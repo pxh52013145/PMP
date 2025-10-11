@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Matrix Player</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // 扫描线动画触发器 - 确保动画完整执行
+      document.addEventListener(
+        'mouseenter',
+        (e) => {
+          const target = e.target;
+          if (
+            target.classList &&
+            target.classList.contains('cyber-switch-btn') &&
+            !target.classList.contains('scan-triggered')
+          ) {
+            target.classList.add('scan-triggered');
+            setTimeout(() => target.classList.remove('scan-triggered'), 2500);
+          }
+        },
+        true
+      );
+
+      // 开关机动画处理
+      document.addEventListener(
+        'click',
+        (e) => {
+          const target = e.target.closest('.cyber-switch-btn');
+          if (!target) return;
+
+          // 如果正在开启状态，触发关机动画
+          if (target.classList.contains('active')) {
+            // 阻止默认行为，先播放动画
+            e.preventDefault();
+            e.stopPropagation();
+
+            // 添加关机动画class
+            target.classList.add('powering-off');
+
+            // 0.6秒后移除active和powering-off class
+            setTimeout(() => {
+              target.classList.remove('active');
+              target.classList.remove('powering-off');
+              // 触发实际的点击事件
+              target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            }, 600);
+          }
+        },
+        true
+      );
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
