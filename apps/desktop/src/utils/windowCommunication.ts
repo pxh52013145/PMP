@@ -24,10 +24,11 @@ export const STORAGE_KEYS = {
   PIXEL_SHAPE: 'pixel-matrix-pixel-shape', // Pixel 形状
   PIXEL_SIZE: 'pixel-matrix-pixel-size', // Pixel 尺寸
   PIXEL_OPACITY: 'pixel-matrix-pixel-opacity', // Pixel 透明度
-  
+
   // === 视觉效果配置 ===
   BACKGROUND_EFFECT: 'pixel-matrix-background-effect', // 背景效果
   BORDER_EFFECT: 'pixel-matrix-border-effect', // 边框效果
+  EFFECT_COLOR: 'pixel-matrix-effect-color', // 效果颜色
   
   // 兼容旧版（废弃）
   BORDER_ANIMATION: 'pixel-matrix-border-animation', // 边框动画（已废弃）
@@ -54,10 +55,11 @@ export const TAURI_EVENTS = {
   PIXEL_SHAPE_UPDATED: 'pixel-shape-updated',
   PIXEL_SIZE_UPDATED: 'pixel-size-updated',
   PIXEL_OPACITY_UPDATED: 'pixel-opacity-updated',
-  
+
   // 视觉效果相关
   BACKGROUND_EFFECT_UPDATED: 'background-effect-updated',
   BORDER_EFFECT_UPDATED: 'border-effect-updated',
+  EFFECT_COLOR_UPDATED: 'effect-color-updated',
   
   // 兼容旧版（废弃）
   BORDER_ANIMATION_UPDATED: 'border-animation-updated',
