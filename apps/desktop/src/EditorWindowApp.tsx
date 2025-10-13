@@ -43,6 +43,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [styleOpen, setStyleOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
 
   const handleToggleStatistics = async () => {
     const newState = !statisticsOpen;
@@ -150,6 +151,29 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     }
   };
 
+  // 切换所有编辑器窗口的置顶状态
+  const handleToggleAlwaysOnTop = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const newState = !isAlwaysOnTop;
+    setIsAlwaysOnTop(newState);
+
+    // 立即移除焦点，防止填满效果残留
+    e.currentTarget.blur();
+
+    try {
+      const { getAll } = await import('@tauri-apps/api/window');
+      const allWindows = getAll();
+
+      // 切换所有编辑器窗口的置顶状态
+      for (const window of allWindows) {
+        if (window.label.startsWith('editor-')) {
+          await window.setAlwaysOnTop(newState);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to toggle always on top:', error);
+    }
+  };
+
   return (
     <div className="draggable-control-panel">
       {/* 拖动标题栏 - 与其他编辑器窗口统一 */}
@@ -159,10 +183,19 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         </span>
       </div>
 
-      {/* 完成编辑按钮（赛博朋克风格） */}
-      <button className="cyber-btn exit-cyber-btn" onClick={onExitEditMode}>
-        <span className="btn-text">submit</span>
-      </button>
+      {/* 完成编辑按钮和置顶按钮 */}
+      <div className="control-button-group">
+        <button className="cyber-btn exit-cyber-btn" onClick={onExitEditMode}>
+          <span className="btn-text">submit</span>
+        </button>
+        <button
+          className={`cyber-btn pin-btn ${isAlwaysOnTop ? 'active' : ''}`}
+          onClick={handleToggleAlwaysOnTop}
+          title={isAlwaysOnTop ? '取消置顶' : '窗口置顶'}
+        >
+          <span className="btn-text"></span>
+        </button>
+      </div>
 
       {/* 统计开关 */}
       <div className="switch-container">

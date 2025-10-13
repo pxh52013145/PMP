@@ -23,3 +23,144 @@ body {
   height: 100vh;
   background: transparent;
 }
+
+/* ====== 全局 Textarea 样式 ====== */
+/* 使用 CSS 变量控制颜色主题，不同组件可以覆盖这些变量 */
+textarea {
+  --textarea-corner-size: 6px;
+  --textarea-border-color: rgba(255, 255, 255, 0.1);
+  --textarea-border-color-focus: rgba(0, 217, 255, 0.5);
+  --textarea-bg: rgba(0, 0, 0, 0.4);
+  --textarea-text-color: rgba(255, 255, 255, 0.9);
+  --textarea-placeholder-color: rgba(255, 255, 255, 0.3);
+  --textarea-shadow-focus: 0 0 10px rgba(0, 217, 255, 0.2);
+  --textarea-scrollbar-bg: rgba(0, 0, 0, 0.3);
+  --textarea-scrollbar-thumb: rgba(0, 217, 255, 0.6);
+  --textarea-scrollbar-thumb-hover: rgba(0, 217, 255, 0.9);
+  --textarea-resizer-color: rgba(0, 217, 255, 0.3);
+  --textarea-resizer-line-color: rgba(0, 217, 255, 0.5);
+
+  padding: 10px 12px;
+  background: var(--textarea-bg);
+  border: 1px solid var(--textarea-border-color);
+  color: var(--textarea-text-color);
+  font-size: 13px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  outline: none;
+  transition: all 0.2s;
+  resize: vertical;
+  min-height: 100px;
+  line-height: 1.6;
+  clip-path: polygon(
+    0% var(--textarea-corner-size),
+    var(--textarea-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--textarea-corner-size)),
+    calc(100% - var(--textarea-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+textarea:focus {
+  border-color: var(--textarea-border-color-focus);
+  box-shadow: var(--textarea-shadow-focus);
+}
+
+textarea::placeholder {
+  color: var(--textarea-placeholder-color);
+}
+
+/* 自定义 resize 手柄 */
+textarea::-webkit-resizer {
+  --resizer-corner-size: 6px;
+  background-color: var(--textarea-resizer-color);
+  background-image: linear-gradient(
+    135deg,
+    transparent 0%,
+    transparent 40%,
+    var(--textarea-resizer-line-color) 40%,
+    var(--textarea-resizer-line-color) 45%,
+    transparent 45%,
+    transparent 50%,
+    var(--textarea-resizer-line-color) 50%,
+    var(--textarea-resizer-line-color) 55%,
+    transparent 55%,
+    transparent 60%,
+    var(--textarea-resizer-line-color) 60%,
+    var(--textarea-resizer-line-color) 65%,
+    transparent 65%
+  );
+  border: 8px solid var(--textarea-resizer-color);
+  clip-path: polygon(
+    0% var(--resizer-corner-size),
+    var(--resizer-corner-size) 0%,
+    100% 0%,
+    100% 100%,
+    0% 100%
+  );
+}
+
+/* 自定义滚动条样式 - Cyber-punk 风格 */
+textarea::-webkit-scrollbar {
+  width: 8px;
+  background-color: var(--textarea-scrollbar-bg);
+}
+
+textarea::-webkit-scrollbar-track {
+  background-color: var(--textarea-scrollbar-bg);
+  border-left: 1px solid var(--textarea-border-color);
+}
+
+textarea::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    var(--textarea-scrollbar-thumb),
+    var(--textarea-scrollbar-thumb)
+  );
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+
+textarea::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    var(--textarea-scrollbar-thumb-hover),
+    var(--textarea-scrollbar-thumb-hover)
+  );
+  box-shadow: 0 0 6px var(--textarea-scrollbar-thumb-hover);
+}
+
+textarea::-webkit-scrollbar-thumb:active {
+  background: var(--textarea-scrollbar-thumb-hover);
+}
+
+/* 强制隐藏滚动条按钮 */
+textarea::-webkit-scrollbar-button {
+  height: 0 !important;
+  width: 0 !important;
+  display: block;
+  background-color: transparent;
+  border: none;
+}
+
+textarea::-webkit-scrollbar-button:single-button {
+  height: 0 !important;
+  display: block;
+}
+
+textarea::-webkit-scrollbar-button:vertical:decrement,
+textarea::-webkit-scrollbar-button:vertical:increment {
+  height: 0 !important;
+}
+
+textarea::-webkit-scrollbar-button:start:decrement,
+textarea::-webkit-scrollbar-button:end:increment {
+  height: 0 !important;
+  width: 0 !important;
+  display: block;
+}
+
+textarea::-webkit-scrollbar-corner {
+  background-color: var(--textarea-scrollbar-bg);
+  display: none;
+}
