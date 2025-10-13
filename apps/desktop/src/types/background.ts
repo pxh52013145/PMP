@@ -21,6 +21,13 @@ export interface BackgroundConfig {
     position: string; // 如 'center center'
     repeat: 'no-repeat' | 'repeat' | 'repeat-x' | 'repeat-y';
     opacity?: number;
+    // 裁剪区域（相对于原图的百分比，与fit模式互斥）
+    crop?: {
+      x: number; // 0-100
+      y: number; // 0-100
+      width: number; // 0-100
+      height: number; // 0-100
+    };
   };
   // 视频背景（动态背景）
   video?: {
@@ -29,6 +36,13 @@ export interface BackgroundConfig {
     loop: boolean;
     muted: boolean;
     opacity?: number;
+    // 裁剪区域（相对于原视频的百分比，与fit模式互斥）
+    crop?: {
+      x: number; // 0-100
+      y: number; // 0-100
+      width: number; // 0-100
+      height: number; // 0-100
+    };
   };
   // HTML 背景（自定义 HTML 内容）
   html?: {
