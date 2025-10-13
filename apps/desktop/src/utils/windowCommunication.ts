@@ -23,6 +23,7 @@ export const STORAGE_KEYS = {
   // === Pixel 渲染配置 ===
   PIXEL_SHAPE: 'pixel-matrix-pixel-shape', // Pixel 形状
   PIXEL_SIZE: 'pixel-matrix-pixel-size', // Pixel 尺寸
+  PIXEL_OPACITY: 'pixel-matrix-pixel-opacity', // Pixel 透明度
   BORDER_ANIMATION: 'pixel-matrix-border-animation', // 边框动画
 
   // === 编辑器临时数据 ===
@@ -46,6 +47,7 @@ export const TAURI_EVENTS = {
   // Pixel 渲染相关
   PIXEL_SHAPE_UPDATED: 'pixel-shape-updated',
   PIXEL_SIZE_UPDATED: 'pixel-size-updated',
+  PIXEL_OPACITY_UPDATED: 'pixel-opacity-updated',
   BORDER_ANIMATION_UPDATED: 'border-animation-updated',
 
   // 编辑器相关

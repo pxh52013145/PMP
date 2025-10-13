@@ -10,6 +10,7 @@ export class PixelMatrixRenderer {
   private pixelContainer: PIXI.Container;
   private pixels: PIXI.Graphics[] = [];
   private pixelSizeScale: number = 1.0; // Pixel 尺寸缩放比例 (0.5-1.0)
+  private pixelOpacity: number = 1.0; // Pixel 透明度 (0.0-1.0)
 
   constructor(width: number, height: number) {
     // 初始化 PixiJS 应用
@@ -153,6 +154,19 @@ export class PixelMatrixRenderer {
       const currentTint = pixel.tint;
       this.drawPixelShape(pixel, currentShape);
       pixel.tint = currentTint;
+    }
+  }
+
+  /**
+   * 更新 Pixel 透明度（0.0-1.0）
+   */
+  public updatePixelOpacity(opacity: number): void {
+    // 限制范围 0%-100%
+    this.pixelOpacity = Math.max(0.0, Math.min(1.0, opacity));
+
+    // 应用透明度到所有 pixel
+    for (const pixel of this.pixels) {
+      pixel.alpha = this.pixelOpacity;
     }
   }
 
