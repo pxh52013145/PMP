@@ -708,7 +708,7 @@ export const BackgroundManager = memo(function BackgroundManager({
                       onClick={() => handleDeleteHistory(item.id)}
                       title="删除"
                     >
-                      ○
+                      <span className="history-delete-btn-symbol">X</span>
                     </button>
                   </div>
                 ))}

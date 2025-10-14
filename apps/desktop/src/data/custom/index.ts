@@ -6,12 +6,6 @@
 import { Magnet } from '../../types/pixel';
 
 // 导入示例 Magnet（可选，仅供参考）
-import {
-  HELP_BUTTON_MAGNET,
-  VOLUME_TOGGLE_MAGNET,
-  CUSTOM_BUTTON_FROM_CREATOR,
-} from './exampleCustomMagnet';
-
 /**
  * 自定义 Magnet 列表
  * 示例：
