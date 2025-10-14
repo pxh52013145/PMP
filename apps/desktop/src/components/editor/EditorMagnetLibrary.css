@@ -1,0 +1,709 @@
+.editor-magnet-library {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 为 magnet 库的内容区域提供定位上下文 */
+.editor-magnet-library .editor-window-content {
+  position: relative;
+  flex: 1; /* 确保内容区域占据剩余空间 */
+  overflow-y: hidden; /* 禁用内容区域的滚动，只让列表滚动 */
+  overflow-x: hidden;
+  padding: 0; /* 移除默认 padding，由固定区域和列表自己控制 */
+}
+
+/* 顶部固定区域 - 包含视图选择器和过滤器 */
+.library-header-fixed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 20px 20px 16px 20px;
+  background: linear-gradient(
+    rgba(10, 10, 20, 0.99),
+    rgba(10, 10, 20, 0.9),
+    rgba(10, 10, 20, 0.8),
+    rgba(10, 10, 20, 0.7),
+    rgba(10, 10, 20, 0),
+    rgba(10, 10, 20, 0)
+  );
+  z-index: 10;
+  pointer-events: all;
+}
+
+/* 视图选择器 - 第一行 */
+.library-view-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.view-btn {
+  --btn-corner-size: 8px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    color 0.2s,
+    border-color 0.2s; /* 只动画需要的属性 */
+  /* 左上和右下剪角 */
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+  /* 性能优化 */
+  contain: layout;
+}
+
+.view-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.view-btn.active {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.8), rgba(52, 199, 89, 0.8));
+  border-color: rgba(0, 122, 255, 1);
+  color: white;
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+}
+
+/* 过滤器行 - 第二行 */
+.library-filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 0; /* 移除底部间距，因为在固定容器内 */
+}
+
+/* 旧的 library-header 已删除，不再使用 */
+
+.filter-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.filter-btn {
+  --btn-corner-size: 6px;
+  flex: 1; /* 平分空间 */
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    color 0.2s,
+    border-color 0.2s; /* 只动画需要的属性 */
+  /* 左上和右下剪角 */
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+  /* 性能优化 */
+  contain: layout;
+}
+
+.filter-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.filter-btn.active {
+  background: rgba(0, 122, 255, 0.8);
+  border-color: rgba(0, 122, 255, 1);
+  color: white;
+}
+
+.import-btn {
+  padding: 8px 16px;
+  background: rgba(52, 199, 89, 0.8);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.import-btn:hover {
+  background: rgba(52, 199, 89, 1);
+  transform: translateY(-1px);
+}
+
+/* 导入区域 */
+.import-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.import-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 600;
+}
+
+.import-textarea {
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.import-textarea:focus {
+  border-color: rgba(0, 122, 255, 0.5);
+}
+
+.import-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.import-error {
+  padding: 10px 12px;
+  background: rgba(255, 59, 48, 0.1);
+  border-left: 3px solid rgba(255, 59, 48, 0.8);
+  border-radius: 4px;
+  color: rgba(255, 59, 48, 0.9);
+  font-size: 13px;
+}
+
+.import-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.import-submit-btn {
+  padding: 10px 24px;
+  background: rgba(0, 122, 255, 0.8);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.import-submit-btn:hover {
+  background: rgba(0, 122, 255, 1);
+  transform: translateY(-1px);
+}
+
+.import-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Magnet 列表 */
+.magnet-list {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto; /* 启用垂直滚动 */
+  overflow-x: hidden; /* 禁用水平滚动条 */
+  padding: 130px 20px 80px 20px; /* 为顶部和底部固定区域留出空间 */
+  padding-right: 24px; /* 为滚动条留出更多空间 */
+
+  /* 隐藏滚动条但保留滚动功能 */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE 和 Edge */
+}
+
+/* 隐藏 WebKit 滚动条 */
+.magnet-list::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+.empty-state {
+  padding: 40px 20px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.magnet-item {
+  --item-corner-size: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s; /* 只动画需要的属性 */
+  max-width: 100%; /* 防止超出容器宽度 */
+  box-sizing: border-box;
+  /* 左上和右下剪角 */
+  clip-path: polygon(
+    0% var(--item-corner-size),
+    var(--item-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--item-corner-size)),
+    calc(100% - var(--item-corner-size)) 100%,
+    0% 100%
+  );
+  /* 性能优化 */
+  will-change: transform;
+  contain: layout;
+}
+
+.magnet-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(0, 255, 255, 0.3);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
+  transform: translateX(4px);
+}
+
+.magnet-preview {
+  --preview-corner-size: 4px;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+  /* 左上和右下小剪角 */
+  clip-path: polygon(
+    0% var(--preview-corner-size),
+    var(--preview-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--preview-corner-size)),
+    calc(100% - var(--preview-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.magnet-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.magnet-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.magnet-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.magnet-type {
+  padding: 2px 6px;
+  background: rgba(0, 122, 255, 0.2);
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.magnet-pixels {
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.magnet-badge {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.magnet-badge.builtin {
+  background: rgba(255, 149, 0, 0.2);
+  color: rgba(255, 149, 0, 0.9);
+  border: 1px solid rgba(255, 149, 0, 0.4);
+}
+
+.magnet-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.magnet-action-btn {
+  --action-btn-corner: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  clip-path: polygon(
+    0% var(--action-btn-corner),
+    var(--action-btn-corner) 0%,
+    100% 0%,
+    100% calc(100% - var(--action-btn-corner)),
+    calc(100% - var(--action-btn-corner)) 100%,
+    0% 100%
+  );
+}
+
+.magnet-action-btn:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.05);
+}
+
+.magnet-action-btn.edit:hover {
+  background: rgba(0, 255, 255, 0.2);
+  border-color: rgba(0, 255, 255, 0.5);
+  color: rgba(0, 255, 255, 0.95);
+  box-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
+}
+
+.magnet-action-btn.add:hover {
+  background: rgba(52, 199, 89, 0.2);
+  border-color: rgba(52, 199, 89, 0.5);
+  color: rgba(52, 199, 89, 0.95);
+  box-shadow: 0 0 8px rgba(52, 199, 89, 0.3);
+}
+
+.magnet-action-btn.remove:hover {
+  background: rgba(255, 149, 0, 0.2);
+  border-color: rgba(255, 149, 0, 0.5);
+  color: rgba(255, 149, 0, 0.95);
+  box-shadow: 0 0 8px rgba(255, 149, 0, 0.3);
+}
+
+.magnet-action-btn.delete:hover:not(.disabled) {
+  background: rgba(255, 59, 48, 0.2);
+  border-color: rgba(255, 59, 48, 0.5);
+  color: rgba(255, 59, 48, 0.95);
+  box-shadow: 0 0 8px rgba(255, 59, 48, 0.3);
+}
+
+.magnet-action-btn.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: rgba(255, 59, 48, 0.5);
+  color: rgba(255, 59, 48, 0.7);
+}
+
+/* 故障动画效果 */
+.magnet-action-btn.glitch {
+  position: relative;
+  animation:
+    cyber-glitch 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    glitch-border 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.magnet-action-btn.glitch::before,
+.magnet-action-btn.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  clip-path: polygon(
+    0% var(--action-btn-corner),
+    var(--action-btn-corner) 0%,
+    100% 0%,
+    100% calc(100% - var(--action-btn-corner)),
+    calc(100% - var(--action-btn-corner)) 100%,
+    0% 100%
+  );
+}
+
+.magnet-action-btn.glitch::before {
+  animation: glitch-before 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-shadow: -2px 0 #ff0000;
+  opacity: 0.8;
+}
+
+.magnet-action-btn.glitch::after {
+  animation: glitch-after 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-shadow: 2px 0 #00ffff;
+  opacity: 0.8;
+}
+
+@keyframes cyber-glitch {
+  0% {
+    transform: translate(0, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  5% {
+    transform: translate(-3px, 0);
+    clip-path: polygon(0 20%, 100% 20%, 100% 25%, 0 25%);
+  }
+  10% {
+    transform: translate(3px, 0);
+    clip-path: polygon(0 40%, 100% 40%, 100% 45%, 0 45%);
+  }
+  15% {
+    transform: translate(-2px, 0);
+    clip-path: polygon(0 60%, 100% 60%, 100% 65%, 0 65%);
+  }
+  20% {
+    transform: translate(2px, 0);
+    clip-path: polygon(0 80%, 100% 80%, 100% 85%, 0 85%);
+  }
+  25% {
+    transform: translate(0, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  100% {
+    transform: translate(0, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+}
+
+@keyframes glitch-before {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  5% {
+    transform: translate(-4px, 2px);
+    opacity: 0.8;
+  }
+  10% {
+    transform: translate(4px, -2px);
+    opacity: 0;
+  }
+  15% {
+    transform: translate(-3px, 1px);
+    opacity: 0.8;
+  }
+  20% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  25% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes glitch-after {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  5% {
+    transform: translate(4px, -2px);
+    opacity: 0;
+  }
+  10% {
+    transform: translate(-4px, 2px);
+    opacity: 0.8;
+  }
+  15% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  20% {
+    transform: translate(-3px, 1px);
+    opacity: 0.8;
+  }
+  25% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes glitch-border {
+  0% {
+    border-color: rgba(255, 59, 48, 0.8);
+    box-shadow: 0 0 15px rgba(255, 59, 48, 0.4);
+    color: rgba(255, 59, 48, 0.9);
+  }
+  8% {
+    border-color: rgba(0, 255, 255, 1);
+    box-shadow:
+      0 0 30px rgba(0, 255, 255, 1),
+      0 0 60px rgba(0, 255, 255, 0.5);
+    color: rgba(0, 255, 255, 1);
+  }
+  16% {
+    border-color: rgba(255, 0, 255, 1);
+    box-shadow: 0 0 25px rgba(255, 0, 255, 0.6);
+    color: rgba(255, 0, 255, 1);
+  }
+  24% {
+    border-color: rgba(255, 59, 48, 1);
+    box-shadow: 0 0 20px rgba(255, 59, 48, 0.5);
+    color: rgba(255, 59, 48, 1);
+  }
+  100% {
+    border-color: rgba(255, 59, 48, 0.8);
+    box-shadow: 0 0 15px rgba(255, 59, 48, 0.4);
+    color: rgba(255, 59, 48, 0.9);
+  }
+}
+
+/* 格式说明 */
+.library-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+}
+
+.format-guide {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.format-guide summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.format-guide summary:hover {
+  color: rgba(255, 255, 255, 1);
+}
+
+.format-content {
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
+}
+
+.format-content h4 {
+  margin: 12px 0 6px 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.format-content ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.format-content li {
+  margin: 4px 0;
+}
+
+.format-content code {
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  color: rgba(0, 122, 255, 0.9);
+}
+
+/* 底部固定按钮区域 */
+.library-footer-fixed {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 16px 20px;
+  background: linear-gradient(to top, rgba(10, 10, 20, 0.95), transparent);
+  display: flex;
+  justify-content: center;
+  pointer-events: none; /* 让背景不阻挡点击 */
+}
+
+.create-import-btn {
+  --btn-corner-size: 10px;
+  pointer-events: all; /* 按钮本身可以点击 */
+  padding: 14px 32px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.3), rgba(52, 199, 89, 0.3));
+  border: 2px solid rgba(0, 255, 255, 0.5);
+  color: rgba(0, 255, 255, 0.95);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+  /* 左上和右下剪角 */
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.create-import-btn:hover {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.5), rgba(52, 199, 89, 0.5));
+  box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+  transform: translateY(-2px);
+}
+
+.create-import-btn:active {
+  transform: translateY(0);
+}

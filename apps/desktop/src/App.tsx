@@ -6,12 +6,13 @@ import {
   setupConfigSync,
   setupTauriListener,
 } from './utils/windowCommunication';
-import Background from './components/Background';
-import PixelMatrixCanvas from './components/PixelMatrixCanvas';
-import WindowBorder from './components/WindowBorder';
-import { MagnetLayer } from './components/MagnetLayer';
-import { EditorOverlay } from './components/EditorOverlay';
-import { EditorPanel } from './components/EditorPanel';
+import Background from './components/core/Background';
+import PixelMatrixCanvas from './components/core/PixelMatrixCanvas';
+import WindowBorder from './components/core/WindowBorder';
+import MatrixRainEffect from './components/effects/MatrixRainEffect';
+import { MagnetLayer } from './components/magnet/MagnetLayer';
+import { EditorOverlay } from './components/core/EditorOverlay';
+import { EditorPanel } from './components/core/EditorPanel';
 import { EditorProvider, useEditor } from './contexts/EditorContext';
 import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
@@ -35,6 +36,48 @@ function AppContent() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.IS_MAXIMIZED, JSON.stringify(isMaximized));
   }, [isMaximized]);
+
+  // 窗口背景效果状态
+  const [backgroundEffect, setBackgroundEffect] = useState(() => {
+    return localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
+  });
+  const [backgroundThemeColor, setBackgroundThemeColor] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
+    return saved ? JSON.parse(saved) : { id: 'cyan', rgb: [0, 255, 136] };
+  });
+
+  // 监听背景效果和主题色变化
+  useEffect(() => {
+    const setupEffectListeners = async () => {
+      const unlistenBg = await setupTauriListener(TAURI_EVENTS.BACKGROUND_EFFECT_UPDATED, () => {
+        const effect = localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT);
+        if (effect) {
+          setBackgroundEffect(effect);
+        }
+      });
+
+      const unlistenBgColor = await setupTauriListener(
+        TAURI_EVENTS.BACKGROUND_THEME_COLOR_UPDATED,
+        () => {
+          const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
+          if (saved) {
+            setBackgroundThemeColor(JSON.parse(saved));
+          }
+        }
+      );
+
+      return () => {
+        unlistenBg();
+        unlistenBgColor();
+      };
+    };
+
+    const cleanup = setupEffectListeners();
+    return () => {
+      cleanup.then((fn) => fn());
+    };
+  }, []);
+
   const [backgroundSettings, setBackgroundSettings] = useState<BackgroundSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS);
@@ -57,42 +100,7 @@ function AppContent() {
     };
   }, []);
 
-  // 监听边框动画更新（使用统一的新框架）
-  useEffect(() => {
-    const applyBorderAnimation = () => {
-      try {
-        const borderAnimation = localStorage.getItem(STORAGE_KEYS.BORDER_ANIMATION);
-        if (borderAnimation) {
-          const borderElement = document.querySelector('.window-border-container') as HTMLElement;
-          if (borderElement) {
-            // 移除之前的动画 class
-            borderElement.className = 'window-border-container';
-            // 添加新的动画 class
-            if (borderAnimation !== 'none') {
-              borderElement.classList.add(`border-${borderAnimation}`);
-            }
-            console.log('Main window: Border animation applied:', borderAnimation);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to apply border animation:', error);
-      }
-    };
-
-    // 初始加载
-    applyBorderAnimation();
-
-    // 监听边框动画更新事件
-    let cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.BORDER_ANIMATION],
-      [TAURI_EVENTS.BORDER_ANIMATION_UPDATED],
-      applyBorderAnimation
-    );
-
-    return () => {
-      cleanupPromise.then((cleanup) => cleanup());
-    };
-  }, []);
+  // 边框动画已移至 WindowBorder 组件管理
 
   const { toggleEditMode, updateOccupancy } = useEditor();
 
@@ -375,6 +383,14 @@ function AppContent() {
     <div className="app-container">
       {/* 背景层 - 根据窗口状态显示不同背景 */}
       <Background config={currentBackground} />
+
+      {/* 字符雨背景效果层 - 独立渲染在低层级 */}
+      {backgroundEffect === 'matrix-rain' && (
+        <MatrixRainEffect
+          color={backgroundThemeColor.rgb}
+          isRainbow={backgroundThemeColor.id === 'rainbow'}
+        />
+      )}
 
       {/* Pixel Grid 层 */}
       <PixelMatrixCanvas onPixelPositionsUpdate={setPixelPositions} />

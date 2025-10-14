@@ -1,0 +1,505 @@
+/* CSS 变量定义 */
+:root {
+  /* 背景效果主题颜色 */
+  --bg-theme-color-r: 0;
+  --bg-theme-color-g: 255;
+  --bg-theme-color-b: 136;
+
+  /* 边框效果主题颜色 */
+  --border-theme-color-r: 0;
+  --border-theme-color-g: 255;
+  --border-theme-color-b: 136;
+}
+
+.window-border-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.window-border-glow {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, opacity;
+  /* 不使用 transition，由 JS 直接控制实现零延迟 */
+}
+
+/* 顶部边框发光 */
+.window-border-glow-top {
+  top: 0;
+  transform: translateX(-50%);
+  width: 120px;
+  height: 3px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.9)
+      0%,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.5)
+      50%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 20px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.8
+      ),
+    0 0 40px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.5
+      ),
+    0 0 60px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.3
+      );
+}
+
+/* 右侧边框发光 */
+.window-border-glow-right {
+  right: 0;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 120px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.9)
+      0%,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.5)
+      50%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 20px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.8
+      ),
+    0 0 40px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.5
+      ),
+    0 0 60px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.3
+      );
+}
+
+/* 底部边框发光 */
+.window-border-glow-bottom {
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 120px;
+  height: 3px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.9)
+      0%,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.5)
+      50%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 20px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.8
+      ),
+    0 0 40px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.5
+      ),
+    0 0 60px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.3
+      );
+}
+
+/* 左侧边框发光 */
+.window-border-glow-left {
+  left: 0;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 120px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.9)
+      0%,
+    rgba(var(--border-theme-color-r), var(--border-theme-color-g), var(--border-theme-color-b), 0.5)
+      50%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 20px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.8
+      ),
+    0 0 40px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.5
+      ),
+    0 0 60px
+      rgba(
+        var(--border-theme-color-r),
+        var(--border-theme-color-g),
+        var(--border-theme-color-b),
+        0.3
+      );
+}
+
+/* ========== 背景效果 ========== */
+
+/* 光晕脉冲 - 全屏呼吸灯效果 */
+.window-border-container.bg-glow-pulse::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 60px
+    rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.3);
+  animation: bg-glow-pulse-anim 2.5s ease-in-out infinite;
+  z-index: -1;
+}
+
+@keyframes bg-glow-pulse-anim {
+  0%,
+  100% {
+    box-shadow: inset 0 0 30px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.2);
+  }
+  50% {
+    box-shadow: inset 0 0 60px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.4);
+  }
+}
+
+/* 扫描线效果 */
+.window-border-container.bg-scan-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.3) 20%,
+    rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.9) 50%,
+    rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.3) 80%,
+    transparent 100%
+  );
+  box-shadow: 0 0 20px
+    rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8);
+  animation: scan-line-move 3s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes scan-line-move {
+  0% {
+    top: -3px;
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+  }
+  95% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+/* 粒子星空效果 - 密集静态粒子闪烁 */
+.window-border-container.bg-particles::before {
+  content: '';
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8);
+  box-shadow:
+    10vw 10vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    20vw 20vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    30vw 5vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    40vw 15vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    50vw 30vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    60vw 8vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    70vw 25vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    80vw 12vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    90vw 35vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    15vw 45vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    25vw 50vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    35vw 40vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    45vw 55vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    55vw 60vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    65vw 48vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    75vw 65vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    85vw 70vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    95vw 58vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    5vw 75vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    18vw 80vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    28vw 68vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    38vw 85vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    48vw 78vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    58vw 90vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    68vw 82vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    78vw 95vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6);
+  animation: particles-twinkle-1 4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.window-border-container.bg-particles::after {
+  content: '';
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7);
+  box-shadow:
+    12vw 18vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    22vw 28vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    32vw 12vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    42vw 22vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    52vw 38vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    62vw 16vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    72vw 32vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    82vw 18vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    92vw 42vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    8vw 52vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    17vw 62vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    27vw 55vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    37vw 72vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    47vw 88vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7),
+    57vw 64vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.6),
+    67vw 92vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.8),
+    77vw 76vh 0 0px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.5),
+    87vw 86vh 0 1px
+      rgba(var(--bg-theme-color-r), var(--bg-theme-color-g), var(--bg-theme-color-b), 0.7);
+  animation: particles-twinkle-2 4s ease-in-out infinite;
+  animation-delay: -2s;
+  pointer-events: none;
+  z-index: -1;
+}
+
+@keyframes particles-twinkle-1 {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes particles-twinkle-2 {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* ========== 边框效果 ========== */
+
+/* 标准边框效果 - 使用主题颜色 */
+/* 默认就使用边框主题颜色，不需要额外动画 */
+
+/* 脉冲边框效果 - 跟随鼠标 + 呼吸灯动画 */
+.window-border-container.border-pulse .window-border-glow {
+  animation: border-pulse-breath 2s ease-in-out infinite;
+}
+
+@keyframes border-pulse-breath {
+  0%,
+  100% {
+    filter: brightness(0.8);
+  }
+  50% {
+    filter: brightness(1.5);
+  }
+}
+
+/* 故障艺术效果 */
+.window-border-container.border-glitch .window-border-glow {
+  animation: glitch-glow 3s infinite;
+}
+
+@keyframes glitch-glow {
+  0%,
+  90%,
+  100% {
+    transform: translate(0, -50%);
+    filter: hue-rotate(0deg);
+  }
+  91% {
+    transform: translate(-3px, -50%);
+    filter: hue-rotate(180deg);
+  }
+  92% {
+    transform: translate(3px, -50%);
+    filter: hue-rotate(270deg);
+  }
+  93% {
+    transform: translate(0, -50%);
+    filter: hue-rotate(0deg);
+  }
+}
+
+.window-border-container.border-glitch .window-border-glow-top,
+.window-border-container.border-glitch .window-border-glow-bottom {
+  animation: glitch-glow-horizontal 3s infinite;
+}
+
+@keyframes glitch-glow-horizontal {
+  0%,
+  90%,
+  100% {
+    transform: translate(-50%, 0);
+    filter: hue-rotate(0deg);
+  }
+  91% {
+    transform: translate(-50%, -3px);
+    filter: hue-rotate(180deg);
+  }
+  92% {
+    transform: translate(-50%, 3px);
+    filter: hue-rotate(270deg);
+  }
+  93% {
+    transform: translate(-50%, 0);
+    filter: hue-rotate(0deg);
+  }
+}
+
+/* ========== 彩虹主题效果 ========== */
+
+/* 背景彩虹主题 - 只影响背景效果的伪元素 */
+.window-border-container.bg-glow-pulse.bg-rainbow-theme::before {
+  animation:
+    bg-glow-pulse-anim 2.5s ease-in-out infinite,
+    bg-rainbow-hue 4s linear infinite;
+}
+
+.window-border-container.bg-scan-line.bg-rainbow-theme::after {
+  animation:
+    scan-line-move 3s linear infinite,
+    bg-rainbow-hue 4s linear infinite;
+}
+
+.window-border-container.bg-particles.bg-rainbow-theme::before {
+  animation:
+    particles-twinkle-1 4s ease-in-out infinite,
+    bg-rainbow-hue 4s linear infinite;
+}
+
+.window-border-container.bg-particles.bg-rainbow-theme::after {
+  animation:
+    particles-twinkle-2 4s ease-in-out infinite,
+    bg-rainbow-hue 4s linear infinite;
+  animation-delay: -2s, 0s;
+}
+
+/* 边框彩虹主题 */
+.window-border-container.border-rainbow-theme .window-border-glow {
+  animation: border-rainbow-hue 4s linear infinite;
+}
+
+@keyframes bg-rainbow-hue {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+  100% {
+    filter: hue-rotate(360deg);
+  }
+}
+
+@keyframes border-rainbow-hue {
+  0% {
+    filter: hue-rotate(0deg) brightness(1.2);
+  }
+  100% {
+    filter: hue-rotate(360deg) brightness(1.2);
+  }
+}

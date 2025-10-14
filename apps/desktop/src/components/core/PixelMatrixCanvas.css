@@ -1,0 +1,10 @@
+.pixel-matrix-canvas {
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  z-index: 10; /* 确保在背景效果层之上 */
+}
+
+.pixel-matrix-canvas canvas {
+  display: block;
+}

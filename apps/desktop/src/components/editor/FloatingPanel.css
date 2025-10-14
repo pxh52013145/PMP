@@ -1,0 +1,188 @@
+.floating-panel {
+  position: fixed;
+  z-index: 10000; /* 确保在所有内容之上 */
+  background: rgba(20, 20, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: box-shadow 0.2s;
+}
+
+.floating-panel.dragging {
+  box-shadow: 0 16px 64px rgba(0, 0, 0, 0.7);
+  cursor: move;
+}
+
+.floating-panel.collapsed {
+  height: auto !important;
+}
+
+/* 标题栏 */
+.floating-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.floating-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  letter-spacing: 0.5px;
+}
+
+.floating-panel-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.panel-button {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.panel-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.panel-button.close-button:hover {
+  background: rgba(255, 59, 48, 0.8);
+  color: white;
+}
+
+/* 内容区域 */
+.floating-panel-content {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* 自定义滚动条 */
+.floating-panel-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.floating-panel-content::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.floating-panel-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.floating-panel-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 缩放手柄 */
+.resize-handle {
+  position: absolute;
+  background: transparent;
+  z-index: 10;
+}
+
+.resize-handle.resize-e,
+.resize-handle.resize-w {
+  width: 8px;
+  top: 0;
+  bottom: 0;
+  cursor: ew-resize;
+}
+
+.resize-handle.resize-e {
+  right: 0;
+}
+
+.resize-handle.resize-w {
+  left: 0;
+}
+
+.resize-handle.resize-n,
+.resize-handle.resize-s {
+  height: 8px;
+  left: 0;
+  right: 0;
+  cursor: ns-resize;
+}
+
+.resize-handle.resize-n {
+  top: 0;
+}
+
+.resize-handle.resize-s {
+  bottom: 0;
+}
+
+.resize-handle.resize-se,
+.resize-handle.resize-sw,
+.resize-handle.resize-ne,
+.resize-handle.resize-nw {
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+.resize-handle.resize-se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+.resize-handle.resize-sw {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+
+.resize-handle.resize-ne {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+
+.resize-handle.resize-nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+
+/* 角落指示器（可选，增加可见性） */
+.resize-handle.resize-se::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(255, 255, 255, 0.3);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0 0 4px 0;
+}

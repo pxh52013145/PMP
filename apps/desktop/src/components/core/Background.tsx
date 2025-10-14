@@ -1,0 +1,210 @@
+import { useEffect, useRef } from 'react';
+import { BackgroundConfig } from '../../types/background';
+import './Background.css';
+
+interface BackgroundProps {
+  config: BackgroundConfig;
+}
+
+/**
+ * 背景组件
+ * 支持纯色、渐变、图片、视频等多种背景类型
+ */
+export default function Background({ config }: BackgroundProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    // 如果是视频背景，自动播放
+    if (config.type === 'video' && videoRef.current) {
+      videoRef.current.play().catch((err) => {
+        console.warn('Video autoplay failed:', err);
+      });
+    }
+  }, [config]);
+
+  const getBackgroundStyle = (): React.CSSProperties => {
+    const baseStyle: React.CSSProperties = {
+      opacity: config.opacity ?? 1,
+      filter: config.blur ? `blur(${config.blur}px)` : undefined,
+    };
+
+    switch (config.type) {
+      case 'color':
+        return {
+          ...baseStyle,
+          backgroundColor: config.color || '#000000',
+        };
+
+      case 'gradient':
+        if (config.gradient) {
+          const { type, colors, angle } = config.gradient;
+          if (type === 'linear') {
+            return {
+              ...baseStyle,
+              background: `linear-gradient(${angle || 135}deg, ${colors.join(', ')})`,
+            };
+          } else {
+            return {
+              ...baseStyle,
+              background: `radial-gradient(circle, ${colors.join(', ')})`,
+            };
+          }
+        }
+        return baseStyle;
+
+      case 'image':
+        if (config.image) {
+          // 如果 URL 为空，返回纯黑背景
+          if (!config.image.url) {
+            return {
+              ...baseStyle,
+              backgroundColor: '#000000',
+              opacity: config.image.opacity ?? config.opacity ?? 1,
+            };
+          }
+
+          // 处理裁剪 - 使用 img 元素而不是背景图
+          if (config.image.crop) {
+            return {
+              ...baseStyle,
+              opacity: config.image.opacity ?? config.opacity ?? 1,
+            };
+          }
+
+          // 处理 fill 模式（拉伸）
+          const backgroundSize = config.image.fit === 'fill' ? '100% 100%' : config.image.fit;
+
+          return {
+            ...baseStyle,
+            backgroundImage: `url(${config.image.url})`,
+            backgroundSize,
+            backgroundPosition: config.image.position,
+            backgroundRepeat: config.image.repeat,
+            opacity: config.image.opacity ?? config.opacity ?? 1,
+          };
+        }
+        return baseStyle;
+
+      case 'video':
+      case 'html':
+        return baseStyle;
+
+      default:
+        return baseStyle;
+    }
+  };
+
+  // 获取视频样式（非裁剪模式）
+  const getVideoStyle = (): React.CSSProperties => {
+    if (!config.video) return {};
+    return {
+      objectFit: config.video.fit,
+      opacity: config.video.opacity ?? 1,
+    };
+  };
+
+  return (
+    <div className="background-container" style={getBackgroundStyle()}>
+      {/* 图片选取背景 - 精确复制选取区域 */}
+      {config.type === 'image' && config.image?.crop && config.image.url && (
+        <div
+          className="background-selection-wrapper"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            overflow: 'hidden',
+          }}
+        >
+          {/* 背景层 - 与编辑器选取时相同 */}
+          <div
+            style={{
+              position: 'absolute',
+              top: `${(-config.image.crop.y * 100) / config.image.crop.height}%`,
+              left: `${(-config.image.crop.x * 100) / config.image.crop.width}%`,
+              width: `${10000 / config.image.crop.width}%`,
+              height: `${10000 / config.image.crop.height}%`,
+              backgroundImage: `url(${config.image.url})`,
+              backgroundSize: 'contain',
+              backgroundPosition: 'center center',
+              backgroundRepeat: 'no-repeat',
+              opacity: config.image.opacity ?? 1,
+            }}
+          />
+        </div>
+      )}
+
+      {/* 视频背景 */}
+      {config.type === 'video' && config.video && (
+        <>
+          {config.video.crop ? (
+            <div
+              className="background-selection-wrapper"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  top: `${(-config.video.crop.y * 100) / config.video.crop.height}%`,
+                  left: `${(-config.video.crop.x * 100) / config.video.crop.width}%`,
+                  width: `${10000 / config.video.crop.width}%`,
+                  height: `${10000 / config.video.crop.height}%`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <video
+                  ref={videoRef}
+                  className="background-selection-video"
+                  src={config.video.url}
+                  loop={config.video.loop}
+                  muted={config.video.muted}
+                  autoPlay
+                  playsInline
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    opacity: config.video.opacity ?? 1,
+                  }}
+                />
+              </div>
+            </div>
+          ) : (
+            <video
+              ref={videoRef}
+              className="background-video"
+              src={config.video.url}
+              loop={config.video.loop}
+              muted={config.video.muted}
+              autoPlay
+              playsInline
+              style={getVideoStyle()}
+            />
+          )}
+        </>
+      )}
+
+      {/* HTML 背景 */}
+      {config.type === 'html' && config.html && (
+        <div
+          className="background-html"
+          dangerouslySetInnerHTML={{ __html: config.html.content }}
+          style={{
+            opacity: config.html.opacity ?? 1,
+          }}
+        />
+      )}
+    </div>
+  );
+}

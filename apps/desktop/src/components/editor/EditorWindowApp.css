@@ -1,0 +1,1552 @@
+/* 注册CSS变量以支持动画 */
+@property --pupil-x {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 50%;
+}
+
+@property --pupil-y {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 50%;
+}
+
+@property --scan-trigger {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+
+/* 独立窗口应用容器 */
+.editor-window-app {
+  width: 100vw;
+  height: 100vh;
+  padding: 20px;
+  color: white;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+/* 通用编辑器窗口样式 - 半透明玻璃效果 */
+.editor-statistics,
+.editor-magnet-library,
+.editor-style-editor,
+.editor-help,
+.editor-creator,
+.background-manager,
+.editor-custom-background {
+  --panel-curve-size: 1em;
+  width: 100%;
+  height: 100%;
+  padding: 0; /* 移除内边距，由内部元素控制 */
+  background: rgba(10, 10, 20, 0.88);
+  border: 2px solid rgba(0, 255, 255, 0.5);
+  box-shadow:
+    0 0 30px rgba(0, 255, 255, 0.6),
+    inset 0 0 20px rgba(0, 255, 255, 0.2);
+  backdrop-filter: blur(12px); /* 降低模糊度提升性能 */
+  box-sizing: border-box;
+  overflow: hidden; /* 隐藏溢出，由内容区域滚动 */
+  user-select: none; /* 禁止文本选择 */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  display: flex;
+  flex-direction: column;
+  /* 多边形裁剪路径 - 左上和右下楞角 */
+  clip-path: polygon(
+    0% var(--panel-curve-size),
+    var(--panel-curve-size) 0,
+    100% 0,
+    100% calc(100% - var(--panel-curve-size)),
+    calc(100% - var(--panel-curve-size)) 100%,
+    0 100%
+  );
+  /* 性能优化 */
+  will-change: transform;
+  contain: layout style paint;
+}
+
+/* 编辑器窗口拖动标题栏 */
+.editor-window-header {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  background: rgba(0, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(0, 255, 255, 0.2);
+  cursor: move;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-window-header:hover {
+  background: rgba(0, 255, 255, 0.1);
+}
+
+.window-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(0, 255, 255, 0.9);
+  text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+  letter-spacing: 1px;
+  user-select: none;
+}
+
+/* 内容区域需要滚动和内边距 */
+.editor-window-content {
+  flex: 1;
+  overflow-y: auto; /* 启用垂直滚动 */
+  overflow-x: hidden; /* 禁用水平滚动条 */
+  padding: 20px;
+  padding-right: 12px; /* 为滚动条留出空间，避免被剪角裁剪 */
+
+  /* 隐藏滚动条但保留滚动功能 */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE 和 Edge */
+}
+
+/* 隐藏 WebKit 滚动条 */
+.editor-window-content::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+/* 允许选择文本内容 */
+.editor-statistics *,
+.editor-magnet-library *,
+.editor-style-editor *,
+.editor-help *,
+.editor-creator *,
+.background-manager *,
+.editor-custom-background * {
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+}
+
+/* 可拖动控制面板 */
+.draggable-control-panel {
+  --panel-curve-size: 1em;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 50px 16px 20px 16px; /* 顶部留出更大拖动手柄空间 */
+  background: rgba(10, 10, 20, 0.77);
+  border: 2px solid rgba(0, 255, 255, 0.5);
+  box-shadow:
+    0 0 30px rgba(0, 255, 255, 0.6),
+    inset 0 0 20px rgba(0, 255, 255, 0.2);
+  backdrop-filter: blur(12px); /* 降低模糊度提升性能 */
+  box-sizing: border-box;
+  overflow: hidden; /* 隐藏滚动条 */
+  user-select: none; /* 禁止文本选择 */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  /* 多边形裁剪路径 - 左上和右下楞角 */
+  clip-path: polygon(
+    0% var(--panel-curve-size),
+    var(--panel-curve-size) 0,
+    100% 0,
+    100% calc(100% - var(--panel-curve-size)),
+    calc(100% - var(--panel-curve-size)) 100%,
+    0 100%
+  );
+  /* 性能优化 */
+  will-change: transform;
+  contain: layout style;
+}
+
+/* 控制面板的拖动标题栏 - 特殊样式 */
+.control-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: move;
+  border-radius: 0;
+  transition: all 0.3s ease;
+  background: transparent;
+  user-select: none;
+  padding: 0; /* 覆盖默认的 padding */
+  border-bottom: none; /* 移除底部边框 */
+}
+
+.control-header:hover {
+  background: rgba(0, 255, 255, 0.08);
+}
+
+/* 保留旧的 .drag-handle 样式以防其他地方使用 */
+.drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: move;
+  border-radius: 0;
+  transition: all 0.3s ease;
+  background: transparent;
+  user-select: none;
+}
+
+.drag-handle:hover {
+  background: rgba(0, 255, 255, 0.08);
+}
+
+.drag-dots {
+  font-size: 16px;
+  color: rgba(0, 255, 255, 0.3);
+  letter-spacing: 2px;
+  transition: all 0.3s ease;
+  user-select: none;
+  padding: 8px;
+}
+
+.drag-handle:hover .drag-dots,
+.control-header:hover .drag-dots {
+  color: rgba(0, 255, 255, 0.8);
+  text-shadow: 0 0 10px rgba(0, 255, 255, 0.8);
+}
+
+/* 赛博朋克风格按钮 */
+.cyber-btn {
+  --border-color: linear-gradient(-45deg, #6affa894);
+  --border-width: 0.125em;
+  --curve-size: 0.5em;
+  --blur: 30px;
+  --bg: #063f5a;
+  --color: #afffff;
+  color: var(--color);
+  cursor: pointer;
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  place-content: center;
+  padding: 0.5em 1.5em;
+  font-size: 17px;
+  font-weight: 600;
+  border: 0;
+  text-transform: uppercase;
+  box-shadow: 10px 10px 20px rgba(0, 0, 0, 0.6);
+  user-select: none;
+  clip-path: polygon(
+    0% var(--curve-size),
+    var(--curve-size) 0,
+    100% 0,
+    100% calc(100% - var(--curve-size)),
+    calc(100% - var(--curve-size)) 100%,
+    0 100%
+  );
+  transition: color 250ms;
+}
+
+.cyber-btn::after,
+.cyber-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.cyber-btn::before {
+  background: var(--border-color);
+  background-size: 300% 300%;
+  animation: move-bg7234 5s ease infinite;
+  z-index: -2;
+}
+
+@keyframes move-bg7234 {
+  0% {
+    background-position: 31% 0%;
+  }
+  50% {
+    background-position: 70% 100%;
+  }
+  100% {
+    background-position: 31% 0%;
+  }
+}
+
+.cyber-btn::after {
+  background: var(--bg);
+  z-index: -1;
+  clip-path: polygon(
+    var(--border-width) calc(var(--curve-size) + var(--border-width) * 0.5),
+    calc(var(--curve-size) + var(--border-width) * 0.5) var(--border-width),
+    calc(100% - var(--border-width)) var(--border-width),
+    calc(100% - var(--border-width))
+      calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5)),
+    calc(100% - calc(var(--curve-size) + var(--border-width) * 0.5))
+      calc(100% - var(--border-width)),
+    var(--border-width) calc(100% - var(--border-width))
+  );
+  transform-origin: center center;
+  transform: scaleX(1); /* 默认填满 */
+  transition: transform 400ms ease-out;
+}
+
+.cyber-btn:hover::after {
+  transform: scaleX(0); /* 悬停时收缩为空心 */
+  transition: transform 250ms ease-out;
+}
+
+.cyber-btn:hover {
+  color: #fff;
+}
+
+/* 移除 focus 状态的填满效果，只保留 outline */
+.cyber-btn:focus {
+  outline: none;
+}
+
+.cyber-btn:focus-visible {
+  outline: 2px solid rgba(106, 255, 168, 0.5);
+  outline-offset: 2px;
+}
+
+.btn-text {
+  letter-spacing: 1px;
+}
+
+.btn-icon {
+  font-size: 1.2em;
+}
+
+/* 控制按钮组（submit + 置顶按钮） */
+.control-button-group {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.control-button-group .exit-cyber-btn {
+  flex: 3;
+}
+
+.control-button-group .pin-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5em;
+  transition:
+    transform 200ms ease,
+    filter 200ms ease;
+}
+
+/* 置顶按钮激活状态 */
+.pin-btn.active {
+  --bg: #0a5a3f;
+  --border-color: linear-gradient(-45deg, #6affb8, #6aff94);
+  --color: #6affb8;
+}
+
+.pin-btn.active::before {
+  animation: move-bg-active 5s ease infinite;
+}
+
+/* 修复悬停时的动画冲突 */
+.pin-btn:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.2);
+}
+
+.pin-btn:active {
+  transform: translateY(0);
+  transition: transform 100ms ease;
+}
+
+/* 置顶按钮取消悬停填满效果，使用渐变透明度 */
+.pin-btn::after {
+  transform: scaleX(1); /* 覆盖父类的 scaleX(0)，保持正常大小 */
+  opacity: 1; /* 默认填满 */
+  transition: opacity 400ms ease-out;
+}
+
+.pin-btn:hover::after {
+  transform: scaleX(1); /* 覆盖父类的 hover 效果 */
+  opacity: 1; /* 悬停时保持填满 */
+}
+
+/* 开启状态下渐变消失（空心效果） */
+.pin-btn.active::after {
+  opacity: 0;
+  transition: opacity 500ms ease-out;
+}
+
+.pin-btn.active:hover::after {
+  opacity: 0; /* 保持空心 */
+}
+
+/* 置顶按钮移除 focus 视觉效果，防止点击后残留 */
+.pin-btn:focus {
+  outline: none;
+}
+
+.pin-btn:focus-visible {
+  outline: 2px solid rgba(106, 255, 168, 0.5);
+  outline-offset: 2px;
+}
+
+@keyframes move-bg-active {
+  0% {
+    background-position: 31% 0%;
+  }
+  50% {
+    background-position: 70% 100%;
+  }
+  100% {
+    background-position: 31% 0%;
+  }
+}
+
+/* Switch容器 */
+.switch-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  user-select: none;
+}
+
+/* 赛博风格开关按钮 */
+.cyber-switch-btn {
+  --btn-corner-size: 6px;
+  width: 100px;
+  height: 45px;
+  flex-shrink: 0;
+  position: relative;
+  background: 
+    /* 横向细线纹理 */
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.9) 0px,
+      rgba(0, 0, 0, 0.9) 2px,
+      rgba(15, 15, 25, 0.9) 2px,
+      rgba(15, 15, 25, 0.9) 4px
+    ),
+    /* 深色基底 */ radial-gradient(ellipse at center, rgba(30, 30, 40, 0.8), rgba(10, 10, 20, 0.9));
+  border: 2px solid rgba(100, 100, 120, 0.5);
+  cursor: pointer;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+  box-shadow:
+    inset 0 3px 10px rgba(0, 0, 0, 0.7),
+    inset 0 -2px 5px rgba(255, 255, 255, 0.05),
+    0 0 15px rgba(0, 255, 255, 0.1);
+}
+
+/* 轨道阴影层 */
+.cyber-switch-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    /* 上下暗角 */ linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.5) 0%,
+    transparent 25%,
+    transparent 75%,
+    rgba(0, 0, 0, 0.5) 100%
+  );
+  opacity: 0.8;
+  transition: all 0.4s;
+  overflow: hidden;
+  z-index: 0;
+}
+
+/* 激活状态 - 01字符串扫描线 */
+.cyber-switch-btn.active::before {
+  content: '01010110100101101001011010010110100101101001011010010110100101101001';
+  display: flex;
+  align-items: center;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  font-weight: bold;
+  color: rgba(0, 255, 194, 0.6);
+  letter-spacing: 2px;
+  white-space: nowrap;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.5) 0%,
+    transparent 25%,
+    transparent 75%,
+    rgba(0, 0, 0, 0.5) 100%
+  );
+  animation: hackScan 3s linear infinite;
+  text-shadow: 0 0 5px rgba(0, 255, 194, 0.8);
+  opacity: 1;
+  transition:
+    opacity 0.5s ease-out,
+    filter 0.5s ease-out;
+}
+
+/* 关闭时01字符串淡出 - 保持原有动画继续运行 */
+.cyber-switch-btn.powering-off::before {
+  animation:
+    hackScan 3s linear infinite,
+    hackScanOverlayFade 0.6s ease-out forwards;
+}
+
+/* 悬停时增强01字符串 */
+.cyber-switch-btn.active:hover::before {
+  opacity: 1;
+  transition: opacity 0.3s ease-in;
+}
+
+/* 扫描线动画 */
+.cyber-switch-btn::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 255, 0.3), transparent);
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* 扫描线动画触发 - 通过class控制确保完整执行 */
+.cyber-switch-btn.scan-triggered::after {
+  animation: scanOnce 2.5s ease-in-out forwards;
+}
+
+/* 扫描线单次动画 - 包含完整的淡入淡出 */
+@keyframes scanOnce {
+  0% {
+    left: -100%;
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+  }
+  45% {
+    left: 100%;
+    opacity: 1;
+  }
+  50% {
+    left: 100%;
+    opacity: 0;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+.cyber-switch-btn:hover {
+  border-color: rgba(0, 255, 255, 0.7);
+  box-shadow:
+    inset 0 3px 10px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 5px rgba(255, 255, 255, 0.1),
+    0 0 25px rgba(0, 255, 255, 0.4),
+    0 0 40px rgba(0, 255, 255, 0.2);
+}
+
+.cyber-switch-btn:hover::before {
+  opacity: 0.8;
+}
+
+/* 滑动指示器 - 圆形设计 */
+.switch-indicator {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, rgba(30, 30, 40, 1), rgba(50, 50, 60, 1));
+  border: 2px solid #5c5e79;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  z-index: 1;
+  /* 使用独立的transition，不包含left */
+  transition:
+    transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    border-color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    box-shadow 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* 指示器内部圆点 - 默认隐藏 */
+.switch-indicator::before {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #8a8b9f;
+  border-radius: 50%;
+  transform: scale(0);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  box-shadow:
+    0 0 8px rgba(138, 139, 159, 0.6),
+    0 0 15px rgba(138, 139, 159, 0.3);
+}
+
+/* 眼睛高光点 - 只在激活状态显示 */
+.cyber-switch-btn.active .switch-indicator::before::after {
+  content: '';
+  position: absolute;
+  top: 30%;
+  left: 60%;
+  width: 2px;
+  height: 2px;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.9) 0%,
+    rgba(255, 255, 255, 0.6) 50%,
+    transparent 100%
+  );
+  border-radius: 50%;
+  animation: eyeGlint 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 指示器旋转轨道 */
+.switch-indicator::after {
+  content: '';
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  /* 渐变线条：从亮到暗 */
+  border-top-color: #5c5e79;
+  border-right-color: rgba(92, 94, 121, 0.4);
+  opacity: 0;
+  transform: scale(0.8) translateZ(0);
+  transition: all 0.4s ease;
+  /* 添加外发光 */
+  filter: drop-shadow(0 0 2px rgba(92, 94, 121, 0.3));
+  /* 抗锯齿优化 */
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+/* 悬停效果 */
+.cyber-switch-btn:hover .switch-indicator {
+  transform: translateY(-50%) scale(1.1);
+  border-color: #8a8daf;
+  transition:
+    transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    border-color 0.3s ease-in;
+}
+
+/* 离开悬停时平滑缩小 */
+.cyber-switch-btn:not(:hover) .switch-indicator {
+  transition:
+    transform 0.5s cubic-bezier(0.4, 0, 0.6, 1),
+    border-color 0.5s ease-out;
+}
+
+/* 悬停时眼睛快速反应 - 保持放大状态 */
+.cyber-switch-btn.active:hover .switch-indicator::before {
+  transform: scale(1.35) translateZ(0);
+  filter: brightness(1.2) saturate(1.3) contrast(1.1);
+  /* 悬停时增强光晕 */
+  box-shadow:
+    0 0 18px rgba(0, 255, 194, 1),
+    0 0 35px rgba(0, 255, 194, 0.6),
+    0 0 50px rgba(0, 255, 194, 0.3),
+    inset 0 0 10px rgba(0, 255, 194, 0.4),
+    inset 0 0 5px rgba(0, 50, 40, 0.9);
+  animation:
+    eyeDilate 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards,
+    pupilMoveXFast 4s cubic-bezier(0.4, 0, 0.6, 1) infinite 0.6s,
+    pupilMoveYFast 4s cubic-bezier(0.4, 0, 0.6, 1) infinite 0.6s;
+  transition:
+    transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    filter 0.4s ease-out,
+    box-shadow 0.4s ease-out;
+  /* 悬停时禁用眨眼和呼吸，保持警觉状态 */
+}
+
+/* 离开悬停时的平滑过渡 */
+.cyber-switch-btn.active:not(:hover) .switch-indicator::before {
+  /* 恢复默认光晕 */
+  box-shadow:
+    0 0 12px rgba(0, 255, 194, 0.8),
+    0 0 25px rgba(0, 255, 194, 0.4),
+    inset 0 0 8px rgba(0, 255, 194, 0.3),
+    inset 0 0 3px rgba(0, 50, 40, 0.8);
+  animation:
+    eyeShrink 0.5s cubic-bezier(0.4, 0, 0.6, 1) forwards,
+    eyeBreath 4s cubic-bezier(0.4, 0, 0.6, 1) infinite 0.5s,
+    eyeBlink 6s cubic-bezier(0.4, 0, 0.6, 1) infinite 0.5s,
+    pupilMoveX 8s cubic-bezier(0.4, 0, 0.6, 1) infinite 0.5s,
+    pupilMoveY 8s cubic-bezier(0.4, 0, 0.6, 1) infinite 0.5s;
+  transition:
+    transform 0.6s cubic-bezier(0.4, 0, 0.6, 1),
+    filter 0.6s ease-out,
+    box-shadow 0.6s ease-out;
+}
+
+/* 瞳孔放大效果 */
+@keyframes eyeDilate {
+  0% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  40% {
+    transform: scale(1.4);
+    filter: brightness(1.25) saturate(1.4);
+  }
+  100% {
+    transform: scale(1.35);
+    filter: brightness(1.2) saturate(1.3);
+  }
+}
+
+/* 瞳孔缩小效果 */
+@keyframes eyeShrink {
+  0% {
+    transform: scale(1.35);
+    filter: brightness(1.2) saturate(1.3) contrast(1.1);
+  }
+  50% {
+    transform: scale(0.95);
+    filter: brightness(0.95) saturate(0.95) contrast(1);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1) saturate(1) contrast(1);
+  }
+}
+
+/* 眼睛唤醒效果 - 开机时 */
+@keyframes eyeWakeUp {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+    filter: brightness(0);
+  }
+  30% {
+    transform: scale(0.3);
+    opacity: 0.5;
+    filter: brightness(2) saturate(0);
+  }
+  60% {
+    transform: scale(1.2);
+    opacity: 1;
+    filter: brightness(1.5) saturate(1.5);
+  }
+  80% {
+    transform: scale(0.9);
+    filter: brightness(0.9) saturate(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: brightness(1) saturate(1);
+  }
+}
+
+/* 眼睛关闭效果 - 关机时 */
+@keyframes eyeShutdown {
+  0% {
+    opacity: 1;
+    filter: brightness(1) hue-rotate(0deg);
+  }
+  20% {
+    filter: brightness(1.5) hue-rotate(0deg) saturate(1.5);
+  }
+  40% {
+    filter: brightness(0.8) hue-rotate(120deg) saturate(2);
+  }
+  60% {
+    filter: brightness(1.2) hue-rotate(-120deg) saturate(2);
+  }
+  80% {
+    opacity: 0.5;
+    filter: brightness(0.3) hue-rotate(0deg) saturate(0.5);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.1);
+    filter: brightness(0) saturate(0);
+  }
+}
+
+/* 指示器开机效果 */
+@keyframes powerOn {
+  0% {
+    border-color: #5c5e79;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  20% {
+    border-color: rgba(0, 255, 194, 0.3);
+    box-shadow:
+      0 0 10px rgba(0, 255, 194, 0.3),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  40% {
+    border-color: rgba(0, 255, 194, 0.6);
+    box-shadow:
+      0 0 20px rgba(0, 255, 194, 0.6),
+      0 0 40px rgba(0, 255, 194, 0.3),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  60% {
+    border-color: #00ffc2;
+    box-shadow:
+      0 0 30px rgba(0, 255, 194, 0.8),
+      0 0 60px rgba(0, 255, 194, 0.4),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  80% {
+    border-color: #00ffc2;
+    box-shadow:
+      0 0 15px rgba(0, 255, 194, 0.6),
+      0 0 30px rgba(0, 255, 194, 0.3),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  100% {
+    border-color: #00ffc2;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* 指示器关机效果 - 电流逐渐断开 */
+@keyframes powerOff {
+  0% {
+    border-color: #00ffc2;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  10% {
+    border-color: rgba(255, 100, 80, 1);
+    box-shadow:
+      0 0 20px rgba(255, 100, 80, 0.9),
+      0 0 40px rgba(255, 100, 80, 0.5),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  25% {
+    border-color: rgba(255, 80, 60, 0.8);
+    box-shadow:
+      0 0 15px rgba(255, 80, 60, 0.7),
+      0 0 30px rgba(255, 80, 60, 0.4),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  40% {
+    border-color: rgba(255, 60, 40, 0.6);
+    box-shadow:
+      0 0 10px rgba(255, 60, 40, 0.5),
+      0 0 20px rgba(255, 60, 40, 0.3),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  55% {
+    border-color: rgba(255, 50, 30, 0.4);
+    box-shadow:
+      0 0 8px rgba(255, 50, 30, 0.3),
+      0 0 15px rgba(255, 50, 30, 0.2),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  70% {
+    border-color: rgba(255, 40, 20, 0.25);
+    box-shadow:
+      0 0 5px rgba(255, 40, 20, 0.2),
+      0 0 10px rgba(255, 40, 20, 0.1),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  85% {
+    border-color: rgba(200, 40, 20, 0.15);
+    box-shadow:
+      0 0 3px rgba(200, 40, 20, 0.1),
+      0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+  100% {
+    border-color: #5c5e79;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* 激活状态 */
+.cyber-switch-btn.active {
+  border-color: rgba(0, 255, 194, 0.7);
+  box-shadow:
+    inset 0 3px 10px rgba(0, 0, 0, 0.7),
+    inset 0 -1px 5px rgba(0, 255, 194, 0.1),
+    0 0 25px rgba(0, 255, 194, 0.5),
+    0 0 40px rgba(0, 255, 194, 0.2);
+}
+
+.cyber-switch-btn.active::before {
+  opacity: 0.8;
+}
+
+.cyber-switch-btn.active .switch-indicator {
+  /* 滑动到右侧 */
+  animation:
+    slideToRight 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards,
+    powerOn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  border-color: #00ffc2;
+  transform: translateY(-50%) scale(0.9);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* 滑动到右侧动画 */
+@keyframes slideToRight {
+  0% {
+    left: 6px;
+  }
+  100% {
+    left: calc(100% - 38px);
+  }
+}
+
+/* 激活状态下悬停 */
+.cyber-switch-btn.active:hover .switch-indicator {
+  transform: translateY(-50%) scale(1);
+  border-color: #00ffc2;
+  transition:
+    transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    border-color 0.3s ease-in;
+}
+
+/* 激活状态离开悬停 */
+.cyber-switch-btn.active:not(:hover) .switch-indicator {
+  transform: translateY(-50%) scale(0.9);
+  transition:
+    transform 0.5s cubic-bezier(0.4, 0, 0.6, 1),
+    border-color 0.5s ease-out;
+}
+
+/* 关机动画 - 通过class触发 */
+.cyber-switch-btn.powering-off {
+  border-color: rgba(255, 100, 80, 0.7);
+  box-shadow:
+    inset 0 3px 10px rgba(0, 0, 0, 0.7),
+    inset 0 -1px 5px rgba(255, 100, 80, 0.1),
+    0 0 25px rgba(255, 100, 80, 0.5),
+    0 0 40px rgba(255, 100, 80, 0.2);
+  animation: switchPowerOff 0.6s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}
+
+.cyber-switch-btn.powering-off .switch-indicator {
+  animation:
+    slideToLeft 0.6s cubic-bezier(0.4, 0, 0.6, 1) forwards,
+    powerOff 0.6s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}
+
+/* 开关按钮本体关机动画 - 电流逐渐断开 */
+@keyframes switchPowerOff {
+  0% {
+    border-color: rgba(0, 255, 194, 0.7);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.7),
+      inset 0 -1px 5px rgba(0, 255, 194, 0.1),
+      0 0 25px rgba(0, 255, 194, 0.5),
+      0 0 40px rgba(0, 255, 194, 0.2);
+  }
+  10% {
+    border-color: rgba(255, 100, 80, 0.9);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.7),
+      inset 0 -1px 5px rgba(255, 100, 80, 0.2),
+      0 0 30px rgba(255, 100, 80, 0.7),
+      0 0 50px rgba(255, 100, 80, 0.4);
+  }
+  25% {
+    border-color: rgba(255, 80, 60, 0.75);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.75),
+      inset 0 -1px 5px rgba(255, 80, 60, 0.15),
+      0 0 25px rgba(255, 80, 60, 0.6),
+      0 0 45px rgba(255, 80, 60, 0.3);
+  }
+  40% {
+    border-color: rgba(255, 60, 40, 0.6);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.8),
+      inset 0 -1px 5px rgba(255, 60, 40, 0.1),
+      0 0 20px rgba(255, 60, 40, 0.5),
+      0 0 35px rgba(255, 60, 40, 0.25);
+  }
+  55% {
+    border-color: rgba(255, 50, 30, 0.45);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.8),
+      inset 0 -1px 5px rgba(255, 50, 30, 0.08),
+      0 0 15px rgba(255, 50, 30, 0.4),
+      0 0 25px rgba(255, 50, 30, 0.2);
+  }
+  70% {
+    border-color: rgba(255, 40, 20, 0.3);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.85),
+      inset 0 -1px 5px rgba(255, 40, 20, 0.05),
+      0 0 10px rgba(255, 40, 20, 0.3),
+      0 0 18px rgba(255, 40, 20, 0.15);
+  }
+  85% {
+    border-color: rgba(200, 40, 20, 0.2);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.9),
+      inset 0 -1px 5px rgba(200, 40, 20, 0.03),
+      0 0 8px rgba(200, 40, 20, 0.2),
+      0 0 12px rgba(200, 40, 20, 0.1);
+  }
+  100% {
+    border-color: rgba(100, 100, 120, 0.5);
+    box-shadow:
+      inset 0 3px 10px rgba(0, 0, 0, 0.7),
+      inset 0 -2px 5px rgba(255, 255, 255, 0.05),
+      0 0 15px rgba(0, 255, 255, 0.1);
+  }
+}
+
+/* 滑动到左侧动画 */
+@keyframes slideToLeft {
+  0% {
+    left: calc(100% - 38px);
+  }
+  100% {
+    left: 6px;
+  }
+}
+
+/* 关机时眼睛动画 */
+.cyber-switch-btn.powering-off .switch-indicator::before {
+  animation: eyeShutdown 0.6s cubic-bezier(0.4, 0, 0.6, 1) forwards !important;
+}
+
+/* 关机时旋转轨道加速并消失 */
+.cyber-switch-btn.powering-off .switch-indicator::after {
+  animation: orbitFade 0.6s cubic-bezier(0.4, 0, 0.6, 1) forwards !important;
+}
+
+/* 轨道淡出动画 - 关机时从青色转红色 */
+@keyframes orbitFade {
+  0% {
+    opacity: 1;
+    transform: rotate(0deg) scale(1.3);
+    border-top-color: rgba(255, 100, 80, 1);
+    border-right-color: rgba(255, 80, 60, 0.7);
+    border-bottom-color: rgba(255, 60, 40, 0.4);
+    border-left-color: rgba(255, 50, 30, 0.2);
+    filter: blur(0.3px) drop-shadow(0 0 4px rgba(255, 100, 80, 0.9));
+    box-shadow:
+      0 0 20px rgba(255, 100, 80, 0.7),
+      0 0 50px rgba(255, 100, 80, 0.2);
+  }
+  30% {
+    opacity: 0.8;
+    transform: rotate(360deg) scale(1.2);
+    border-top-color: rgba(255, 80, 60, 0.9);
+    border-right-color: rgba(255, 60, 40, 0.6);
+    border-bottom-color: rgba(255, 50, 30, 0.35);
+    border-left-color: rgba(255, 40, 20, 0.15);
+    filter: blur(0.3px) drop-shadow(0 0 3px rgba(255, 80, 60, 0.7));
+    box-shadow:
+      0 0 15px rgba(255, 80, 60, 0.6),
+      0 0 40px rgba(255, 80, 60, 0.15);
+  }
+  60% {
+    opacity: 0.4;
+    transform: rotate(540deg) scale(0.9);
+    border-top-color: rgba(255, 60, 40, 0.6);
+    border-right-color: rgba(255, 50, 30, 0.4);
+    border-bottom-color: rgba(255, 40, 20, 0.2);
+    border-left-color: rgba(200, 40, 20, 0.1);
+    filter: blur(0.2px) drop-shadow(0 0 2px rgba(255, 60, 40, 0.5));
+    box-shadow:
+      0 0 10px rgba(255, 60, 40, 0.4),
+      0 0 25px rgba(255, 60, 40, 0.1);
+  }
+  85% {
+    opacity: 0.15;
+    transform: rotate(680deg) scale(0.5);
+    border-top-color: rgba(200, 40, 20, 0.3);
+    border-right-color: rgba(180, 35, 15, 0.2);
+    border-bottom-color: rgba(160, 30, 10, 0.1);
+    border-left-color: rgba(140, 25, 5, 0.05);
+    filter: blur(0.1px) drop-shadow(0 0 1px rgba(200, 40, 20, 0.3));
+    box-shadow:
+      0 0 5px rgba(200, 40, 20, 0.2),
+      0 0 12px rgba(200, 40, 20, 0.05);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(720deg) scale(0.4);
+    border-top-color: rgba(150, 30, 10, 0.1);
+    border-right-color: rgba(130, 25, 5, 0.05);
+    border-bottom-color: rgba(110, 20, 0, 0);
+    border-left-color: rgba(100, 15, 0, 0);
+    filter: blur(0px) drop-shadow(0 0 0px transparent);
+    box-shadow: none;
+  }
+}
+
+.cyber-switch-btn.active .switch-indicator::before {
+  transform: scale(1);
+  opacity: 1;
+  /* 眼睛开机动画 */
+  animation-name: eyeWakeUp, eyeBreath, eyeBlink, pupilMoveX, pupilMoveY;
+  animation-duration: 1s, 4s, 6s, 8s, 8s;
+  animation-timing-function:
+    cubic-bezier(0.34, 1.56, 0.64, 1), cubic-bezier(0.4, 0, 0.6, 1), cubic-bezier(0.4, 0, 0.6, 1),
+    cubic-bezier(0.4, 0, 0.6, 1), cubic-bezier(0.4, 0, 0.6, 1);
+  animation-delay: 0s, 1s, 1s, 1s, 1s;
+  animation-iteration-count: 1, infinite, infinite, infinite, infinite;
+  animation-fill-mode: forwards, none, none, none, none;
+  /* 高质感眼睛效果：多层次瞳孔虹膜 */
+  --pupil-x: 50%;
+  --pupil-y: 50%;
+  background: 
+    /* 瞳孔高光 */
+    radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.4) 0%, transparent 3%),
+    /* 主瞳孔渐变 - 使用CSS变量实现真实的瞳孔移动 */
+      radial-gradient(
+        circle at var(--pupil-x) var(--pupil-y),
+        rgba(0, 30, 25, 1) 0%,
+        /* 瞳孔核心 */ rgba(0, 40, 35, 1) 15%,
+        /* 瞳孔中层 */ rgba(0, 50, 40, 1) 22%,
+        /* 瞳孔外层 */ rgba(0, 50, 40, 0.9) 24%,
+        /* 瞳孔边缘 */ rgba(0, 180, 140, 0.6) 25%,
+        /* 虹膜过渡 */ rgba(0, 255, 194, 0.8) 30%,
+        /* 虹膜内环 */ rgba(0, 240, 180, 1) 45%,
+        /* 虹膜纹理1 */ rgba(0, 255, 194, 0.95) 55%,
+        /* 虹膜纹理2 */ rgba(0, 220, 170, 1) 70%,
+        /* 虹膜纹理3 */ rgba(0, 200, 160, 0.9) 85%,
+        /* 虹膜外环 */ rgba(0, 255, 194, 0.4) 95%,
+        /* 边缘光晕 */ transparent 100% /* 完全透明 */
+      );
+  background-size:
+    100% 100%,
+    120% 120%;
+  background-position:
+    35% 35%,
+    center center;
+  box-shadow:
+    0 0 12px rgba(0, 255, 194, 0.8),
+    0 0 25px rgba(0, 255, 194, 0.4),
+    inset 0 0 8px rgba(0, 255, 194, 0.3),
+    inset 0 0 3px rgba(0, 50, 40, 0.8);
+  animation:
+    eyeBreath 4s cubic-bezier(0.4, 0, 0.6, 1) infinite,
+    eyeBlink 6s cubic-bezier(0.4, 0, 0.6, 1) infinite,
+    pupilMoveX 8s cubic-bezier(0.4, 0, 0.6, 1) infinite,
+    pupilMoveY 8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: transform, filter, --pupil-x, --pupil-y, clip-path;
+  transition:
+    transform 0.3s ease-out,
+    background-position 0.3s ease-out;
+}
+
+/* 眼睛眨眼效果 - 光圈收缩式 */
+@keyframes eyeBlink {
+  0%,
+  85%,
+  100% {
+    clip-path: circle(50% at center);
+    opacity: 1;
+    filter: brightness(1);
+  }
+  91% {
+    clip-path: circle(40% at center);
+    opacity: 0.95;
+    filter: brightness(0.95);
+  }
+  94% {
+    clip-path: circle(20% at center);
+    opacity: 0.85;
+    filter: brightness(0.8);
+  }
+  95% {
+    clip-path: circle(5% at center);
+    opacity: 0.7;
+    filter: brightness(0.6);
+  }
+  96% {
+    clip-path: circle(3% at center);
+    opacity: 0.6;
+    filter: brightness(0.5);
+  }
+  98% {
+    clip-path: circle(25% at center);
+    opacity: 0.9;
+    filter: brightness(0.9);
+  }
+}
+
+.cyber-switch-btn.active .switch-indicator::after {
+  opacity: 1;
+  transform: scale(1.3) translateZ(0);
+  /* 渐变线条：头部最亮，尾部渐暗 */
+  border-top-color: rgba(0, 255, 225, 1);
+  border-right-color: rgba(0, 255, 194, 0.5);
+  border-bottom-color: rgba(0, 255, 194, 0.2);
+  border-left-color: rgba(0, 255, 194, 0.1);
+  border-width: 2px;
+  animation: orbit 2.5s infinite linear;
+  /* 柔和发光 + 轻微模糊抗锯齿 */
+  filter: blur(0.3px) drop-shadow(0 0 4px rgba(0, 255, 194, 0.9)) brightness(1.08);
+  box-shadow:
+    0 0 20px rgba(0, 255, 194, 0.7),
+    0 0 50px rgba(0, 255, 194, 0.2);
+  /* 性能优化 + 边缘平滑 */
+  contain: layout style paint;
+  backface-visibility: hidden;
+  will-change: transform;
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  /* 精简 transition */
+  transition:
+    filter 0.5s ease-out,
+    box-shadow 0.5s ease-out,
+    border-color 0.5s ease-out;
+}
+
+/* 悬停时增强轨道 - 放大+视觉加速效果 */
+.cyber-switch-btn.active:hover .switch-indicator::after {
+  transform: scale(1.45) translateZ(0);
+  border-width: 2px;
+  /* 悬停时颜色微调 */
+  border-top-color: rgba(0, 255, 235, 1);
+  border-right-color: rgba(0, 255, 194, 0.7);
+  border-bottom-color: rgba(0, 255, 194, 0.4);
+  border-left-color: rgba(0, 255, 194, 0.2);
+  /* 精简发光+轻微模糊 */
+  filter: blur(0.5px) drop-shadow(0 0 5px rgba(0, 255, 194, 0.95)) brightness(1.1);
+  /* 优化的发光拖尾 */
+  box-shadow:
+    0 0 22px rgba(0, 255, 194, 0.75),
+    5px 0 18px rgba(0, 255, 194, 0.45),
+    -5px 0 18px rgba(0, 255, 194, 0.45),
+    0 0 50px rgba(0, 255, 194, 0.2);
+  transition:
+    filter 0.5s ease-out,
+    box-shadow 0.5s ease-out,
+    border-color 0.5s ease-out;
+}
+
+/* 离开悬停时轨道平滑恢复 */
+.cyber-switch-btn.active:not(:hover) .switch-indicator::after {
+  transform: scale(1.3) translateZ(0);
+  border-width: 2px;
+  /* 恢复默认渐变 */
+  border-top-color: rgba(0, 255, 225, 1);
+  border-right-color: rgba(0, 255, 194, 0.5);
+  border-bottom-color: rgba(0, 255, 194, 0.2);
+  border-left-color: rgba(0, 255, 194, 0.1);
+  filter: blur(0.3px) drop-shadow(0 0 4px rgba(0, 255, 194, 0.9)) brightness(1.08);
+  transition:
+    filter 0.6s ease-out,
+    box-shadow 0.6s ease-out,
+    border-color 0.6s ease-out;
+}
+
+/* 轨道旋转动画 - 只控制旋转，不控制缩放 */
+@keyframes orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 字符串扫描动画 - 从右向左 */
+@keyframes hackScan {
+  0% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.8;
+  }
+  90% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+}
+
+/* 字符串淡出叠加动画 - 不改变位置，只改变可见性 */
+@keyframes hackScanOverlayFade {
+  0% {
+    opacity: 1;
+    filter: brightness(1) blur(0px);
+  }
+  40% {
+    opacity: 0.6;
+    filter: brightness(0.7) blur(0.5px);
+  }
+  70% {
+    opacity: 0.3;
+    filter: brightness(0.4) blur(1px);
+  }
+  100% {
+    opacity: 0;
+    filter: brightness(0) blur(2px);
+  }
+}
+
+/* 眼睛呼吸效果 - 平滑自然 */
+@keyframes eyeBreath {
+  0%,
+  100% {
+    transform: scale(1) translateZ(0);
+    filter: brightness(1) saturate(1) hue-rotate(0deg);
+  }
+  20% {
+    transform: scale(1.02) translateZ(0);
+    filter: brightness(1.05) saturate(1.05) hue-rotate(2deg);
+  }
+  40% {
+    transform: scale(0.98) translateZ(0);
+    filter: brightness(0.98) saturate(0.98) hue-rotate(-1deg);
+  }
+  60% {
+    transform: scale(1.01) translateZ(0);
+    filter: brightness(1.02) saturate(1.02) hue-rotate(1deg);
+  }
+  80% {
+    transform: scale(0.99) translateZ(0);
+    filter: brightness(0.99) saturate(1) hue-rotate(0deg);
+  }
+}
+
+/* 瞳孔水平移动 */
+@keyframes pupilMoveX {
+  0%,
+  100% {
+    --pupil-x: 50%;
+  }
+  15% {
+    --pupil-x: 58%; /* 向右 */
+  }
+  30% {
+    --pupil-x: 42%; /* 向左 */
+  }
+  45% {
+    --pupil-x: 50%; /* 回中 */
+  }
+  60% {
+    --pupil-x: 50%; /* 保持 */
+  }
+  75% {
+    --pupil-x: 56%; /* 右 */
+  }
+  90% {
+    --pupil-x: 44%; /* 左 */
+  }
+}
+
+/* 瞳孔垂直移动 */
+@keyframes pupilMoveY {
+  0%,
+  100% {
+    --pupil-y: 50%;
+  }
+  15% {
+    --pupil-y: 50%; /* 保持水平 */
+  }
+  30% {
+    --pupil-y: 50%; /* 保持水平 */
+  }
+  45% {
+    --pupil-y: 43%; /* 向上看 */
+  }
+  60% {
+    --pupil-y: 57%; /* 向下看 */
+  }
+  75% {
+    --pupil-y: 45%; /* 上 */
+  }
+  90% {
+    --pupil-y: 55%; /* 下 */
+  }
+}
+
+/* 瞳孔快速水平移动（悬停） */
+@keyframes pupilMoveXFast {
+  0%,
+  100% {
+    --pupil-x: 50%;
+  }
+  12% {
+    --pupil-x: 60%; /* 快速右 */
+  }
+  25% {
+    --pupil-x: 40%; /* 快速左 */
+  }
+  37% {
+    --pupil-x: 50%; /* 回中 */
+  }
+  50% {
+    --pupil-x: 50%; /* 保持 */
+  }
+  62% {
+    --pupil-x: 58%; /* 右 */
+  }
+  75% {
+    --pupil-x: 42%; /* 左 */
+  }
+  87% {
+    --pupil-x: 56%; /* 右 */
+  }
+}
+
+/* 瞳孔快速垂直移动（悬停） */
+@keyframes pupilMoveYFast {
+  0%,
+  100% {
+    --pupil-y: 50%;
+  }
+  12% {
+    --pupil-y: 50%; /* 保持 */
+  }
+  25% {
+    --pupil-y: 50%; /* 保持 */
+  }
+  37% {
+    --pupil-y: 40%; /* 快速上 */
+  }
+  50% {
+    --pupil-y: 60%; /* 快速下 */
+  }
+  62% {
+    --pupil-y: 43%; /* 上 */
+  }
+  75% {
+    --pupil-y: 57%; /* 下 */
+  }
+  87% {
+    --pupil-y: 55%; /* 下 */
+  }
+}
+
+/* 眼睛高光闪烁 */
+@keyframes eyeGlint {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.cyber-switch-btn:active {
+  transform: scale(0.97);
+}
+
+.cyber-switch-btn:active .switch-indicator {
+  transform: translateY(-50%) scale(0.85);
+}
+
+.cyber-switch-btn.active:active .switch-indicator {
+  transform: translateY(-50%) scale(0.8);
+}
+
+/* 发光标签 */
+.glow-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.27);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  user-select: none;
+  text-shadow: none;
+  transition: all 0.3s;
+  white-space: nowrap;
+}
+
+.switch-container:has(.cyber-switch-btn.active) .glow-label {
+  color: rgba(0, 255, 194, 1);
+  text-shadow:
+    0 0 8px rgba(0, 255, 194, 0.8),
+    0 0 15px rgba(0, 255, 194, 0.5),
+    0 0 20px rgba(0, 255, 194, 0.3);
+}
+
+/* 关机时文本标签红色闪烁 */
+.switch-container:has(.cyber-switch-btn.powering-off) .glow-label {
+  animation: labelPowerOff 0.6s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}
+
+/* 文本标签关机动画 - 电流逐渐断开 */
+@keyframes labelPowerOff {
+  0% {
+    color: rgba(255, 100, 80, 1);
+    text-shadow:
+      0 0 15px rgba(255, 100, 80, 0.9),
+      0 0 25px rgba(255, 100, 80, 0.6),
+      0 0 35px rgba(255, 100, 80, 0.3);
+  }
+  10% {
+    color: rgba(255, 100, 80, 1);
+    text-shadow:
+      0 0 15px rgba(255, 100, 80, 0.9),
+      0 0 25px rgba(255, 100, 80, 0.6),
+      0 0 35px rgba(255, 100, 80, 0.3);
+  }
+  25% {
+    color: rgba(255, 80, 60, 0.85);
+    text-shadow:
+      0 0 12px rgba(255, 80, 60, 0.5),
+      0 0 20px rgba(255, 80, 60, 0.5),
+      0 0 30px rgba(255, 80, 60, 0.25);
+  }
+  40% {
+    color: rgba(255, 60, 40, 0.7);
+    text-shadow:
+      0 0 10px rgba(255, 60, 40, 0.1),
+      0 0 18px rgba(255, 60, 40, 0.4),
+      0 0 25px rgba(255, 60, 40, 0.2);
+  }
+  55% {
+    color: rgba(255, 50, 30, 0.55);
+    text-shadow:
+      0 0 8px rgba(255, 50, 30, 0),
+      0 0 15px rgba(255, 50, 30, 0.3),
+      0 0 20px rgba(255, 50, 30, 0.15);
+  }
+  70% {
+    color: rgba(255, 255, 255, 0.14);
+    text-shadow:
+      0 0 6px rgba(255, 40, 20, 0.1),
+      0 0 12px rgba(255, 40, 20, 0.05),
+      0 0 15px rgba(255, 40, 20, 0);
+  }
+  85% {
+    color: rgba(255, 255, 255, 0.17);
+    text-shadow:
+      0 0 4px rgba(200, 40, 20, 0.05),
+      0 0 8px rgba(200, 40, 20, 0);
+  }
+  100% {
+    color: rgba(255, 255, 255, 0.27);
+    text-shadow: none;
+  }
+}

@@ -1,0 +1,1211 @@
+/* .background-manager 的基础样式已在 EditorWindowApp.css 中统一定义 */
+
+/* 为背景管理器的内容区域提供定位上下文 */
+.background-manager .editor-window-content {
+  position: relative;
+  flex: 1;
+  overflow-y: hidden;
+  overflow-x: hidden;
+  padding: 0;
+}
+
+/* 顶部固定区域 - 模式选择器 */
+.bg-header-fixed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 20px 20px 16px 20px;
+  background: linear-gradient(
+    rgba(10, 10, 20, 0.99),
+    rgba(10, 10, 20, 0.9),
+    rgba(10, 10, 20, 0.8),
+    rgba(10, 10, 20, 0.7),
+    rgba(10, 10, 20, 0),
+    rgba(10, 10, 20, 0)
+  );
+  z-index: 10;
+  pointer-events: all;
+}
+
+/* 模式选择器 */
+.bg-mode-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mode-btn {
+  --btn-corner-size: 8px;
+  padding: 12px 16px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+  contain: layout;
+}
+
+.mode-btn:hover {
+  border-color: rgba(0, 122, 255, 0.5);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.mode-btn.active {
+  border-color: rgba(0, 122, 255, 0.8);
+  color: white;
+  box-shadow: 0 0 15px rgba(0, 122, 255, 0.4);
+}
+
+.mode-btn.disabled {
+  border-color: rgba(255, 59, 48, 0.8);
+  color: rgba(255, 59, 48, 0.9);
+  box-shadow: 0 0 15px rgba(255, 59, 48, 0.4);
+  cursor: not-allowed;
+}
+
+.mode-btn.disabled:hover {
+  border-color: rgba(255, 59, 48, 0.9);
+  color: rgba(255, 59, 48, 1);
+  box-shadow: 0 0 20px rgba(255, 59, 48, 0.6);
+}
+
+.mode-btn.glitch {
+  position: relative;
+  animation:
+    cyber-glitch 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    glitch-border 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.mode-btn.glitch::before,
+.mode-btn.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.mode-btn.glitch::before {
+  animation: glitch-before 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-shadow: -2px 0 #ff0000;
+  opacity: 0.8;
+}
+
+.mode-btn.glitch::after {
+  animation: glitch-after 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-shadow: 2px 0 #00ffff;
+  opacity: 0.8;
+}
+
+@keyframes cyber-glitch {
+  0% {
+    transform: translate(0, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  5% {
+    transform: translate(-3px, 0);
+    clip-path: polygon(0 20%, 100% 20%, 100% 25%, 0 25%);
+  }
+  10% {
+    transform: translate(3px, 0);
+    clip-path: polygon(0 60%, 100% 60%, 100% 65%, 0 65%);
+  }
+  15% {
+    transform: translate(-2px, 0) skew(-5deg);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  20% {
+    transform: translate(2px, 0);
+    clip-path: polygon(0 40%, 100% 40%, 100% 45%, 0 45%);
+  }
+  25% {
+    transform: translate(-3px, 0) skew(5deg);
+    clip-path: polygon(0 80%, 100% 80%, 100% 85%, 0 85%);
+  }
+  30% {
+    transform: translate(3px, 0);
+    clip-path: polygon(0 10%, 100% 10%, 100% 15%, 0 15%);
+  }
+  35% {
+    transform: translate(-2px, 0);
+    clip-path: polygon(0 50%, 100% 50%, 100% 55%, 0 55%);
+  }
+  40% {
+    transform: translate(2px, 0) skew(-3deg);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  45% {
+    transform: translate(-3px, 0);
+    clip-path: polygon(0 70%, 100% 70%, 100% 75%, 0 75%);
+  }
+  50% {
+    transform: translate(4px, 0) skew(5deg);
+    clip-path: polygon(0 30%, 100% 30%, 100% 35%, 0 35%);
+  }
+  55% {
+    transform: translate(-2px, 0);
+    clip-path: polygon(0 55%, 100% 55%, 100% 60%, 0 60%);
+  }
+  60% {
+    transform: translate(3px, 0) skew(-3deg);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  65% {
+    transform: translate(-2px, 0);
+    clip-path: polygon(0 35%, 100% 35%, 100% 40%, 0 40%);
+  }
+  70% {
+    transform: translate(2px, 0) skew(2deg);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  75% {
+    transform: translate(-1px, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  80% {
+    transform: translate(1px, 0) skew(-1deg);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  85% {
+    transform: translate(-0.5px, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  90% {
+    transform: translate(0.5px, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  95%,
+  100% {
+    transform: translate(0, 0);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+}
+
+@keyframes glitch-before {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  5% {
+    transform: translate(-4px, 2px);
+    opacity: 0.8;
+  }
+  10% {
+    transform: translate(4px, -2px);
+    opacity: 0;
+  }
+  15% {
+    transform: translate(-3px, 1px);
+    opacity: 0.7;
+  }
+  20% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  25% {
+    transform: translate(-5px, 2px);
+    opacity: 0.9;
+  }
+  30% {
+    transform: translate(5px, -2px);
+    opacity: 0;
+  }
+  35% {
+    transform: translate(-2px, 1px);
+    opacity: 0.6;
+  }
+  40% {
+    transform: translate(2px, -1px);
+    opacity: 0;
+  }
+  45% {
+    transform: translate(-4px, 2px);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  55% {
+    transform: translate(-3px, 1px);
+    opacity: 0.7;
+  }
+  60% {
+    transform: translate(2px, -1px);
+    opacity: 0;
+  }
+  65% {
+    transform: translate(-4px, 2px);
+    opacity: 0.7;
+  }
+  70% {
+    transform: translate(2px, -1px);
+    opacity: 0;
+  }
+  75% {
+    transform: translate(-3px, 1px);
+    opacity: 0.5;
+  }
+  80% {
+    transform: translate(-2px, 1px);
+    opacity: 0.3;
+  }
+  85% {
+    transform: translate(-1px, 0px);
+    opacity: 0.2;
+  }
+  90% {
+    transform: translate(-1px, 0px);
+    opacity: 0.1;
+  }
+  95%,
+  100% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes glitch-after {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  5% {
+    transform: translate(4px, -2px);
+    opacity: 0;
+  }
+  10% {
+    transform: translate(-4px, 2px);
+    opacity: 0.8;
+  }
+  15% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  20% {
+    transform: translate(-3px, 1px);
+    opacity: 0.7;
+  }
+  25% {
+    transform: translate(5px, -2px);
+    opacity: 0;
+  }
+  30% {
+    transform: translate(-5px, 2px);
+    opacity: 0.9;
+  }
+  35% {
+    transform: translate(2px, -1px);
+    opacity: 0;
+  }
+  40% {
+    transform: translate(-2px, 1px);
+    opacity: 0.6;
+  }
+  45% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  50% {
+    transform: translate(-4px, 2px);
+    opacity: 0.8;
+  }
+  55% {
+    transform: translate(2px, -1px);
+    opacity: 0;
+  }
+  60% {
+    transform: translate(-3px, 1px);
+    opacity: 0.7;
+  }
+  65% {
+    transform: translate(3px, -1px);
+    opacity: 0;
+  }
+  70% {
+    transform: translate(-4px, 2px);
+    opacity: 0.6;
+  }
+  75% {
+    transform: translate(3px, -1px);
+    opacity: 0.4;
+  }
+  80% {
+    transform: translate(2px, -1px);
+    opacity: 0.3;
+  }
+  85% {
+    transform: translate(1px, 0px);
+    opacity: 0.2;
+  }
+  90% {
+    transform: translate(1px, 0px);
+    opacity: 0.1;
+  }
+  95%,
+  100% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes glitch-border {
+  0% {
+    border-color: rgba(255, 59, 48, 0.8);
+    box-shadow: 0 0 15px rgba(255, 59, 48, 0.4);
+    color: rgba(255, 59, 48, 0.9);
+  }
+  8% {
+    border-color: rgba(0, 255, 255, 1);
+    box-shadow:
+      0 0 30px rgba(0, 255, 255, 1),
+      0 0 60px rgba(0, 255, 255, 0.5);
+    color: rgba(0, 255, 255, 1);
+  }
+  16% {
+    border-color: rgba(255, 0, 255, 1);
+    box-shadow:
+      0 0 30px rgba(255, 0, 255, 1),
+      0 0 60px rgba(255, 0, 255, 0.5);
+    color: rgba(255, 0, 255, 1);
+  }
+  24% {
+    border-color: rgba(255, 255, 255, 1);
+    box-shadow:
+      0 0 35px rgba(255, 255, 255, 1),
+      0 0 70px rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 1);
+  }
+  32% {
+    border-color: rgba(0, 255, 255, 1);
+    box-shadow:
+      0 0 30px rgba(0, 255, 255, 1),
+      0 0 60px rgba(0, 255, 255, 0.5);
+    color: rgba(0, 255, 255, 1);
+  }
+  40% {
+    border-color: rgba(255, 0, 255, 1);
+    box-shadow:
+      0 0 30px rgba(255, 0, 255, 1),
+      0 0 60px rgba(255, 0, 255, 0.5);
+    color: rgba(255, 0, 255, 1);
+  }
+  48% {
+    border-color: rgba(255, 255, 255, 1);
+    box-shadow:
+      0 0 35px rgba(255, 255, 255, 1),
+      0 0 70px rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 1);
+  }
+  56% {
+    border-color: rgba(0, 255, 255, 1);
+    box-shadow:
+      0 0 30px rgba(0, 255, 255, 1),
+      0 0 60px rgba(0, 255, 255, 0.5);
+    color: rgba(0, 255, 255, 1);
+  }
+  64% {
+    border-color: rgba(255, 0, 255, 1);
+    box-shadow:
+      0 0 30px rgba(255, 0, 255, 1),
+      0 0 60px rgba(255, 0, 255, 0.5);
+    color: rgba(255, 0, 255, 1);
+  }
+  72% {
+    border-color: rgba(255, 255, 255, 1);
+    box-shadow:
+      0 0 35px rgba(255, 255, 255, 1),
+      0 0 70px rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 1);
+  }
+  75% {
+    border-color: rgba(0, 255, 255, 1);
+    box-shadow:
+      0 0 30px rgba(0, 255, 255, 1),
+      0 0 60px rgba(0, 255, 255, 0.5);
+    color: rgba(0, 255, 255, 1);
+  }
+  80% {
+    border-color: rgba(255, 255, 255, 0.9);
+    box-shadow:
+      0 0 25px rgba(255, 255, 255, 0.7),
+      0 0 50px rgba(255, 255, 255, 0.3);
+    color: rgba(255, 255, 255, 0.95);
+  }
+  85% {
+    border-color: rgba(255, 150, 150, 0.85);
+    box-shadow: 0 0 20px rgba(255, 100, 100, 0.5);
+    color: rgba(255, 150, 150, 0.95);
+  }
+  90% {
+    border-color: rgba(255, 80, 70, 0.82);
+    box-shadow: 0 0 18px rgba(255, 70, 60, 0.45);
+    color: rgba(255, 80, 70, 0.93);
+  }
+  95% {
+    border-color: rgba(255, 59, 48, 0.8);
+    box-shadow: 0 0 16px rgba(255, 59, 48, 0.42);
+    color: rgba(255, 59, 48, 0.91);
+  }
+  100% {
+    border-color: rgba(255, 59, 48, 0.8);
+    box-shadow: 0 0 15px rgba(255, 59, 48, 0.4);
+    color: rgba(255, 59, 48, 0.9);
+  }
+}
+
+/* 滚动内容区域 */
+.bg-content-scroll {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 100px 20px 20px 20px;
+  padding-right: 24px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.bg-content-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 分区样式 */
+.bg-section {
+  margin-bottom: 16px;
+}
+
+.section-title {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+  padding-bottom: 8px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 预设背景网格 */
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.preset-btn {
+  --btn-corner-size: 6px;
+  padding: 8px 12px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.preset-btn:hover {
+  border-color: rgba(0, 122, 255, 0.5);
+  box-shadow: 0 0 10px rgba(0, 122, 255, 0.3);
+}
+
+.preset-btn.active {
+  border-color: rgba(0, 122, 255, 0.8);
+  color: white;
+  box-shadow: 0 0 10px rgba(0, 122, 255, 0.4);
+}
+
+.preset-btn.disabled {
+  border-color: rgba(255, 59, 48, 0.6);
+  color: rgba(255, 59, 48, 0.8);
+  box-shadow: 0 0 8px rgba(255, 59, 48, 0.3);
+  cursor: not-allowed;
+}
+
+.preset-btn.disabled:hover {
+  border-color: rgba(255, 59, 48, 0.8);
+  box-shadow: 0 0 12px rgba(255, 59, 48, 0.5);
+}
+
+.preset-btn.glitch {
+  position: relative;
+  animation:
+    cyber-glitch 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    glitch-border 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.preset-btn.glitch::before,
+.preset-btn.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.preset-btn.glitch::before {
+  animation: glitch-before 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-shadow: -2px 0 #ff0000;
+  opacity: 0.8;
+}
+
+.preset-btn.glitch::after {
+  animation: glitch-after 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-shadow: 2px 0 #00ffff;
+  opacity: 0.8;
+}
+
+/* 滑块容器 */
+.slider-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 8px;
+}
+
+.opacity-slider,
+.blur-slider {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.opacity-slider::-webkit-slider-thumb,
+.blur-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: rgba(0, 122, 255, 0.9);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
+}
+
+.opacity-slider::-moz-range-thumb,
+.blur-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: rgba(0, 122, 255, 0.9);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
+}
+
+.slider-value {
+  min-width: 50px;
+  text-align: right;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  font-family: monospace;
+}
+
+/* 类型按钮 */
+.type-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.type-btn {
+  --btn-corner-size: 6px;
+  padding: 8px 16px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.type-btn:hover {
+  border-color: rgba(0, 122, 255, 0.5);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.type-btn.active {
+  border-color: rgba(0, 122, 255, 0.8);
+  color: white;
+  box-shadow: 0 0 10px rgba(0, 122, 255, 0.4);
+}
+
+/* 颜色输入 */
+.color-input-container {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 8px;
+}
+
+.color-picker {
+  width: 60px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  background: transparent;
+}
+
+.color-text {
+  flex: 1;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.color-text:focus {
+  border-color: rgba(0, 122, 255, 0.5);
+}
+
+/* 渐变颜色行 */
+.gradient-color-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.color-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  padding-left: 12px;
+}
+
+.gradient-color-row .color-input-container {
+  position: relative;
+  margin-bottom: 0;
+}
+
+.remove-color-btn {
+  --btn-corner-size: 4px;
+  width: 32px;
+  height: 40px;
+  padding: 0;
+  background: rgba(255, 59, 48, 0.2);
+  border: 1px solid rgba(255, 59, 48, 0.4);
+  color: rgba(255, 59, 48, 0.9);
+  font-size: 20px;
+  font-weight: bold;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.remove-color-btn:hover {
+  background: rgba(255, 59, 48, 0.3);
+  border-color: rgba(255, 59, 48, 0.6);
+  box-shadow: 0 0 10px rgba(255, 59, 48, 0.4);
+}
+
+.add-color-btn {
+  --btn-corner-size: 6px;
+  width: 100%;
+  padding: 10px 16px;
+  margin-top: 8px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(52, 199, 89, 0.4);
+  color: rgba(52, 199, 89, 0.9);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.add-color-btn:hover {
+  border-color: rgba(52, 199, 89, 0.6);
+  box-shadow: 0 0 12px rgba(52, 199, 89, 0.4);
+}
+
+/* 角度滑块 */
+.angle-slider {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.angle-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: rgba(0, 122, 255, 0.9);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
+}
+
+.angle-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: rgba(0, 122, 255, 0.9);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
+}
+
+/* 打开自定义编辑器按钮 */
+.open-custom-editor-btn {
+  --btn-corner-size: 6px;
+  width: 100%;
+  padding: 12px 16px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(255, 0, 255, 0.5);
+  color: rgba(255, 0, 255, 0.95);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.open-custom-editor-btn:hover {
+  border-color: rgba(255, 0, 255, 0.8);
+  color: white;
+  box-shadow: 0 0 15px rgba(255, 0, 255, 0.5);
+}
+
+/* 保存按钮 */
+.save-history-btn {
+  --btn-corner-size: 6px;
+  width: 100%;
+  padding: 12px 16px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(0, 122, 255, 0.5);
+  color: rgba(0, 122, 255, 0.95);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.save-history-btn:hover {
+  border-color: rgba(0, 122, 255, 0.8);
+  color: white;
+  box-shadow: 0 0 15px rgba(0, 122, 255, 0.5);
+}
+
+/* 标题与操作按钮行 */
+.section-title-with-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 12px 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.section-title-with-actions > span {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.clear-history-btn {
+  padding: 4px 12px;
+  background: rgba(255, 59, 48, 0.15);
+  border: 1px solid rgba(255, 59, 48, 0.4);
+  color: rgba(255, 59, 48, 0.9);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.clear-history-btn:hover {
+  background: rgba(255, 59, 48, 0.25);
+  border-color: rgba(255, 59, 48, 0.6);
+  box-shadow: 0 0 8px rgba(255, 59, 48, 0.3);
+}
+
+/* 历史记录列表 */
+.history-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.history-item {
+  position: relative;
+  aspect-ratio: 1;
+}
+
+.history-preview {
+  --preview-corner-size: 8px;
+  width: 100%;
+  height: 100%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  overflow: hidden;
+  position: relative;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s;
+  clip-path: polygon(
+    0% var(--preview-corner-size),
+    var(--preview-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--preview-corner-size)),
+    calc(100% - var(--preview-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.history-preview:hover {
+  border-color: rgba(0, 122, 255, 0.6);
+  box-shadow: 0 0 15px rgba(0, 122, 255, 0.4);
+  transform: scale(1.05);
+}
+
+/* 视频和HTML特殊图标 */
+.history-media-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.media-icon-symbol {
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow:
+    0 0 10px rgba(255, 255, 255, 0.6),
+    0 0 20px rgba(255, 255, 255, 0.3);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.media-icon-label {
+  font-family: 'Courier New', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.8);
+  letter-spacing: 1px;
+  text-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+}
+
+.history-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 4px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 2;
+}
+
+.history-preview:hover .history-overlay {
+  opacity: 1;
+}
+
+.history-type {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 600;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.history-delete-btn {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: rgba(255, 59, 48, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.2s,
+    background 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s;
+  z-index: 1;
+}
+
+.history-item:hover .history-delete-btn {
+  opacity: 1;
+}
+
+.history-delete-btn:hover {
+  background: rgba(255, 59, 48, 1);
+  box-shadow: 0 0 10px rgba(255, 59, 48, 0.6);
+  transform: scale(1.1);
+}
+
+/* URL 输入 */
+.url-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 8px;
+}
+
+.url-input:focus {
+  border-color: rgba(0, 122, 255, 0.5);
+}
+
+/* HTML 文本框 */
+.html-textarea {
+  width: 100%;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  resize: vertical;
+  outline: none;
+  min-height: 120px;
+  transition: border-color 0.2s;
+  margin-bottom: 8px;
+}
+
+.html-textarea:focus {
+  border-color: rgba(0, 122, 255, 0.5);
+}
+
+/* 导入/导出按钮 */
+.import-export-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ie-btn {
+  --btn-corner-size: 6px;
+  flex: 1;
+  padding: 10px 16px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.ie-btn:hover {
+  border-color: rgba(0, 122, 255, 0.5);
+  box-shadow: 0 0 10px rgba(0, 122, 255, 0.3);
+}
+
+/* 导入区域 */
+.import-section {
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.import-textarea {
+  width: 100%;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  resize: vertical;
+  outline: none;
+  min-height: 150px;
+  transition: border-color 0.2s;
+}
+
+.import-textarea:focus {
+  border-color: rgba(0, 122, 255, 0.5);
+}
+
+.import-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.import-error {
+  padding: 10px 12px;
+  background: rgba(255, 59, 48, 0.1);
+  border-left: 3px solid rgba(255, 59, 48, 0.8);
+  color: rgba(255, 59, 48, 0.9);
+  font-size: 13px;
+}
+
+.import-submit-btn {
+  --btn-corner-size: 6px;
+  padding: 10px 24px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(52, 199, 89, 0.5);
+  color: rgba(52, 199, 89, 0.9);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.import-submit-btn:hover {
+  border-color: rgba(52, 199, 89, 0.8);
+  box-shadow: 0 0 15px rgba(52, 199, 89, 0.4);
+}

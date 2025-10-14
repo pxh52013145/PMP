@@ -1,0 +1,278 @@
+/* 导入科幻字体 */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap');
+
+.editor-statistics {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* 卡片行 */
+.stats-cards-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.stat-card {
+  --card-corner-size: 10px;
+  padding: 10px 6px; /* 进一步减小内边距 */
+  min-height: 120px; /* 统一高度 */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: rgba(10, 10, 20, 0.9);
+  text-align: center;
+  transition:
+    transform 0.3s,
+    box-shadow 0.3s; /* 只动画需要的属性 */
+  position: relative;
+  overflow: hidden;
+  /* 左上和右下剪角 */
+  clip-path: polygon(
+    0% var(--card-corner-size),
+    var(--card-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--card-corner-size)),
+    calc(100% - var(--card-corner-size)) 100%,
+    0% 100%
+  );
+  /* 直接使用 border + box-shadow */
+  border: 1px solid var(--border-color);
+  box-shadow:
+    0 0 10px var(--border-color),
+    inset 0 0 10px rgba(0, 0, 0, 0.5);
+  animation: card-glow 2s ease-in-out infinite;
+  /* 性能优化 */
+  will-change: box-shadow;
+  contain: layout style;
+}
+
+/* 确保内容在伪元素之上 */
+.stat-card > * {
+  position: relative;
+  z-index: 2;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 20px var(--border-color),
+    0 0 30px var(--border-color),
+    inset 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes card-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 10px var(--border-color),
+      inset 0 0 10px rgba(0, 0, 0, 0.5);
+  }
+  50% {
+    box-shadow:
+      0 0 20px var(--border-color),
+      0 0 30px var(--border-color),
+      inset 0 0 10px rgba(0, 0, 0, 0.5);
+  }
+}
+
+.stat-card.total {
+  --border-color: rgba(100, 200, 255, 0.6);
+}
+
+.stat-card.occupied {
+  --border-color: rgba(255, 149, 0, 0.6);
+}
+
+.stat-card.free {
+  --border-color: rgba(52, 199, 89, 0.6);
+}
+
+.stat-label {
+  font-family: 'Orbitron', monospace; /* 科幻字体 */
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.stat-value {
+  font-family: 'Orbitron', monospace; /* 科幻字体 */
+  font-size: 24px; /* 进一步缩小，确保显示完全 */
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+  margin-bottom: 4px;
+  line-height: 1.1;
+  text-shadow: 0 0 10px var(--border-color);
+  letter-spacing: 0px; /* 移除字间距，节省空间 */
+}
+
+.stat-detail {
+  font-family: 'Orbitron', monospace; /* 科幻字体 */
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.5px;
+}
+
+/* Magnet 占用详情 */
+.stats-magnets {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.magnet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.magnet-stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.magnet-stat-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.magnet-id {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.magnet-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(0, 122, 255, 0.9);
+  padding: 4px 8px;
+  background: rgba(0, 122, 255, 0.1);
+  border-radius: 4px;
+}
+
+/* 布局建议 */
+.stats-tips {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tips-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tip-item {
+  --tip-corner-size: 6px;
+  padding: 10px 12px;
+  background: rgba(0, 122, 255, 0.1);
+  border-left: 3px solid rgba(0, 122, 255, 0.8);
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.5;
+  /* 左上和右下剪角 */
+  clip-path: polygon(
+    0% var(--tip-corner-size),
+    var(--tip-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--tip-corner-size)),
+    calc(100% - var(--tip-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.tip-item.warning {
+  background: rgba(255, 149, 0, 0.1);
+  border-left-color: rgba(255, 149, 0, 0.8);
+}
+
+.tip-item.info {
+  background: rgba(52, 199, 89, 0.1);
+  border-left-color: rgba(52, 199, 89, 0.8);
+}
+
+/* 自定义滚动条 */
+.magnet-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.magnet-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+.magnet-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.magnet-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 果汁剩余效果容器 */
+.juice-loader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 0;
+  gap: 12px;
+}
+
+/* 果汁剩余效果 */
+.juice-loader {
+  width: 35px;
+  height: 80px;
+  position: relative;
+}
+
+.juice-loader:after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 3px 5px;
+  border-top: 1px solid rgba(0, 255, 255, 0.6);
+  border-bottom: 4px solid rgba(0, 255, 255, 0.6);
+  background:
+    linear-gradient(rgba(0, 255, 255, 0.8) 0 0) bottom no-repeat content-box,
+    rgba(10, 30, 40, 0.8);
+  mix-blend-mode: normal;
+  background-size: 100% var(--fill-percent, 100%);
+  transition: background-size 0.5s ease;
+}
+
+.juice-loader:before {
+  content: '';
+  position: absolute;
+  inset: -18px calc(50% - 2px) 8px;
+  background: rgba(0, 255, 255, 0.3);
+  transform-origin: bottom;
+  transform: rotate(8deg);
+}
+
+.juice-label {
+  font-family: 'Orbitron', monospace; /* 科幻字体 */
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 255, 255, 0.9);
+  white-space: nowrap;
+  text-shadow: 0 0 8px rgba(0, 255, 255, 0.5);
+  text-align: center;
+  letter-spacing: 1px;
+}

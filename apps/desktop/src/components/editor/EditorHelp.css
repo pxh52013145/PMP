@@ -1,0 +1,192 @@
+.editor-help {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-bottom: 16px;
+}
+
+.help-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.help-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.help-content {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.6;
+}
+
+.help-content p {
+  margin: 8px 0;
+}
+
+.help-content ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.help-content li {
+  margin: 8px 0;
+}
+
+.help-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.help-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.help-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.help-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.help-text {
+  flex: 1;
+}
+
+.help-text strong {
+  display: block;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.95);
+  margin-bottom: 4px;
+}
+
+.help-text p {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.5;
+}
+
+/* 颜色指示器 */
+.help-color-indicator {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.help-color-indicator.free {
+  background: rgba(52, 199, 89, 0.3);
+  border: 2px solid rgba(52, 199, 89, 0.8);
+}
+
+.help-color-indicator.occupied {
+  background: rgba(255, 59, 48, 0.3);
+  border: 2px solid rgba(255, 59, 48, 0.8);
+}
+
+.help-color-indicator.selected {
+  background: rgba(0, 122, 255, 0.3);
+  border: 2px solid rgba(0, 122, 255, 0.8);
+}
+
+.help-color-indicator.hover {
+  background: transparent;
+  border: 2px solid rgba(255, 204, 0, 0.8);
+}
+
+.help-color-indicator.drag-ok {
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px dashed rgba(0, 122, 255, 0.8);
+}
+
+.help-color-indicator.drag-collision {
+  background: rgba(255, 59, 48, 0.2);
+  border: 2px dashed rgba(255, 59, 48, 0.8);
+}
+
+/* Magnet 类型卡片 */
+.magnet-type-card {
+  padding: 12px;
+  background: rgba(0, 122, 255, 0.1);
+  border-left: 3px solid rgba(0, 122, 255, 0.8);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.magnet-type-card h4 {
+  margin: 0 0 6px 0;
+  font-size: 13px;
+  color: rgba(0, 122, 255, 0.9);
+}
+
+.magnet-type-card code {
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.magnet-type-card p {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.5;
+}
+
+/* 快捷键 */
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+kbd {
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.shortcut-item span {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* 页脚 */
+.help-footer {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.help-footer p {
+  margin: 0;
+}

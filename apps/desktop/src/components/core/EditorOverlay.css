@@ -1,0 +1,79 @@
+/* 编辑器覆盖层 */
+.editor-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  z-index: 1000;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Pixel 状态显示 */
+.editor-pixel {
+  border: 1px solid transparent;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+  pointer-events: none;
+}
+
+/* 空闲 Pixel */
+.editor-pixel.free {
+  background-color: rgba(0, 255, 136, 0.1);
+  border-color: rgba(0, 255, 136, 0.2);
+}
+
+/* 已占用 Pixel */
+.editor-pixel.occupied {
+  background-color: rgba(255, 59, 48, 0.2);
+  border-color: rgba(255, 59, 48, 0.4);
+}
+
+/* 悬停 Pixel */
+.editor-pixel.hovered {
+  background-color: rgba(0, 122, 255, 0.3);
+  border-color: rgba(0, 122, 255, 0.6);
+  border-width: 2px;
+  transform: scale(1.1);
+}
+
+/* 已选中 Pixel */
+.editor-pixel.selected {
+  background-color: rgba(255, 149, 0, 0.4);
+  border-color: rgba(255, 149, 0, 0.8);
+  border-width: 2px;
+}
+
+/* 拖拽选择中的 Pixel */
+.editor-pixel.drag-selection {
+  background-color: rgba(0, 122, 255, 0.3);
+  border-color: rgba(0, 122, 255, 0.6);
+  border-width: 2px;
+}
+
+/* 占用 + 选中 */
+.editor-pixel.occupied.selected {
+  background-color: rgba(255, 149, 0, 0.5);
+  border-color: rgba(255, 149, 0, 1);
+}
+
+/* 占用 + 悬停 */
+.editor-pixel.occupied.hovered {
+  background-color: rgba(255, 59, 48, 0.4);
+  border-color: rgba(255, 59, 48, 0.8);
+}
+
+/* Magnet 拖动预览 */
+.magnet-drag-preview {
+  z-index: 2000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  transition: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.magnet-drag-preview.collision {
+  background-color: rgba(255, 59, 48, 0.3) !important;
+}

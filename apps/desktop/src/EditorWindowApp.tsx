@@ -1,12 +1,12 @@
 import { useEffect, useState, useMemo } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
-import { EditorStatistics } from './components/EditorStatistics';
-import { EditorMagnetLibrary } from './components/EditorMagnetLibrary';
-import { StyleEditor } from './components/StyleEditor';
-import { EditorHelp } from './components/EditorHelp';
-import { MagnetCreator } from './components/MagnetCreator';
-import { BackgroundManager } from './components/BackgroundManager';
-import { CustomBackgroundEditor } from './components/CustomBackgroundEditor';
+import { EditorStatistics } from './components/editor/EditorStatistics';
+import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
+import { StyleEditor } from './components/editor/StyleEditor';
+import { EditorHelp } from './components/editor/EditorHelp';
+import { MagnetCreator } from './components/editor/MagnetCreator';
+import { BackgroundManager } from './components/editor/BackgroundManager';
+import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
 import { Magnet } from './types/pixel';
 import { BackgroundSettings, BackgroundConfig } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
@@ -24,14 +24,14 @@ import {
   setupConfigSync,
 } from './utils/windowCommunication';
 import './index.css';
-import './components/EditorStatistics.css';
-import './components/EditorMagnetLibrary.css';
-import './components/StyleEditor.css';
-import './components/EditorHelp.css';
-import './components/EditorWindow.css';
-import './components/MagnetCreator.css';
-import './components/BackgroundManager.css';
-import './components/CustomBackgroundEditor.css';
+import './components/editor/EditorStatistics.css';
+import './components/editor/EditorMagnetLibrary.css';
+import './components/editor/StyleEditor.css';
+import './components/editor/EditorHelp.css';
+import './components/editor/EditorWindowApp.css';
+import './components/editor/MagnetCreator.css';
+import './components/editor/BackgroundManager.css';
+import './components/editor/CustomBackgroundEditor.css';
 
 interface EditorControlPanelProps {
   onExitEditMode: () => void;
