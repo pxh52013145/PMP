@@ -18,7 +18,9 @@ import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
+import { MUSIC_PLAYER_SIMULATOR } from './data/builtin/musicPlayerSimulator';
 import { MATRIX_CONFIG } from './constants/config';
+import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from './constants/magnets';
 import { Magnet, PixelAnchor } from './types/pixel';
 import { BackgroundSettings } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
@@ -113,29 +115,13 @@ function AppContent() {
       ...WINDOW_CONTROL_MAGNETS,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
+      MUSIC_PLAYER_SIMULATOR,
     ],
     []
   );
 
-  // 默认激活的 Magnet ID
-  const defaultActiveMagnetIds = useMemo(
-    () =>
-      new Set([
-        'drag-handle',
-        'btn-minimize',
-        'btn-maximize',
-        'btn-close',
-        'btn-play-pause',
-        'btn-previous', // ✅ 修正：btn-prev → btn-previous
-        'btn-next',
-        'btn-mode',
-        'btn-volume',
-        'progress-bar',
-        'track-info', // ✅ 修正：song-info → track-info
-        'btn-editor',
-      ]),
-    []
-  );
+  // 默认激活的 Magnet ID（使用统一常量）
+  const defaultActiveMagnetIds = DEFAULT_ACTIVE_MAGNET_IDS;
 
   // 初始化配置（从 localStorage 或使用默认值）
   const initializeConfig = useCallback(() => {
@@ -167,25 +153,8 @@ function AppContent() {
     return config.activeMagnetIds;
   });
 
-  // 内置 Magnet ID 列表（不可删除）
-  const builtInMagnetIds = useMemo(
-    () =>
-      new Set([
-        'drag-handle',
-        'btn-minimize',
-        'btn-maximize',
-        'btn-close',
-        'btn-play-pause',
-        'btn-previous', // ✅ 修正：btn-prev → btn-previous
-        'btn-next',
-        'btn-mode',
-        'btn-volume',
-        'progress-bar',
-        'track-info', // ✅ 修正：song-info → track-info
-        'btn-editor', // 编辑器按钮也是内置
-      ]),
-    []
-  );
+  // 内置 Magnet ID 列表（使用统一常量）
+  const builtInMagnetIds = BUILTIN_MAGNET_IDS;
 
   useEffect(() => {
     // 防止上下文菜单
@@ -432,6 +401,7 @@ function App() {
       ...WINDOW_CONTROL_MAGNETS,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
+      MUSIC_PLAYER_SIMULATOR,
     ];
 
     const savedConfig = loadConfig();

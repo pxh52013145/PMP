@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import { Magnet } from '../../types/pixel';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
+import { useEditor } from '../../contexts/EditorContext';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
@@ -31,6 +32,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   onMagnetDeactivate,
   onMagnetDeleteFromLibrary,
 }: EditorMagnetLibraryProps) {
+  const { importMagnet: validateAndImportMagnet } = useEditor();
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [showImport, setShowImport] = useState(false);
@@ -162,34 +164,45 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     try {
       const parsed = JSON.parse(importData);
 
-      // 验证格式
-      if (!parsed.id || !parsed.content || !parsed.anchors || !parsed.anchorType || !parsed.style) {
-        throw new Error('Magnet 格式不完整，需要包含: id, content, anchors, anchorType, style');
-      }
-
-      // 检查 ID 冲突
+      // 检查 ID 冲突（在调用 validateAndImportMagnet 前检查，因为它不检查 library 冲突）
       if (magnetLibrary.some((m) => m.id === parsed.id)) {
         throw new Error(`Magnet ID "${parsed.id}" 已存在，请使用不同的 ID`);
       }
 
-      // 验证 anchorType
-      if (!['single', 'horizontal', 'rectangular'].includes(parsed.anchorType)) {
-        throw new Error('anchorType 必须是: single, horizontal, 或 rectangular');
+      // 使用 EditorContext 的完整验证逻辑
+      const result = validateAndImportMagnet(parsed);
+
+      if (!result.valid) {
+        // 验证失败，显示错误
+        const errorMessage = result.errors.join('\n');
+        setImportError(errorMessage);
+        return;
       }
 
-      // 验证 anchors
-      if (!Array.isArray(parsed.anchors) || parsed.anchors.length === 0) {
-        throw new Error('anchors 必须是非空数组');
+      if (!result.magnet) {
+        setImportError('验证通过但 Magnet 数据为空');
+        return;
       }
 
-      onMagnetAddToLibrary(parsed);
+      // 验证成功，添加到 library
+      onMagnetAddToLibrary(result.magnet);
       setImportData('');
       setShowImport(false);
-      alert(`成功导入 Magnet: ${parsed.id}`);
+
+      // 如果有警告信息（例如自动移动位置），显示给用户
+      if (result.warnings.length > 0) {
+        alert(`成功导入 Magnet: ${result.magnet.id}\n\n提示：\n${result.warnings.join('\n')}`);
+      } else {
+        alert(`成功导入 Magnet: ${result.magnet.id}`);
+      }
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : '解析失败');
+      if (error instanceof SyntaxError) {
+        setImportError('JSON 格式错误，请检查格式');
+      } else {
+        setImportError(error instanceof Error ? error.message : '导入失败');
+      }
     }
-  }, [importData, magnetLibrary, onMagnetAddToLibrary]);
+  }, [importData, magnetLibrary, onMagnetAddToLibrary, validateAndImportMagnet]);
 
   return (
     <div className="editor-magnet-library">

@@ -1,4 +1,5 @@
 import { Magnet, PixelAnchor } from '../types/pixel';
+import { BUILTIN_MAGNET_IDS } from '../constants/magnets';
 
 /**
  * 配置文件格式
@@ -44,21 +45,6 @@ export function saveConfig(
       customMagnets: [],
     };
 
-    const builtInIds = new Set([
-      'drag-handle',
-      'btn-minimize',
-      'btn-maximize',
-      'btn-close',
-      'btn-play-pause',
-      'btn-previous',
-      'btn-next',
-      'btn-mode',
-      'btn-volume',
-      'progress-bar',
-      'track-info',
-      'btn-editor',
-    ]);
-
     // 保存所有 Magnet 的位置和激活状态
     magnetLibrary.forEach((magnet) => {
       const isActive = activeMagnetIds.has(magnet.id);
@@ -68,7 +54,7 @@ export function saveConfig(
       };
 
       // 对于内置 Magnet，检查样式是否被修改
-      if (builtInIds.has(magnet.id) && defaultMagnetLibrary) {
+      if (BUILTIN_MAGNET_IDS.has(magnet.id) && defaultMagnetLibrary) {
         const defaultMagnet = defaultMagnetLibrary.find((m) => m.id === magnet.id);
 
         if (defaultMagnet) {
@@ -104,7 +90,7 @@ export function saveConfig(
     });
 
     // 保存自定义 Magnet 的完整定义
-    config.customMagnets = magnetLibrary.filter((m) => !builtInIds.has(m.id));
+    config.customMagnets = magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id));
 
     localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
     console.log('配置已保存:', config);
@@ -207,21 +193,6 @@ export function exportConfig(
     customMagnets: [],
   };
 
-  const builtInIds = new Set([
-    'drag-handle',
-    'btn-minimize',
-    'btn-maximize',
-    'btn-close',
-    'btn-play-pause',
-    'btn-previous',
-    'btn-next',
-    'btn-mode',
-    'btn-volume',
-    'progress-bar',
-    'track-info',
-    'btn-editor',
-  ]);
-
   // 保存所有 Magnet 的位置和激活状态
   magnetLibrary.forEach((magnet) => {
     const magnetConfig: any = {
@@ -230,7 +201,7 @@ export function exportConfig(
     };
 
     // 对于内置 Magnet，检查样式是否被修改
-    if (builtInIds.has(magnet.id) && defaultMagnetLibrary) {
+    if (BUILTIN_MAGNET_IDS.has(magnet.id) && defaultMagnetLibrary) {
       const defaultMagnet = defaultMagnetLibrary.find((m) => m.id === magnet.id);
 
       if (defaultMagnet) {
@@ -261,7 +232,7 @@ export function exportConfig(
     config.magnets[magnet.id] = magnetConfig;
   });
 
-  config.customMagnets = magnetLibrary.filter((m) => !builtInIds.has(m.id));
+  config.customMagnets = magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id));
 
   return JSON.stringify(config, null, 2);
 }
@@ -304,6 +275,65 @@ export function clearConfig(): void {
 }
 
 /**
+ * 去重 Magnet 数组（按 ID）
+ */
+function deduplicateMagnets(magnets: Magnet[]): Magnet[] {
+  const seen = new Set<string>();
+  const result: Magnet[] = [];
+
+  for (const magnet of magnets) {
+    if (!seen.has(magnet.id)) {
+      seen.add(magnet.id);
+      result.push(magnet);
+    } else {
+      console.warn(`警告：发现重复的 Magnet ID: ${magnet.id}，已跳过`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 验证 Magnet 配置
+ */
+function validateMagnet(magnet: Magnet): boolean {
+  if (!magnet.id || typeof magnet.id !== 'string') {
+    console.error('无效的 Magnet：缺少 id', magnet);
+    return false;
+  }
+
+  if (!magnet.anchors || !Array.isArray(magnet.anchors) || magnet.anchors.length === 0) {
+    console.error(`无效的 Magnet ${magnet.id}：缺少有效的 anchors`, magnet);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * 清理配置中的重复和无效数据
+ */
+function sanitizeConfig(config: MagnetConfig): MagnetConfig {
+  const sanitized = { ...config };
+
+  // 清理 customMagnets 中的内置 magnet
+  if (sanitized.customMagnets) {
+    sanitized.customMagnets = sanitized.customMagnets.filter((m) => {
+      if (BUILTIN_MAGNET_IDS.has(m.id)) {
+        console.warn(`清理：从 customMagnets 中移除内置 magnet: ${m.id}`);
+        return false;
+      }
+      return validateMagnet(m);
+    });
+
+    // 去重
+    sanitized.customMagnets = deduplicateMagnets(sanitized.customMagnets);
+  }
+
+  return sanitized;
+}
+
+/**
  * 合并配置到现有库（用于应用加载的配置）
  */
 export function applyConfig(
@@ -313,12 +343,23 @@ export function applyConfig(
   magnetLibrary: Magnet[];
   activeMagnetIds: Set<string>;
 } {
+  // 清理配置
+  const cleanConfig = sanitizeConfig(config);
+
   const magnetLibrary: Magnet[] = [];
   const activeMagnetIds = new Set<string>();
 
+  // 用于去重的集合
+  const addedIds = new Set<string>();
+
   // 1. 首先处理内置 Magnet
   defaultMagnetLibrary.forEach((defaultMagnet) => {
-    const savedConfig = config.magnets[defaultMagnet.id];
+    if (addedIds.has(defaultMagnet.id)) {
+      console.warn(`跳过重复的内置 magnet: ${defaultMagnet.id}`);
+      return;
+    }
+
+    const savedConfig = cleanConfig.magnets[defaultMagnet.id];
 
     if (savedConfig) {
       const appliedMagnet: Magnet = {
@@ -343,6 +384,7 @@ export function applyConfig(
       appliedMagnet.interactions = defaultMagnet.interactions;
 
       magnetLibrary.push(appliedMagnet);
+      addedIds.add(defaultMagnet.id);
 
       // 恢复激活状态
       if (savedConfig.isActive) {
@@ -351,15 +393,26 @@ export function applyConfig(
     } else {
       // 使用默认配置
       magnetLibrary.push(defaultMagnet);
-      // 默认激活（除了某些特定 Magnet）
+      addedIds.add(defaultMagnet.id);
+      // 默认激活（新添加的内置 Magnet）
       activeMagnetIds.add(defaultMagnet.id);
     }
   });
 
-  // 2. 添加自定义 Magnet
-  if (config.customMagnets) {
-    config.customMagnets.forEach((customMagnet) => {
-      const savedConfig = config.magnets[customMagnet.id];
+  // 2. 添加自定义 Magnet（排除内置 magnet 和已添加的）
+  if (cleanConfig.customMagnets) {
+    cleanConfig.customMagnets.forEach((customMagnet) => {
+      // 跳过已添加的和内置的
+      if (addedIds.has(customMagnet.id) || BUILTIN_MAGNET_IDS.has(customMagnet.id)) {
+        console.warn(`跳过重复或内置的自定义 magnet: ${customMagnet.id}`);
+        return;
+      }
+
+      if (!validateMagnet(customMagnet)) {
+        return;
+      }
+
+      const savedConfig = cleanConfig.magnets[customMagnet.id];
 
       if (savedConfig) {
         // 使用保存的锚点位置
@@ -367,6 +420,7 @@ export function applyConfig(
           ...customMagnet,
           anchors: savedConfig.anchors,
         });
+        addedIds.add(customMagnet.id);
 
         // 恢复激活状态
         if (savedConfig.isActive) {
@@ -375,9 +429,12 @@ export function applyConfig(
       } else {
         // 使用原始配置
         magnetLibrary.push(customMagnet);
+        addedIds.add(customMagnet.id);
       }
     });
   }
+
+  console.log(`配置应用完成: 共 ${magnetLibrary.length} 个 magnet, ${activeMagnetIds.size} 个激活`);
 
   return { magnetLibrary, activeMagnetIds };
 }

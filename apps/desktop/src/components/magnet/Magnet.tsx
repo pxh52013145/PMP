@@ -1,6 +1,12 @@
 import { useMemo, useState, useCallback } from 'react';
 import { Magnet } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
+import { MusicPlayerSimulator } from './MusicPlayerSimulator';
+import { PlayPauseButton, PreviousButton, NextButton } from './PlaybackControls';
+import { PlayModeButton } from './PlayModeButton';
+import { VolumeControl } from './VolumeControl';
+import { TrackInfo } from './TrackInfo';
+import { ProgressBar } from './ProgressBar';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -169,6 +175,52 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     };
   }, [bounds, magnet.animation, currentStyle]);
 
+  // 渲染自定义组件内容
+  const renderContent = () => {
+    // 特殊处理：音乐播放器模拟器
+    if (magnet.id === 'music-player-simulator') {
+      return <MusicPlayerSimulator />;
+    }
+
+    // 播放控制按钮
+    if (magnet.id === 'btn-play-pause') {
+      return <PlayPauseButton />;
+    }
+    if (magnet.id === 'btn-previous') {
+      return <PreviousButton />;
+    }
+    if (magnet.id === 'btn-next') {
+      return <NextButton />;
+    }
+
+    // 播放模式按钮
+    if (magnet.id === 'btn-mode') {
+      return <PlayModeButton />;
+    }
+
+    // 音量控制
+    if (magnet.id === 'btn-volume') {
+      return <VolumeControl />;
+    }
+
+    // 歌曲信息
+    if (magnet.id === 'track-info') {
+      return <TrackInfo />;
+    }
+
+    // 进度条
+    if (magnet.id === 'progress-bar') {
+      return <ProgressBar />;
+    }
+
+    // 默认渲染
+    if (typeof magnet.content === 'string') {
+      return <span className="magnet-text">{magnet.content}</span>;
+    }
+
+    return magnet.content;
+  };
+
   return (
     <div
       className={`magnet magnet-${magnet.type} magnet-state-${magnet.state}`}
@@ -180,11 +232,7 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {typeof magnet.content === 'string' ? (
-        <span className="magnet-text">{magnet.content}</span>
-      ) : (
-        magnet.content
-      )}
+      {renderContent()}
     </div>
   );
 }

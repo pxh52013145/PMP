@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Magnet, PixelAnchor, AnchorType, MagnetStyle } from '../../types/pixel';
 import { open } from '@tauri-apps/api/dialog';
 import { readTextFile } from '@tauri-apps/api/fs';
+import { useEditor } from '../../contexts/EditorContext';
+import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import './MagnetCreator.css';
 
 interface MagnetCreatorProps {
@@ -65,6 +67,9 @@ export function MagnetCreator({
   onSave,
   onCancel,
 }: MagnetCreatorProps) {
+  // 获取编辑器上下文（用于冲突检测）
+  const { occupancyMap } = useEditor();
+
   // 表单字段状态
   const [id, setId] = useState('');
   const [name, setName] = useState('');
@@ -236,7 +241,54 @@ export function MagnetCreator({
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    generateAnchors.forEach((anchor) => {
+    // 在编辑模式下，基于实际位置验证；在创建模式下，基于尺寸验证
+    let anchorsToValidate: PixelAnchor[];
+
+    if (mode === 'edit' && editingMagnet) {
+      // 编辑模式：基于实际位置生成锚点进行验证
+      const baseAnchor = editingMagnet.anchors[0];
+      const baseX = baseAnchor.gridX;
+      const baseY = baseAnchor.gridY;
+
+      switch (anchorType) {
+        case 'single':
+          anchorsToValidate = [{ id: 'anchor', gridX: baseX, gridY: baseY, role: 'anchor' }];
+          break;
+        case 'horizontal':
+          anchorsToValidate = [
+            { id: 'left', gridX: baseX, gridY: baseY, role: 'anchor' },
+            { id: 'right', gridX: baseX + horizontalPixels - 1, gridY: baseY, role: 'boundary' },
+          ];
+          break;
+        case 'vertical':
+          anchorsToValidate = [
+            { id: 'top', gridX: baseX, gridY: baseY, role: 'anchor' },
+            { id: 'bottom', gridX: baseX, gridY: baseY + verticalPixels - 1, role: 'boundary' },
+          ];
+          break;
+        case 'rectangular':
+          anchorsToValidate = [
+            { id: 'top-left', gridX: baseX, gridY: baseY, role: 'anchor' },
+            { id: 'top-right', gridX: baseX + rectWidth - 1, gridY: baseY, role: 'boundary' },
+            { id: 'bottom-left', gridX: baseX, gridY: baseY + rectHeight - 1, role: 'boundary' },
+            {
+              id: 'bottom-right',
+              gridX: baseX + rectWidth - 1,
+              gridY: baseY + rectHeight - 1,
+              role: 'boundary',
+            },
+          ];
+          break;
+        default:
+          anchorsToValidate = [];
+      }
+    } else {
+      // 创建模式：使用预览锚点验证
+      anchorsToValidate = generateAnchors;
+    }
+
+    // 验证锚点坐标
+    anchorsToValidate.forEach((anchor) => {
       if (anchor.gridX < 0 || anchor.gridX > maxX) {
         errors.push(`锚点 "${anchor.id}" 的 X 坐标超出范围 (${anchor.gridX})`);
       }
@@ -245,20 +297,74 @@ export function MagnetCreator({
       }
     });
 
-    // 检查预览区域是否合适（基准点 10,10）
-    if (anchorType === 'horizontal' && horizontalPixels > 17) {
-      warnings.push('宽度较大，实际使用时可能需要调整位置');
+    // 在编辑模式下，检查是否与其他 magnet 冲突
+    if (mode === 'edit' && editingMagnet && anchorsToValidate.length > 0) {
+      // 创建临时 magnet 对象，使用新的锚点和类型
+      const tempMagnet: Magnet = {
+        ...editingMagnet,
+        anchorType,
+        anchors: anchorsToValidate,
+      };
+
+      // 计算新尺寸下占用的 pixels
+      const occupiedPixels = getMagnetOccupiedPixels(tempMagnet);
+
+      // 检查冲突
+      const conflictingPixels: Array<{ x: number; y: number; occupiedBy: string }> = [];
+      occupiedPixels.forEach((pixel) => {
+        const key = `${pixel.x},${pixel.y}`;
+        const occupancy = occupancyMap.get(key);
+
+        // 如果 pixel 被占用，且不是被当前编辑的 magnet 占用
+        if (
+          occupancy?.isOccupied &&
+          occupancy.occupiedBy &&
+          occupancy.occupiedBy !== editingMagnet.id
+        ) {
+          conflictingPixels.push({
+            x: pixel.x,
+            y: pixel.y,
+            occupiedBy: occupancy.occupiedBy,
+          });
+        }
+      });
+
+      // 如果有冲突，添加错误信息
+      if (conflictingPixels.length > 0) {
+        // 统计冲突的 magnet
+        const conflictingMagnets = new Set(conflictingPixels.map((p) => p.occupiedBy));
+        errors.push(
+          `调整后会与 ${conflictingMagnets.size} 个 Magnet 冲突 (${conflictingPixels.length} 个 pixel 重叠)`
+        );
+      }
     }
-    if (anchorType === 'vertical' && verticalPixels > 10) {
-      warnings.push('高度较大，实际使用时可能需要调整位置');
-    }
-    if (anchorType === 'rectangular') {
-      if (rectWidth > 17) warnings.push('宽度较大，实际使用时可能需要调整位置');
-      if (rectHeight > 10) warnings.push('高度较大，实际使用时可能需要调整位置');
+
+    // 创建模式下的预览位置提示
+    if (mode === 'create') {
+      if (anchorType === 'horizontal' && horizontalPixels > 17) {
+        warnings.push('宽度较大，实际使用时可能需要调整位置');
+      }
+      if (anchorType === 'vertical' && verticalPixels > 10) {
+        warnings.push('高度较大，实际使用时可能需要调整位置');
+      }
+      if (anchorType === 'rectangular') {
+        if (rectWidth > 17) warnings.push('宽度较大，实际使用时可能需要调整位置');
+        if (rectHeight > 10) warnings.push('高度较大，实际使用时可能需要调整位置');
+      }
     }
 
     return { hasErrors: errors.length > 0, errors, warnings };
-  }, [generateAnchors, anchorType, horizontalPixels, verticalPixels, rectWidth, rectHeight]);
+  }, [
+    mode,
+    editingMagnet,
+    generateAnchors,
+    anchorType,
+    horizontalPixels,
+    verticalPixels,
+    rectWidth,
+    rectHeight,
+    occupancyMap,
+  ]);
 
   // 动态生成预览用的 pixelPositions（使用较小的间距以适应预览区域）
   const previewPixelPositions = useMemo(() => {
