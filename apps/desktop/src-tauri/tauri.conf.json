@@ -47,6 +47,12 @@
     "security": {
       "csp": null
     },
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false,
+      "title": "Pixel Matrix Player"
+    },
     "windows": [
       {
         "label": "main",
