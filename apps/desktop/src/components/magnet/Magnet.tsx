@@ -6,6 +6,9 @@ import { PlayPauseButton, PreviousButton, NextButton } from './PlaybackControls'
 import { PlayModeButton } from './PlayModeButton';
 import { VolumeControl } from './VolumeControl';
 import { TrackInfo } from './TrackInfo';
+import { PlayQueueButton } from './PlayQueueButton';
+import { PlaylistsButton } from './PlaylistsButton';
+import { MusicLibraryButton } from './MusicLibraryButton';
 import { ProgressBar } from './ProgressBar';
 import './Magnet.css';
 
@@ -211,6 +214,21 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     // 进度条
     if (magnet.id === 'progress-bar') {
       return <ProgressBar />;
+    }
+
+    // 播放列表按钮
+    if (magnet.id === 'btn-play-queue') {
+      return <PlayQueueButton />;
+    }
+
+    // 歌单按钮
+    if (magnet.id === 'btn-playlists') {
+      return <PlaylistsButton />;
+    }
+
+    // 音乐库按钮
+    if (magnet.id === 'btn-music-library') {
+      return <MusicLibraryButton />;
     }
 
     // 默认渲染

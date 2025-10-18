@@ -49,7 +49,9 @@ export async function parseAudioMetadata(file: File): Promise<Partial<Track>> {
     // 封面图片
     if (metadata.common.picture && metadata.common.picture.length > 0) {
       const picture = metadata.common.picture[0];
-      const blob = new Blob([picture.data], { type: picture.format });
+      const blob = new Blob([picture.data.buffer || picture.data] as BlobPart[], {
+        type: picture.format,
+      });
       const coverUrl = URL.createObjectURL(blob);
       track.coverUrl = coverUrl;
     }
@@ -78,4 +80,71 @@ export function formatFileSize(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+}
+
+/**
+ * 生成唯一ID
+ */
+function generateId(): string {
+  return Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+}
+
+/**
+ * 解析音频文件并返回完整的Track对象
+ */
+export async function parseAudioFile(file: File): Promise<Track> {
+  try {
+    // 使用 music-metadata 解析音频文件
+    const metadata = await parseBlob(file);
+    const common = metadata.common;
+    const format = metadata.format;
+
+    // 获取文件路径（如果存在）
+    const path = (file as any).webkitRelativePath || file.name;
+
+    // 提取封面
+    let coverUrl: string | undefined;
+    if (common.picture && common.picture.length > 0) {
+      const picture = common.picture[0];
+      const blob = new Blob([picture.data.buffer || picture.data] as BlobPart[], {
+        type: picture.format,
+      });
+      coverUrl = URL.createObjectURL(blob);
+    }
+
+    return {
+      id: generateId(),
+      title: common.title || file.name.replace(/\.[^/.]+$/, ''),
+      artist: common.artist || common.artists?.join(', ') || undefined,
+      album: common.album || undefined,
+      path: path,
+      duration: format.duration,
+      bitrate: format.bitrate ? Math.round(format.bitrate / 1000) : undefined, // kbps
+      sampleRate: format.sampleRate,
+      codecName: format.codec,
+      year: common.year,
+      genre: common.genre?.join(', '),
+      albumArtist: common.albumartist,
+      trackNumber: common.track?.no ?? undefined,
+      discNumber: common.disk?.no ?? undefined,
+      composer: common.composer?.join(', '),
+      comment: common.comment?.join('; '),
+      coverUrl: coverUrl,
+      fileSize: file.size,
+      file: file, // 保留File对象以供播放
+      addedAt: new Date(), // 添加时间
+    };
+  } catch (error) {
+    console.error('Failed to parse audio file:', error);
+    // 如果解析失败，返回基本信息
+    const path = (file as any).webkitRelativePath || file.name;
+    return {
+      id: generateId(),
+      title: file.name.replace(/\.[^/.]+$/, ''),
+      file: file,
+      fileSize: file.size,
+      path: path,
+      addedAt: new Date(),
+    };
+  }
 }

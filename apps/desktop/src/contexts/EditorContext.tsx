@@ -13,6 +13,7 @@ import {
   checkMagnetCollision,
   getMagnetOccupiedPixels,
 } from '../utils/magnetEditor';
+import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../utils/windowCommunication';
 
 interface EditorContextType {
   editorState: EditorState;
@@ -54,6 +55,28 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
   useEffect(() => {
     setOccupancyMap(calculatePixelOccupancy(magnets));
   }, [magnets]);
+
+  // 同步 editorState 到其他窗口
+  useEffect(() => {
+    // 将 Set 转换为数组以便序列化
+    const serializableState = {
+      mode: editorState.mode,
+      isEditing: editorState.isEditing,
+      selectedMagnetId: editorState.selectedMagnetId,
+      selectedPixels: Array.from(editorState.selectedPixels),
+      isDragging: editorState.isDragging,
+      dragStartPixel: editorState.dragStartPixel,
+      dragEndPixel: editorState.dragEndPixel,
+      hoverPixel: editorState.hoverPixel,
+    };
+
+    // 同步到 localStorage 和广播事件
+    broadcastDataUpdate(
+      STORAGE_KEYS.EDITOR_STATE,
+      serializableState,
+      TAURI_EVENTS.EDITOR_STATE_UPDATED
+    );
+  }, [editorState]);
 
   // 进入编辑模式
   const enterEditMode = useCallback(() => {
@@ -103,13 +126,36 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
   }, []);
 
   // 选中 Magnet
-  const selectMagnet = useCallback((magnetId: string | null) => {
-    setEditorState((prev) => ({
-      ...prev,
-      selectedMagnetId: magnetId,
-      mode: magnetId ? 'drag' : 'edit',
-    }));
-  }, []);
+  const selectMagnet = useCallback(
+    (magnetId: string | null) => {
+      setEditorState((prev) => {
+        if (!magnetId) {
+          return {
+            ...prev,
+            selectedMagnetId: null,
+            selectedPixels: new Set<string>(),
+            mode: 'edit',
+          };
+        }
+
+        // 找到magnet占用的所有pixels
+        const magnetPixels = new Set<string>();
+        occupancyMap.forEach((occupancy, key) => {
+          if (occupancy.isOccupied && occupancy.occupiedBy === magnetId) {
+            magnetPixels.add(key);
+          }
+        });
+
+        return {
+          ...prev,
+          selectedMagnetId: magnetId,
+          selectedPixels: magnetPixels,
+          mode: 'drag',
+        };
+      });
+    },
+    [occupancyMap]
+  );
 
   // 选中 Pixel
   const selectPixel = useCallback((x: number, y: number) => {

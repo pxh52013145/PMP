@@ -15,6 +15,11 @@ import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
 import { MUSIC_PLAYER_SIMULATOR } from './data/builtin/musicPlayerSimulator';
+import {
+  PLAY_QUEUE_MAGNET,
+  PLAYLISTS_MAGNET,
+  MUSIC_LIBRARY_MAGNET,
+} from './data/builtin/musicMagnets';
 import { saveConfig, loadConfig, applyConfig } from './utils/configManager';
 import { MATRIX_CONFIG } from './constants/config';
 import {
@@ -273,6 +278,9 @@ export function EditorWindowApp() {
       ...WINDOW_CONTROL_MAGNETS,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
+      PLAY_QUEUE_MAGNET,
+      PLAYLISTS_MAGNET,
+      MUSIC_LIBRARY_MAGNET,
       MUSIC_PLAYER_SIMULATOR,
     ],
     []

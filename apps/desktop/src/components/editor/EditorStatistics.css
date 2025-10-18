@@ -276,3 +276,173 @@
   text-align: center;
   letter-spacing: 1px;
 }
+
+/* 选中区域信息卡片 */
+.selection-info-card {
+  --selection-corner-size: 8px;
+  background: rgba(15, 1, 29, 0.7);
+  border: 1px solid rgba(138, 43, 226, 0.4);
+  padding: 14px;
+  margin-bottom: 20px;
+  clip-path: polygon(
+    0% var(--selection-corner-size),
+    var(--selection-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--selection-corner-size)),
+    calc(100% - var(--selection-corner-size)) 100%,
+    0% 100%
+  );
+  box-shadow:
+    0 0 15px rgba(138, 43, 226, 0.2),
+    inset 0 0 15px rgba(0, 0, 0, 0.3);
+  animation: selection-pulse 3s ease-in-out infinite;
+}
+
+@keyframes selection-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 15px rgba(138, 43, 226, 0.2),
+      inset 0 0 15px rgba(0, 0, 0, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 0 25px rgba(138, 43, 226, 0.4),
+      0 0 35px rgba(138, 43, 226, 0.2),
+      inset 0 0 15px rgba(0, 0, 0, 0.3);
+  }
+}
+
+.selection-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(138, 43, 226, 0.3);
+}
+
+.selection-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.selection-title {
+  font-family: 'Orbitron', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(138, 43, 226, 0.9);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  flex: 1;
+}
+
+.selection-count {
+  font-family: 'Orbitron', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(138, 43, 226, 0.2);
+  padding: 3px 8px;
+  border-radius: 3px;
+}
+
+.selection-details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.info-label {
+  font-family: 'Orbitron', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.info-value {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.5;
+}
+
+.info-value.magnet-id {
+  color: rgba(138, 43, 226, 0.9);
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(138, 43, 226, 0.3);
+}
+
+.anchor-list,
+.coord-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.anchor-coord,
+.coord-item {
+  color: rgba(0, 255, 200, 0.9);
+  background: rgba(0, 255, 200, 0.08);
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.anchor-coord:hover,
+.coord-item:hover {
+  background: rgba(0, 255, 200, 0.15);
+  color: rgba(0, 255, 200, 1);
+}
+
+/* 四角锚点网格布局 */
+.anchor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.anchor-point {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(0, 255, 200, 0.05);
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 255, 200, 0.2);
+  transition: all 0.2s;
+}
+
+.anchor-point:hover {
+  background: rgba(0, 255, 200, 0.1);
+  border-color: rgba(0, 255, 200, 0.4);
+  transform: translateY(-1px);
+}
+
+.anchor-label {
+  font-family: 'Orbitron', monospace;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.anchor-point .anchor-coord {
+  font-size: 12px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}

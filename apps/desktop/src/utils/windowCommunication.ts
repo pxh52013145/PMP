@@ -35,6 +35,7 @@ export const STORAGE_KEYS = {
   MAGNET_EDITOR_DATA: 'magnet-editor-data', // 编辑中的 Magnet 数据
   MAGNET_EDITOR_MODE: 'magnet-editor-mode', // 编辑模式（create/edit）
   CREATOR_WINDOW_OPEN: 'magnet-creator-window-open', // Creator 窗口是否打开
+  EDITOR_STATE: 'pixel-matrix-editor-state', // 编辑器状态（包括选中信息）
 } as const;
 
 /**
@@ -63,6 +64,7 @@ export const TAURI_EVENTS = {
   // 编辑器相关
   EDITOR_EXIT: 'editor-exit',
   EDITOR_STYLE_APPLY: 'editor-style-apply',
+  EDITOR_STATE_UPDATED: 'editor-state-updated', // 编辑器状态更新（选中区域等）
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 } as const;

@@ -22,7 +22,8 @@ export interface Playlist {
 
 export interface Track {
   id: string;
-  path: string;
+  path?: string; // 文件路径或URL（Blob URL用于播放）
+  originalPath?: string; // 原始文件路径（用于显示）
   title: string;
   artist?: string;
   album?: string;
@@ -37,8 +38,10 @@ export interface Track {
   bitrate?: number;
   sampleRate?: number;
   format?: string;
+  codecName?: string; // 编码格式
   fileSize?: number;
   dateAdded?: number;
+  addedAt?: Date; // 添加到库的时间
   lastPlayed?: number;
   playCount?: number;
   rating?: number;
@@ -46,6 +49,7 @@ export interface Track {
   tags?: string[];
   lyrics?: string;
   comment?: string;
+  file?: File; // 原始File对象（用于播放）
 }
 
 export interface AudioState {

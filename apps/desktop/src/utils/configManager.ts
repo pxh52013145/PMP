@@ -1,5 +1,6 @@
 import { Magnet, PixelAnchor } from '../types/pixel';
 import { BUILTIN_MAGNET_IDS } from '../constants/magnets';
+import { resolveMagnetPositions, detectConflicts } from './magnetPositionResolver';
 
 /**
  * 配置文件格式
@@ -436,5 +437,19 @@ export function applyConfig(
 
   console.log(`配置应用完成: 共 ${magnetLibrary.length} 个 magnet, ${activeMagnetIds.size} 个激活`);
 
-  return { magnetLibrary, activeMagnetIds };
+  // 检测位置冲突
+  const conflicts = detectConflicts(magnetLibrary);
+  if (conflicts.length > 0) {
+    console.warn(`⚠️ 检测到 ${conflicts.length} 个位置冲突，正在自动解决...`);
+    conflicts.forEach((conflict) => {
+      console.warn(
+        `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
+      );
+    });
+  }
+
+  // 自动解决位置冲突
+  const resolvedMagnetLibrary = resolveMagnetPositions(magnetLibrary);
+
+  return { magnetLibrary: resolvedMagnetLibrary, activeMagnetIds };
 }

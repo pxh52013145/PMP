@@ -20,6 +20,9 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'progress-bar',
   'track-info',
   'btn-editor',
+  'btn-play-queue',
+  'btn-playlists',
+  'btn-music-library',
   'music-player-simulator',
 ] as const;
 
@@ -44,6 +47,10 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-minimize',
   'btn-maximize',
   'btn-close',
+  'btn-editor',
+  // 音乐播放器模拟器
+  'music-player-simulator',
+  // 独立播放控制按钮
   'btn-play-pause',
   'btn-previous',
   'btn-next',
@@ -51,6 +58,8 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-volume',
   'progress-bar',
   'track-info',
-  'btn-editor',
-  'music-player-simulator',
+  // 音乐功能按钮
+  'btn-play-queue',
+  'btn-playlists',
+  'btn-music-library',
 ]);

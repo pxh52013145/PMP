@@ -19,12 +19,18 @@ import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
 import { MUSIC_PLAYER_SIMULATOR } from './data/builtin/musicPlayerSimulator';
+import {
+  PLAY_QUEUE_MAGNET,
+  PLAYLISTS_MAGNET,
+  MUSIC_LIBRARY_MAGNET,
+} from './data/builtin/musicMagnets';
 import { MATRIX_CONFIG } from './constants/config';
 import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from './constants/magnets';
 import { Magnet, PixelAnchor } from './types/pixel';
 import { BackgroundSettings } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
 import { loadConfig, saveConfig, applyConfig } from './utils/configManager';
+import { resolveMagnetPositions, detectConflicts } from './utils/magnetPositionResolver';
 import { calculateWindowPosition } from './utils/editorWindows';
 import './App.css';
 
@@ -115,6 +121,9 @@ function AppContent() {
       ...WINDOW_CONTROL_MAGNETS,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
+      PLAY_QUEUE_MAGNET,
+      PLAYLISTS_MAGNET,
+      MUSIC_LIBRARY_MAGNET,
       MUSIC_PLAYER_SIMULATOR,
     ],
     []
@@ -135,8 +144,21 @@ function AppContent() {
       };
     }
 
+    // 首次加载，检测并解决默认magnets的位置冲突
+    const conflicts = detectConflicts(defaultMagnetLibrary);
+    if (conflicts.length > 0) {
+      console.warn(`🔧 首次加载检测到 ${conflicts.length} 个位置冲突，正在自动解决...`);
+      conflicts.forEach((conflict) => {
+        console.warn(
+          `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
+        );
+      });
+    }
+
+    const resolvedMagnets = resolveMagnetPositions(defaultMagnetLibrary);
+
     return {
-      magnetLibrary: defaultMagnetLibrary,
+      magnetLibrary: resolvedMagnets,
       activeMagnetIds: defaultActiveMagnetIds,
     };
   }, [defaultMagnetLibrary, defaultActiveMagnetIds]);

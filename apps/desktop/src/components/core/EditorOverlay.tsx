@@ -102,7 +102,8 @@ function getMagnetBounds(
 }
 
 export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorOverlayProps) {
-  const { editorState, occupancyMap, startDrag, updateDrag, endDrag, setHoverPixel } = useEditor();
+  const { editorState, occupancyMap, startDrag, updateDrag, endDrag, setHoverPixel, selectMagnet } =
+    useEditor();
 
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -177,6 +178,9 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
       const clickedMagnet = getMagnetAtPosition(mouseX, mouseY);
 
       if (clickedMagnet) {
+        // 选中该 Magnet（会自动选中其占用的所有pixels）
+        selectMagnet(clickedMagnet.id);
+
         // 进入拖动 Magnet 模式
         const firstAnchor = clickedMagnet.anchors[0];
         const anchorPos = pixelPositions.get(`${firstAnchor.gridX},${firstAnchor.gridY}`);
@@ -201,7 +205,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
         startDrag(pixel.x, pixel.y);
       }
     },
-    [editorState, getMagnetAtPosition, getPixelAtPosition, pixelPositions, startDrag]
+    [editorState, getMagnetAtPosition, getPixelAtPosition, pixelPositions, startDrag, selectMagnet]
   );
 
   // 处理鼠标移动
