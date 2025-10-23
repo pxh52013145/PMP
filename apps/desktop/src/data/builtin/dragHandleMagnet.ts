@@ -29,6 +29,7 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
   style: {
     height: '36px', // 固定高度（2个pixel）
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    border: '1px solid transparent',
     borderRadius: '4px',
     fontSize: '16px',
     fontWeight: '600',
@@ -43,7 +44,7 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
     hoverStyle: {
       opacity: 1,
       backgroundColor: 'rgba(0, 0, 0, 0.7)',
-      borderColor: 'rgba(255, 255, 255, 0.2)',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
       transform: 'translateY(-1px)',
       boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
     },

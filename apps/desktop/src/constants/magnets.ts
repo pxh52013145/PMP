@@ -23,7 +23,8 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-play-queue',
   'btn-playlists',
   'btn-music-library',
-  'music-player-simulator',
+  'navigation-page',
+  'btn-back',
 ] as const;
 
 /**
@@ -48,8 +49,9 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-maximize',
   'btn-close',
   'btn-editor',
-  // 音乐播放器模拟器
-  'music-player-simulator',
+  // 导航页面
+  'navigation-page',
+  'btn-back',
   // 独立播放控制按钮
   'btn-play-pause',
   'btn-previous',

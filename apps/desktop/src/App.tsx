@@ -14,11 +14,13 @@ import { MagnetLayer } from './components/magnet/MagnetLayer';
 import { EditorOverlay } from './components/core/EditorOverlay';
 import { EditorPanel } from './components/core/EditorPanel';
 import { EditorProvider, useEditor } from './contexts/EditorContext';
+import { NavigationProvider } from './contexts/NavigationContext';
 import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
-import { MUSIC_PLAYER_SIMULATOR } from './data/builtin/musicPlayerSimulator';
+import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
+import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
 import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
@@ -124,7 +126,8 @@ function AppContent() {
       PLAY_QUEUE_MAGNET,
       PLAYLISTS_MAGNET,
       MUSIC_LIBRARY_MAGNET,
-      MUSIC_PLAYER_SIMULATOR,
+      NAVIGATION_PAGE_MAGNET,
+      BACK_BUTTON_MAGNET,
     ],
     []
   );
@@ -423,7 +426,8 @@ function App() {
       ...WINDOW_CONTROL_MAGNETS,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
-      MUSIC_PLAYER_SIMULATOR,
+      NAVIGATION_PAGE_MAGNET,
+      BACK_BUTTON_MAGNET,
     ];
 
     const savedConfig = loadConfig();
@@ -437,7 +441,9 @@ function App() {
 
   return (
     <EditorProvider magnets={magnetsForContext}>
-      <AppContent />
+      <NavigationProvider>
+        <AppContent />
+      </NavigationProvider>
     </EditorProvider>
   );
 }

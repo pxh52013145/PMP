@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/tauri';
-import { MATRIX_CONFIG } from '../constants/config';
 
 export type EditorWindowType =
   | 'control'
@@ -18,9 +17,6 @@ export interface EditorWindowConfig {
   width: number;
   height: number;
 }
-
-// 编辑器按钮的位置（gridX: 19, gridY: 16）
-const EDITOR_BUTTON_GRID = { x: 19, y: 16 };
 
 // 缓存窗口位置，避免重复计算
 const windowPositionCache = new Map<
@@ -131,6 +127,7 @@ export async function getMainWindowBounds(): Promise<{
 
 /**
  * 计算编辑器窗口的默认位置（基于主窗口）
+ * 所有窗口默认放在主窗口右下外边框处，从下往上堆叠
  */
 export async function calculateWindowPosition(
   type: EditorWindowType
@@ -166,76 +163,67 @@ export async function calculateWindowPosition(
   const screenWidth = window.screen.availWidth;
   const screenHeight = window.screen.availHeight;
 
+  // 主窗口右下角位置
+  const mainRightX = mainBounds.x + mainBounds.width;
+  const mainBottomY = mainBounds.y + mainBounds.height;
+
   let offsetX: number;
   let y: number;
 
-  // 对于控制面板，放在编辑器按钮附近
-  if (type === 'control') {
-    // 计算编辑器按钮在主窗口中的位置
-    // 编辑器按钮位于 gridX: 19, gridY: 16
-    // 像素之间的间距通过窗口大小和像素数量动态计算
-    const pixelSpacingX =
-      (mainBounds.width - 2 * MATRIX_CONFIG.EDGE_PADDING) / MATRIX_CONFIG.COLUMNS;
-    const pixelSpacingY = (mainBounds.height - 2 * MATRIX_CONFIG.EDGE_PADDING) / MATRIX_CONFIG.ROWS;
+  const GAP = 10; // 窗口之间的间距
 
-    const editorButtonX =
-      mainBounds.x + MATRIX_CONFIG.EDGE_PADDING + EDITOR_BUTTON_GRID.x * pixelSpacingX;
-    const editorButtonY =
-      mainBounds.y + MATRIX_CONFIG.EDGE_PADDING + EDITOR_BUTTON_GRID.y * pixelSpacingY;
+  // 窗口垂直堆叠顺序（从下往上）
+  const verticalOrder: Record<EditorWindowType, number> = {
+    control: 0, // 最底部，紧贴主窗口底部
+    statistics: 1,
+    library: 2,
+    style: 3,
+    help: 4,
+    creator: 5,
+    background: 6,
+    'custom-background': 7,
+  };
 
-    // 优先放在编辑器按钮右侧，留一点间距
-    offsetX = editorButtonX + 50;
-    y = editorButtonY - 50; // 稍微往上一点对齐
+  // 自定义背景窗口居中显示，其他窗口放在右下角
+  if (type === 'custom-background') {
+    // 居中显示，确保能被看到
+    offsetX = Math.max(20, (screenWidth - size.width) / 2);
+    y = Math.max(20, (screenHeight - size.height) / 2);
+  } else {
+    // 所有窗口放在主窗口右侧，紧贴主窗口右边框
+    offsetX = mainRightX + GAP;
 
-    // 检查右侧是否会超出屏幕
+    // 从主窗口底部开始，向上堆叠窗口
+    // control 窗口底部与主窗口底部对齐
+    const order = verticalOrder[type];
+    if (order === 0) {
+      // control 窗口：底部对齐主窗口底部
+      y = mainBottomY - size.height;
+    } else {
+      // 其他窗口：在 control 窗口上方依次堆叠
+      // 需要计算之前所有窗口的总高度
+      let accumulatedHeight = 0;
+      const controlSize = windowSizes['control'];
+
+      // control 窗口占据的高度
+      accumulatedHeight = controlSize.height + GAP;
+
+      // 根据顺序计算当前窗口应该堆叠的位置
+      // 这里简化处理：每个窗口向上偏移固定距离
+      const verticalOffset = order * 60; // 每个窗口向上偏移60px（部分重叠）
+
+      y = mainBottomY - size.height - accumulatedHeight - verticalOffset;
+    }
+
+    // 确保窗口不会超出屏幕右侧
     if (offsetX + size.width > screenWidth) {
-      // 如果右侧超出，放在左侧
-      offsetX = Math.max(20, editorButtonX - size.width - 20);
+      // 如果右侧超出，放在主窗口左侧
+      offsetX = Math.max(20, mainBounds.x - size.width - GAP);
     }
 
-    // 确保不会超出屏幕
-    if (offsetX < 20) {
-      offsetX = 20;
-    }
+    // 确保窗口不会超出屏幕顶部
     if (y < 20) {
       y = 20;
-    }
-    if (y + size.height > screenHeight) {
-      y = Math.max(20, screenHeight - size.height - 20);
-    }
-  } else {
-    // 其他窗口放在控制面板附近排列
-    // 先获取控制面板的位置
-    const controlPosition = await calculateWindowPosition('control');
-
-    const offsetMap: Record<EditorWindowType, number> = {
-      control: 0,
-      statistics: 0,
-      library: 250,
-      style: 300,
-      help: 500,
-      creator: 100,
-      background: 350,
-      'custom-background': 0,
-    };
-
-    // 自定义背景窗口放在屏幕中央，其他窗口放在控制面板下方
-    if (type === 'custom-background') {
-      // 居中显示，确保能被看到
-      offsetX = Math.max(20, (screenWidth - size.width) / 2);
-      y = Math.max(20, (screenHeight - size.height) / 2);
-    } else {
-      // 放在控制面板下方
-      offsetX = controlPosition.x;
-      y = controlPosition.y + offsetMap[type];
-    }
-
-    // 确保不会超出屏幕
-    if (offsetX + size.width > screenWidth) {
-      offsetX = Math.max(20, screenWidth - size.width - 20);
-    }
-    if (y + size.height > screenHeight) {
-      y = Math.max(20, screenHeight - size.height - 20);
     }
   }
 

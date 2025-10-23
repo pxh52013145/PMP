@@ -46,14 +46,17 @@ export async function parseAudioMetadata(file: File): Promise<Partial<Track>> {
     if (metadata.format.bitrate) track.bitrate = Math.round(metadata.format.bitrate / 1000); // kbps
     if (metadata.format.sampleRate) track.sampleRate = metadata.format.sampleRate;
 
-    // 封面图片
+    // 封面图片 - 转换为 Base64 Data URL 以便持久化存储
     if (metadata.common.picture && metadata.common.picture.length > 0) {
       const picture = metadata.common.picture[0];
-      const blob = new Blob([picture.data.buffer || picture.data] as BlobPart[], {
-        type: picture.format,
-      });
-      const coverUrl = URL.createObjectURL(blob);
-      track.coverUrl = coverUrl;
+      // 将封面数据转换为 Base64
+      const base64 = btoa(
+        Array.from(new Uint8Array(picture.data.buffer || picture.data))
+          .map((byte) => String.fromCharCode(byte))
+          .join('')
+      );
+      // 创建 Data URL
+      track.coverUrl = `data:${picture.format};base64,${base64}`;
     }
 
     return track;
@@ -102,14 +105,18 @@ export async function parseAudioFile(file: File): Promise<Track> {
     // 获取文件路径（如果存在）
     const path = (file as any).webkitRelativePath || file.name;
 
-    // 提取封面
+    // 提取封面 - 转换为 Base64 Data URL 以便持久化存储
     let coverUrl: string | undefined;
     if (common.picture && common.picture.length > 0) {
       const picture = common.picture[0];
-      const blob = new Blob([picture.data.buffer || picture.data] as BlobPart[], {
-        type: picture.format,
-      });
-      coverUrl = URL.createObjectURL(blob);
+      // 将封面数据转换为 Base64
+      const base64 = btoa(
+        Array.from(new Uint8Array(picture.data.buffer || picture.data))
+          .map((byte) => String.fromCharCode(byte))
+          .join('')
+      );
+      // 创建 Data URL，可以直接存储到 IndexedDB
+      coverUrl = `data:${picture.format};base64,${base64}`;
     }
 
     return {

@@ -23,6 +23,8 @@ export interface Playlist {
 export interface Track {
   id: string;
   path?: string; // 文件路径或URL（Blob URL用于播放）
+  filePath?: string; // 完整文件路径（Tauri场景 - 绝对路径）
+  fileHandle?: FileSystemFileHandle; // ✅ 文件句柄（File System Access API - 零空间占用）
   originalPath?: string; // 原始文件路径（用于显示）
   title: string;
   artist?: string;
@@ -50,6 +52,8 @@ export interface Track {
   lyrics?: string;
   comment?: string;
   file?: File; // 原始File对象（用于播放）
+  fileContent?: ArrayBuffer; // 文件内容（兼容性保留）
+  mimeType?: string; // MIME类型（用于创建Blob）
 }
 
 export interface AudioState {

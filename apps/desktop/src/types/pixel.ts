@@ -37,6 +37,8 @@ export type MagnetType =
   | 'search-bar' // 搜索栏
   | 'playlist' // 播放列表
   | 'progress-bar' // 进度条
+  | 'player' // 播放器相关按钮
+  | 'navigation' // 导航相关
   | 'custom'; // 自定义
 
 /**

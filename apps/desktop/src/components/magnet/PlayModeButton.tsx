@@ -8,10 +8,10 @@ import { audioService, PlayMode } from '../../services/audio';
 import './PlayModeButton.css';
 
 const PLAY_MODE_CONFIG: Record<PlayMode, { icon: string; text: string; next: PlayMode }> = {
-  sequence: { icon: '➡️', text: '顺序播放', next: 'loop' },
-  loop: { icon: '🔁', text: '列表循环', next: 'single-loop' },
-  'single-loop': { icon: '🔂', text: '单曲循环', next: 'shuffle' },
-  shuffle: { icon: '🔀', text: '随机播放', next: 'sequence' },
+  sequence: { icon: '→', text: '顺序播放', next: 'loop' },
+  loop: { icon: '↻', text: '列表循环', next: 'single-loop' },
+  'single-loop': { icon: '⟲', text: '单曲循环', next: 'shuffle' },
+  shuffle: { icon: '⧢', text: '随机播放', next: 'sequence' },
 };
 
 export const PlayModeButton: React.FC = () => {

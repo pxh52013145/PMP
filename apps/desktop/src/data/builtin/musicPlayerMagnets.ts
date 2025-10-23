@@ -19,11 +19,11 @@ export const PREVIOUS_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 9,
-      gridY: 16,
+      gridY: 19,
       role: 'anchor',
     },
   ],
-  content: '⏮',
+  content: '⟪',
   style: {
     width: '36px',
     height: '36px',
@@ -64,14 +64,14 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 11,
-      gridY: 16,
+      gridY: 19,
       role: 'anchor',
     },
   ],
-  content: '▶', // 默认显示播放，可通过状态切换为暂停 ⏸
+  content: '▶', // 默认显示播放
   style: {
-    width: '48px',
-    height: '48px',
+    width: '36px',
+    height: '36px',
     backgroundColor: 'rgba(0, 123, 255, 0.8)', // 主要操作使用醒目的蓝色
     border: '2px solid rgba(255, 255, 255, 0.2)',
   },
@@ -110,11 +110,11 @@ export const NEXT_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 13,
-      gridY: 16,
+      gridY: 19,
       role: 'anchor',
     },
   ],
-  content: '⏭',
+  content: '⟫',
   style: {
     width: '36px',
     height: '36px',
@@ -155,11 +155,11 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 15,
-      gridY: 16,
+      gridY: 19,
       role: 'anchor',
     },
   ],
-  content: '🔁', // 默认循环播放，可切换为 '🔂'(单曲) 或 '🔀'(随机)
+  content: '↻', // 默认循环播放
   style: {
     width: '36px',
     height: '36px',
@@ -200,11 +200,11 @@ export const VOLUME_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 17,
-      gridY: 16,
+      gridY: 19,
       role: 'anchor',
     },
   ],
-  content: '🔊', // 可根据音量状态切换为 '🔇'(静音) 或 '🔉'(低音量)
+  content: '♪', // 音量图标
   style: {
     width: '36px',
     height: '36px',
@@ -247,13 +247,13 @@ export const PROGRESS_BAR: Magnet = {
   anchors: [
     {
       id: 'left',
-      gridX: 2, // 左端点
+      gridX: 6, // 左端点
       gridY: 18,
       role: 'anchor',
     },
     {
       id: 'right',
-      gridX: 24, // 右端点
+      gridX: 26, // 右端点
       gridY: 18,
       role: 'boundary',
     },
@@ -301,26 +301,26 @@ export const TRACK_INFO: Magnet = {
   anchors: [
     {
       id: 'top-left',
-      gridX: 1,
-      gridY: 8,
+      gridX: 0,
+      gridY: 14,
       role: 'anchor',
     },
     {
       id: 'top-right',
-      gridX: 6,
-      gridY: 8,
+      gridX: 5,
+      gridY: 14,
       role: 'boundary',
     },
     {
       id: 'bottom-left',
-      gridX: 1,
-      gridY: 11,
+      gridX: 0,
+      gridY: 17,
       role: 'boundary',
     },
     {
       id: 'bottom-right',
-      gridX: 6,
-      gridY: 11,
+      gridX: 5,
+      gridY: 17,
       role: 'boundary',
     },
   ],
@@ -342,7 +342,7 @@ export const TRACK_INFO: Magnet = {
     transition: 'all 0.2s ease',
     hoverStyle: {
       backgroundColor: 'rgba(0, 0, 0, 0.85)',
-      borderColor: 'rgba(255, 255, 255, 0.2)',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
     },
   },

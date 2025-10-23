@@ -1,7 +1,6 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Magnet } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
-import { MusicPlayerSimulator } from './MusicPlayerSimulator';
 import { PlayPauseButton, PreviousButton, NextButton } from './PlaybackControls';
 import { PlayModeButton } from './PlayModeButton';
 import { VolumeControl } from './VolumeControl';
@@ -10,6 +9,8 @@ import { PlayQueueButton } from './PlayQueueButton';
 import { PlaylistsButton } from './PlaylistsButton';
 import { MusicLibraryButton } from './MusicLibraryButton';
 import { ProgressBar } from './ProgressBar';
+import { NavigationPage } from './NavigationPage';
+import { BackButton } from './BackButton';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -26,6 +27,13 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
   const [isHovering, setIsHovering] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const { PIXEL_SIZE } = MATRIX_CONFIG;
+
+  // ✅ 优化：检测大幅度位置变化，禁用 transition 以避免卡顿
+  const [disableTransition, setDisableTransition] = useState(true); // ✅ 首次渲染禁用动画
+  const lastBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(
+    null
+  );
+  const isFirstRenderRef = useRef(true);
 
   // 根据锚点计算实际位置和尺寸
   const bounds = useMemo(() => {
@@ -163,6 +171,56 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     return appliedStyle;
   }, [magnet.style, magnet.animation, isHovering, isActive]);
 
+  // ✅ 检测大幅度位置变化（窗口大小变化），禁用 transition
+  useEffect(() => {
+    if (!bounds) {
+      return;
+    }
+
+    // 首次渲染，保存初始位置并短暂禁用动画
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      lastBoundsRef.current = bounds;
+      // 50ms 后启用动画
+      const timer = setTimeout(() => {
+        setDisableTransition(false);
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+
+    // 首次渲染后第一次更新
+    if (!lastBoundsRef.current) {
+      lastBoundsRef.current = bounds;
+      return;
+    }
+
+    const last = lastBoundsRef.current;
+    const deltaX = Math.abs(bounds.x - last.x);
+    const deltaY = Math.abs(bounds.y - last.y);
+    const deltaW = Math.abs(bounds.width - last.width);
+    const deltaH = Math.abs(bounds.height - last.height);
+
+    // ✅ 检测窗口大小变化：
+    // 1. 任何单个维度变化超过 100px
+    // 2. 或者多个维度同时变化（总变化 > 100px）
+    const totalDelta = deltaX + deltaY + deltaW + deltaH;
+    const isLargeChange =
+      deltaX > 100 || deltaY > 100 || deltaW > 100 || deltaH > 100 || totalDelta > 100;
+
+    if (isLargeChange) {
+      setDisableTransition(true);
+      // 短暂禁用后恢复（立即禁用，50ms 后恢复）
+      const timer = setTimeout(() => {
+        setDisableTransition(false);
+        lastBoundsRef.current = bounds; // ✅ 恢复后更新位置
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      // 小幅度变化，正常更新位置
+      lastBoundsRef.current = bounds;
+    }
+  }, [bounds]);
+
   // 组合最终样式
   const finalStyle = useMemo(() => {
     return {
@@ -171,18 +229,19 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       top: `${bounds.y}px`,
       width: `${bounds.width}px`,
       height: `${bounds.height}px`,
-      transition:
-        magnet.animation?.transition ||
-        'var(--magnet-transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1))',
+      transition: disableTransition
+        ? 'none' // ✅ 禁用 transition
+        : magnet.animation?.transition ||
+          'var(--magnet-transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1))',
       ...currentStyle,
     };
-  }, [bounds, magnet.animation, currentStyle]);
+  }, [bounds, magnet.animation, currentStyle, disableTransition]);
 
   // 渲染自定义组件内容
   const renderContent = () => {
-    // 特殊处理：音乐播放器模拟器
-    if (magnet.id === 'music-player-simulator') {
-      return <MusicPlayerSimulator />;
+    // 导航页面
+    if (magnet.id === 'navigation-page') {
+      return <NavigationPage />;
     }
 
     // 播放控制按钮
@@ -229,6 +288,11 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     // 音乐库按钮
     if (magnet.id === 'btn-music-library') {
       return <MusicLibraryButton />;
+    }
+
+    // 返回按钮
+    if (magnet.id === 'btn-back') {
+      return <BackButton />;
     }
 
     // 默认渲染

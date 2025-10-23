@@ -14,7 +14,8 @@ import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
-import { MUSIC_PLAYER_SIMULATOR } from './data/builtin/musicPlayerSimulator';
+import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
+import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
 import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
@@ -281,7 +282,8 @@ export function EditorWindowApp() {
       PLAY_QUEUE_MAGNET,
       PLAYLISTS_MAGNET,
       MUSIC_LIBRARY_MAGNET,
-      MUSIC_PLAYER_SIMULATOR,
+      NAVIGATION_PAGE_MAGNET,
+      BACK_BUTTON_MAGNET,
     ],
     []
   );

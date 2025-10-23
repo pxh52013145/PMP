@@ -392,12 +392,44 @@ export function snapToNearestPixel(
 
 /**
  * 计算移动 Magnet 后的新锚点位置
+ * 确保整个magnet在边界内，而不是单独限制每个锚点
  */
 export function calculateNewAnchors(magnet: Magnet, deltaX: number, deltaY: number): PixelAnchor[] {
+  // 计算magnet的边界
+  const minX = Math.min(...magnet.anchors.map((a) => a.gridX));
+  const maxX = Math.max(...magnet.anchors.map((a) => a.gridX));
+  const minY = Math.min(...magnet.anchors.map((a) => a.gridY));
+  const maxY = Math.max(...magnet.anchors.map((a) => a.gridY));
+
+  // 计算移动后的边界
+  const newMinX = minX + deltaX;
+  const newMaxX = maxX + deltaX;
+  const newMinY = minY + deltaY;
+  const newMaxY = maxY + deltaY;
+
+  // 调整delta以保持magnet在边界内
+  let adjustedDeltaX = deltaX;
+  let adjustedDeltaY = deltaY;
+
+  // 检查X方向边界
+  if (newMinX < 0) {
+    adjustedDeltaX = -minX; // 左边界限制
+  } else if (newMaxX >= MATRIX_CONFIG.COLUMNS) {
+    adjustedDeltaX = MATRIX_CONFIG.COLUMNS - 1 - maxX; // 右边界限制
+  }
+
+  // 检查Y方向边界
+  if (newMinY < 0) {
+    adjustedDeltaY = -minY; // 上边界限制
+  } else if (newMaxY >= MATRIX_CONFIG.ROWS) {
+    adjustedDeltaY = MATRIX_CONFIG.ROWS - 1 - maxY; // 下边界限制
+  }
+
+  // 使用调整后的delta移动所有锚点
   return magnet.anchors.map((anchor) => ({
     ...anchor,
-    gridX: Math.max(0, Math.min(MATRIX_CONFIG.COLUMNS - 1, anchor.gridX + deltaX)),
-    gridY: Math.max(0, Math.min(MATRIX_CONFIG.ROWS - 1, anchor.gridY + deltaY)),
+    gridX: anchor.gridX + adjustedDeltaX,
+    gridY: anchor.gridY + adjustedDeltaY,
   }));
 }
 

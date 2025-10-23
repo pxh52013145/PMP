@@ -9,11 +9,18 @@ import { createPortal } from 'react-dom';
 import { audioService } from '../../services/audio';
 import './VolumeControl.css';
 
+interface PopupState {
+  show: boolean;
+  position: { x: number; y: number } | null;
+}
+
 export const VolumeControl: React.FC = () => {
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
-  const [showSlider, setShowSlider] = useState(false);
-  const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
+  const [popupState, setPopupState] = useState<PopupState>({
+    show: false,
+    position: null,
+  });
   const containerRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
@@ -31,18 +38,6 @@ export const VolumeControl: React.FC = () => {
     return unsubscribe;
   }, []);
 
-  // 计算弹窗位置
-  const updatePopupPosition = () => {
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      // 弹窗显示在按钮上方居中
-      setPopupPosition({
-        x: rect.left + rect.width / 2,
-        y: rect.top,
-      });
-    }
-  };
-
   // 点击外部关闭滑块
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -52,22 +47,32 @@ export const VolumeControl: React.FC = () => {
         popupRef.current &&
         !popupRef.current.contains(event.target as Node)
       ) {
-        setShowSlider(false);
+        setPopupState({ show: false, position: null });
       }
     };
 
-    if (showSlider) {
+    if (popupState.show) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showSlider]);
+  }, [popupState.show]);
 
   const handleButtonClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!showSlider) {
-      updatePopupPosition();
+
+    if (!popupState.show && containerRef.current) {
+      // 同步计算位置，并在同一次状态更新中设置显示和位置
+      const rect = containerRef.current.getBoundingClientRect();
+      setPopupState({
+        show: true,
+        position: {
+          x: rect.left + rect.width / 2,
+          y: rect.top,
+        },
+      });
+    } else {
+      setPopupState({ show: false, position: null });
     }
-    setShowSlider(!showSlider);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,23 +86,24 @@ export const VolumeControl: React.FC = () => {
   };
 
   const getVolumeIcon = () => {
-    if (muted) return '🔇';
-    if (volume > 0.5) return '🔊';
-    if (volume > 0) return '🔉';
-    return '🔇';
+    if (muted) return '⊗';
+    if (volume > 0.5) return '♪+';
+    if (volume > 0) return '♪';
+    return '⊗';
   };
 
   // 渲染弹窗（使用Portal渲染到body）
   const renderPopup = () => {
-    if (!showSlider) return null;
+    // 只有当位置计算完成后才渲染弹窗，避免闪烁
+    if (!popupState.show || !popupState.position) return null;
 
     const popupElement = (
       <div
         ref={popupRef}
         className="volume-slider-popup volume-slider-popup-portal"
         style={{
-          left: `${popupPosition.x}px`,
-          top: `${popupPosition.y}px`,
+          left: `${popupState.position.x}px`,
+          top: `${popupState.position.y}px`,
         }}
       >
         <button
@@ -105,7 +111,7 @@ export const VolumeControl: React.FC = () => {
           onClick={handleMuteToggle}
           title={muted ? '取消静音' : '静音'}
         >
-          {muted ? '🔇' : '🔊'}
+          {muted ? '⊗' : '♪'}
         </button>
         <input
           type="range"

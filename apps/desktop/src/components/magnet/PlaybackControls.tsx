@@ -40,7 +40,7 @@ export const PlayPauseButton: React.FC = () => {
       disabled={isLoading}
       title={isPlaying ? '暂停' : '播放'}
     >
-      {isLoading ? '⏳' : isPlaying ? '⏸️' : '▶️'}
+      {isLoading ? '○' : isPlaying ? '∥' : '▶'}
     </button>
   );
 };
@@ -67,7 +67,7 @@ export const PreviousButton: React.FC = () => {
       disabled={!hasQueue}
       title="上一首"
     >
-      ⏮️
+      ⟪
     </button>
   );
 };
@@ -94,7 +94,7 @@ export const NextButton: React.FC = () => {
       disabled={!hasQueue}
       title="下一首"
     >
-      ⏭️
+      ⟫
     </button>
   );
 };

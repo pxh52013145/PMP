@@ -1,0 +1,900 @@
+.music-library {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 90%;
+  max-width: 1200px;
+  height: 80vh;
+  background: rgba(20, 20, 30, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  z-index: 10000;
+  backdrop-filter: blur(10px);
+}
+
+/* 嵌入模式样式 */
+.music-library-embedded {
+  position: relative;
+  top: auto;
+  left: auto;
+  transform: none;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  z-index: auto;
+  backdrop-filter: none;
+}
+
+/* 嵌入模式下的toolbar调整 */
+.music-library-embedded .music-library-toolbar {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 嵌入模式下的content区域 */
+.music-library-embedded .music-library-content {
+  background: transparent;
+}
+
+/* 嵌入模式下的滚动条优化 */
+.music-library-embedded .music-library-sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.music-library-embedded .music-library-main::-webkit-scrollbar {
+  width: 8px;
+}
+
+.music-library-embedded .music-library-main::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.music-library-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.music-library-title {
+  font-size: 18px;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.music-library-close {
+  width: 30px;
+  height: 30px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s;
+  font-size: 18px;
+}
+
+.music-library-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.music-library-toolbar {
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.music-library-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.music-library-btn {
+  padding: 8px 16px;
+  background: rgba(100, 100, 255, 0.15);
+  border: 1px solid rgba(100, 100, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.music-library-btn:hover {
+  background: rgba(100, 100, 255, 0.25);
+  border-color: rgba(100, 100, 255, 0.5);
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(100, 100, 255, 0.2);
+}
+
+.music-library-btn:active {
+  transform: translateY(0);
+}
+
+.music-library-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.music-library-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 200px;
+  max-width: 400px;
+  position: relative;
+}
+
+.music-library-search input {
+  width: 100%;
+  padding: 8px 35px 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.music-library-search input:focus {
+  outline: none;
+  border-color: rgba(100, 100, 255, 0.5);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.music-library-search input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.music-library-search-icon {
+  position: absolute;
+  right: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+  font-size: 14px;
+}
+
+.music-library-view-modes {
+  display: flex;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.music-library-view-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.music-library-view-btn.active {
+  background: rgba(100, 100, 255, 0.3);
+  color: white;
+}
+
+.music-library-view-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.music-library-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.music-library-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.music-library-stat strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+}
+
+.music-library-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.music-library-sidebar {
+  width: 200px;
+  background: rgba(0, 0, 0, 0.2);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  overflow-y: auto;
+  padding: 10px;
+}
+
+/* 侧边栏滚动条样式 */
+.music-library-sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.music-library-sidebar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.music-library-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.music-library-sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.music-library-sidebar-section {
+  margin-bottom: 20px;
+}
+
+.music-library-sidebar-title {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.music-library-sidebar-item {
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.music-library-sidebar-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+}
+
+.music-library-sidebar-item.selected {
+  background: rgba(100, 100, 255, 0.2);
+  color: white;
+}
+
+.music-library-sidebar-count {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.music-library-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+/* 主区域滚动条样式 */
+.music-library-main::-webkit-scrollbar {
+  width: 10px;
+}
+
+.music-library-main::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 5px;
+  margin: 4px 0;
+}
+
+.music-library-main::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(100, 100, 255, 0.3) 0%, rgba(100, 100, 255, 0.2) 100%);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: all 0.3s ease;
+}
+
+.music-library-main::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(100, 100, 255, 0.5) 0%, rgba(100, 100, 255, 0.3) 100%);
+  background-clip: content-box;
+}
+
+.music-library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 15px;
+  overflow-x: hidden;
+}
+
+.music-library-album-card {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  overflow: hidden;
+}
+
+.music-library-album-card:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+/* 鼠标悬停时唱片旋转效果 */
+.music-library-album-card:hover .music-library-album-cover {
+  animation: vinylRotate 3s linear infinite;
+}
+
+@keyframes vinylRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.music-library-album-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  background:
+    radial-gradient(
+      circle at center,
+      transparent 20%,
+      rgba(0, 0, 0, 0.4) 20.5%,
+      rgba(0, 0, 0, 0.4) 21%,
+      transparent 21.5%
+    ),
+    radial-gradient(
+      circle at center,
+      transparent 25%,
+      rgba(0, 0, 0, 0.3) 25.5%,
+      rgba(0, 0, 0, 0.3) 26%,
+      transparent 26.5%
+    ),
+    radial-gradient(
+      circle at center,
+      transparent 30%,
+      rgba(0, 0, 0, 0.2) 30.5%,
+      rgba(0, 0, 0, 0.2) 31%,
+      transparent 31.5%
+    ),
+    radial-gradient(
+      circle at center,
+      transparent 35%,
+      rgba(0, 0, 0, 0.15) 35.5%,
+      rgba(0, 0, 0, 0.15) 36%,
+      transparent 36.5%
+    ),
+    radial-gradient(
+      circle at center,
+      transparent 40%,
+      rgba(0, 0, 0, 0.1) 40.5%,
+      rgba(0, 0, 0, 0.1) 41%,
+      transparent 41.5%
+    ),
+    radial-gradient(circle at center, #1a1a1a 0%, #2a2a2a 50%, #1a1a1a 100%);
+  border-radius: 50%;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  color: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  position: relative;
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.4),
+    inset 0 0 20px rgba(0, 0, 0, 0.5);
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* 黑胶唱片中心标签 */
+.music-library-album-cover img {
+  width: 60%;
+  height: 60%;
+  object-fit: cover;
+  border-radius: 50%;
+  position: absolute;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+/* 中心小圆孔 */
+.music-library-album-cover::after {
+  content: '';
+  position: absolute;
+  width: 10%;
+  height: 10%;
+  background: radial-gradient(circle, #0a0a0a 0%, #1a1a1a 50%, #0a0a0a 100%);
+  border-radius: 50%;
+  box-shadow:
+    0 0 4px rgba(0, 0, 0, 0.8),
+    inset 0 0 3px rgba(255, 255, 255, 0.1);
+  z-index: 2;
+}
+
+.music-library-album-title {
+  font-size: 12px;
+  color: white;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-library-album-artist {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.music-library-list-header {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 1fr 80px 60px;
+  gap: 10px;
+  padding: 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 10px;
+}
+
+.music-library-track {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 1fr 80px 60px;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  align-items: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.music-library-track:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.music-library-track-number {
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+}
+
+.music-library-track-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-library-track-artist,
+.music-library-track-album {
+  color: rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-library-track-duration,
+.music-library-track-actions {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.music-library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+}
+
+.music-library-empty-icon {
+  font-size: 48px;
+  margin-bottom: 20px;
+}
+
+.music-library-empty-text {
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.music-library-scan-progress {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: rgba(30, 30, 40, 0.98);
+  border: 1px solid rgba(100, 150, 255, 0.4);
+  border-radius: 12px;
+  padding: 20px;
+  min-width: 350px;
+  max-width: 450px;
+  backdrop-filter: blur(15px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 10001;
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.music-library-scan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.music-library-scan-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.music-library-scan-percentage {
+  font-size: 18px;
+  font-weight: 700;
+  color: #6b9eff;
+}
+
+.music-library-scan-file {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-library-scan-progress-bar {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.music-library-scan-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9eff, #9b6dff);
+  transition: width 0.3s ease-out;
+  border-radius: 3px;
+}
+
+.music-library-scan-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  gap: 12px;
+}
+
+.scan-stat-count {
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 500;
+}
+
+.scan-stat-speed {
+  color: #6bd18a;
+}
+
+.scan-stat-remaining {
+  color: #ffa95d;
+}
+
+/* 库路径管理器 */
+.paths-manager-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+
+.paths-manager-modal {
+  width: 90%;
+  max-width: 600px;
+  max-height: 70vh;
+  background: rgba(30, 30, 40, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 64px rgba(0, 0, 0, 0.6);
+  animation: slideIn 0.3s ease;
+}
+
+.paths-manager-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.paths-manager-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.paths-manager-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.paths-scan-btn {
+  padding: 8px 16px;
+  background: rgba(70, 130, 180, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paths-scan-btn:hover:not(:disabled) {
+  background: rgba(70, 130, 180, 1);
+  box-shadow: 0 2px 8px rgba(70, 130, 180, 0.3);
+}
+
+.paths-scan-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.paths-manager-header-actions > button:last-child {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.paths-manager-header-actions > button:last-child:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.paths-manager-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+.paths-manager-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.paths-manager-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.paths-manager-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.paths-manager-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.paths-manager-empty {
+  padding: 80px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.paths-empty-icon {
+  font-size: 64px;
+  opacity: 0.3;
+}
+
+.paths-empty-text {
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 500;
+}
+
+.paths-empty-hint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.paths-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.path-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.path-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.path-item-icon {
+  font-size: 24px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.path-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.path-item-name {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-item-meta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.path-meta-tracks {
+  color: #6bd18a;
+  font-weight: 500;
+}
+
+.path-meta-time {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.path-meta-unscanned {
+  color: #ffa95d;
+  font-weight: 500;
+}
+
+.path-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.path-item-action-btn {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.path-item-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.path-item-action-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.path-item-rescan:hover:not(:disabled) {
+  background: rgba(107, 209, 138, 0.1);
+  border-color: rgba(107, 209, 138, 0.3);
+  color: #6bd18a;
+}
+
+.path-item-remove:hover:not(:disabled) {
+  background: rgba(236, 65, 65, 0.1);
+  border-color: rgba(236, 65, 65, 0.3);
+  color: #ec4141;
+}
+
+.paths-manager-footer {
+  padding: 16px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.paths-manager-info {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  line-height: 1.5;
+}

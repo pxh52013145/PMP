@@ -14,7 +14,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     anchors: [
       {
         id: 'anchor',
-        gridX: 21,
+        gridX: 22,
         gridY: 0,
         role: 'anchor',
       },
@@ -54,7 +54,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     anchors: [
       {
         id: 'anchor',
-        gridX: 23,
+        gridX: 24,
         gridY: 0,
         role: 'anchor',
       },
@@ -100,7 +100,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     anchors: [
       {
         id: 'anchor',
-        gridX: 25,
+        gridX: 26,
         gridY: 0,
         role: 'anchor',
       },

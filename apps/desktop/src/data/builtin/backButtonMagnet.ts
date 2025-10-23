@@ -1,35 +1,35 @@
 import { Magnet } from '../../types/pixel';
 
 /**
- * 编辑器按钮 Magnet
- * 点击进入/退出编辑模式
+ * 返回按钮 Magnet
+ * 用于导航页面的返回操作
  */
-export const EDITOR_BUTTON_MAGNET: Magnet = {
-  id: 'btn-editor',
-  type: 'custom',
-  name: '编辑器',
+export const BACK_BUTTON_MAGNET: Magnet = {
+  id: 'btn-back',
+  type: 'navigation',
+  name: '返回',
   anchorType: 'single',
   anchors: [
     {
       id: 'anchor',
-      gridX: 19,
+      gridX: 1,
       gridY: 19,
       role: 'anchor',
     },
   ],
-  content: '✎',
+  content: '←',
   style: {
     width: '36px',
     height: '36px',
-    backgroundColor: 'rgba(255, 149, 0, 0.8)',
+    backgroundColor: 'rgba(100, 100, 120, 0.85)',
     border: '1px solid rgba(255, 255, 255, 0.2)',
   },
   animation: {
     transition: 'all 0.2s ease',
     hoverStyle: {
       transform: 'scale(1.05)',
-      backgroundColor: 'rgba(255, 149, 0, 1)',
-      boxShadow: '0 4px 8px rgba(255, 149, 0, 0.3)',
+      backgroundColor: 'rgba(100, 100, 120, 1)',
+      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
     },
     activeStyle: {
       transform: 'scale(0.95)',
@@ -37,11 +37,10 @@ export const EDITOR_BUTTON_MAGNET: Magnet = {
   },
   state: 'idle',
   interactions: {
-    draggable: false,
+    draggable: true,
     clickable: true,
     onClick: () => {
-      // 这个会在 App.tsx 中被覆盖为实际的切换编辑模式函数
-      console.log('Toggle editor mode');
+      console.log('返回按钮点击');
     },
   },
 };

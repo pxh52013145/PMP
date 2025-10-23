@@ -6,15 +6,17 @@ export { WINDOW_CONTROL_MAGNETS } from './windowControlMagnets';
 export { DRAG_HANDLE_MAGNET } from './dragHandleMagnet';
 export { MUSIC_PLAYER_MAGNETS } from './musicPlayerMagnets';
 export { EDITOR_BUTTON_MAGNET } from './editorMagnet';
-export { MUSIC_PLAYER_SIMULATOR } from './musicPlayerSimulator';
 export { PLAY_QUEUE_MAGNET, PLAYLISTS_MAGNET, MUSIC_LIBRARY_MAGNET } from './musicMagnets';
+export { NAVIGATION_PAGE_MAGNET } from './navigationPageMagnet';
+export { BACK_BUTTON_MAGNET } from './backButtonMagnet';
 
 import { WINDOW_CONTROL_MAGNETS } from './windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './dragHandleMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './editorMagnet';
-import { MUSIC_PLAYER_SIMULATOR } from './musicPlayerSimulator';
 import { PLAY_QUEUE_MAGNET, PLAYLISTS_MAGNET, MUSIC_LIBRARY_MAGNET } from './musicMagnets';
+import { NAVIGATION_PAGE_MAGNET } from './navigationPageMagnet';
+import { BACK_BUTTON_MAGNET } from './backButtonMagnet';
 import { Magnet } from '../../types/pixel';
 
 /**
@@ -28,7 +30,8 @@ export const ALL_BUILTIN_MAGNETS: Magnet[] = [
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
   MUSIC_LIBRARY_MAGNET,
-  MUSIC_PLAYER_SIMULATOR,
+  NAVIGATION_PAGE_MAGNET,
+  BACK_BUTTON_MAGNET,
 ];
 
 /**
