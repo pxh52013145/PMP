@@ -17,25 +17,25 @@ export interface PlayQueueLogic {
   showQueue: boolean;
   editMode: boolean;
   dragState: DragState;
-  
+
   // UI控制
   toggleQueue: () => void;
   closeQueue: () => void;
   toggleEditMode: () => void;
-  
+
   // 播放控制
   playTrack: (index: number) => void;
   removeTrack: (index: number) => void;
   clearQueue: () => void;
   addFiles: () => Promise<void>;
-  
+
   // 拖拽控制
   handleDragStart: (index: number) => void;
   handleDragOver: (index: number) => void;
   handleDragLeave: () => void;
   handleDrop: (toIndex: number) => void;
   handleDragEnd: () => void;
-  
+
   // 工具函数
   formatTime: (seconds: number) => string;
 }

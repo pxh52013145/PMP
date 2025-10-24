@@ -15,7 +15,7 @@ export interface BackButtonData {
  */
 export function useBackButtonData(): BackButtonData {
   const { history } = useNavigation();
-  
+
   return {
     canGoBack: history.length > 1,
     historyLength: history.length,
