@@ -8,7 +8,7 @@ import { TrackInfo } from './trackInfo/TrackInfo';
 import { PlayQueueButton } from './PlayQueueButton';
 import { PlaylistsButton } from './PlaylistsButton';
 import { MusicLibraryButton } from './MusicLibraryButton';
-import { ProgressBar } from './ProgressBar';
+import { ProgressBar } from './progressBar/ProgressBar';
 import { NavigationPage } from './NavigationPage';
 import { BackButton } from './BackButton';
 import { WindowPinButton } from './WindowPinButton';

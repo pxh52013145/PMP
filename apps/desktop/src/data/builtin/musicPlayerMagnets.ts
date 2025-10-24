@@ -302,13 +302,13 @@ export const TRACK_INFO: Magnet = {
     {
       id: 'top-left',
       gridX: 0,
-      gridY: 13,  // 上移1行
+      gridY: 14,
       role: 'anchor',
     },
     {
       id: 'top-right',
-      gridX: 7,   // 右扩2列（6→8列宽）
-      gridY: 13,  // 上移1行
+      gridX: 5,
+      gridY: 14,
       role: 'boundary',
     },
     {
@@ -319,7 +319,7 @@ export const TRACK_INFO: Magnet = {
     },
     {
       id: 'bottom-right',
-      gridX: 7,   // 右扩2列
+      gridX: 5,
       gridY: 17,
       role: 'boundary',
     },
