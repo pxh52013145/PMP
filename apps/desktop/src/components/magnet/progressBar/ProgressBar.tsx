@@ -6,6 +6,7 @@
 import React from 'react';
 import { useProgressBarLogic } from './useProgressBarLogic';
 import { useProgressBarData } from './useProgressBarData';
+import { useDynamicColor } from '../trackInfo/useDynamicColor';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { ProgressBarVariantProps } from './ProgressBarTypes';
 import { StandardProgressBar, MinimalProgressBar } from './variants';
@@ -32,6 +33,10 @@ export const ProgressBar: React.FC = () => {
   // Layer 3: 主题配置
   const themeConfig = useComponentTheme('progress-bar');
 
+  // 动态颜色提取（复用TrackInfo的Hook）
+  const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false; // 默认启用
+  const dynamicColors = useDynamicColor(data.coverUrl, dynamicColorEnabled);
+
   // 选择变体组件
   const variant = themeConfig.variant || 'default';
   const VariantComponent = PROGRESS_BAR_VARIANTS[variant] || StandardProgressBar;
@@ -39,10 +44,24 @@ export const ProgressBar: React.FC = () => {
   // 优先级：自定义渲染器 > 预设变体
   if (themeConfig.customRenderer) {
     const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+    return (
+      <CustomRenderer
+        data={data}
+        logic={logic}
+        dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+        variantConfig={themeConfig.variantConfig}
+      />
+    );
   }
 
   // 使用预设变体
-  return <VariantComponent data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+  return (
+    <VariantComponent
+      data={data}
+      logic={logic}
+      dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+      variantConfig={themeConfig.variantConfig}
+    />
+  );
 };
 
