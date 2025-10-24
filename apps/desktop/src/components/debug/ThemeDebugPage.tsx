@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { TrackInfo } from '../magnet/trackInfo/TrackInfo';
+import { ProgressBar } from '../magnet/progressBar/ProgressBar';
 import './ThemeDebugPage.css';
 
 /**
@@ -15,6 +16,9 @@ export const ThemeDebugPage: React.FC = () => {
   const [configMode, setConfigMode] = useState<'global' | 'component'>('component');
   const [trackInfoVariant, setTrackInfoVariant] = useState<string>(
     theme.componentThemes?.['track-info']?.variant || 'default'
+  );
+  const [progressBarVariant, setProgressBarVariant] = useState<string>(
+    theme.componentThemes?.['progress-bar']?.variant || 'default'
   );
 
   return (
@@ -90,11 +94,18 @@ export const ThemeDebugPage: React.FC = () => {
                 <ComponentConfigPanel
                   selectedMagnet={selectedMagnet}
                   trackInfoVariant={trackInfoVariant}
+                  progressBarVariant={progressBarVariant}
                   onTrackInfoVariantChange={(variant) => {
                     setTrackInfoVariant(variant);
-                    // 使用新的 updateComponentTheme 方法（会自动同步到主窗口）
                     updateComponentTheme('track-info', {
                       ...theme.componentThemes?.['track-info'],
+                      variant,
+                    });
+                  }}
+                  onProgressBarVariantChange={(variant) => {
+                    setProgressBarVariant(variant);
+                    updateComponentTheme('progress-bar', {
+                      ...theme.componentThemes?.['progress-bar'],
                       variant,
                     });
                   }}
@@ -171,17 +182,25 @@ export const ThemeDebugPage: React.FC = () => {
                 >
                   📥 导出主题
                 </button>
-                <button
+                <button 
                   className="action-btn"
                   onClick={() => {
-                    updateComponentTheme('track-info', {
-                      variant: 'spinning-vinyl',
-                      dynamicColor: {
-                        extractFromCover: true,
-                        applyMode: 'full',
-                      },
-                    });
-                    setTrackInfoVariant('spinning-vinyl');
+                    // 重置当前选中的组件
+                    if (selectedMagnet === 'track-info') {
+                      updateComponentTheme('track-info', {
+                        variant: 'spinning-vinyl',
+                        dynamicColor: {
+                          extractFromCover: true,
+                          applyMode: 'full',
+                        },
+                      });
+                      setTrackInfoVariant('spinning-vinyl');
+                    } else if (selectedMagnet === 'progress-bar') {
+                      updateComponentTheme('progress-bar', {
+                        variant: 'standard',
+                      });
+                      setProgressBarVariant('standard');
+                    }
                   }}
                 >
                   🔄 重置
@@ -263,13 +282,17 @@ const ShaderPreviewGrid: React.FC<ShaderPreviewGridProps> = ({
 interface ComponentConfigPanelProps {
   selectedMagnet: string;
   trackInfoVariant: string;
+  progressBarVariant: string;
   onTrackInfoVariantChange: (variant: string) => void;
+  onProgressBarVariantChange: (variant: string) => void;
 }
 
 const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
   selectedMagnet,
   trackInfoVariant,
+  progressBarVariant,
   onTrackInfoVariantChange,
+  onProgressBarVariantChange,
 }) => {
   // TrackInfo 专用配置
   if (selectedMagnet === 'track-info') {
@@ -284,6 +307,30 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
           >
             <option value="spinning-vinyl">旋转唱片</option>
             <option value="card">卡片式</option>
+            <option value="minimal">极简</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text disabled">🔧 更多配置选项开发中...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ProgressBar 专用配置
+  if (selectedMagnet === 'progress-bar') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={progressBarVariant}
+            onChange={(e) => onProgressBarVariantChange(e.target.value)}
+          >
+            <option value="standard">标准进度条</option>
             <option value="minimal">极简</option>
           </select>
         </div>
@@ -329,12 +376,10 @@ const ComponentPreviewArea: React.FC<ComponentPreviewAreaProps> = ({
             </div>
           )}
 
-          {/* ProgressBar 预览 */}
+          {/* ProgressBar 实时预览 - 使用真实组件 */}
           {selectedMagnet === 'progress-bar' && (
-            <div className="preview-progress">
-              <div className="preview-track"></div>
-              <div className="preview-fill" style={{ width: '60%' }}></div>
-              <div className="preview-thumb" style={{ left: '60%' }}></div>
+            <div className="real-component-preview">
+              <ProgressBar />
             </div>
           )}
 
