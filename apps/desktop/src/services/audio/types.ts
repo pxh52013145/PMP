@@ -193,6 +193,11 @@ export interface IAudioService {
   playTrackAtIndex(index: number): Promise<void>;
 
   /**
+   * 重新排序队列
+   */
+  reorderQueue(fromIndex: number, toIndex: number): void;
+
+  /**
    * 播放上一首
    */
   playPrevious(): Promise<void>;

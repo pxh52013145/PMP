@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
+import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
+import { NavigationProvider } from './contexts/NavigationContext';
 import { EditorStatistics } from './components/editor/EditorStatistics';
 import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
 import { StyleEditor } from './components/editor/StyleEditor';
@@ -7,13 +9,16 @@ import { EditorHelp } from './components/editor/EditorHelp';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
+import { ThemeDebugPage } from './components/debug/ThemeDebugPage';
 import { Magnet } from './types/pixel';
 import { BackgroundSettings, BackgroundConfig } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
 import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
+import { WINDOW_PIN_MAGNET } from './data/builtin/windowPinMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
+import { DEBUG_BUTTON_MAGNET } from './data/builtin/debugButtonMagnet';
 import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
 import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
 import {
@@ -277,8 +282,10 @@ export function EditorWindowApp() {
     () => [
       DRAG_HANDLE_MAGNET,
       ...WINDOW_CONTROL_MAGNETS,
+      WINDOW_PIN_MAGNET,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
+      DEBUG_BUTTON_MAGNET,
       PLAY_QUEUE_MAGNET,
       PLAYLISTS_MAGNET,
       MUSIC_LIBRARY_MAGNET,
@@ -569,91 +576,97 @@ export function EditorWindowApp() {
   }, [magnetLibrary, activeMagnetIds]);
 
   return (
-    <EditorProvider magnets={activeMagnets}>
-      <div className="editor-window-app">
-        {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
+    <ThemeProvider>
+      <NavigationProvider>
+        <EditorProvider magnets={activeMagnets}>
+          <div className="editor-window-app">
+            {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
 
-        {windowType === 'statistics' && <EditorStatistics />}
+            {windowType === 'statistics' && <EditorStatistics />}
 
-        {windowType === 'library' && (
-          <EditorMagnetLibrary
-            magnetLibrary={magnetLibrary}
-            activeMagnetIds={activeMagnetIds}
-            builtInMagnetIds={builtInMagnetIds}
-            onMagnetAddToLibrary={handleMagnetAddToLibrary}
-            onMagnetActivate={handleMagnetActivate}
-            onMagnetDeactivate={handleMagnetDeactivate}
-            onMagnetDeleteFromLibrary={handleMagnetDeleteFromLibrary}
-          />
-        )}
+            {windowType === 'library' && (
+              <EditorMagnetLibrary
+                magnetLibrary={magnetLibrary}
+                activeMagnetIds={activeMagnetIds}
+                builtInMagnetIds={builtInMagnetIds}
+                onMagnetAddToLibrary={handleMagnetAddToLibrary}
+                onMagnetActivate={handleMagnetActivate}
+                onMagnetDeactivate={handleMagnetDeactivate}
+                onMagnetDeleteFromLibrary={handleMagnetDeleteFromLibrary}
+              />
+            )}
 
-        {windowType === 'style' && <StyleEditor />}
+            {windowType === 'style' && <StyleEditor />}
 
-        {windowType === 'help' && <EditorHelp />}
+            {windowType === 'help' && <EditorHelp />}
 
-        {windowType === 'creator' && (
-          <MagnetCreator
-            mode={creatorMode}
-            editingMagnet={editingMagnet}
-            defaultMagnet={
-              // 如果是编辑内置 Magnet，传入默认配置
-              creatorMode === 'edit' && editingMagnet
-                ? defaultMagnetLibrary.find((m) => m.id === editingMagnet.id)
-                : undefined
-            }
-            onSave={async (magnet) => {
-              // 根据模式选择新增或更新
-              if (creatorMode === 'edit') {
-                handleMagnetUpdate(magnet);
-              } else {
-                handleMagnetAddToLibrary(magnet);
-              }
-              // 清除编辑数据
-              localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-              localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
-              // 清除窗口打开状态
-              await broadcastDataUpdate(
-                STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-                false,
-                TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-              );
-            }}
-            onCancel={async () => {
-              try {
-                // 清除编辑数据
-                localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
-                // 清除窗口打开状态
-                await broadcastDataUpdate(
-                  STORAGE_KEYS.CREATOR_WINDOW_OPEN,
-                  false,
-                  TAURI_EVENTS.CREATOR_WINDOW_CLOSED
-                );
-                // 关闭窗口
-                const { closeEditorWindow } = await import('./utils/editorWindows');
-                await closeEditorWindow('creator');
-              } catch (error) {
-                console.error('Failed to close creator window:', error);
-              }
-            }}
-          />
-        )}
+            {windowType === 'creator' && (
+              <MagnetCreator
+                mode={creatorMode}
+                editingMagnet={editingMagnet}
+                defaultMagnet={
+                  // 如果是编辑内置 Magnet，传入默认配置
+                  creatorMode === 'edit' && editingMagnet
+                    ? defaultMagnetLibrary.find((m) => m.id === editingMagnet.id)
+                    : undefined
+                }
+                onSave={async (magnet) => {
+                  // 根据模式选择新增或更新
+                  if (creatorMode === 'edit') {
+                    handleMagnetUpdate(magnet);
+                  } else {
+                    handleMagnetAddToLibrary(magnet);
+                  }
+                  // 清除编辑数据
+                  localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                  localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                  // 清除窗口打开状态
+                  await broadcastDataUpdate(
+                    STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+                    false,
+                    TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+                  );
+                }}
+                onCancel={async () => {
+                  try {
+                    // 清除编辑数据
+                    localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                    localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                    // 清除窗口打开状态
+                    await broadcastDataUpdate(
+                      STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+                      false,
+                      TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+                    );
+                    // 关闭窗口
+                    const { closeEditorWindow } = await import('./utils/editorWindows');
+                    await closeEditorWindow('creator');
+                  } catch (error) {
+                    console.error('Failed to close creator window:', error);
+                  }
+                }}
+              />
+            )}
 
-        {windowType === 'background' && (
-          <BackgroundManager
-            settings={backgroundSettings}
-            onSettingsChange={handleBackgroundSettingsChange}
-            currentWindowMode={isMaximized ? 'maximized' : 'windowed'}
-          />
-        )}
+            {windowType === 'background' && (
+              <BackgroundManager
+                settings={backgroundSettings}
+                onSettingsChange={handleBackgroundSettingsChange}
+                currentWindowMode={isMaximized ? 'maximized' : 'windowed'}
+              />
+            )}
 
-        {windowType === 'custom-background' && (
-          <CustomBackgroundEditor
-            initialConfig={backgroundSettings[isMaximized ? 'maximized' : 'windowed']}
-            onSave={handleCustomBackgroundSave}
-          />
-        )}
-      </div>
-    </EditorProvider>
+            {windowType === 'custom-background' && (
+              <CustomBackgroundEditor
+                initialConfig={backgroundSettings[isMaximized ? 'maximized' : 'windowed']}
+                onSave={handleCustomBackgroundSave}
+              />
+            )}
+
+            {windowType === 'debug' && <ThemeDebugPage />}
+          </div>
+        </EditorProvider>
+      </NavigationProvider>
+    </ThemeProvider>
   );
 }

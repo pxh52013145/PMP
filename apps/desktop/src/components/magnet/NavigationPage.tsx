@@ -14,15 +14,15 @@ export function NavigationPage() {
   const { currentPage } = useNavigation();
 
   // 播放歌曲
-  const handlePlayNow = (tracks: Track[]) => {
+  const handlePlayNow = async (tracks: Track[], startIndex: number = 0) => {
     if (tracks.length === 0) return;
 
     // 清空队列并添加新歌曲
     audioService.clearQueue();
     audioService.addMultipleToQueue(tracks);
-    audioService.playTrackAtIndex(0);
+    await audioService.playTrackAtIndex(startIndex);
 
-    console.log(`Playing ${tracks.length} track(s)`);
+    console.log(`✅ Playing ${tracks.length} track(s) from index ${startIndex}`);
   };
 
   // 添加到队列

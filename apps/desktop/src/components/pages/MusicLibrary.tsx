@@ -9,6 +9,7 @@ import {
   LibraryPath,
 } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
+import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useNavigation } from '../../contexts/NavigationContext';
 import './MusicLibrary.css';
 
@@ -16,7 +17,7 @@ interface MusicLibraryProps {
   isOpen?: boolean;
   onClose?: () => void;
   onAddToQueue?: (tracks: Track[]) => void;
-  onPlayNow?: (tracks: Track[]) => void;
+  onPlayNow?: (tracks: Track[], startIndex?: number) => void;
   embedded?: boolean; // 是否嵌入模式（在NavigationPage中）
 }
 
@@ -59,13 +60,38 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   });
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [selectedArtist, setSelectedArtist] = useState<string | null>(null);
-  const [selectedAlbum] = useState<string | null>(null);
+  const [selectedAlbum, setSelectedAlbum] = useState<string | null>(null);
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [libraryPaths, setLibraryPaths] = useState<LibraryPath[]>([]);
   const [showPathsManager, setShowPathsManager] = useState(false);
   const [isRefreshingPermissions, setIsRefreshingPermissions] = useState(false);
+
+  // 排序状态
+  const [sortBy, setSortBy] = useState<
+    'title' | 'artist' | 'album' | 'duration' | 'year' | 'default'
+  >('default');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // 右键菜单状态
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
+
+  // 切换视图模式时清除筛选状态
+  const handleViewModeChange = (
+    newMode: ViewMode,
+    options?: { artist?: string; genre?: string }
+  ) => {
+    setViewMode(newMode);
+    // 清除所有筛选条件，让每个视图独立
+    setSelectedArtist(options?.artist || null);
+    setSelectedAlbum(null);
+    setSelectedGenre(options?.genre || null);
+  };
 
   // 加载库数据
   const loadLibraryData = async () => {
@@ -230,13 +256,103 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (query.trim()) {
       const results = await musicLibraryService.searchTracks(query);
       setTracks(results);
+
+      // 从搜索结果中提取 albums、artists 和 genres
+      const uniqueArtists = Array.from(new Set(results.map((t) => t.artist).filter(Boolean)));
+      const uniqueGenres = Array.from(new Set(results.map((t) => t.genre).filter(Boolean)));
+
+      // 提取专辑信息（专辑名 + 艺术家 + 封面）
+      const albumMap = new Map<string, { album: string; artist: string; cover?: string }>();
+      results.forEach((track) => {
+        if (track.album) {
+          const key = `${track.album}-${track.artist}`;
+          if (!albumMap.has(key)) {
+            albumMap.set(key, {
+              album: track.album,
+              artist: track.artist || '未知艺术家',
+              cover: track.coverUrl,
+            });
+          }
+        }
+      });
+      const uniqueAlbums = Array.from(albumMap.values());
+
+      setArtists(uniqueArtists as string[]);
+      setGenres(uniqueGenres as string[]);
+      setAlbums(uniqueAlbums);
     } else {
-      const allTracks = await musicLibraryService.getAllTracks();
+      // 清空搜索时恢复原始数据
+      const [allTracks, allArtists, allAlbums, allGenres] = await Promise.all([
+        musicLibraryService.getAllTracks(),
+        musicLibraryService.getAllArtists(),
+        musicLibraryService.getAllAlbums(),
+        musicLibraryService.getAllGenres(),
+      ]);
+
       setTracks(allTracks);
+      setArtists(allArtists);
+      setAlbums(allAlbums);
+      setGenres(allGenres);
     }
   };
 
-  // 获取过滤后的轨道
+  // 排序处理函数
+  const handleSort = (field: typeof sortBy) => {
+    if (sortBy === field) {
+      // 如果已经是当前排序字段，切换排序方向
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      // 切换到新的排序字段，默认升序
+      setSortBy(field);
+      setSortOrder('asc');
+    }
+  };
+
+  // 应用排序到数组
+  const applySorting = <T extends Track | { album: string; artist: string }>(items: T[]): T[] => {
+    if (sortBy === 'default') return items;
+
+    const sorted = [...items];
+    sorted.sort((a, b) => {
+      let compareA: any;
+      let compareB: any;
+
+      // 根据排序字段获取比较值
+      if ('title' in a && sortBy === 'title') {
+        compareA = (a as Track).title?.toLowerCase() || '';
+        compareB = (b as Track).title?.toLowerCase() || '';
+      } else if (sortBy === 'artist') {
+        compareA = ('artist' in a ? a.artist : '')?.toLowerCase() || '';
+        compareB = ('artist' in b ? b.artist : '')?.toLowerCase() || '';
+      } else if (sortBy === 'album') {
+        compareA = ('album' in a ? a.album : '')?.toLowerCase() || '';
+        compareB = ('album' in b ? b.album : '')?.toLowerCase() || '';
+      } else if ('duration' in a && sortBy === 'duration') {
+        compareA = (a as Track).duration || 0;
+        compareB = (b as Track).duration || 0;
+      } else if ('year' in a && sortBy === 'year') {
+        compareA = (a as Track).year || 0;
+        compareB = (b as Track).year || 0;
+      } else {
+        return 0;
+      }
+
+      // 比较
+      let result = 0;
+      if (typeof compareA === 'string') {
+        result = compareA.localeCompare(compareB);
+      } else {
+        result = compareA - compareB;
+      }
+
+      // 应用排序方向
+      return sortOrder === 'asc' ? result : -result;
+    });
+
+    return sorted;
+  };
+
+  // 获取过滤和排序后的轨道
   const getFilteredTracks = () => {
     let filtered = [...tracks];
 
@@ -250,7 +366,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       filtered = filtered.filter((t) => t.genre === selectedGenre);
     }
 
-    return filtered;
+    return applySorting(filtered);
+  };
+
+  // 获取排序后的专辑列表
+  const getSortedAlbums = () => {
+    return applySorting(albums);
   };
 
   // 单击专辑 - 导航到专辑详情页
@@ -284,6 +405,134 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (artistTracks.length > 0) {
       onPlayNow(artistTracks);
     }
+  };
+
+  // 双击歌曲：添加所有过滤后的歌曲到队列，从选中的歌曲开始播放
+  const handleTrackDoubleClick = (track: Track, index: number) => {
+    if (!onPlayNow) {
+      console.log('Play track:', track.title, '(embedded mode - no playback)');
+      return;
+    }
+    const filteredTracks = getFilteredTracks();
+    console.log(`🎵 Playing from track ${index + 1}/${filteredTracks.length}`);
+    onPlayNow(filteredTracks, index);
+  };
+
+  // 只播放单首歌曲
+  const handlePlaySingleTrack = (track: Track, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onPlayNow) {
+      console.log('Play single track:', track.title, '(embedded mode - no playback)');
+      return;
+    }
+    console.log('🎵 Playing single track:', track.title);
+    onPlayNow([track]);
+  };
+
+  // 只添加单首歌曲到队列
+  const handleAddSingleTrack = (track: Track, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onAddToQueue) {
+      console.log('Add track:', track.title, '(embedded mode - no queue)');
+      return;
+    }
+    console.log('➕ Adding single track:', track.title);
+    onAddToQueue([track]);
+  };
+
+  // 处理歌曲右键菜单
+  const handleTrackContextMenu = (track: Track, index: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const filteredTracks = getFilteredTracks();
+
+    const menuItems: ContextMenuItem[] = [
+      {
+        label: '播放',
+        icon: '▶',
+        onClick: () => handlePlaySingleTrack(track, e),
+      },
+      {
+        label: '添加到队列',
+        icon: '+',
+        onClick: () => onAddToQueue?.([track]),
+      },
+      {
+        label: '播放全部（从此开始）',
+        icon: '🎵',
+        onClick: () => onPlayNow?.(filteredTracks, index),
+      },
+      { divider: true } as ContextMenuItem,
+      {
+        label: '查看专辑',
+        icon: '💿',
+        onClick: () => {
+          if (track.album && embedded) {
+            handleAlbumClick(track.album, track.artist || '');
+          }
+        },
+        disabled: !track.album || !embedded,
+      },
+      {
+        label: '查看艺术家',
+        icon: '👤',
+        onClick: () => {
+          if (track.artist) {
+            handleViewModeChange('artists', { artist: track.artist });
+          }
+        },
+        disabled: !track.artist,
+      },
+    ];
+
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: menuItems,
+    });
+  };
+
+  // 处理专辑右键菜单
+  const handleAlbumContextMenu = (album: string, artist: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const menuItems: ContextMenuItem[] = [
+      {
+        label: '查看专辑',
+        icon: '💿',
+        onClick: () => handleAlbumClick(album, artist),
+        disabled: !embedded,
+      },
+      {
+        label: '播放专辑',
+        icon: '▶',
+        onClick: () => handlePlayAlbum(album),
+      },
+      {
+        label: '添加到队列',
+        icon: '+',
+        onClick: async () => {
+          const albumTracks = await musicLibraryService.getTracksByAlbum(album);
+          onAddToQueue?.(albumTracks);
+        },
+      },
+      { divider: true } as ContextMenuItem,
+      {
+        label: '查看艺术家',
+        icon: '👤',
+        onClick: () => {
+          handleViewModeChange('artists', { artist: artist });
+        },
+      },
+    ];
+
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: menuItems,
+    });
   };
 
   // 格式化文件大小
@@ -351,28 +600,69 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           <span className="music-library-search-icon">🔍</span>
         </div>
 
+        <div className="music-library-sort">
+          <label htmlFor="sort-select">排序：</label>
+          <select
+            id="sort-select"
+            className="music-library-sort-select"
+            value={sortBy}
+            onChange={(e) => handleSort(e.target.value as typeof sortBy)}
+          >
+            <option value="default">默认</option>
+            {/* Albums 视图只显示专辑和艺术家排序 */}
+            {viewMode !== 'albums' && <option value="title">标题</option>}
+            <option value="artist">艺术家</option>
+            <option value="album">专辑</option>
+            {viewMode !== 'albums' && <option value="duration">时长</option>}
+            {viewMode !== 'albums' && <option value="year">年份</option>}
+          </select>
+          <button
+            className={`music-library-sort-order-btn ${sortBy === 'default' ? 'disabled' : ''}`}
+            onClick={() =>
+              sortBy !== 'default' && setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+            }
+            disabled={sortBy === 'default'}
+            title={
+              sortBy === 'default'
+                ? '请先选择排序字段'
+                : sortOrder === 'asc'
+                  ? '升序 - 点击切换为降序'
+                  : '降序 - 点击切换为升序'
+            }
+          >
+            {sortOrder === 'asc' ? '↑' : '↓'}
+          </button>
+          <span
+            className="music-library-sort-hint"
+            title={sortBy === 'default' ? '当前使用默认顺序' : '播放时将按此排序顺序'}
+            style={{ opacity: sortBy === 'default' ? 0.4 : 1 }}
+          >
+            🎵
+          </span>
+        </div>
+
         <div className="music-library-view-modes">
           <button
             className={`music-library-view-btn ${viewMode === 'all' ? 'active' : ''}`}
-            onClick={() => setViewMode('all')}
+            onClick={() => handleViewModeChange('all')}
           >
             All
           </button>
           <button
             className={`music-library-view-btn ${viewMode === 'albums' ? 'active' : ''}`}
-            onClick={() => setViewMode('albums')}
+            onClick={() => handleViewModeChange('albums')}
           >
             Albums
           </button>
           <button
             className={`music-library-view-btn ${viewMode === 'artists' ? 'active' : ''}`}
-            onClick={() => setViewMode('artists')}
+            onClick={() => handleViewModeChange('artists')}
           >
             Artists
           </button>
           <button
             className={`music-library-view-btn ${viewMode === 'genres' ? 'active' : ''}`}
-            onClick={() => setViewMode('genres')}
+            onClick={() => handleViewModeChange('genres')}
           >
             Genres
           </button>
@@ -398,7 +688,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       </div>
 
       <div className="music-library-content">
-        {viewMode !== 'all' && (
+        {(viewMode === 'artists' || viewMode === 'genres') && (
           <div className="music-library-sidebar">
             {viewMode === 'artists' && (
               <div className="music-library-sidebar-section">
@@ -452,13 +742,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             <>
               {viewMode === 'albums' && (
                 <div className="music-library-grid">
-                  {albums.map(({ album, artist, cover }) => (
+                  {getSortedAlbums().map(({ album, artist, cover }) => (
                     <div
                       key={`${album}-${artist}`}
                       className="music-library-album-card"
                       onClick={() => handleAlbumClick(album, artist)}
                       onDoubleClick={() => handlePlayAlbum(album)}
-                      title={`单击查看专辑 / 双击播放`}
+                      onContextMenu={(e) => handleAlbumContextMenu(album, artist, e)}
+                      title={`单击查看专辑 / 双击播放 / 右键菜单`}
                     >
                       <div className="music-library-album-cover">
                         {cover ? <img src={cover} alt={album} /> : '◉'}
@@ -484,7 +775,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                     <div
                       key={track.id}
                       className="music-library-track"
-                      onDoubleClick={() => onPlayNow?.([track])}
+                      onDoubleClick={() => handleTrackDoubleClick(track, index)}
+                      onContextMenu={(e) => handleTrackContextMenu(track, index, e)}
+                      title="双击播放所有歌曲（从此歌曲开始） / 右键菜单"
                     >
                       <div className="music-library-track-number">{index + 1}</div>
                       <div className="music-library-track-title">{track.title}</div>
@@ -494,13 +787,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         {track.duration ? formatDuration(track.duration) : '-'}
                       </div>
                       <div className="music-library-track-actions">
+                        {onPlayNow && (
+                          <button
+                            onClick={(e) => handlePlaySingleTrack(track, e)}
+                            title="只播放此歌曲"
+                            className="track-action-play"
+                          >
+                            ▶
+                          </button>
+                        )}
                         {onAddToQueue && (
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAddToQueue([track]);
-                            }}
-                            title="添加到播放列表"
+                            onClick={(e) => handleAddSingleTrack(track, e)}
+                            title="只添加此歌曲到队列"
+                            className="track-action-add"
                           >
                             +
                           </button>
@@ -689,5 +989,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   // 嵌入模式直接返回内容，非嵌入模式使用Portal
-  return embedded ? libraryContent : createPortal(libraryContent, document.body);
+  return (
+    <>
+      {embedded ? libraryContent : createPortal(libraryContent, document.body)}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </>
+  );
 };

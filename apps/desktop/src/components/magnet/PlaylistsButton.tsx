@@ -12,7 +12,15 @@ export const PlaylistsButton: React.FC = () => {
 
   return (
     <>
-      <button className="playlists-button" onClick={() => setIsOpen(true)} title="歌单">
+      <button
+        className="playlists-button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsOpen(true);
+        }}
+        title="歌单"
+      >
         <span className="playlists-icon">♬</span>
       </button>
       <Playlists isOpen={isOpen} onClose={() => setIsOpen(false)} />

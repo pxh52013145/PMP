@@ -12,6 +12,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-minimize',
   'btn-maximize',
   'btn-close',
+  'btn-window-pin',
   'btn-play-pause',
   'btn-previous',
   'btn-next',
@@ -25,6 +26,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-music-library',
   'navigation-page',
   'btn-back',
+  'btn-debug', // 调试按钮
 ] as const;
 
 /**
@@ -48,7 +50,9 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-minimize',
   'btn-maximize',
   'btn-close',
+  'btn-window-pin',
   'btn-editor',
+  'btn-debug', // 调试按钮
   // 导航页面
   'navigation-page',
   'btn-back',

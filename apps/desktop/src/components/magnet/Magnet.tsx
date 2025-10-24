@@ -4,13 +4,15 @@ import { MATRIX_CONFIG } from '../../constants/config';
 import { PlayPauseButton, PreviousButton, NextButton } from './PlaybackControls';
 import { PlayModeButton } from './PlayModeButton';
 import { VolumeControl } from './VolumeControl';
-import { TrackInfo } from './TrackInfo';
+import { TrackInfo } from './trackInfo/TrackInfo';
 import { PlayQueueButton } from './PlayQueueButton';
 import { PlaylistsButton } from './PlaylistsButton';
 import { MusicLibraryButton } from './MusicLibraryButton';
 import { ProgressBar } from './ProgressBar';
 import { NavigationPage } from './NavigationPage';
 import { BackButton } from './BackButton';
+import { WindowPinButton } from './WindowPinButton';
+import { DebugButton } from './DebugButton';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -244,6 +246,11 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       return <NavigationPage />;
     }
 
+    // 窗口置顶按钮
+    if (magnet.id === 'btn-window-pin') {
+      return <WindowPinButton />;
+    }
+
     // 播放控制按钮
     if (magnet.id === 'btn-play-pause') {
       return <PlayPauseButton />;
@@ -293,6 +300,11 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     // 返回按钮
     if (magnet.id === 'btn-back') {
       return <BackButton />;
+    }
+
+    // 调试按钮
+    if (magnet.id === 'btn-debug') {
+      return <DebugButton />;
     }
 
     // 默认渲染

@@ -15,10 +15,13 @@ import { EditorOverlay } from './components/core/EditorOverlay';
 import { EditorPanel } from './components/core/EditorPanel';
 import { EditorProvider, useEditor } from './contexts/EditorContext';
 import { NavigationProvider } from './contexts/NavigationContext';
+import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
+import { WINDOW_PIN_MAGNET } from './data/builtin/windowPinMagnet';
 import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
+import { DEBUG_BUTTON_MAGNET } from './data/builtin/debugButtonMagnet';
 import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
 import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
 import {
@@ -121,8 +124,10 @@ function AppContent() {
     () => [
       DRAG_HANDLE_MAGNET,
       ...WINDOW_CONTROL_MAGNETS,
+      WINDOW_PIN_MAGNET,
       ...MUSIC_PLAYER_MAGNETS,
       EDITOR_BUTTON_MAGNET,
+      DEBUG_BUTTON_MAGNET,
       PLAY_QUEUE_MAGNET,
       PLAYLISTS_MAGNET,
       MUSIC_LIBRARY_MAGNET,
@@ -440,11 +445,13 @@ function App() {
   });
 
   return (
-    <EditorProvider magnets={magnetsForContext}>
-      <NavigationProvider>
-        <AppContent />
-      </NavigationProvider>
-    </EditorProvider>
+    <ThemeProvider>
+      <EditorProvider magnets={magnetsForContext}>
+        <NavigationProvider>
+          <AppContent />
+        </NavigationProvider>
+      </EditorProvider>
+    </ThemeProvider>
   );
 }
 

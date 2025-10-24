@@ -8,7 +8,8 @@ export type EditorWindowType =
   | 'help'
   | 'creator'
   | 'background'
-  | 'custom-background';
+  | 'custom-background'
+  | 'debug';
 
 export interface EditorWindowConfig {
   type: EditorWindowType;
@@ -48,7 +49,7 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
  * 当父窗口关闭时，其所有子窗口也应该关闭
  */
 const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
-  control: ['statistics', 'library', 'style', 'help', 'background'], // control 关闭时关闭所有主要窗口
+  control: ['statistics', 'library', 'style', 'help', 'background'], // control 关闭时关闭所有主要窗口（debug独立，不关闭）
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
@@ -56,6 +57,7 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   help: [],
   creator: [],
   'custom-background': [],
+  debug: [], // 独立窗口，无父窗口，无子窗口
 };
 
 /**
@@ -155,6 +157,7 @@ export async function calculateWindowPosition(
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
+    debug: { width: 1200, height: 800 }, // 调试窗口 - 大窗口
   };
 
   const size = windowSizes[type];
@@ -182,10 +185,11 @@ export async function calculateWindowPosition(
     creator: 5,
     background: 6,
     'custom-background': 7,
+    debug: 8, // 调试窗口
   };
 
-  // 自定义背景窗口居中显示，其他窗口放在右下角
-  if (type === 'custom-background') {
+  // 自定义背景窗口和调试窗口居中显示，其他窗口放在右下角
+  if (type === 'custom-background' || type === 'debug') {
     // 居中显示，确保能被看到
     offsetX = Math.max(20, (screenWidth - size.width) / 2);
     y = Math.max(20, (screenHeight - size.height) / 2);

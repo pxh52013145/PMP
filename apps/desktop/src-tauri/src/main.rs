@@ -46,6 +46,7 @@ async fn open_editor_window(
         "creator" => "创建/导入 Magnet",
         "background" => "背景管理",
         "custom-background" => "自定义背景",
+        "debug" => "主题系统调试",
         _ => "编辑器窗口"
     })
     .inner_size(width, height)
@@ -63,7 +64,7 @@ async fn open_editor_window(
         let app_handle = app.clone();
         window.on_window_event(move |event| {
              if let tauri::WindowEvent::CloseRequested { .. } = event {
-                // 先关闭所有其他编辑器窗口
+                // 先关闭所有其他编辑器窗口（不包括debug，debug是独立的）
                 let window_types = vec!["statistics", "library", "style", "help", "creator", "background", "custom-background"];
                 for wtype in window_types {
                     let label = format!("editor-{}", wtype);
@@ -97,7 +98,7 @@ async fn close_editor_window(app: tauri::AppHandle, window_type: String) -> Resu
 
 #[tauri::command]
 async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), String> {
-    let window_types = vec!["control", "statistics", "library", "style", "help", "creator", "background", "custom-background"];
+    let window_types = vec!["control", "statistics", "library", "style", "help", "creator", "background", "custom-background", "debug"];
     
     for window_type in window_types {
         let label = format!("editor-{}", window_type);
@@ -180,7 +181,7 @@ fn main() {
             let app_handle = app.handle();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
-                    let window_types = vec!["control", "statistics", "library", "style", "help", "creator", "background", "custom-background"];
+                    let window_types = vec!["control", "statistics", "library", "style", "help", "creator", "background", "custom-background", "debug"];
                     for window_type in window_types {
                         let label = format!("editor-{}", window_type);
                         if let Some(window) = app_handle.get_window(&label) {

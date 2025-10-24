@@ -157,7 +157,7 @@
 
 .album-tracks-header {
   display: grid;
-  grid-template-columns: 50px 1fr 80px;
+  grid-template-columns: 50px 1fr 80px 100px;
   gap: 12px;
   padding: 16px 24px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
@@ -176,7 +176,7 @@
 
 .album-track-item {
   display: grid;
-  grid-template-columns: 50px 1fr 80px;
+  grid-template-columns: 50px 1fr 80px 100px;
   gap: 12px;
   padding: 12px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -214,6 +214,45 @@
   text-align: right;
   color: rgba(255, 255, 255, 0.5);
   font-size: 14px;
+}
+
+.album-track-item .track-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.album-track-item:hover .track-actions {
+  opacity: 1;
+}
+
+.track-action-btn {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.8);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+}
+
+.track-action-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 1);
+  transform: scale(1.05);
+}
+
+.track-action-btn:active {
+  transform: scale(0.95);
 }
 
 /* 滚动条样式 */
@@ -279,14 +318,11 @@
 
   .album-tracks-header,
   .album-track-item {
-    grid-template-columns: 40px 1fr 70px;
+    grid-template-columns: 40px 1fr 70px 90px;
     gap: 8px;
   }
+
+  .album-track-item .track-actions {
+    opacity: 1;
+  }
 }
-
-
-
-
-
-
-
