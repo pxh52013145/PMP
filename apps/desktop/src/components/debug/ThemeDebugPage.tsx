@@ -53,51 +53,13 @@ export const ThemeDebugPage: React.FC = () => {
 
           {/* 全局主题配置 */}
           {configMode === 'global' && (
-            <>
-              <div className="control-section">
-                <h2>选择主题</h2>
-                <select
-                  className="theme-selector"
-                  value={selectedTheme}
-                  onChange={(e) => setSelectedTheme(e.target.value)}
-                >
-                  <option value="default">默认主题</option>
-                  <option value="cyberpunk">赛博朋克</option>
-                  <option value="nord">北欧风</option>
-                  <option value="neon">霓虹</option>
-                  <option value="retro">复古</option>
-                  <option value="monochrome">单色</option>
-                </select>
+            <div className="control-section">
+              <div className="config-placeholder-box">
+                <p className="placeholder-title">🚧 全局主题功能</p>
+                <p className="placeholder-desc">主题切换、着色器系统等功能开发中</p>
+                <p className="placeholder-hint">当前请使用"单独配置"模式测试组件变体</p>
               </div>
-
-              <div className="control-section">
-                <h2>着色器预览</h2>
-                <div className="shader-selector">
-                  <ShaderPreviewGrid
-                    selectedShader={selectedShader}
-                    onSelectShader={setSelectedShader}
-                  />
-                </div>
-              </div>
-
-              <div className="control-section">
-                <h2>全局配置</h2>
-                <div className="global-config">
-                  <div className="config-item">
-                    <label>Pixel形状</label>
-                    <select className="config-select">
-                      <option>circle</option>
-                      <option>square</option>
-                      <option>rounded-square</option>
-                    </select>
-                  </div>
-                  <div className="config-item">
-                    <label>主字体</label>
-                    <input type="text" className="config-input" placeholder="Inter, sans-serif" />
-                  </div>
-                </div>
-              </div>
-            </>
+            </div>
           )}
 
           {/* 单独配置模式 */}
@@ -141,54 +103,44 @@ export const ThemeDebugPage: React.FC = () => {
             </>
           )}
 
-          {/* 操作按钮 */}
-          <div className="control-section">
-            <h2>操作</h2>
-            <div className="action-buttons">
-              <button
-                className="action-btn primary"
-                onClick={() => {
-                  // TODO: 实现主题切换
-                  alert('主题切换功能即将实现');
-                }}
-              >
-                应用主题
-              </button>
-              <button
-                className="action-btn"
-                onClick={() => {
-                  const configStr = JSON.stringify(theme, null, 2);
-                  const blob = new Blob([configStr], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `theme-${theme.id}-${Date.now()}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}
-              >
-                导出配置
-              </button>
-              <button
-                className="action-btn"
-                onClick={() => {
-                  // 重置为默认主题
-                  updateComponentTheme('track-info', {
-                    variant: 'spinning-vinyl',
-                    dynamicColor: {
-                      extractFromCover: true,
-                      applyMode: 'full',
-                    },
-                  });
-                  setTrackInfoVariant('spinning-vinyl');
-                  setSelectedTheme('default');
-                  setSelectedShader('shader-default');
-                }}
-              >
-                重置
-              </button>
+          {/* 操作按钮 - 只保留有效功能 */}
+          {configMode === 'component' && (
+            <div className="control-section">
+              <h2>操作</h2>
+              <div className="action-buttons">
+                <button 
+                  className="action-btn"
+                  onClick={() => {
+                    const configStr = JSON.stringify(theme, null, 2);
+                    const blob = new Blob([configStr], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `theme-${theme.id}-${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  📥 导出配置
+                </button>
+                <button 
+                  className="action-btn"
+                  onClick={() => {
+                    updateComponentTheme('track-info', {
+                      variant: 'spinning-vinyl',
+                      dynamicColor: {
+                        extractFromCover: true,
+                        applyMode: 'full',
+                      },
+                    });
+                    setTrackInfoVariant('spinning-vinyl');
+                  }}
+                >
+                  🔄 重置
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* 右侧：预览区域 */}
@@ -288,59 +240,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
           </select>
         </div>
 
-        <div className="config-group">
-          <label>封面形状</label>
-          <select className="config-select">
-            <option value="circle">圆形</option>
-            <option value="square">方形</option>
-            <option value="rounded">圆角方形</option>
-            <option value="hexagon">六边形</option>
-          </select>
-        </div>
-
-        <div className="config-group">
-          <label>动画效果</label>
-          <select className="config-select">
-            <option value="spin">旋转</option>
-            <option value="pulse">脉冲</option>
-            <option value="glow">发光</option>
-            <option value="float">悬浮</option>
-            <option value="none">无</option>
-          </select>
-        </div>
-
-        <div className="config-group">
-          <label>动态颜色</label>
-          <div className="checkbox-group">
-            <label className="checkbox-label">
-              <input type="checkbox" defaultChecked />
-              从封面提取颜色
-            </label>
-            <label className="checkbox-label">
-              <input type="checkbox" defaultChecked />
-              应用到光效
-            </label>
-            <label className="checkbox-label">
-              <input type="checkbox" />
-              应用到文字
-            </label>
-          </div>
-        </div>
-
-        <div className="config-group">
-          <label>材质效果</label>
-          <div className="slider-group">
-            <div className="slider-item">
-              <span>Glow (发光)</span>
-              <input type="range" min="0" max="100" defaultValue="60" />
-              <span>0.6</span>
-            </div>
-            <div className="slider-item">
-              <span>Metallic (金属)</span>
-              <input type="range" min="0" max="100" defaultValue="30" />
-              <span>0.3</span>
-            </div>
-          </div>
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text disabled">🔧 更多配置选项开发中...</p>
         </div>
       </div>
     );
