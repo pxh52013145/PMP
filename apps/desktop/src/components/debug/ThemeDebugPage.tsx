@@ -108,7 +108,55 @@ export const ThemeDebugPage: React.FC = () => {
             <div className="control-section">
               <h2>操作</h2>
               <div className="action-buttons">
-                <button 
+                <button
+                  className="action-btn primary"
+                  onClick={async () => {
+                    try {
+                      // 使用 File System Access API
+                      // @ts-ignore
+                      if (window.showOpenFilePicker) {
+                        // @ts-ignore
+                        const [fileHandle] = await window.showOpenFilePicker({
+                          types: [
+                            {
+                              description: 'Theme Files',
+                              accept: { 'application/json': ['.pmpt', '.json'] },
+                            },
+                          ],
+                        });
+                        const file = await fileHandle.getFile();
+                        const text = await file.text();
+                        const importedTheme = JSON.parse(text);
+                        applyTheme(importedTheme);
+                        setTrackInfoVariant(
+                          importedTheme.componentThemes?.['track-info']?.variant || 'spinning-vinyl'
+                        );
+                      } else {
+                        // 降级到 Tauri dialog
+                        const { open } = await import('@tauri-apps/api/dialog');
+                        const selected = await open({
+                          multiple: false,
+                          filters: [{ name: 'Theme Files', extensions: ['pmpt', 'json'] }],
+                        });
+                        if (selected && typeof selected === 'string') {
+                          const { readTextFile } = await import('@tauri-apps/api/fs');
+                          const text = await readTextFile(selected);
+                          const importedTheme = JSON.parse(text);
+                          applyTheme(importedTheme);
+                          setTrackInfoVariant(
+                            importedTheme.componentThemes?.['track-info']?.variant ||
+                              'spinning-vinyl'
+                          );
+                        }
+                      }
+                    } catch (error) {
+                      console.error('Failed to import theme:', error);
+                    }
+                  }}
+                >
+                  📂 导入主题
+                </button>
+                <button
                   className="action-btn"
                   onClick={() => {
                     const configStr = JSON.stringify(theme, null, 2);
@@ -116,14 +164,14 @@ export const ThemeDebugPage: React.FC = () => {
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `theme-${theme.id}-${Date.now()}.json`;
+                    a.download = `theme-${theme.id}-${Date.now()}.pmpt`;
                     a.click();
                     URL.revokeObjectURL(url);
                   }}
                 >
-                  📥 导出配置
+                  📥 导出主题
                 </button>
-                <button 
+                <button
                   className="action-btn"
                   onClick={() => {
                     updateComponentTheme('track-info', {
