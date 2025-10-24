@@ -38,7 +38,7 @@ export const DebugButton: React.FC = () => {
   // 优先级：自定义渲染器 > 预设变体
   if (themeConfig.customRenderer) {
     const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic=logic} variantConfig={themeConfig.variantConfig} />;
+    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
   }
 
   // 使用预设变体
