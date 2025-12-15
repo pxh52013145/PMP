@@ -8,13 +8,14 @@ import { useVolumeData } from './useVolumeData';
 import { useVolumeLogic } from './useVolumeLogic';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { VolumeVariantProps } from './VolumeTypes';
-import { StandardVolume } from './variants';
+import { StandardVolume, CyberEnergyVolume } from './variants';
 
 /**
  * 变体组件注册表
  */
 const VOLUME_VARIANTS: Record<string, React.ComponentType<VolumeVariantProps>> = {
   standard: StandardVolume,
+  cyber: CyberEnergyVolume,
   default: StandardVolume, // 默认使用标准样式
 };
 

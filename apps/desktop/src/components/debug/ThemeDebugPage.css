@@ -218,6 +218,94 @@
   gap: 1.25rem;
 }
 
+.theme-json-editor {
+  width: 100%;
+  min-height: 200px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(0, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #d1f8ff;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.theme-json-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.theme-json-actions button,
+.theme-file-upload {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid rgba(0, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.2);
+  color: #aef8ff;
+  cursor: pointer;
+  text-align: center;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.theme-json-actions button:hover,
+.theme-file-upload:hover {
+  background: rgba(0, 255, 255, 0.15);
+}
+
+.theme-file-upload input {
+  display: none;
+}
+
+.refresh-btn {
+  width: 100%;
+  padding: 6px;
+  margin-bottom: 6px;
+}
+
+.renderer-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.renderer-item {
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.renderer-id {
+  font-weight: 600;
+  color: #f8f8f8;
+}
+
+.renderer-meta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  display: flex;
+  gap: 12px;
+}
+
+.renderer-desc {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.renderer-empty {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+}
+
 .config-group {
   display: flex;
   flex-direction: column;

@@ -1,18 +1,7 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Magnet } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
-import { PlayPauseButton, PreviousButton, NextButton } from './PlaybackControls';
-import { PlayModeButton } from './PlayModeButton';
-import { VolumeControl } from './VolumeControl';
-import { TrackInfo } from './trackInfo/TrackInfo';
-import { PlayQueueButton } from './PlayQueueButton';
-import { PlaylistsButton } from './PlaylistsButton';
-import { MusicLibraryButton } from './MusicLibraryButton';
-import { ProgressBar } from './progressBar/ProgressBar';
-import { NavigationPage } from './NavigationPage';
-import { BackButton } from './BackButton';
-import { WindowPinButton } from './WindowPinButton';
-import { DebugButton } from './DebugButton';
+import { getMagnetRenderer } from '../../magnet-system/registry';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -241,70 +230,9 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
 
   // 渲染自定义组件内容
   const renderContent = () => {
-    // 导航页面
-    if (magnet.id === 'navigation-page') {
-      return <NavigationPage />;
-    }
-
-    // 窗口置顶按钮
-    if (magnet.id === 'btn-window-pin') {
-      return <WindowPinButton />;
-    }
-
-    // 播放控制按钮
-    if (magnet.id === 'btn-play-pause') {
-      return <PlayPauseButton />;
-    }
-    if (magnet.id === 'btn-previous') {
-      return <PreviousButton />;
-    }
-    if (magnet.id === 'btn-next') {
-      return <NextButton />;
-    }
-
-    // 播放模式按钮
-    if (magnet.id === 'btn-mode') {
-      return <PlayModeButton />;
-    }
-
-    // 音量控制
-    if (magnet.id === 'btn-volume') {
-      return <VolumeControl />;
-    }
-
-    // 歌曲信息
-    if (magnet.id === 'track-info') {
-      return <TrackInfo />;
-    }
-
-    // 进度条
-    if (magnet.id === 'progress-bar') {
-      return <ProgressBar />;
-    }
-
-    // 播放列表按钮
-    if (magnet.id === 'btn-play-queue') {
-      return <PlayQueueButton />;
-    }
-
-    // 歌单按钮
-    if (magnet.id === 'btn-playlists') {
-      return <PlaylistsButton />;
-    }
-
-    // 音乐库按钮
-    if (magnet.id === 'btn-music-library') {
-      return <MusicLibraryButton />;
-    }
-
-    // 返回按钮
-    if (magnet.id === 'btn-back') {
-      return <BackButton />;
-    }
-
-    // 调试按钮
-    if (magnet.id === 'btn-debug') {
-      return <DebugButton />;
+    const rendererEntry = getMagnetRenderer(magnet.id);
+    if (rendererEntry) {
+      return rendererEntry.render();
     }
 
     // 默认渲染

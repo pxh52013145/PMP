@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface ProgressBarData {
   currentTime: number;
@@ -17,9 +17,10 @@ export interface ProgressBarData {
  * 获取ProgressBar的数据
  */
 export function useProgressBarData(isSeeking: boolean): ProgressBarData {
+  const audioService = useAudioService();
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [buffered, setBuffered] = useState(0);
+  const buffered = 0;
   const [coverUrl, setCoverUrl] = useState<string | undefined>(undefined);
 
   useEffect(() => {
@@ -41,7 +42,7 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     setCoverUrl(state.currentTrack?.coverUrl);
 
     return unsubscribe;
-  }, [isSeeking]);
+  }, [audioService, isSeeking]);
 
   return {
     currentTime,

@@ -4,8 +4,9 @@
  */
 
 import { useState } from 'react';
-import { audioService, Track } from '../../../services/audio';
+import { Track } from '../../../services/audio';
 import { parseAudioFile } from '../../../utils/audioMetadata';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface DragState {
   dragIndex: number | null;
@@ -44,6 +45,7 @@ export interface PlayQueueLogic {
  * PlayQueueButton的逻辑层
  */
 export function usePlayQueueLogic(): PlayQueueLogic {
+  const audioService = useAudioService();
   const [showQueue, setShowQueue] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [dragState, setDragState] = useState<DragState>({

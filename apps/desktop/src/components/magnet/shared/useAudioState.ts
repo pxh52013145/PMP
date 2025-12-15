@@ -4,12 +4,14 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService, PlayMode } from '../../../services/audio';
+import { PlayMode } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 /**
  * 获取播放状态
  */
 export function usePlaybackState() {
+  const audioService = useAudioService();
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -24,7 +26,7 @@ export function usePlaybackState() {
     setIsLoading(state.playbackState === 'loading');
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return { isPlaying, isLoading };
 }
@@ -33,6 +35,7 @@ export function usePlaybackState() {
  * 获取队列状态
  */
 export function useQueueState() {
+  const audioService = useAudioService();
   const [hasQueue, setHasQueue] = useState(false);
   const [queueLength, setQueueLength] = useState(0);
 
@@ -47,7 +50,7 @@ export function useQueueState() {
     setQueueLength(state.queue.length);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return { hasQueue, queueLength };
 }
@@ -56,6 +59,7 @@ export function useQueueState() {
  * 获取播放模式
  */
 export function usePlayMode() {
+  const audioService = useAudioService();
   const [playMode, setPlayMode] = useState<PlayMode>('sequence');
 
   useEffect(() => {
@@ -66,7 +70,7 @@ export function usePlayMode() {
     setPlayMode(audioService.getState().playMode);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return playMode;
 }
@@ -75,6 +79,7 @@ export function usePlayMode() {
  * 获取音量状态
  */
 export function useVolumeState() {
+  const audioService = useAudioService();
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
 
@@ -89,7 +94,7 @@ export function useVolumeState() {
     setMuted(state.muted);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return { volume, muted };
 }

@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
+import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { EditorStatistics } from './components/editor/EditorStatistics';
 import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
 import { StyleEditor } from './components/editor/StyleEditor';
@@ -577,9 +578,10 @@ export function EditorWindowApp() {
 
   return (
     <ThemeProvider>
-      <NavigationProvider>
-        <EditorProvider magnets={activeMagnets}>
-          <div className="editor-window-app">
+      <AudioEngineProvider>
+        <NavigationProvider>
+          <EditorProvider magnets={activeMagnets}>
+            <div className="editor-window-app">
             {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
 
             {windowType === 'statistics' && <EditorStatistics />}
@@ -664,9 +666,10 @@ export function EditorWindowApp() {
             )}
 
             {windowType === 'debug' && <ThemeDebugPage />}
-          </div>
-        </EditorProvider>
-      </NavigationProvider>
+            </div>
+          </EditorProvider>
+        </NavigationProvider>
+      </AudioEngineProvider>
     </ThemeProvider>
   );
 }

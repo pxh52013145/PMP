@@ -6,7 +6,15 @@
   box-sizing: border-box;
   user-select: none;
   -webkit-user-select: none;
+  position: relative; /* 确保z-index生效 */
+  z-index: 1; /* 默认层级 */
+  overflow: visible; /* 允许发光效果溢出 */
   /* 注意：过渡动画和 hover/active 效果现在由 Magnet 的 animation 配置控制 */
+}
+
+/* 悬停时提升层级，避免被其他magnet遮挡 */
+.magnet:hover {
+  z-index: 10;
 }
 
 .magnet-text {

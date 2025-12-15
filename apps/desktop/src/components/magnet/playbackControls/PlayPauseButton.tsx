@@ -8,13 +8,14 @@ import { usePlaybackData } from './usePlaybackData';
 import { usePlaybackLogic } from './usePlaybackLogic';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { PlaybackVariantProps } from './PlaybackTypes';
-import { StandardPlayPause } from './variants';
+import { StandardPlayPause, RoundedPlayPause } from './variants';
 
 /**
  * 变体组件注册表
  */
 const PLAY_PAUSE_VARIANTS: Record<string, React.ComponentType<PlaybackVariantProps>> = {
   standard: StandardPlayPause,
+  rounded: RoundedPlayPause,
   default: StandardPlayPause,
 };
 

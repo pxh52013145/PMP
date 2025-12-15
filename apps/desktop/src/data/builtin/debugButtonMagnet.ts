@@ -28,29 +28,21 @@ export const DEBUG_BUTTON_MAGNET: Magnet = {
   style: {
     width: '36px',
     height: '36px',
-    backgroundColor: 'rgba(255, 136, 0, 0.8)',
-    border: '1px solid rgba(255, 136, 0, 0.4)',
-    borderRadius: '8px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    fontSize: '1.2rem',
-    backdropFilter: 'blur(10px)',
-    transition: 'all 0.3s ease',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
   },
 
   // 动画
   animation: {
+    transition: 'all 0.2s ease',
     hoverStyle: {
-      backgroundColor: 'rgba(255, 136, 0, 1)',
-      transform: 'scale(1.1)',
-      boxShadow: '0 0 20px rgba(255, 136, 0, 0.6)',
+      transform: 'scale(1.05)',
+      backgroundColor: 'rgba(60, 60, 60, 0.9)',
+      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
     },
     activeStyle: {
       transform: 'scale(0.95)',
     },
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
   },
 
   // 状态

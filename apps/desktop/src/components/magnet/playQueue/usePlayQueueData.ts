@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService, AudioState } from '../../../services/audio';
+import { AudioState } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface PlayQueueData {
   queue: AudioState['queue'];
@@ -16,12 +17,13 @@ export interface PlayQueueData {
  * 获取PlayQueue的数据
  */
 export function usePlayQueueData(): PlayQueueData {
+  const audioService = useAudioService();
   const [audioState, setAudioState] = useState<AudioState>(audioService.getState());
 
   useEffect(() => {
     const unsubscribe = audioService.onStateChange(setAudioState);
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return {
     queue: audioState.queue,

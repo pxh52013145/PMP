@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Track, audioService } from '../../services/audio';
+import { Track } from '../../services/audio';
+import { useAudioService } from '../../contexts/AudioEngineContext';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import './AlbumDetailPage.css';
 
@@ -14,6 +15,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   artist,
   tracks: initialTracks,
 }) => {
+  const audioService = useAudioService();
   const [tracks, setTracks] = useState<Track[]>(initialTracks || []);
   const [albumCover, setAlbumCover] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<{

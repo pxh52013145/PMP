@@ -117,6 +117,12 @@ export interface Magnet {
   id: string;
   type: MagnetType;
   name: string;
+  renderer?: string; // 关联的 renderer ID（供 registry / 编辑器识别）
+  previewText?: string; // 编辑器预览文字
+  description?: string; // 说明
+  tags?: string[];
+  variant?: string; // 渲染变体名称
+  variantConfig?: Record<string, unknown>; // 变体配置参数
 
   // 锚点配置 - 核心设计
   anchors: PixelAnchor[];

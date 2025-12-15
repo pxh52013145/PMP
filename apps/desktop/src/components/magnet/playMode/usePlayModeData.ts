@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService, PlayMode } from '../../../services/audio';
+import { PlayMode } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface PlayModeData {
   playMode: PlayMode;
@@ -14,6 +15,7 @@ export interface PlayModeData {
  * 获取PlayModeButton的数据
  */
 export function usePlayModeData(): PlayModeData {
+  const audioService = useAudioService();
   const [playMode, setPlayMode] = useState<PlayMode>('sequence');
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export function usePlayModeData(): PlayModeData {
     setPlayMode(audioService.getState().playMode);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return {
     playMode,

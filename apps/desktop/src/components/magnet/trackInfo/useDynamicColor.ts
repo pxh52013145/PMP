@@ -3,7 +3,7 @@
  * 从封面图片中提取主色调
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 export interface DynamicColors {
   dominantColor: string;
@@ -113,7 +113,6 @@ function extractColorFromImage(imageUrl: string): Promise<DynamicColors> {
 
           // 增强饱和度
           const enhanceSaturation = (r: number, g: number, b: number, factor: number) => {
-            const max = Math.max(r, g, b);
             const avg = (r + g + b) / 3;
 
             return {

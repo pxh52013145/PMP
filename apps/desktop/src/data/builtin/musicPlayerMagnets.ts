@@ -14,6 +14,8 @@ export const PREVIOUS_BUTTON: Magnet = {
   id: 'btn-previous',
   type: 'playback-control',
   name: '上一首',
+  renderer: 'btn-previous',
+  previewText: 'Prev',
   anchorType: 'single',
   anchors: [
     {
@@ -59,6 +61,8 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
   id: 'btn-play-pause',
   type: 'playback-control',
   name: '播放/暂停',
+  renderer: 'btn-play-pause',
+  previewText: 'Play/Pause',
   anchorType: 'single',
   anchors: [
     {
@@ -105,6 +109,8 @@ export const NEXT_BUTTON: Magnet = {
   id: 'btn-next',
   type: 'playback-control',
   name: '下一首',
+  renderer: 'btn-next',
+  previewText: 'Next',
   anchorType: 'single',
   anchors: [
     {
@@ -150,6 +156,8 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
   id: 'btn-mode',
   type: 'playback-control',
   name: '播放模式',
+  renderer: 'btn-mode',
+  previewText: 'Mode',
   anchorType: 'single',
   anchors: [
     {
@@ -195,6 +203,8 @@ export const VOLUME_BUTTON: Magnet = {
   id: 'btn-volume',
   type: 'playback-control',
   name: '音量',
+  renderer: 'btn-volume',
+  previewText: 'Volume',
   anchorType: 'single',
   anchors: [
     {

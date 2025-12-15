@@ -16,6 +16,7 @@ import { EditorPanel } from './components/core/EditorPanel';
 import { EditorProvider, useEditor } from './contexts/EditorContext';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
+import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
 import { WINDOW_PIN_MAGNET } from './data/builtin/windowPinMagnet';
@@ -446,11 +447,13 @@ function App() {
 
   return (
     <ThemeProvider>
-      <EditorProvider magnets={magnetsForContext}>
-        <NavigationProvider>
-          <AppContent />
-        </NavigationProvider>
-      </EditorProvider>
+      <AudioEngineProvider>
+        <EditorProvider magnets={magnetsForContext}>
+          <NavigationProvider>
+            <AppContent />
+          </NavigationProvider>
+        </EditorProvider>
+      </AudioEngineProvider>
     </ThemeProvider>
   );
 }

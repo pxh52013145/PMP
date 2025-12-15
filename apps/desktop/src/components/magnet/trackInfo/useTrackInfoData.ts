@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService, Track } from '../../../services/audio';
+import { Track } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface TrackInfoData {
   track: Track | null;
@@ -17,6 +18,7 @@ export interface TrackInfoData {
  * 获取TrackInfo的数据
  */
 export function useTrackInfoData(): TrackInfoData {
+  const audioService = useAudioService();
   const [track, setTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -38,7 +40,7 @@ export function useTrackInfoData(): TrackInfoData {
     setDuration(state.duration);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return {
     track,

@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface VolumeData {
   volume: number;
@@ -15,6 +15,7 @@ export interface VolumeData {
  * 获取VolumeControl的数据
  */
 export function useVolumeData(): VolumeData {
+  const audioService = useAudioService();
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
 
@@ -30,7 +31,7 @@ export function useVolumeData(): VolumeData {
     setMuted(state.muted);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return {
     volume,

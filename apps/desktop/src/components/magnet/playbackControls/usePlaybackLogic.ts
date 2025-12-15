@@ -3,14 +3,15 @@
  * 负责播放控制逻辑
  */
 
-import { audioService, PlaybackState } from '../../../services/audio';
+import { PlaybackState } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface PlaybackLogic {
   // 播放控制
   togglePlayPause: () => Promise<void>;
   playPrevious: () => void;
   playNext: () => void;
-  
+
   // UI辅助
   getPlayPauseIcon: (playbackState: PlaybackState) => string;
   getPlayPauseTitle: (playbackState: PlaybackState) => string;
@@ -21,6 +22,7 @@ export interface PlaybackLogic {
  * PlaybackControls的逻辑层
  */
 export function usePlaybackLogic(): PlaybackLogic {
+  const audioService = useAudioService();
   const togglePlayPause = async () => {
     const state = audioService.getState();
     if (state.playbackState === 'playing') {
@@ -47,7 +49,7 @@ export function usePlaybackLogic(): PlaybackLogic {
       case 'loading':
         return '○';
       case 'playing':
-        return '∥';
+        return '⏸';
       default:
         return '▶';
     }

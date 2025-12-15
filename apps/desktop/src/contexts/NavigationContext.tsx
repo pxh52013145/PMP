@@ -10,7 +10,8 @@ export type NavigationPageType =
   | 'play-queue'
   | 'track'
   | 'album'
-  | 'artist';
+  | 'artist'
+  | 'native-debug';
 
 /**
  * 导航页面数据（可携带额外参数）

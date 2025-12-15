@@ -3,7 +3,8 @@
  * 负责播放模式切换逻辑
  */
 
-import { audioService, PlayMode } from '../../../services/audio';
+import { PlayMode } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export const PLAY_MODE_CONFIG: Record<PlayMode, { icon: string; text: string; next: PlayMode }> = {
   sequence: { icon: '→', text: '顺序播放', next: 'loop' },
@@ -22,6 +23,7 @@ export interface PlayModeLogic {
  * PlayModeButton的逻辑层
  */
 export function usePlayModeLogic(): PlayModeLogic {
+  const audioService = useAudioService();
   const cyclePlayMode = (currentMode: PlayMode) => {
     const nextMode = PLAY_MODE_CONFIG[currentMode].next;
     audioService.setPlayMode(nextMode);

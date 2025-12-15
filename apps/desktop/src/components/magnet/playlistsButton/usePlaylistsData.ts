@@ -3,9 +3,6 @@
  * 负责获取歌单相关数据
  */
 
-import { useState, useEffect } from 'react';
-import { audioService } from '../../../services/audio';
-
 export interface PlaylistsData {
   // 未来可以添加歌单数量、当前歌单等数据
   playlistCount?: number;

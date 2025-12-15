@@ -4,7 +4,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { audioService, PlaybackState } from '../../../services/audio';
+import { PlaybackState } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface PlaybackData {
   playbackState: PlaybackState;
@@ -17,6 +18,7 @@ export interface PlaybackData {
  * 获取PlaybackControls的数据
  */
 export function usePlaybackData(): PlaybackData {
+  const audioService = useAudioService();
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [hasQueue, setHasQueue] = useState(false);
   const [currentTrack, setCurrentTrack] = useState<any>(null);
@@ -38,7 +40,7 @@ export function usePlaybackData(): PlaybackData {
     setQueueLength(state.queue.length);
 
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   return {
     playbackState,

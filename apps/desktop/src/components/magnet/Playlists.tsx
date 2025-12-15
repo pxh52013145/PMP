@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { audioService, AudioState, Track, Playlist } from '../../services/audio';
+import { AudioState, Track, Playlist } from '../../services/audio';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InputDialog } from './InputDialog';
+import { useAudioService } from '../../contexts/AudioEngineContext';
 import './Playlists.css';
 
 interface PlaylistsProps {
@@ -12,6 +13,7 @@ interface PlaylistsProps {
 }
 
 export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
+  const audioService = useAudioService();
   const [audioState, setAudioState] = useState<AudioState>(audioService.getState());
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [showAddTrackModal, setShowAddTrackModal] = useState(false);
@@ -28,7 +30,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     const unsubscribe = audioService.onStateChange(setAudioState);
     return unsubscribe;
-  }, []);
+  }, [audioService]);
 
   useEffect(() => {
     if (showAddTrackModal) {
@@ -107,9 +109,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const formatTotalDuration = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
+  const formatTotalDuration = (seconds?: number): string => {
+    const safeSeconds = seconds ?? 0;
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   };
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { audioService, Track } from '../../services/audio';
+import { Track } from '../../services/audio';
+import { useAudioService } from '../../contexts/AudioEngineContext';
 import './TrackDetailPage.css';
 
 interface TrackDetailPageProps {
@@ -11,6 +12,7 @@ interface TrackDetailPageProps {
  * 显示当前播放歌曲的详细信息、歌词等
  */
 export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }) => {
+  const audioService = useAudioService();
   const [currentTrack, setCurrentTrack] = useState<Track | null>(initialTrack || null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [dominantColor, setDominantColor] = useState<string>('#1a1a1a');
@@ -70,7 +72,6 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
           b = Math.floor(b / count);
 
           const enhanceSaturation = (r: number, g: number, b: number, factor: number) => {
-            const max = Math.max(r, g, b);
             const avg = (r + g + b) / 3;
 
             return {
@@ -103,17 +104,17 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
   useEffect(() => {
     const unsubscribe = audioService.onStateChange((state) => {
       setCurrentTrack(state.currentTrack);
-      setIsPlaying(state.isPlaying);
+      setIsPlaying(state.playbackState === 'playing');
     });
 
     const state = audioService.getState();
     if (!initialTrack) {
       setCurrentTrack(state.currentTrack);
     }
-    setIsPlaying(state.isPlaying);
+    setIsPlaying(state.playbackState === 'playing');
 
     return unsubscribe;
-  }, [initialTrack]);
+  }, [audioService, initialTrack]);
 
   // 提取封面颜色
   useEffect(() => {

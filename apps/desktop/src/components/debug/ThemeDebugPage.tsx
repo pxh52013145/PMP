@@ -1,7 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { TrackInfo } from '../magnet/trackInfo/TrackInfo';
 import { ProgressBar } from '../magnet/progressBar/ProgressBar';
+import { PlayPauseButton, PreviousButton, NextButton } from '../magnet/PlaybackControls';
+import { PlayModeButton } from '../magnet/PlayModeButton';
+import { VolumeControl } from '../magnet/VolumeControl';
+import { PlayQueueButton } from '../magnet/PlayQueueButton';
+import { PlaylistsButton } from '../magnet/PlaylistsButton';
+import { MusicLibraryButton } from '../magnet/MusicLibraryButton';
+import { BackButton } from '../magnet/BackButton';
+import { WindowPinButton } from '../magnet/WindowPinButton';
+import { DebugButton } from '../magnet/DebugButton';
+import { listRegisteredMagnetRenderers } from '../../magnet-system/registry';
 import './ThemeDebugPage.css';
 
 /**
@@ -10,9 +20,8 @@ import './ThemeDebugPage.css';
  */
 export const ThemeDebugPage: React.FC = () => {
   const { theme, applyTheme, updateComponentTheme } = useTheme();
-  const [selectedTheme, setSelectedTheme] = useState<string>('default');
+  const [selectedTheme] = useState<string>('default');
   const [selectedMagnet, setSelectedMagnet] = useState<string>('track-info');
-  const [selectedShader, setSelectedShader] = useState<string>('shader-default');
   const [configMode, setConfigMode] = useState<'global' | 'component'>('component');
   const [trackInfoVariant, setTrackInfoVariant] = useState<string>(
     theme.componentThemes?.['track-info']?.variant || 'default'
@@ -20,6 +29,59 @@ export const ThemeDebugPage: React.FC = () => {
   const [progressBarVariant, setProgressBarVariant] = useState<string>(
     theme.componentThemes?.['progress-bar']?.variant || 'default'
   );
+  const [playPauseVariant, setPlayPauseVariant] = useState<string>(
+    theme.componentThemes?.['play-pause-button']?.variant || 'standard'
+  );
+  const [previousVariant, setPreviousVariant] = useState<string>(
+    theme.componentThemes?.['previous-button']?.variant || 'standard'
+  );
+  const [nextVariant, setNextVariant] = useState<string>(
+    theme.componentThemes?.['next-button']?.variant || 'standard'
+  );
+  const [playModeVariant, setPlayModeVariant] = useState<string>(
+    theme.componentThemes?.['play-mode']?.variant || 'standard'
+  );
+  const [backButtonVariant, setBackButtonVariant] = useState<string>(
+    theme.componentThemes?.['back-button']?.variant || 'standard'
+  );
+  const [volumeVariant, setVolumeVariant] = useState<string>(
+    theme.componentThemes?.['volume-control']?.variant || 'standard'
+  );
+  const [themeJson, setThemeJson] = useState<string>(JSON.stringify(theme, null, 2));
+  const [rendererList, setRendererList] = useState(() => listRegisteredMagnetRenderers());
+
+  useEffect(() => {
+    setThemeJson(JSON.stringify(theme, null, 2));
+  }, [theme]);
+
+  const refreshRenderers = useCallback(() => {
+    setRendererList(listRegisteredMagnetRenderers());
+  }, []);
+
+  const handleApplyThemeJson = () => {
+    try {
+      const parsed = JSON.parse(themeJson);
+      applyTheme(parsed);
+    } catch (error) {
+      alert('主题 JSON 解析失败，请检查格式');
+      console.error('[ThemeDebug] Failed to parse theme json', error);
+    }
+  };
+
+  const handleThemeFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      await applyTheme(parsed);
+      setThemeJson(JSON.stringify(parsed, null, 2));
+      alert(`已加载主题文件：${file.name}`);
+    } catch (error) {
+      alert('读取主题文件失败，请确认 JSON 格式');
+      console.error('[ThemeDebug] Failed to load theme file', error);
+    }
+  };
 
   return (
     <div className="theme-debug-page">
@@ -58,10 +120,20 @@ export const ThemeDebugPage: React.FC = () => {
           {/* 全局主题配置 */}
           {configMode === 'global' && (
             <div className="control-section">
-              <div className="config-placeholder-box">
-                <p className="placeholder-title">🚧 全局主题功能</p>
-                <p className="placeholder-desc">主题切换、着色器系统等功能开发中</p>
-                <p className="placeholder-hint">当前请使用"单独配置"模式测试组件变体</p>
+              <h2>主题 JSON</h2>
+              <textarea
+                className="theme-json-editor"
+                value={themeJson}
+                onChange={(e) => setThemeJson(e.target.value)}
+                spellCheck={false}
+              ></textarea>
+              <div className="theme-json-actions">
+                <label className="theme-file-upload">
+                  导入文件
+                  <input type="file" accept="application/json" onChange={handleThemeFileUpload} />
+                </label>
+                <button onClick={() => navigator.clipboard.writeText(themeJson)}>复制 JSON</button>
+                <button onClick={handleApplyThemeJson}>应用 JSON</button>
               </div>
             </div>
           )}
@@ -79,12 +151,25 @@ export const ThemeDebugPage: React.FC = () => {
                   <optgroup label="核心组件">
                     <option value="track-info">TrackInfo - 歌曲信息</option>
                     <option value="progress-bar">ProgressBar - 进度条</option>
-                    <option value="btn-play-pause">PlayPauseButton - 播放按钮</option>
                   </optgroup>
-                  <optgroup label="导航组件">
-                    <option value="btn-music-library">MusicLibraryButton</option>
-                    <option value="btn-playlists">PlaylistsButton</option>
-                    <option value="btn-play-queue">PlayQueueButton</option>
+                  <optgroup label="播放控制">
+                    <option value="btn-play-pause">PlayPause - 播放/暂停</option>
+                    <option value="btn-previous">Previous - 上一首</option>
+                    <option value="btn-next">Next - 下一首</option>
+                    <option value="btn-mode">PlayMode - 播放模式</option>
+                    <option value="btn-volume">Volume - 音量控制</option>
+                  </optgroup>
+                  <optgroup label="音乐库">
+                    <option value="btn-music-library">MusicLibrary - 音乐库</option>
+                    <option value="btn-playlists">Playlists - 歌单</option>
+                    <option value="btn-play-queue">PlayQueue - 播放列表</option>
+                  </optgroup>
+                  <optgroup label="导航">
+                    <option value="btn-back">Back - 返回按钮</option>
+                  </optgroup>
+                  <optgroup label="系统">
+                    <option value="btn-window-pin">WindowPin - 窗口置顶</option>
+                    <option value="btn-debug">Debug - 调试按钮</option>
                   </optgroup>
                 </select>
               </div>
@@ -95,6 +180,12 @@ export const ThemeDebugPage: React.FC = () => {
                   selectedMagnet={selectedMagnet}
                   trackInfoVariant={trackInfoVariant}
                   progressBarVariant={progressBarVariant}
+                  playPauseVariant={playPauseVariant}
+                  previousVariant={previousVariant}
+                  nextVariant={nextVariant}
+                  playModeVariant={playModeVariant}
+                  backButtonVariant={backButtonVariant}
+                  volumeVariant={volumeVariant}
                   onTrackInfoVariantChange={(variant) => {
                     setTrackInfoVariant(variant);
                     updateComponentTheme('track-info', {
@@ -106,6 +197,48 @@ export const ThemeDebugPage: React.FC = () => {
                     setProgressBarVariant(variant);
                     updateComponentTheme('progress-bar', {
                       ...theme.componentThemes?.['progress-bar'],
+                      variant,
+                    });
+                  }}
+                  onPlayPauseVariantChange={(variant) => {
+                    setPlayPauseVariant(variant);
+                    updateComponentTheme('play-pause-button', {
+                      ...theme.componentThemes?.['play-pause-button'],
+                      variant,
+                    });
+                  }}
+                  onPreviousVariantChange={(variant) => {
+                    setPreviousVariant(variant);
+                    updateComponentTheme('previous-button', {
+                      ...theme.componentThemes?.['previous-button'],
+                      variant,
+                    });
+                  }}
+                  onNextVariantChange={(variant) => {
+                    setNextVariant(variant);
+                    updateComponentTheme('next-button', {
+                      ...theme.componentThemes?.['next-button'],
+                      variant,
+                    });
+                  }}
+                  onPlayModeVariantChange={(variant) => {
+                    setPlayModeVariant(variant);
+                    updateComponentTheme('play-mode', {
+                      ...theme.componentThemes?.['play-mode'],
+                      variant,
+                    });
+                  }}
+                  onBackButtonVariantChange={(variant) => {
+                    setBackButtonVariant(variant);
+                    updateComponentTheme('back-button', {
+                      ...theme.componentThemes?.['back-button'],
+                      variant,
+                    });
+                  }}
+                  onVolumeVariantChange={(variant) => {
+                    setVolumeVariant(variant);
+                    updateComponentTheme('volume-control', {
+                      ...theme.componentThemes?.['volume-control'],
                       variant,
                     });
                   }}
@@ -182,7 +315,7 @@ export const ThemeDebugPage: React.FC = () => {
                 >
                   📥 导出主题
                 </button>
-                <button 
+                <button
                   className="action-btn"
                   onClick={() => {
                     // 重置当前选中的组件
@@ -208,6 +341,28 @@ export const ThemeDebugPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          <div className="control-section">
+            <h2>Renderer 列表</h2>
+            <button className="refresh-btn" onClick={refreshRenderers}>
+              刷新
+            </button>
+            <div className="renderer-list">
+              {rendererList.map((renderer) => (
+                <div key={renderer.id} className="renderer-item">
+                  <div className="renderer-id">{renderer.id}</div>
+                  <div className="renderer-meta">
+                    <span>{renderer.group || 'general'}</span>
+                    <span>{renderer.source || 'builtin'}</span>
+                  </div>
+                  <div className="renderer-desc">{renderer.description}</div>
+                </div>
+              ))}
+              {rendererList.length === 0 && (
+                <div className="renderer-empty">暂无注册 renderer</div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* 右侧：预览区域 */}
@@ -220,11 +375,7 @@ export const ThemeDebugPage: React.FC = () => {
           </div>
 
           <div className="preview-content">
-            <ComponentPreviewArea
-              selectedMagnet={selectedMagnet}
-              selectedTheme={selectedTheme}
-              configMode={configMode}
-            />
+            <ComponentPreviewArea selectedMagnet={selectedMagnet} />
           </div>
 
           {/* 预览信息 */}
@@ -241,58 +392,44 @@ export const ThemeDebugPage: React.FC = () => {
     </div>
   );
 };
-
-/**
- * 着色器预览网格
- */
-interface ShaderPreviewGridProps {
-  selectedShader: string;
-  onSelectShader: (shaderId: string) => void;
-}
-
-const ShaderPreviewGrid: React.FC<ShaderPreviewGridProps> = ({
-  selectedShader,
-  onSelectShader,
-}) => {
-  const shaders = [
-    { id: 'shader-default', name: 'Default', color: '#00ff88' },
-    { id: 'shader-cyberpunk', name: 'Cyberpunk', color: '#ff00ff' },
-    { id: 'shader-nord', name: 'Nord', color: '#88c0d0' },
-    { id: 'shader-neon', name: 'Neon', color: '#39ff14' },
-    { id: 'shader-retro', name: 'Retro', color: '#f4a261' },
-    { id: 'shader-monochrome', name: 'Monochrome', color: '#808080' },
-  ];
-
-  return (
-    <div className="shader-grid">
-      {shaders.map((shader) => (
-        <div
-          key={shader.id}
-          className={`shader-card ${selectedShader === shader.id ? 'selected' : ''}`}
-          style={{ background: shader.color }}
-          onClick={() => onSelectShader(shader.id)}
-        >
-          <span>{shader.name}</span>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 interface ComponentConfigPanelProps {
   selectedMagnet: string;
   trackInfoVariant: string;
   progressBarVariant: string;
+  playPauseVariant: string;
+  previousVariant: string;
+  nextVariant: string;
+  playModeVariant: string;
+  backButtonVariant: string;
+  volumeVariant: string;
   onTrackInfoVariantChange: (variant: string) => void;
   onProgressBarVariantChange: (variant: string) => void;
+  onPlayPauseVariantChange: (variant: string) => void;
+  onPreviousVariantChange: (variant: string) => void;
+  onNextVariantChange: (variant: string) => void;
+  onPlayModeVariantChange: (variant: string) => void;
+  onBackButtonVariantChange: (variant: string) => void;
+  onVolumeVariantChange: (variant: string) => void;
 }
 
 const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
   selectedMagnet,
   trackInfoVariant,
   progressBarVariant,
+  playPauseVariant,
+  previousVariant,
+  nextVariant,
+  playModeVariant,
+  backButtonVariant,
+  volumeVariant,
   onTrackInfoVariantChange,
   onProgressBarVariantChange,
+  onPlayPauseVariantChange,
+  onPreviousVariantChange,
+  onNextVariantChange,
+  onPlayModeVariantChange,
+  onBackButtonVariantChange,
+  onVolumeVariantChange,
 }) => {
   // TrackInfo 专用配置
   if (selectedMagnet === 'track-info') {
@@ -343,6 +480,156 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     );
   }
 
+  // 播放/暂停按钮配置
+  if (selectedMagnet === 'btn-play-pause') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={playPauseVariant}
+            onChange={(e) => onPlayPauseVariantChange(e.target.value)}
+          >
+            <option value="standard">标准样式</option>
+            <option value="rounded">霓虹发光</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text">🎯 Standard: 方形，简洁高效</p>
+          <p className="info-text">🎯 Rounded: 霓虹圆形，旋转光晕</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 上一首按钮配置
+  if (selectedMagnet === 'btn-previous') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={previousVariant}
+            onChange={(e) => onPreviousVariantChange(e.target.value)}
+          >
+            <option value="standard">标准样式</option>
+            <option value="rounded">霓虹发光</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text">🎯 Standard: 方形，简洁高效</p>
+          <p className="info-text">🎯 Rounded: 青色霓虹，360°旋转</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 下一首按钮配置
+  if (selectedMagnet === 'btn-next') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={nextVariant}
+            onChange={(e) => onNextVariantChange(e.target.value)}
+          >
+            <option value="standard">标准样式</option>
+            <option value="rounded">霓虹发光</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text">🎯 Standard: 方形，简洁高效</p>
+          <p className="info-text">🎯 Rounded: 青色霓虹，360°旋转</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 播放模式按钮配置
+  if (selectedMagnet === 'btn-mode') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={playModeVariant}
+            onChange={(e) => onPlayModeVariantChange(e.target.value)}
+          >
+            <option value="standard">标准样式</option>
+            <option value="minimal">粒子爆炸</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text">🎯 Standard: 方形，简洁背景</p>
+          <p className="info-text">🎯 Minimal: 彩虹光环，脉冲波纹</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 返回按钮配置
+  if (selectedMagnet === 'btn-back') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={backButtonVariant}
+            onChange={(e) => onBackButtonVariantChange(e.target.value)}
+          >
+            <option value="standard">标准样式</option>
+            <option value="rounded">时空穿梭</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text">🎯 Standard: 方形，简单平移</p>
+          <p className="info-text">🎯 Rounded: 时空漩涡，残影轨迹</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 音量控制配置
+  if (selectedMagnet === 'btn-volume') {
+    return (
+      <div className="component-config">
+        <div className="config-group">
+          <label>变体选择</label>
+          <select
+            className="config-select"
+            value={volumeVariant}
+            onChange={(e) => onVolumeVariantChange(e.target.value)}
+          >
+            <option value="standard">标准样式</option>
+            <option value="cyber">赛博能量条</option>
+          </select>
+        </div>
+
+        <div className="config-info">
+          <p className="info-text">✅ 变体切换功能已实现</p>
+          <p className="info-text">🎯 Standard: 简洁弹窗滑块</p>
+          <p className="info-text">🎯 Cyber: 能量条+赛博数字显示</p>
+        </div>
+      </div>
+    );
+  }
+
   // 其他组件的通用配置
   return (
     <div className="component-config">
@@ -356,35 +643,177 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
  */
 interface ComponentPreviewAreaProps {
   selectedMagnet: string;
-  selectedTheme: string;
-  configMode: 'global' | 'component';
 }
 
-const ComponentPreviewArea: React.FC<ComponentPreviewAreaProps> = ({
-  selectedMagnet,
-  selectedTheme,
-  configMode,
-}) => {
+const ComponentPreviewArea: React.FC<ComponentPreviewAreaProps> = ({ selectedMagnet }) => {
   return (
     <div className="preview-container">
       <div className="preview-stage">
         <div className="preview-bg">
-          {/* TrackInfo 实时预览 - 使用真实组件 */}
+          {/* TrackInfo 实时预览 */}
           {selectedMagnet === 'track-info' && (
             <div className="real-component-preview">
               <TrackInfo />
             </div>
           )}
 
-          {/* ProgressBar 实时预览 - 使用真实组件 */}
+          {/* ProgressBar 实时预览 */}
           {selectedMagnet === 'progress-bar' && (
             <div className="real-component-preview">
               <ProgressBar />
             </div>
           )}
 
-          {/* PlayPauseButton 预览 */}
-          {selectedMagnet === 'btn-play-pause' && <div className="preview-button">▶</div>}
+          {/* 播放控制按钮预览 */}
+          {selectedMagnet === 'btn-play-pause' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <PlayPauseButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-previous' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <PreviousButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-next' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <NextButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-mode' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <PlayModeButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-volume' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <VolumeControl />
+            </div>
+          )}
+
+          {/* 音乐库按钮预览 */}
+          {selectedMagnet === 'btn-play-queue' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <PlayQueueButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-playlists' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <PlaylistsButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-music-library' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <MusicLibraryButton />
+            </div>
+          )}
+
+          {/* 导航按钮预览 */}
+          {selectedMagnet === 'btn-back' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <BackButton />
+            </div>
+          )}
+
+          {/* 系统按钮预览 */}
+          {selectedMagnet === 'btn-window-pin' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <WindowPinButton />
+            </div>
+          )}
+          {selectedMagnet === 'btn-debug' && (
+            <div
+              className="button-preview"
+              style={{
+                width: '36px',
+                height: '36px',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <DebugButton />
+            </div>
+          )}
         </div>
       </div>
 

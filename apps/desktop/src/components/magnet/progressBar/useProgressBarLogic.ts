@@ -3,8 +3,8 @@
  * 负责所有交互逻辑（点击、拖动）
  */
 
-import { useCallback, useRef, useState } from 'react';
-import { audioService } from '../../../services/audio';
+import { useCallback, useState } from 'react';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface ProgressBarLogic {
   isSeeking: boolean;
@@ -18,11 +18,15 @@ export interface ProgressBarLogic {
  * 获取ProgressBar的交互逻辑
  */
 export function useProgressBarLogic(): ProgressBarLogic {
+  const audioService = useAudioService();
   const [isSeeking, setIsSeeking] = useState(false);
 
-  const onSeek = useCallback((time: number) => {
-    audioService.seek(time);
-  }, []);
+  const onSeek = useCallback(
+    (time: number) => {
+      audioService.seek(time);
+    },
+    [audioService]
+  );
 
   const onSeekStart = useCallback(() => {
     setIsSeeking(true);

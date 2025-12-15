@@ -4,7 +4,7 @@
  */
 
 import { useCallback } from 'react';
-import { audioService } from '../../../services/audio';
+import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { useNavigation } from '../../../contexts/NavigationContext';
 import { Track } from '../../../services/audio';
 
@@ -20,23 +20,37 @@ export interface TrackInfoLogic {
  * 获取TrackInfo的交互逻辑
  */
 export function useTrackInfoLogic(): TrackInfoLogic {
+  const audioService = useAudioService();
   const { navigateTo } = useNavigation();
 
   const onPlay = useCallback(() => {
     audioService.play();
-  }, []);
+  }, [audioService]);
 
   const onPause = useCallback(() => {
     audioService.pause();
-  }, []);
+  }, [audioService]);
 
   const onTogglePlay = useCallback(() => {
-    audioService.togglePlayPause();
-  }, []);
+    const state = audioService.getState();
+    if (state.playbackState === 'playing') {
+      audioService.pause();
+      return;
+    }
 
-  const onSeek = useCallback((time: number) => {
-    audioService.seek(time);
-  }, []);
+    if (!state.currentTrack && state.queue.length > 0) {
+      void audioService.playTrackAtIndex(0);
+    } else {
+      void audioService.play();
+    }
+  }, [audioService]);
+
+  const onSeek = useCallback(
+    (time: number) => {
+      audioService.seek(time);
+    },
+    [audioService]
+  );
 
   const onNavigateToTrack = useCallback(
     (track: Track) => {

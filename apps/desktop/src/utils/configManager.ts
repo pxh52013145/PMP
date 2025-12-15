@@ -5,28 +5,31 @@ import { resolveMagnetPositions, detectConflicts } from './magnetPositionResolve
 /**
  * 配置文件格式
  */
+export interface MagnetStateConfig {
+  anchors: PixelAnchor[];
+  isActive: boolean;
+  renderer?: string;
+  variant?: string;
+  variantConfig?: Record<string, unknown>;
+  previewText?: string;
+  styleOverride?: {
+    style?: any;
+    animation?: any;
+    content?: any;
+  };
+}
+
 export interface MagnetConfig {
   version: string; // 配置版本，用于兼容性检查
   gridSize: {
     columns: number;
     rows: number;
   };
-  magnets: {
-    [magnetId: string]: {
-      anchors: PixelAnchor[]; // 位置信息
-      isActive: boolean; // 是否激活（显示在点阵上）
-      // 内置 Magnet 的样式覆盖（可选）
-      styleOverride?: {
-        style?: any;
-        animation?: any;
-        content?: any;
-      };
-    };
-  };
+  magnets: Record<string, MagnetStateConfig>;
   customMagnets: Magnet[]; // 自定义 Magnet 的完整定义
 }
 
-const CONFIG_VERSION = '1.0.0';
+const CONFIG_VERSION = '1.1.0';
 const CONFIG_KEY = 'pixel-matrix-player-config';
 
 /**
@@ -49,9 +52,13 @@ export function saveConfig(
     // 保存所有 Magnet 的位置和激活状态
     magnetLibrary.forEach((magnet) => {
       const isActive = activeMagnetIds.has(magnet.id);
-      const magnetConfig: any = {
+      const magnetConfig: MagnetStateConfig = {
         anchors: magnet.anchors,
-        isActive: isActive,
+        isActive,
+        renderer: magnet.renderer,
+        variant: magnet.variant,
+        variantConfig: magnet.variantConfig,
+        previewText: magnet.previewText,
       };
 
       // 对于内置 Magnet，检查样式是否被修改
@@ -196,9 +203,13 @@ export function exportConfig(
 
   // 保存所有 Magnet 的位置和激活状态
   magnetLibrary.forEach((magnet) => {
-    const magnetConfig: any = {
+    const magnetConfig: MagnetStateConfig = {
       anchors: magnet.anchors,
       isActive: activeMagnetIds.has(magnet.id),
+      renderer: magnet.renderer,
+      variant: magnet.variant,
+      variantConfig: magnet.variantConfig,
+      previewText: magnet.previewText,
     };
 
     // 对于内置 Magnet，检查样式是否被修改
@@ -383,6 +394,10 @@ export function applyConfig(
 
       // 保持 interactions 使用默认定义（功能不可修改）
       appliedMagnet.interactions = defaultMagnet.interactions;
+      appliedMagnet.renderer = savedConfig.renderer ?? appliedMagnet.renderer;
+      appliedMagnet.variant = savedConfig.variant ?? appliedMagnet.variant;
+      appliedMagnet.variantConfig = savedConfig.variantConfig ?? appliedMagnet.variantConfig;
+      appliedMagnet.previewText = savedConfig.previewText ?? appliedMagnet.previewText;
 
       magnetLibrary.push(appliedMagnet);
       addedIds.add(defaultMagnet.id);
@@ -420,6 +435,10 @@ export function applyConfig(
         magnetLibrary.push({
           ...customMagnet,
           anchors: savedConfig.anchors,
+          renderer: savedConfig.renderer ?? customMagnet.renderer,
+          variant: savedConfig.variant ?? customMagnet.variant,
+          variantConfig: savedConfig.variantConfig ?? customMagnet.variantConfig,
+          previewText: savedConfig.previewText ?? customMagnet.previewText,
         });
         addedIds.add(customMagnet.id);
 

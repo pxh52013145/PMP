@@ -7,7 +7,7 @@ import { Magnet } from '../../types/pixel';
  */
 export const NAVIGATOR_MAGNET: Magnet = {
   id: 'navigator',
-  type: 'navigator',
+  type: 'navigation',
   name: '路由导航器',
   anchorType: 'rectangular',
   anchors: [

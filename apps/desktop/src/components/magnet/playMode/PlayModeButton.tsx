@@ -8,13 +8,14 @@ import { usePlayModeData } from './usePlayModeData';
 import { usePlayModeLogic } from './usePlayModeLogic';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { PlayModeVariantProps } from './PlayModeTypes';
-import { StandardPlayMode } from './variants';
+import { StandardPlayMode, MinimalPlayMode } from './variants';
 
 /**
  * 变体组件注册表
  */
 const PLAY_MODE_VARIANTS: Record<string, React.ComponentType<PlayModeVariantProps>> = {
   standard: StandardPlayMode,
+  minimal: MinimalPlayMode,
   default: StandardPlayMode, // 默认使用标准样式
 };
 

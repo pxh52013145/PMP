@@ -8,13 +8,14 @@ import { usePlaybackData } from './usePlaybackData';
 import { usePlaybackLogic } from './usePlaybackLogic';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { PlaybackVariantProps } from './PlaybackTypes';
-import { StandardPrevious } from './variants';
+import { StandardPrevious, RoundedPrevious } from './variants';
 
 /**
  * 变体组件注册表
  */
 const PREVIOUS_VARIANTS: Record<string, React.ComponentType<PlaybackVariantProps>> = {
   standard: StandardPrevious,
+  rounded: RoundedPrevious,
   default: StandardPrevious,
 };
 

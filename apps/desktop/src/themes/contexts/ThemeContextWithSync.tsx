@@ -2,24 +2,19 @@
  * 支持窗口间同步的主题系统Context
  */
 
-import React, {
+import {
   createContext,
   useContext,
   useState,
   useCallback,
   useEffect,
-  ReactNode,
+  type ReactNode,
 } from 'react';
 import { Theme, ComponentTheme } from '../types/theme';
 import { Shader } from '../types/shader';
 import { DefaultShader } from '../shaders/default';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
-import {
-  broadcastDataUpdate,
-  setupDualListener,
-  STORAGE_KEYS,
-  TAURI_EVENTS,
-} from '../../utils/windowCommunication';
+import { broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
 
 // 添加专用的存储键和事件
 const THEME_STORAGE_KEY = 'pixel-matrix-theme-config';

@@ -1,4 +1,12 @@
-import { useState, useCallback, useMemo, memo, useEffect } from 'react';
+import {
+  useState,
+  useCallback,
+  useMemo,
+  memo,
+  useEffect,
+  isValidElement,
+  type ReactNode,
+} from 'react';
 import { Magnet } from '../../types/pixel';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import { useEditor } from '../../contexts/EditorContext';
@@ -8,6 +16,7 @@ import {
   setupConfigSync,
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
+import { getMagnetPreviewNode } from '../../magnet-system/registry';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -297,7 +306,30 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
             displayMagnets.map((magnet) => {
               const isBuiltIn = builtInMagnetIds.has(magnet.id);
               const isActive = activeMagnetIds.has(magnet.id);
-              const pixelCount = getMagnetOccupiedPixels(magnet).length;
+              let pixelCount = 0;
+              try {
+                pixelCount = getMagnetOccupiedPixels(magnet).length;
+              } catch (error) {
+                console.error(
+                  `[EditorMagnetLibrary] 计算 Magnet 占用像素失败: ${magnet.id}`,
+                  error
+                );
+              }
+
+              const registryPreview = getMagnetPreviewNode(magnet);
+              let previewContent: ReactNode = registryPreview ?? null;
+              if (!previewContent) {
+                const content = magnet.content;
+                if (typeof content === 'string' || typeof content === 'number') {
+                  previewContent = content;
+                } else if (isValidElement(content)) {
+                  previewContent = content;
+                } else if (content === null || content === undefined) {
+                  previewContent = magnet.name || magnet.id;
+                } else {
+                  previewContent = `[${magnet.name || magnet.id}]`;
+                }
+              }
 
               return (
                 <div key={magnet.id} className="magnet-item">
@@ -310,7 +342,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       border: magnet.style.border,
                     }}
                   >
-                    {magnet.content}
+                    {previewContent}
                   </div>
                   <div className="magnet-info">
                     <div className="magnet-name">{magnet.id}</div>

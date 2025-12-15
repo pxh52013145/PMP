@@ -4,50 +4,35 @@
  */
 
 import { useState, useEffect } from 'react';
-import { appWindow } from '@tauri-apps/api/window';
 import { WindowPinData } from './WindowPinTypes';
 
-export function useWindowPinData(): WindowPinData {
-  const [isPinned, setIsPinned] = useState(false);
+const WINDOW_PIN_STORAGE_KEY = 'pixel-matrix-window-pin-state';
 
-  useEffect(() => {
-    // 初始化时获取窗口置顶状态
-    const initPinState = async () => {
-      try {
-        const alwaysOnTop = await appWindow.isAlwaysOnTop?.();
-        if (alwaysOnTop !== undefined) {
-          setIsPinned(alwaysOnTop);
-        }
-      } catch (error) {
-        console.error('Failed to get window pin state:', error);
-      }
-    };
-
-    initPinState();
-  }, []);
-
-  return {
-    isPinned,
-  };
+function readStoredPinState(): boolean {
+  if (typeof window === 'undefined') return false;
+  const stored = localStorage.getItem(WINDOW_PIN_STORAGE_KEY);
+  return stored === 'true';
 }
 
-export function useWindowPinDataWithSetter(): [WindowPinData, React.Dispatch<React.SetStateAction<boolean>>] {
-  const [isPinned, setIsPinned] = useState(false);
+function persistPinState(value: boolean) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(WINDOW_PIN_STORAGE_KEY, value ? 'true' : 'false');
+}
+
+export function useWindowPinData(): WindowPinData {
+  const [data] = useWindowPinDataWithSetter();
+  return data;
+}
+
+export function useWindowPinDataWithSetter(): [
+  WindowPinData,
+  React.Dispatch<React.SetStateAction<boolean>>
+] {
+  const [isPinned, setIsPinned] = useState<boolean>(() => readStoredPinState());
 
   useEffect(() => {
-    const initPinState = async () => {
-      try {
-        const alwaysOnTop = await appWindow.isAlwaysOnTop?.();
-        if (alwaysOnTop !== undefined) {
-          setIsPinned(alwaysOnTop);
-        }
-      } catch (error) {
-        console.error('Failed to get window pin state:', error);
-      }
-    };
-
-    initPinState();
-  }, []);
+    persistPinState(isPinned);
+  }, [isPinned]);
 
   return [{ isPinned }, setIsPinned];
 }

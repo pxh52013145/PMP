@@ -323,6 +323,13 @@
   );
 }
 
+.magnet-preview-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.8);
+}
+
 .magnet-info {
   flex: 1;
   display: flex;

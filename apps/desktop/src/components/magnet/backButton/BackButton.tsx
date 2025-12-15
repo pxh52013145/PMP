@@ -8,13 +8,14 @@ import { useBackButtonData } from './useBackButtonData';
 import { useBackButtonLogic } from './useBackButtonLogic';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { BackButtonVariantProps } from './BackButtonTypes';
-import { StandardBackButton } from './variants';
+import { StandardBackButton, RoundedBackButton } from './variants';
 
 /**
  * 变体组件注册表
  */
 const BACK_BUTTON_VARIANTS: Record<string, React.ComponentType<BackButtonVariantProps>> = {
   standard: StandardBackButton,
+  rounded: RoundedBackButton,
   default: StandardBackButton, // 默认使用标准样式
 };
 
