@@ -69,3 +69,7 @@ Thumbs.db
 
 # pnpm
 pnpm-lock.yaml
+
+# npm
+package-lock.json
+npm-shrinkwrap.json

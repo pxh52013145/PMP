@@ -19,6 +19,7 @@
     "dev:tauri": "pnpm --filter @pixel-matrix/desktop tauri dev",
     "build": "pnpm --filter @pixel-matrix/desktop build",
     "build:web": "pnpm --filter @pixel-matrix/web build",
+    "test": "pnpm --filter @pixel-matrix/desktop test",
     "lint": "pnpm --parallel lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "type-check": "pnpm --parallel type-check"
