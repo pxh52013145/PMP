@@ -20,6 +20,7 @@ type NativeAudioMeta = {
   device: string | null;
   sampleRate: number | null;
   bitDepth: number | null;
+  gainDb: number | null;
 };
 
 export const NativeDebugPage: React.FC = () => {
@@ -33,6 +34,7 @@ export const NativeDebugPage: React.FC = () => {
     device: null,
     sampleRate: null,
     bitDepth: null,
+    gainDb: null,
   });
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
@@ -85,8 +87,9 @@ export const NativeDebugPage: React.FC = () => {
       const device = typeof next.device === 'string' ? next.device : null;
       const sampleRate = typeof next.sampleRate === 'number' ? next.sampleRate : null;
       const bitDepth = typeof next.bitDepth === 'number' ? next.bitDepth : null;
+      const gainDb = typeof next.gainDb === 'number' ? next.gainDb : null;
 
-      setNativeMeta({ device, sampleRate, bitDepth });
+      setNativeMeta({ device, sampleRate, bitDepth, gainDb });
       setSelectedDevice((prev) => prev || device || '');
     })
       .then((fn) => {
@@ -132,6 +135,19 @@ export const NativeDebugPage: React.FC = () => {
       appendLog(`切换输出设备失败：${message}`);
     }
   }, [appendLog, selectedDevice]);
+
+  const handleGainChange = useCallback(
+    async (db: number) => {
+      try {
+        await invoke('native_audio_set_gain', { db });
+        appendLog(`设置 Gain：${db.toFixed(1)} dB`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendLog(`设置 Gain 失败：${message}`);
+      }
+    },
+    [appendLog]
+  );
 
   const handleSelectTrack = useCallback(async () => {
     setIsSelectingFile(true);
@@ -326,6 +342,24 @@ export const NativeDebugPage: React.FC = () => {
             />
             <button type="button" onClick={handleToggleMute}>
               {state.muted ? '取消静音' : '静音'}
+            </button>
+          </div>
+
+          <div className="volume-row">
+            <label htmlFor="native-debug-gain">
+              Gain：{typeof nativeMeta.gainDb === 'number' ? `${nativeMeta.gainDb.toFixed(1)} dB` : '—'}
+            </label>
+            <input
+              id="native-debug-gain"
+              type="range"
+              min={-24}
+              max={12}
+              step={0.5}
+              value={typeof nativeMeta.gainDb === 'number' ? nativeMeta.gainDb : 0}
+              onChange={(e) => void handleGainChange(Number(e.target.value))}
+            />
+            <button type="button" onClick={() => void handleGainChange(0)}>
+              复位
             </button>
           </div>
 

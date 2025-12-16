@@ -58,6 +58,11 @@ async fn native_audio_set_mute(app: tauri::AppHandle, muted: bool) -> Result<(),
     native_audio::set_mute(&app, muted)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_set_gain(app: tauri::AppHandle, db: f32) -> Result<(), String> {
+    native_audio::set_gain(&app, db)
+}
+
 #[tauri::command]
 async fn native_audio_list_devices() -> Result<Vec<String>, String> {
     native_audio::list_output_devices()
@@ -290,6 +295,7 @@ fn main() {
             native_audio_seek,
             native_audio_set_volume,
             native_audio_set_mute,
+            native_audio_set_gain,
             native_audio_list_devices,
             native_audio_select_device,
             native_audio_sync_queue

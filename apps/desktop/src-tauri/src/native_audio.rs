@@ -110,6 +110,7 @@ fn default_output_device_name() -> Option<String> {
 struct NativeAudioStatePayload {
     playback_state: String,
     volume: f32,
+    gain_db: f32,
     muted: bool,
     track_path: Option<String>,
     current_time: f64,
@@ -383,6 +384,7 @@ struct NativeAudioEngine {
     decoded_bit_depth: Option<u32>,
     device_name: Option<String>,
     volume: f32,
+    gain_db: f32,
     muted: bool,
     playback_state: PlaybackState,
 }
@@ -430,8 +432,28 @@ impl NativeAudioEngine {
             decoded_bit_depth: None,
             device_name: None,
             volume: 0.7,
+            gain_db: 0.0,
             muted: false,
             playback_state: PlaybackState::Idle,
+        }
+    }
+
+    fn gain_linear(&self) -> f32 {
+        let db = self.gain_db.clamp(-60.0, 12.0);
+        10.0f32.powf(db / 20.0)
+    }
+
+    fn effective_volume(&self) -> f32 {
+        if self.muted {
+            0.0
+        } else {
+            (self.volume * self.gain_linear()).clamp(0.0, 4.0)
+        }
+    }
+
+    fn apply_effective_volume(&self) {
+        if let Some(sink) = &self.sink {
+            sink.set_volume(self.effective_volume());
         }
     }
 
@@ -513,7 +535,7 @@ impl NativeAudioEngine {
         }
 
         sink.pause();
-        sink.set_volume(if self.muted { 0.0 } else { self.volume });
+        sink.set_volume(self.effective_volume());
 
         self.sink = Some(sink);
         self.current_track = Some(path.clone());
@@ -595,7 +617,7 @@ impl NativeAudioEngine {
                         }
                     }
                     sink.pause();
-                    sink.set_volume(if self.muted { 0.0 } else { self.volume });
+                    sink.set_volume(self.effective_volume());
                     if let Some(old) = self.sink.replace(sink) {
                         old.stop();
                     }
@@ -777,28 +799,24 @@ impl NativeAudioEngine {
 
     fn set_volume(&mut self, volume: f32) {
         self.volume = volume;
-        if !self.muted {
-            if let Some(sink) = &self.sink {
-                sink.set_volume(volume);
-            }
-        }
+        self.apply_effective_volume();
     }
 
     fn set_mute(&mut self, muted: bool) {
         self.muted = muted;
-        if let Some(sink) = &self.sink {
-            if muted {
-                sink.set_volume(0.0);
-            } else {
-                sink.set_volume(self.volume);
-            }
-        }
+        self.apply_effective_volume();
+    }
+
+    fn set_gain(&mut self, gain_db: f32) {
+        self.gain_db = gain_db.clamp(-60.0, 12.0);
+        self.apply_effective_volume();
     }
 
     fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
         NativeAudioStatePayload {
             playback_state: self.playback_state.as_str().to_string(),
             volume: self.volume,
+            gain_db: self.gain_db,
             muted: self.muted,
             track_path: self
                 .current_track
@@ -878,7 +896,7 @@ impl NativeAudioEngine {
         }
 
         sink.pause();
-        sink.set_volume(if self.muted { 0.0 } else { self.volume });
+        sink.set_volume(self.effective_volume());
 
         if resume_playing {
             sink.play();
@@ -1544,6 +1562,19 @@ pub fn set_mute(app_handle: &AppHandle, muted: bool) -> Result<(), String> {
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_mute(muted);
+        engine.build_state_payload(false)
+    };
+    emit_state(app_handle, payload)?;
+    Ok(())
+}
+
+pub fn set_gain(app_handle: &AppHandle, gain_db: f32) -> Result<(), String> {
+    init_emitter(app_handle);
+    let payload = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.set_gain(gain_db);
         engine.build_state_payload(false)
     };
     emit_state(app_handle, payload)?;
