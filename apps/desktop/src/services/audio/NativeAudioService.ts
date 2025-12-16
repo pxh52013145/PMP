@@ -4,6 +4,20 @@ import { AudioState, IAudioService, PlayMode, Playlist, Track, PlaybackState } f
 
 type StateListener = (state: AudioState) => void;
 
+type NativeAudioStatePayload = {
+  playbackState?: PlaybackState;
+  volume?: number;
+  muted?: boolean;
+  trackPath?: string | null;
+  currentTime?: number;
+  duration?: number;
+  ended?: boolean;
+};
+
+type NativeAudioSpectrumPayload = {
+  bins: number[];
+};
+
 /**
  * NativeAudioService
  *
@@ -20,8 +34,8 @@ export class NativeAudioService implements IAudioService {
   private loadProgressCallbacks: Set<(progress: number) => void> = new Set();
   private errorCallbacks: Set<(error: Error) => void> = new Set();
   private stateListener?: UnlistenFn;
-  private progressTimer: number | null = null;
-  private playbackStartTimestamp: number | null = null;
+  private spectrumListener?: UnlistenFn;
+  private spectrumData: Uint8Array | null = null;
 
   constructor() {
     this.state = {
@@ -56,72 +70,117 @@ export class NativeAudioService implements IAudioService {
   private async setupNativeListeners() {
     try {
       this.stateListener = await listen('native_audio_state', (event) => {
-        const payload = event.payload as Partial<AudioState> | { state?: Partial<AudioState> };
-        const nextState =
-          payload && 'state' in payload ? payload.state : (payload as Partial<AudioState>);
-        if (nextState) {
-          const merged = this.updateState(nextState);
-          if (typeof nextState.playbackState !== 'undefined') {
-            this.applyPlaybackStateSideEffects(merged.playbackState);
+        const payload = event.payload as NativeAudioStatePayload | { state?: NativeAudioStatePayload };
+        const next =
+          payload && 'state' in payload ? (payload.state as NativeAudioStatePayload) : (payload as NativeAudioStatePayload);
+        if (!next) return;
+
+        const update: Partial<AudioState> = {};
+        if (typeof next.playbackState !== 'undefined') update.playbackState = next.playbackState;
+        if (typeof next.volume !== 'undefined') update.volume = next.volume;
+        if (typeof next.muted !== 'undefined') update.muted = next.muted;
+        if (typeof next.currentTime !== 'undefined') update.currentTime = next.currentTime;
+        if (typeof next.duration !== 'undefined') update.duration = next.duration;
+
+        if (typeof next.trackPath !== 'undefined' && next.trackPath) {
+          const resolved = this.resolveTrackFromPath(next.trackPath);
+          if (resolved) {
+            update.currentTrack = resolved.track;
+            update.currentIndex = resolved.index;
+          } else {
+            update.currentTrack = {
+              id: `native-${next.trackPath}`,
+              title: this.deriveTitleFromPath(next.trackPath),
+              filePath: next.trackPath,
+              path: next.trackPath,
+              originalPath: next.trackPath,
+            };
           }
         }
+
+        const merged = this.updateState(update);
+        if (typeof next.playbackState !== 'undefined') {
+          this.applyPlaybackStateSideEffects(merged.playbackState);
+        }
+        if (typeof next.currentTime !== 'undefined') {
+          this.timeUpdateCallbacks.forEach((cb) => cb(next.currentTime as number));
+        }
+        if (next.ended) {
+          this.endedCallbacks.forEach((cb) => cb());
+          void this.handleTrackEnded();
+        }
+      });
+
+      this.spectrumListener = await listen('native_audio_spectrum', (event) => {
+        const payload = event.payload as NativeAudioSpectrumPayload;
+        if (!payload?.bins || !Array.isArray(payload.bins)) return;
+        const bins = payload.bins;
+        const next = new Uint8Array(bins.length);
+        for (let i = 0; i < bins.length; i++) {
+          const value = typeof bins[i] === 'number' ? bins[i] : 0;
+          const clamped = Math.max(0, Math.min(1, value));
+          next[i] = Math.round(clamped * 255);
+        }
+        this.spectrumData = next;
       });
     } catch (error) {
       console.warn('[NativeAudio] Failed to register state listener:', error);
     }
   }
 
-  private getNow(): number {
-    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-      return performance.now();
-    }
-    return Date.now();
+  private deriveTitleFromPath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/');
+    const segments = normalized.split('/');
+    return segments[segments.length - 1] || 'Unknown Track';
   }
 
-  private startProgressTimer(baseTime: number = this.state.currentTime) {
-    if (typeof window === 'undefined') return;
-    this.stopProgressTimer(false);
-    this.playbackStartTimestamp = this.getNow() - baseTime * 1000;
-    this.progressTimer = window.setInterval(() => {
-      if (this.playbackStartTimestamp == null) return;
-      const elapsed = (this.getNow() - this.playbackStartTimestamp) / 1000;
-      const duration = this.state.duration || 0;
-      const nextTime = duration > 0 ? Math.min(elapsed, duration) : elapsed;
-      this.updateState({ currentTime: nextTime });
-      this.timeUpdateCallbacks.forEach((cb) => cb(nextTime));
-      if (duration > 0 && nextTime >= duration) {
-        this.stopProgressTimer(false);
+  private resolveTrackFromPath(trackPath: string): { track: Track; index: number } | null {
+    const index = this.state.queue.findIndex((track) => {
+      const candidates = [track.filePath, track.path, track.originalPath].filter(Boolean) as string[];
+      return candidates.includes(trackPath);
+    });
+    if (index === -1) return null;
+    return { track: this.state.queue[index], index };
+  }
+
+  private async handleTrackEnded(): Promise<void> {
+    const { playMode, queue, currentIndex } = this.state;
+    if (!queue.length) return;
+
+    switch (playMode) {
+      case 'single-loop': {
+        this.seek(0);
+        await this.play();
+        return;
       }
-    }, 250);
-  }
-
-  private stopProgressTimer(syncPosition: boolean = true) {
-    if (this.progressTimer !== null && typeof window !== 'undefined') {
-      window.clearInterval(this.progressTimer);
+      case 'loop': {
+        if (currentIndex < queue.length - 1) {
+          await this.playNext();
+        } else {
+          await this.playTrackAtIndex(0);
+        }
+        return;
+      }
+      case 'sequence': {
+        if (currentIndex < queue.length - 1) {
+          await this.playNext();
+        } else {
+          this.stop();
+        }
+        return;
+      }
+      case 'shuffle': {
+        if (queue.length > 1) {
+          await this.playNext();
+        } else {
+          this.stop();
+        }
+      }
     }
-    this.progressTimer = null;
-    if (syncPosition && this.playbackStartTimestamp != null) {
-      const elapsed = (this.getNow() - this.playbackStartTimestamp) / 1000;
-      const duration = this.state.duration || 0;
-      const clamped = duration > 0 ? Math.min(elapsed, duration) : elapsed;
-      this.updateState({ currentTime: clamped });
-      this.timeUpdateCallbacks.forEach((cb) => cb(clamped));
-    }
-    this.playbackStartTimestamp = null;
   }
 
   private applyPlaybackStateSideEffects(playbackState: PlaybackState) {
-    if (playbackState === 'playing') {
-      this.startProgressTimer();
-    } else if (playbackState === 'paused') {
-      this.stopProgressTimer(true);
-    } else if (
-      playbackState === 'stopped' ||
-      playbackState === 'idle' ||
-      playbackState === 'error'
-    ) {
-      this.stopProgressTimer(false);
-    }
+    void playbackState;
   }
 
   private async invokeCommand<T = void>(cmd: string, payload?: Record<string, unknown>): Promise<T> {
@@ -138,7 +197,6 @@ export class NativeAudioService implements IAudioService {
   async loadTrack(track: Track): Promise<void> {
     if (!track) return;
 
-    this.stopProgressTimer(false);
     const nextState = this.updateState({
       currentTrack: track,
       playbackState: 'loading',
@@ -174,7 +232,6 @@ export class NativeAudioService implements IAudioService {
 
   stop(): void {
     void this.invokeCommand('native_audio_stop');
-    this.stopProgressTimer(false);
     this.updateState({ playbackState: 'stopped', currentTime: 0 });
     this.timeUpdateCallbacks.forEach((cb) => cb(0));
   }
@@ -184,11 +241,6 @@ export class NativeAudioService implements IAudioService {
     const clamped = Math.max(0, Math.min(time, duration));
     void this.invokeCommand('native_audio_seek', { time: clamped });
     this.updateState({ currentTime: clamped });
-    if (this.state.playbackState === 'playing') {
-      this.startProgressTimer(clamped);
-    } else {
-      this.stopProgressTimer(false);
-    }
     this.timeUpdateCallbacks.forEach((cb) => cb(clamped));
   }
 
@@ -271,7 +323,6 @@ export class NativeAudioService implements IAudioService {
   }
 
   clearQueue(): void {
-    this.stopProgressTimer(false);
     this.updateState({
       queue: [],
       currentIndex: -1,
@@ -297,9 +348,29 @@ export class NativeAudioService implements IAudioService {
 
   reorderQueue(fromIndex: number, toIndex: number): void {
     const queue = [...this.state.queue];
-    const [item] = queue.splice(fromIndex, 1);
-    queue.splice(toIndex, 0, item);
-    this.updateState({ queue });
+    if (
+      fromIndex < 0 ||
+      fromIndex >= queue.length ||
+      toIndex < 0 ||
+      toIndex >= queue.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+
+    const [moved] = queue.splice(fromIndex, 1);
+    queue.splice(toIndex, 0, moved);
+
+    let currentIndex = this.state.currentIndex;
+    if (currentIndex === fromIndex) {
+      currentIndex = toIndex;
+    } else if (fromIndex < currentIndex && toIndex >= currentIndex) {
+      currentIndex--;
+    } else if (fromIndex > currentIndex && toIndex <= currentIndex) {
+      currentIndex++;
+    }
+
+    this.updateState({ queue, currentIndex });
   }
 
   async playPrevious(): Promise<void> {
@@ -323,8 +394,14 @@ export class NativeAudioService implements IAudioService {
       return;
     }
 
-    const nextIndex = currentIndex + 1 < queue.length ? currentIndex + 1 : 0;
-    await this.playTrackAtIndex(nextIndex);
+    const nextIndex = currentIndex + 1;
+    if (nextIndex < queue.length) {
+      await this.playTrackAtIndex(nextIndex);
+      return;
+    }
+    if (playMode === 'loop') {
+      await this.playTrackAtIndex(0);
+    }
   }
 
   // ===== 播放模式 =====
@@ -443,13 +520,12 @@ export class NativeAudioService implements IAudioService {
 
   // ===== 音频可视化 (placeholder) =====
   getFrequencyData(): Uint8Array | null {
-    return null;
+    return this.spectrumData ? new Uint8Array(this.spectrumData) : null;
   }
 
   // ===== 清理 =====
   destroy(): void {
     this.stop();
-    this.stopProgressTimer(false);
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();
@@ -459,5 +535,10 @@ export class NativeAudioService implements IAudioService {
       this.stateListener();
       this.stateListener = undefined;
     }
+    if (this.spectrumListener) {
+      this.spectrumListener();
+      this.spectrumListener = undefined;
+    }
+    this.spectrumData = null;
   }
 }

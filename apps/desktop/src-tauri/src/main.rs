@@ -12,6 +12,17 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to Pixel Matrix Player!", name)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::greet;
+
+    #[test]
+    fn greet_returns_expected_message() {
+        let message = greet("Tester");
+        assert_eq!(message, "Hello, Tester! Welcome to Pixel Matrix Player!");
+    }
+}
+
 #[tauri::command]
 async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
     native_audio::load(&app, path)

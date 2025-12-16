@@ -74,6 +74,29 @@ export function AudioEngineProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    const service = serviceRef.current;
+    if (!service) return;
+
+    const unsubscribe = service.onError((error) => {
+      if (engineType !== 'native') return;
+      console.warn('[AudioEngine] Native audio error, falling back to WebAudio:', error);
+      setEngineType('web');
+      void import('@tauri-apps/api/dialog')
+        .then(({ message }) =>
+          message(
+            `Native audio error: ${error?.message ?? String(error)}\n\nFalling back to WebAudio.`,
+            { title: 'Audio Engine', type: 'warning' }
+          )
+        )
+        .catch(() => {});
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [engineType, setEngineType]);
+
+  useEffect(() => {
     return () => {
       serviceRef.current?.destroy();
     };

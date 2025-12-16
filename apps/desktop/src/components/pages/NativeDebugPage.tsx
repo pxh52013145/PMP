@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { Track } from '../../services/audio';
+import { AudioVisualizer } from '../magnet/AudioVisualizer';
 
 function getFileName(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -19,6 +20,8 @@ export const NativeDebugPage: React.FC = () => {
   const [logs, setLogs] = useState<string[]>([]);
   const [isSelectingFile, setIsSelectingFile] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+
+  const getFrequencyData = useCallback(() => audioService.getFrequencyData?.() ?? null, [audioService]);
 
   const appendLog = useCallback((message: string) => {
     setLogs((prev) => {
@@ -245,6 +248,11 @@ export const NativeDebugPage: React.FC = () => {
               {state.muted ? '取消静音' : '静音'}
             </button>
           </div>
+
+          <AudioVisualizer
+            getFrequencyData={getFrequencyData}
+            isPlaying={state.playbackState === 'playing'}
+          />
 
           <div className="queue-actions">
             <div>
