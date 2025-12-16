@@ -1,5 +1,6 @@
 use once_cell::sync::{Lazy, OnceCell};
 use rodio::{decoder::Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::Serialize;
 use std::{
@@ -49,6 +50,12 @@ fn ensure_stream_handle() -> Result<OutputStreamHandle, String> {
     Ok(handle)
 }
 
+fn default_output_device_name() -> Option<String> {
+    rodio::cpal::default_host()
+        .default_output_device()
+        .and_then(|device| device.name().ok())
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 struct NativeAudioStatePayload {
@@ -59,6 +66,8 @@ struct NativeAudioStatePayload {
     current_time: f64,
     duration: f64,
     sample_rate: Option<u32>,
+    bit_depth: Option<u32>,
+    device: Option<String>,
     queue: Option<Vec<String>>,
     current_index: Option<i32>,
     ended: bool,
@@ -125,41 +134,6 @@ impl AudioRingBuffer {
         let (lock, _available, _space) = &*self.inner;
         let inner = lock.lock().expect("ring buffer lock poisoned");
         inner.finished && inner.data.is_empty()
-    }
-
-    fn push_frame(&self, frame: &[f32]) -> bool {
-        let frame_len = frame.len();
-        if frame_len == 0 {
-            return true;
-        }
-
-        let (lock, available, space) = &*self.inner;
-        let mut inner = match lock.lock() {
-            Ok(inner) => inner,
-            Err(_) => return false,
-        };
-
-        loop {
-            let free = inner.capacity.saturating_sub(inner.data.len());
-            if free >= frame_len {
-                break;
-            }
-
-            let (guard, timeout) = match space.wait_timeout(inner, Duration::from_millis(10)) {
-                Ok(value) => value,
-                Err(_) => return false,
-            };
-            inner = guard;
-            if timeout.timed_out() {
-                return false;
-            }
-        }
-
-        for sample in frame {
-            inner.data.push_back(*sample);
-        }
-        available.notify_all();
-        true
     }
 
     fn push_interleaved(&self, samples: &[f32], channels: usize) -> usize {
@@ -283,6 +257,7 @@ enum DecoderCommand {
 struct DecoderMeta {
     channels: u16,
     sample_rate: u32,
+    bit_depth: Option<u32>,
     duration: f64,
 }
 
@@ -301,6 +276,8 @@ struct NativeAudioEngine {
     decoded_samples: Option<Arc<Vec<f32>>>,
     decoded_channels: u16,
     decoded_sample_rate: u32,
+    decoded_bit_depth: Option<u32>,
+    device_name: Option<String>,
     volume: f32,
     muted: bool,
     playback_state: PlaybackState,
@@ -346,6 +323,8 @@ impl NativeAudioEngine {
             decoded_samples: None,
             decoded_channels: 0,
             decoded_sample_rate: 0,
+            decoded_bit_depth: None,
+            device_name: None,
             volume: 0.7,
             muted: false,
             playback_state: PlaybackState::Idle,
@@ -387,6 +366,7 @@ impl NativeAudioEngine {
             self.decoded_samples = None;
             self.decoded_channels = meta.channels;
             self.decoded_sample_rate = meta.sample_rate;
+            self.decoded_bit_depth = meta.bit_depth;
             sink.append(source);
             self.streaming = Some(streaming);
         }
@@ -398,6 +378,7 @@ impl NativeAudioEngine {
                     self.decoded_samples = Some(decoded.samples.clone());
                     self.decoded_channels = decoded.channels;
                     self.decoded_sample_rate = decoded.sample_rate;
+                    self.decoded_bit_depth = decoded.bit_depth;
                     sink.append(decoded.source);
                 }
                 Err(err) => {
@@ -416,9 +397,12 @@ impl NativeAudioEngine {
                     self.decoded_samples = None;
                     self.decoded_channels = 0;
                     self.decoded_sample_rate = 0;
+                    self.decoded_bit_depth = None;
                 }
             }
         }
+
+        self.device_name = default_output_device_name();
 
         sink.pause();
         sink.set_volume(if self.muted { 0.0 } else { self.volume });
@@ -539,6 +523,7 @@ impl NativeAudioEngine {
             self.decoded_samples = None;
             self.decoded_channels = 0;
             self.decoded_sample_rate = 0;
+            self.decoded_bit_depth = None;
             self.set_state(PlaybackState::Stopped);
         }
     }
@@ -718,6 +703,8 @@ impl NativeAudioEngine {
             } else {
                 None
             },
+            bit_depth: self.decoded_bit_depth,
+            device: self.device_name.clone(),
             queue: if self.queue_initialized {
                 Some(
                     self.queue
@@ -940,8 +927,13 @@ fn start_symphonia_stream(
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 hint.with_extension(ext);
             }
+            let format_options = FormatOptions {
+                prebuild_seek_index: false,
+                seek_index_fill_rate: 5,
+                enable_gapless: false,
+            };
             let probed = symphonia::default::get_probe()
-                .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+                .format(&hint, mss, &format_options, &MetadataOptions::default())
                 .map_err(|e| format!("Failed to probe format: {e}"))?;
             let format = probed.format;
             let track = format
@@ -966,6 +958,10 @@ fn start_symphonia_stream(
             .channels
             .map(|ch| ch.count() as u16)
             .unwrap_or(2);
+        let bit_depth = track
+            .codec_params
+            .bits_per_sample
+            .or(track.codec_params.bits_per_coded_sample);
         let duration = track
             .codec_params
             .n_frames
@@ -975,6 +971,7 @@ fn start_symphonia_stream(
         let _ = meta_tx.send(Ok(DecoderMeta {
             channels,
             sample_rate,
+            bit_depth,
             duration,
         }));
         tap_clone.set_sample_rate(sample_rate);
@@ -1311,6 +1308,7 @@ struct DecodedAudioBuffer {
     samples: Arc<Vec<f32>>,
     channels: u16,
     sample_rate: u32,
+    bit_depth: Option<u32>,
     duration: f64,
 }
 
@@ -1346,6 +1344,10 @@ fn decode_track_to_buffer(path: &Path) -> Result<DecodedAudioBuffer, String> {
         .map(|ch| ch.count())
         .unwrap_or_default();
     let mut sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
+    let bit_depth = track
+        .codec_params
+        .bits_per_sample
+        .or(track.codec_params.bits_per_coded_sample);
 
     loop {
         let packet = match format.next_packet() {
@@ -1401,6 +1403,7 @@ fn decode_track_to_buffer(path: &Path) -> Result<DecodedAudioBuffer, String> {
         samples: shared,
         channels: channels as u16,
         sample_rate,
+        bit_depth,
         duration,
     })
 }
