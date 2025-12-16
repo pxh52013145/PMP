@@ -36,6 +36,8 @@ import {
   broadcastDataUpdate,
   broadcastSignal,
   setupConfigSync,
+  setupTauriListener,
+  setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import './index.css';
 import './components/editor/EditorStatistics.css';
@@ -399,30 +401,63 @@ export function EditorWindowApp() {
   const [creatorMode, setCreatorMode] = useState<'create' | 'edit'>('create');
   const [editingMagnet, setEditingMagnet] = useState<Magnet | undefined>(undefined);
 
-  // 加载 Creator 编辑数据
-  useEffect(() => {
-    if (windowType === 'creator') {
-      try {
-        const mode = localStorage.getItem(STORAGE_KEYS.MAGNET_EDITOR_MODE) as
-          | 'create'
-          | 'edit'
-          | null;
-        const data = localStorage.getItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+  const reloadCreatorData = useCallback(() => {
+    try {
+      const mode = localStorage.getItem(STORAGE_KEYS.MAGNET_EDITOR_MODE) as
+        | 'create'
+        | 'edit'
+        | null;
+      const data = localStorage.getItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
 
-        if (mode === 'edit' && data) {
-          setCreatorMode('edit');
-          setEditingMagnet(JSON.parse(data));
-        } else {
-          setCreatorMode('create');
-          setEditingMagnet(undefined);
-        }
-      } catch (error) {
-        console.error('Failed to load creator data:', error);
+      if (mode === 'edit' && data) {
+        setCreatorMode('edit');
+        setEditingMagnet(JSON.parse(data));
+      } else {
         setCreatorMode('create');
         setEditingMagnet(undefined);
       }
+    } catch (error) {
+      console.error('Failed to load creator data:', error);
+      setCreatorMode('create');
+      setEditingMagnet(undefined);
     }
-  }, [windowType]);
+  }, []);
+
+  // Creator window is now cached (hidden, not destroyed), so it must reload its payload when reopened.
+  useEffect(() => {
+    if (windowType !== 'creator') return;
+
+    reloadCreatorData();
+
+    const setup = async () => {
+      const unlistenOpened = await setupTauriListener(TAURI_EVENTS.CREATOR_WINDOW_OPENED, () => {
+        reloadCreatorData();
+      });
+
+      const unlistenHidden = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
+        (payload) => {
+          if (payload === 'creator') {
+          void broadcastDataUpdate(
+            STORAGE_KEYS.CREATOR_WINDOW_OPEN,
+            false,
+            TAURI_EVENTS.CREATOR_WINDOW_CLOSED
+          );
+        }
+        }
+      );
+
+      return () => {
+        unlistenOpened();
+        unlistenHidden();
+      };
+    };
+
+    let cleanupPromise = setup();
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [windowType, reloadCreatorData]);
 
   // 监听 URL hash 变化（如果需要动态切换）
   useEffect(() => {

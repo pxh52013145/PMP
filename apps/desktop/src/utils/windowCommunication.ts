@@ -69,6 +69,7 @@ export const TAURI_EVENTS = {
   EDITOR_EXIT: 'editor-exit',
   EDITOR_STYLE_APPLY: 'editor-style-apply',
   EDITOR_STATE_UPDATED: 'editor-state-updated', // 编辑器状态更新（选中区域等）
+  EDITOR_WINDOW_HIDDEN: 'editor-window-hidden', // Rust 侧拦截 close 并 hide 后的通知
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 
@@ -161,6 +162,25 @@ export async function setupTauriListener(
     const unlisten = await listen(eventName, () => {
       console.log(`Tauri event received: ${eventName}`);
       callback();
+    });
+    return unlisten;
+  } catch (error) {
+    console.error(`Failed to setup Tauri listener (${eventName}):`, error);
+    throw error;
+  }
+}
+
+/**
+ * 设定带 payload 的 Tauri 事件监听器
+ */
+export async function setupTauriListenerWithPayload<T>(
+  eventName: string,
+  callback: (payload: T) => void
+): Promise<UnlistenFn> {
+  try {
+    const unlisten = await listen<T>(eventName, (event) => {
+      console.log(`Tauri event received: ${eventName}`);
+      callback(event.payload);
     });
     return unlisten;
   } catch (error) {

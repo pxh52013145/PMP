@@ -162,6 +162,7 @@ async fn open_editor_window(
 
             api.prevent_close();
             let _ = window_for_hide.hide();
+            let _ = app_handle.emit_all("editor-window-hidden", window_type_for_handler.clone());
 
             // Closing the control panel should behave like "exit edit mode".
             if window_type_for_handler == "control" {
@@ -180,6 +181,7 @@ async fn open_editor_window(
                     let label = format!("editor-{}", wtype);
                     if let Some(w) = app_handle.get_window(&label) {
                         let _ = w.hide();
+                        let _ = app_handle.emit_all("editor-window-hidden", wtype);
                     }
                 }
             }
@@ -197,6 +199,7 @@ async fn close_editor_window(app: tauri::AppHandle, window_type: String) -> Resu
 
     if let Some(window) = app.get_window(&label) {
         window.hide().map_err(|e| e.to_string())?;
+        let _ = app.emit_all("editor-window-hidden", window_type);
     }
 
     Ok(())
@@ -220,6 +223,7 @@ async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), String> {
         let label = format!("editor-{}", window_type);
         if let Some(window) = app.get_window(&label) {
             let _ = window.hide();
+            let _ = app.emit_all("editor-window-hidden", window_type);
         }
     }
 
