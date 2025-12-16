@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/tauri';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { Track } from '../../services/audio';
@@ -13,6 +15,12 @@ function getFileName(filePath: string): string {
 
 const SUPPORTED_EXTENSIONS = ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'];
 
+type NativeAudioMeta = {
+  device: string | null;
+  sampleRate: number | null;
+  bitDepth: number | null;
+};
+
 export const NativeDebugPage: React.FC = () => {
   const audioService = useAudioService();
   const { engineType, setEngineType } = useAudioEngine();
@@ -20,6 +28,13 @@ export const NativeDebugPage: React.FC = () => {
   const [logs, setLogs] = useState<string[]>([]);
   const [isSelectingFile, setIsSelectingFile] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [nativeMeta, setNativeMeta] = useState<NativeAudioMeta>({
+    device: null,
+    sampleRate: null,
+    bitDepth: null,
+  });
+  const [outputDevices, setOutputDevices] = useState<string[]>([]);
+  const [selectedDevice, setSelectedDevice] = useState<string>('');
 
   const getFrequencyData = useCallback(() => audioService.getFrequencyData?.() ?? null, [audioService]);
 
@@ -47,11 +62,60 @@ export const NativeDebugPage: React.FC = () => {
 
   const isNativeEngine = engineType === 'native';
 
+  useEffect(() => {
+    if (!isNativeEngine) return;
+
+    let unlisten: UnlistenFn | null = null;
+    void listen('native_audio_state', (event) => {
+      const payload = event.payload as Record<string, unknown>;
+      const next =
+        payload && 'state' in payload ? (payload.state as Record<string, unknown>) : payload;
+
+      const device = typeof next.device === 'string' ? next.device : null;
+      const sampleRate = typeof next.sampleRate === 'number' ? next.sampleRate : null;
+      const bitDepth = typeof next.bitDepth === 'number' ? next.bitDepth : null;
+
+      setNativeMeta({ device, sampleRate, bitDepth });
+      setSelectedDevice((prev) => prev || device || '');
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      unlisten?.();
+    };
+  }, [isNativeEngine]);
+
   const currentTrackLabel = useMemo(() => {
     if (!state.currentTrack) return '未加载音频';
     const { title, artist } = state.currentTrack;
     return artist ? `${title} – ${artist}` : title;
   }, [state.currentTrack]);
+
+  const handleRefreshDevices = useCallback(async () => {
+    try {
+      const devices = await invoke<string[]>('native_audio_list_devices');
+      setOutputDevices(devices);
+      appendLog(`已获取输出设备：${devices.length} 个`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(`获取输出设备失败：${message}`);
+    }
+  }, [appendLog]);
+
+  const handleApplyDevice = useCallback(async () => {
+    try {
+      await invoke('native_audio_select_device', {
+        deviceName: selectedDevice.length > 0 ? selectedDevice : null,
+      });
+      appendLog(`切换输出设备：${selectedDevice || '默认设备'}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(`切换输出设备失败：${message}`);
+    }
+  }, [appendLog, selectedDevice]);
 
   const handleSelectTrack = useCallback(async () => {
     setIsSelectingFile(true);
@@ -247,6 +311,37 @@ export const NativeDebugPage: React.FC = () => {
             <button type="button" onClick={handleToggleMute}>
               {state.muted ? '取消静音' : '静音'}
             </button>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">输出设备</p>
+              <p className="device-value">{nativeMeta.device ?? '默认设备'}</p>
+              <p className="device-hint">
+                {nativeMeta.sampleRate ? `${nativeMeta.sampleRate} Hz` : '—'} ·{' '}
+                {nativeMeta.bitDepth ? `${nativeMeta.bitDepth} bit` : '—'}
+              </p>
+            </div>
+            <div className="device-controls">
+              <select
+                value={selectedDevice}
+                onChange={(e) => setSelectedDevice(e.target.value)}
+                aria-label="选择输出设备"
+              >
+                <option value="">默认设备</option>
+                {outputDevices.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => void handleRefreshDevices()}>
+                刷新
+              </button>
+              <button type="button" onClick={() => void handleApplyDevice()}>
+                应用
+              </button>
+            </div>
           </div>
 
           <AudioVisualizer

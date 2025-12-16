@@ -31,23 +31,72 @@ use tauri::Manager;
 static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 static EMITTER_STARTED: OnceCell<()> = OnceCell::new();
-static STREAM_HANDLE: OnceCell<OutputStreamHandle> = OnceCell::new();
+static STREAM_STATE: Lazy<Mutex<StreamState>> = Lazy::new(|| Mutex::new(StreamState::default()));
 
-fn ensure_stream_handle() -> Result<OutputStreamHandle, String> {
-    if let Some(handle) = STREAM_HANDLE.get() {
-        return Ok(handle.clone());
+#[derive(Default)]
+struct StreamState {
+    handle: Option<OutputStreamHandle>,
+    device_name: Option<String>,
+}
+
+fn open_output_stream_handle(
+    preferred_device_name: Option<&str>,
+) -> Result<(OutputStreamHandle, Option<String>), String> {
+    let host = rodio::cpal::default_host();
+
+    if let Some(preferred) = preferred_device_name {
+        let devices = host
+            .output_devices()
+            .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
+        for device in devices {
+            let Ok(name) = device.name() else {
+                continue;
+            };
+            if name != preferred {
+                continue;
+            }
+            let (stream, handle) = OutputStream::try_from_device(&device)
+                .map_err(|e| format!("Failed to init output device '{preferred}': {e}"))?;
+            std::mem::forget(stream);
+            return Ok((handle, Some(name)));
+        }
+        return Err(format!("Output device not found: {preferred}"));
     }
 
-    let (stream, handle) =
-        OutputStream::try_default().map_err(|e| format!("Failed to init output: {e}"))?;
-    if STREAM_HANDLE.set(handle.clone()).is_err() {
-        return Ok(STREAM_HANDLE
-            .get()
-            .expect("stream handle cell set concurrently")
-            .clone());
+    if let Some(device) = host.default_output_device() {
+        let device_name = device.name().ok();
+        if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
+            std::mem::forget(stream);
+            return Ok((handle, device_name));
+        }
     }
-    std::mem::forget(stream);
-    Ok(handle)
+
+    let devices = host
+        .output_devices()
+        .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
+    for device in devices {
+        let device_name = device.name().ok();
+        if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
+            std::mem::forget(stream);
+            return Ok((handle, device_name));
+        }
+    }
+
+    Err("No usable output device found".into())
+}
+
+fn ensure_stream_handle() -> Result<(OutputStreamHandle, Option<String>), String> {
+    let mut state = STREAM_STATE
+        .lock()
+        .map_err(|_| "Audio stream state is locked".to_string())?;
+    if let Some(handle) = state.handle.clone() {
+        return Ok((handle, state.device_name.clone()));
+    }
+
+    let (handle, device_name) = open_output_stream_handle(state.device_name.as_deref())?;
+    state.handle = Some(handle.clone());
+    state.device_name = device_name.clone();
+    Ok((handle, device_name))
 }
 
 fn default_output_device_name() -> Option<String> {
@@ -261,6 +310,61 @@ struct DecoderMeta {
     duration: f64,
 }
 
+#[derive(Clone)]
+struct StreamingSamplesSource {
+    buffer: AudioRingBuffer,
+    channels: u16,
+    sample_rate: u32,
+    duration: f64,
+}
+
+impl StreamingSamplesSource {
+    fn new(buffer: AudioRingBuffer, channels: u16, sample_rate: u32, duration: f64) -> Self {
+        Self {
+            buffer,
+            channels,
+            sample_rate,
+            duration,
+        }
+    }
+}
+
+impl Iterator for StreamingSamplesSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.buffer.is_finished_and_empty() {
+            return None;
+        }
+        match self.buffer.pop_sample() {
+            Some(sample) => Some(sample),
+            None => Some(0.0),
+        }
+    }
+}
+
+impl Source for StreamingSamplesSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        if self.duration > 0.0 {
+            Some(Duration::from_secs_f64(self.duration))
+        } else {
+            None
+        }
+    }
+}
+
 struct NativeAudioEngine {
     stream_handle: Option<OutputStreamHandle>,
     sink: Option<Sink>,
@@ -349,7 +453,9 @@ impl NativeAudioEngine {
         self.shutdown_streaming();
 
         if self.stream_handle.is_none() {
-            self.stream_handle = Some(ensure_stream_handle()?);
+            let (handle, device_name) = ensure_stream_handle()?;
+            self.stream_handle = Some(handle);
+            self.device_name = device_name.or_else(default_output_device_name);
         }
 
         let stream_handle = self
@@ -402,7 +508,9 @@ impl NativeAudioEngine {
             }
         }
 
-        self.device_name = default_output_device_name();
+        if self.device_name.is_none() {
+            self.device_name = default_output_device_name();
+        }
 
         sink.pause();
         sink.set_volume(if self.muted { 0.0 } else { self.volume });
@@ -723,6 +831,68 @@ impl NativeAudioEngine {
             ended,
         }
     }
+
+    fn rebuild_sink_on_new_device(&mut self) -> Result<(), String> {
+        let Some(track_path) = self.current_track.clone() else {
+            return Ok(());
+        };
+        let stream_handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| "Audio stream not initialized".to_string())?
+            .clone();
+
+        let target = self.current_position.max(0.0);
+        let resume_playing = matches!(self.playback_state, PlaybackState::Playing);
+
+        self.sync_clock();
+        if let Some(old_sink) = self.sink.take() {
+            old_sink.stop();
+        }
+
+        let sink =
+            Sink::try_new(&stream_handle).map_err(|e| format!("Failed to create sink: {e}"))?;
+
+        if let Some(streaming) = &self.streaming {
+            streaming.buffer.clear();
+            streaming.tap.clear();
+            let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
+            let source = StreamingSamplesSource::new(
+                streaming.buffer.clone(),
+                self.decoded_channels.max(1),
+                self.decoded_sample_rate.max(1),
+                self.duration,
+            );
+            sink.append(source);
+        } else if let Some(samples) = self.decoded_samples.clone() {
+            let channels = self.decoded_channels.max(1);
+            let sample_rate = self.decoded_sample_rate.max(1);
+            let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
+            sink.append(SharedSamplesSource::new(samples, channels, sample_rate, start_sample));
+        } else {
+            let file = File::open(&track_path).map_err(|e| format!("Failed to open file: {e}"))?;
+            let decoder = Decoder::new(BufReader::new(file))
+                .map_err(|e| format!("Failed to decode audio file: {e}"))?;
+            let skipped = decoder.skip_duration(Duration::from_secs_f64(target));
+            sink.append(skipped);
+        }
+
+        sink.pause();
+        sink.set_volume(if self.muted { 0.0 } else { self.volume });
+
+        if resume_playing {
+            sink.play();
+            self.base_position = target;
+            self.playback_started_at = Some(Instant::now());
+        } else {
+            self.base_position = target;
+            self.playback_started_at = None;
+        }
+
+        self.current_position = target;
+        self.sink = Some(sink);
+        Ok(())
+    }
 }
 
 fn emit_state(app_handle: &AppHandle, payload: NativeAudioStatePayload) -> Result<(), String> {
@@ -849,61 +1019,6 @@ fn compute_spectrum(
     }
 
     Some(NativeAudioSpectrumPayload { bins: mags })
-}
-
-#[derive(Clone)]
-struct StreamingSamplesSource {
-    buffer: AudioRingBuffer,
-    channels: u16,
-    sample_rate: u32,
-    duration: f64,
-}
-
-impl StreamingSamplesSource {
-    fn new(buffer: AudioRingBuffer, channels: u16, sample_rate: u32, duration: f64) -> Self {
-        Self {
-            buffer,
-            channels,
-            sample_rate,
-            duration,
-        }
-    }
-}
-
-impl Iterator for StreamingSamplesSource {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.buffer.is_finished_and_empty() {
-            return None;
-        }
-        match self.buffer.pop_sample() {
-            Some(sample) => Some(sample),
-            None => Some(0.0),
-        }
-    }
-}
-
-impl Source for StreamingSamplesSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        self.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        if self.duration > 0.0 {
-            Some(Duration::from_secs_f64(self.duration))
-        } else {
-            None
-        }
-    }
 }
 
 fn start_symphonia_stream(
@@ -1431,6 +1546,59 @@ pub fn set_mute(app_handle: &AppHandle, muted: bool) -> Result<(), String> {
         engine.set_mute(muted);
         engine.build_state_payload(false)
     };
+    emit_state(app_handle, payload)?;
+    Ok(())
+}
+
+pub fn list_output_devices() -> Result<Vec<String>, String> {
+    let host = rodio::cpal::default_host();
+    let devices = host
+        .output_devices()
+        .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
+
+    let mut names = Vec::new();
+    for device in devices {
+        if let Ok(name) = device.name() {
+            names.push(name);
+        }
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+pub fn select_output_device(app_handle: &AppHandle, device_name: Option<String>) -> Result<(), String> {
+    init_emitter(app_handle);
+
+    let (handle, resolved_name) = open_output_stream_handle(device_name.as_deref())?;
+    {
+        let mut state = STREAM_STATE
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.handle = Some(handle.clone());
+        state.device_name = device_name.clone();
+    }
+
+    let payload = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+
+        engine.sync_clock();
+        engine.stream_handle = Some(handle);
+        engine.device_name = resolved_name
+            .or(device_name)
+            .or_else(default_output_device_name);
+
+        engine
+            .rebuild_sink_on_new_device()
+            .unwrap_or_else(|err| {
+                eprintln!("[NativeAudio] Failed to rebuild sink after device change: {err}");
+            });
+
+        engine.build_state_payload(false)
+    };
+
     emit_state(app_handle, payload)?;
     Ok(())
 }
