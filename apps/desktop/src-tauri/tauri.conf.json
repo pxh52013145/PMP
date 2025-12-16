@@ -13,6 +13,14 @@
   "tauri": {
     "allowlist": {
       "all": false,
+      "protocol": {
+        "all": false,
+        "asset": true,
+        "assetScope": [
+          "$APPDATA/background-media/*",
+          "$APPDATA/background-media/**"
+        ]
+      },
       "shell": {
         "all": false,
         "open": true

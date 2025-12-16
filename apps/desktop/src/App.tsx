@@ -17,28 +17,21 @@ import { EditorProvider, useEditor } from './contexts/EditorContext';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
-import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
-import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
-import { WINDOW_PIN_MAGNET } from './data/builtin/windowPinMagnet';
-import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
-import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
-import { DEBUG_BUTTON_MAGNET } from './data/builtin/debugButtonMagnet';
-import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
-import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
-import { AUDIO_VISUALIZER_MAGNET } from './data/builtin/audioVisualizerMagnet';
-import {
-  PLAY_QUEUE_MAGNET,
-  PLAYLISTS_MAGNET,
-  MUSIC_LIBRARY_MAGNET,
-} from './data/builtin/musicMagnets';
 import { MATRIX_CONFIG } from './constants/config';
 import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from './constants/magnets';
 import { Magnet, PixelAnchor } from './types/pixel';
 import { BackgroundSettings } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
-import { loadConfig, saveConfig, applyConfig } from './utils/configManager';
-import { resolveMagnetPositions, detectConflicts } from './utils/magnetPositionResolver';
 import { calculateWindowPosition } from './utils/editorWindows';
+import {
+  applyMagnetConfig,
+  createDefaultMagnetLibrary,
+  createInitialMagnetState,
+  loadMagnetConfig,
+  saveMagnetConfig,
+} from './modules/magnets';
+import { readJson, readString, writeJson } from './modules/storage';
+import { gcOrphanBackgroundMedia } from './modules/background/mediaCleanup';
 import './App.css';
 
 function AppContent() {
@@ -49,23 +42,24 @@ function AppContent() {
 
   // 同步 isMaximized 状态到 localStorage，供编辑器窗口使用
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.IS_MAXIMIZED, JSON.stringify(isMaximized));
+    writeJson(STORAGE_KEYS.IS_MAXIMIZED, isMaximized);
   }, [isMaximized]);
 
   // 窗口背景效果状态
   const [backgroundEffect, setBackgroundEffect] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
+    return readString(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
   });
-  const [backgroundThemeColor, setBackgroundThemeColor] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
-    return saved ? JSON.parse(saved) : { id: 'cyan', rgb: [0, 255, 136] };
+  type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
+  const defaultBackgroundThemeColor: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
+  const [backgroundThemeColor, setBackgroundThemeColor] = useState<BackgroundThemeColor>(() => {
+    return readJson<BackgroundThemeColor>(STORAGE_KEYS.BACKGROUND_THEME_COLOR, defaultBackgroundThemeColor);
   });
 
   // 监听背景效果和主题色变化
   useEffect(() => {
     const setupEffectListeners = async () => {
       const unlistenBg = await setupTauriListener(TAURI_EVENTS.BACKGROUND_EFFECT_UPDATED, () => {
-        const effect = localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT);
+        const effect = readString(STORAGE_KEYS.BACKGROUND_EFFECT);
         if (effect) {
           setBackgroundEffect(effect);
         }
@@ -74,10 +68,12 @@ function AppContent() {
       const unlistenBgColor = await setupTauriListener(
         TAURI_EVENTS.BACKGROUND_THEME_COLOR_UPDATED,
         () => {
-          const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
-          if (saved) {
-            setBackgroundThemeColor(JSON.parse(saved));
-          }
+          setBackgroundThemeColor(
+            readJson<BackgroundThemeColor>(
+              STORAGE_KEYS.BACKGROUND_THEME_COLOR,
+              defaultBackgroundThemeColor
+            )
+          );
         }
       );
 
@@ -94,12 +90,7 @@ function AppContent() {
   }, []);
 
   const [backgroundSettings, setBackgroundSettings] = useState<BackgroundSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS);
-      return saved ? JSON.parse(saved) : DEFAULT_BACKGROUND_SETTINGS;
-    } catch {
-      return DEFAULT_BACKGROUND_SETTINGS;
-    }
+    return readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
   });
 
   // 监听背景设置变化（从编辑器窗口更新）
@@ -122,56 +113,14 @@ function AppContent() {
   // ============ 新的状态管理系统 ============
 
   // 默认 Magnet 库
-  const defaultMagnetLibrary = useMemo(
-    () => [
-      DRAG_HANDLE_MAGNET,
-      ...WINDOW_CONTROL_MAGNETS,
-      WINDOW_PIN_MAGNET,
-      ...MUSIC_PLAYER_MAGNETS,
-      AUDIO_VISUALIZER_MAGNET,
-      EDITOR_BUTTON_MAGNET,
-      DEBUG_BUTTON_MAGNET,
-      PLAY_QUEUE_MAGNET,
-      PLAYLISTS_MAGNET,
-      MUSIC_LIBRARY_MAGNET,
-      NAVIGATION_PAGE_MAGNET,
-      BACK_BUTTON_MAGNET,
-    ],
-    []
-  );
+  const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
 
   // 默认激活的 Magnet ID（使用统一常量）
   const defaultActiveMagnetIds = DEFAULT_ACTIVE_MAGNET_IDS;
 
   // 初始化配置（从 localStorage 或使用默认值）
   const initializeConfig = useCallback(() => {
-    const savedConfig = loadConfig();
-
-    if (savedConfig) {
-      const applied = applyConfig(savedConfig, defaultMagnetLibrary);
-      return {
-        magnetLibrary: applied.magnetLibrary,
-        activeMagnetIds: applied.activeMagnetIds,
-      };
-    }
-
-    // 首次加载，检测并解决默认magnets的位置冲突
-    const conflicts = detectConflicts(defaultMagnetLibrary);
-    if (conflicts.length > 0) {
-      console.warn(`🔧 首次加载检测到 ${conflicts.length} 个位置冲突，正在自动解决...`);
-      conflicts.forEach((conflict) => {
-        console.warn(
-          `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
-        );
-      });
-    }
-
-    const resolvedMagnets = resolveMagnetPositions(defaultMagnetLibrary);
-
-    return {
-      magnetLibrary: resolvedMagnets,
-      activeMagnetIds: defaultActiveMagnetIds,
-    };
+    return createInitialMagnetState(defaultMagnetLibrary, { defaultActiveMagnetIds });
   }, [defaultMagnetLibrary, defaultActiveMagnetIds]);
 
   // Magnet 库：所有可用的 Magnet 模板（内置 + 自定义）
@@ -231,18 +180,32 @@ function AppContent() {
     };
   }, []);
 
+  // Background media GC (runs on startup; no UI blocking).
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const result = await gcOrphanBackgroundMedia();
+        if (result.removed > 0) {
+          console.log(`[background] GC removed ${result.removed}/${result.scanned} orphan files`);
+        }
+      } catch (error) {
+        console.warn('[background] GC failed:', error);
+      }
+    };
+
+    if ('requestIdleCallback' in window) {
+      (window as any).requestIdleCallback(() => run(), { timeout: 2000 });
+      return;
+    }
+    const timer = setTimeout(() => run(), 800);
+    return () => clearTimeout(timer);
+  }, []);
+
   // 监听背景设置变化（使用统一的通信机制）
   useEffect(() => {
     const reloadBackgroundSettings = () => {
       console.log('Main window: Background settings changed');
-      const settings = localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS);
-      if (settings) {
-        try {
-          setBackgroundSettings(JSON.parse(settings));
-        } catch (error) {
-          console.error('Failed to parse background settings:', error);
-        }
-      }
+      setBackgroundSettings(readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS));
     };
 
     let cleanupPromise = setupConfigSync(
@@ -282,7 +245,7 @@ function AppContent() {
 
   // 同步 builtInMagnetIds 到 localStorage（供编辑器窗口识别）
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.BUILTIN_MAGNETS, JSON.stringify([...builtInMagnetIds]));
+    writeJson(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds]);
   }, [builtInMagnetIds]);
 
   // 获取当前激活的 Magnet（显示在点阵上的）
@@ -315,7 +278,7 @@ function AppContent() {
   useEffect(() => {
     const timer = setTimeout(() => {
       console.log('App: Auto-saving config');
-      saveConfig(
+      saveMagnetConfig(
         magnetLibrary,
         activeMagnetIds,
         {
@@ -346,9 +309,9 @@ function AppContent() {
   useEffect(() => {
     const reloadConfig = () => {
       console.log('Main window: Config changed, reloading from localStorage');
-      const config = loadConfig();
+      const config = loadMagnetConfig();
       if (config) {
-        const applied = applyConfig(config, defaultMagnetLibrary);
+        const applied = applyMagnetConfig(config, defaultMagnetLibrary);
         console.log(
           'Main window: Applied config, magnetLibrary:',
           applied.magnetLibrary.length,
@@ -429,22 +392,9 @@ function App() {
   // 注意：magnetsForContext 仅用于 EditorProvider 的初始化
   // 后续更新通过 AppContent 内部的 updateOccupancy 方法进行
   const [magnetsForContext] = useState<Magnet[]>(() => {
-    const defaultLibrary = [
-      DRAG_HANDLE_MAGNET,
-      ...WINDOW_CONTROL_MAGNETS,
-      ...MUSIC_PLAYER_MAGNETS,
-      EDITOR_BUTTON_MAGNET,
-      NAVIGATION_PAGE_MAGNET,
-      BACK_BUTTON_MAGNET,
-    ];
-
-    const savedConfig = loadConfig();
-    if (savedConfig) {
-      const applied = applyConfig(savedConfig, defaultLibrary);
-      return applied.magnetLibrary;
-    }
-
-    return defaultLibrary;
+    const defaultLibrary = createDefaultMagnetLibrary();
+    const initial = createInitialMagnetState(defaultLibrary);
+    return initial.magnetLibrary.filter((magnet) => initial.activeMagnetIds.has(magnet.id));
   });
 
   return (

@@ -23,6 +23,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       : 'image'
   );
   const [imageUrl, setImageUrl] = useState(initialConfig?.image?.url || '');
+  const [imagePreviewUrl, setImagePreviewUrl] = useState(initialConfig?.image?.url || '');
   const [imageFit, setImageFit] = useState<ImageFitMode>(
     initialConfig?.image?.fit === 'cover' ||
       initialConfig?.image?.fit === 'contain' ||
@@ -31,6 +32,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       : 'contain'
   );
   const [videoUrl, setVideoUrl] = useState(initialConfig?.video?.url || '');
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState(initialConfig?.video?.url || '');
   const [videoFit, setVideoFit] = useState<VideoFitMode>(
     initialConfig?.video?.fit === 'cover' || initialConfig?.video?.fit === 'contain'
       ? initialConfig.video.fit
@@ -79,6 +81,22 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
   // 错误弹窗状态
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreviewUrl);
+      }
+    };
+  }, [imagePreviewUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (videoPreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(videoPreviewUrl);
+      }
+    };
+  }, [videoPreviewUrl]);
 
   // 窗口打开时自动聚焦
   useEffect(() => {
@@ -290,6 +308,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   const handleFileSelect = useCallback(async (type: 'image' | 'video') => {
     try {
       const dialog = await import('@tauri-apps/api/dialog');
+      const fs = await import('@tauri-apps/api/fs');
+      const pathApi = await import('@tauri-apps/api/path');
+      const tauri = await import('@tauri-apps/api/tauri');
 
       const filterConfig =
         type === 'image'
@@ -308,11 +329,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       });
 
       if (selected && typeof selected === 'string') {
-        let fileUrl: string | null = null;
-
-        // 读取并转换为 base64
+        let stage = 'init';
         try {
-          const fs = await import('@tauri-apps/api/fs');
+          stage = 'read';
           const contents = await fs.readBinaryFile(selected);
           const fileSizeMB = contents.length / 1024 / 1024;
 
@@ -332,7 +351,6 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             return;
           }
 
-          // 获取 MIME 类型
           const ext = selected.split('.').pop()?.toLowerCase() || '';
           const mimeTypes: Record<string, string> = {
             png: 'image/png',
@@ -348,35 +366,57 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           };
           const mimeType = mimeTypes[ext] || 'application/octet-stream';
 
-          // 分块 base64 转换（避免调用栈溢出）
-          const uint8Array = new Uint8Array(contents);
-          let binary = '';
-          const chunkSize = 8192; // 每次处理 8KB
+          // Preview uses a blob URL (fast, no base64). Persisted value is a stable AppData file URL.
+          stage = 'preview';
+          const blobBytes = Uint8Array.from(contents);
+          const blobUrl = URL.createObjectURL(new Blob([blobBytes], { type: mimeType }));
 
-          for (let i = 0; i < uint8Array.length; i += chunkSize) {
-            const chunk = uint8Array.subarray(i, i + chunkSize);
-            binary += String.fromCharCode.apply(null, Array.from(chunk));
+          const fileName = `background-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext || (type === 'image' ? 'png' : 'mp4')}`;
+          const relativePath = `background-media/${fileName}`;
+
+          let persistedUrl: string;
+          try {
+            stage = 'persist';
+            const appDataDirKey = (fs as any).BaseDirectory?.AppData ?? (fs as any).Dir?.AppData;
+            await fs.createDir('background-media', { dir: appDataDirKey, recursive: true });
+            await fs.writeBinaryFile({ path: relativePath, contents: blobBytes }, { dir: appDataDirKey });
+
+            stage = 'persist-url';
+            const appDataDir = await pathApi.appDataDir();
+            const fullPath = await pathApi.join(appDataDir, 'background-media', fileName);
+            persistedUrl = tauri.convertFileSrc(fullPath);
+          } catch (persistError) {
+            // Fallback: reference the original file path directly if writing to AppData fails.
+            console.warn('[CustomBackgroundEditor] Failed to persist media into AppData; falling back to source path.', persistError);
+            persistedUrl = tauri.convertFileSrc(selected);
           }
 
-          const base64 = btoa(binary);
-          fileUrl = `data:${mimeType};base64,${base64}`;
+          if (type === 'image') {
+            setImageUrl(persistedUrl);
+            setImagePreviewUrl((prev) => {
+              if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+              return blobUrl;
+            });
+            setSelectionApplied(false);
+          } else {
+            setVideoUrl(persistedUrl);
+            setVideoPreviewUrl((prev) => {
+              if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+              return blobUrl;
+            });
+            setSelectionApplied(false);
+          }
         } catch (readError) {
-          console.error('❌ File processing failed:', readError);
+          console.error(`❌ File processing failed (stage=${stage}):`, readError);
           setErrorMessage(
             `<FILE_READ_ERROR>\n` +
               `文件处理失败\n\n` +
+              `[阶段]\n` +
+              `${stage}\n\n` +
               `[错误详情]\n` +
               `${readError instanceof Error ? readError.message : String(readError)}`
           );
           return;
-        }
-
-        if (fileUrl) {
-          if (type === 'image') {
-            setImageUrl(fileUrl);
-          } else {
-            setVideoUrl(fileUrl);
-          }
         }
       }
     } catch (error) {
@@ -459,10 +499,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
   // 获取预览样式
   const getPreviewStyle = useCallback((): React.CSSProperties => {
+    const imageDisplayUrl = imagePreviewUrl || imageUrl;
     const style = (() => {
       switch (customType) {
         case 'image':
-          if (!imageUrl) return { background: 'rgba(255, 255, 255, 0.05)' };
+          if (!imageDisplayUrl) return { background: 'rgba(255, 255, 255, 0.05)' };
 
           // 选取模式且已应用：不使用背景图，用 img 元素
           if (cropEnabled && selectionApplied) {
@@ -472,7 +513,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           // 选取模式未应用：使用contain模式显示完整图片方便选取
           if (cropEnabled) {
             return {
-              backgroundImage: `url(${imageUrl})`,
+              backgroundImage: `url(${imageDisplayUrl})`,
               backgroundSize: 'contain',
               backgroundPosition: 'center center',
               backgroundRepeat: 'no-repeat',
@@ -482,7 +523,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           // 普通模式
           const backgroundSize = imageFit === 'fill' ? '100% 100%' : imageFit;
           return {
-            backgroundImage: `url(${imageUrl})`,
+            backgroundImage: `url(${imageDisplayUrl})`,
             backgroundSize,
             backgroundPosition: 'center center',
             backgroundRepeat: 'no-repeat',
@@ -496,7 +537,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       }
     })();
     return style;
-  }, [customType, imageUrl, imageFit, cropEnabled, selectionApplied]);
+  }, [customType, imagePreviewUrl, imageUrl, imageFit, cropEnabled, selectionApplied]);
 
   // 获取视频样式
   const getVideoStyle = useCallback((): React.CSSProperties => {
@@ -544,7 +585,10 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           </div>
           <div className="preview-container" style={getPreviewStyle()}>
             {/* 图片选取预览 - 精确复制选取区域 */}
-            {customType === 'image' && imageUrl && cropEnabled && selectionApplied && (
+            {customType === 'image' &&
+              (imagePreviewUrl || imageUrl) &&
+              cropEnabled &&
+              selectionApplied && (
               <div
                 style={{
                   position: 'absolute',
@@ -563,7 +607,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     left: `${(-cropRect.x * 100) / cropRect.width}%`,
                     width: `${10000 / cropRect.width}%`,
                     height: `${10000 / cropRect.height}%`,
-                    backgroundImage: `url(${imageUrl})`,
+                    backgroundImage: `url(${imagePreviewUrl || imageUrl})`,
                     backgroundSize: 'contain',
                     backgroundPosition: 'center center',
                     backgroundRepeat: 'no-repeat',
@@ -574,7 +618,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             )}
 
             {/* 视频预览 */}
-            {customType === 'video' && videoUrl && (
+            {customType === 'video' && (videoPreviewUrl || videoUrl) && (
               <>
                 {cropEnabled && selectionApplied ? (
                   <div
@@ -601,7 +645,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                       }}
                     >
                       <video
-                        src={videoUrl}
+                        src={videoPreviewUrl || videoUrl}
                         className="preview-video"
                         autoPlay
                         loop
@@ -616,7 +660,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                   </div>
                 ) : (
                   <video
-                    src={videoUrl}
+                    src={videoPreviewUrl || videoUrl}
                     className="preview-video"
                     autoPlay
                     loop
@@ -642,7 +686,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             {cropEnabled &&
               !selectionApplied &&
               (customType === 'image' || customType === 'video') &&
-              (imageUrl || videoUrl) && (
+              (imagePreviewUrl || imageUrl || videoPreviewUrl || videoUrl) && (
                 <>
                   <div className="crop-overlay" />
                   <div
@@ -700,7 +744,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           {/* 选取控制按钮 - 集成在预览区域内 */}
           {cropEnabled &&
             (customType === 'image' || customType === 'video') &&
-            (imageUrl || videoUrl) && (
+            (imagePreviewUrl || imageUrl || videoPreviewUrl || videoUrl) && (
               <>
                 <div className="preview-selection-controls">
                   <button
@@ -893,7 +937,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
               className="url-input"
               placeholder="或输入图片 URL"
               value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
+              onChange={(e) => {
+                setImageUrl(e.target.value);
+                setImagePreviewUrl(e.target.value);
+                setSelectionApplied(false);
+              }}
             />
           </div>
         )}
@@ -911,7 +959,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
               className="url-input"
               placeholder="或输入视频 URL"
               value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
+              onChange={(e) => {
+                setVideoUrl(e.target.value);
+                setVideoPreviewUrl(e.target.value);
+                setSelectionApplied(false);
+              }}
             />
           </div>
         )}

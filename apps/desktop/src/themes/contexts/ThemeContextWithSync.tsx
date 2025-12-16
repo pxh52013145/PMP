@@ -15,6 +15,7 @@ import { Shader } from '../types/shader';
 import { DefaultShader } from '../shaders/default';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
 import { broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
+import { readJson } from '../../modules/storage';
 
 // 添加专用的存储键和事件
 const THEME_STORAGE_KEY = 'pixel-matrix-theme-config';
@@ -75,15 +76,7 @@ interface ThemeProviderProps {
  * 从 localStorage 加载主题
  */
 function loadThemeFromStorage(): Theme | null {
-  try {
-    const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (error) {
-    console.error('[ThemeContextWithSync] Failed to load theme from storage:', error);
-  }
-  return null;
+  return readJson<Theme | null>(THEME_STORAGE_KEY, null);
 }
 
 /**

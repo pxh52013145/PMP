@@ -98,7 +98,7 @@ export async function broadcastDataUpdate<T>(
     }
   } catch (error) {
     console.error(`Failed to broadcast data update (${storageKey}):`, error);
-    throw error;
+    // Do not throw: most callers are UI callbacks and may not await/handle rejections.
   }
 }
 
@@ -111,7 +111,7 @@ export async function broadcastSignal(tauriEvent: string): Promise<void> {
     console.log(`Signal broadcasted: ${tauriEvent}`);
   } catch (error) {
     console.error(`Failed to broadcast signal (${tauriEvent}):`, error);
-    throw error;
+    // Do not throw: signals are best-effort and typically not critical to render paths.
   }
 }
 

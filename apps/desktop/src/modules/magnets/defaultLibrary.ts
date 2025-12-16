@@ -1,0 +1,38 @@
+import { Magnet } from '../../types/pixel';
+import { WINDOW_CONTROL_MAGNETS } from '../../data/builtin/windowControlMagnets';
+import { DRAG_HANDLE_MAGNET } from '../../data/builtin/dragHandleMagnet';
+import { WINDOW_PIN_MAGNET } from '../../data/builtin/windowPinMagnet';
+import { MUSIC_PLAYER_MAGNETS } from '../../data/builtin/musicPlayerMagnets';
+import { EDITOR_BUTTON_MAGNET } from '../../data/builtin/editorMagnet';
+import { DEBUG_BUTTON_MAGNET } from '../../data/builtin/debugButtonMagnet';
+import { NAVIGATION_PAGE_MAGNET } from '../../data/builtin/navigationPageMagnet';
+import { BACK_BUTTON_MAGNET } from '../../data/builtin/backButtonMagnet';
+import { AUDIO_VISUALIZER_MAGNET } from '../../data/builtin/audioVisualizerMagnet';
+import {
+  PLAY_QUEUE_MAGNET,
+  PLAYLISTS_MAGNET,
+  MUSIC_LIBRARY_MAGNET,
+} from '../../data/builtin/musicMagnets';
+
+/**
+ * Built-in magnet library (source of truth).
+ *
+ * App-level code should not manually assemble builtin magnets; import this function instead.
+ */
+export function createDefaultMagnetLibrary(): Magnet[] {
+  return [
+    DRAG_HANDLE_MAGNET,
+    ...WINDOW_CONTROL_MAGNETS,
+    WINDOW_PIN_MAGNET,
+    ...MUSIC_PLAYER_MAGNETS,
+    AUDIO_VISUALIZER_MAGNET,
+    EDITOR_BUTTON_MAGNET,
+    DEBUG_BUTTON_MAGNET,
+    PLAY_QUEUE_MAGNET,
+    PLAYLISTS_MAGNET,
+    MUSIC_LIBRARY_MAGNET,
+    NAVIGATION_PAGE_MAGNET,
+    BACK_BUTTON_MAGNET,
+  ];
+}
+

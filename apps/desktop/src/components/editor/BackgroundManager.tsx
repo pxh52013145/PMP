@@ -1,6 +1,7 @@
-import { useState, useCallback, memo, useEffect, useRef } from 'react';
+import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
 import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../types/background';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
+import { readJson } from '../../modules/storage';
 import './BackgroundManager.css';
 
 interface BackgroundManagerProps {
@@ -17,6 +18,12 @@ interface HistoryItem {
   timestamp: number;
 }
 
+type ConfirmDialogState =
+  | { type: 'delete-history'; historyId: string }
+  | { type: 'clear-history' }
+  | { type: 'gc-media' }
+  | { type: 'migrate-legacy' };
+
 export const BackgroundManager = memo(function BackgroundManager({
   settings,
   onSettingsChange,
@@ -25,14 +32,33 @@ export const BackgroundManager = memo(function BackgroundManager({
   const [mode, setMode] = useState<BackgroundMode>(currentWindowMode);
   const [glitchEffect, setGlitchEffect] = useState(false);
   const [glitchPreset, setGlitchPreset] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_HISTORY);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
+  const [historyPersistError, setHistoryPersistError] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
+
+  const settingsRef = useRef(settings);
+  const modeRef = useRef<BackgroundMode>(mode);
+  const lastCustomConfigRef = useRef<Record<BackgroundMode, BackgroundConfig | null>>({
+    maximized: null,
+    windowed: null,
   });
+  const migrationRunningRef = useRef(false);
+
+  // Keep refs hot to avoid stale closures in debounced handlers.
+  settingsRef.current = settings;
+  modeRef.current = mode;
+
+  const [history, setHistory] = useState<HistoryItem[]>(() => {
+    return readJson<HistoryItem[]>(STORAGE_KEYS.BACKGROUND_HISTORY, []);
+  });
+
+  // Sync history across windows (e.g. custom-background window auto-adds entries).
+  useEffect(() => {
+    return setupStorageListener([STORAGE_KEYS.BACKGROUND_HISTORY], () => {
+      setHistory(readJson<HistoryItem[]>(STORAGE_KEYS.BACKGROUND_HISTORY, []));
+    });
+  }, []);
 
   // 当 currentWindowMode 改变时，同步 mode
   useEffect(() => {
@@ -41,11 +67,48 @@ export const BackgroundManager = memo(function BackgroundManager({
 
   // 保存历史记录到 localStorage（使用统一的 STORAGE_KEYS）
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.BACKGROUND_HISTORY, JSON.stringify(history));
+    const serialized = JSON.stringify(history);
+    try {
+      localStorage.setItem(STORAGE_KEYS.BACKGROUND_HISTORY, serialized);
+      setHistoryPersistError(null);
+    } catch (error) {
+      console.error('[BackgroundManager] Failed to persist background history:', error);
+      setHistoryPersistError(
+        '历史记录保存失败（可能是存储空间不足）。当前会话可用，但重启后可能丢失。'
+      );
+    }
   }, [history]);
 
   const currentConfig = settings[mode];
   const isCustomMode = ['image', 'video', 'html'].includes(currentConfig.type);
+
+  const cloneConfig = useCallback((config: BackgroundConfig): BackgroundConfig => {
+    return typeof structuredClone === 'function'
+      ? structuredClone(config)
+      : (JSON.parse(JSON.stringify(config)) as BackgroundConfig);
+  }, []);
+
+  useEffect(() => {
+    if (isCustomMode) {
+      lastCustomConfigRef.current[mode] = cloneConfig(currentConfig);
+    }
+  }, [cloneConfig, currentConfig, isCustomMode, mode]);
+
+  const hasLegacyDataUrls = useMemo(() => {
+    const hasDataUrl = (url: string | undefined): boolean => !!url && url.startsWith('data:');
+
+    if (settings.maximized.type === 'image' && hasDataUrl(settings.maximized.image?.url)) return true;
+    if (settings.maximized.type === 'video' && hasDataUrl(settings.maximized.video?.url)) return true;
+    if (settings.windowed.type === 'image' && hasDataUrl(settings.windowed.image?.url)) return true;
+    if (settings.windowed.type === 'video' && hasDataUrl(settings.windowed.video?.url)) return true;
+
+    for (const item of history) {
+      if (item.config.type === 'image' && hasDataUrl(item.config.image?.url)) return true;
+      if (item.config.type === 'video' && hasDataUrl(item.config.video?.url)) return true;
+    }
+
+    return false;
+  }, [history, settings.maximized, settings.windowed]);
 
   // 计算当前激活的预设
   const activePreset = (() => {
@@ -67,19 +130,32 @@ export const BackgroundManager = memo(function BackgroundManager({
     return null;
   })();
 
-  // 更新当前模式的背景配置
-  const updateConfig = useCallback(
-    (config: Partial<BackgroundConfig>) => {
-      const newSettings = {
-        ...settings,
-        [mode]: {
-          ...currentConfig,
-          ...config,
+  const applyConfigPatch = useCallback(
+    (patch: Partial<BackgroundConfig>, targetMode?: BackgroundMode) => {
+      const resolvedMode = targetMode ?? modeRef.current;
+      const latestSettings = settingsRef.current;
+      const baseConfig = latestSettings[resolvedMode];
+      onSettingsChange({
+        ...latestSettings,
+        [resolvedMode]: {
+          ...baseConfig,
+          ...patch,
         },
-      };
-      onSettingsChange(newSettings);
+      });
     },
-    [settings, mode, currentConfig, onSettingsChange]
+    [onSettingsChange]
+  );
+
+  const replaceConfig = useCallback(
+    (nextConfig: BackgroundConfig, targetMode?: BackgroundMode) => {
+      const resolvedMode = targetMode ?? modeRef.current;
+      const latestSettings = settingsRef.current;
+      onSettingsChange({
+        ...latestSettings,
+        [resolvedMode]: nextConfig,
+      });
+    },
+    [onSettingsChange]
   );
 
   // 本地状态（实时UI更新）
@@ -93,10 +169,11 @@ export const BackgroundManager = memo(function BackgroundManager({
   }, [currentConfig.opacity, currentConfig.blur]);
 
   // 防抖保存（用于滑块等频繁操作）
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const debouncedUpdateConfig = useCallback(
     (config: Partial<BackgroundConfig>) => {
+      const modeSnapshot = modeRef.current;
       // 清除之前的定时器
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -104,28 +181,29 @@ export const BackgroundManager = memo(function BackgroundManager({
 
       // 延迟保存到 localStorage
       saveTimeoutRef.current = setTimeout(() => {
-        const newSettings = {
-          ...settings,
-          [mode]: {
-            ...currentConfig,
-            ...config,
-          },
-        };
-        onSettingsChange(newSettings);
+        applyConfigPatch(config, modeSnapshot);
       }, 300); // 300ms 防抖
     },
-    [settings, mode, currentConfig, onSettingsChange]
+    [applyConfigPatch]
   );
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // 应用预设背景
   const applyPreset = useCallback(
     (presetKey: string) => {
       const preset = PRESET_BACKGROUNDS[presetKey];
       if (preset) {
-        updateConfig(preset);
+        applyConfigPatch(preset);
       }
     },
-    [updateConfig]
+    [applyConfigPatch]
   );
 
   // 处理透明度调整（立即更新UI + 防抖保存）
@@ -158,17 +236,17 @@ export const BackgroundManager = memo(function BackgroundManager({
       }
 
       // 切换类型
-      updateConfig({ type });
+      applyConfigPatch({ type });
     },
-    [updateConfig]
+    [applyConfigPatch]
   );
 
   // 处理颜色更改
   const handleColorChange = useCallback(
     (color: string) => {
-      updateConfig({ type: 'color', color });
+      applyConfigPatch({ type: 'color', color });
     },
-    [updateConfig]
+    [applyConfigPatch]
   );
 
   // 处理渐变类型更改
@@ -179,7 +257,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         colors: ['#667eea', '#764ba2'],
         angle: 135,
       };
-      updateConfig({
+      applyConfigPatch({
         type: 'gradient',
         gradient: {
           ...currentGradient,
@@ -187,7 +265,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         },
       });
     },
-    [currentConfig.gradient, updateConfig]
+    [currentConfig.gradient, applyConfigPatch]
   );
 
   // 处理渐变颜色更改
@@ -200,7 +278,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       };
       const newColors = [...currentGradient.colors];
       newColors[index] = color;
-      updateConfig({
+      applyConfigPatch({
         type: 'gradient',
         gradient: {
           ...currentGradient,
@@ -208,7 +286,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         },
       });
     },
-    [currentConfig.gradient, updateConfig]
+    [currentConfig.gradient, applyConfigPatch]
   );
 
   // 添加渐变颜色
@@ -219,7 +297,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       angle: 135,
     };
     if (currentGradient.colors.length < 5) {
-      updateConfig({
+      applyConfigPatch({
         type: 'gradient',
         gradient: {
           ...currentGradient,
@@ -227,7 +305,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         },
       });
     }
-  }, [currentConfig.gradient, updateConfig]);
+  }, [currentConfig.gradient, applyConfigPatch]);
 
   // 删除渐变颜色
   const handleRemoveGradientColor = useCallback(
@@ -239,7 +317,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       };
       if (currentGradient.colors.length > 2) {
         const newColors = currentGradient.colors.filter((_, i) => i !== index);
-        updateConfig({
+        applyConfigPatch({
           type: 'gradient',
           gradient: {
             ...currentGradient,
@@ -248,7 +326,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         });
       }
     },
-    [currentConfig.gradient, updateConfig]
+    [currentConfig.gradient, applyConfigPatch]
   );
 
   // 处理渐变角度更改
@@ -259,7 +337,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         colors: ['#667eea', '#764ba2'],
         angle: 135,
       };
-      updateConfig({
+      applyConfigPatch({
         type: 'gradient',
         gradient: {
           ...currentGradient,
@@ -267,14 +345,20 @@ export const BackgroundManager = memo(function BackgroundManager({
         },
       });
     },
-    [currentConfig.gradient, updateConfig]
+    [currentConfig.gradient, applyConfigPatch]
   );
 
   // 处理自定义类型按钮点击（只切换类型，不打开窗口）
   const handleCustomTypeClick = useCallback(() => {
     if (!isCustomMode) {
-      // 切换到自定义类型，设置默认的图片类型（纯黑背景）
-      updateConfig({
+      const remembered = lastCustomConfigRef.current[mode];
+      if (remembered) {
+        replaceConfig(remembered, mode);
+        return;
+      }
+
+      // 首次进入自定义类型：设置默认的图片类型（纯黑背景）
+      applyConfigPatch({
         type: 'image',
         image: {
           url: '', // 空 URL，在 Background 组件中会显示纯黑
@@ -285,7 +369,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         opacity: 1,
       });
     }
-  }, [isCustomMode, updateConfig]);
+  }, [isCustomMode, mode, applyConfigPatch, replaceConfig]);
 
   // 打开自定义背景编辑窗口
   const handleOpenCustomEditor = useCallback(async () => {
@@ -328,30 +412,291 @@ export const BackgroundManager = memo(function BackgroundManager({
   const handleSaveToHistory = useCallback(() => {
     const newItem: HistoryItem = {
       id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      config: { ...currentConfig },
+      config: cloneConfig(currentConfig),
       timestamp: Date.now(),
     };
     setHistory((prev) => [newItem, ...prev].slice(0, 20)); // 最多保存20条
-  }, [currentConfig]);
+  }, [cloneConfig, currentConfig]);
 
   // 从历史记录恢复配置
   const handleRestoreFromHistory = useCallback(
     (item: HistoryItem) => {
-      updateConfig(item.config);
+      replaceConfig(item.config);
     },
-    [updateConfig]
+    [replaceConfig]
   );
 
-  // 删除历史记录
-  const handleDeleteHistory = useCallback((id: string) => {
-    setHistory((prev) => prev.filter((item) => item.id !== id));
+  const tryGetManagedMediaRelPath = useCallback((url: string | undefined): string | null => {
+    if (!url) return null;
+    if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+      return null;
+    }
+
+    const candidates = [url];
+    try {
+      candidates.push(decodeURIComponent(url));
+    } catch {
+      // ignore
+    }
+
+    for (const candidate of candidates) {
+      const normalized = candidate.split('\\').join('/');
+      const markerIndex = normalized.lastIndexOf('/background-media/');
+      if (markerIndex === -1) continue;
+      const tail = normalized.slice(markerIndex + '/background-media/'.length);
+      const fileName = tail.split('?')[0].split('#')[0].split('/')[0];
+      if (!fileName || !fileName.startsWith('background-')) continue;
+      return `background-media/${fileName}`;
+    }
+
+    return null;
   }, []);
 
-  // 清空历史记录
-  const handleClearHistory = useCallback(() => {
-    if (confirm('确定要清空所有历史记录吗？')) {
-      setHistory([]);
+  const getConfigMediaRelPath = useCallback(
+    (config: BackgroundConfig): string | null => {
+      if (config.type === 'image') {
+        return tryGetManagedMediaRelPath(config.image?.url);
+      }
+      if (config.type === 'video') {
+        return tryGetManagedMediaRelPath(config.video?.url);
+      }
+      return null;
+    },
+    [tryGetManagedMediaRelPath]
+  );
+
+  const decodeBase64ToBytes = useCallback((base64: string): Uint8Array => {
+    const normalized = base64.replace(/\s/g, '');
+    const chunkChars = 1_048_576; // must be divisible by 4
+    const parts: Uint8Array[] = [];
+
+    for (let offset = 0; offset < normalized.length; offset += chunkChars) {
+      const slice = normalized.slice(offset, offset + chunkChars);
+      const binary = atob(slice);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      parts.push(bytes);
     }
+
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const merged = new Uint8Array(total);
+    let writeOffset = 0;
+    for (const part of parts) {
+      merged.set(part, writeOffset);
+      writeOffset += part.length;
+    }
+    return merged;
+  }, []);
+
+  const writeManagedMediaFromDataUrl = useCallback(
+    async (dataUrl: string, fallbackKind: 'image' | 'video'): Promise<string> => {
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) throw new Error('Invalid data URL');
+      const mimeType = match[1];
+      const base64 = match[2];
+
+      const mimeToExt: Record<string, string> = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/svg+xml': 'svg',
+        'image/bmp': 'bmp',
+        'video/mp4': 'mp4',
+        'video/webm': 'webm',
+        'video/ogg': 'ogg',
+        'video/quicktime': 'mov',
+      };
+      const ext = mimeToExt[mimeType] || (fallbackKind === 'image' ? 'png' : 'mp4');
+
+      const fs = await import('@tauri-apps/api/fs');
+      const pathApi = await import('@tauri-apps/api/path');
+      const tauri = await import('@tauri-apps/api/tauri');
+
+      const bytes = decodeBase64ToBytes(base64);
+      const fileName = `background-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const relativePath = `background-media/${fileName}`;
+      await fs.createDir('background-media', { dir: fs.BaseDirectory.AppData, recursive: true });
+      await fs.writeBinaryFile({ path: relativePath, contents: bytes }, { dir: fs.BaseDirectory.AppData });
+
+      const appDataDir = await pathApi.appDataDir();
+      const fullPath = await pathApi.join(appDataDir, 'background-media', fileName);
+      return tauri.convertFileSrc(fullPath);
+    },
+    [decodeBase64ToBytes]
+  );
+
+  const migrateConfigIfNeeded = useCallback(
+    async (config: BackgroundConfig): Promise<BackgroundConfig | null> => {
+      if (config.type === 'image' && config.image?.url?.startsWith('data:')) {
+        try {
+          const migratedUrl = await writeManagedMediaFromDataUrl(config.image.url, 'image');
+          return { ...config, image: { ...config.image, url: migratedUrl } };
+        } catch (error) {
+          console.warn('[BackgroundManager] Failed to migrate image data URL:', error);
+          return { type: 'image', image: { url: '', fit: 'cover', position: 'center center', repeat: 'no-repeat' } };
+        }
+      }
+
+      if (config.type === 'video' && config.video?.url?.startsWith('data:')) {
+        try {
+          const migratedUrl = await writeManagedMediaFromDataUrl(config.video.url, 'video');
+          return { ...config, video: { ...config.video, url: migratedUrl } };
+        } catch (error) {
+          console.warn('[BackgroundManager] Failed to migrate video data URL:', error);
+          return { type: 'color', color: '#000000', opacity: 1 };
+        }
+      }
+
+      return null;
+    },
+    [writeManagedMediaFromDataUrl]
+  );
+
+  const runLegacyMigration = useCallback(async () => {
+    if (maintenanceBusy || migrationRunningRef.current) return;
+    migrationRunningRef.current = true;
+    setMaintenanceBusy(true);
+    setMaintenanceMessage('正在迁移旧版背景数据…');
+
+    try {
+      let changedSettings = false;
+      const nextSettings: BackgroundSettings = {
+        maximized: settingsRef.current.maximized,
+        windowed: settingsRef.current.windowed,
+      };
+
+      const migratedMax = await migrateConfigIfNeeded(nextSettings.maximized);
+      if (migratedMax) {
+        nextSettings.maximized = migratedMax;
+        changedSettings = true;
+      }
+      const migratedWin = await migrateConfigIfNeeded(nextSettings.windowed);
+      if (migratedWin) {
+        nextSettings.windowed = migratedWin;
+        changedSettings = true;
+      }
+
+      if (changedSettings) {
+        onSettingsChange(nextSettings);
+      }
+
+      const nextHistory: HistoryItem[] = [];
+      let dropped = 0;
+      for (const item of history) {
+        const migrated = await migrateConfigIfNeeded(item.config);
+        if (migrated) {
+          nextHistory.push({ ...item, config: migrated });
+          continue;
+        }
+
+        const stillLegacy =
+          (item.config.type === 'image' && item.config.image?.url?.startsWith('data:')) ||
+          (item.config.type === 'video' && item.config.video?.url?.startsWith('data:'));
+        if (stillLegacy) {
+          dropped += 1;
+          continue;
+        }
+
+        nextHistory.push(item);
+      }
+
+      setHistory(nextHistory);
+      localStorage.setItem('pixel-matrix-background-media-migration-v1', '1');
+      setMaintenanceMessage(
+        dropped > 0 ? `迁移完成（已移除 ${dropped} 条无法迁移的旧记录）` : '迁移完成'
+      );
+    } catch (error) {
+      console.error('[BackgroundManager] Legacy migration failed:', error);
+      setMaintenanceMessage('迁移失败：请重试或重新选择背景文件');
+    } finally {
+      migrationRunningRef.current = false;
+      setMaintenanceBusy(false);
+    }
+  }, [history, maintenanceBusy, migrateConfigIfNeeded, onSettingsChange]);
+
+  const runMediaGc = useCallback(async () => {
+    if (maintenanceBusy) return;
+    setMaintenanceBusy(true);
+    setMaintenanceMessage('正在清理未使用的背景文件…');
+
+    try {
+      const fs = await import('@tauri-apps/api/fs');
+
+      const referenced = new Set<string>();
+      for (const item of history) {
+        const rel = getConfigMediaRelPath(item.config);
+        if (rel) referenced.add(rel);
+      }
+      const currentMax = getConfigMediaRelPath(settingsRef.current.maximized);
+      if (currentMax) referenced.add(currentMax);
+      const currentWin = getConfigMediaRelPath(settingsRef.current.windowed);
+      if (currentWin) referenced.add(currentWin);
+
+      let removed = 0;
+      let scanned = 0;
+      let entries: Array<import('@tauri-apps/api/fs').FileEntry> = [];
+      try {
+        entries = await fs.readDir('background-media', {
+          dir: fs.BaseDirectory.AppData,
+          recursive: false,
+        });
+      } catch {
+        entries = [];
+      }
+
+      for (const entry of entries) {
+        const normalized = entry.path.split('\\').join('/');
+        const name = normalized.split('/').pop() || '';
+        if (!name) continue;
+        scanned += 1;
+        const rel = `background-media/${name}`;
+        if (referenced.has(rel)) continue;
+        try {
+          await fs.removeFile(rel, { dir: fs.BaseDirectory.AppData });
+          removed += 1;
+        } catch (error) {
+          console.warn('[BackgroundManager] Failed to remove orphan file:', rel, error);
+        }
+      }
+
+      setMaintenanceMessage(`清理完成：扫描 ${scanned} 个文件，删除 ${removed} 个未使用文件`);
+    } catch (error) {
+      console.error('[BackgroundManager] Media GC failed:', error);
+      setMaintenanceMessage('清理失败：请重试');
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }, [getConfigMediaRelPath, history, maintenanceBusy]);
+
+  useEffect(() => {
+    const migrated = localStorage.getItem('pixel-matrix-background-media-migration-v1') === '1';
+    if (migrated) return;
+    if (!hasLegacyDataUrls) return;
+    void runLegacyMigration();
+  }, [hasLegacyDataUrls, runLegacyMigration]);
+
+  const deleteHistoryNow = useCallback(
+    (id: string) => {
+      const nextHistory = history.filter((item) => item.id !== id);
+      setHistory(nextHistory);
+    },
+    [history]
+  );
+
+  const clearHistoryNow = useCallback(() => {
+    setHistory([]);
+  }, []);
+
+  const handleDeleteHistory = useCallback((id: string) => {
+    setConfirmDialog({ type: 'delete-history', historyId: id });
+  }, []);
+
+  const handleClearHistory = useCallback(() => {
+    setConfirmDialog({ type: 'clear-history' });
   }, []);
 
   // 生成历史记录项的可视化样式
@@ -376,14 +721,6 @@ export const BackgroundManager = memo(function BackgroundManager({
         }
         return {};
       case 'image':
-        if (config.image?.url) {
-          return {
-            backgroundImage: `url(${config.image.url})`,
-            backgroundSize: config.image.fit || 'cover',
-            backgroundPosition: config.image.position || 'center center',
-            backgroundRepeat: config.image.repeat || 'no-repeat',
-          };
-        }
         return {
           background: '#1a1a1a',
         };
@@ -422,6 +759,60 @@ export const BackgroundManager = memo(function BackgroundManager({
         return '未知';
     }
   }, []);
+
+  const confirmDialogContent = useMemo(() => {
+    if (!confirmDialog) return null;
+
+    switch (confirmDialog.type) {
+      case 'delete-history':
+        return {
+          title: '删除历史记录',
+          message: '确定要删除这条历史记录吗？（文件会在下次启动时自动清理，或手动点“清理未使用文件”。）',
+          confirmText: '[删除] DELETE',
+        };
+      case 'clear-history':
+        return {
+          title: '清空历史记录',
+          message: '确定要清空所有历史记录吗？（文件会在下次启动时自动清理，或手动点“清理未使用文件”。）',
+          confirmText: '[清空] CLEAR',
+        };
+      case 'gc-media':
+        return {
+          title: '清理未使用文件',
+          message: '将扫描本地 background-media 目录并删除未被历史记录或当前背景引用的文件，确定继续吗？',
+          confirmText: '[清理] GC',
+        };
+      case 'migrate-legacy':
+        return {
+          title: '迁移旧数据',
+          message:
+            '将把旧版 data:base64 背景数据迁移为本地文件存储，并自动清理无法迁移的旧记录，确定继续吗？',
+          confirmText: '[迁移] MIGRATE',
+        };
+    }
+  }, [confirmDialog]);
+
+  const handleConfirmDialogConfirm = useCallback(() => {
+    if (!confirmDialog) return;
+    const action = confirmDialog;
+    setConfirmDialog(null);
+
+    if (action.type === 'delete-history') {
+      deleteHistoryNow(action.historyId);
+      return;
+    }
+    if (action.type === 'clear-history') {
+      clearHistoryNow();
+      return;
+    }
+    if (action.type === 'gc-media') {
+      void runMediaGc();
+      return;
+    }
+    if (action.type === 'migrate-legacy') {
+      void runLegacyMigration();
+    }
+  }, [clearHistoryNow, confirmDialog, deleteHistoryNow, runLegacyMigration, runMediaGc]);
 
   return (
     <div className="background-manager">
@@ -686,6 +1077,19 @@ export const BackgroundManager = memo(function BackgroundManager({
                       onClick={() => handleRestoreFromHistory(item)}
                       title="点击恢复此配置"
                     >
+                      {item.config.type === 'image' && item.config.image?.url && (
+                        <img
+                          className="history-image"
+                          src={item.config.image.url}
+                          alt=""
+                          draggable={false}
+                          style={{
+                            objectFit: item.config.image.fit,
+                            objectPosition: item.config.image.position || 'center center',
+                            opacity: item.config.image.opacity ?? 1,
+                          }}
+                        />
+                      )}
                       {/* 视频和HTML类型显示特殊图标 */}
                       {item.config.type === 'video' && (
                         <div className="history-media-icon">
@@ -715,8 +1119,59 @@ export const BackgroundManager = memo(function BackgroundManager({
               </div>
             </div>
           )}
+
+          <div className="bg-section">
+            <div className="section-title">存储维护</div>
+            <div className="maintenance-actions">
+              <button
+                className="maintenance-btn"
+                disabled={!hasLegacyDataUrls || maintenanceBusy}
+                onClick={() => setConfirmDialog({ type: 'migrate-legacy' })}
+                title={hasLegacyDataUrls ? '迁移旧版 base64 背景数据' : '未检测到旧版数据'}
+              >
+                迁移旧数据
+              </button>
+              <button
+                className="maintenance-btn maintenance-btn-danger"
+                disabled={maintenanceBusy}
+                onClick={() => setConfirmDialog({ type: 'gc-media' })}
+                title="清理未被引用的 background-media 文件"
+              >
+                清理未使用文件
+              </button>
+            </div>
+            {maintenanceMessage && <div className="maintenance-message">{maintenanceMessage}</div>}
+          </div>
+
+          {historyPersistError && <div className="history-persist-error">{historyPersistError}</div>}
         </div>
       </div>
+
+      {confirmDialogContent && (
+        <div className="cyber-confirm-overlay" onClick={() => setConfirmDialog(null)}>
+          <div className="cyber-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="cyber-confirm-header">
+              <span className="confirm-icon">▲</span>
+              <span className="confirm-title">{confirmDialogContent.title}</span>
+            </div>
+            <div className="cyber-confirm-body">
+              <div className="confirm-message">{confirmDialogContent.message}</div>
+            </div>
+            <div className="cyber-confirm-footer">
+              <button className="confirm-btn confirm-cancel" onClick={() => setConfirmDialog(null)}>
+                [取消] CANCEL
+              </button>
+              <button
+                className="confirm-btn confirm-ok"
+                onClick={handleConfirmDialogConfirm}
+                disabled={maintenanceBusy && (confirmDialog?.type === 'gc-media' || confirmDialog?.type === 'migrate-legacy')}
+              >
+                {confirmDialogContent.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

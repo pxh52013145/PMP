@@ -972,6 +972,15 @@
   );
 }
 
+.history-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
 .history-preview:hover {
   border-color: rgba(0, 122, 255, 0.6);
   box-shadow: 0 0 15px rgba(0, 122, 255, 0.4);
@@ -1070,6 +1079,248 @@
   background: rgba(255, 59, 48, 1);
   box-shadow: 0 0 10px rgba(255, 59, 48, 0.6);
   transform: scale(1.1);
+}
+
+.history-persist-error {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 59, 48, 0.12);
+  border-left: 3px solid rgba(255, 59, 48, 0.8);
+  color: rgba(255, 180, 180, 0.95);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 存储维护 */
+.maintenance-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.maintenance-btn {
+  --btn-corner-size: 6px;
+  padding: 10px 14px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(0, 255, 255, 0.45);
+  color: rgba(0, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s,
+    opacity 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.maintenance-btn:hover {
+  border-color: rgba(0, 255, 255, 0.85);
+  color: white;
+  box-shadow: 0 0 14px rgba(0, 255, 255, 0.35);
+}
+
+.maintenance-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.maintenance-btn-danger {
+  border-color: rgba(255, 59, 48, 0.5);
+  color: rgba(255, 120, 120, 0.95);
+}
+
+.maintenance-btn-danger:hover {
+  border-color: rgba(255, 59, 48, 0.85);
+  box-shadow: 0 0 14px rgba(255, 59, 48, 0.35);
+}
+
+.maintenance-message {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 3px solid rgba(0, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  line-height: 1.4;
+  font-family: 'Courier New', monospace;
+}
+
+/* ====== 赛博风格确认弹窗 ====== */
+.cyber-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: confirmOverlayFadeIn 0.2s ease-out;
+}
+
+@keyframes confirmOverlayFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.cyber-confirm-modal {
+  background: rgba(20, 20, 25, 0.98);
+  border: 2px solid rgba(0, 255, 255, 0.65);
+  border-radius: 0;
+  width: 520px;
+  max-width: 92vw;
+  box-shadow:
+    0 0 36px rgba(0, 255, 255, 0.35),
+    0 0 72px rgba(0, 255, 255, 0.18),
+    inset 0 0 28px rgba(0, 255, 255, 0.08);
+  position: relative;
+  animation: confirmModalSlideIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+}
+
+@keyframes confirmModalSlideIn {
+  from {
+    transform: translateY(-35px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.cyber-confirm-header {
+  background: linear-gradient(135deg, rgba(0, 255, 255, 0.16), rgba(0, 255, 255, 0.04));
+  border-bottom: 1px solid rgba(0, 255, 255, 0.45);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+}
+
+.cyber-confirm-header::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 255, 0.8), transparent);
+  animation: confirmScanlineMove 3s linear infinite;
+}
+
+@keyframes confirmScanlineMove {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.confirm-icon {
+  font-size: 20px;
+  color: rgba(0, 255, 255, 1);
+  font-weight: 900;
+  text-shadow:
+    0 0 10px rgba(0, 255, 255, 0.75),
+    0 0 20px rgba(0, 255, 255, 0.35);
+  font-family: Arial, sans-serif;
+  line-height: 1;
+}
+
+.confirm-title {
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.95);
+  letter-spacing: 1px;
+}
+
+.cyber-confirm-body {
+  padding: 16px 20px 8px 20px;
+}
+
+.confirm-message {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cyber-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px 18px 20px;
+}
+
+.confirm-btn {
+  --btn-corner-size: 6px;
+  padding: 10px 14px;
+  background: rgba(10, 10, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.85);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s,
+    opacity 0.2s;
+  clip-path: polygon(
+    0% var(--btn-corner-size),
+    var(--btn-corner-size) 0%,
+    100% 0%,
+    100% calc(100% - var(--btn-corner-size)),
+    calc(100% - var(--btn-corner-size)) 100%,
+    0% 100%
+  );
+}
+
+.confirm-btn:hover {
+  border-color: rgba(0, 255, 255, 0.7);
+  color: white;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.35);
+}
+
+.confirm-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.confirm-btn.confirm-ok {
+  border-color: rgba(52, 199, 89, 0.5);
+  color: rgba(52, 199, 89, 0.95);
+}
+
+.confirm-btn.confirm-ok:hover {
+  border-color: rgba(52, 199, 89, 0.9);
+  box-shadow: 0 0 12px rgba(52, 199, 89, 0.35);
+}
+
+.confirm-btn.confirm-cancel {
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 /* URL 输入 */

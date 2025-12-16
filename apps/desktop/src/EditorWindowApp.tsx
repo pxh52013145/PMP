@@ -566,6 +566,20 @@ export function EditorWindowApp() {
     );
     console.log('Background settings broadcasted');
 
+    // Auto-add to background history (so custom backgrounds are discoverable without extra clicks).
+    try {
+      const historyRaw = localStorage.getItem(STORAGE_KEYS.BACKGROUND_HISTORY);
+      const history = historyRaw ? (JSON.parse(historyRaw) as Array<{ id: string; config: BackgroundConfig; timestamp: number }>) : [];
+      const newItem = {
+        id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        config,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEYS.BACKGROUND_HISTORY, JSON.stringify([newItem, ...history].slice(0, 20)));
+    } catch (error) {
+      console.warn('Failed to auto-add background history item:', error);
+    }
+
     // 关闭自定义背景编辑窗口
     import('./utils/editorWindows').then(({ closeEditorWindow }) => {
       closeEditorWindow('custom-background');
