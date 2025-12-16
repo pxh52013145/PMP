@@ -39,6 +39,7 @@ export const STORAGE_KEYS = {
 
   // === Native Audio ===
   NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
+  NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
 } as const;
 
 /**
@@ -73,6 +74,7 @@ export const TAURI_EVENTS = {
 
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
+  NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',
 } as const;
 
 /**

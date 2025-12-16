@@ -139,6 +139,11 @@ export const NativeDebugPage: React.FC = () => {
   const handleGainChange = useCallback(
     async (db: number) => {
       try {
+        await broadcastDataUpdate(
+          STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB,
+          db,
+          TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
+        );
         await invoke('native_audio_set_gain', { db });
         appendLog(`设置 Gain：${db.toFixed(1)} dB`);
       } catch (error) {

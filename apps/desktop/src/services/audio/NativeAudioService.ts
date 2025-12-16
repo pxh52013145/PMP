@@ -41,6 +41,7 @@ export class NativeAudioService implements IAudioService {
   private spectrumListener?: UnlistenFn;
   private spectrumData: Uint8Array | null = null;
   private restoredOutputDevice = false;
+  private restoredGainDb = false;
 
   constructor() {
     this.state = {
@@ -59,6 +60,7 @@ export class NativeAudioService implements IAudioService {
 
     this.setupNativeListeners();
     this.restoreOutputDeviceFromStorage();
+    this.restoreGainDbFromStorage();
   }
 
   // ===== Helpers =====
@@ -188,6 +190,22 @@ export class NativeAudioService implements IAudioService {
       const deviceName = typeof parsed === 'string' ? parsed : null;
       if (!deviceName) return;
       void invoke('native_audio_select_device', { deviceName }).catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
+
+  private restoreGainDbFromStorage() {
+    if (this.restoredGainDb) return;
+    this.restoredGainDb = true;
+
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      const db = typeof parsed === 'number' ? parsed : null;
+      if (db === null) return;
+      void invoke('native_audio_set_gain', { db }).catch(() => {});
     } catch {
       // ignore
     }

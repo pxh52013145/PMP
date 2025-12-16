@@ -2,7 +2,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use rodio::{decoder::Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rustfft::{num_complex::Complex, FftPlanner};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
     fs::File,
@@ -127,6 +127,12 @@ struct NativeAudioStatePayload {
 #[serde(rename_all = "camelCase")]
 struct NativeAudioSpectrumPayload {
     bins: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum DspNodeConfig {
+    Gain { db: f32 },
 }
 
 #[derive(Clone)]
@@ -385,6 +391,7 @@ struct NativeAudioEngine {
     device_name: Option<String>,
     volume: f32,
     gain_db: f32,
+    dsp_chain: Vec<DspNodeConfig>,
     muted: bool,
     playback_state: PlaybackState,
 }
@@ -433,6 +440,7 @@ impl NativeAudioEngine {
             device_name: None,
             volume: 0.7,
             gain_db: 0.0,
+            dsp_chain: Vec::new(),
             muted: false,
             playback_state: PlaybackState::Idle,
         }
@@ -808,6 +816,19 @@ impl NativeAudioEngine {
     }
 
     fn set_gain(&mut self, gain_db: f32) {
+        self.gain_db = gain_db.clamp(-60.0, 12.0);
+        self.dsp_chain = vec![DspNodeConfig::Gain { db: self.gain_db }];
+        self.apply_effective_volume();
+    }
+
+    fn set_dsp_chain(&mut self, chain: Vec<DspNodeConfig>) {
+        let mut gain_db = 0.0;
+        for node in &chain {
+            match node {
+                DspNodeConfig::Gain { db } => gain_db += *db,
+            }
+        }
+        self.dsp_chain = chain;
         self.gain_db = gain_db.clamp(-60.0, 12.0);
         self.apply_effective_volume();
     }
@@ -1575,6 +1596,19 @@ pub fn set_gain(app_handle: &AppHandle, gain_db: f32) -> Result<(), String> {
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_gain(gain_db);
+        engine.build_state_payload(false)
+    };
+    emit_state(app_handle, payload)?;
+    Ok(())
+}
+
+pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Result<(), String> {
+    init_emitter(app_handle);
+    let payload = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.set_dsp_chain(chain);
         engine.build_state_payload(false)
     };
     emit_state(app_handle, payload)?;
