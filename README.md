@@ -2,6 +2,8 @@
 
 > 一个高度模块化、可扩展的音乐播放器，采用像素矩阵布局系统和插件化架构
 
+文档入口（单一入口）：见 `DOCUMENTATION.md`
+
 ---
 
 ## 📋 目录
@@ -860,7 +862,7 @@ MIT License
 ---
 
 **项目地址**: [GitHub Repository URL]
-**文档**: 见 `Mannuals/` 目录
+**文档**: 见 `DOCUMENTATION.md`
 **贡献指南**: 见 `Mannuals/developer-guide/contributing/`
 
 ## 优化路线图
