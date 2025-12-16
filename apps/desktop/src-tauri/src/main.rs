@@ -259,9 +259,11 @@ fn main() {
                 if let Some(window) = app.get_window("main") {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
+                        let _ = app.emit_all("main-window-hidden", ());
                     } else {
                         let _ = window.show();
                         let _ = window.set_focus();
+                        let _ = app.emit_all("main-window-shown", ());
                     }
                 }
             }
@@ -270,11 +272,13 @@ fn main() {
                     if let Some(window) = app.get_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
+                        let _ = app.emit_all("main-window-shown", ());
                     }
                 }
                 "hide" => {
                     if let Some(window) = app.get_window("main") {
                         let _ = window.hide();
+                        let _ = app.emit_all("main-window-hidden", ());
                     }
                 }
                 "quit" => {

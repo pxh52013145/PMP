@@ -11,6 +11,7 @@ export class PixelMatrixRenderer {
   private pixels: PIXI.Graphics[] = [];
   private pixelSizeScale: number = 1.0; // Pixel 尺寸缩放比例 (0.5-1.0)
   private pixelOpacity: number = 1.0; // Pixel 透明度 (0.0-1.0)
+  private isActive: boolean = true;
 
   constructor(width: number, height: number) {
     // 初始化 PixiJS 应用
@@ -270,6 +271,43 @@ export class PixelMatrixRenderer {
    */
   public getView(): HTMLCanvasElement {
     return this.app.view as HTMLCanvasElement;
+  }
+
+  /**
+   * Pause/resume Pixi's render loop to reduce CPU/GPU usage when the window is hidden.
+   */
+  public setActive(active: boolean): void {
+    if (this.isActive === active) return;
+    this.isActive = active;
+
+    if (active) {
+      try {
+        this.app.start();
+      } catch {
+        try {
+          this.app.ticker?.start();
+        } catch {
+          // ignore
+        }
+      }
+
+      try {
+        this.app.render();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    try {
+      this.app.stop();
+    } catch {
+      try {
+        this.app.ticker?.stop();
+      } catch {
+        // ignore
+      }
+    }
   }
 
   /**

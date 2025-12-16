@@ -1,6 +1,6 @@
 import { useState, useCallback, memo, useEffect } from 'react';
 import { BackgroundConfig } from '../../types/background';
-import { useEditorWindowActivity } from '../../contexts/EditorWindowActivityContext';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import './CustomBackgroundEditor.css';
 
 interface CustomBackgroundEditorProps {
@@ -16,7 +16,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   initialConfig,
   onSave,
 }: CustomBackgroundEditorProps) {
-  const { isActive } = useEditorWindowActivity();
+  const { isActive } = useWindowActivity();
   const [customType, setCustomType] = useState<CustomType>(
     initialConfig?.type === 'image' ||
       initialConfig?.type === 'video' ||

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { PixelMatrixRenderer } from '../../pixelEngine/PixelMatrixRenderer';
 import './PixelMatrixCanvas.css';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 
 interface PixelMatrixCanvasProps {
   onPixelPositionsUpdate?: (positions: Map<string, { x: number; y: number }>) => void;
@@ -10,6 +11,7 @@ interface PixelMatrixCanvasProps {
 export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatrixCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PixelMatrixRenderer | null>(null);
+  const { isActive } = useWindowActivity();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -113,6 +115,10 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
       }
     };
   }, [onPixelPositionsUpdate]);
+
+  useEffect(() => {
+    rendererRef.current?.setActive(isActive);
+  }, [isActive]);
 
   return (
     <div

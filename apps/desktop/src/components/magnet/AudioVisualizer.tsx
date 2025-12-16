@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef } from 'react';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import './AudioVisualizer.css';
 
 interface AudioVisualizerProps {
@@ -17,6 +18,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
+  const { isActive: isWindowActive } = useWindowActivity();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -26,6 +28,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     if (!ctx) return;
 
     const draw = () => {
+      if (!isWindowActive) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
       const frequencyData = getFrequencyData();
 
       if (!frequencyData || !isPlaying) {
@@ -33,7 +39,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        if (isPlaying) {
+        if (isPlaying && isWindowActive) {
           animationRef.current = requestAnimationFrame(draw);
         }
         return;
@@ -80,7 +86,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       animationRef.current = requestAnimationFrame(draw);
     };
 
-    if (isPlaying) {
+    if (isPlaying && isWindowActive) {
       draw();
     } else {
       // 停止时显示静态状态
@@ -93,7 +99,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [getFrequencyData, isPlaying]);
+  }, [getFrequencyData, isPlaying, isWindowActive]);
 
   return (
     <div className="audio-visualizer">

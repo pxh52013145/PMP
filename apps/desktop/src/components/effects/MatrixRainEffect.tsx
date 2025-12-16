@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 
 interface MatrixRainEffectProps {
   color: [number, number, number];
@@ -7,6 +8,7 @@ interface MatrixRainEffectProps {
 
 export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRainEffectProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { isActive } = useWindowActivity();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -214,8 +216,9 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
       }
     };
 
-    let animationId: number;
+    let animationId: number | null = null;
     const animate = (currentTime: number) => {
+      if (!isActive) return;
       const shouldDraw = draw(currentTime);
       if (shouldDraw) {
         // 彩虹主题：更新色相
@@ -226,7 +229,9 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
       }
       animationId = requestAnimationFrame(animate);
     };
-    animationId = requestAnimationFrame(animate);
+    if (isActive) {
+      animationId = requestAnimationFrame(animate);
+    }
 
     // 窗口大小变化时重新计算
     const handleResize = () => {
@@ -257,10 +262,10 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     window.addEventListener('resize', handleResize);
 
     return () => {
-      cancelAnimationFrame(animationId);
+      if (animationId !== null) cancelAnimationFrame(animationId);
       window.removeEventListener('resize', handleResize);
     };
-  }, [color, isRainbow]);
+  }, [color, isRainbow, isActive]);
 
   return (
     <canvas

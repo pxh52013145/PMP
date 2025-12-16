@@ -74,6 +74,10 @@ export const TAURI_EVENTS = {
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 
+  // 主窗口可见性
+  MAIN_WINDOW_HIDDEN: 'main-window-hidden',
+  MAIN_WINDOW_SHOWN: 'main-window-shown',
+
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
   NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',

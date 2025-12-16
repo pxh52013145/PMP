@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
-import { EditorWindowActivityProvider } from './contexts/EditorWindowActivityContext';
+import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
@@ -729,7 +729,7 @@ export function EditorWindowApp() {
 	      <AudioEngineProvider>
 	        <NavigationProvider>
 	          <EditorProvider magnets={activeMagnets}>
-	            <EditorWindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
+	            <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
 	              <div className="editor-window-app">
 	            {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
 
@@ -816,7 +816,7 @@ export function EditorWindowApp() {
 
 	            {windowType === 'debug' && <ThemeDebugPage />}
 	              </div>
-	            </EditorWindowActivityProvider>
+	            </WindowActivityProvider>
 	          </EditorProvider>
 	        </NavigationProvider>
 	      </AudioEngineProvider>

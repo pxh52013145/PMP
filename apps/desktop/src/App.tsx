@@ -6,6 +6,7 @@ import {
   setupConfigSync,
   setupTauriListener,
 } from './utils/windowCommunication';
+import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import Background from './components/core/Background';
 import PixelMatrixCanvas from './components/core/PixelMatrixCanvas';
 import WindowBorder from './components/core/WindowBorder';
@@ -35,6 +36,43 @@ import { gcOrphanBackgroundMedia } from './modules/background/mediaCleanup';
 import './App.css';
 
 function AppContent() {
+  const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
+  const isWindowActive = isMainWindowVisible && isDocumentVisible;
+
+  useEffect(() => {
+    const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        setIsMainWindowVisible(await appWindow.isVisible());
+      } catch {
+        // ignore
+      }
+
+      const unlistenHidden = await setupTauriListener(TAURI_EVENTS.MAIN_WINDOW_HIDDEN, () => {
+        setIsMainWindowVisible(false);
+      });
+      const unlistenShown = await setupTauriListener(TAURI_EVENTS.MAIN_WINDOW_SHOWN, () => {
+        setIsMainWindowVisible(true);
+      });
+
+      return () => {
+        unlistenHidden();
+        unlistenShown();
+      };
+    };
+
+    let cleanupPromise = init();
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, []);
+
   const [pixelPositions, setPixelPositions] = useState<Map<string, { x: number; y: number }>>(
     new Map()
   );
@@ -339,7 +377,8 @@ function AppContent() {
     : backgroundSettings.windowed;
 
   return (
-    <div className="app-container">
+    <WindowActivityProvider value={{ isVisible: isMainWindowVisible, isActive: isWindowActive }}>
+      <div className="app-container">
       {/* 背景层 - 根据窗口状态显示不同背景 */}
       <Background config={currentBackground} />
 
@@ -377,7 +416,8 @@ function AppContent() {
 
       {/* 窗口边框 */}
       <WindowBorder />
-    </div>
+      </div>
+    </WindowActivityProvider>
   );
 }
 
