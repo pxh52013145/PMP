@@ -85,6 +85,73 @@
   margin-bottom: 0; /* 移除底部间距，因为在固定容器内 */
 }
 
+/* 搜索行 - 第三行 */
+.library-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.library-search-input {
+  flex: 1;
+  height: 34px;
+  padding: 0 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.library-search-input:focus {
+  border-color: rgba(0, 255, 255, 0.35);
+}
+
+.library-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.library-search-clear-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.library-search-clear-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.library-search-count {
+  min-width: 46px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  background: rgba(0, 122, 255, 0.15);
+  border: 1px solid rgba(0, 122, 255, 0.25);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(0, 122, 255, 0.95);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* 旧的 library-header 已删除，不再使用 */
 
 .filter-buttons {
@@ -236,7 +303,7 @@
   gap: 12px;
   overflow-y: auto; /* 启用垂直滚动 */
   overflow-x: hidden; /* 禁用水平滚动条 */
-  padding: 130px 20px 80px 20px; /* 为顶部和底部固定区域留出空间 */
+  padding: 170px 20px 80px 20px; /* 为顶部和底部固定区域留出空间 */
   padding-right: 24px; /* 为滚动条留出更多空间 */
 
   /* 隐藏滚动条但保留滚动功能 */
@@ -342,7 +409,23 @@
   font-size: 14px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.magnet-id {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
   font-family: 'Courier New', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.magnet-description {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -350,14 +433,30 @@
 
 .magnet-meta {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.magnet-group {
+  padding: 2px 6px;
+  background: rgba(175, 82, 222, 0.18);
+  border-radius: 3px;
+  font-family: monospace;
+  color: rgba(175, 82, 222, 0.95);
 }
 
 .magnet-type {
   padding: 2px 6px;
   background: rgba(0, 122, 255, 0.2);
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.magnet-anchor {
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
   font-family: monospace;
 }

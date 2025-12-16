@@ -16,7 +16,7 @@ import {
   setupConfigSync,
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
-import { getMagnetPreviewNode } from '../../magnet-system/registry';
+import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -44,6 +44,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const { importMagnet: validateAndImportMagnet } = useEditor();
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [showImport, setShowImport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importError, setImportError] = useState('');
@@ -80,8 +81,31 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     };
   }, [magnetLibrary, activeMagnetIds, builtInMagnetIds]);
 
-  // 当前显示的 Magnet
-  const displayMagnets = categorizedMagnets[viewMode][filterMode];
+  // 当前显示的 Magnet（支持搜索）
+  const displayMagnets = useMemo(() => {
+    const baseMagnets = categorizedMagnets[viewMode][filterMode];
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    if (!normalizedQuery) return baseMagnets;
+
+    return baseMagnets.filter((magnet) => {
+      const renderer = getMagnetRenderer(magnet.id);
+      const searchable: string[] = [
+        magnet.id,
+        magnet.name,
+        magnet.type,
+        magnet.anchorType,
+        magnet.description,
+        renderer?.description,
+        renderer?.group,
+        ...(magnet.tags ?? []),
+        ...(renderer?.tags ?? []),
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .map((value) => value.toLowerCase());
+
+      return searchable.some((value) => value.includes(normalizedQuery));
+    });
+  }, [categorizedMagnets, filterMode, searchQuery, viewMode]);
 
   // 监听 creator 窗口状态
   useEffect(() => {
@@ -262,6 +286,28 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               自定义 ({counts[viewMode].custom})
             </button>
           </div>
+
+          {/* 第三行：搜索 */}
+          <div className="library-search-row">
+            <input
+              className="library-search-input"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索 id / 名称 / 描述 / tag"
+            />
+            {searchQuery.trim().length > 0 && (
+              <button
+                className="library-search-clear-btn"
+                onClick={() => setSearchQuery('')}
+                title="清空搜索"
+              >
+                ×
+              </button>
+            )}
+            <div className="library-search-count" title="搜索结果数量">
+              {displayMagnets.length}
+            </div>
+          </div>
         </div>
 
         {/* 导入区域 */}
@@ -316,6 +362,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                 );
               }
 
+              const renderer = getMagnetRenderer(magnet.id);
+              const rendererGroup = renderer?.group;
+              const rendererDescription = renderer?.description;
+
               const registryPreview = getMagnetPreviewNode(magnet);
               let previewContent: ReactNode = registryPreview ?? null;
               if (!previewContent) {
@@ -345,9 +395,15 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                     {previewContent}
                   </div>
                   <div className="magnet-info">
-                    <div className="magnet-name">{magnet.id}</div>
+                    <div className="magnet-name">{magnet.name || magnet.id}</div>
+                    <div className="magnet-id">{magnet.id}</div>
+                    {rendererDescription && (
+                      <div className="magnet-description">{rendererDescription}</div>
+                    )}
                     <div className="magnet-meta">
-                      <span className="magnet-type">{magnet.anchorType}</span>
+                      {rendererGroup && <span className="magnet-group">{rendererGroup}</span>}
+                      <span className="magnet-type">{magnet.type}</span>
+                      <span className="magnet-anchor">{magnet.anchorType}</span>
                       <span className="magnet-pixels">{pixelCount} pixels</span>
                       {isBuiltIn && <span className="magnet-badge builtin">内置</span>}
                     </div>
