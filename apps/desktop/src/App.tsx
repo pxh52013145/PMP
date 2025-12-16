@@ -221,11 +221,6 @@ function AppContent() {
 
   // 监听编辑器窗口的退出信号
   useEffect(() => {
-    // 暴露给 Rust 端调用的函数
-    (window as any).toggleEditModeFromClose = () => {
-      toggleEditMode();
-    };
-
     // 监听 Tauri 退出编辑模式事件
     const setupExitListener = async () => {
       const unlisten = await setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
@@ -239,7 +234,6 @@ function AppContent() {
 
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
-      delete (window as any).toggleEditModeFromClose;
     };
   }, [toggleEditMode]);
 

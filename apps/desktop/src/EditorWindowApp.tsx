@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
@@ -58,6 +58,62 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
+
+  const syncWindowStates = useCallback(async () => {
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/window');
+
+      const getVisible = async (type: string) => {
+        const win = WebviewWindow.getByLabel(`editor-${type}`);
+        if (!win) return false;
+        try {
+          return await win.isVisible();
+        } catch {
+          return false;
+        }
+      };
+
+      const [statistics, library, style, help, background] = await Promise.all([
+        getVisible('statistics'),
+        getVisible('library'),
+        getVisible('style'),
+        getVisible('help'),
+        getVisible('background'),
+      ]);
+
+      setStatisticsOpen(statistics);
+      setLibraryOpen(library);
+      setStyleOpen(style);
+      setHelpOpen(help);
+      setBackgroundOpen(background);
+    } catch {
+      // best-effort: visibility sync is non-critical
+    }
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const run = () => {
+      if (!isActive) return;
+      void syncWindowStates();
+    };
+
+    run();
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) run();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', run);
+
+    return () => {
+      isActive = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', run);
+    };
+  }, [syncWindowStates]);
 
   const handleToggleStatistics = async () => {
     const newState = !statisticsOpen;
