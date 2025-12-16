@@ -35,6 +35,9 @@ struct NativeAudioStatePayload {
     track_path: Option<String>,
     current_time: f64,
     duration: f64,
+    sample_rate: Option<u32>,
+    queue: Option<Vec<String>>,
+    current_index: Option<i32>,
     ended: bool,
 }
 
@@ -48,6 +51,9 @@ struct NativeAudioEngine {
     stream_handle: Option<OutputStreamHandle>,
     sink: Option<Sink>,
     current_track: Option<PathBuf>,
+    queue: Vec<PathBuf>,
+    current_index: i32,
+    queue_initialized: bool,
     current_position: f64,
     duration: f64,
     base_position: f64,
@@ -89,6 +95,9 @@ impl NativeAudioEngine {
             stream_handle: None,
             sink: None,
             current_track: None,
+            queue: Vec::new(),
+            current_index: -1,
+            queue_initialized: false,
             current_position: 0.0,
             duration: 0.0,
             base_position: 0.0,
@@ -143,7 +152,21 @@ impl NativeAudioEngine {
 
         self.stream_handle = Some(stream_handle);
         self.sink = Some(sink);
-        self.current_track = Some(path);
+        self.current_track = Some(path.clone());
+
+        if !self.queue_initialized {
+            self.queue_initialized = true;
+        }
+        if self.queue.is_empty() {
+            self.queue.push(path.clone());
+            self.current_index = 0;
+        } else if let Some(index) = self.queue.iter().position(|entry| entry == &path) {
+            self.current_index = index as i32;
+        } else {
+            self.queue.push(path.clone());
+            self.current_index = (self.queue.len() as i32).saturating_sub(1);
+        }
+
         self.current_position = 0.0;
         self.base_position = 0.0;
         self.playback_started_at = None;
@@ -192,6 +215,13 @@ impl NativeAudioEngine {
         self.decoded_channels = 0;
         self.decoded_sample_rate = 0;
         self.set_state(PlaybackState::Stopped);
+    }
+
+    fn sync_queue_state(&mut self, queue: Vec<PathBuf>, current_index: i32) {
+        self.queue_initialized = true;
+        self.queue = queue;
+        let max_index = (self.queue.len() as i32).saturating_sub(1);
+        self.current_index = current_index.clamp(-1, max_index);
     }
 
     fn seek(&mut self, seconds: f64) -> Result<(), String> {
@@ -322,6 +352,26 @@ impl NativeAudioEngine {
                 .and_then(|path| path.to_str().map(|s| s.to_string())),
             current_time: self.current_position,
             duration: self.duration,
+            sample_rate: if self.decoded_sample_rate > 0 {
+                Some(self.decoded_sample_rate)
+            } else {
+                None
+            },
+            queue: if self.queue_initialized {
+                Some(
+                    self.queue
+                        .iter()
+                        .filter_map(|path| path.to_str().map(|s| s.to_string()))
+                        .collect(),
+                )
+            } else {
+                None
+            },
+            current_index: if self.queue_initialized {
+                Some(self.current_index)
+            } else {
+                None
+            },
             ended,
         }
     }
@@ -573,6 +623,24 @@ pub fn stop(app_handle: &AppHandle) -> Result<(), String> {
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.stop();
+        engine.build_state_payload(false)
+    };
+    emit_state(app_handle, payload)?;
+    Ok(())
+}
+
+pub fn sync_queue(
+    app_handle: &AppHandle,
+    queue: Vec<String>,
+    current_index: i32,
+) -> Result<(), String> {
+    init_emitter(app_handle);
+    let payload = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        let paths = queue.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        engine.sync_queue_state(paths, current_index);
         engine.build_state_payload(false)
     };
     emit_state(app_handle, payload)?;

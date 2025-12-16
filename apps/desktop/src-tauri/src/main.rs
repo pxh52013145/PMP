@@ -58,6 +58,15 @@ async fn native_audio_set_mute(app: tauri::AppHandle, muted: bool) -> Result<(),
     native_audio::set_mute(&app, muted)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_sync_queue(
+    app: tauri::AppHandle,
+    queue: Vec<String>,
+    current_index: i32,
+) -> Result<(), String> {
+    native_audio::sync_queue(&app, queue, current_index)
+}
+
 #[tauri::command]
 async fn open_editor_window(
     app: tauri::AppHandle,
@@ -267,7 +276,8 @@ fn main() {
             native_audio_stop,
             native_audio_seek,
             native_audio_set_volume,
-            native_audio_set_mute
+            native_audio_set_mute,
+            native_audio_sync_queue
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

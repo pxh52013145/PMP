@@ -11,6 +11,9 @@ type NativeAudioStatePayload = {
   trackPath?: string | null;
   currentTime?: number;
   duration?: number;
+  sampleRate?: number;
+  queue?: string[];
+  currentIndex?: number;
   ended?: boolean;
 };
 
@@ -62,6 +65,42 @@ export class NativeAudioService implements IAudioService {
     return this.state;
   }
 
+  private getTrackPath(track: Track): string | null {
+    return track.filePath ?? track.path ?? track.originalPath ?? null;
+  }
+
+  private buildQueuePaths(queue: Track[]): string[] {
+    return queue.map((track) => this.getTrackPath(track)).filter(Boolean) as string[];
+  }
+
+  private syncQueueToNative(queue: Track[] = this.state.queue, currentIndex = this.state.currentIndex): void {
+    void invoke('native_audio_sync_queue', {
+      queue: this.buildQueuePaths(queue),
+      currentIndex,
+    }).catch((error) => {
+      console.warn('[NativeAudio] Failed to sync queue state:', error);
+    });
+  }
+
+  private resolveQueueFromPaths(queuePaths: string[]): Track[] {
+    const previousQueue = this.state.queue;
+    return queuePaths.map((trackPath) => {
+      const resolved = this.resolveTrackFromPath(trackPath);
+      if (resolved) return resolved.track;
+
+      const existing = previousQueue.find((track) => this.getTrackPath(track) === trackPath);
+      if (existing) return existing;
+
+      return {
+        id: `native-${trackPath}`,
+        title: this.deriveTitleFromPath(trackPath),
+        filePath: trackPath,
+        path: trackPath,
+        originalPath: trackPath,
+      };
+    });
+  }
+
   private emitError(error: Error) {
     this.updateState({ playbackState: 'error' });
     this.errorCallbacks.forEach((cb) => cb(error));
@@ -81,6 +120,13 @@ export class NativeAudioService implements IAudioService {
         if (typeof next.muted !== 'undefined') update.muted = next.muted;
         if (typeof next.currentTime !== 'undefined') update.currentTime = next.currentTime;
         if (typeof next.duration !== 'undefined') update.duration = next.duration;
+
+        if (Array.isArray(next.queue)) {
+          update.queue = this.resolveQueueFromPaths(next.queue);
+        }
+        if (typeof next.currentIndex === 'number') {
+          update.currentIndex = next.currentIndex;
+        }
 
         if (typeof next.trackPath !== 'undefined' && next.trackPath) {
           const resolved = this.resolveTrackFromPath(next.trackPath);
@@ -197,17 +243,32 @@ export class NativeAudioService implements IAudioService {
   async loadTrack(track: Track): Promise<void> {
     if (!track) return;
 
+    const trackPath = this.getTrackPath(track);
+    if (!trackPath) {
+      this.emitError(new Error('Track path is missing'));
+      return;
+    }
+
+    let queue = this.state.queue;
+    let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
+    if (index === -1) {
+      queue = [...queue, track];
+      index = queue.length - 1;
+    }
+
     const nextState = this.updateState({
       currentTrack: track,
+      queue,
+      currentIndex: index,
       playbackState: 'loading',
       duration: track.duration ?? 0,
       currentTime: 0,
     });
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
 
-    await this.invokeCommand('native_audio_load', {
-      path: track.filePath ?? track.path ?? track.originalPath,
-    });
+    this.syncQueueToNative(queue, index);
+
+    await this.invokeCommand('native_audio_load', { path: trackPath });
 
     this.updateState({
       playbackState: 'paused',
@@ -306,12 +367,14 @@ export class NativeAudioService implements IAudioService {
     if (!track) return;
     const queue = [...this.state.queue, track];
     this.updateState({ queue });
+    this.syncQueueToNative(queue, this.state.currentIndex);
   }
 
   addMultipleToQueue(tracks: Track[]): void {
     if (!tracks.length) return;
     const queue = [...this.state.queue, ...tracks];
     this.updateState({ queue });
+    this.syncQueueToNative(queue, this.state.currentIndex);
   }
 
   removeFromQueue(index: number): void {
@@ -320,6 +383,7 @@ export class NativeAudioService implements IAudioService {
     const currentIndex =
       this.state.currentIndex >= queue.length ? queue.length - 1 : this.state.currentIndex;
     this.updateState({ queue, currentIndex });
+    this.syncQueueToNative(queue, currentIndex);
   }
 
   clearQueue(): void {
@@ -330,6 +394,7 @@ export class NativeAudioService implements IAudioService {
       playbackState: 'stopped',
       currentTime: 0,
     });
+    this.syncQueueToNative([], -1);
     void this.invokeCommand('native_audio_stop');
     this.timeUpdateCallbacks.forEach((cb) => cb(0));
   }
@@ -342,6 +407,7 @@ export class NativeAudioService implements IAudioService {
     if (index < 0 || index >= this.state.queue.length) return;
     const track = this.state.queue[index];
     this.updateState({ currentIndex: index });
+    this.syncQueueToNative(this.state.queue, index);
     await this.loadTrack(track);
     await this.play();
   }
@@ -371,6 +437,7 @@ export class NativeAudioService implements IAudioService {
     }
 
     this.updateState({ queue, currentIndex });
+    this.syncQueueToNative(queue, currentIndex);
   }
 
   async playPrevious(): Promise<void> {
