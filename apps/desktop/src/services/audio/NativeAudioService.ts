@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { AudioState, IAudioService, PlayMode, Playlist, Track, PlaybackState } from './types';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 type StateListener = (state: AudioState) => void;
 
@@ -39,6 +40,7 @@ export class NativeAudioService implements IAudioService {
   private stateListener?: UnlistenFn;
   private spectrumListener?: UnlistenFn;
   private spectrumData: Uint8Array | null = null;
+  private restoredOutputDevice = false;
 
   constructor() {
     this.state = {
@@ -56,6 +58,7 @@ export class NativeAudioService implements IAudioService {
     };
 
     this.setupNativeListeners();
+    this.restoreOutputDeviceFromStorage();
   }
 
   // ===== Helpers =====
@@ -171,6 +174,22 @@ export class NativeAudioService implements IAudioService {
       });
     } catch (error) {
       console.warn('[NativeAudio] Failed to register state listener:', error);
+    }
+  }
+
+  private restoreOutputDeviceFromStorage() {
+    if (this.restoredOutputDevice) return;
+    this.restoredOutputDevice = true;
+
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      const deviceName = typeof parsed === 'string' ? parsed : null;
+      if (!deviceName) return;
+      void invoke('native_audio_select_device', { deviceName }).catch(() => {});
+    } catch {
+      // ignore
     }
   }
 

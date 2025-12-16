@@ -5,6 +5,7 @@ import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { Track } from '../../services/audio';
 import { AudioVisualizer } from '../magnet/AudioVisualizer';
+import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 
 function getFileName(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -64,6 +65,16 @@ export const NativeDebugPage: React.FC = () => {
 
   useEffect(() => {
     if (!isNativeEngine) return;
+    const persisted = readData<string | null>(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
+    if (typeof persisted === 'string') {
+      setSelectedDevice(persisted);
+    } else if (persisted === null) {
+      setSelectedDevice('');
+    }
+  }, [isNativeEngine]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
 
     let unlisten: UnlistenFn | null = null;
     void listen('native_audio_state', (event) => {
@@ -107,6 +118,11 @@ export const NativeDebugPage: React.FC = () => {
 
   const handleApplyDevice = useCallback(async () => {
     try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
+        selectedDevice.length > 0 ? selectedDevice : null,
+        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
+      );
       await invoke('native_audio_select_device', {
         deviceName: selectedDevice.length > 0 ? selectedDevice : null,
       });

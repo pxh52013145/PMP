@@ -36,6 +36,9 @@ export const STORAGE_KEYS = {
   MAGNET_EDITOR_MODE: 'magnet-editor-mode', // 编辑模式（create/edit）
   CREATOR_WINDOW_OPEN: 'magnet-creator-window-open', // Creator 窗口是否打开
   EDITOR_STATE: 'pixel-matrix-editor-state', // 编辑器状态（包括选中信息）
+
+  // === Native Audio ===
+  NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
 } as const;
 
 /**
@@ -67,6 +70,9 @@ export const TAURI_EVENTS = {
   EDITOR_STATE_UPDATED: 'editor-state-updated', // 编辑器状态更新（选中区域等）
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
+
+  // Native Audio
+  NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
 } as const;
 
 /**
