@@ -27,6 +27,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'navigation-page',
   'btn-back',
   'btn-debug', // 调试按钮
+  'audio-visualizer',
 ] as const;
 
 /**

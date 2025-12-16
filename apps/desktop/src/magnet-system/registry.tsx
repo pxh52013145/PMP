@@ -15,6 +15,7 @@ import { PlaylistsButton } from '../components/magnet/PlaylistsButton';
 import { MusicLibraryButton } from '../components/magnet/MusicLibraryButton';
 import { BackButton } from '../components/magnet/BackButton';
 import { DebugButton } from '../components/magnet/DebugButton';
+import { AudioVisualizerMagnet } from '../components/magnet/AudioVisualizerMagnet';
 import { Magnet } from '../types/pixel';
 
 export type MagnetRendererSource = 'builtin' | 'plugin' | 'runtime';
@@ -206,6 +207,15 @@ function ensureBuiltinRenderers() {
       preview: () => createTextPreview('Debug'),
       description: '主题/调试按钮',
       group: 'utility',
+      source: 'builtin',
+    },
+    {
+      id: 'audio-visualizer',
+      render: () => <AudioVisualizerMagnet />,
+      preview: () => createTextPreview('Visualizer'),
+      description: '音频频谱可视化（FFT）',
+      group: 'visualizer',
+      tags: ['audio', 'fft', 'spectrum', 'visualizer', 'native'],
       source: 'builtin',
     },
   ];

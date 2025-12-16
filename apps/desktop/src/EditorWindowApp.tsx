@@ -22,6 +22,7 @@ import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
 import { DEBUG_BUTTON_MAGNET } from './data/builtin/debugButtonMagnet';
 import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
 import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
+import { AUDIO_VISUALIZER_MAGNET } from './data/builtin/audioVisualizerMagnet';
 import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
@@ -285,6 +286,7 @@ export function EditorWindowApp() {
       ...WINDOW_CONTROL_MAGNETS,
       WINDOW_PIN_MAGNET,
       ...MUSIC_PLAYER_MAGNETS,
+      AUDIO_VISUALIZER_MAGNET,
       EDITOR_BUTTON_MAGNET,
       DEBUG_BUTTON_MAGNET,
       PLAY_QUEUE_MAGNET,
