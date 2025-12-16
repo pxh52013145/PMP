@@ -1,5 +1,6 @@
 import { useState, useCallback, memo, useEffect } from 'react';
 import { BackgroundConfig } from '../../types/background';
+import { useEditorWindowActivity } from '../../contexts/EditorWindowActivityContext';
 import './CustomBackgroundEditor.css';
 
 interface CustomBackgroundEditorProps {
@@ -15,6 +16,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   initialConfig,
   onSave,
 }: CustomBackgroundEditorProps) {
+  const { isActive } = useEditorWindowActivity();
   const [customType, setCustomType] = useState<CustomType>(
     initialConfig?.type === 'image' ||
       initialConfig?.type === 'video' ||
@@ -440,6 +442,34 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       console.error('Failed to close window:', error);
     }
   }, []);
+
+  // Cached windows keep running even when hidden; pause video decode/render work while inactive.
+  useEffect(() => {
+    const videos = Array.from(document.querySelectorAll<HTMLVideoElement>('video.preview-video'));
+    if (videos.length === 0) return;
+
+    if (!isActive) {
+      for (const video of videos) {
+        try {
+          video.pause();
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
+    for (const video of videos) {
+      try {
+        const p = video.play();
+        if (p && typeof (p as Promise<void>).catch === 'function') {
+          (p as Promise<void>).catch(() => {});
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }, [isActive]);
 
   // 保存配置
   const handleSave = useCallback(() => {

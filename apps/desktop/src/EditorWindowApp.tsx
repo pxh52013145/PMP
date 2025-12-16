@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { EditorProvider } from './contexts/EditorContext';
+import { EditorWindowActivityProvider } from './contexts/EditorWindowActivityContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
@@ -336,6 +337,45 @@ const getWindowTypeFromHash = (): string => {
 
 export function EditorWindowApp() {
   const [windowType, setWindowType] = useState<string>(getWindowTypeFromHash());
+  const [isWindowVisible, setIsWindowVisible] = useState(true);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
+  const isWindowActive = isWindowVisible && isDocumentVisible;
+  const activityRef = useRef({ isWindowActive });
+  activityRef.current.isWindowActive = isWindowActive;
+
+  useEffect(() => {
+    const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    const setup = async () => {
+      const unlistenHidden = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
+        (payload) => {
+          if (payload === windowType) setIsWindowVisible(false);
+        }
+      );
+
+      const unlistenShown = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_SHOWN,
+        (payload) => {
+          if (payload === windowType) setIsWindowVisible(true);
+        }
+      );
+
+      return () => {
+        unlistenHidden();
+        unlistenShown();
+      };
+    };
+
+    let cleanupPromise = setup();
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [windowType]);
 
   // 默认内置 Magnet 库
   const defaultMagnetLibrary = useMemo(
@@ -520,6 +560,7 @@ export function EditorWindowApp() {
         TAURI_EVENTS.MAGNET_DEACTIVATED,
       ],
       () => {
+        if (!activityRef.current.isWindowActive) return;
         console.log('Editor window: Received update signal, reloading config');
         loadConfigFromMain();
       }
@@ -683,13 +724,14 @@ export function EditorWindowApp() {
     return magnetLibrary.filter((magnet) => activeMagnetIds.has(magnet.id));
   }, [magnetLibrary, activeMagnetIds]);
 
-  return (
-    <ThemeProvider>
-      <AudioEngineProvider>
-        <NavigationProvider>
-          <EditorProvider magnets={activeMagnets}>
-            <div className="editor-window-app">
-            {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
+	  return (
+	    <ThemeProvider>
+	      <AudioEngineProvider>
+	        <NavigationProvider>
+	          <EditorProvider magnets={activeMagnets}>
+	            <EditorWindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
+	              <div className="editor-window-app">
+	            {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
 
             {windowType === 'statistics' && <EditorStatistics />}
 
@@ -772,11 +814,12 @@ export function EditorWindowApp() {
               />
             )}
 
-            {windowType === 'debug' && <ThemeDebugPage />}
-            </div>
-          </EditorProvider>
-        </NavigationProvider>
-      </AudioEngineProvider>
-    </ThemeProvider>
-  );
-}
+	            {windowType === 'debug' && <ThemeDebugPage />}
+	              </div>
+	            </EditorWindowActivityProvider>
+	          </EditorProvider>
+	        </NavigationProvider>
+	      </AudioEngineProvider>
+	    </ThemeProvider>
+	  );
+	}

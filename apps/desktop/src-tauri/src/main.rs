@@ -118,6 +118,7 @@ async fn open_editor_window(
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
         existing_window.set_focus().map_err(|e| e.to_string())?;
+        let _ = app.emit_all("editor-window-shown", window_type);
         // 不再自动更新位置，保持用户移动后的窗口位置
         return Ok(());
     }
@@ -147,6 +148,8 @@ async fn open_editor_window(
         .always_on_top(true)
         .build()
         .map_err(|e| e.to_string())?;
+
+    let _ = app.emit_all("editor-window-shown", window_type.clone());
 
     // Editor windows: hide instead of closing to avoid rebuilding WebView state on next open.
     // When the app is exiting, allow the close to proceed.

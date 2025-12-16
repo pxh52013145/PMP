@@ -70,6 +70,7 @@ export const TAURI_EVENTS = {
   EDITOR_STYLE_APPLY: 'editor-style-apply',
   EDITOR_STATE_UPDATED: 'editor-state-updated', // 编辑器状态更新（选中区域等）
   EDITOR_WINDOW_HIDDEN: 'editor-window-hidden', // Rust 侧拦截 close 并 hide 后的通知
+  EDITOR_WINDOW_SHOWN: 'editor-window-shown', // Rust 侧 show/unminimize 后的通知
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 
