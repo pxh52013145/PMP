@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev:vite": "node ../../scripts/ensure-port-free.mjs 1420 && vite",
     "dev": "tauri dev",
+    "build:vite": "vite build",
     "build": "tauri build",
     "preview": "vite preview",
     "tauri": "tauri",

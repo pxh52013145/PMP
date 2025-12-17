@@ -15,10 +15,10 @@
   },
   "scripts": {
     "dev": "pnpm --filter @pixel-matrix/desktop dev",
-    "dev:web": "pnpm --filter @pixel-matrix/web dev",
+    "dev:web": "pnpm --filter @pixel-matrix/desktop dev:vite",
     "dev:tauri": "pnpm --filter @pixel-matrix/desktop tauri dev",
     "build": "pnpm --filter @pixel-matrix/desktop build",
-    "build:web": "pnpm --filter @pixel-matrix/web build",
+    "build:web": "pnpm --filter @pixel-matrix/desktop build:vite",
     "test": "pnpm --filter @pixel-matrix/desktop test",
     "lint": "pnpm --parallel lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
