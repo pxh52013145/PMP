@@ -19,17 +19,15 @@ import { NavigationProvider } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { MATRIX_CONFIG } from './constants/config';
-import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from './constants/magnets';
 import { Magnet, PixelAnchor } from './types/pixel';
 import { BackgroundSettings } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
 import { calculateWindowPosition } from './utils/editorWindows';
 import {
-  applyMagnetConfig,
   createDefaultMagnetLibrary,
   createInitialMagnetState,
-  loadMagnetConfig,
-  saveMagnetConfig,
+  MagnetLibraryProvider,
+  useMagnetConfig,
 } from './modules/magnets';
 import { readJson, readString, writeJson } from './modules/storage';
 import { gcOrphanBackgroundMedia } from './modules/background/mediaCleanup';
@@ -147,34 +145,9 @@ function AppContent() {
   // 边框动画已移至 WindowBorder 组件管理
 
   const { toggleEditMode, updateOccupancy } = useEditor();
+  const { magnetLibrary, activeMagnetIds, updateMagnetAnchors } = useMagnetConfig();
 
   // ============ 新的状态管理系统 ============
-
-  // 默认 Magnet 库
-  const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
-
-  // 默认激活的 Magnet ID（使用统一常量）
-  const defaultActiveMagnetIds = DEFAULT_ACTIVE_MAGNET_IDS;
-
-  // 初始化配置（从 localStorage 或使用默认值）
-  const initializeConfig = useCallback(() => {
-    return createInitialMagnetState(defaultMagnetLibrary, { defaultActiveMagnetIds });
-  }, [defaultMagnetLibrary, defaultActiveMagnetIds]);
-
-  // Magnet 库：所有可用的 Magnet 模板（内置 + 自定义）
-  const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => {
-    const config = initializeConfig();
-    return config.magnetLibrary;
-  });
-
-  // 当前激活（显示在点阵上）的 Magnet ID 集合
-  const [activeMagnetIds, setActiveMagnetIds] = useState<Set<string>>(() => {
-    const config = initializeConfig();
-    return config.activeMagnetIds;
-  });
-
-  // 内置 Magnet ID 列表（使用统一常量）
-  const builtInMagnetIds = BUILTIN_MAGNET_IDS;
 
   useEffect(() => {
     // 防止上下文菜单
@@ -275,11 +248,6 @@ function AppContent() {
     };
   }, [toggleEditMode]);
 
-  // 同步 builtInMagnetIds 到 localStorage（供编辑器窗口识别）
-  useEffect(() => {
-    writeJson(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds]);
-  }, [builtInMagnetIds]);
-
   // 获取当前激活的 Magnet（显示在点阵上的）
   const activeMagnets = useMemo(() => {
     const filtered = magnetLibrary
@@ -306,70 +274,11 @@ function AppContent() {
     updateOccupancy(activeMagnets);
   }, [activeMagnets, updateOccupancy]);
 
-  // 自动保存配置（防抖）- 只在主窗口修改时保存（如拖动 Magnet）
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      console.log('App: Auto-saving config');
-      saveMagnetConfig(
-        magnetLibrary,
-        activeMagnetIds,
-        {
-          columns: MATRIX_CONFIG.COLUMNS,
-          rows: MATRIX_CONFIG.ROWS,
-        },
-        defaultMagnetLibrary
-      );
-    }, 500); // 500ms 防抖
-
-    return () => clearTimeout(timer);
-  }, [magnetLibrary, activeMagnetIds, defaultMagnetLibrary]);
-
   // 处理 Magnet 移动（只更新库中的 Magnet）
   const handleMagnetMove = useCallback((magnetId: string, newAnchors: PixelAnchor[]) => {
     console.log('App.handleMagnetMove called:', magnetId);
-
-    setMagnetLibrary((prev) =>
-      prev.map((m) => (m.id === magnetId ? { ...m, anchors: newAnchors } : m))
-    );
-  }, []);
-
-  // 注意：不再需要 handle* 回调函数
-  // 编辑器窗口直接通过 saveConfig + Tauri 事件通知主窗口
-  // 主窗口通过监听 Tauri 事件重新加载配置来更新数据
-
-  // 监听编辑器窗口的所有更新（使用统一的新框架）
-  useEffect(() => {
-    const reloadConfig = () => {
-      console.log('Main window: Config changed, reloading from localStorage');
-      const config = loadMagnetConfig();
-      if (config) {
-        const applied = applyMagnetConfig(config, defaultMagnetLibrary);
-        console.log(
-          'Main window: Applied config, magnetLibrary:',
-          applied.magnetLibrary.length,
-          'activeMagnetIds:',
-          applied.activeMagnetIds.size
-        );
-        setMagnetLibrary(applied.magnetLibrary);
-        setActiveMagnetIds(applied.activeMagnetIds);
-      }
-    };
-
-    // 监听所有 Magnet 相关事件
-    let cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.CONFIG],
-      [
-        TAURI_EVENTS.MAGNET_LIBRARY_UPDATED, // 样式修改、新增、删除
-        TAURI_EVENTS.MAGNET_ACTIVATED, // 激活
-        TAURI_EVENTS.MAGNET_DEACTIVATED, // 停用
-      ],
-      reloadConfig
-    );
-
-    return () => {
-      cleanupPromise.then((cleanup) => cleanup());
-    };
-  }, [defaultMagnetLibrary]);
+    updateMagnetAnchors(magnetId, newAnchors);
+  }, [updateMagnetAnchors]);
 
   // 根据窗口状态选择背景配置
   const currentBackground = isMaximized
@@ -408,11 +317,7 @@ function AppContent() {
       )}
 
       {/* 编辑器面板 */}
-      <EditorPanel
-        magnetLibrary={magnetLibrary}
-        activeMagnetIds={activeMagnetIds}
-        builtInMagnetIds={builtInMagnetIds}
-      />
+      <EditorPanel />
 
       {/* 窗口边框 */}
       <WindowBorder />
@@ -436,7 +341,11 @@ function App() {
       <AudioEngineProvider>
         <EditorProvider magnets={magnetsForContext}>
           <NavigationProvider>
-            <AppContent />
+            <MagnetLibraryProvider
+              gridSize={{ columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS }}
+            >
+              <AppContent />
+            </MagnetLibraryProvider>
           </NavigationProvider>
         </EditorProvider>
       </AudioEngineProvider>

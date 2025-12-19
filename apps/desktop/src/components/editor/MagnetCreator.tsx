@@ -4,6 +4,7 @@ import { open } from '@tauri-apps/api/dialog';
 import { readTextFile } from '@tauri-apps/api/fs';
 import { useEditor } from '../../contexts/EditorContext';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
+import { readJson, writeJson } from '../../modules/storage';
 import './MagnetCreator.css';
 
 interface MagnetCreatorProps {
@@ -28,8 +29,7 @@ const MAX_HISTORY_ITEMS = 20; // 每个 Magnet 最多保存 20 条历史
 
 const loadHistory = (magnetId: string): MagnetHistory[] => {
   try {
-    const data = localStorage.getItem(`${HISTORY_STORAGE_KEY}-${magnetId}`);
-    return data ? JSON.parse(data) : [];
+    return readJson<MagnetHistory[]>(`${HISTORY_STORAGE_KEY}-${magnetId}`, []);
   } catch {
     return [];
   }
@@ -37,7 +37,7 @@ const loadHistory = (magnetId: string): MagnetHistory[] => {
 
 const saveHistory = (magnetId: string, history: MagnetHistory[]) => {
   try {
-    localStorage.setItem(`${HISTORY_STORAGE_KEY}-${magnetId}`, JSON.stringify(history));
+    writeJson(`${HISTORY_STORAGE_KEY}-${magnetId}`, history);
   } catch (error) {
     console.error('Failed to save history:', error);
   }

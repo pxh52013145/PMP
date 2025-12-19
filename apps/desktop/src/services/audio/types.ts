@@ -26,11 +26,15 @@ export interface Track {
   filePath?: string; // 完整文件路径（Tauri场景 - 绝对路径）
   fileHandle?: FileSystemFileHandle; // ✅ 文件句柄（File System Access API - 零空间占用）
   originalPath?: string; // 原始文件路径（用于显示）
+  libraryPathId?: string; // Music library folder id (IndexedDB.libraryPaths.id)
+  mtimeMs?: number; // last modified time (ms) - library change detection
+  metadataScannedAtMs?: number; // when metadata probe last ran (avoid repeated probing on unchanged files)
   title: string;
   artist?: string;
   album?: string;
   albumArtist?: string;
   duration?: number;
+  coverKey?: string;
   coverUrl?: string;
   year?: number;
   genre?: string;

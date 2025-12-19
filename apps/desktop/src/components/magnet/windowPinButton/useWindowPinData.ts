@@ -5,18 +5,18 @@
 
 import { useState, useEffect } from 'react';
 import { WindowPinData } from './WindowPinTypes';
-
-const WINDOW_PIN_STORAGE_KEY = 'pixel-matrix-window-pin-state';
+import { readString, writeString } from '../../../modules/storage';
+import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 
 function readStoredPinState(): boolean {
   if (typeof window === 'undefined') return false;
-  const stored = localStorage.getItem(WINDOW_PIN_STORAGE_KEY);
+  const stored = readString(STORAGE_KEYS.WINDOW_PIN_STATE);
   return stored === 'true';
 }
 
 function persistPinState(value: boolean) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(WINDOW_PIN_STORAGE_KEY, value ? 'true' : 'false');
+  writeString(STORAGE_KEYS.WINDOW_PIN_STATE, value ? 'true' : 'false');
 }
 
 export function useWindowPinData(): WindowPinData {

@@ -29,7 +29,7 @@ export const DebugButton: React.FC = () => {
   const logic = useDebugButtonLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('debug-button');
+  const themeConfig = useComponentTheme('btn-debug');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

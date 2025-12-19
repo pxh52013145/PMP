@@ -1,4 +1,5 @@
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { readString } from '../storage';
 
 type BackgroundMode = 'maximized' | 'windowed';
 
@@ -35,9 +36,18 @@ function tryGetManagedMediaRelPath(url: string | undefined): string | null {
 
   for (const candidate of candidates) {
     const normalized = candidate.split('\\').join('/');
-    const markerIndex = normalized.lastIndexOf('/background-media/');
+
+    let markerIndex = normalized.lastIndexOf('/background-media/');
+    let markerLength = '/background-media/'.length;
+
+    if (markerIndex === -1 && normalized.startsWith('background-media/')) {
+      markerIndex = 0;
+      markerLength = 'background-media/'.length;
+    }
+
     if (markerIndex === -1) continue;
-    const tail = normalized.slice(markerIndex + '/background-media/'.length);
+
+    const tail = normalized.slice(markerIndex + markerLength);
     const fileName = tail.split('?')[0].split('#')[0].split('/')[0];
     if (!fileName || !fileName.startsWith('background-')) continue;
     return `background-media/${fileName}`;
@@ -55,7 +65,7 @@ function getConfigMediaRelPath(config: BackgroundConfig): string | null {
 export function collectReferencedBackgroundMedia(): Set<string> {
   const referenced = new Set<string>();
 
-  const settings = safeParseJson<BackgroundSettings>(localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS));
+  const settings = safeParseJson<BackgroundSettings>(readString(STORAGE_KEYS.BACKGROUND_SETTINGS));
   if (settings) {
     const maxRel = getConfigMediaRelPath(settings.maximized);
     if (maxRel) referenced.add(maxRel);
@@ -63,7 +73,7 @@ export function collectReferencedBackgroundMedia(): Set<string> {
     if (winRel) referenced.add(winRel);
   }
 
-  const history = safeParseJson<HistoryItem[]>(localStorage.getItem(STORAGE_KEYS.BACKGROUND_HISTORY)) || [];
+  const history = safeParseJson<HistoryItem[]>(readString(STORAGE_KEYS.BACKGROUND_HISTORY)) || [];
   for (const item of history) {
     const rel = getConfigMediaRelPath(item.config);
     if (rel) referenced.add(rel);
@@ -105,4 +115,3 @@ export async function gcOrphanBackgroundMedia(): Promise<{ scanned: number; remo
 
   return { scanned, removed };
 }
-

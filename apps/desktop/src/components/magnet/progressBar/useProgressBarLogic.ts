@@ -3,7 +3,7 @@
  * 负责所有交互逻辑（点击、拖动）
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface ProgressBarLogic {
@@ -20,6 +20,23 @@ export interface ProgressBarLogic {
 export function useProgressBarLogic(): ProgressBarLogic {
   const audioService = useAudioService();
   const [isSeeking, setIsSeeking] = useState(false);
+
+  // Safety net: pointer capture can occasionally be lost without our handlers firing.
+  // Ensure we always exit seeking mode on global pointer end/cancel/blur.
+  useEffect(() => {
+    if (!isSeeking) return;
+
+    const end = () => setIsSeeking(false);
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+    window.addEventListener('blur', end);
+
+    return () => {
+      window.removeEventListener('pointerup', end, true);
+      window.removeEventListener('pointercancel', end, true);
+      window.removeEventListener('blur', end);
+    };
+  }, [isSeeking]);
 
   const onSeek = useCallback(
     (time: number) => {
@@ -51,4 +68,3 @@ export function useProgressBarLogic(): ProgressBarLogic {
     formatTime,
   };
 }
-

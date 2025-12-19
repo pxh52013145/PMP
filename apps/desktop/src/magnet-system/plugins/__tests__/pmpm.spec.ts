@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createMagnetTemplateFromPlugin, getPluginRendererDefinition } from '../pmpm';
 import type { InstalledPmpmPlugin } from '../pmpm';
+import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 
 beforeEach(() => {
   localStorage.clear();
@@ -41,7 +42,7 @@ describe('pmpm plugins', () => {
         installedAt: Date.now(),
       },
     ];
-    localStorage.setItem('pixel-matrix-pmpm-plugins', JSON.stringify(installed));
+    localStorage.setItem(STORAGE_KEYS.PMPM_PLUGINS, JSON.stringify(installed));
 
     const def = getPluginRendererDefinition('magnet-demo');
     expect(def?.id).toBe('magnet-demo');

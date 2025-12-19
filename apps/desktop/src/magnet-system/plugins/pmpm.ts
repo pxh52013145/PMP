@@ -4,8 +4,8 @@ import type { Magnet } from '../../types/pixel';
 import type { MagnetRendererDefinition } from '../registry';
 import { PluginMagnetHost } from './PluginMagnetHost';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
-
-const PLUGINS_STORAGE_KEY = 'pixel-matrix-pmpm-plugins';
+import { readJson, writeJson } from '../../modules/storage';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 export type PmpmManifest = {
   formatVersion: '1.0';
@@ -59,9 +59,7 @@ function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
 export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(PLUGINS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = readJson<unknown>(STORAGE_KEYS.PMPM_PLUGINS, []);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(Boolean) as InstalledPmpmPlugin[];
   } catch {
@@ -71,7 +69,7 @@ export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
 
 function saveInstalledPmpmPlugins(plugins: InstalledPmpmPlugin[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(PLUGINS_STORAGE_KEY, JSON.stringify(plugins));
+  writeJson(STORAGE_KEYS.PMPM_PLUGINS, plugins);
 }
 
 export function getInstalledPmpmPlugin(id: string): InstalledPmpmPlugin | null {

@@ -2629,9 +2629,11 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 name = "pixel-matrix-player"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "once_cell",
  "reqwest",
  "rodio",
+ "rubato",
  "rusqlite",
  "rustfft",
  "serde",
@@ -2640,6 +2642,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "window-shadows",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3041,6 +3044,16 @@ dependencies = [
  "hound",
  "lewton",
  "symphonia",
+]
+
+[[package]]
+name = "rubato"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5258099699851cfd0082aeb645feb9c084d9a5e1f1b8d5372086b989fc5e56a1"
+dependencies = [
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]

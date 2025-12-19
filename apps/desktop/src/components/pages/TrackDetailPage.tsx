@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import './TrackDetailPage.css';
 
 interface TrackDetailPageProps {
@@ -115,6 +116,27 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
 
     return unsubscribe;
   }, [audioService, initialTrack]);
+
+  // 尝试从磁盘缓存中懒加载封面（Desktop/Tauri）
+  useEffect(() => {
+    let cancelled = false;
+    const current = currentTrack;
+    if (!current) return;
+
+    void musicLibraryService.getCoverUrlForTrack(current).then((url) => {
+      if (cancelled) return;
+      if (!url) return;
+      setCurrentTrack((prev) => {
+        if (!prev || prev.id !== current.id) return prev;
+        if (prev.coverUrl === url) return prev;
+        return { ...prev, coverUrl: url };
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id, currentTrack?.filePath, currentTrack?.path]);
 
   // 提取封面颜色
   useEffect(() => {

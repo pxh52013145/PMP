@@ -4,6 +4,7 @@
  */
 
 import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
+import { readString, writeJson } from '../modules/storage';
 
 /**
  * localStorage 数据 key 定义
@@ -40,6 +41,23 @@ export const STORAGE_KEYS = {
   // === Native Audio ===
   NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
+
+  // === Plugins (.pmpm) ===
+  PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
+
+  // === Theme ===
+  THEME_CONFIG: 'pixel-matrix-theme-config',
+
+  // === Audio Engine Selection ===
+  AUDIO_ENGINE: 'pixel-matrix-audio-engine',
+  AUDIO_VOLUME: 'audio_volume',
+  AUDIO_MUTED: 'audio_muted',
+
+  // === Window Pin ===
+  WINDOW_PIN_STATE: 'pixel-matrix-window-pin-state',
+
+  // === Background Migration Flags ===
+  BACKGROUND_MEDIA_MIGRATION_V1: 'pixel-matrix-background-media-migration-v1',
 } as const;
 
 /**
@@ -81,6 +99,9 @@ export const TAURI_EVENTS = {
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
   NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',
+
+  // Theme
+  THEME_UPDATED: 'theme-config-updated',
 } as const;
 
 /**
@@ -93,7 +114,7 @@ export async function broadcastDataUpdate<T>(
 ): Promise<void> {
   try {
     // 1. 更新 localStorage
-    localStorage.setItem(storageKey, JSON.stringify(data));
+    writeJson(storageKey, data, { mode: 'sync' });
 
     // 2. 发送 Tauri 事件（如果提供）
     if (tauriEvent) {
@@ -126,7 +147,7 @@ export async function broadcastSignal(tauriEvent: string): Promise<void> {
  */
 export function readData<T>(storageKey: string): T | null {
   try {
-    const data = localStorage.getItem(storageKey);
+    const data = readString(storageKey);
     return data ? JSON.parse(data) : null;
   } catch (error) {
     console.error(`Failed to read data (${storageKey}):`, error);

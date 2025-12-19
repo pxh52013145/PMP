@@ -29,7 +29,7 @@ export const PlaylistsButton: React.FC = () => {
   const logic = usePlaylistsLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('playlists-button');
+  const themeConfig = useComponentTheme('btn-playlists');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

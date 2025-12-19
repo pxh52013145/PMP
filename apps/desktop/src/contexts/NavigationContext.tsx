@@ -13,6 +13,17 @@ export type NavigationPageType =
   | 'artist'
   | 'native-debug';
 
+export type NavigationParamsMap = {
+  home: undefined;
+  'music-library': undefined;
+  playlists: undefined;
+  'play-queue': undefined;
+  'native-debug': undefined;
+  track: Record<string, any>;
+  album: Record<string, any>;
+  artist: Record<string, any>;
+};
+
 /**
  * 导航页面数据（可携带额外参数）
  */

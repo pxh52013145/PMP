@@ -9,6 +9,20 @@ import {
 
 export type { MagnetConfig, MagnetStateConfig };
 
+export interface ScheduleSaveMagnetConfigOptions {
+  debounceMs?: number;
+}
+
+let scheduledSaveTimeout: number | null = null;
+let scheduledSaveArgs:
+  | {
+      magnetLibrary: Magnet[];
+      activeMagnetIds: Set<string>;
+      gridSize: { columns: number; rows: number };
+      defaultMagnetLibrary?: Magnet[];
+    }
+  | null = null;
+
 /**
  * Magnets persistence/config public API.
  *
@@ -31,6 +45,42 @@ export function saveMagnetConfig(
   saveConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary);
 }
 
+export function scheduleSaveMagnetConfig(
+  magnetLibrary: Magnet[],
+  activeMagnetIds: Set<string>,
+  gridSize: { columns: number; rows: number },
+  defaultMagnetLibrary?: Magnet[],
+  options: ScheduleSaveMagnetConfigOptions = {}
+): void {
+  const debounceMs = options.debounceMs ?? 300;
+
+  scheduledSaveArgs = { magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary };
+
+  if (scheduledSaveTimeout !== null) {
+    window.clearTimeout(scheduledSaveTimeout);
+  }
+
+  scheduledSaveTimeout = window.setTimeout(() => {
+    scheduledSaveTimeout = null;
+    const args = scheduledSaveArgs;
+    scheduledSaveArgs = null;
+    if (!args) return;
+    try {
+      saveMagnetConfig(args.magnetLibrary, args.activeMagnetIds, args.gridSize, args.defaultMagnetLibrary);
+    } catch (error) {
+      console.warn('[magnets] Failed to save config (scheduled)', error);
+    }
+  }, debounceMs);
+}
+
+export function cancelScheduledMagnetConfigSave(): void {
+  if (scheduledSaveTimeout !== null) {
+    window.clearTimeout(scheduledSaveTimeout);
+    scheduledSaveTimeout = null;
+  }
+  scheduledSaveArgs = null;
+}
+
 export function applyMagnetConfig(
   config: MagnetConfig,
   defaultMagnetLibrary: Magnet[]
@@ -40,4 +90,3 @@ export function applyMagnetConfig(
 } {
   return applyConfig(config, defaultMagnetLibrary);
 }
-

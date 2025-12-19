@@ -12,3 +12,9 @@ export { createInitialMagnetState } from './state';
 export type { MagnetStateSnapshot, CreateInitialMagnetStateOptions } from './state';
 export { applyMagnetConfig, loadMagnetConfig, saveMagnetConfig } from './config';
 export type { MagnetConfig, MagnetStateConfig } from './config';
+export {
+  MagnetLibraryProvider,
+  useMagnetConfig,
+  type MagnetConfigContextValue,
+  type MagnetLibraryProviderProps,
+} from './MagnetLibraryProvider';

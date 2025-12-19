@@ -7,6 +7,17 @@ import { useState } from 'react';
 import { Track } from '../../../services/audio';
 import { parseAudioFile } from '../../../utils/audioMetadata';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
+import { open } from '@tauri-apps/api/dialog';
+
+function stableIdFromPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `track-${(hash >>> 0).toString(16)}`;
+}
 
 export interface DragState {
   dragIndex: number | null;
@@ -67,7 +78,9 @@ export function usePlayQueueLogic(): PlayQueueLogic {
   };
 
   const playTrack = (index: number) => {
-    audioService.playTrackAtIndex(index);
+    void audioService.playTrackAtIndex(index).catch((error) => {
+      console.error('[PlayQueue] Failed to play track:', error);
+    });
   };
 
   const removeTrack = (index: number) => {
@@ -80,6 +93,44 @@ export function usePlayQueueLogic(): PlayQueueLogic {
 
   const addFiles = async () => {
     try {
+      const isTauriRuntime =
+        typeof window !== 'undefined' && typeof (window as any).__TAURI__ !== 'undefined';
+
+      if (isTauriRuntime) {
+        const selected = await open({
+          multiple: true,
+          directory: false,
+          title: '选择音频文件',
+          filters: [
+            {
+              name: 'Audio Files',
+              extensions: ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'weba', 'aac'],
+            },
+          ],
+        });
+
+        if (!selected) return;
+        const paths = Array.isArray(selected) ? selected : [selected];
+
+        const tracks: Track[] = [];
+        for (const filePath of paths) {
+          const name = filePath.split(/[/\\]/).pop() || filePath;
+          tracks.push({
+            id: stableIdFromPath(filePath),
+            title: name.replace(/\.[^/.]+$/, ''),
+            filePath,
+            originalPath: filePath,
+            path: filePath,
+            addedAt: new Date(),
+          });
+        }
+
+        if (tracks.length > 0) {
+          audioService.addMultipleToQueue(tracks);
+        }
+        return;
+      }
+
       // @ts-ignore - File System Access API
       const fileHandles = await window.showOpenFilePicker({
         multiple: true,

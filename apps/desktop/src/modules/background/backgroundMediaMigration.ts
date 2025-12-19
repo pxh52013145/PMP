@@ -1,6 +1,7 @@
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import type { BackgroundConfig, BackgroundSettings } from '../../types/background';
 import { persistBackgroundSnapshots } from './backgroundSnapshot';
+import { readString, writeString } from '../storage';
 
 type BackgroundHistoryItem = {
   id: string;
@@ -110,7 +111,7 @@ export async function migrateBackgroundStorageToManagedMedia(): Promise<{
   let migratedHistory = false;
   let migratedCount = 0;
 
-  const settings = safeParseJson<BackgroundSettings>(localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS));
+  const settings = safeParseJson<BackgroundSettings>(readString(STORAGE_KEYS.BACKGROUND_SETTINGS));
   if (settings) {
     const [maximized, windowed] = await Promise.all([migrateConfig(settings.maximized), migrateConfig(settings.windowed)]);
     if (maximized.migrated || windowed.migrated) {
@@ -120,18 +121,14 @@ export async function migrateBackgroundStorageToManagedMedia(): Promise<{
         windowed: windowed.config,
       };
       const json = JSON.stringify(next);
-      try {
-        localStorage.setItem(STORAGE_KEYS.BACKGROUND_SETTINGS, json);
-      } catch {
-        // ignore
-      }
+      writeString(STORAGE_KEYS.BACKGROUND_SETTINGS, json);
       await persistBackgroundSnapshots({ storageKey: STORAGE_KEYS.BACKGROUND_SETTINGS, json });
       migratedSettings = true;
       migratedCount += Number(maximized.migrated) + Number(windowed.migrated);
     }
   }
 
-  const history = safeParseJson<BackgroundHistoryItem[]>(localStorage.getItem(STORAGE_KEYS.BACKGROUND_HISTORY));
+  const history = safeParseJson<BackgroundHistoryItem[]>(readString(STORAGE_KEYS.BACKGROUND_HISTORY));
   if (history && history.length > 0) {
     const migratedItems = await Promise.all(
       history.map(async (item) => {
@@ -144,11 +141,7 @@ export async function migrateBackgroundStorageToManagedMedia(): Promise<{
     if (hasChanges) {
       const next = migratedItems.map((entry) => entry.item);
       const json = JSON.stringify(next);
-      try {
-        localStorage.setItem(STORAGE_KEYS.BACKGROUND_HISTORY, json);
-      } catch {
-        // ignore
-      }
+      writeString(STORAGE_KEYS.BACKGROUND_HISTORY, json);
       await persistBackgroundSnapshots({ storageKey: STORAGE_KEYS.BACKGROUND_HISTORY, json });
       migratedHistory = true;
       migratedCount += migratedItems.reduce((sum, entry) => sum + Number(entry.migrated), 0);

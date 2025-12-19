@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Track } from '../../services/audio';
 import {
@@ -7,10 +7,12 @@ import {
   ScanProgress,
   ViewMode,
   LibraryPath,
+  AlbumSummary,
 } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './MusicLibrary.css';
 
 interface MusicLibraryProps {
@@ -25,7 +27,7 @@ interface MusicLibraryProps {
 let moduleCache: {
   tracks: Track[];
   artists: string[];
-  albums: { album: string; artist: string; cover?: string }[];
+  albums: AlbumSummary[];
   genres: string[];
   timestamp: number;
 } | null = null;
@@ -37,6 +39,10 @@ export function clearModuleCache() {
   moduleCache = null;
 }
 
+function albumKey(album: string, artist: string): string {
+  return `${album}::${artist}`;
+}
+
 export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   isOpen = true,
   onClose,
@@ -45,11 +51,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   embedded = false,
 }) => {
   const { navigateTo } = useNavigation();
-  const [viewMode, setViewMode] = useState<ViewMode>('albums');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    return isTauriRuntime() ? 'all' : 'albums';
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [tracks, setTracks] = useState<Track[]>([]);
   const [artists, setArtists] = useState<string[]>([]);
-  const [albums, setAlbums] = useState<{ album: string; artist: string; cover?: string }[]>([]);
+  const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [genres, setGenres] = useState<string[]>([]);
   const [libraryStats, setLibraryStats] = useState<LibraryStats>({
     totalTracks: 0,
@@ -67,6 +75,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [libraryPaths, setLibraryPaths] = useState<LibraryPath[]>([]);
   const [showPathsManager, setShowPathsManager] = useState(false);
   const [isRefreshingPermissions, setIsRefreshingPermissions] = useState(false);
+  const requestedAlbumCoversRef = useRef<Set<string>>(new Set());
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
+  const albumCardElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const albumCardRefCallbacksRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(
+    new Map()
+  );
+  const albumCoverObserverRef = useRef<IntersectionObserver | null>(null);
+  const albumCoverQueueRef = useRef<string[]>([]);
+  const albumCoverInFlightRef = useRef<number>(0);
+  const albumCoverDrainRafRef = useRef<number | null>(null);
+  const albumInfoByKeyRef = useRef<Map<string, AlbumSummary>>(new Map());
+  const albumCoverGenerationRef = useRef<number>(0);
 
   // 排序状态
   const [sortBy, setSortBy] = useState<
@@ -103,6 +123,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       console.log('✅ Using module cache for instant display');
       setTracks(moduleCache.tracks);
       setArtists(moduleCache.artists);
+      requestedAlbumCoversRef.current.clear();
       setAlbums(moduleCache.albums);
       setGenres(moduleCache.genres);
 
@@ -143,6 +164,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setTracks(allTracks);
       setArtists(allArtists);
+      requestedAlbumCoversRef.current.clear();
       setAlbums(allAlbums);
       setGenres(allGenres);
 
@@ -198,6 +220,148 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const map = new Map<string, AlbumSummary>();
+    for (const a of albums) {
+      map.set(albumKey(a.album, a.artist), a);
+    }
+    albumInfoByKeyRef.current = map;
+  }, [albums]);
+
+  const getAlbumCardRef = useCallback((key: string) => {
+    const existing = albumCardRefCallbacksRef.current.get(key);
+    if (existing) return existing;
+
+    const cb = (el: HTMLDivElement | null) => {
+      const previousEl = albumCardElementsRef.current.get(key);
+      if (previousEl && previousEl !== el) {
+        albumCoverObserverRef.current?.unobserve(previousEl);
+      }
+
+      if (el) {
+        albumCardElementsRef.current.set(key, el);
+        albumCoverObserverRef.current?.observe(el);
+      } else {
+        albumCardElementsRef.current.delete(key);
+      }
+    };
+
+    albumCardRefCallbacksRef.current.set(key, cb);
+    return cb;
+  }, []);
+
+  // Desktop/Tauri: 专辑封面懒加载（IntersectionObserver + 并发队列）
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!isTauriRuntime()) return;
+    if (viewMode !== 'albums') return;
+
+    const root = mainScrollRef.current;
+    if (!root) return;
+
+    const generation = (albumCoverGenerationRef.current += 1);
+    let disposed = false;
+
+    albumCoverQueueRef.current = [];
+    albumCoverInFlightRef.current = 0;
+
+    const maxConcurrency = 4;
+
+    function scheduleDrain() {
+      if (disposed) return;
+      if (albumCoverDrainRafRef.current != null) return;
+      albumCoverDrainRafRef.current = window.requestAnimationFrame(() => {
+        albumCoverDrainRafRef.current = null;
+        drainQueue();
+      });
+    }
+
+    async function loadCoverForAlbumKey(key: string) {
+      const info = albumInfoByKeyRef.current.get(key);
+      if (!info || info.cover || !info.coverTrackPath) return;
+
+      const stub: Track = {
+        id: info.coverTrackId || `cover-${info.album}-${info.artist}`,
+        title: info.album,
+        album: info.album,
+        artist: info.artist,
+        filePath: info.coverTrackPath,
+        path: info.coverTrackPath,
+      };
+
+      const url = await musicLibraryService.getCoverUrlForTrack(stub);
+      if (!url) return;
+      if (disposed) return;
+      if (albumCoverGenerationRef.current !== generation) return;
+
+      setAlbums((prev) =>
+        prev.map((a) => (albumKey(a.album, a.artist) === key ? { ...a, cover: url } : a))
+      );
+    }
+
+    function drainQueue() {
+      if (disposed) return;
+
+      while (albumCoverInFlightRef.current < maxConcurrency) {
+        const nextKey = albumCoverQueueRef.current.shift();
+        if (!nextKey) return;
+
+        albumCoverInFlightRef.current += 1;
+        void loadCoverForAlbumKey(nextKey)
+          .catch(() => {})
+          .finally(() => {
+            albumCoverInFlightRef.current = Math.max(0, albumCoverInFlightRef.current - 1);
+            scheduleDrain();
+          });
+      }
+    }
+
+    function enqueue(key: string) {
+      if (disposed) return;
+      if (requestedAlbumCoversRef.current.has(key)) return;
+
+      const info = albumInfoByKeyRef.current.get(key);
+      if (!info || info.cover || !info.coverTrackPath) return;
+
+      requestedAlbumCoversRef.current.add(key);
+      albumCoverQueueRef.current.push(key);
+      scheduleDrain();
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const key = (entry.target as HTMLElement).dataset.albumKey;
+          if (!key) continue;
+          enqueue(key);
+        }
+      },
+      {
+        root,
+        rootMargin: '600px 0px',
+        threshold: 0.01,
+      }
+    );
+
+    albumCoverObserverRef.current = observer;
+    for (const el of albumCardElementsRef.current.values()) {
+      observer.observe(el);
+    }
+
+    return () => {
+      disposed = true;
+      if (albumCoverDrainRafRef.current != null) {
+        cancelAnimationFrame(albumCoverDrainRafRef.current);
+        albumCoverDrainRafRef.current = null;
+      }
+      observer.disconnect();
+      if (albumCoverObserverRef.current === observer) {
+        albumCoverObserverRef.current = null;
+      }
+    };
+  }, [isOpen, viewMode]);
+
   // 处理文件夹扫描
   const handleScanFolder = async () => {
     try {
@@ -215,6 +379,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     } catch (error) {
       console.error('Failed to scan folder:', error);
       setErrorMessage('扫描文件夹失败: ' + (error as Error).message);
+    }
+  };
+
+  const handleCancelScan = async () => {
+    try {
+      await musicLibraryService.cancelCurrentScan();
+    } catch (error) {
+      console.error('Failed to cancel scan:', error);
     }
   };
 
@@ -262,7 +434,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       const uniqueGenres = Array.from(new Set(results.map((t) => t.genre).filter(Boolean)));
 
       // 提取专辑信息（专辑名 + 艺术家 + 封面）
-      const albumMap = new Map<string, { album: string; artist: string; cover?: string }>();
+      const albumMap = new Map<string, AlbumSummary>();
       results.forEach((track) => {
         if (track.album) {
           const key = `${track.album}-${track.artist}`;
@@ -270,7 +442,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             albumMap.set(key, {
               album: track.album,
               artist: track.artist || '未知艺术家',
-              cover: track.coverUrl,
+              cover:
+                typeof track.coverUrl === 'string' &&
+                (track.coverUrl.toLowerCase().startsWith('data:') ||
+                  track.coverUrl.toLowerCase().startsWith('blob:') ||
+                  track.coverUrl.toLowerCase().startsWith('http:') ||
+                  track.coverUrl.toLowerCase().startsWith('https:'))
+                  ? track.coverUrl
+                  : undefined,
+              coverTrackPath: track.filePath || track.path,
+              coverTrackId: track.id,
             });
           }
         }
@@ -279,6 +460,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setArtists(uniqueArtists as string[]);
       setGenres(uniqueGenres as string[]);
+      requestedAlbumCoversRef.current.clear();
       setAlbums(uniqueAlbums);
     } else {
       // 清空搜索时恢复原始数据
@@ -291,6 +473,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setTracks(allTracks);
       setArtists(allArtists);
+      requestedAlbumCoversRef.current.clear();
       setAlbums(allAlbums);
       setGenres(allGenres);
     }
@@ -729,7 +912,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           </div>
         )}
 
-        <div className="music-library-main">
+        <div className="music-library-main" ref={mainScrollRef}>
           {libraryStats.totalTracks === 0 ? (
             <div className="music-library-empty">
               <div className="music-library-empty-icon">⊞</div>
@@ -742,22 +925,31 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             <>
               {viewMode === 'albums' && (
                 <div className="music-library-grid">
-                  {getSortedAlbums().map(({ album, artist, cover }) => (
-                    <div
-                      key={`${album}-${artist}`}
-                      className="music-library-album-card"
-                      onClick={() => handleAlbumClick(album, artist)}
-                      onDoubleClick={() => handlePlayAlbum(album)}
-                      onContextMenu={(e) => handleAlbumContextMenu(album, artist, e)}
-                      title={`单击查看专辑 / 双击播放 / 右键菜单`}
-                    >
-                      <div className="music-library-album-cover">
-                        {cover ? <img src={cover} alt={album} /> : '◉'}
+                  {getSortedAlbums().map(({ album, artist, cover }) => {
+                    const key = albumKey(album, artist);
+                    return (
+                      <div
+                        key={`${album}-${artist}`}
+                        ref={getAlbumCardRef(key)}
+                        data-album-key={key}
+                        className="music-library-album-card"
+                        onClick={() => handleAlbumClick(album, artist)}
+                        onDoubleClick={() => handlePlayAlbum(album)}
+                        onContextMenu={(e) => handleAlbumContextMenu(album, artist, e)}
+                        title={`单击查看专辑 / 双击播放 / 右键菜单`}
+                      >
+                        <div className="music-library-album-cover">
+                          {cover ? (
+                            <img src={cover} alt={album} loading="lazy" decoding="async" />
+                          ) : (
+                            '◉'
+                          )}
+                        </div>
+                        <div className="music-library-album-title">{album}</div>
+                        <div className="music-library-album-artist">{artist}</div>
                       </div>
-                      <div className="music-library-album-title">{album}</div>
-                      <div className="music-library-album-artist">{artist}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -819,6 +1011,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         <div className="music-library-scan-progress">
           <div className="music-library-scan-header">
             <div className="music-library-scan-title">🔍 扫描中...</div>
+            <button
+              className="music-library-scan-cancel"
+              onClick={handleCancelScan}
+              title="取消扫描"
+            >
+              取消
+            </button>
             <div className="music-library-scan-percentage">
               {scanProgress.progress ? `${scanProgress.progress.toFixed(1)}%` : '0%'}
             </div>

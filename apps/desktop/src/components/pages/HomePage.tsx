@@ -40,7 +40,7 @@ export const HomePage: React.FC = () => {
               data-active={engineType === 'web'}
               onClick={() => handleEngineChange('web')}
             >
-              Web Audio
+              Web Audio（兼容/调试）
             </button>
             <button
               type="button"
@@ -49,7 +49,7 @@ export const HomePage: React.FC = () => {
               onClick={() => handleEngineChange('native')}
               title={isNativeAvailable ? undefined : '原生音频引擎开发中'}
             >
-              Native Audio
+              Native Audio（默认）
             </button>
           </div>
 

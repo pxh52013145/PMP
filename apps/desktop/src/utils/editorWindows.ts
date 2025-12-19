@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/tauri';
+import { isTauriRuntime } from './tauriRuntime';
 
 export type EditorWindowType =
   | 'control'
@@ -30,6 +31,9 @@ const CACHE_DURATION = 5000; // 5 秒缓存
  * 打开编辑器窗口
  */
 export async function openEditorWindow(config: EditorWindowConfig): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error('Editor windows require the Tauri runtime (use `pnpm dev:tauri`).');
+  }
   try {
     await invoke('open_editor_window', {
       windowType: config.type,
@@ -66,6 +70,7 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
 export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
   try {
     // 先关闭所有子窗口
+    if (!isTauriRuntime()) return;
     const childWindows = WINDOW_HIERARCHY[type] || [];
     for (const childType of childWindows) {
       await closeEditorWindow(childType); // 递归关闭子窗口及其子窗口
@@ -88,6 +93,7 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
  */
 export async function closeAllEditorWindows(): Promise<void> {
   try {
+    if (!isTauriRuntime()) return;
     await invoke('close_all_editor_windows');
     // 清除所有窗口的位置缓存
     windowPositionCache.clear();

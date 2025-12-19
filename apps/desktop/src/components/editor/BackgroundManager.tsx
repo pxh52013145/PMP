@@ -1,7 +1,7 @@
 import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
 import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../types/background';
 import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
-import { readJson } from '../../modules/storage';
+import { readJson, readString, tryWriteJson, writeString } from '../../modules/storage';
 import './BackgroundManager.css';
 
 interface BackgroundManagerProps {
@@ -67,16 +67,13 @@ export const BackgroundManager = memo(function BackgroundManager({
 
   // 保存历史记录到 localStorage（使用统一的 STORAGE_KEYS）
   useEffect(() => {
-    const serialized = JSON.stringify(history);
-    try {
-      localStorage.setItem(STORAGE_KEYS.BACKGROUND_HISTORY, serialized);
+    const ok = tryWriteJson(STORAGE_KEYS.BACKGROUND_HISTORY, history);
+    if (ok) {
       setHistoryPersistError(null);
-    } catch (error) {
-      console.error('[BackgroundManager] Failed to persist background history:', error);
-      setHistoryPersistError(
-        '历史记录保存失败（可能是存储空间不足）。当前会话可用，但重启后可能丢失。'
-      );
+      return;
     }
+
+    setHistoryPersistError('历史记录保存失败（可能是存储空间不足）。当前会话可用，但重启后可能丢失。');
   }, [history]);
 
   const currentConfig = settings[mode];
@@ -605,7 +602,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       }
 
       setHistory(nextHistory);
-      localStorage.setItem('pixel-matrix-background-media-migration-v1', '1');
+      writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, '1');
       setMaintenanceMessage(
         dropped > 0 ? `迁移完成（已移除 ${dropped} 条无法迁移的旧记录）` : '迁移完成'
       );
@@ -673,7 +670,7 @@ export const BackgroundManager = memo(function BackgroundManager({
   }, [getConfigMediaRelPath, history, maintenanceBusy]);
 
   useEffect(() => {
-    const migrated = localStorage.getItem('pixel-matrix-background-media-migration-v1') === '1';
+    const migrated = readString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1) === '1';
     if (migrated) return;
     if (!hasLegacyDataUrls) return;
     void runLegacyMigration();

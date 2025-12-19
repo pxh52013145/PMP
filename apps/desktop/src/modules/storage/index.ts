@@ -8,11 +8,13 @@ export {
   readString,
   readJson,
   writeString,
+  tryWriteString,
   writeJson,
+  tryWriteJson,
+  removeKey,
   flushStorageWrites,
   type StorageWriteMode,
   type StorageWriteOptions,
 } from './localStorage';
 export { usePersistentSetting } from './usePersistentSetting';
 export type { UsePersistentSettingOptions, PersistentFormat } from './usePersistentSetting';
-

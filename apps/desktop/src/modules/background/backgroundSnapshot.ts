@@ -1,5 +1,5 @@
-const BACKGROUND_SETTINGS_KEY = 'pixel-matrix-background-settings';
-const BACKGROUND_HISTORY_KEY = 'pixel-matrix-background-history';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { readString, writeString } from '../storage';
 
 const SETTINGS_FILE = 'pixel-matrix-background-settings.snapshot.json';
 const HISTORY_FILE = 'pixel-matrix-background-history.snapshot.json';
@@ -27,10 +27,10 @@ export async function persistBackgroundSnapshots(options: {
   storageKey: string;
   json: string;
 }): Promise<void> {
-  if (options.storageKey === BACKGROUND_SETTINGS_KEY) {
+  if (options.storageKey === STORAGE_KEYS.BACKGROUND_SETTINGS) {
     await tryWriteSnapshot(SETTINGS_FILE, options.json);
   }
-  if (options.storageKey === BACKGROUND_HISTORY_KEY) {
+  if (options.storageKey === STORAGE_KEYS.BACKGROUND_HISTORY) {
     await tryWriteSnapshot(HISTORY_FILE, options.json);
   }
 }
@@ -42,27 +42,19 @@ export async function restoreBackgroundSnapshots(): Promise<{
   let restoredSettings = false;
   let restoredHistory = false;
 
-  if (!localStorage.getItem(BACKGROUND_SETTINGS_KEY)) {
+  if (!readString(STORAGE_KEYS.BACKGROUND_SETTINGS)) {
     const settings = await tryReadSnapshot<unknown>(SETTINGS_FILE);
     if (settings) {
-      try {
-        localStorage.setItem(BACKGROUND_SETTINGS_KEY, JSON.stringify(settings));
-        restoredSettings = true;
-      } catch {
-        // ignore
-      }
+      writeString(STORAGE_KEYS.BACKGROUND_SETTINGS, JSON.stringify(settings));
+      restoredSettings = true;
     }
   }
 
-  if (!localStorage.getItem(BACKGROUND_HISTORY_KEY)) {
+  if (!readString(STORAGE_KEYS.BACKGROUND_HISTORY)) {
     const history = await tryReadSnapshot<unknown>(HISTORY_FILE);
     if (history) {
-      try {
-        localStorage.setItem(BACKGROUND_HISTORY_KEY, JSON.stringify(history));
-        restoredHistory = true;
-      } catch {
-        // ignore
-      }
+      writeString(STORAGE_KEYS.BACKGROUND_HISTORY, JSON.stringify(history));
+      restoredHistory = true;
     }
   }
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './WindowBorder.css';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
+import { readJson, readString } from '../../modules/storage';
 
 export default function WindowBorder() {
   const topGlowRef = useRef<HTMLDivElement>(null);
@@ -11,20 +12,18 @@ export default function WindowBorder() {
 
   // 效果状态
   const [backgroundEffect, setBackgroundEffect] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
+    return readString(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
   });
   const [borderEffect, setBorderEffect] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.BORDER_EFFECT) || 'none';
+    return readString(STORAGE_KEYS.BORDER_EFFECT) || 'none';
   });
 
   // 颜色主题状态
   const [backgroundThemeColor, setBackgroundThemeColor] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
-    return saved ? JSON.parse(saved) : { id: 'cyan', rgb: [0, 255, 136] };
+    return readJson(STORAGE_KEYS.BACKGROUND_THEME_COLOR, { id: 'cyan', rgb: [0, 255, 136] });
   });
   const [borderThemeColor, setBorderThemeColor] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.BORDER_THEME_COLOR);
-    return saved ? JSON.parse(saved) : { id: 'cyan', rgb: [0, 255, 136] };
+    return readJson(STORAGE_KEYS.BORDER_THEME_COLOR, { id: 'cyan', rgb: [0, 255, 136] });
   });
 
   useEffect(() => {
@@ -50,17 +49,20 @@ export default function WindowBorder() {
       }
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
-      // 检查边框效果是否关闭
-      const currentBorderEffect = localStorage.getItem(STORAGE_KEYS.BORDER_EFFECT) || 'none';
+    let moveRaf: number | null = null;
+    let pendingMove: { clientX: number; clientY: number } | null = null;
 
-      // 如果边框效果是none，不显示鼠标悬停的边框光效
-      if (currentBorderEffect === 'none') {
+    const flushMove = () => {
+      moveRaf = null;
+      if (!pendingMove) return;
+      const { clientX, clientY } = pendingMove;
+      pendingMove = null;
+
+      // 如果边框效果是 none，不显示鼠标悬停的边框光效
+      if (borderEffect === 'none') {
         clearAllGlows();
         return;
       }
-
-      const { clientX, clientY } = e;
 
       const windowWidth = window.innerWidth;
       const windowHeight = window.innerHeight;
@@ -126,13 +128,29 @@ export default function WindowBorder() {
       }
     };
 
+    const handleMouseMove = (e: MouseEvent) => {
+      pendingMove = { clientX: e.clientX, clientY: e.clientY };
+      if (moveRaf !== null) return;
+      moveRaf = window.requestAnimationFrame(flushMove);
+    };
+
     // 鼠标离开窗口时清除所有光效
     const handleMouseLeave = () => {
+      pendingMove = null;
+      if (moveRaf !== null) {
+        window.cancelAnimationFrame(moveRaf);
+        moveRaf = null;
+      }
       clearAllGlows();
     };
 
     // 窗口失焦时也清除光效（后备方案）
     const handleBlur = () => {
+      pendingMove = null;
+      if (moveRaf !== null) {
+        window.cancelAnimationFrame(moveRaf);
+        moveRaf = null;
+      }
       clearAllGlows();
     };
 
@@ -150,8 +168,9 @@ export default function WindowBorder() {
       document.removeEventListener('mouseleave', handleMouseLeave);
       window.removeEventListener('mouseleave', handleMouseLeave);
       window.removeEventListener('blur', handleBlur);
+      if (moveRaf !== null) window.cancelAnimationFrame(moveRaf);
     };
-  }, []);
+  }, [borderEffect]);
 
   // 初始化时检查边框效果状态
   useEffect(() => {
@@ -202,13 +221,13 @@ export default function WindowBorder() {
     const setupListeners = async () => {
       // 监听背景效果变化
       const unlistenBg = await setupTauriListener(TAURI_EVENTS.BACKGROUND_EFFECT_UPDATED, () => {
-        const effect = localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
+        const effect = readString(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
         setBackgroundEffect(effect);
       });
 
       // 监听边框效果变化
       const unlistenBorder = await setupTauriListener(TAURI_EVENTS.BORDER_EFFECT_UPDATED, () => {
-        const effect = localStorage.getItem(STORAGE_KEYS.BORDER_EFFECT) || 'none';
+        const effect = readString(STORAGE_KEYS.BORDER_EFFECT) || 'none';
         setBorderEffect(effect);
 
         // 如果切换到无效果，立即清除所有边框光效
@@ -236,10 +255,7 @@ export default function WindowBorder() {
       const unlistenBgColor = await setupTauriListener(
         TAURI_EVENTS.BACKGROUND_THEME_COLOR_UPDATED,
         () => {
-          const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
-          if (saved) {
-            setBackgroundThemeColor(JSON.parse(saved));
-          }
+          setBackgroundThemeColor(readJson(STORAGE_KEYS.BACKGROUND_THEME_COLOR, { id: 'cyan', rgb: [0, 255, 136] }));
         }
       );
 
@@ -247,10 +263,7 @@ export default function WindowBorder() {
       const unlistenBorderColor = await setupTauriListener(
         TAURI_EVENTS.BORDER_THEME_COLOR_UPDATED,
         () => {
-          const saved = localStorage.getItem(STORAGE_KEYS.BORDER_THEME_COLOR);
-          if (saved) {
-            setBorderThemeColor(JSON.parse(saved));
-          }
+          setBorderThemeColor(readJson(STORAGE_KEYS.BORDER_THEME_COLOR, { id: 'cyan', rgb: [0, 255, 136] }));
         }
       );
 

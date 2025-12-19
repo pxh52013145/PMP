@@ -30,7 +30,7 @@ export const BackButton: React.FC = () => {
   const logic = useBackButtonLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('back-button');
+  const themeConfig = useComponentTheme('btn-back');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

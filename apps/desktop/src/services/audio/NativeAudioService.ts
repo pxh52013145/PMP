@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { AudioState, IAudioService, PlayMode, Playlist, Track, PlaybackState } from './types';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { readString } from '../../modules/storage';
 
 type StateListener = (state: AudioState) => void;
 
@@ -42,6 +43,18 @@ export class NativeAudioService implements IAudioService {
   private spectrumData: Uint8Array | null = null;
   private restoredOutputDevice = false;
   private restoredGainDb = false;
+  private fallbackTicker: number | null = null;
+  private fallbackClockStartedAtMs: number | null = null;
+  private fallbackClockBaseTimeSec: number = 0;
+  private lastBackendTimeUpdateAtMs: number = 0;
+
+  private isProbablyAbsolutePath(value: string): boolean {
+    if (!value) return false;
+    if (/^[a-zA-Z]:[\\/]/.test(value)) return true; // Windows drive
+    if (value.startsWith('\\\\')) return true; // UNC path
+    if (value.startsWith('/')) return true; // unix
+    return false;
+  }
 
   constructor() {
     this.state = {
@@ -68,6 +81,40 @@ export class NativeAudioService implements IAudioService {
     this.state = { ...this.state, ...partial };
     this.stateChangeCallbacks.forEach((cb) => cb(this.state));
     return this.state;
+  }
+
+  private ensureFallbackTicker() {
+    if (typeof window === 'undefined') return;
+    if (this.fallbackTicker !== null) return;
+
+    this.fallbackTicker = window.setInterval(() => {
+      if (this.state.playbackState !== 'playing') return;
+
+      const now = performance.now();
+      if (now - this.lastBackendTimeUpdateAtMs < 700) return;
+
+      if (this.fallbackClockStartedAtMs === null) {
+        this.fallbackClockBaseTimeSec = this.state.currentTime;
+        this.fallbackClockStartedAtMs = now;
+      }
+
+      const predicted =
+        this.fallbackClockBaseTimeSec + (now - this.fallbackClockStartedAtMs) / 1000;
+      const clamped =
+        this.state.duration > 0 ? Math.min(predicted, this.state.duration) : predicted;
+
+      if (!isFinite(clamped)) return;
+      if (Math.abs(clamped - this.state.currentTime) < 0.05) return;
+
+      const nextState = this.updateState({ currentTime: clamped });
+      this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+    }, 250);
+  }
+
+  private stopFallbackTicker() {
+    if (this.fallbackTicker === null) return;
+    window.clearInterval(this.fallbackTicker);
+    this.fallbackTicker = null;
   }
 
   private getTrackPath(track: Track): string | null {
@@ -154,6 +201,15 @@ export class NativeAudioService implements IAudioService {
           this.applyPlaybackStateSideEffects(merged.playbackState);
         }
         if (typeof next.currentTime !== 'undefined') {
+          this.lastBackendTimeUpdateAtMs = performance.now();
+          if (merged.playbackState === 'playing') {
+            this.fallbackClockBaseTimeSec = Number(next.currentTime) || 0;
+            this.fallbackClockStartedAtMs = this.lastBackendTimeUpdateAtMs;
+            this.ensureFallbackTicker();
+          } else {
+            this.fallbackClockBaseTimeSec = Number(next.currentTime) || 0;
+            this.fallbackClockStartedAtMs = null;
+          }
           this.timeUpdateCallbacks.forEach((cb) => cb(next.currentTime as number));
         }
         if (next.ended) {
@@ -184,7 +240,7 @@ export class NativeAudioService implements IAudioService {
     this.restoredOutputDevice = true;
 
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
       const deviceName = typeof parsed === 'string' ? parsed : null;
@@ -200,7 +256,7 @@ export class NativeAudioService implements IAudioService {
     this.restoredGainDb = true;
 
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB);
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
       const db = typeof parsed === 'number' ? parsed : null;
@@ -281,8 +337,12 @@ export class NativeAudioService implements IAudioService {
     if (!track) return;
 
     const trackPath = this.getTrackPath(track);
-    if (!trackPath) {
-      this.emitError(new Error('Track path is missing'));
+    if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
+      const error = new Error(
+        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+      ) as Error & { code?: string };
+      error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+      this.emitError(error);
       return;
     }
 
@@ -319,18 +379,25 @@ export class NativeAudioService implements IAudioService {
     }
     await this.invokeCommand('native_audio_play');
     const nextState = this.updateState({ playbackState: 'playing' });
+    this.fallbackClockBaseTimeSec = nextState.currentTime;
+    this.fallbackClockStartedAtMs = performance.now();
+    this.ensureFallbackTicker();
     this.applyPlaybackStateSideEffects(nextState.playbackState);
   }
 
   async pause(): Promise<void> {
     await this.invokeCommand('native_audio_pause');
     const nextState = this.updateState({ playbackState: 'paused' });
+    this.fallbackClockBaseTimeSec = nextState.currentTime;
+    this.fallbackClockStartedAtMs = null;
     this.applyPlaybackStateSideEffects(nextState.playbackState);
   }
 
   stop(): void {
     void this.invokeCommand('native_audio_stop');
     this.updateState({ playbackState: 'stopped', currentTime: 0 });
+    this.fallbackClockBaseTimeSec = 0;
+    this.fallbackClockStartedAtMs = null;
     this.timeUpdateCallbacks.forEach((cb) => cb(0));
   }
 
@@ -338,7 +405,12 @@ export class NativeAudioService implements IAudioService {
     const duration = this.state.duration || time;
     const clamped = Math.max(0, Math.min(time, duration));
     void this.invokeCommand('native_audio_seek', { time: clamped });
-    this.updateState({ currentTime: clamped });
+    const nextState = this.updateState({ currentTime: clamped });
+    this.fallbackClockBaseTimeSec = clamped;
+    this.fallbackClockStartedAtMs = nextState.playbackState === 'playing' ? performance.now() : null;
+    if (nextState.playbackState === 'playing') {
+      this.ensureFallbackTicker();
+    }
     this.timeUpdateCallbacks.forEach((cb) => cb(clamped));
   }
 
@@ -630,6 +702,7 @@ export class NativeAudioService implements IAudioService {
   // ===== 清理 =====
   destroy(): void {
     this.stop();
+    this.stopFallbackTicker();
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();

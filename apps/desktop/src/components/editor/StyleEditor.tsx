@@ -1,6 +1,7 @@
 import { memo, useState, useCallback, useEffect } from 'react';
 import './StyleEditor.css';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
+import { readJson, readString, writeJson, writeString } from '../../modules/storage';
 
 /**
  * Pixel 形状预设
@@ -135,35 +136,33 @@ const COLOR_THEME_PRESETS: ColorThemePreset[] = [
 export const StyleEditor = memo(function StyleEditor() {
   // 从 localStorage 读取初始值（使用统一的 STORAGE_KEYS）
   const [selectedPixelShape, setSelectedPixelShape] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.PIXEL_SHAPE) || 'circle';
+    return readString(STORAGE_KEYS.PIXEL_SHAPE) || 'circle';
   });
   const [selectedBackgroundEffect, setSelectedBackgroundEffect] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
+    return readString(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
   });
   const [selectedBorderEffect, setSelectedBorderEffect] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.BORDER_EFFECT) || 'none';
+    return readString(STORAGE_KEYS.BORDER_EFFECT) || 'none';
   });
   const [pixelSize, setPixelSize] = useState(() => {
-    const savedSize = localStorage.getItem(STORAGE_KEYS.PIXEL_SIZE);
+    const savedSize = readString(STORAGE_KEYS.PIXEL_SIZE);
     return savedSize ? Math.round(parseFloat(savedSize) * 100) : 100;
   });
   const [pixelOpacity, setPixelOpacity] = useState(() => {
-    const savedOpacity = localStorage.getItem(STORAGE_KEYS.PIXEL_OPACITY);
+    const savedOpacity = readString(STORAGE_KEYS.PIXEL_OPACITY);
     return savedOpacity ? Math.round(parseFloat(savedOpacity) * 100) : 100;
   });
   const [backgroundThemeColor, setBackgroundThemeColor] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR);
-    return saved ? JSON.parse(saved) : { id: 'cyan', rgb: [0, 255, 136] };
+    return readJson(STORAGE_KEYS.BACKGROUND_THEME_COLOR, { id: 'cyan', rgb: [0, 255, 136] });
   });
   const [borderThemeColor, setBorderThemeColor] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.BORDER_THEME_COLOR);
-    return saved ? JSON.parse(saved) : { id: 'cyan', rgb: [0, 255, 136] };
+    return readJson(STORAGE_KEYS.BORDER_THEME_COLOR, { id: 'cyan', rgb: [0, 255, 136] });
   });
 
   // 应用 Pixel 形状设置
   const applyPixelShape = async (presetId: string) => {
     setSelectedPixelShape(presetId);
-    localStorage.setItem(STORAGE_KEYS.PIXEL_SHAPE, presetId);
+    writeString(STORAGE_KEYS.PIXEL_SHAPE, presetId);
 
     // 触发全局事件通知主窗口更新 Pixel 形状
     await broadcastSignal(TAURI_EVENTS.PIXEL_SHAPE_UPDATED);
@@ -176,7 +175,7 @@ export const StyleEditor = memo(function StyleEditor() {
 
     // 转换为 0.5-1.0 的比例
     const scale = value / 100;
-    localStorage.setItem(STORAGE_KEYS.PIXEL_SIZE, scale.toString());
+    writeString(STORAGE_KEYS.PIXEL_SIZE, scale.toString());
 
     // 触发全局事件
     await broadcastSignal(TAURI_EVENTS.PIXEL_SIZE_UPDATED);
@@ -189,7 +188,7 @@ export const StyleEditor = memo(function StyleEditor() {
 
     // 转换为 0.0-1.0 的比例
     const opacity = value / 100;
-    localStorage.setItem(STORAGE_KEYS.PIXEL_OPACITY, opacity.toString());
+    writeString(STORAGE_KEYS.PIXEL_OPACITY, opacity.toString());
 
     // 触发全局事件
     await broadcastSignal(TAURI_EVENTS.PIXEL_OPACITY_UPDATED);
@@ -198,7 +197,7 @@ export const StyleEditor = memo(function StyleEditor() {
   // 应用背景效果设置
   const applyBackgroundEffect = async (presetId: string) => {
     setSelectedBackgroundEffect(presetId);
-    localStorage.setItem(STORAGE_KEYS.BACKGROUND_EFFECT, presetId);
+    writeString(STORAGE_KEYS.BACKGROUND_EFFECT, presetId);
 
     // 触发全局事件通知主窗口更新背景效果
     await broadcastSignal(TAURI_EVENTS.BACKGROUND_EFFECT_UPDATED);
@@ -207,7 +206,7 @@ export const StyleEditor = memo(function StyleEditor() {
   // 应用边框效果设置
   const applyBorderEffect = async (presetId: string) => {
     setSelectedBorderEffect(presetId);
-    localStorage.setItem(STORAGE_KEYS.BORDER_EFFECT, presetId);
+    writeString(STORAGE_KEYS.BORDER_EFFECT, presetId);
 
     // 触发全局事件通知主窗口更新边框效果
     await broadcastSignal(TAURI_EVENTS.BORDER_EFFECT_UPDATED);
@@ -217,7 +216,7 @@ export const StyleEditor = memo(function StyleEditor() {
   const applyBackgroundThemeColor = useCallback(async (theme: ColorThemePreset) => {
     const themeData = { id: theme.id, rgb: theme.rgb };
     setBackgroundThemeColor(themeData);
-    localStorage.setItem(STORAGE_KEYS.BACKGROUND_THEME_COLOR, JSON.stringify(themeData));
+    writeJson(STORAGE_KEYS.BACKGROUND_THEME_COLOR, themeData);
 
     // 设置CSS变量
     document.documentElement.style.setProperty('--bg-theme-color-r', theme.rgb[0].toString());
@@ -232,7 +231,7 @@ export const StyleEditor = memo(function StyleEditor() {
   const applyBorderThemeColor = useCallback(async (theme: ColorThemePreset) => {
     const themeData = { id: theme.id, rgb: theme.rgb };
     setBorderThemeColor(themeData);
-    localStorage.setItem(STORAGE_KEYS.BORDER_THEME_COLOR, JSON.stringify(themeData));
+    writeJson(STORAGE_KEYS.BORDER_THEME_COLOR, themeData);
 
     // 设置CSS变量
     document.documentElement.style.setProperty('--border-theme-color-r', theme.rgb[0].toString());

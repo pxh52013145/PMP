@@ -17,6 +17,7 @@ import { BackButton } from '../components/magnet/BackButton';
 import { DebugButton } from '../components/magnet/DebugButton';
 import { AudioVisualizerMagnet } from '../components/magnet/AudioVisualizerMagnet';
 import { Magnet } from '../types/pixel';
+import { registerMagnetVariant } from './variantRegistry';
 
 export type MagnetRendererSource = 'builtin' | 'plugin' | 'runtime';
 
@@ -92,6 +93,7 @@ const createTextPreview = (label: string) => (
 );
 
 let builtinRegistered = false;
+let builtinVariantsRegistered = false;
 
 function ensureBuiltinRenderers() {
   if (builtinRegistered) return;
@@ -222,4 +224,75 @@ function ensureBuiltinRenderers() {
 
   builtinDefinitions.forEach((definition) => registerMagnetRenderer(definition, { overwrite: false }));
   builtinRegistered = true;
+  ensureBuiltinVariants();
+}
+
+function ensureBuiltinVariants() {
+  if (builtinVariantsRegistered) return;
+
+  const register = (rendererId: string, id: string, label: string, description?: string) => {
+    registerMagnetVariant(
+      rendererId,
+      {
+        id,
+        label,
+        description,
+        source: 'builtin',
+      },
+      { overwrite: false }
+    );
+  };
+
+  register('track-info', 'default', 'Default', 'Track info default variant');
+  register('track-info', 'spinning-vinyl', 'Spinning Vinyl');
+  register('track-info', 'minimal', 'Minimal');
+  register('track-info', 'card', 'Card');
+
+  register('progress-bar', 'default', 'Default');
+  register('progress-bar', 'standard', 'Standard');
+  register('progress-bar', 'minimal', 'Minimal');
+
+  register('btn-play-pause', 'default', 'Default');
+  register('btn-play-pause', 'standard', 'Standard');
+  register('btn-play-pause', 'rounded', 'Rounded');
+
+  register('btn-previous', 'default', 'Default');
+  register('btn-previous', 'standard', 'Standard');
+  register('btn-previous', 'rounded', 'Rounded');
+
+  register('btn-next', 'default', 'Default');
+  register('btn-next', 'standard', 'Standard');
+  register('btn-next', 'rounded', 'Rounded');
+
+  register('btn-mode', 'default', 'Default');
+  register('btn-mode', 'standard', 'Standard');
+  register('btn-mode', 'minimal', 'Minimal');
+
+  register('btn-back', 'default', 'Default');
+  register('btn-back', 'standard', 'Standard');
+  register('btn-back', 'rounded', 'Rounded');
+
+  register('btn-volume', 'default', 'Default');
+  register('btn-volume', 'standard', 'Standard');
+  register('btn-volume', 'cyber', 'Cyber');
+
+  register('btn-window-pin', 'default', 'Default');
+  register('btn-window-pin', 'standard', 'Standard');
+
+  register('navigation-page', 'default', 'Default');
+  register('navigation-page', 'standard', 'Standard');
+
+  register('btn-debug', 'default', 'Default');
+  register('btn-debug', 'standard', 'Standard');
+
+  register('btn-play-queue', 'default', 'Default');
+  register('btn-play-queue', 'standard', 'Standard');
+
+  register('btn-playlists', 'default', 'Default');
+  register('btn-playlists', 'standard', 'Standard');
+
+  register('btn-music-library', 'default', 'Default');
+  register('btn-music-library', 'standard', 'Standard');
+
+  builtinVariantsRegistered = true;
 }

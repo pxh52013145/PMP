@@ -1,5 +1,8 @@
 import * as PIXI from 'pixi.js';
 import { MATRIX_CONFIG, PIXEL_COLORS } from '../constants/config';
+import { readString } from '../modules/storage';
+import { STORAGE_KEYS } from '../utils/windowCommunication';
+import { computePixelGridLayout, hitTestPixelGridFromPoint, PixelGridLayout } from '../utils/pixelGrid';
 
 /**
  * Pixel Matrix 渲染引擎
@@ -12,6 +15,11 @@ export class PixelMatrixRenderer {
   private pixelSizeScale: number = 1.0; // Pixel 尺寸缩放比例 (0.5-1.0)
   private pixelOpacity: number = 1.0; // Pixel 透明度 (0.0-1.0)
   private isActive: boolean = true;
+  private layout: PixelGridLayout;
+  private hoveredIndex: number | null = null;
+  private hoveredBaseTint: PIXI.ColorSource | null = null;
+  private pointerMoveRaf: number | null = null;
+  private pendingPointerMove: { x: number; y: number } | null = null;
 
   constructor(width: number, height: number) {
     // 初始化 PixiJS 应用
@@ -27,6 +35,16 @@ export class PixelMatrixRenderer {
     // 创建像素容器
     this.pixelContainer = new PIXI.Container();
     this.app.stage.addChild(this.pixelContainer);
+
+    this.layout = computePixelGridLayout(width, height);
+
+    this.app.stage.eventMode = 'static';
+    this.app.stage.hitArea = this.app.screen;
+    this.app.stage.on('pointermove', this.handlePointerMove, this);
+    this.app.stage.on('pointertap', this.handlePointerTap, this);
+    this.app.stage.on('pointerout', this.handlePointerOut, this);
+
+    (this.app.view as HTMLCanvasElement).style.cursor = 'pointer';
 
     // 初始化像素网格
     this.initPixels();
@@ -50,27 +68,72 @@ export class PixelMatrixRenderer {
         pixel.y = 0;
 
         // 启用交互
-        pixel.eventMode = 'static';
-        pixel.cursor = 'pointer';
-
-        // 添加悬停效果
-        pixel.on('pointerover', () => {
-          pixel.tint = 0x00ff88;
-        });
-
-        pixel.on('pointerout', () => {
-          pixel.tint = 0xffffff;
-        });
-
-        // 添加点击事件
-        pixel.on('pointertap', () => {
-          console.log(`Pixel clicked: (${col}, ${row})`);
-        });
+        pixel.eventMode = 'none';
 
         this.pixelContainer.addChild(pixel);
         this.pixels.push(pixel);
       }
     }
+  }
+
+  private handlePointerOut(): void {
+    this.pendingPointerMove = null;
+    if (this.pointerMoveRaf !== null) {
+      window.cancelAnimationFrame(this.pointerMoveRaf);
+      this.pointerMoveRaf = null;
+    }
+    if (this.hoveredIndex === null) return;
+    const prev = this.pixels[this.hoveredIndex];
+    if (prev && this.hoveredBaseTint !== null) prev.tint = this.hoveredBaseTint;
+    this.hoveredIndex = null;
+    this.hoveredBaseTint = null;
+  }
+
+  private handlePointerMove(event: PIXI.FederatedPointerEvent): void {
+    if (!this.isActive) return;
+
+    this.pendingPointerMove = { x: event.global.x, y: event.global.y };
+    if (this.pointerMoveRaf !== null) return;
+
+    this.pointerMoveRaf = window.requestAnimationFrame(() => {
+      this.pointerMoveRaf = null;
+      const pending = this.pendingPointerMove;
+      this.pendingPointerMove = null;
+      if (!pending) return;
+      this.processPointerMove(pending.x, pending.y);
+    });
+  }
+
+  private processPointerMove(x: number, y: number): void {
+    const hit = hitTestPixelGridFromPoint(x, y, this.layout);
+    const nextIndex = hit ? hit.gridY * MATRIX_CONFIG.COLUMNS + hit.gridX : null;
+
+    if (nextIndex === this.hoveredIndex) return;
+
+    if (this.hoveredIndex !== null) {
+      const prev = this.pixels[this.hoveredIndex];
+      if (prev && this.hoveredBaseTint !== null) prev.tint = this.hoveredBaseTint;
+    }
+
+    this.hoveredIndex = nextIndex;
+    if (this.hoveredIndex !== null) {
+      const next = this.pixels[this.hoveredIndex];
+      if (next) {
+        this.hoveredBaseTint = next.tint;
+        next.tint = 0x00ff88;
+      }
+    } else {
+      this.hoveredBaseTint = null;
+    }
+  }
+
+  private handlePointerTap(event: PIXI.FederatedPointerEvent): void {
+    if (!this.isActive) return;
+
+    const hit = hitTestPixelGridFromPoint(event.global.x, event.global.y, this.layout);
+    if (!hit) return;
+
+    console.log(`Pixel clicked: (${hit.gridX}, ${hit.gridY})`);
   }
 
   /**
@@ -148,7 +211,9 @@ export class PixelMatrixRenderer {
 
     // 获取当前形状（使用统一的 STORAGE_KEYS）
     const currentShape =
-      typeof window !== 'undefined' ? localStorage.getItem('pixel-shape') || 'circle' : 'circle';
+      typeof window !== 'undefined'
+        ? readString(STORAGE_KEYS.PIXEL_SHAPE) || readString('pixel-shape') || 'circle'
+        : 'circle';
 
     // 重绘所有 pixel
     for (const pixel of this.pixels) {
@@ -175,15 +240,10 @@ export class PixelMatrixRenderer {
    * 根据窗口尺寸更新像素布局
    */
   public updateLayout(windowWidth: number, windowHeight: number): void {
-    const { COLUMNS, ROWS, PIXEL_SIZE, EDGE_PADDING } = MATRIX_CONFIG;
+    const { COLUMNS, ROWS, EDGE_PADDING } = MATRIX_CONFIG;
 
-    // 可用空间 = 窗口尺寸 - 两侧边距
-    const availableWidth = windowWidth - EDGE_PADDING * 2;
-    const availableHeight = windowHeight - EDGE_PADDING * 2;
-
-    // 独立计算水平和垂直间距
-    const spacingX = Math.max(0, (availableWidth - COLUMNS * PIXEL_SIZE) / (COLUMNS - 1));
-    const spacingY = Math.max(0, (availableHeight - ROWS * PIXEL_SIZE) / (ROWS - 1));
+    this.layout = computePixelGridLayout(windowWidth, windowHeight);
+    const { stepX, stepY } = this.layout;
 
     // 更新每个像素的位置
     let index = 0;
@@ -191,8 +251,8 @@ export class PixelMatrixRenderer {
       for (let col = 0; col < COLUMNS; col++) {
         const pixel = this.pixels[index];
         if (pixel) {
-          pixel.x = EDGE_PADDING + col * (PIXEL_SIZE + spacingX);
-          pixel.y = EDGE_PADDING + row * (PIXEL_SIZE + spacingY);
+          pixel.x = EDGE_PADDING + col * stepX;
+          pixel.y = EDGE_PADDING + row * stepY;
         }
         index++;
       }
@@ -200,6 +260,7 @@ export class PixelMatrixRenderer {
 
     // 更新 canvas 尺寸
     this.app.renderer.resize(windowWidth, windowHeight);
+    this.app.stage.hitArea = this.app.screen;
   }
 
   /**
@@ -211,7 +272,12 @@ export class PixelMatrixRenderer {
     const pixel = this.pixels[index];
 
     if (pixel) {
-      pixel.tint = color;
+      if (this.hoveredIndex === index) {
+        this.hoveredBaseTint = color;
+        pixel.tint = 0x00ff88;
+      } else {
+        pixel.tint = color;
+      }
     }
   }
 
@@ -314,6 +380,14 @@ export class PixelMatrixRenderer {
    * 销毁渲染器
    */
   public destroy(): void {
+    this.app.stage.off('pointermove', this.handlePointerMove, this);
+    this.app.stage.off('pointertap', this.handlePointerTap, this);
+    this.app.stage.off('pointerout', this.handlePointerOut, this);
+    if (this.pointerMoveRaf !== null) {
+      window.cancelAnimationFrame(this.pointerMoveRaf);
+      this.pointerMoveRaf = null;
+    }
+    this.pendingPointerMove = null;
     this.app.destroy(true, { children: true, texture: true, baseTexture: true });
   }
 }

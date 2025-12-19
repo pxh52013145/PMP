@@ -4,11 +4,16 @@
  * 处理 Magnet 拖动
  */
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
 import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
 import { calculateNewAnchors, checkMagnetCollision } from '../../utils/magnetEditor';
+import {
+  computePixelGridLayout,
+  hitTestPixelGridFromPoint,
+  nearestPixelGridFromPoint,
+} from '../../utils/pixelGrid';
 import './EditorOverlay.css';
 
 interface EditorOverlayProps {
@@ -16,6 +21,14 @@ interface EditorOverlayProps {
   magnets: Magnet[];
   onMagnetMove: (magnetId: string, newAnchors: PixelAnchor[]) => void;
 }
+
+type DraggingMagnetState = {
+  magnet: Magnet;
+  startAnchor: { x: number; y: number };
+  mouseOffset: { x: number; y: number };
+  previewAnchors: PixelAnchor[];
+  hasCollision: boolean;
+} | null;
 
 /**
  * 获取 Magnet 的边界框
@@ -106,15 +119,39 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
     useEditor();
 
   const overlayRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const gridLayoutRef = useRef(computePixelGridLayout(window.innerWidth, window.innerHeight));
+  const occupancyMapRef = useRef(occupancyMap);
+  const editorStateRef = useRef(editorState);
+  const moveRafRef = useRef<number | null>(null);
+  const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
+  const lastHoverKeyRef = useRef<string | null>(null);
+  const lastDragKeyRef = useRef<string | null>(null);
+  const lastMagnetDeltaRef = useRef<{ dx: number; dy: number } | null>(null);
+  const drawRafRef = useRef<number | null>(null);
+
+  occupancyMapRef.current = occupancyMap;
+  editorStateRef.current = editorState;
+
+  useEffect(() => {
+    gridLayoutRef.current = computePixelGridLayout(window.innerWidth, window.innerHeight);
+  }, [pixelPositions]);
+
+  useEffect(() => {
+    if (!editorState.isDragging) lastDragKeyRef.current = null;
+  }, [editorState.isDragging]);
 
   // Magnet 拖动状态
-  const [draggingMagnet, setDraggingMagnet] = useState<{
-    magnet: Magnet;
-    startAnchor: { x: number; y: number };
-    mouseOffset: { x: number; y: number };
-    previewAnchors: PixelAnchor[];
-    hasCollision: boolean;
-  } | null>(null);
+  const [draggingMagnet, setDraggingMagnet] = useState<DraggingMagnetState>(null);
+  const draggingMagnetRef = useRef<DraggingMagnetState>(null);
+
+  useEffect(() => {
+    draggingMagnetRef.current = draggingMagnet;
+  }, [draggingMagnet]);
+
+  useEffect(() => {
+    if (!draggingMagnet) lastMagnetDeltaRef.current = null;
+  }, [draggingMagnet]);
 
   // 检测鼠标是否点击在某个 Magnet 上
   const getMagnetAtPosition = useCallback(
@@ -143,24 +180,13 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
   // 获取鼠标位置对应的 Pixel 坐标
   const getPixelAtPosition = useCallback(
     (mouseX: number, mouseY: number): { x: number; y: number } | null => {
-      let closestPixel: { x: number; y: number } | null = null;
-      let minDistance = Infinity;
-
-      pixelPositions.forEach((pos, key) => {
-        const [gridX, gridY] = key.split(',').map(Number);
-        const centerX = pos.x + MATRIX_CONFIG.PIXEL_SIZE / 2;
-        const centerY = pos.y + MATRIX_CONFIG.PIXEL_SIZE / 2;
-        const distance = Math.sqrt(Math.pow(centerX - mouseX, 2) + Math.pow(centerY - mouseY, 2));
-
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestPixel = { x: gridX, y: gridY };
-        }
-      });
-
-      return closestPixel;
+      const layout = gridLayoutRef.current;
+      const hit = hitTestPixelGridFromPoint(mouseX, mouseY, layout);
+      const nearest = nearestPixelGridFromPoint(mouseX, mouseY, layout);
+      const grid = hit ?? nearest;
+      return { x: grid.gridX, y: grid.gridY };
     },
-    [pixelPositions]
+    []
   );
 
   // 处理鼠标按下
@@ -208,6 +234,64 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
     [editorState, getMagnetAtPosition, getPixelAtPosition, pixelPositions, startDrag, selectMagnet]
   );
 
+  const flushMouseMove = useCallback(() => {
+    moveRafRef.current = null;
+    const pending = pendingMoveRef.current;
+    pendingMoveRef.current = null;
+    if (!pending) return;
+
+    const { x: mouseX, y: mouseY } = pending;
+
+    if (draggingMagnetRef.current) {
+      setDraggingMagnet((prev) => {
+        if (!prev) return prev;
+
+        const targetX = mouseX - prev.mouseOffset.x;
+        const targetY = mouseY - prev.mouseOffset.y;
+
+        const targetPixel = getPixelAtPosition(targetX, targetY);
+        if (!targetPixel) return prev;
+
+        const dx = targetPixel.x - prev.startAnchor.x;
+        const dy = targetPixel.y - prev.startAnchor.y;
+
+        const lastDelta = lastMagnetDeltaRef.current;
+        if (lastDelta && lastDelta.dx === dx && lastDelta.dy === dy) return prev;
+        lastMagnetDeltaRef.current = { dx, dy };
+
+        const newAnchors = calculateNewAnchors(prev.magnet, dx, dy);
+        const hasCollision = checkMagnetCollision(
+          prev.magnet,
+          newAnchors,
+          occupancyMapRef.current
+        );
+
+        return {
+          ...prev,
+          previewAnchors: newAnchors,
+          hasCollision,
+        };
+      });
+      return;
+    }
+
+    const pixel = getPixelAtPosition(mouseX, mouseY);
+    if (!pixel) return;
+
+    const key = `${pixel.x},${pixel.y}`;
+    if (key !== lastHoverKeyRef.current) {
+      lastHoverKeyRef.current = key;
+      setHoverPixel(pixel.x, pixel.y);
+    }
+
+    const editorStateNow = editorStateRef.current;
+    if (!editorStateNow.isDragging) return;
+    if (key === lastDragKeyRef.current) return;
+
+    lastDragKeyRef.current = key;
+    updateDrag(pixel.x, pixel.y);
+  }, [getPixelAtPosition, setHoverPixel, updateDrag]);
+
   // 处理鼠标移动
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
@@ -219,46 +303,11 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      // 如果正在拖动 Magnet
-      if (draggingMagnet) {
-        // 计算目标 Pixel 位置（考虑鼠标偏移）
-        const targetX = mouseX - draggingMagnet.mouseOffset.x;
-        const targetY = mouseY - draggingMagnet.mouseOffset.y;
-
-        // 找到最近的 Pixel
-        const targetPixel = getPixelAtPosition(targetX, targetY);
-        if (!targetPixel) return;
-
-        // 计算 delta
-        const deltaX = targetPixel.x - draggingMagnet.startAnchor.x;
-        const deltaY = targetPixel.y - draggingMagnet.startAnchor.y;
-
-        if (deltaX === 0 && deltaY === 0) return;
-
-        // 计算新的锚点位置
-        const newAnchors = calculateNewAnchors(draggingMagnet.magnet, deltaX, deltaY);
-
-        // 检查是否有冲突
-        const hasCollision = checkMagnetCollision(draggingMagnet.magnet, newAnchors, occupancyMap);
-
-        setDraggingMagnet({
-          ...draggingMagnet,
-          previewAnchors: newAnchors,
-          hasCollision,
-        });
-        return;
-      }
-
-      // 否则处理 Pixel 选择
-      const pixel = getPixelAtPosition(mouseX, mouseY);
-      if (pixel) {
-        setHoverPixel(pixel.x, pixel.y);
-        if (editorState.isDragging) {
-          updateDrag(pixel.x, pixel.y);
-        }
-      }
+      pendingMoveRef.current = { x: mouseX, y: mouseY };
+      if (moveRafRef.current !== null) return;
+      moveRafRef.current = window.requestAnimationFrame(flushMouseMove);
     },
-    [editorState, draggingMagnet, getPixelAtPosition, occupancyMap, setHoverPixel, updateDrag]
+    [editorState.isEditing, flushMouseMove]
   );
 
   // 处理鼠标释放
@@ -298,12 +347,161 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
   // 处理鼠标离开
   const handleMouseLeave = useCallback(() => {
+    if (moveRafRef.current !== null) {
+      window.cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = null;
+    }
+    pendingMoveRef.current = null;
+    lastHoverKeyRef.current = null;
+    lastDragKeyRef.current = null;
     setHoverPixel(null, null);
     setDraggingMagnet(null);
     if (editorState.isDragging) {
       endDrag();
     }
   }, [setHoverPixel, editorState.isDragging, endDrag]);
+
+  const drawOverlay = useCallback(() => {
+    drawRafRef.current = null;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const overlayEl = overlayRef.current;
+    const cssWidth = overlayEl?.clientWidth ?? window.innerWidth;
+    const cssHeight = overlayEl?.clientHeight ?? window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+
+    const targetWidth = Math.max(1, Math.floor(cssWidth * dpr));
+    const targetHeight = Math.max(1, Math.floor(cssHeight * dpr));
+    if (canvas.width !== targetWidth) canvas.width = targetWidth;
+    if (canvas.height !== targetHeight) canvas.height = targetHeight;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    if (
+      gridLayoutRef.current.width !== cssWidth ||
+      gridLayoutRef.current.height !== cssHeight
+    ) {
+      gridLayoutRef.current = computePixelGridLayout(cssWidth, cssHeight);
+    }
+
+    const { COLUMNS, ROWS, PIXEL_SIZE, EDGE_PADDING } = MATRIX_CONFIG;
+    const { stepX, stepY } = gridLayoutRef.current;
+
+    const state = editorStateRef.current;
+    const occ = occupancyMapRef.current;
+
+    let dragMinX = 0;
+    let dragMaxX = -1;
+    let dragMinY = 0;
+    let dragMaxY = -1;
+    const hasDragArea =
+      state.isDragging && state.dragStartPixel && state.dragEndPixel ? true : false;
+    if (hasDragArea && state.dragStartPixel && state.dragEndPixel) {
+      dragMinX = Math.min(state.dragStartPixel.x, state.dragEndPixel.x);
+      dragMaxX = Math.max(state.dragStartPixel.x, state.dragEndPixel.x);
+      dragMinY = Math.min(state.dragStartPixel.y, state.dragEndPixel.y);
+      dragMaxY = Math.max(state.dragStartPixel.y, state.dragEndPixel.y);
+    }
+
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLUMNS; col++) {
+        const key = `${col},${row}`;
+        const occupancy = occ.get(key);
+
+        const isOccupied = occupancy?.isOccupied === true;
+        const isSelected = state.selectedPixels.has(key);
+        const isHovered = state.hoverPixel?.x === col && state.hoverPixel?.y === row;
+        const isDragSelection = hasDragArea
+          ? col >= dragMinX && col <= dragMaxX && row >= dragMinY && row <= dragMaxY
+          : false;
+
+        let fill = 'rgba(0, 255, 136, 0.10)';
+        let stroke = 'rgba(0, 255, 136, 0.20)';
+        let lineWidth = 1;
+        let scale = 1.0;
+
+        if (isOccupied) {
+          fill = 'rgba(255, 59, 48, 0.20)';
+          stroke = 'rgba(255, 59, 48, 0.40)';
+        }
+
+        if (isDragSelection) {
+          fill = 'rgba(0, 122, 255, 0.30)';
+          stroke = 'rgba(0, 122, 255, 0.60)';
+          lineWidth = 2;
+        }
+
+        if (isSelected) {
+          if (isOccupied) {
+            fill = 'rgba(255, 149, 0, 0.50)';
+            stroke = 'rgba(255, 149, 0, 1.00)';
+          } else {
+            fill = 'rgba(255, 149, 0, 0.40)';
+            stroke = 'rgba(255, 149, 0, 0.80)';
+          }
+          lineWidth = 2;
+        }
+
+        if (isHovered) {
+          if (isOccupied) {
+            fill = 'rgba(255, 59, 48, 0.40)';
+            stroke = 'rgba(255, 59, 48, 0.80)';
+          } else {
+            fill = 'rgba(0, 122, 255, 0.30)';
+            stroke = 'rgba(0, 122, 255, 0.60)';
+          }
+          lineWidth = 2;
+          scale = 1.1;
+        }
+
+        const baseX = EDGE_PADDING + col * stepX;
+        const baseY = EDGE_PADDING + row * stepY;
+
+        const w = PIXEL_SIZE * scale;
+        const h = PIXEL_SIZE * scale;
+        const dx = baseX + (PIXEL_SIZE - w) / 2;
+        const dy = baseY + (PIXEL_SIZE - h) / 2;
+
+        ctx.fillStyle = fill;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidth;
+        ctx.fillRect(dx, dy, w, h);
+        ctx.strokeRect(dx + 0.5, dy + 0.5, w - 1, h - 1);
+      }
+    }
+  }, []);
+
+  const scheduleDraw = useCallback(() => {
+    if (drawRafRef.current !== null) return;
+    drawRafRef.current = window.requestAnimationFrame(drawOverlay);
+  }, [drawOverlay]);
+
+  useEffect(() => {
+    scheduleDraw();
+  }, [scheduleDraw, editorState, occupancyMap, pixelPositions, draggingMagnet]);
+
+  useEffect(() => {
+    return () => {
+      if (drawRafRef.current !== null) {
+        window.cancelAnimationFrame(drawRafRef.current);
+        drawRafRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => {
+      gridLayoutRef.current = computePixelGridLayout(window.innerWidth, window.innerHeight);
+      scheduleDraw();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [scheduleDraw]);
 
   if (!editorState.isEditing) {
     return null;
@@ -318,52 +516,17 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
     >
-      {/* 渲染所有 Pixel 的占用状态 */}
-      {Array.from(pixelPositions.entries()).map(([key, pos]) => {
-        const [gridX, gridY] = key.split(',').map(Number);
-        const occupancy = occupancyMap.get(key);
-        const isSelected = editorState.selectedPixels.has(key);
-        const isHovered =
-          editorState.hoverPixel?.x === gridX && editorState.hoverPixel?.y === gridY;
-        const isDragSelection =
-          editorState.isDragging &&
-          editorState.dragStartPixel &&
-          editorState.dragEndPixel &&
-          isInDragArea(gridX, gridY, editorState.dragStartPixel, editorState.dragEndPixel);
-
-        let pixelClass = 'editor-pixel';
-        if (occupancy?.isOccupied) {
-          pixelClass += ' occupied';
-        } else {
-          pixelClass += ' free';
-        }
-        if (isSelected) {
-          pixelClass += ' selected';
-        }
-        if (isHovered) {
-          pixelClass += ' hovered';
-        }
-        if (isDragSelection) {
-          pixelClass += ' drag-selection';
-        }
-
-        return (
-          <div
-            key={key}
-            className={pixelClass}
-            style={{
-              position: 'absolute',
-              left: pos.x,
-              top: pos.y,
-              width: MATRIX_CONFIG.PIXEL_SIZE,
-              height: MATRIX_CONFIG.PIXEL_SIZE,
-            }}
-            data-grid-x={gridX}
-            data-grid-y={gridY}
-            title={`(${gridX}, ${gridY})${occupancy?.isOccupied ? ` - ${occupancy.occupiedBy}` : ''}`}
-          />
-        );
-      })}
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
+      />
 
       {/* 渲染拖动预览 */}
       {draggingMagnet && (
@@ -465,16 +628,3 @@ function getMagnetPreviewStyle(
 /**
  * 检查 pixel 是否在拖拽选择区域内
  */
-function isInDragArea(
-  x: number,
-  y: number,
-  start: { x: number; y: number },
-  end: { x: number; y: number }
-): boolean {
-  const minX = Math.min(start.x, end.x);
-  const maxX = Math.max(start.x, end.x);
-  const minY = Math.min(start.y, end.y);
-  const maxY = Math.max(start.y, end.y);
-
-  return x >= minX && x <= maxX && y >= minY && y <= maxY;
-}

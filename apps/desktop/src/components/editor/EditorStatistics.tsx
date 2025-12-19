@@ -2,6 +2,7 @@ import { useMemo, memo, useState, useEffect } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
 import { MATRIX_CONFIG } from '../../constants/config';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
+import { readJson } from '../../modules/storage';
 import './EditorStatistics.css';
 
 interface SerializableEditorState {
@@ -17,46 +18,29 @@ interface SerializableEditorState {
 
 export const EditorStatistics = memo(function EditorStatistics() {
   const { occupancyMap } = useEditor();
+  const defaultEditorState: SerializableEditorState = {
+    mode: 'view',
+    isEditing: false,
+    selectedMagnetId: null,
+    selectedPixels: [],
+    isDragging: false,
+    dragStartPixel: null,
+    dragEndPixel: null,
+    hoverPixel: null,
+  };
 
   // 从localStorage/事件监听获取editorState（用于跨窗口通信）
   const [editorState, setEditorState] = useState<SerializableEditorState>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.EDITOR_STATE);
-      return saved
-        ? JSON.parse(saved)
-        : {
-            mode: 'view',
-            isEditing: false,
-            selectedMagnetId: null,
-            selectedPixels: [],
-            isDragging: false,
-            dragStartPixel: null,
-            dragEndPixel: null,
-            hoverPixel: null,
-          };
-    } catch {
-      return {
-        mode: 'view',
-        isEditing: false,
-        selectedMagnetId: null,
-        selectedPixels: [],
-        isDragging: false,
-        dragStartPixel: null,
-        dragEndPixel: null,
-        hoverPixel: null,
-      };
-    }
+    return readJson<SerializableEditorState>(STORAGE_KEYS.EDITOR_STATE, defaultEditorState);
   });
 
   // 监听editorState更新
   useEffect(() => {
     const unlistenPromise = setupTauriListener(TAURI_EVENTS.EDITOR_STATE_UPDATED, () => {
-      const saved = localStorage.getItem(STORAGE_KEYS.EDITOR_STATE);
-      if (saved) {
-        const newState = JSON.parse(saved);
-        console.log('EditorStatistics: 收到editorState更新', newState);
-        setEditorState(newState);
-      }
+      const newState = readJson<SerializableEditorState | null>(STORAGE_KEYS.EDITOR_STATE, null);
+      if (!newState) return;
+      console.log('EditorStatistics: 收到editorState更新', newState);
+      setEditorState(newState);
     });
 
     return () => {

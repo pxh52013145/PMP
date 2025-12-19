@@ -31,6 +31,7 @@ import {
 } from './data/builtin/musicMagnets';
 import { saveConfig, loadConfig, applyConfig } from './utils/configManager';
 import { MATRIX_CONFIG } from './constants/config';
+import { isTauriRuntime } from './utils/tauriRuntime';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
@@ -40,6 +41,7 @@ import {
   setupTauriListener,
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
+import { readJson, readString, removeKey, writeJson } from './modules/storage';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
@@ -342,6 +344,12 @@ export function EditorWindowApp() {
   const isWindowActive = isWindowVisible && isDocumentVisible;
   const activityRef = useRef({ isWindowActive });
   activityRef.current.isWindowActive = isWindowActive;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const effectsReadyRef = useRef(false);
+  const isTauri = useMemo(() => isTauriRuntime(), []);
+  const needsMagnetConfigSync =
+    windowType === 'library' || windowType === 'statistics' || windowType === 'creator';
+  const needsBuiltInMagnetIds = windowType === 'library';
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -397,44 +405,19 @@ export function EditorWindowApp() {
   );
 
   const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.MAGNET_LIBRARY);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
+    return readJson<Magnet[]>(STORAGE_KEYS.MAGNET_LIBRARY, []);
   });
   const [activeMagnetIds, setActiveMagnetIds] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_MAGNETS);
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch {
-      return new Set();
-    }
+    return new Set(readJson<string[]>(STORAGE_KEYS.ACTIVE_MAGNETS, []));
   });
   const [builtInMagnetIds, setBuiltInMagnetIds] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.BUILTIN_MAGNETS);
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch {
-      return new Set();
-    }
+    return new Set(readJson<string[]>(STORAGE_KEYS.BUILTIN_MAGNETS, []));
   });
   const [backgroundSettings, setBackgroundSettings] = useState<BackgroundSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS);
-      return saved ? JSON.parse(saved) : DEFAULT_BACKGROUND_SETTINGS;
-    } catch {
-      return DEFAULT_BACKGROUND_SETTINGS;
-    }
+    return readJson<BackgroundSettings>(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
   });
   const [isMaximized, setIsMaximized] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.IS_MAXIMIZED);
-      return saved ? JSON.parse(saved) : false;
-    } catch {
-      return false;
-    }
+    return readJson<boolean>(STORAGE_KEYS.IS_MAXIMIZED, false);
   });
 
   // Creator 编辑模式数据
@@ -443,15 +426,12 @@ export function EditorWindowApp() {
 
   const reloadCreatorData = useCallback(() => {
     try {
-      const mode = localStorage.getItem(STORAGE_KEYS.MAGNET_EDITOR_MODE) as
-        | 'create'
-        | 'edit'
-        | null;
-      const data = localStorage.getItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+      const mode = readString(STORAGE_KEYS.MAGNET_EDITOR_MODE) as 'create' | 'edit' | null;
+      const data = readJson<Magnet | null>(STORAGE_KEYS.MAGNET_EDITOR_DATA, null);
 
       if (mode === 'edit' && data) {
         setCreatorMode('edit');
-        setEditingMagnet(JSON.parse(data));
+        setEditingMagnet(data);
       } else {
         setCreatorMode('create');
         setEditingMagnet(undefined);
@@ -510,39 +490,85 @@ export function EditorWindowApp() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
+  // Scroll performance: when user is actively scrolling, temporarily disable heavy glass effects (blur)
+  // to avoid wheel jank in small editor windows.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    let rafId: number | null = null;
+    let idleTimer: number | null = null;
+
+    const markScrolling = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        root.classList.add('editor-window-app--scrolling');
+        if (idleTimer !== null) window.clearTimeout(idleTimer);
+        idleTimer = window.setTimeout(() => {
+          root.classList.remove('editor-window-app--scrolling');
+        }, 160);
+      });
+    };
+
+    root.addEventListener('wheel', markScrolling, { passive: true });
+
+    return () => {
+      root.removeEventListener('wheel', markScrolling);
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      if (idleTimer !== null) window.clearTimeout(idleTimer);
+    };
+  }, [windowType]);
+
+  // Avoid "open window stutter": delay expensive glass effects until after the first paint of this window.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    if (effectsReadyRef.current) return;
+    if (isTauri) return;
+    if (!isWindowActive) return;
+
+    let raf1: number | null = null;
+    let raf2: number | null = null;
+
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        root.classList.add('editor-window-app--effects-ready');
+        effectsReadyRef.current = true;
+      });
+    });
+
+    return () => {
+      if (raf1 !== null) window.cancelAnimationFrame(raf1);
+      if (raf2 !== null) window.cancelAnimationFrame(raf2);
+    };
+  }, [isWindowActive, isTauri]);
+
   // 从主窗口加载初始数据和监听更新
   useEffect(() => {
     const loadConfigFromMain = () => {
       try {
-        // 从配置文件加载（支持 styleOverride）
-        const config = loadConfig();
-        if (config) {
-          const applied = applyConfig(config, defaultMagnetLibrary);
-          console.log(
-            'EditorWindow: Config loaded, magnets:',
-            applied.magnetLibrary.length,
-            'active:',
-            applied.activeMagnetIds.size
-          );
-          setMagnetLibrary(applied.magnetLibrary);
-          setActiveMagnetIds(applied.activeMagnetIds);
+        if (needsMagnetConfigSync) {
+          // 从配置文件加载（支持 styleOverride）
+          const config = loadConfig();
+          if (config) {
+            const applied = applyConfig(config, defaultMagnetLibrary);
+            setMagnetLibrary(applied.magnetLibrary);
+            setActiveMagnetIds(applied.activeMagnetIds);
+          }
         }
 
         // 加载其他辅助数据
-        const builtInData = localStorage.getItem(STORAGE_KEYS.BUILTIN_MAGNETS);
-        if (builtInData) {
-          setBuiltInMagnetIds(new Set(JSON.parse(builtInData)));
+        if (needsBuiltInMagnetIds) {
+          const builtInData = readJson<string[] | null>(STORAGE_KEYS.BUILTIN_MAGNETS, null);
+          if (builtInData) setBuiltInMagnetIds(new Set(builtInData));
         }
 
-        const backgroundData = localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS);
-        if (backgroundData) {
-          setBackgroundSettings(JSON.parse(backgroundData));
-        }
+        const backgroundData = readJson<BackgroundSettings | null>(STORAGE_KEYS.BACKGROUND_SETTINGS, null);
+        if (backgroundData) setBackgroundSettings(backgroundData);
 
-        const maximizedData = localStorage.getItem(STORAGE_KEYS.IS_MAXIMIZED);
-        if (maximizedData) {
-          setIsMaximized(JSON.parse(maximizedData));
-        }
+        const maximizedData = readJson<boolean | null>(STORAGE_KEYS.IS_MAXIMIZED, null);
+        if (maximizedData !== null) setIsMaximized(maximizedData);
       } catch (error) {
         console.error('Failed to load config from main window:', error);
       }
@@ -551,7 +577,28 @@ export function EditorWindowApp() {
     // 初始加载
     loadConfigFromMain();
 
-    // 监听主窗口的配置更新
+    // 监听主窗口的配置更新（仅对需要 magnet 配置的窗口启用）
+    if (!needsMagnetConfigSync) return;
+
+    let reloadTimer: number | null = null;
+    let reloadInFlight = false;
+
+    const scheduleReload = () => {
+      if (!activityRef.current.isWindowActive) return;
+      if (reloadTimer !== null) return;
+
+      reloadTimer = window.setTimeout(async () => {
+        reloadTimer = null;
+        if (reloadInFlight) return;
+        reloadInFlight = true;
+        try {
+          loadConfigFromMain();
+        } finally {
+          reloadInFlight = false;
+        }
+      }, 60);
+    };
+
     let cleanupPromise = setupConfigSync(
       [STORAGE_KEYS.CONFIG],
       [
@@ -560,16 +607,15 @@ export function EditorWindowApp() {
         TAURI_EVENTS.MAGNET_DEACTIVATED,
       ],
       () => {
-        if (!activityRef.current.isWindowActive) return;
-        console.log('Editor window: Received update signal, reloading config');
-        loadConfigFromMain();
+        scheduleReload();
       }
     );
 
     return () => {
+      if (reloadTimer !== null) window.clearTimeout(reloadTimer);
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [defaultMagnetLibrary]);
+  }, [defaultMagnetLibrary, needsBuiltInMagnetIds, needsMagnetConfigSync]);
 
   // Handlers
   const handleExitEditMode = async () => {
@@ -598,7 +644,7 @@ export function EditorWindowApp() {
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
       defaultMagnetLibrary
     );
-    localStorage.setItem(STORAGE_KEYS.ACTIVE_MAGNETS, JSON.stringify([...newActive]));
+    writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...newActive]);
     await broadcastSignal(TAURI_EVENTS.MAGNET_ACTIVATED);
     console.log('EditorWindow: Magnet activated:', magnetId);
   };
@@ -615,7 +661,7 @@ export function EditorWindowApp() {
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
       defaultMagnetLibrary
     );
-    localStorage.setItem(STORAGE_KEYS.ACTIVE_MAGNETS, JSON.stringify([...newActive]));
+    writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...newActive]);
     await broadcastSignal(TAURI_EVENTS.MAGNET_DEACTIVATED);
     console.log('EditorWindow: Magnet deactivated:', magnetId);
   };
@@ -631,7 +677,7 @@ export function EditorWindowApp() {
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
       defaultMagnetLibrary
     );
-    localStorage.setItem(STORAGE_KEYS.MAGNET_LIBRARY, JSON.stringify(newLibrary));
+    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     console.log('EditorWindow: Magnet deleted:', magnetId);
   };
@@ -647,7 +693,7 @@ export function EditorWindowApp() {
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
       defaultMagnetLibrary
     );
-    localStorage.setItem(STORAGE_KEYS.MAGNET_LIBRARY, JSON.stringify(newLibrary));
+    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     console.log('EditorWindow: Magnet added:', magnet.id);
   };
@@ -663,7 +709,7 @@ export function EditorWindowApp() {
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
       defaultMagnetLibrary
     );
-    localStorage.setItem(STORAGE_KEYS.MAGNET_LIBRARY, JSON.stringify(newLibrary));
+    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
     console.log('EditorWindow: Magnet updated:', magnet.id);
   };
@@ -700,14 +746,13 @@ export function EditorWindowApp() {
 
     // Auto-add to background history (so custom backgrounds are discoverable without extra clicks).
     try {
-      const historyRaw = localStorage.getItem(STORAGE_KEYS.BACKGROUND_HISTORY);
-      const history = historyRaw ? (JSON.parse(historyRaw) as Array<{ id: string; config: BackgroundConfig; timestamp: number }>) : [];
+      const history = readJson<Array<{ id: string; config: BackgroundConfig; timestamp: number }>>(STORAGE_KEYS.BACKGROUND_HISTORY, []);
       const newItem = {
         id: `history-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         config,
         timestamp: Date.now(),
       };
-      localStorage.setItem(STORAGE_KEYS.BACKGROUND_HISTORY, JSON.stringify([newItem, ...history].slice(0, 20)));
+      writeJson(STORAGE_KEYS.BACKGROUND_HISTORY, [newItem, ...history].slice(0, 20));
     } catch (error) {
       console.warn('Failed to auto-add background history item:', error);
     }
@@ -724,14 +769,14 @@ export function EditorWindowApp() {
     return magnetLibrary.filter((magnet) => activeMagnetIds.has(magnet.id));
   }, [magnetLibrary, activeMagnetIds]);
 
-	  return (
-	    <ThemeProvider>
-	      <AudioEngineProvider>
-	        <NavigationProvider>
-	          <EditorProvider magnets={activeMagnets}>
-	            <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
-	              <div className="editor-window-app">
-	            {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
+  return (
+    <ThemeProvider>
+      <AudioEngineProvider mode="noop">
+        <NavigationProvider>
+          <EditorProvider magnets={activeMagnets}>
+            <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
+              <div className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''}`} ref={rootRef}>
+                  {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
 
             {windowType === 'statistics' && <EditorStatistics />}
 
@@ -769,8 +814,8 @@ export function EditorWindowApp() {
                     handleMagnetAddToLibrary(magnet);
                   }
                   // 清除编辑数据
-                  localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                  localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                  removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                  removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
                   // 清除窗口打开状态
                   await broadcastDataUpdate(
                     STORAGE_KEYS.CREATOR_WINDOW_OPEN,
@@ -781,8 +826,8 @@ export function EditorWindowApp() {
                 onCancel={async () => {
                   try {
                     // 清除编辑数据
-                    localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_MODE);
-                    localStorage.removeItem(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_MODE);
+                    removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
                     // 清除窗口打开状态
                     await broadcastDataUpdate(
                       STORAGE_KEYS.CREATOR_WINDOW_OPEN,
@@ -814,12 +859,12 @@ export function EditorWindowApp() {
               />
             )}
 
-	            {windowType === 'debug' && <ThemeDebugPage />}
-	              </div>
-	            </WindowActivityProvider>
-	          </EditorProvider>
-	        </NavigationProvider>
-	      </AudioEngineProvider>
-	    </ThemeProvider>
-	  );
-	}
+                {windowType === 'debug' && <ThemeDebugPage />}
+              </div>
+            </WindowActivityProvider>
+          </EditorProvider>
+        </NavigationProvider>
+      </AudioEngineProvider>
+    </ThemeProvider>
+  );
+}

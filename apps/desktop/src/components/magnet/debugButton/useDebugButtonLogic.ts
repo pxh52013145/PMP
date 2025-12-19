@@ -3,6 +3,8 @@
  * 负责调试窗口打开/关闭逻辑
  */
 
+import { isTauriRuntime } from '../../../utils/tauriRuntime';
+
 export interface DebugButtonLogic {
   toggleDebugWindow: (isOpen: boolean, setIsOpen: (value: boolean) => void) => Promise<void>;
   getButtonTitle: (isOpen: boolean) => string;
@@ -15,6 +17,18 @@ export interface DebugButtonLogic {
 export function useDebugButtonLogic(): DebugButtonLogic {
   const toggleDebugWindow = async (isOpen: boolean, setIsOpen: (value: boolean) => void) => {
     try {
+      if (!isTauriRuntime()) {
+        // Web/Vite fallback: open debug page in the same window (no multi-window support).
+        if (isOpen) {
+          window.location.hash = '';
+          setIsOpen(false);
+        } else {
+          window.location.hash = '#/editor/debug';
+          setIsOpen(true);
+        }
+        return;
+      }
+
       if (isOpen) {
         // 关闭窗口
         const { closeEditorWindow } = await import('../../../utils/editorWindows');

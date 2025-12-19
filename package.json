@@ -20,6 +20,7 @@
     "build": "pnpm --filter @pixel-matrix/desktop build",
     "build:web": "pnpm --filter @pixel-matrix/desktop build:vite",
     "test": "pnpm --filter @pixel-matrix/desktop test",
+    "magnet:doctor": "node scripts/magnet-doctor.mjs",
     "lint": "pnpm --parallel lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "type-check": "pnpm --parallel type-check"

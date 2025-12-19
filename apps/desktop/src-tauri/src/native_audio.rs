@@ -1,4 +1,7 @@
 use once_cell::sync::{Lazy, OnceCell};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use rodio::{decoder::Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -37,11 +40,12 @@ static STREAM_STATE: Lazy<Mutex<StreamState>> = Lazy::new(|| Mutex::new(StreamSt
 struct StreamState {
     handle: Option<OutputStreamHandle>,
     device_name: Option<String>,
+    output_sample_rate: Option<u32>,
 }
 
 fn open_output_stream_handle(
     preferred_device_name: Option<&str>,
-) -> Result<(OutputStreamHandle, Option<String>), String> {
+) -> Result<(OutputStreamHandle, Option<String>, Option<u32>), String> {
     let host = rodio::cpal::default_host();
 
     if let Some(preferred) = preferred_device_name {
@@ -55,19 +59,27 @@ fn open_output_stream_handle(
             if name != preferred {
                 continue;
             }
+            let output_sample_rate = device
+                .default_output_config()
+                .ok()
+                .map(|cfg| cfg.sample_rate().0);
             let (stream, handle) = OutputStream::try_from_device(&device)
                 .map_err(|e| format!("Failed to init output device '{preferred}': {e}"))?;
             std::mem::forget(stream);
-            return Ok((handle, Some(name)));
+            return Ok((handle, Some(name), output_sample_rate));
         }
         return Err(format!("Output device not found: {preferred}"));
     }
 
     if let Some(device) = host.default_output_device() {
         let device_name = device.name().ok();
+        let output_sample_rate = device
+            .default_output_config()
+            .ok()
+            .map(|cfg| cfg.sample_rate().0);
         if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
             std::mem::forget(stream);
-            return Ok((handle, device_name));
+            return Ok((handle, device_name, output_sample_rate));
         }
     }
 
@@ -76,27 +88,33 @@ fn open_output_stream_handle(
         .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
     for device in devices {
         let device_name = device.name().ok();
+        let output_sample_rate = device
+            .default_output_config()
+            .ok()
+            .map(|cfg| cfg.sample_rate().0);
         if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
             std::mem::forget(stream);
-            return Ok((handle, device_name));
+            return Ok((handle, device_name, output_sample_rate));
         }
     }
 
     Err("No usable output device found".into())
 }
 
-fn ensure_stream_handle() -> Result<(OutputStreamHandle, Option<String>), String> {
+fn ensure_stream_handle() -> Result<(OutputStreamHandle, Option<String>, Option<u32>), String> {
     let mut state = STREAM_STATE
         .lock()
         .map_err(|_| "Audio stream state is locked".to_string())?;
     if let Some(handle) = state.handle.clone() {
-        return Ok((handle, state.device_name.clone()));
+        return Ok((handle, state.device_name.clone(), state.output_sample_rate));
     }
 
-    let (handle, device_name) = open_output_stream_handle(state.device_name.as_deref())?;
+    let (handle, device_name, output_sample_rate) =
+        open_output_stream_handle(state.device_name.as_deref())?;
     state.handle = Some(handle.clone());
     state.device_name = device_name.clone();
-    Ok((handle, device_name))
+    state.output_sample_rate = output_sample_rate;
+    Ok((handle, device_name, output_sample_rate))
 }
 
 fn default_output_device_name() -> Option<String> {
@@ -176,14 +194,62 @@ impl AudioRingBuffer {
         available.notify_all();
     }
 
-    fn pop_sample(&self) -> Option<f32> {
-        let (lock, _available, space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-        let sample = inner.data.pop_front();
-        if sample.is_some() {
-            space.notify_one();
+    fn len_samples(&self) -> usize {
+        let (lock, _available, _space) = &*self.inner;
+        let inner = lock.lock().expect("ring buffer lock poisoned");
+        inner.data.len()
+    }
+
+    fn wait_for_samples(&self, min_samples: usize, timeout: Duration) {
+        if min_samples == 0 {
+            return;
         }
-        sample
+
+        let (lock, available, _space) = &*self.inner;
+        let mut inner = lock.lock().expect("ring buffer lock poisoned");
+
+        while inner.data.len() < min_samples && !inner.finished {
+            let (guard, wait_result) = match available.wait_timeout(inner, timeout) {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            inner = guard;
+            if wait_result.timed_out() {
+                break;
+            }
+        }
+    }
+
+    fn pop_chunk(&self, max_samples: usize, wait_timeout: Duration) -> Vec<f32> {
+        if max_samples == 0 {
+            return Vec::new();
+        }
+
+        let (lock, available, space) = &*self.inner;
+        let mut inner = lock.lock().expect("ring buffer lock poisoned");
+
+        if inner.data.is_empty() && !inner.finished {
+            inner = match available.wait_timeout(inner, wait_timeout) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+
+        let count = inner.data.len().min(max_samples);
+        if count == 0 {
+            return Vec::new();
+        }
+
+        let mut out = Vec::with_capacity(count);
+        for _ in 0..count {
+            if let Some(sample) = inner.data.pop_front() {
+                out.push(sample);
+            } else {
+                break;
+            }
+        }
+        space.notify_all();
+        out
     }
 
     fn is_finished_and_empty(&self) -> bool {
@@ -323,6 +389,8 @@ struct StreamingSamplesSource {
     channels: u16,
     sample_rate: u32,
     duration: f64,
+    local: Vec<f32>,
+    local_index: usize,
 }
 
 impl StreamingSamplesSource {
@@ -332,6 +400,8 @@ impl StreamingSamplesSource {
             channels,
             sample_rate,
             duration,
+            local: Vec::new(),
+            local_index: 0,
         }
     }
 }
@@ -340,13 +410,27 @@ impl Iterator for StreamingSamplesSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.buffer.is_finished_and_empty() {
-            return None;
+        if self.local_index >= self.local.len() {
+            if self.buffer.is_finished_and_empty() {
+                return None;
+            }
+
+            // Reduce mutex contention by draining chunks instead of per-sample locking.
+            // Small wait helps avoid injecting zeros on transient scheduling jitter.
+            self.local = self.buffer.pop_chunk(8192, Duration::from_millis(20));
+            self.local_index = 0;
+
+            if self.local.is_empty() {
+                if self.buffer.is_finished_and_empty() {
+                    return None;
+                }
+                return Some(0.0);
+            }
         }
-        match self.buffer.pop_sample() {
-            Some(sample) => Some(sample),
-            None => Some(0.0),
-        }
+
+        let sample = self.local[self.local_index];
+        self.local_index += 1;
+        Some(sample)
     }
 }
 
@@ -388,6 +472,7 @@ struct NativeAudioEngine {
     decoded_channels: u16,
     decoded_sample_rate: u32,
     decoded_bit_depth: Option<u32>,
+    output_sample_rate: Option<u32>,
     device_name: Option<String>,
     volume: f32,
     gain_db: f32,
@@ -437,6 +522,7 @@ impl NativeAudioEngine {
             decoded_channels: 0,
             decoded_sample_rate: 0,
             decoded_bit_depth: None,
+            output_sample_rate: None,
             device_name: None,
             volume: 0.7,
             gain_db: 0.0,
@@ -483,9 +569,10 @@ impl NativeAudioEngine {
         self.shutdown_streaming();
 
         if self.stream_handle.is_none() {
-            let (handle, device_name) = ensure_stream_handle()?;
+            let (handle, device_name, output_sample_rate) = ensure_stream_handle()?;
             self.stream_handle = Some(handle);
             self.device_name = device_name.or_else(default_output_device_name);
+            self.output_sample_rate = output_sample_rate;
         }
 
         let stream_handle = self
@@ -496,7 +583,9 @@ impl NativeAudioEngine {
             Sink::try_new(stream_handle).map_err(|e| format!("Failed to create sink: {e}"))?;
 
         let mut used_streaming = false;
-        if let Ok((source, meta, streaming)) = start_symphonia_stream(&path) {
+        if let Ok((source, meta, streaming)) =
+            start_symphonia_stream(&path, self.output_sample_rate)
+        {
             used_streaming = true;
             self.duration = meta.duration;
             self.decoded_samples = None;
@@ -508,7 +597,7 @@ impl NativeAudioEngine {
         }
 
         if !used_streaming {
-            match decode_track_to_buffer(&path) {
+            match decode_track_to_buffer(&path, self.output_sample_rate) {
                 Ok(decoded) => {
                     self.duration = decoded.duration;
                     self.decoded_samples = Some(decoded.samples.clone());
@@ -570,6 +659,18 @@ impl NativeAudioEngine {
 
     fn play(&mut self) -> Result<(), String> {
         if let Some(sink) = &self.sink {
+            // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
+            if let Some(streaming) = &self.streaming {
+                let channels = self.decoded_channels.max(1) as usize;
+                let target_frames = 2048usize; // ~46ms @ 44.1kHz
+                let target_samples = target_frames * channels;
+                if streaming.buffer.len_samples() < target_samples {
+                    streaming
+                        .buffer
+                        .wait_for_samples(target_samples, Duration::from_millis(250));
+                }
+            }
+
             sink.play();
             self.set_state(PlaybackState::Playing);
             if self.playback_started_at.is_none() {
@@ -1062,6 +1163,7 @@ fn compute_spectrum(
 
 fn start_symphonia_stream(
     path: &Path,
+    output_sample_rate: Option<u32>,
 ) -> Result<(StreamingSamplesSource, DecoderMeta, StreamingPlayback), String> {
     let buffer = AudioRingBuffer::new(352_800);
     let tap = SpectrumTap::new(1024);
@@ -1106,12 +1208,14 @@ fn start_symphonia_stream(
             }
         };
 
-        let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
+        let input_sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
         let channels = track
             .codec_params
             .channels
             .map(|ch| ch.count() as u16)
             .unwrap_or(2);
+        let channels_usize = channels.max(1) as usize;
+        let requested_sample_rate = output_sample_rate.unwrap_or(input_sample_rate);
         let bit_depth = track
             .codec_params
             .bits_per_sample
@@ -1119,16 +1223,16 @@ fn start_symphonia_stream(
         let duration = track
             .codec_params
             .n_frames
-            .map(|frames| frames as f64 / sample_rate as f64)
+            .map(|frames| frames as f64 / input_sample_rate as f64)
             .unwrap_or(0.0);
 
-        let _ = meta_tx.send(Ok(DecoderMeta {
-            channels,
-            sample_rate,
-            bit_depth,
-            duration,
-        }));
-        tap_clone.set_sample_rate(sample_rate);
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Cubic,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        };
 
         let track_id = track.id;
         let mut decoder = match symphonia::default::get_codecs()
@@ -1142,7 +1246,43 @@ fn start_symphonia_stream(
         };
 
         let mut sample_buf: Option<SampleBuffer<f32>> = None;
-        let mut pending_trim_frames: usize = 0;
+        let mut pending_trim_frames_out: usize = 0;
+
+        let mut resampler: Option<SincFixedIn<f32>> = None;
+        let mut resampler_input: Vec<Vec<f32>> = Vec::new();
+        let mut effective_sample_rate = input_sample_rate;
+        let resample_chunk_frames = 1024usize;
+        if requested_sample_rate != input_sample_rate {
+            let resample_ratio = requested_sample_rate as f64 / input_sample_rate as f64;
+            match SincFixedIn::<f32>::new(
+                resample_ratio,
+                1.0,
+                params,
+                resample_chunk_frames,
+                channels_usize,
+            ) {
+                Ok(instance) => {
+                    resampler = Some(instance);
+                    resampler_input = (0..channels_usize).map(|_| Vec::new()).collect();
+                    effective_sample_rate = requested_sample_rate;
+                }
+                Err(err) => {
+                    eprintln!("[NativeAudio] Failed to init resampler, falling back: {err}");
+                }
+            }
+        }
+
+        let _ = meta_tx.send(Ok(DecoderMeta {
+            channels,
+            sample_rate: effective_sample_rate,
+            bit_depth,
+            duration,
+        }));
+        tap_clone.set_sample_rate(effective_sample_rate);
+        eprintln!(
+            "[NativeAudio] Stream init: channels={channels} in_sr={input_sample_rate} out_sr={effective_sample_rate} resample={}",
+            resampler.is_some()
+        );
 
         'decode_loop: loop {
             while let Ok(cmd) = command_rx.try_recv() {
@@ -1154,7 +1294,7 @@ fn start_symphonia_stream(
                     DecoderCommand::Seek(target) => {
                         buffer_clone.clear();
                         tap_clone.clear();
-                        pending_trim_frames = 0;
+                        pending_trim_frames_out = 0;
 
                         let seek_to = SeekTo::Time {
                             time: Time::from(target.max(0.0)),
@@ -1168,7 +1308,8 @@ fn start_symphonia_stream(
                                 let required_seconds = required.seconds as f64 + required.frac;
                                 let actual_seconds = actual.seconds as f64 + actual.frac;
                                 let delta = (required_seconds - actual_seconds).max(0.0);
-                                pending_trim_frames = (delta * sample_rate as f64) as usize;
+                                pending_trim_frames_out =
+                                    (delta * effective_sample_rate as f64) as usize;
                             }
 
                             decoder = match symphonia::default::get_codecs()
@@ -1181,6 +1322,12 @@ fn start_symphonia_stream(
                                 }
                             };
                             sample_buf = None;
+                            if let Some(r) = resampler.as_mut() {
+                                r.reset();
+                            }
+                            for ch in &mut resampler_input {
+                                ch.clear();
+                            }
                         }
                     }
                 }
@@ -1220,17 +1367,81 @@ fn start_symphonia_stream(
                         let channels = spec.channels.count().max(1);
                         let all = buf.samples();
                         let total_frames = all.len() / channels;
-                        let mut start_frame = 0usize;
-                        if pending_trim_frames > 0 {
-                            let trim_now = pending_trim_frames.min(total_frames);
-                            start_frame = trim_now;
-                            pending_trim_frames = pending_trim_frames.saturating_sub(trim_now);
-                        }
-                        let start_index = start_frame * channels;
-                        if start_index < all.len() {
-                            let slice = &all[start_index..];
+                        if total_frames > 0 {
+                            let slice = all;
+
+                            // Resample to device mix rate to avoid rodio's low-quality resampler artifacts.
+                            let mut out_interleaved: Vec<f32> = Vec::new();
+                            if let Some(resampler) = resampler.as_mut() {
+                                // deinterleave
+                                let frames = slice.len() / channels;
+                                for frame in 0..frames {
+                                    for ch in 0..channels {
+                                        resampler_input[ch].push(slice[frame * channels + ch]);
+                                    }
+                                }
+
+                                while resampler_input
+                                    .get(0)
+                                    .map(|v| v.len())
+                                    .unwrap_or(0)
+                                    >= resample_chunk_frames
+                                {
+                                    let mut input_block: Vec<Vec<f32>> =
+                                        Vec::with_capacity(channels_usize);
+                                    for ch in 0..channels_usize {
+                                        let drained: Vec<f32> = resampler_input[ch]
+                                            .drain(0..resample_chunk_frames)
+                                            .collect();
+                                        input_block.push(drained);
+                                    }
+
+                                    let output_blocks = match resampler.process(&input_block, None) {
+                                        Ok(value) => value,
+                                        Err(_) => break,
+                                    };
+
+                                    let out_frames = output_blocks
+                                        .get(0)
+                                        .map(|v| v.len())
+                                        .unwrap_or(0);
+                                    if out_frames == 0 {
+                                        continue;
+                                    }
+
+                                    let mut start_out_frame = 0usize;
+                                    if pending_trim_frames_out > 0 {
+                                        let trim_now = pending_trim_frames_out.min(out_frames);
+                                        start_out_frame = trim_now;
+                                        pending_trim_frames_out =
+                                            pending_trim_frames_out.saturating_sub(trim_now);
+                                    }
+
+                                    for frame in start_out_frame..out_frames {
+                                        for ch in 0..channels_usize {
+                                            if let Some(sample) = output_blocks[ch].get(frame) {
+                                                out_interleaved.push(*sample);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // No resampling: apply pending trim in input frames.
+                                let mut start_frame = 0usize;
+                                if pending_trim_frames_out > 0 {
+                                    let trim_now = pending_trim_frames_out.min(total_frames);
+                                    start_frame = trim_now;
+                                    pending_trim_frames_out =
+                                        pending_trim_frames_out.saturating_sub(trim_now);
+                                }
+                                let start_index = start_frame * channels;
+                                if start_index < slice.len() {
+                                    out_interleaved.extend_from_slice(&slice[start_index..]);
+                                }
+                            }
+
                             let mut offset = 0usize;
-                            while offset < slice.len() {
+                            while offset < out_interleaved.len() {
                                 if let Ok(cmd) = command_rx.try_recv() {
                                     match cmd {
                                         DecoderCommand::Shutdown => {
@@ -1240,7 +1451,7 @@ fn start_symphonia_stream(
                                         DecoderCommand::Seek(target) => {
                                             buffer_clone.clear();
                                             tap_clone.clear();
-                                            pending_trim_frames = 0;
+                                            pending_trim_frames_out = 0;
 
                                             let seek_to = SeekTo::Time {
                                                 time: Time::from(target.max(0.0)),
@@ -1254,7 +1465,8 @@ fn start_symphonia_stream(
                                                     let required_seconds = required.seconds as f64 + required.frac;
                                                     let actual_seconds = actual.seconds as f64 + actual.frac;
                                                     let delta = (required_seconds - actual_seconds).max(0.0);
-                                                    pending_trim_frames = (delta * sample_rate as f64) as usize;
+                                                    pending_trim_frames_out =
+                                    (delta * effective_sample_rate as f64) as usize;
                                                 }
 
                                                 decoder = match symphonia::default::get_codecs()
@@ -1267,6 +1479,12 @@ fn start_symphonia_stream(
                                                     }
                                                 };
                                                 sample_buf = None;
+                                                if let Some(r) = resampler.as_mut() {
+                                                    r.reset();
+                                                }
+                                                for ch in &mut resampler_input {
+                                                    ch.clear();
+                                                }
                                             }
 
                                             continue 'decode_loop;
@@ -1274,8 +1492,9 @@ fn start_symphonia_stream(
                                     }
                                 }
 
-                                let remaining = &slice[offset..];
-                                let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
+                                let remaining = &out_interleaved[offset..];
+                                let frames_pushed =
+                                    buffer_clone.push_interleaved(remaining, channels);
                                 if frames_pushed == 0 {
                                     continue;
                                 }
@@ -1466,7 +1685,7 @@ struct DecodedAudioBuffer {
     duration: f64,
 }
 
-fn decode_track_to_buffer(path: &Path) -> Result<DecodedAudioBuffer, String> {
+fn decode_track_to_buffer(path: &Path, output_sample_rate: Option<u32>) -> Result<DecodedAudioBuffer, String> {
     let file = File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
@@ -1551,6 +1770,73 @@ fn decode_track_to_buffer(path: &Path) -> Result<DecodedAudioBuffer, String> {
 
     let frames = samples.len() / channels;
     let duration = frames as f64 / sample_rate as f64;
+
+    let target_sample_rate = output_sample_rate.unwrap_or(sample_rate);
+    let (samples, sample_rate) = if target_sample_rate != sample_rate {
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Cubic,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let ratio = target_sample_rate as f64 / sample_rate as f64;
+        let chunk_size = 2048usize;
+        let mut resampler = SincFixedIn::<f32>::new(ratio, 1.0, params, chunk_size, channels)
+            .map_err(|e| format!("Failed to init resampler: {e}"))?;
+
+        let mut per_channel: Vec<Vec<f32>> = (0..channels).map(|_| Vec::new()).collect();
+        let frames_in = samples.len() / channels;
+        for frame in 0..frames_in {
+            for ch in 0..channels {
+                per_channel[ch].push(samples[frame * channels + ch]);
+            }
+        }
+
+        let expected_out_frames = ((frames_in as f64) * ratio).round().max(0.0) as usize;
+        let mut out_per_channel: Vec<Vec<f32>> = (0..channels).map(|_| Vec::new()).collect();
+
+        let mut start = 0usize;
+        while start < frames_in {
+            let end = (start + chunk_size).min(frames_in);
+            let block_len = end - start;
+
+            let mut input_block: Vec<Vec<f32>> = Vec::with_capacity(channels);
+            for ch in 0..channels {
+                let mut block = per_channel[ch][start..end].to_vec();
+                if block_len < chunk_size {
+                    block.resize(chunk_size, 0.0);
+                }
+                input_block.push(block);
+            }
+
+            let output_block = resampler
+                .process(&input_block, None)
+                .map_err(|e| format!("Resample failed: {e}"))?;
+
+            for ch in 0..channels {
+                out_per_channel[ch].extend_from_slice(&output_block[ch]);
+            }
+
+            start = end;
+        }
+
+        let out_frames_total = out_per_channel.get(0).map(|v| v.len()).unwrap_or(0);
+        let out_frames = expected_out_frames.min(out_frames_total);
+        let mut out_interleaved = Vec::with_capacity(out_frames * channels);
+        for frame in 0..out_frames {
+            for ch in 0..channels {
+                if let Some(sample) = out_per_channel[ch].get(frame) {
+                    out_interleaved.push(*sample);
+                }
+            }
+        }
+
+        (out_interleaved, target_sample_rate)
+    } else {
+        (samples, sample_rate)
+    };
+
     let shared = Arc::new(samples);
     Ok(DecodedAudioBuffer {
         source: SharedSamplesSource::new(shared.clone(), channels as u16, sample_rate, 0),
@@ -1635,13 +1921,33 @@ pub fn list_output_devices() -> Result<Vec<String>, String> {
 pub fn select_output_device(app_handle: &AppHandle, device_name: Option<String>) -> Result<(), String> {
     init_emitter(app_handle);
 
-    let (handle, resolved_name) = open_output_stream_handle(device_name.as_deref())?;
+    let already_selected = {
+        let state = STREAM_STATE
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.handle.is_some() && state.device_name == device_name
+    };
+
+    if already_selected {
+        let payload = {
+            let engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.build_state_payload(false)
+        };
+        emit_state(app_handle, payload)?;
+        return Ok(());
+    }
+
+    let (handle, resolved_name, output_sample_rate) =
+        open_output_stream_handle(device_name.as_deref())?;
     {
         let mut state = STREAM_STATE
             .lock()
             .map_err(|_| "Audio stream state is locked".to_string())?;
         state.handle = Some(handle.clone());
         state.device_name = device_name.clone();
+        state.output_sample_rate = output_sample_rate;
     }
 
     let payload = {
@@ -1654,6 +1960,7 @@ pub fn select_output_device(app_handle: &AppHandle, device_name: Option<String>)
         engine.device_name = resolved_name
             .or(device_name)
             .or_else(default_output_device_name);
+        engine.output_sample_rate = output_sample_rate;
 
         engine
             .rebuild_sink_on_new_device()

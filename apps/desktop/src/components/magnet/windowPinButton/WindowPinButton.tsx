@@ -29,7 +29,7 @@ export const WindowPinButton: React.FC = () => {
   const logic = useWindowPinLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('window-pin-button');
+  const themeConfig = useComponentTheme('btn-window-pin');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

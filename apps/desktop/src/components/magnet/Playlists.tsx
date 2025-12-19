@@ -19,6 +19,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [showAddTrackModal, setShowAddTrackModal] = useState(false);
   const [availableTracks, setAvailableTracks] = useState<Track[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isLoadingTracks, setIsLoadingTracks] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -28,22 +29,40 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [playlistToClear, setPlaylistToClear] = useState<string | null>(null);
 
   useEffect(() => {
+    setAudioState(audioService.getState());
+    setSelectedPlaylist(null);
+    setShowAddTrackModal(false);
+    setSearchQuery('');
     const unsubscribe = audioService.onStateChange(setAudioState);
     return unsubscribe;
   }, [audioService]);
 
   useEffect(() => {
     if (showAddTrackModal) {
-      loadAvailableTracks();
+      void loadAvailableTracks(searchQuery);
     }
   }, [showAddTrackModal]);
 
-  const loadAvailableTracks = async () => {
+  useEffect(() => {
+    if (!showAddTrackModal) return;
+    const handle = setTimeout(() => {
+      void loadAvailableTracks(searchQuery);
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [searchQuery, showAddTrackModal]);
+
+  const loadAvailableTracks = async (query: string) => {
     try {
-      const tracks = await musicLibraryService.getAllTracks();
+      setIsLoadingTracks(true);
+      const q = query.trim();
+      const tracks = q
+        ? await musicLibraryService.searchTracks(q, 200)
+        : await musicLibraryService.getAllTracks(200);
       setAvailableTracks(tracks);
     } catch (error) {
       console.error('Failed to load tracks:', error);
+    } finally {
+      setIsLoadingTracks(false);
     }
   };
 
@@ -100,7 +119,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const handlePlayTrackFromPlaylist = (playlist: Playlist, trackIndex: number) => {
     audioService.clearQueue();
     audioService.addMultipleToQueue(playlist.tracks);
-    audioService.playTrackAtIndex(trackIndex);
+    void audioService.playTrackAtIndex(trackIndex).catch((error) => {
+      console.error('[Playlists] Failed to play track:', error);
+    });
   };
 
   const formatDuration = (seconds: number): string => {
@@ -117,14 +138,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   };
 
   const getFilteredTracks = () => {
-    if (!searchQuery.trim()) return availableTracks;
-    const query = searchQuery.toLowerCase();
-    return availableTracks.filter(
-      (track) =>
-        track.title?.toLowerCase().includes(query) ||
-        track.artist?.toLowerCase().includes(query) ||
-        track.album?.toLowerCase().includes(query)
-    );
+    return availableTracks;
   };
 
   if (!isOpen) return null;
@@ -333,7 +347,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               </div>
 
               <div className="playlists-add-modal-tracks">
-                {availableTracks.length === 0 ? (
+                {isLoadingTracks ? (
+                  <div className="playlists-add-modal-empty">
+                    <div>加载中...</div>
+                  </div>
+                ) : availableTracks.length === 0 ? (
                   <div className="playlists-add-modal-empty">
                     <div>音乐库为空</div>
                     <div>请先在音乐库中添加音乐文件</div>
@@ -360,6 +378,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                     </div>
                   ))
                 )}
+              </div>
+              <div className="playlists-add-modal-footer">
+                <span>最多显示 200 首（建议用搜索）</span>
               </div>
             </div>
           </div>

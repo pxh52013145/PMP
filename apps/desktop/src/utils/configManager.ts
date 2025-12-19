@@ -1,6 +1,7 @@
 import { Magnet, PixelAnchor } from '../types/pixel';
 import { BUILTIN_MAGNET_IDS } from '../constants/magnets';
 import { resolveMagnetPositions, detectConflicts } from './magnetPositionResolver';
+import { readString, removeKey, writeString } from '../modules/storage';
 
 /**
  * 配置文件格式
@@ -100,7 +101,7 @@ export function saveConfig(
     // 保存自定义 Magnet 的完整定义
     config.customMagnets = magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id));
 
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+    writeString(CONFIG_KEY, JSON.stringify(config));
     console.log('配置已保存:', config);
   } catch (error) {
     console.error('保存配置失败:', error);
@@ -145,7 +146,7 @@ function migrateMagnetIds(config: MagnetConfig): MagnetConfig {
  */
 export function loadConfig(): MagnetConfig | null {
   try {
-    const configStr = localStorage.getItem(CONFIG_KEY);
+    const configStr = readString(CONFIG_KEY);
     if (!configStr) {
       console.log('未找到保存的配置');
       return null;
@@ -161,20 +162,20 @@ export function loadConfig(): MagnetConfig | null {
       config.version = CONFIG_VERSION;
 
       // 保存迁移后的配置
-      localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+      writeString(CONFIG_KEY, JSON.stringify(config));
       console.log('配置已迁移到新版本');
     } else {
       // 即使版本相同，也检查是否有旧 ID 需要迁移
       const oldIds = ['btn-prev', 'song-info'];
       const hasOldIds = Object.keys(config.magnets).some((id) => oldIds.includes(id));
 
-      if (hasOldIds) {
-        console.log('检测到旧的 Magnet ID，正在迁移...');
-        config = migrateMagnetIds(config);
-        localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-        console.log('配置已迁移');
+        if (hasOldIds) {
+          console.log('检测到旧的 Magnet ID，正在迁移...');
+          config = migrateMagnetIds(config);
+          writeString(CONFIG_KEY, JSON.stringify(config));
+          console.log('配置已迁移');
+        }
       }
-    }
 
     console.log('配置已加载:', config);
     return config;
@@ -279,7 +280,7 @@ export function importConfig(jsonStr: string): MagnetConfig | null {
  */
 export function clearConfig(): void {
   try {
-    localStorage.removeItem(CONFIG_KEY);
+    removeKey(CONFIG_KEY);
     console.log('配置已清除');
   } catch (error) {
     console.error('清除配置失败:', error);
@@ -456,19 +457,25 @@ export function applyConfig(
 
   console.log(`配置应用完成: 共 ${magnetLibrary.length} 个 magnet, ${activeMagnetIds.size} 个激活`);
 
-  // 检测位置冲突
-  const conflicts = detectConflicts(magnetLibrary);
-  if (conflicts.length > 0) {
-    console.warn(`⚠️ 检测到 ${conflicts.length} 个位置冲突，正在自动解决...`);
-    conflicts.forEach((conflict) => {
-      console.warn(
-        `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
-      );
-    });
+  // 仅对“激活的 magnets”进行冲突检测/自动解决：
+  // - 未激活 magnets 不参与占用，不需要为其耗时解析位置
+  // - 只有在确实检测到冲突时才运行 resolve（避免每次都做全量解析）
+  const activeMagnets = magnetLibrary.filter((m) => activeMagnetIds.has(m.id));
+  const conflicts = detectConflicts(activeMagnets);
+  if (conflicts.length === 0) {
+    return { magnetLibrary, activeMagnetIds };
   }
 
-  // 自动解决位置冲突
-  const resolvedMagnetLibrary = resolveMagnetPositions(magnetLibrary);
+  console.warn(`⚠️ 检测到 ${conflicts.length} 个激活 Magnet 位置冲突，正在自动解决...`);
+  conflicts.forEach((conflict) => {
+    console.warn(
+      `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
+    );
+  });
+
+  const resolvedActive = resolveMagnetPositions(activeMagnets);
+  const resolvedById = new Map(resolvedActive.map((m) => [m.id, m]));
+  const resolvedMagnetLibrary = magnetLibrary.map((m) => resolvedById.get(m.id) ?? m);
 
   return { magnetLibrary: resolvedMagnetLibrary, activeMagnetIds };
 }

@@ -12,40 +12,63 @@ import { BackButton } from '../magnet/BackButton';
 import { WindowPinButton } from '../magnet/WindowPinButton';
 import { DebugButton } from '../magnet/DebugButton';
 import { listRegisteredMagnetRenderers } from '../../magnet-system/registry';
+import { listMagnetVariants } from '../../magnet-system/variantRegistry';
 import './ThemeDebugPage.css';
+
+const LEGACY_THEME_KEYS: Record<string, string[]> = {
+  'btn-play-pause': ['play-pause-button'],
+  'btn-previous': ['previous-button'],
+  'btn-next': ['next-button'],
+  'btn-mode': ['play-mode'],
+  'btn-back': ['back-button'],
+  'btn-volume': ['volume-control'],
+};
+
+function resolveVariantFromTheme(themeValue: any, componentId: string, fallback: string): string {
+  const direct = themeValue?.componentThemes?.[componentId]?.variant;
+  if (typeof direct === 'string') return direct;
+
+  const legacyKeys = LEGACY_THEME_KEYS[componentId] ?? [];
+  for (const legacyKey of legacyKeys) {
+    const legacyVariant = themeValue?.componentThemes?.[legacyKey]?.variant;
+    if (typeof legacyVariant === 'string') return legacyVariant;
+  }
+
+  return fallback;
+}
 
 /**
  * 主题系统调试页面
  * 用于测试和开发主题、着色器系统
  */
 export const ThemeDebugPage: React.FC = () => {
-  const { theme, applyTheme, updateComponentTheme } = useTheme();
+  const { theme, applyTheme, updateComponentTheme, getComponentTheme } = useTheme();
   const [selectedTheme] = useState<string>('default');
   const [selectedMagnet, setSelectedMagnet] = useState<string>('track-info');
   const [configMode, setConfigMode] = useState<'global' | 'component'>('component');
   const [trackInfoVariant, setTrackInfoVariant] = useState<string>(
-    theme.componentThemes?.['track-info']?.variant || 'default'
+    getComponentTheme('track-info').variant || 'default'
   );
   const [progressBarVariant, setProgressBarVariant] = useState<string>(
-    theme.componentThemes?.['progress-bar']?.variant || 'default'
+    getComponentTheme('progress-bar').variant || 'default'
   );
   const [playPauseVariant, setPlayPauseVariant] = useState<string>(
-    theme.componentThemes?.['play-pause-button']?.variant || 'standard'
+    getComponentTheme('btn-play-pause').variant || 'default'
   );
   const [previousVariant, setPreviousVariant] = useState<string>(
-    theme.componentThemes?.['previous-button']?.variant || 'standard'
+    getComponentTheme('btn-previous').variant || 'default'
   );
   const [nextVariant, setNextVariant] = useState<string>(
-    theme.componentThemes?.['next-button']?.variant || 'standard'
+    getComponentTheme('btn-next').variant || 'default'
   );
   const [playModeVariant, setPlayModeVariant] = useState<string>(
-    theme.componentThemes?.['play-mode']?.variant || 'standard'
+    getComponentTheme('btn-mode').variant || 'default'
   );
   const [backButtonVariant, setBackButtonVariant] = useState<string>(
-    theme.componentThemes?.['back-button']?.variant || 'standard'
+    getComponentTheme('btn-back').variant || 'default'
   );
   const [volumeVariant, setVolumeVariant] = useState<string>(
-    theme.componentThemes?.['volume-control']?.variant || 'standard'
+    getComponentTheme('btn-volume').variant || 'default'
   );
   const [themeJson, setThemeJson] = useState<string>(JSON.stringify(theme, null, 2));
   const [rendererList, setRendererList] = useState(() => listRegisteredMagnetRenderers());
@@ -189,56 +212,56 @@ export const ThemeDebugPage: React.FC = () => {
                   onTrackInfoVariantChange={(variant) => {
                     setTrackInfoVariant(variant);
                     updateComponentTheme('track-info', {
-                      ...theme.componentThemes?.['track-info'],
+                      ...getComponentTheme('track-info'),
                       variant,
                     });
                   }}
                   onProgressBarVariantChange={(variant) => {
                     setProgressBarVariant(variant);
                     updateComponentTheme('progress-bar', {
-                      ...theme.componentThemes?.['progress-bar'],
+                      ...getComponentTheme('progress-bar'),
                       variant,
                     });
                   }}
                   onPlayPauseVariantChange={(variant) => {
                     setPlayPauseVariant(variant);
-                    updateComponentTheme('play-pause-button', {
-                      ...theme.componentThemes?.['play-pause-button'],
+                    updateComponentTheme('btn-play-pause', {
+                      ...getComponentTheme('btn-play-pause'),
                       variant,
                     });
                   }}
                   onPreviousVariantChange={(variant) => {
                     setPreviousVariant(variant);
-                    updateComponentTheme('previous-button', {
-                      ...theme.componentThemes?.['previous-button'],
+                    updateComponentTheme('btn-previous', {
+                      ...getComponentTheme('btn-previous'),
                       variant,
                     });
                   }}
                   onNextVariantChange={(variant) => {
                     setNextVariant(variant);
-                    updateComponentTheme('next-button', {
-                      ...theme.componentThemes?.['next-button'],
+                    updateComponentTheme('btn-next', {
+                      ...getComponentTheme('btn-next'),
                       variant,
                     });
                   }}
                   onPlayModeVariantChange={(variant) => {
                     setPlayModeVariant(variant);
-                    updateComponentTheme('play-mode', {
-                      ...theme.componentThemes?.['play-mode'],
+                    updateComponentTheme('btn-mode', {
+                      ...getComponentTheme('btn-mode'),
                       variant,
                     });
                   }}
                   onBackButtonVariantChange={(variant) => {
                     setBackButtonVariant(variant);
-                    updateComponentTheme('back-button', {
-                      ...theme.componentThemes?.['back-button'],
+                    updateComponentTheme('btn-back', {
+                      ...getComponentTheme('btn-back'),
                       variant,
                     });
                   }}
                   onVolumeVariantChange={(variant) => {
                     setVolumeVariant(variant);
-                    updateComponentTheme('volume-control', {
-                      ...theme.componentThemes?.['volume-control'],
+                    updateComponentTheme('btn-volume', {
+                      ...getComponentTheme('btn-volume'),
                       variant,
                     });
                   }}
@@ -268,14 +291,19 @@ export const ThemeDebugPage: React.FC = () => {
                             },
                           ],
                         });
-                        const file = await fileHandle.getFile();
-                        const text = await file.text();
-                        const importedTheme = JSON.parse(text);
-                        applyTheme(importedTheme);
-                        setTrackInfoVariant(
-                          importedTheme.componentThemes?.['track-info']?.variant || 'spinning-vinyl'
-                        );
-                      } else {
+                         const file = await fileHandle.getFile();
+                         const text = await file.text();
+                         const importedTheme = JSON.parse(text);
+                         await applyTheme(importedTheme);
+                         setTrackInfoVariant(resolveVariantFromTheme(importedTheme, 'track-info', 'spinning-vinyl'));
+                         setProgressBarVariant(resolveVariantFromTheme(importedTheme, 'progress-bar', 'standard'));
+                         setPlayPauseVariant(resolveVariantFromTheme(importedTheme, 'btn-play-pause', 'standard'));
+                         setPreviousVariant(resolveVariantFromTheme(importedTheme, 'btn-previous', 'standard'));
+                         setNextVariant(resolveVariantFromTheme(importedTheme, 'btn-next', 'standard'));
+                         setPlayModeVariant(resolveVariantFromTheme(importedTheme, 'btn-mode', 'standard'));
+                         setBackButtonVariant(resolveVariantFromTheme(importedTheme, 'btn-back', 'standard'));
+                         setVolumeVariant(resolveVariantFromTheme(importedTheme, 'btn-volume', 'standard'));
+                       } else {
                         // 降级到 Tauri dialog
                         const { open } = await import('@tauri-apps/api/dialog');
                         const selected = await open({
@@ -283,17 +311,21 @@ export const ThemeDebugPage: React.FC = () => {
                           filters: [{ name: 'Theme Files', extensions: ['pmpt', 'json'] }],
                         });
                         if (selected && typeof selected === 'string') {
-                          const { readTextFile } = await import('@tauri-apps/api/fs');
-                          const text = await readTextFile(selected);
-                          const importedTheme = JSON.parse(text);
-                          applyTheme(importedTheme);
-                          setTrackInfoVariant(
-                            importedTheme.componentThemes?.['track-info']?.variant ||
-                              'spinning-vinyl'
-                          );
-                        }
-                      }
-                    } catch (error) {
+                           const { readTextFile } = await import('@tauri-apps/api/fs');
+                           const text = await readTextFile(selected);
+                           const importedTheme = JSON.parse(text);
+                           await applyTheme(importedTheme);
+                           setTrackInfoVariant(resolveVariantFromTheme(importedTheme, 'track-info', 'spinning-vinyl'));
+                           setProgressBarVariant(resolveVariantFromTheme(importedTheme, 'progress-bar', 'standard'));
+                           setPlayPauseVariant(resolveVariantFromTheme(importedTheme, 'btn-play-pause', 'standard'));
+                           setPreviousVariant(resolveVariantFromTheme(importedTheme, 'btn-previous', 'standard'));
+                           setNextVariant(resolveVariantFromTheme(importedTheme, 'btn-next', 'standard'));
+                           setPlayModeVariant(resolveVariantFromTheme(importedTheme, 'btn-mode', 'standard'));
+                           setBackButtonVariant(resolveVariantFromTheme(importedTheme, 'btn-back', 'standard'));
+                           setVolumeVariant(resolveVariantFromTheme(importedTheme, 'btn-volume', 'standard'));
+                         }
+                       }
+                     } catch (error) {
                       console.error('Failed to import theme:', error);
                     }
                   }}
@@ -442,9 +474,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={trackInfoVariant}
             onChange={(e) => onTrackInfoVariantChange(e.target.value)}
           >
-            <option value="spinning-vinyl">旋转唱片</option>
-            <option value="card">卡片式</option>
-            <option value="minimal">极简</option>
+            {listMagnetVariants('track-info').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -467,8 +501,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={progressBarVariant}
             onChange={(e) => onProgressBarVariantChange(e.target.value)}
           >
-            <option value="standard">标准进度条</option>
-            <option value="minimal">极简</option>
+            {listMagnetVariants('progress-bar').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -491,8 +528,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={playPauseVariant}
             onChange={(e) => onPlayPauseVariantChange(e.target.value)}
           >
-            <option value="standard">标准样式</option>
-            <option value="rounded">霓虹发光</option>
+            {listMagnetVariants('btn-play-pause').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -516,8 +556,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={previousVariant}
             onChange={(e) => onPreviousVariantChange(e.target.value)}
           >
-            <option value="standard">标准样式</option>
-            <option value="rounded">霓虹发光</option>
+            {listMagnetVariants('btn-previous').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -541,8 +584,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={nextVariant}
             onChange={(e) => onNextVariantChange(e.target.value)}
           >
-            <option value="standard">标准样式</option>
-            <option value="rounded">霓虹发光</option>
+            {listMagnetVariants('btn-next').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -566,8 +612,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={playModeVariant}
             onChange={(e) => onPlayModeVariantChange(e.target.value)}
           >
-            <option value="standard">标准样式</option>
-            <option value="minimal">粒子爆炸</option>
+            {listMagnetVariants('btn-mode').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -591,8 +640,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={backButtonVariant}
             onChange={(e) => onBackButtonVariantChange(e.target.value)}
           >
-            <option value="standard">标准样式</option>
-            <option value="rounded">时空穿梭</option>
+            {listMagnetVariants('btn-back').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -616,8 +668,11 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
             value={volumeVariant}
             onChange={(e) => onVolumeVariantChange(e.target.value)}
           >
-            <option value="standard">标准样式</option>
-            <option value="cyber">赛博能量条</option>
+            {listMagnetVariants('btn-volume').map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.label}
+              </option>
+            ))}
           </select>
         </div>
 

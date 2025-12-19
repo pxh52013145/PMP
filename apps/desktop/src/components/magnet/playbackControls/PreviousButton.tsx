@@ -30,7 +30,7 @@ export const PreviousButton: React.FC = () => {
   const logic = usePlaybackLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('previous-button');
+  const themeConfig = useComponentTheme('btn-previous');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

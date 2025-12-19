@@ -29,7 +29,7 @@ export const MusicLibraryButton: React.FC = () => {
   const logic = useMusicLibraryLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('music-library-button');
+  const themeConfig = useComponentTheme('btn-music-library');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

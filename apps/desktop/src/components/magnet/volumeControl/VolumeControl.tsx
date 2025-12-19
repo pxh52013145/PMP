@@ -30,7 +30,7 @@ export const VolumeControl: React.FC = () => {
   const logic = useVolumeLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('volume-control');
+  const themeConfig = useComponentTheme('btn-volume');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

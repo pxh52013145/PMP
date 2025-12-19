@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
+import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import './AlbumDetailPage.css';
 
 interface AlbumDetailPageProps {
@@ -27,8 +28,22 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   useEffect(() => {
     if (initialTracks && initialTracks.length > 0) {
       setTracks(initialTracks);
-      // 使用第一首歌的封面作为专辑封面
-      setAlbumCover(initialTracks[0].coverUrl);
+
+      // 使用第一首歌的封面作为专辑封面（Desktop/Tauri 下优先走磁盘缓存懒加载）
+      const candidate = initialTracks[0];
+      const url = typeof candidate?.coverUrl === 'string' ? candidate.coverUrl : undefined;
+      const lower = (url || '').toLowerCase();
+      const isDisplayable =
+        !!url &&
+        (lower.startsWith('data:') ||
+          lower.startsWith('blob:') ||
+          lower.startsWith('http:') ||
+          lower.startsWith('https:'));
+      setAlbumCover(isDisplayable ? url : undefined);
+
+      void musicLibraryService.getCoverUrlForTrack(candidate).then((coverUrl) => {
+        if (coverUrl) setAlbumCover(coverUrl);
+      });
     }
   }, [initialTracks]);
 

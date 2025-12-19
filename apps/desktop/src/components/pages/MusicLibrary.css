@@ -697,8 +697,8 @@
 
 .music-library-scan-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
   margin-bottom: 12px;
 }
 
@@ -708,7 +708,26 @@
   color: rgba(255, 255, 255, 0.9);
 }
 
+.music-library-scan-cancel {
+  background: rgba(255, 80, 80, 0.18);
+  border: 1px solid rgba(255, 80, 80, 0.45);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.music-library-scan-cancel:hover {
+  background: rgba(255, 80, 80, 0.28);
+}
+
+.music-library-scan-cancel:active {
+  transform: translateY(1px);
+}
+
 .music-library-scan-percentage {
+  margin-left: auto;
   font-size: 18px;
   font-weight: 700;
   color: #6b9eff;

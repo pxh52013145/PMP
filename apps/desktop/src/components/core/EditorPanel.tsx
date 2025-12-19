@@ -1,43 +1,24 @@
 import { useEffect, useCallback } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
-import { Magnet } from '../../types/pixel';
 import {
   openEditorWindow,
   closeAllEditorWindows,
   calculateWindowPosition,
 } from '../../utils/editorWindows';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { writeJson } from '../../modules/storage';
+import { useMagnetConfig } from '../../modules/magnets';
 import './EditorPanel.css';
 
-interface EditorPanelProps {
-  magnetLibrary: Magnet[];
-  activeMagnetIds: Set<string>;
-  builtInMagnetIds: Set<string>;
-}
-
-export function EditorPanel({
-  magnetLibrary,
-  activeMagnetIds,
-  builtInMagnetIds,
-}: EditorPanelProps) {
+export function EditorPanel() {
   const { editorState } = useEditor();
+  const { magnetLibrary, activeMagnetIds, builtInMagnetIds } = useMagnetConfig();
 
   // 同步数据到 localStorage（供编辑器窗口初始化时读取）
   const syncDataToStorage = useCallback(() => {
-    // 使用 requestIdleCallback 在空闲时写入，避免阻塞主线程
-    if ('requestIdleCallback' in window) {
-      requestIdleCallback(() => {
-        localStorage.setItem(STORAGE_KEYS.MAGNET_LIBRARY, JSON.stringify(magnetLibrary));
-        localStorage.setItem(STORAGE_KEYS.ACTIVE_MAGNETS, JSON.stringify([...activeMagnetIds]));
-        localStorage.setItem(STORAGE_KEYS.BUILTIN_MAGNETS, JSON.stringify([...builtInMagnetIds]));
-      });
-    } else {
-      setTimeout(() => {
-        localStorage.setItem(STORAGE_KEYS.MAGNET_LIBRARY, JSON.stringify(magnetLibrary));
-        localStorage.setItem(STORAGE_KEYS.ACTIVE_MAGNETS, JSON.stringify([...activeMagnetIds]));
-        localStorage.setItem(STORAGE_KEYS.BUILTIN_MAGNETS, JSON.stringify([...builtInMagnetIds]));
-      }, 0);
-    }
+    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, magnetLibrary, { mode: 'idle', debounceMs: 250 });
+    writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...activeMagnetIds], { mode: 'idle', debounceMs: 250 });
+    writeJson(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds], { mode: 'idle', debounceMs: 250 });
   }, [magnetLibrary, activeMagnetIds, builtInMagnetIds]);
 
   // 当进入编辑模式时，打开控制窗口

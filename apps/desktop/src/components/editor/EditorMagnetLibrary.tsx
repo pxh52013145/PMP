@@ -4,11 +4,11 @@ import {
   useMemo,
   memo,
   useEffect,
+  useDeferredValue,
   isValidElement,
   type ReactNode,
 } from 'react';
 import { Magnet } from '../../types/pixel';
-import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import { useEditor } from '../../contexts/EditorContext';
 import {
   STORAGE_KEYS,
@@ -16,6 +16,7 @@ import {
   setupConfigSync,
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
+import { readJson, writeJson, writeString } from '../../modules/storage';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
 import './EditorMagnetLibrary.css';
 
@@ -32,6 +33,40 @@ interface EditorMagnetLibraryProps {
 type ViewMode = 'active' | 'inactive';
 type FilterMode = 'all' | 'builtin' | 'custom';
 
+function estimateMagnetPixelCount(magnet: Magnet): number {
+  const anchors = magnet.anchors ?? [];
+  if (anchors.length === 0) return 0;
+
+  let minX = anchors[0].gridX;
+  let maxX = anchors[0].gridX;
+  let minY = anchors[0].gridY;
+  let maxY = anchors[0].gridY;
+
+  for (let i = 1; i < anchors.length; i++) {
+    const a = anchors[i];
+    if (a.gridX < minX) minX = a.gridX;
+    if (a.gridX > maxX) maxX = a.gridX;
+    if (a.gridY < minY) minY = a.gridY;
+    if (a.gridY > maxY) maxY = a.gridY;
+  }
+
+  const width = Math.max(0, maxX - minX + 1);
+  const height = Math.max(0, maxY - minY + 1);
+
+  switch (magnet.anchorType) {
+    case 'single':
+      return 1;
+    case 'horizontal':
+      return width;
+    case 'vertical':
+      return height;
+    case 'rectangular':
+      return width * height;
+    default:
+      return 0;
+  }
+}
+
 export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   magnetLibrary,
   activeMagnetIds,
@@ -45,6 +80,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [showImport, setShowImport] = useState(false);
   const [importData, setImportData] = useState('');
   const [importError, setImportError] = useState('');
@@ -54,10 +90,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   // 初始化时清理可能残留的窗口状态
   useEffect(() => {
     // 确保初始状态正确（EditorMagnetLibrary 窗口打开时，creator 一定是关闭的）
-    const storedValue = localStorage.getItem(STORAGE_KEYS.CREATOR_WINDOW_OPEN);
-    if (storedValue === 'true') {
+    const storedValue = readJson<boolean>(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
+    if (storedValue === true) {
       // 清理残留状态
-      localStorage.setItem(STORAGE_KEYS.CREATOR_WINDOW_OPEN, 'false');
+      writeJson(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
     }
     setCreatorWindowOpen(false);
   }, []);
@@ -84,7 +120,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   // 当前显示的 Magnet（支持搜索）
   const displayMagnets = useMemo(() => {
     const baseMagnets = categorizedMagnets[viewMode][filterMode];
-    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const normalizedQuery = deferredSearchQuery.trim().toLowerCase();
     if (!normalizedQuery) return baseMagnets;
 
     return baseMagnets.filter((magnet) => {
@@ -105,12 +141,12 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       return searchable.some((value) => value.includes(normalizedQuery));
     });
-  }, [categorizedMagnets, filterMode, searchQuery, viewMode]);
+  }, [categorizedMagnets, deferredSearchQuery, filterMode, viewMode]);
 
   // 监听 creator 窗口状态
   useEffect(() => {
     const reloadStatus = () => {
-      const isOpen = localStorage.getItem(STORAGE_KEYS.CREATOR_WINDOW_OPEN) === 'true';
+      const isOpen = readJson<boolean>(STORAGE_KEYS.CREATOR_WINDOW_OPEN, false);
       setCreatorWindowOpen(isOpen);
     };
 
@@ -153,8 +189,8 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       try {
         // 将要编辑的 magnet 存储到 localStorage（临时数据，不需要广播）
-        localStorage.setItem(STORAGE_KEYS.MAGNET_EDITOR_DATA, JSON.stringify(magnet));
-        localStorage.setItem(STORAGE_KEYS.MAGNET_EDITOR_MODE, 'edit');
+        writeJson(STORAGE_KEYS.MAGNET_EDITOR_DATA, magnet);
+        writeString(STORAGE_KEYS.MAGNET_EDITOR_MODE, 'edit');
 
         // 标记窗口打开
         await broadcastDataUpdate(
@@ -352,15 +388,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
             displayMagnets.map((magnet) => {
               const isBuiltIn = builtInMagnetIds.has(magnet.id);
               const isActive = activeMagnetIds.has(magnet.id);
-              let pixelCount = 0;
-              try {
-                pixelCount = getMagnetOccupiedPixels(magnet).length;
-              } catch (error) {
-                console.error(
-                  `[EditorMagnetLibrary] 计算 Magnet 占用像素失败: ${magnet.id}`,
-                  error
-                );
-              }
+              const pixelCount = estimateMagnetPixelCount(magnet);
 
               const renderer = getMagnetRenderer(magnet.id);
               const rendererGroup = renderer?.group;

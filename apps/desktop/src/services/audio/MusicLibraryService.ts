@@ -1,10 +1,11 @@
 import { Track } from '../audio';
 import { parseAudioFile } from '../../utils/audioMetadata';
 import { open } from '@tauri-apps/api/dialog';
-import { readDir, readBinaryFile, exists } from '@tauri-apps/api/fs';
+import { readDir, exists } from '@tauri-apps/api/fs';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 // 音乐库数据库版本
-const DB_VERSION = 1;
+const DB_VERSION = 4;
 const DB_NAME = 'MusicLibrary';
 
 // 库统计信息
@@ -14,6 +15,14 @@ export interface LibraryStats {
   totalAlbums: number;
   totalSize: number;
   totalDuration: number;
+}
+
+export interface AlbumSummary {
+  album: string;
+  artist: string;
+  cover?: string;
+  coverTrackPath?: string;
+  coverTrackId?: string;
 }
 
 // 库路径信息
@@ -45,8 +54,19 @@ export type SortBy = 'title' | 'artist' | 'album' | 'duration' | 'addedAt' | 'ye
 
 export class MusicLibraryService {
   private static instance: MusicLibraryService;
+  private static startupRefreshScheduled: boolean = false;
   private db: IDBDatabase | null = null;
   private scanProgressListeners: Set<(progress: ScanProgress) => void> = new Set();
+  private isScanning: boolean = false;
+  private coverUrlCache: Map<string, string> = new Map();
+  private coverBlobUrlCache: Map<string, { url: string; bytes: number }> = new Map();
+  private coverBlobUrlTotalBytes: number = 0;
+  private coverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
+  private albumCoverUrlCache: Map<string, string> = new Map();
+  private albumCoverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
+  private COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024; // 80MB
+  private COVER_MAX_IMAGE_BYTES = 1024 * 1024; // 1MB per cover (many embedded covers exceed 256KB)
+  private COVER_BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024; // 32MB in-memory blob URL cache
 
   // 缓存 - 减少数据库查询
   private cachedStats: LibraryStats | null = null;
@@ -55,6 +75,434 @@ export class MusicLibraryService {
 
   private constructor() {
     this.initDB();
+    this.scheduleStartupRefresh();
+  }
+
+  private stableIdFromPath(path: string): string {
+    const normalized = path.replace(/\\/g, '/').toLowerCase();
+    let hash = 2166136261;
+    for (let i = 0; i < normalized.length; i++) {
+      hash ^= normalized.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `track-${(hash >>> 0).toString(16)}`;
+  }
+
+  private normalizePathForCompare(path: string): string {
+    return path.replace(/\\/g, '/').toLowerCase();
+  }
+
+  private normalizeFolderPrefix(folderPath: string): string {
+    const normalized = this.normalizePathForCompare(folderPath);
+    return normalized.endsWith('/') ? normalized : `${normalized}/`;
+  }
+
+  private albumKeyForTrack(track: Track): string | null {
+    const album = String(track.album || '').trim();
+    if (!album) return null;
+    const artist = String(track.artist || '').trim();
+    return `${album}::${artist}`;
+  }
+
+  private sanitizeCoverUrl(raw: unknown): string | undefined {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return undefined;
+
+    const lower = value.toLowerCase();
+    if (lower.startsWith('data:')) return value;
+    if (lower.startsWith('blob:')) return value;
+    if (lower.startsWith('http:') || lower.startsWith('https:')) return value;
+
+    if (lower.startsWith('asset:') || lower.startsWith('tauri:')) return undefined;
+
+    if (/^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('/') || value.startsWith('\\\\')) {
+      return undefined;
+    }
+
+    return undefined;
+  }
+
+  private guessMimeTypeFromPath(path: string): string | undefined {
+    const lower = path.toLowerCase();
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.flac')) return 'audio/flac';
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.m4a') || lower.endsWith('.mp4')) return 'audio/mp4';
+    if (lower.endsWith('.aac')) return 'audio/aac';
+    if (lower.endsWith('.ogg')) return 'audio/ogg';
+    if (lower.endsWith('.opus')) return 'audio/opus';
+    if (lower.endsWith('.aiff') || lower.endsWith('.aif')) return 'audio/aiff';
+    return undefined;
+  }
+
+  private isLikelyAbsolutePath(path: string): boolean {
+    if (!path) return false;
+    if (path.startsWith('/')) return true;
+    return /^[a-zA-Z]:[\\/]/.test(path);
+  }
+
+  private scheduleStartupRefresh(): void {
+    if (MusicLibraryService.startupRefreshScheduled) return;
+    MusicLibraryService.startupRefreshScheduled = true;
+
+    if (typeof window === 'undefined') return;
+    if (!isTauriRuntime()) return;
+
+    window.setTimeout(() => {
+      void this.refreshLibraryOnStartup().catch((error) => {
+        console.error('[MusicLibrary] Startup refresh failed:', error);
+      });
+    }, 2500);
+  }
+
+  private async refreshLibraryOnStartup(): Promise<void> {
+    if (this.isScanning) return;
+
+    const paths = await this.getLibraryPaths();
+    const toRefresh = paths.filter(
+      (p) => typeof p.path === 'string' && this.isLikelyAbsolutePath(p.path)
+    );
+    if (toRefresh.length === 0) return;
+
+    for (const p of toRefresh) {
+      if (this.isScanning) return;
+      await this.scanFolderViaTauriBackend(p.path, p.id, false, { silentProgress: true });
+    }
+  }
+
+  private async upsertCoverCacheEntry(entry: {
+    key: string;
+    filePath: string;
+    bytes: number;
+    lastAccessedAtMs: number;
+  }): Promise<void> {
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['coverCache'], 'readwrite');
+      const store = transaction.objectStore('coverCache');
+      store.put(entry);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
+  private async touchCoverCacheEntry(key: string): Promise<void> {
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['coverCache'], 'readwrite');
+      const store = transaction.objectStore('coverCache');
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const existing = request.result;
+        if (existing) {
+          existing.lastAccessedAtMs = Date.now();
+          store.put(existing);
+        }
+      };
+      request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
+  private async maybeUpdateTrackCoverInDB(
+    audioPath: string,
+    coverUrl: string,
+    coverKey: string
+  ): Promise<void> {
+    // Blob URLs are session-only; never persist them into IndexedDB.
+    if (String(coverUrl).startsWith('blob:')) {
+      const db = await this.ensureDB();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction(['tracks'], 'readwrite');
+        const store = transaction.objectStore('tracks');
+
+        if (!store.indexNames.contains('path')) {
+          resolve();
+          return;
+        }
+
+        const request = store.index('path').get(audioPath);
+        request.onsuccess = () => {
+          const existing = request.result;
+          if (existing) {
+            store.put({
+              ...existing,
+              coverKey,
+            });
+          }
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      });
+      return;
+    }
+
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
+
+      if (!store.indexNames.contains('path')) {
+        resolve();
+        return;
+      }
+
+      const request = store.index('path').get(audioPath);
+      request.onsuccess = () => {
+        const existing = request.result;
+        if (existing) {
+          const prevCoverUrl = String(existing.coverUrl || '');
+          const shouldReplace =
+            !prevCoverUrl || prevCoverUrl.startsWith('data:') || prevCoverUrl !== coverUrl;
+          if (shouldReplace) {
+            store.put({
+              ...existing,
+              coverUrl,
+              coverKey,
+            });
+          }
+        }
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  private touchCoverBlobCache(normalizedAudioPath: string): void {
+    const existing = this.coverBlobUrlCache.get(normalizedAudioPath);
+    if (!existing) return;
+    this.coverBlobUrlCache.delete(normalizedAudioPath);
+    this.coverBlobUrlCache.set(normalizedAudioPath, existing);
+  }
+
+  private addCoverBlobUrlToCache(
+    normalizedAudioPath: string,
+    url: string,
+    bytes: number
+  ): void {
+    const existing = this.coverBlobUrlCache.get(normalizedAudioPath);
+    if (existing) {
+      this.coverBlobUrlCache.delete(normalizedAudioPath);
+      this.coverBlobUrlCache.set(normalizedAudioPath, existing);
+      return;
+    }
+
+    this.coverBlobUrlCache.set(normalizedAudioPath, { url, bytes });
+    this.coverBlobUrlTotalBytes += bytes;
+
+    while (
+      this.coverBlobUrlTotalBytes > this.COVER_BLOB_CACHE_MAX_BYTES &&
+      this.coverBlobUrlCache.size > 0
+    ) {
+      const oldestKey = this.coverBlobUrlCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      const oldest = this.coverBlobUrlCache.get(oldestKey);
+      this.coverBlobUrlCache.delete(oldestKey);
+      if (oldest) {
+        this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - oldest.bytes);
+        try {
+          URL.revokeObjectURL(oldest.url);
+        } catch {}
+
+        const cached = this.coverUrlCache.get(oldestKey);
+        if (cached === oldest.url) {
+          this.coverUrlCache.delete(oldestKey);
+        }
+      }
+    }
+  }
+
+  private async pruneCoverCacheIfNeeded(): Promise<void> {
+    const db = await this.ensureDB();
+
+    const entries: Array<{
+      key: string;
+      filePath: string;
+      bytes: number;
+      lastAccessedAtMs: number;
+    }> = await new Promise((resolve, reject) => {
+      const transaction = db.transaction(['coverCache'], 'readonly');
+      const store = transaction.objectStore('coverCache');
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+
+    let total = 0;
+    for (const e of entries) total += Number(e.bytes || 0);
+    if (total <= this.COVER_CACHE_MAX_BYTES) return;
+
+    entries.sort((a, b) => Number(a.lastAccessedAtMs || 0) - Number(b.lastAccessedAtMs || 0));
+
+    const keysToDelete: string[] = [];
+    for (const entry of entries) {
+      if (total <= this.COVER_CACHE_MAX_BYTES) break;
+      keysToDelete.push(entry.key);
+      total -= Number(entry.bytes || 0);
+    }
+
+    if (keysToDelete.length === 0) return;
+
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['coverCache'], 'readwrite');
+      const store = transaction.objectStore('coverCache');
+      for (const key of keysToDelete) {
+        store.delete(key);
+      }
+
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    for (const key of keysToDelete) {
+      try {
+        await invoke('music_library_remove_cover', { key });
+      } catch (error) {
+        console.warn('[MusicLibrary] Failed to delete cached cover file:', error);
+      }
+    }
+  }
+
+  async getCoverUrlForTrack(
+    track: Track,
+    options?: { allowAlbumFallback?: boolean }
+  ): Promise<string | undefined> {
+    const allowAlbumFallback = options?.allowAlbumFallback !== false;
+    const existingUrl = track.coverUrl;
+    if (existingUrl && (String(existingUrl).startsWith('data:') || String(existingUrl).startsWith('blob:'))) {
+      if (track.coverKey) {
+        void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+      }
+      return existingUrl;
+    }
+
+    if (!isTauriRuntime()) return existingUrl;
+
+    const audioPath = track.filePath || track.path;
+    if (!audioPath || !this.isLikelyAbsolutePath(audioPath)) return existingUrl;
+
+    const normalized = this.normalizePathForCompare(audioPath);
+    const cached = this.coverUrlCache.get(normalized);
+    if (cached) {
+      if (track.coverKey) {
+        void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+      }
+      this.touchCoverBlobCache(normalized);
+      return cached;
+    }
+
+    const inflight = this.coverUrlInflight.get(normalized);
+    if (inflight) return inflight;
+
+    const promise = (async () => {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+
+      const result = await invoke<
+        | {
+            key: string;
+            path: string;
+            size: number;
+            mediaType?: string | null;
+            bytesBase64?: string | null;
+          }
+        | null
+      >('music_library_get_cover', {
+        path: audioPath,
+        maxBytes: this.COVER_MAX_IMAGE_BYTES,
+      });
+
+      if (!result) return undefined;
+
+      const rawBase64 = String(result.bytesBase64 || '').trim();
+      if (!rawBase64) return undefined;
+
+      const mime = result.mediaType || 'image/jpeg';
+      const binary = atob(rawBase64);
+      const buffer = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        buffer[i] = binary.charCodeAt(i);
+      }
+
+      const blob = new Blob([buffer], { type: mime });
+      const url = URL.createObjectURL(blob);
+      this.coverUrlCache.set(normalized, url);
+      this.addCoverBlobUrlToCache(normalized, url, result.size);
+
+      const albumKey = this.albumKeyForTrack(track);
+      if (albumKey) {
+        this.albumCoverUrlCache.set(albumKey, url);
+      }
+
+      const now = Date.now();
+      await this.upsertCoverCacheEntry({
+        key: result.key,
+        filePath: result.path,
+        bytes: result.size,
+        lastAccessedAtMs: now,
+      });
+
+      await this.maybeUpdateTrackCoverInDB(audioPath, url, result.key);
+      await this.pruneCoverCacheIfNeeded();
+
+      return url;
+    })()
+      .catch((error) => {
+        console.warn('[MusicLibrary] Failed to get cover:', error);
+        return undefined;
+      })
+      .finally(() => {
+        this.coverUrlInflight.delete(normalized);
+      });
+
+    this.coverUrlInflight.set(normalized, promise);
+    const direct = await promise;
+    if (direct) return direct;
+
+    if (!allowAlbumFallback) return undefined;
+
+    const albumKey = this.albumKeyForTrack(track);
+    if (!albumKey) return undefined;
+
+    const cachedAlbum = this.albumCoverUrlCache.get(albumKey);
+    if (cachedAlbum) return cachedAlbum;
+
+    const inflightAlbum = this.albumCoverUrlInflight.get(albumKey);
+    if (inflightAlbum) return inflightAlbum;
+
+    const albumPromise = (async () => {
+      const album = String(track.album || '').trim();
+      if (!album) return undefined;
+      const artist = String(track.artist || '').trim();
+
+      const candidates = await this.getTracksByAlbum(album);
+      const filtered = candidates
+        .filter((t) => t && (t.filePath || t.path))
+        .filter((t) => (artist ? String(t.artist || '').trim() === artist : true))
+        .slice(0, 12);
+
+      for (const candidate of filtered) {
+        if (candidate.id === track.id) continue;
+        const url = await this.getCoverUrlForTrack(candidate, { allowAlbumFallback: false });
+        if (url) {
+          this.albumCoverUrlCache.set(albumKey, url);
+          return url;
+        }
+      }
+
+      return undefined;
+    })()
+      .catch((error) => {
+        console.warn('[MusicLibrary] Failed to resolve album cover fallback:', error);
+        return undefined;
+      })
+      .finally(() => {
+        this.albumCoverUrlInflight.delete(albumKey);
+      });
+
+    this.albumCoverUrlInflight.set(albumKey, albumPromise);
+    return albumPromise;
   }
 
   static getInstance(): MusicLibraryService {
@@ -77,6 +525,8 @@ export class MusicLibraryService {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
+        const transaction = (event.target as IDBOpenDBRequest).transaction;
+        const oldVersion = (event as IDBVersionChangeEvent).oldVersion ?? 0;
 
         // 创建音乐轨道存储
         if (!db.objectStoreNames.contains('tracks')) {
@@ -88,12 +538,87 @@ export class MusicLibraryService {
           tracksStore.createIndex('year', 'year', { unique: false });
           tracksStore.createIndex('addedAt', 'addedAt', { unique: false });
           tracksStore.createIndex('path', 'path', { unique: true });
+          tracksStore.createIndex('libraryPathId', 'libraryPathId', { unique: false });
+        } else if (transaction) {
+          const tracksStore = transaction.objectStore('tracks');
+          if (!tracksStore.indexNames.contains('libraryPathId')) {
+            tracksStore.createIndex('libraryPathId', 'libraryPathId', { unique: false });
+          }
+          if (!tracksStore.indexNames.contains('path')) {
+            tracksStore.createIndex('path', 'path', { unique: true });
+          }
         }
 
         // 创建库路径存储
         if (!db.objectStoreNames.contains('libraryPaths')) {
           const pathsStore = db.createObjectStore('libraryPaths', { keyPath: 'id' });
           pathsStore.createIndex('path', 'path', { unique: true });
+        } else if (transaction) {
+          const pathsStore = transaction.objectStore('libraryPaths');
+          if (!pathsStore.indexNames.contains('path')) {
+            pathsStore.createIndex('path', 'path', { unique: true });
+          }
+        }
+
+        // 封面磁盘缓存索引（仅存 key/路径/最近访问时间，不存 base64）
+        if (!db.objectStoreNames.contains('coverCache')) {
+          const coverStore = db.createObjectStore('coverCache', { keyPath: 'key' });
+          coverStore.createIndex('lastAccessedAtMs', 'lastAccessedAtMs', { unique: false });
+        } else if (transaction) {
+          const coverStore = transaction.objectStore('coverCache');
+          if (!coverStore.indexNames.contains('lastAccessedAtMs')) {
+            coverStore.createIndex('lastAccessedAtMs', 'lastAccessedAtMs', { unique: false });
+          }
+        }
+
+        // v3 migration: drop legacy base64 coverUrl for Desktop paths (covers can be regenerated via Rust cache)
+        if (transaction && oldVersion < 3 && db.objectStoreNames.contains('tracks')) {
+          const tracksStore = transaction.objectStore('tracks');
+          const cursorRequest = tracksStore.openCursor();
+          cursorRequest.onsuccess = (evt) => {
+            const cursor = (evt.target as IDBRequest).result as IDBCursorWithValue | null;
+            if (!cursor) return;
+
+            const value: any = cursor.value;
+            const coverUrl = String(value.coverUrl || '');
+            const filePath = String(value.filePath || value.path || '');
+            const isAbs = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('/');
+
+            if (isAbs && coverUrl.startsWith('data:')) {
+              delete value.coverUrl;
+              delete value.coverKey;
+              tracksStore.put(value);
+            }
+
+            cursor.continue();
+          };
+        }
+
+        // v4 migration: drop legacy asset/tauri/blob cover URLs that depend on Tauri assetScope.
+        if (transaction && oldVersion < 4 && db.objectStoreNames.contains('tracks')) {
+          const tracksStore = transaction.objectStore('tracks');
+          const cursorRequest = tracksStore.openCursor();
+          cursorRequest.onsuccess = (evt) => {
+            const cursor = (evt.target as IDBRequest).result as IDBCursorWithValue | null;
+            if (!cursor) return;
+
+            const value: any = cursor.value;
+            const coverUrl = String(value.coverUrl || '').trim();
+            const lower = coverUrl.toLowerCase();
+            const shouldDrop =
+              !coverUrl ||
+              lower.startsWith('asset:') ||
+              lower.startsWith('tauri:') ||
+              lower.startsWith('blob:') ||
+              lower.includes('music-covers');
+
+            if (shouldDrop && 'coverUrl' in value) {
+              delete value.coverUrl;
+              tracksStore.put(value);
+            }
+
+            cursor.continue();
+          };
         }
       };
     });
@@ -193,10 +718,16 @@ export class MusicLibraryService {
   async scanAllLibraryPaths(): Promise<void> {
     const paths = await this.getLibraryPaths();
     console.log(`Found ${paths.length} library paths to scan`);
+    const tauriRuntime = isTauriRuntime();
 
     for (const pathInfo of paths) {
       console.log(`Scanning library path: ${pathInfo.path}`);
       try {
+        if (tauriRuntime) {
+          await this.scanFolder(pathInfo.path, pathInfo.id);
+          continue;
+        }
+
         // 尝试重新获取文件夹句柄
         // @ts-ignore - File System Access API
         if (window.showDirectoryPicker) {
@@ -229,12 +760,15 @@ export class MusicLibraryService {
     let folderHandle: FileSystemDirectoryHandle | null = null;
     let useFileSystemAPI = false;
 
+    const tauriRuntime = isTauriRuntime();
+
     // 优先使用 File System Access API（快速）
     if (!folderPathOrHandle) {
       try {
         // 检查是否支持 File System Access API
         // @ts-ignore
-        if (window.showDirectoryPicker) {
+        // NOTE: In Tauri, we prefer native dialogs so we always have absolute file paths for NativeAudio.
+        if (!tauriRuntime && window.showDirectoryPicker) {
           // @ts-ignore
           folderHandle = await window.showDirectoryPicker({ mode: 'read' });
           useFileSystemAPI = true;
@@ -270,6 +804,13 @@ export class MusicLibraryService {
     } else {
       folderHandle = folderPathOrHandle;
       useFileSystemAPI = true;
+    }
+
+    // ML.1 (Desktop/Tauri): do all scanning + metadata extraction in Rust backend.
+    // This avoids reading/decoding whole files in the frontend and prevents UI stalls/crashes.
+    if (tauriRuntime && folderPath && !useFileSystemAPI) {
+      await this.scanFolderViaTauriBackend(folderPath, pathId, shouldAddPath);
+      return;
     }
 
     console.log('Starting to scan folder...');
@@ -364,14 +905,17 @@ export class MusicLibraryService {
               track = await parseAudioFile(audioFile.file);
               filePath = audioFile.path;
             } else {
-              // 否则读取文件（Tauri API）
-              const fileData = await readBinaryFile(audioFile.path);
-              const arrayBuffer = fileData.buffer as ArrayBuffer;
-              const blob = new Blob([arrayBuffer]);
-              const file = new File([blob], audioFile.name);
-
-              track = await parseAudioFile(file);
               filePath = audioFile.path;
+
+              // ML.0 (Desktop/Tauri): do not read full audio contents in the frontend during scans.
+              // Store minimal metadata and rely on later phases for enrichment.
+              track = {
+                id: this.stableIdFromPath(filePath),
+                title: audioFile.name.replace(/\.[^/.]+$/, ''),
+                filePath,
+                originalPath: filePath,
+                path: filePath,
+              };
             }
 
             // 准备存储的数据
@@ -464,6 +1008,317 @@ export class MusicLibraryService {
       total,
       current,
       isScanning: false,
+    });
+  }
+
+  async cancelCurrentScan(): Promise<void> {
+    if (!isTauriRuntime()) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      await invoke('music_library_cancel_scan');
+    } catch (error) {
+      console.error('[MusicLibrary] Failed to cancel scan:', error);
+    } finally {
+      this.notifyScanProgress({ total: 0, current: 0, isScanning: false });
+    }
+  }
+
+  private async scanFolderViaTauriBackend(
+    folderPath: string,
+    pathId?: string,
+    shouldAddPath: boolean = false,
+    options?: { silentProgress?: boolean; enrichUnscannedMetadata?: boolean }
+  ): Promise<void> {
+    const silentProgress = options?.silentProgress ?? false;
+    const enrichUnscannedMetadata = options?.enrichUnscannedMetadata ?? true;
+
+    this.isScanning = true;
+
+    if (!silentProgress) {
+      this.notifyScanProgress({
+        total: 0,
+        current: 0,
+        currentFile: folderPath.split(/[/\\]/).pop() || folderPath,
+        isScanning: true,
+        progress: 0,
+      });
+    }
+
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    const { listen } = await import('@tauri-apps/api/event');
+
+    // Ensure the folder is registered so tracks can be associated to a stable libraryPathId.
+    if (shouldAddPath && !pathId) {
+      try {
+        const folderName = folderPath.split(/[/\\]/).pop() || folderPath;
+        const newPath = await this.addLibraryPathByString(folderPath, folderName);
+        pathId = newPath.id;
+      } catch (error) {
+        console.error('Failed to add library path before scanning:', error);
+      }
+    }
+
+    const startTime = Date.now();
+    const unlisten = silentProgress
+      ? async () => {}
+      : await listen<{ total: number; current: number; currentFile?: string }>(
+          'music-library-scan-progress',
+          (event) => {
+            const total = event.payload?.total ?? 0;
+            const current = event.payload?.current ?? 0;
+            const progress = total > 0 ? (current / total) * 100 : 0;
+            const elapsed = (Date.now() - startTime) / 1000;
+            const speed = elapsed > 0 ? current / elapsed : 0;
+            const remaining = speed > 0 ? (total - current) / speed : undefined;
+
+            this.notifyScanProgress({
+              total,
+              current,
+              currentFile: event.payload?.currentFile,
+              isScanning: current < total,
+              progress,
+              speed,
+              remaining,
+            });
+          }
+        );
+
+    try {
+      // ML.2 Stage A: fast enumerate only (mtime/size) without metadata probing.
+      const quick = await invoke<
+        Array<{ path: string; fileName: string; size: number; mtimeMs: number }>
+      >('music_library_scan', {
+        paths: [folderPath],
+        options: { includeMetadata: false },
+      });
+
+      await this.ensureDB();
+
+      const existing = await this.getStoredTracksForBackendScan(folderPath, pathId);
+      const existingByPath = new Map<string, any>();
+      for (const t of existing) {
+        const p = String(t.filePath || t.path || '');
+        if (!p) continue;
+        existingByPath.set(this.normalizePathForCompare(p), t);
+      }
+
+      const seen = new Set<string>();
+      const upserts: any[] = [];
+      const needMetadataPaths: string[] = [];
+
+      for (const item of quick) {
+        const normalizedPath = this.normalizePathForCompare(item.path);
+        seen.add(normalizedPath);
+
+        const prev = existingByPath.get(normalizedPath);
+        const isNew = !prev;
+        const unchanged =
+          prev &&
+          typeof prev.mtimeMs === 'number' &&
+          typeof prev.fileSize === 'number' &&
+          prev.mtimeMs === item.mtimeMs &&
+          prev.fileSize === item.size;
+
+        const needsLibraryPathLink = Boolean(pathId) && prev && !prev.libraryPathId;
+        const metadataScannedBefore = prev && typeof prev.metadataScannedAtMs === 'number';
+        const shouldProbeMetadata = isNew || !unchanged || (!metadataScannedBefore && enrichUnscannedMetadata);
+
+        if (shouldProbeMetadata) needMetadataPaths.push(item.path);
+        if (!isNew && unchanged && !needsLibraryPathLink && !shouldProbeMetadata) continue;
+
+        const fallbackTitle = item.fileName.replace(/\.[^/.]+$/, '');
+        upserts.push({
+          ...(prev ?? {}),
+          id: prev?.id ?? this.stableIdFromPath(item.path),
+          title: prev?.title ?? fallbackTitle,
+          fileSize: item.size,
+          mtimeMs: item.mtimeMs,
+          filePath: item.path,
+          originalPath: item.path,
+          path: item.path,
+          libraryPathId: pathId ?? prev?.libraryPathId,
+          addedAt: prev?.addedAt ?? Date.now(),
+          mimeType: prev?.mimeType ?? this.guessMimeTypeFromPath(item.path),
+          file: undefined,
+          fileContent: undefined,
+        });
+      }
+
+      const deletions = existing
+        .filter((t) => {
+          const p = String(t.filePath || t.path || '');
+          if (!p) return false;
+          const normalizedPath = this.normalizePathForCompare(p);
+          return !seen.has(normalizedPath);
+        })
+        .map((t) => t.id)
+        .filter(Boolean);
+
+      // ML.2 Stage B: only probe metadata for added/modified/unscanned items.
+      if (needMetadataPaths.length > 0) {
+        const scannedMeta = await invoke<
+          Array<{
+            path: string;
+            fileName: string;
+            size: number;
+            mtimeMs: number;
+            duration?: number | null;
+            sampleRate?: number | null;
+            title?: string | null;
+            artist?: string | null;
+            album?: string | null;
+          }>
+        >('music_library_scan', {
+          paths: needMetadataPaths,
+          options: { includeMetadata: true },
+        });
+
+        const metaByPath = new Map<string, any>();
+        for (const item of scannedMeta) {
+          metaByPath.set(this.normalizePathForCompare(item.path), item);
+        }
+
+        const now = Date.now();
+        for (const record of upserts) {
+          const p = String(record.filePath || record.path || '');
+          if (!p) continue;
+          const meta = metaByPath.get(this.normalizePathForCompare(p));
+          if (!meta) continue;
+
+          const title = String(meta.title || '').trim();
+          const artist = String(meta.artist || '').trim();
+          const album = String(meta.album || '').trim();
+
+          if (title.length > 0) record.title = title;
+          if (artist.length > 0) record.artist = artist;
+          if (album.length > 0) record.album = album;
+          if (typeof meta.duration === 'number') record.duration = meta.duration;
+          if (typeof meta.sampleRate === 'number') record.sampleRate = meta.sampleRate;
+
+          record.metadataScannedAtMs = now;
+        }
+
+        const normalizedNeed = new Set(needMetadataPaths.map((p) => this.normalizePathForCompare(p)));
+        for (const record of upserts) {
+          const p = String(record.filePath || record.path || '');
+          if (!p) continue;
+          if (record.metadataScannedAtMs) continue;
+          if (normalizedNeed.has(this.normalizePathForCompare(p))) {
+            record.metadataScannedAtMs = Date.now();
+          }
+        }
+      }
+
+      await this.applyBackendScanDiff(upserts, deletions);
+      this.clearCache();
+
+      if (pathId) {
+        try {
+          const db = await this.ensureDB();
+          const transaction = db.transaction(['libraryPaths'], 'readwrite');
+          const store = transaction.objectStore('libraryPaths');
+          const request = store.get(pathId);
+
+          await new Promise<void>((resolve, reject) => {
+            request.onsuccess = () => {
+              const pathInfo = request.result;
+              if (pathInfo) {
+                pathInfo.lastScanned = Date.now();
+                pathInfo.trackCount = quick.length;
+                store.put(pathInfo);
+              }
+              resolve();
+            };
+            request.onerror = () => reject(request.error);
+          });
+        } catch (error) {
+          console.error('Failed to update library path metadata:', error);
+        }
+      }
+    } catch (error: any) {
+      if (String(error?.message || error).includes('Scan cancelled')) {
+        return;
+      }
+      throw error;
+    } finally {
+      await unlisten();
+      this.isScanning = false;
+      if (!silentProgress) {
+        this.notifyScanProgress({ total: 0, current: 0, isScanning: false });
+      }
+    }
+  }
+
+  private async getStoredTracksForBackendScan(folderPath: string, pathId?: string): Promise<any[]> {
+    const db = await this.ensureDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+      const folderPrefix = this.normalizeFolderPrefix(folderPath);
+
+      const scanByPrefix = () => {
+        const results: any[] = [];
+        const request = store.openCursor();
+        request.onsuccess = (event) => {
+          const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+          if (!cursor) {
+            resolve(results);
+            return;
+          }
+          const value = cursor.value;
+          const p = String(value.filePath || value.path || '');
+          if (p) {
+            const normalized = this.normalizePathForCompare(p);
+            if (normalized.startsWith(folderPrefix)) results.push(value);
+          }
+          cursor.continue();
+        };
+        request.onerror = () => reject(request.error);
+      };
+
+      if (pathId && store.indexNames.contains('libraryPathId')) {
+        try {
+          const index = store.index('libraryPathId');
+          const request = index.getAll(pathId);
+          request.onsuccess = () => {
+            const result = request.result || [];
+            if (result.length > 0) {
+              resolve(result);
+              return;
+            }
+            scanByPrefix();
+          };
+          request.onerror = () => {
+            scanByPrefix();
+          };
+        } catch (_error) {
+          scanByPrefix();
+        }
+      } else {
+        scanByPrefix();
+      }
+    });
+  }
+
+  private async applyBackendScanDiff(upserts: any[], deletions: string[]): Promise<void> {
+    if (upserts.length === 0 && deletions.length === 0) return;
+
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
+
+      for (const item of upserts) {
+        store.put(item);
+      }
+
+      for (const id of deletions) {
+        store.delete(id);
+      }
+
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
     });
   }
 
@@ -685,9 +1540,51 @@ export class MusicLibraryService {
     });
   }
 
+  // 搜索轨道（避免一次性加载全库导致卡顿）
+  async searchTracks(query: string, limit?: number): Promise<Track[]> {
+    const q = query.trim().toLowerCase();
+    if (!q) return typeof limit === 'number' ? this.getAllTracks(limit) : this.getAllTracks();
+
+    const db = await this.ensureDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+
+      const results: Track[] = [];
+      const request = store.openCursor();
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+        if (!cursor) {
+          resolve(results);
+          return;
+        }
+
+        const value = cursor.value;
+        const title = String(value.title || '').toLowerCase();
+        const artist = String(value.artist || '').toLowerCase();
+        const album = String(value.album || '').toLowerCase();
+
+        if (title.includes(q) || artist.includes(q) || album.includes(q)) {
+          results.push(this.restoreTrackForPlayback(value));
+          if (typeof limit === 'number' && results.length >= limit) {
+            resolve(results);
+            return;
+          }
+        }
+
+        cursor.continue();
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   // 从存储的track恢复用于播放的track对象
   private restoreTrackForPlayback(storedTrack: any): Track {
     const track = { ...storedTrack };
+
+    track.coverUrl = this.sanitizeCoverUrl(track.coverUrl);
 
     // 直接使用文件路径，WebAudioService 会负责处理
     if (track.filePath) {
@@ -854,41 +1751,120 @@ export class MusicLibraryService {
 
   // 获取所有艺术家
   async getAllArtists(): Promise<string[]> {
-    const tracks = await this.getAllTracks();
-    const artists = new Set<string>();
-    tracks.forEach((track) => {
-      if (track.artist) artists.add(track.artist);
+    const db = await this.ensureDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+
+      const request = (store.indexNames.contains('artist') ? store.index('artist') : store).openCursor();
+      const seen = new Set<string>();
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+        if (!cursor) {
+          resolve(Array.from(seen).sort());
+          return;
+        }
+        const value: any = cursor.value;
+        const artist = String(value.artist || '').trim();
+        if (artist) seen.add(artist);
+        cursor.continue();
+      };
+
+      request.onerror = () => reject(request.error);
     });
-    return Array.from(artists).sort();
   }
 
   // 获取所有专辑
-  async getAllAlbums(): Promise<{ album: string; artist: string; cover?: string }[]> {
-    const tracks = await this.getAllTracks();
-    const albumMap = new Map<string, { artist: string; cover?: string }>();
+  async getAllAlbums(): Promise<AlbumSummary[]> {
+    const db = await this.ensureDB();
 
-    tracks.forEach((track) => {
-      if (track.album && !albumMap.has(track.album)) {
-        albumMap.set(track.album, {
-          artist: track.artist || 'Unknown Artist',
-          cover: track.coverUrl,
-        });
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+
+      if (!store.indexNames.contains('album')) {
+        void this.getAllTracks()
+          .then((tracks) => {
+            const albumMap = new Map<string, AlbumSummary>();
+            tracks.forEach((track) => {
+              if (!track.album) return;
+              const key = `${track.album}::${track.artist || ''}`;
+              if (albumMap.has(key)) return;
+              albumMap.set(key, {
+                album: track.album,
+                artist: track.artist || 'Unknown Artist',
+                cover: this.sanitizeCoverUrl(track.coverUrl),
+                coverTrackPath: track.filePath || track.path,
+                coverTrackId: track.id,
+              });
+            });
+            resolve(
+              Array.from(albumMap.values()).sort((a, b) => a.album.localeCompare(b.album))
+            );
+          })
+          .catch(reject);
+        return;
       }
-    });
 
-    return Array.from(albumMap.entries())
-      .map(([album, info]) => ({ album, ...info }))
-      .sort((a, b) => a.album.localeCompare(b.album));
+      const albumMap = new Map<string, AlbumSummary>();
+      const index = store.index('album');
+      const request = index.openCursor();
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+        if (!cursor) {
+          resolve(Array.from(albumMap.values()).sort((a, b) => a.album.localeCompare(b.album)));
+          return;
+        }
+
+        const value: any = cursor.value;
+        const album = String(value.album || '');
+        if (album) {
+          const artist = String(value.artist || 'Unknown Artist');
+          const key = `${album}::${artist}`;
+          if (!albumMap.has(key)) {
+            albumMap.set(key, {
+              album,
+              artist,
+                cover: this.sanitizeCoverUrl(value.coverUrl),
+              coverTrackPath: value.filePath || value.path,
+              coverTrackId: value.id,
+            });
+          }
+        }
+
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
   }
 
   // 获取所有流派
   async getAllGenres(): Promise<string[]> {
-    const tracks = await this.getAllTracks();
-    const genres = new Set<string>();
-    tracks.forEach((track) => {
-      if (track.genre) genres.add(track.genre);
+    const db = await this.ensureDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+
+      const request = (store.indexNames.contains('genre') ? store.index('genre') : store).openCursor();
+      const seen = new Set<string>();
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+        if (!cursor) {
+          resolve(Array.from(seen).sort());
+          return;
+        }
+        const value: any = cursor.value;
+        const genre = String(value.genre || '').trim();
+        if (genre) seen.add(genre);
+        cursor.continue();
+      };
+
+      request.onerror = () => reject(request.error);
     });
-    return Array.from(genres).sort();
   }
 
   // 获取库统计信息（带缓存）
@@ -899,21 +1875,41 @@ export class MusicLibraryService {
       return this.cachedStats;
     }
 
-    const tracks = await this.getAllTracks();
     const artists = new Set<string>();
     const albums = new Set<string>();
+    let totalTracks = 0;
     let totalSize = 0;
     let totalDuration = 0;
 
-    tracks.forEach((track) => {
-      if (track.artist) artists.add(track.artist);
-      if (track.album) albums.add(track.album);
-      totalSize += track.fileSize || 0;
-      totalDuration += track.duration || 0;
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+      const request = store.openCursor();
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+
+        const value: any = cursor.value;
+        totalTracks++;
+        const artist = String(value.artist || '').trim();
+        const album = String(value.album || '').trim();
+        if (artist) artists.add(artist);
+        if (album) albums.add(album);
+        totalSize += Number(value.fileSize || 0);
+        totalDuration += Number(value.duration || 0);
+
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
     });
 
     const stats = {
-      totalTracks: tracks.length,
+      totalTracks,
       totalArtists: artists.size,
       totalAlbums: albums.size,
       totalSize,
@@ -934,19 +1930,6 @@ export class MusicLibraryService {
   }
 
   // 搜索轨道
-  async searchTracks(query: string): Promise<Track[]> {
-    const allTracks = await this.getAllTracks();
-    const lowerQuery = query.toLowerCase();
-
-    return allTracks.filter(
-      (track) =>
-        track.title?.toLowerCase().includes(lowerQuery) ||
-        track.artist?.toLowerCase().includes(lowerQuery) ||
-        track.album?.toLowerCase().includes(lowerQuery) ||
-        track.genre?.toLowerCase().includes(lowerQuery)
-    );
-  }
-
   // 清空库
   async clearLibrary(): Promise<void> {
     const db = await this.ensureDB();
@@ -996,6 +1979,7 @@ export class MusicLibraryService {
 
   // 通知扫描进度
   private notifyScanProgress(progress: ScanProgress): void {
+    this.isScanning = progress.isScanning;
     this.scanProgressListeners.forEach((listener) => listener(progress));
   }
 }

@@ -21,6 +21,7 @@ export function usePlayQueueData(): PlayQueueData {
   const [audioState, setAudioState] = useState<AudioState>(audioService.getState());
 
   useEffect(() => {
+    setAudioState(audioService.getState());
     const unsubscribe = audioService.onStateChange(setAudioState);
     return unsubscribe;
   }, [audioService]);

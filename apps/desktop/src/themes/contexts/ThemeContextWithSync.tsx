@@ -14,12 +14,22 @@ import { Theme, ComponentTheme } from '../types/theme';
 import { Shader } from '../types/shader';
 import { DefaultShader } from '../shaders/default';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
-import { broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
+import { broadcastDataUpdate, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { readJson } from '../../modules/storage';
 
-// 添加专用的存储键和事件
-const THEME_STORAGE_KEY = 'pixel-matrix-theme-config';
-const THEME_UPDATE_EVENT = 'theme-config-updated';
+const LEGACY_COMPONENT_THEME_KEYS: Record<string, string[]> = {
+  'btn-play-pause': ['play-pause-button'],
+  'btn-previous': ['previous-button'],
+  'btn-next': ['next-button'],
+  'btn-mode': ['play-mode'],
+  'btn-volume': ['volume-control'],
+  'btn-back': ['back-button'],
+  'btn-debug': ['debug-button'],
+  'btn-window-pin': ['window-pin-button'],
+  'btn-play-queue': ['play-queue'],
+  'btn-playlists': ['playlists-button'],
+  'btn-music-library': ['music-library-button'],
+};
 
 /**
  * 默认主题
@@ -76,7 +86,7 @@ interface ThemeProviderProps {
  * 从 localStorage 加载主题
  */
 function loadThemeFromStorage(): Theme | null {
-  return readJson<Theme | null>(THEME_STORAGE_KEY, null);
+  return readJson<Theme | null>(STORAGE_KEYS.THEME_CONFIG, null);
 }
 
 /**
@@ -84,7 +94,7 @@ function loadThemeFromStorage(): Theme | null {
  */
 async function saveAndBroadcastTheme(theme: Theme): Promise<void> {
   try {
-    await broadcastDataUpdate(THEME_STORAGE_KEY, theme, THEME_UPDATE_EVENT);
+    await broadcastDataUpdate(STORAGE_KEYS.THEME_CONFIG, theme, TAURI_EVENTS.THEME_UPDATED);
   } catch (error) {
     console.error('[ThemeContextWithSync] Failed to save theme:', error);
   }
@@ -111,8 +121,8 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
     // 设置双重监听（localStorage + Tauri事件）
     const setupListenerAsync = async () => {
       const cleanup = await setupDualListener(
-        [THEME_STORAGE_KEY],
-        [THEME_UPDATE_EVENT],
+        [STORAGE_KEYS.THEME_CONFIG],
+        [TAURI_EVENTS.THEME_UPDATED],
         reloadTheme
       );
       return cleanup;
@@ -146,7 +156,18 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
 
   const getComponentTheme = useCallback(
     (componentId: string): ComponentTheme => {
-      return theme.componentThemes?.[componentId] || {};
+      const direct = theme.componentThemes?.[componentId];
+      if (direct) return direct;
+
+      const legacyKeys = LEGACY_COMPONENT_THEME_KEYS[componentId];
+      if (legacyKeys) {
+        for (const legacyKey of legacyKeys) {
+          const legacyTheme = theme.componentThemes?.[legacyKey];
+          if (legacyTheme) return legacyTheme;
+        }
+      }
+
+      return {};
     },
     [theme]
   );

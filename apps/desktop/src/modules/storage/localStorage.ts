@@ -74,11 +74,38 @@ export function writeString(key: string, value: string, options: StorageWriteOpt
   }
 }
 
+export function tryWriteString(key: string, value: string): boolean {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    console.warn(`[storage] Failed to write key "${key}"`, error);
+    return false;
+  }
+}
+
 export function writeJson<T>(key: string, value: T, options: StorageWriteOptions = {}): void {
   try {
     writeString(key, JSON.stringify(value), options);
   } catch (error) {
     console.warn(`[storage] Failed to serialize JSON for key "${key}"`, error);
+  }
+}
+
+export function tryWriteJson<T>(key: string, value: T): boolean {
+  try {
+    return tryWriteString(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`[storage] Failed to serialize JSON for key "${key}"`, error);
+    return false;
+  }
+}
+
+export function removeKey(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch (error) {
+    console.warn(`[storage] Failed to remove key "${key}"`, error);
   }
 }
 

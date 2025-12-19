@@ -30,7 +30,7 @@ export const PlayModeButton: React.FC = () => {
   const logic = usePlayModeLogic();
 
   // Layer 3: 主题配置
-  const themeConfig = useComponentTheme('play-mode');
+  const themeConfig = useComponentTheme('btn-mode');
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';

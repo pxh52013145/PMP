@@ -25,6 +25,22 @@
   color: white;
   overflow: auto;
   box-sizing: border-box;
+  --editor-window-panel-bg: rgba(10, 10, 20, 0.88);
+  --editor-window-glass-blur: 0px;
+}
+
+.editor-window-app.editor-window-app--tauri {
+  /* On Windows, prefer OS-level vibrancy; keep panels more translucent and avoid CSS blur. */
+  --editor-window-panel-bg: rgba(10, 10, 20, 0.76);
+  --editor-window-glass-blur: 0px;
+}
+
+.editor-window-app.editor-window-app--effects-ready:not(.editor-window-app--tauri) {
+  --editor-window-glass-blur: 12px;
+}
+
+.editor-window-app.editor-window-app--scrolling {
+  --editor-window-glass-blur: 0px;
 }
 
 /* 通用编辑器窗口样式 - 半透明玻璃效果 */
@@ -39,12 +55,9 @@
   width: 100%;
   height: 100%;
   padding: 0; /* 移除内边距，由内部元素控制 */
-  background: rgba(10, 10, 20, 0.88);
-  border: 2px solid rgba(0, 255, 255, 0.5);
-  box-shadow:
-    0 0 30px rgba(0, 255, 255, 0.6),
-    inset 0 0 20px rgba(0, 255, 255, 0.2);
-  backdrop-filter: blur(12px); /* 降低模糊度提升性能 */
+  position: relative;
+  isolation: isolate;
+  background: transparent;
   box-sizing: border-box;
   overflow: hidden; /* 隐藏溢出，由内容区域滚动 */
   user-select: none; /* 禁止文本选择 */
@@ -67,6 +80,43 @@
   contain: layout style paint;
 }
 
+.editor-statistics::before,
+.editor-magnet-library::before,
+.editor-style-editor::before,
+.editor-help::before,
+.editor-creator::before,
+.background-manager::before,
+.editor-custom-background::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--editor-window-panel-bg);
+  border: 2px solid rgba(0, 255, 255, 0.5);
+  box-shadow:
+    0 0 30px rgba(0, 255, 255, 0.6),
+    inset 0 0 20px rgba(0, 255, 255, 0.2);
+  backdrop-filter: blur(var(--editor-window-glass-blur));
+  -webkit-backdrop-filter: blur(var(--editor-window-glass-blur));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.editor-window-app.editor-window-app--scrolling .editor-statistics::before,
+.editor-window-app.editor-window-app--scrolling .editor-magnet-library::before,
+.editor-window-app.editor-window-app--scrolling .editor-style-editor::before,
+.editor-window-app.editor-window-app--scrolling .editor-help::before,
+.editor-window-app.editor-window-app--scrolling .editor-creator::before,
+.editor-window-app.editor-window-app--scrolling .background-manager::before,
+.editor-window-app.editor-window-app--scrolling .editor-custom-background::before {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.editor-window-app.editor-window-app--scrolling .draggable-control-panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* 编辑器窗口拖动标题栏 */
 .editor-window-header {
   flex-shrink: 0;
@@ -78,6 +128,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  z-index: 1;
+  transition: background 180ms ease;
 }
 
 .editor-window-header:hover {
@@ -100,6 +153,8 @@
   overflow-x: hidden; /* 禁用水平滚动条 */
   padding: 20px;
   padding-right: 12px; /* 为滚动条留出空间，避免被剪角裁剪 */
+  position: relative;
+  z-index: 1;
 
   /* 隐藏滚动条但保留滚动功能 */
   scrollbar-width: none; /* Firefox */
@@ -139,7 +194,8 @@
   box-shadow:
     0 0 30px rgba(0, 255, 255, 0.6),
     inset 0 0 20px rgba(0, 255, 255, 0.2);
-  backdrop-filter: blur(12px); /* 降低模糊度提升性能 */
+  backdrop-filter: blur(var(--editor-window-glass-blur)); /* 滚动时自动降低 */
+  -webkit-backdrop-filter: blur(var(--editor-window-glass-blur));
   box-sizing: border-box;
   overflow: hidden; /* 隐藏滚动条 */
   user-select: none; /* 禁止文本选择 */
@@ -174,14 +230,62 @@
   cursor: move;
   border-radius: 0;
   transition: all 0.3s ease;
-  background: transparent;
+  background: rgba(0, 255, 255, 0.05);
   user-select: none;
   padding: 0; /* 覆盖默认的 padding */
-  border-bottom: none; /* 移除底部边框 */
+  border-bottom: 0px solid rgba(0, 255, 255, 0.55); /* 更有质感，接近外框亮度 */
+  box-shadow:
+    0 1px 0 rgba(0, 255, 255, 0.35),
+    0 4px 14px rgba(0, 255, 255, 0.18);
 }
 
-.control-header:hover {
-  background: rgba(0, 255, 255, 0.08);
+.control-header::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  right: -12px;
+  top: -12px;
+  bottom: -22px;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 255, 255, 0.1) 0%,
+    rgba(0, 255, 255, 0.05) 35%,
+    rgba(0, 255, 255, 0) 100%
+  );
+  opacity: 0.5;
+  filter: blur(10px);
+  transform: translateZ(0);
+  pointer-events: none;
+}
+
+.control-header::after {
+  content: '';
+  position: absolute;
+  left: -12px;
+  right: -12px;
+  top: -12px;
+  bottom: -26px;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 255, 255, 0.2) 0%,
+    rgba(0, 255, 255, 0.12) 25%,
+    rgba(0, 255, 255, 0.05) 55%,
+    rgba(0, 255, 255, 0) 100%
+  );
+  opacity: 0;
+  transition: opacity 180ms ease;
+  pointer-events: none;
+  filter: blur(12px);
+  transform: translateZ(0);
+}
+
+.control-header:hover::after {
+  opacity: 1;
+}
+
+.control-header > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* 保留旧的 .drag-handle 样式以防其他地方使用 */
