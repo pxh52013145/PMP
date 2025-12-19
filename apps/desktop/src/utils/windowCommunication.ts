@@ -6,6 +6,64 @@
 import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
 import { readString, writeJson } from '../modules/storage';
 
+const DEBUG_STORAGE_KEY = 'pixel-matrix-debug-window-comm';
+let debugEnabledCache: boolean | null = null;
+
+function isDebugEnabled(): boolean {
+  if (debugEnabledCache !== null) return debugEnabledCache;
+  let enabled = false;
+  try {
+    enabled = localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
+  } catch {
+    enabled = false;
+  }
+  debugEnabledCache = enabled;
+  return enabled;
+}
+
+function debugLog(...args: unknown[]): void {
+  if (!isDebugEnabled()) return;
+  console.log(...args);
+}
+
+type WindowCommStats = {
+  emitted: Record<string, number>;
+  received: Record<string, number>;
+  lastEmitAt: Record<string, number>;
+  lastReceiveAt: Record<string, number>;
+};
+
+const windowCommStats: WindowCommStats = {
+  emitted: {},
+  received: {},
+  lastEmitAt: {},
+  lastReceiveAt: {},
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __pmpWindowCommStats: WindowCommStats | undefined;
+}
+
+function exposeStats(): void {
+  if (!isDebugEnabled()) return;
+  globalThis.__pmpWindowCommStats = windowCommStats;
+}
+
+function recordEmit(eventName: string): void {
+  if (!isDebugEnabled()) return;
+  windowCommStats.emitted[eventName] = (windowCommStats.emitted[eventName] ?? 0) + 1;
+  windowCommStats.lastEmitAt[eventName] = Date.now();
+  exposeStats();
+}
+
+function recordReceive(eventName: string): void {
+  if (!isDebugEnabled()) return;
+  windowCommStats.received[eventName] = (windowCommStats.received[eventName] ?? 0) + 1;
+  windowCommStats.lastReceiveAt[eventName] = Date.now();
+  exposeStats();
+}
+
 /**
  * localStorage 数据 key 定义
  */
@@ -55,6 +113,9 @@ export const STORAGE_KEYS = {
 
   // === Window Pin ===
   WINDOW_PIN_STATE: 'pixel-matrix-window-pin-state',
+
+  // === Editor Performance ===
+  EDITOR_LOW_PERFORMANCE_MODE: 'pixel-matrix-editor-low-performance-mode',
 
   // === Background Migration Flags ===
   BACKGROUND_MEDIA_MIGRATION_V1: 'pixel-matrix-background-media-migration-v1',
@@ -118,10 +179,11 @@ export async function broadcastDataUpdate<T>(
 
     // 2. 发送 Tauri 事件（如果提供）
     if (tauriEvent) {
+      recordEmit(tauriEvent);
       await emit(tauriEvent, { timestamp: Date.now(), key: storageKey });
-      console.log(`Broadcasted: ${storageKey} via ${tauriEvent}`);
+      debugLog(`Broadcasted: ${storageKey} via ${tauriEvent}`);
     } else {
-      console.log(`Saved to localStorage: ${storageKey}`);
+      debugLog(`Saved to localStorage: ${storageKey}`);
     }
   } catch (error) {
     console.error(`Failed to broadcast data update (${storageKey}):`, error);
@@ -134,8 +196,9 @@ export async function broadcastDataUpdate<T>(
  */
 export async function broadcastSignal(tauriEvent: string): Promise<void> {
   try {
+    recordEmit(tauriEvent);
     await emit(tauriEvent, { timestamp: Date.now() });
-    console.log(`Signal broadcasted: ${tauriEvent}`);
+    debugLog(`Signal broadcasted: ${tauriEvent}`);
   } catch (error) {
     console.error(`Failed to broadcast signal (${tauriEvent}):`, error);
     // Do not throw: signals are best-effort and typically not critical to render paths.
@@ -186,7 +249,8 @@ export async function setupTauriListener(
 ): Promise<UnlistenFn> {
   try {
     const unlisten = await listen(eventName, () => {
-      console.log(`Tauri event received: ${eventName}`);
+      debugLog(`Tauri event received: ${eventName}`);
+      recordReceive(eventName);
       callback();
     });
     return unlisten;
@@ -205,7 +269,8 @@ export async function setupTauriListenerWithPayload<T>(
 ): Promise<UnlistenFn> {
   try {
     const unlisten = await listen<T>(eventName, (event) => {
-      console.log(`Tauri event received: ${eventName}`);
+      debugLog(`Tauri event received: ${eventName}`);
+      recordReceive(eventName);
       callback(event.payload);
     });
     return unlisten;
@@ -225,7 +290,7 @@ export async function setupDualListener(
 ): Promise<() => void> {
   // 设置 localStorage 监听
   const unlistenStorage = setupStorageListener(storageKeys, () => {
-    console.log('Storage event triggered, calling callback');
+    debugLog('Storage event triggered, calling callback');
     callback();
   });
 

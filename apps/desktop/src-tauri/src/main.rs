@@ -13,6 +13,9 @@ mod windows;
 mod music_library;
 
 struct ExitFlag(Arc<AtomicBool>);
+struct EditorEffectsState {
+    blur_enabled: AtomicBool,
+}
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -109,6 +112,7 @@ async fn open_editor_window(
     width: f64,
     height: f64,
     exit: tauri::State<'_, ExitFlag>,
+    effects: tauri::State<'_, EditorEffectsState>,
 ) -> Result<(), String> {
     let editor_window_type = windows::editor::EditorWindowType::from_str(window_type.as_str())
         .ok_or_else(|| format!("Unknown editor window type: {}", window_type))?;
@@ -123,6 +127,7 @@ async fn open_editor_window(
             height,
         },
         exit.0.clone(),
+        effects.blur_enabled.load(Ordering::SeqCst),
     )
 }
 
@@ -137,6 +142,16 @@ async fn close_editor_window(app: tauri::AppHandle, window_type: String) -> Resu
 #[tauri::command]
 async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), String> {
     windows::editor::hide_all_editor_windows(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn set_editor_blur_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+    effects: tauri::State<'_, EditorEffectsState>,
+) -> Result<(), String> {
+    effects.blur_enabled.store(enabled, Ordering::SeqCst);
+    windows::editor::set_editor_windows_blur_enabled(&app, enabled)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -193,6 +208,9 @@ fn main() {
 
     tauri::Builder::default()
         .manage(ExitFlag(Arc::new(AtomicBool::new(false))))
+        .manage(EditorEffectsState {
+            blur_enabled: AtomicBool::new(true),
+        })
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
@@ -253,6 +271,7 @@ fn main() {
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,
+            set_editor_blur_enabled,
             music_library_scan,
             music_library_get_cover,
             music_library_remove_cover,

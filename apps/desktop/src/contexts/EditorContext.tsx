@@ -58,25 +58,26 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
 
   // 同步 editorState 到其他窗口
   useEffect(() => {
-    // 将 Set 转换为数组以便序列化
+    // 只同步跨窗口真正需要的字段，避免 hover/拖拽过程产生高频广播导致多窗口卡顿
     const serializableState = {
       mode: editorState.mode,
       isEditing: editorState.isEditing,
       selectedMagnetId: editorState.selectedMagnetId,
       selectedPixels: Array.from(editorState.selectedPixels),
-      isDragging: editorState.isDragging,
-      dragStartPixel: editorState.dragStartPixel,
-      dragEndPixel: editorState.dragEndPixel,
-      hoverPixel: editorState.hoverPixel,
     };
 
     // 同步到 localStorage 和广播事件
-    broadcastDataUpdate(
+    void broadcastDataUpdate(
       STORAGE_KEYS.EDITOR_STATE,
       serializableState,
       TAURI_EVENTS.EDITOR_STATE_UPDATED
     );
-  }, [editorState]);
+  }, [
+    editorState.mode,
+    editorState.isEditing,
+    editorState.selectedMagnetId,
+    editorState.selectedPixels,
+  ]);
 
   // 进入编辑模式
   const enterEditMode = useCallback(() => {

@@ -23,6 +23,7 @@ import { Magnet, PixelAnchor } from './types/pixel';
 import { BackgroundSettings } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
 import { calculateWindowPosition } from './utils/editorWindows';
+import { syncEditorEffectsFromStorage } from './utils/editorWindowEffects';
 import {
   createDefaultMagnetLibrary,
   createInitialMagnetState,
@@ -37,6 +38,10 @@ function AppContent() {
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const isWindowActive = isMainWindowVisible && isDocumentVisible;
+
+  useEffect(() => {
+    void syncEditorEffectsFromStorage();
+  }, []);
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);

@@ -43,6 +43,32 @@
   color: rgba(255, 255, 255, 0.5);
 }
 
+.home-actions {
+  margin-top: 28px;
+  width: min(420px, 90vw);
+  display: flex;
+  gap: 12px;
+}
+
+.home-settings-link {
+  flex: 1;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  background: rgba(0, 255, 255, 0.08);
+  color: rgba(0, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.home-settings-link:hover {
+  border-color: rgba(0, 255, 255, 0.7);
+  background: rgba(0, 255, 255, 0.14);
+  box-shadow: 0 10px 25px rgba(0, 255, 255, 0.12);
+}
+
 .audio-engine-card {
   margin-top: 32px;
   width: min(420px, 90vw);

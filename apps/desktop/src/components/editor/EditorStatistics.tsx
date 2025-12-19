@@ -6,27 +6,19 @@ import { readJson } from '../../modules/storage';
 import './EditorStatistics.css';
 
 interface SerializableEditorState {
-  mode: string;
-  isEditing: boolean;
-  selectedMagnetId: string | null;
   selectedPixels: string[];
-  isDragging: boolean;
-  dragStartPixel: { x: number; y: number } | null;
-  dragEndPixel: { x: number; y: number } | null;
-  hoverPixel: { x: number; y: number } | null;
+  mode?: string;
+  isEditing?: boolean;
+  selectedMagnetId?: string | null;
 }
 
 export const EditorStatistics = memo(function EditorStatistics() {
   const { occupancyMap } = useEditor();
   const defaultEditorState: SerializableEditorState = {
+    selectedPixels: [],
     mode: 'view',
     isEditing: false,
     selectedMagnetId: null,
-    selectedPixels: [],
-    isDragging: false,
-    dragStartPixel: null,
-    dragEndPixel: null,
-    hoverPixel: null,
   };
 
   // 从localStorage/事件监听获取editorState（用于跨窗口通信）
@@ -39,7 +31,6 @@ export const EditorStatistics = memo(function EditorStatistics() {
     const unlistenPromise = setupTauriListener(TAURI_EVENTS.EDITOR_STATE_UPDATED, () => {
       const newState = readJson<SerializableEditorState | null>(STORAGE_KEYS.EDITOR_STATE, null);
       if (!newState) return;
-      console.log('EditorStatistics: 收到editorState更新', newState);
       setEditorState(newState);
     });
 

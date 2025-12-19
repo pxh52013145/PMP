@@ -73,3 +73,6 @@ pnpm-lock.yaml
 # npm
 package-lock.json
 npm-shrinkwrap.json
+
+# Local debug/perf dumps
+docs/text.md

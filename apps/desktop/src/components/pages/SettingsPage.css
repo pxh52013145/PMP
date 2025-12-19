@@ -1,0 +1,123 @@
+.page-settings {
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.settings-header {
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.settings-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.settings-sections {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.settings-section {
+  width: min(520px, 94vw);
+}
+
+.settings-section-title {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: rgba(255, 255, 255, 0.75);
+  text-transform: uppercase;
+}
+
+.settings-card {
+  width: 100%;
+  padding: 20px;
+  border-radius: 16px;
+  background: rgba(8, 12, 24, 0.75);
+  border: 1px solid rgba(0, 255, 255, 0.2);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px);
+  text-align: left;
+}
+
+.settings-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.settings-card-label {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.settings-card-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.settings-card-badge {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  font-size: 12px;
+  color: rgba(0, 255, 255, 0.85);
+  background: rgba(0, 255, 255, 0.08);
+}
+
+.settings-toggle {
+  margin-top: 18px;
+  display: flex;
+  gap: 12px;
+}
+
+.settings-toggle button {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(6px);
+}
+
+.settings-toggle button[data-active='true'] {
+  border-color: rgba(0, 255, 255, 0.6);
+  background: rgba(0, 255, 255, 0.12);
+  color: #00ffff;
+  box-shadow: inset 0 0 20px rgba(0, 255, 255, 0.1);
+}
+
+.settings-card-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}

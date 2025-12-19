@@ -3,7 +3,7 @@ use std::sync::{
     Arc,
 };
 
-use tauri::{AppHandle, Manager, WindowBuilder, WindowUrl};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl};
 
 use super::{EVENT_EDITOR_EXIT, EVENT_EDITOR_WINDOW_HIDDEN, EVENT_EDITOR_WINDOW_SHOWN};
 
@@ -108,15 +108,130 @@ pub struct EditorWindowGeometry {
     pub height: f64,
 }
 
+#[cfg(target_os = "windows")]
+fn apply_windows_blur_behind(window: &tauri::Window, enabled: bool) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
+    };
+    use windows_sys::Win32::Graphics::Gdi::{CreatePolygonRgn, DeleteObject, WINDING};
+
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+
+    unsafe {
+        if !enabled {
+            let bb = DWM_BLURBEHIND {
+                dwFlags: DWM_BB_ENABLE,
+                fEnable: 0,
+                hRgnBlur: std::ptr::null_mut(),
+                fTransitionOnMaximized: 0,
+            };
+            let _ = DwmEnableBlurBehindWindow(hwnd.0 as _, &bb);
+            return;
+        }
+    }
+
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+
+    const ROOT_PADDING_CSS_PX: f64 = 20.0;
+    const CURVE_CSS_PX: f64 = 16.0; // matches default 1em-ish cut corner
+
+    let root_padding = (ROOT_PADDING_CSS_PX * scale_factor).round() as i32;
+    let curve_px = (CURVE_CSS_PX * scale_factor).round() as i32;
+
+    let w = size.width as i32;
+    let h = size.height as i32;
+
+    if w <= root_padding + 1 || h <= root_padding + 1 {
+        return;
+    }
+
+    let left = root_padding;
+    let top = root_padding;
+    let right = (w - root_padding).max(left + 1);
+    let bottom = (h - root_padding).max(top + 1);
+
+    let curve = curve_px
+        .min((right - left).max(1))
+        .min((bottom - top).max(1));
+
+    let points: [POINT; 6] = [
+        POINT {
+            x: left,
+            y: top + curve,
+        },
+        POINT {
+            x: left + curve,
+            y: top,
+        },
+        POINT { x: right, y: top },
+        POINT {
+            x: right,
+            y: bottom - curve,
+        },
+        POINT {
+            x: right - curve,
+            y: bottom,
+        },
+        POINT { x: left, y: bottom },
+    ];
+
+    unsafe {
+        let region = CreatePolygonRgn(points.as_ptr(), points.len() as i32, WINDING);
+        if region.is_null() {
+            return;
+        }
+
+        let bb = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+            fEnable: 1,
+            hRgnBlur: region,
+            fTransitionOnMaximized: 0,
+        };
+        let _ = DwmEnableBlurBehindWindow(hwnd.0 as _, &bb);
+        let _ = DeleteObject(region as _);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_windows_blur_behind(_window: &tauri::Window, _enabled: bool) {}
+
+fn apply_geometry(window: &tauri::Window, geometry: &EditorWindowGeometry) {
+    // Best-effort: avoid failing to reopen a window just because geometry is invalid.
+    if geometry.width.is_finite() && geometry.height.is_finite() && geometry.width > 0.0 && geometry.height > 0.0 {
+        let _ = window.set_size(Size::Logical(LogicalSize {
+            width: geometry.width,
+            height: geometry.height,
+        }));
+    }
+
+    if geometry.x.is_finite() && geometry.y.is_finite() {
+        let _ = window.set_position(Position::Logical(LogicalPosition {
+            x: geometry.x,
+            y: geometry.y,
+        }));
+    }
+}
+
 pub fn open_editor_window(
     app: &AppHandle,
     window_type: EditorWindowType,
     geometry: EditorWindowGeometry,
     exit_flag: Arc<AtomicBool>,
+    blur_enabled: bool,
 ) -> Result<(), String> {
     let window_label = label(window_type);
 
     if let Some(existing_window) = app.get_window(window_label) {
+        // When the window already exists (possibly hidden/off-screen), always re-apply geometry so the
+        // caller can bring it back to a visible location.
+        apply_geometry(&existing_window, &geometry);
+        apply_windows_blur_behind(&existing_window, blur_enabled);
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
         existing_window.set_focus().map_err(|e| e.to_string())?;
@@ -143,51 +258,7 @@ pub fn open_editor_window(
     // IMPORTANT: DWMWA_SYSTEMBACKDROP_TYPE (Mica/Tabbed) paints the whole window background and breaks
     // per-pixel transparency (our "floating" editor windows). Instead, use DWM blur-behind with a region
     // so corners/padding remain truly transparent, while the panel area gets a system blur.
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::Graphics::Dwm::{
-            DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
-        };
-        use windows_sys::Win32::Graphics::Gdi::{CreatePolygonRgn, DeleteObject, WINDING};
-
-        if let Ok(hwnd) = window.hwnd() {
-            const ROOT_PADDING_PX: i32 = 20;
-            const CURVE_PX: i32 = 16; // matches default 1em-ish cut corner
-
-            let w = geometry.width.round() as i32;
-            let h = geometry.height.round() as i32;
-            let left = ROOT_PADDING_PX;
-            let top = ROOT_PADDING_PX;
-            let right = (w - ROOT_PADDING_PX).max(left + 1);
-            let bottom = (h - ROOT_PADDING_PX).max(top + 1);
-
-            let curve = CURVE_PX.min((right - left).max(1)).min((bottom - top).max(1));
-
-            let points: [POINT; 6] = [
-                POINT { x: left, y: top + curve },
-                POINT { x: left + curve, y: top },
-                POINT { x: right, y: top },
-                POINT { x: right, y: bottom - curve },
-                POINT { x: right - curve, y: bottom },
-                POINT { x: left, y: bottom },
-            ];
-
-            unsafe {
-                let region = CreatePolygonRgn(points.as_ptr(), points.len() as i32, WINDING);
-                if !region.is_null() {
-                    let bb = DWM_BLURBEHIND {
-                        dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-                        fEnable: 1,
-                        hRgnBlur: region,
-                        fTransitionOnMaximized: 0,
-                    };
-                    let _ = DwmEnableBlurBehindWindow(hwnd.0 as _, &bb);
-                    let _ = DeleteObject(region as _);
-                }
-            }
-        }
-    }
+    apply_windows_blur_behind(&window, blur_enabled);
 
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
 
@@ -214,6 +285,16 @@ pub fn open_editor_window(
             }
         }
     });
+
+    Ok(())
+}
+
+pub fn set_editor_windows_blur_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    for window_type in ALL_EDITOR_WINDOWS {
+        if let Some(window) = app.get_window(label(*window_type)) {
+            apply_windows_blur_behind(&window, enabled);
+        }
+    }
 
     Ok(())
 }

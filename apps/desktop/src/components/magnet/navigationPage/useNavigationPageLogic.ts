@@ -21,6 +21,8 @@ export function useNavigationPageLogic(): NavigationPageLogic {
     switch (pageType) {
       case 'home':
         return '首页';
+      case 'settings':
+        return '设置';
       case 'music-library':
         return '音乐库';
       case 'playlists':

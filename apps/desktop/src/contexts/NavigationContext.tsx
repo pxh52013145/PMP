@@ -5,6 +5,7 @@ import { createContext, useContext, useState, ReactNode } from 'react';
  */
 export type NavigationPageType =
   | 'home'
+  | 'settings'
   | 'music-library'
   | 'playlists'
   | 'play-queue'
@@ -15,6 +16,7 @@ export type NavigationPageType =
 
 export type NavigationParamsMap = {
   home: undefined;
+  settings: undefined;
   'music-library': undefined;
   playlists: undefined;
   'play-queue': undefined;
