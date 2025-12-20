@@ -74,8 +74,10 @@ pnpm-lock.yaml
 package-lock.json
 npm-shrinkwrap.json
 
-# Documentation (excluded from repo for now)
-docs/
+# Documentation
+docs/examples/**/dist/
+docs/perf-snapshots/*.csv
+docs/examples/**/*.pmpm
+
+# Manuals (work-in-progress)
 Mannuals/
-*.md
-!GETTING_STARTED.md
