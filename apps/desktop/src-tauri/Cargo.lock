@@ -2642,6 +2642,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "window-shadows",
+ "windows 0.54.0",
  "windows-sys 0.60.2",
 ]
 

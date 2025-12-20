@@ -193,6 +193,83 @@ export function AudioEngineProvider({
     };
   }, []);
 
+  useEffect(() => {
+    if (mode !== 'real') return;
+    if (!isTauriRuntime()) return;
+
+    let unlisten: null | (() => void) = null;
+    let disposed = false;
+
+    type Payload = { action?: string };
+
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<Payload>('taskbar-media-control', (event) => {
+          const action = event.payload?.action;
+          if (!action) return;
+
+          const service = serviceRef.current;
+          if (!service) return;
+
+          if (action === 'previous') {
+            void service.playPrevious().catch((err) => {
+              console.error('[Taskbar] playPrevious failed:', err);
+            });
+            return;
+          }
+          if (action === 'next') {
+            void service.playNext().catch((err) => {
+              console.error('[Taskbar] playNext failed:', err);
+            });
+            return;
+          }
+          if (action === 'playPause') {
+            const state = service.getState();
+            if (state.playbackState === 'playing') {
+              try {
+                const maybePromise = (service as any).pause?.();
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                  void maybePromise.catch((err: unknown) => {
+                    console.error('[Taskbar] pause failed:', err);
+                  });
+                }
+              } catch (err) {
+                console.error('[Taskbar] pause failed:', err);
+              }
+              return;
+            }
+
+            if (!state.currentTrack && state.queue.length > 0) {
+              const index = state.currentIndex >= 0 ? state.currentIndex : 0;
+              void service.playTrackAtIndex(index).catch((err) => {
+                console.error('[Taskbar] playTrackAtIndex failed:', err);
+              });
+              return;
+            }
+
+            void service.play().catch((err) => {
+              console.error('[Taskbar] play failed:', err);
+            });
+          }
+        })
+      )
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch((err) => {
+        console.warn('[Taskbar] Failed to register taskbar media controls listener:', err);
+      });
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [mode]);
+
   return (
     <AudioEngineContext.Provider
       value={{

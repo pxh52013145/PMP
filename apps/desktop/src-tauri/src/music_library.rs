@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager};
 
 use once_cell::sync::Lazy;
 use symphonia::core::{
-    formats::FormatOptions,
+    formats::{FormatOptions, FormatReader, Track},
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::{Limit, MetadataOptions, StandardVisualKey},
     probe::Hint,
@@ -48,6 +48,8 @@ pub struct ScannedTrack {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub replay_gain_track_db: Option<f32>,
+    pub replay_gain_album_db: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,6 +114,8 @@ struct FlacQuickMetadata {
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
+    replay_gain_track_db: Option<f32>,
+    replay_gain_album_db: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +146,32 @@ fn normalize_vorbis_key(key: &str) -> String {
     key.trim().to_ascii_lowercase()
 }
 
+fn parse_replaygain_db(raw: &str) -> Option<f32> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    let mut out = String::new();
+    let mut started = false;
+    for ch in text.chars() {
+        if ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '+' {
+            out.push(ch);
+            started = true;
+            continue;
+        }
+        if started {
+            break;
+        }
+    }
+
+    if out.is_empty() {
+        return None;
+    }
+
+    out.parse::<f32>().ok()
+}
+
 fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(reader: &mut R) -> Result<FlacQuickMetadata, String> {
     let mut magic = [0u8; 4];
     read_exact_or_err(reader, &mut magic, "Failed to read FLAC magic")?;
@@ -155,6 +185,8 @@ fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(reader: &mut R) -> Resu
     let mut title: Option<String> = None;
     let mut artist: Option<String> = None;
     let mut album: Option<String> = None;
+    let mut replay_gain_track_db: Option<f32> = None;
+    let mut replay_gain_album_db: Option<f32> = None;
 
     let mut is_last = false;
     while !is_last {
@@ -237,6 +269,12 @@ fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(reader: &mut R) -> Resu
                         "title" if title.is_none() => title = Some(value),
                         "artist" if artist.is_none() => artist = Some(value),
                         "album" if album.is_none() => album = Some(value),
+                        "replaygain_track_gain" if replay_gain_track_db.is_none() => {
+                            replay_gain_track_db = parse_replaygain_db(&value)
+                        }
+                        "replaygain_album_gain" if replay_gain_album_db.is_none() => {
+                            replay_gain_album_db = parse_replaygain_db(&value)
+                        }
                         _ => {}
                     }
                 }
@@ -274,6 +312,8 @@ fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(reader: &mut R) -> Resu
         title,
         artist,
         album,
+        replay_gain_track_db,
+        replay_gain_album_db,
     })
 }
 
@@ -376,8 +416,44 @@ fn parse_flac_picture_from_reader<R: Read + Seek>(
     Ok(best.map(|(_, pic)| pic))
 }
 
-fn extract_quick_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Option<u32>, Option<String>, Option<String>, Option<String>), String>
+fn extract_quick_metadata(
+    path: &Path,
+) -> Result<
+    (
+        Option<f64>,
+        Option<u32>,
+        Option<u32>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<f32>,
+        Option<f32>,
+    ),
+    String,
+>
 {
+    fn track_is_audio_like(track: &Track) -> bool {
+        track.codec_params.sample_rate.is_some()
+            || track.codec_params.channels.is_some()
+            || track.codec_params.bits_per_sample.is_some()
+            || track.codec_params.bits_per_coded_sample.is_some()
+    }
+
+    fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
+        let tracks = format.tracks();
+        let default = format.default_track();
+        if let Some(track) = default {
+            if track_is_audio_like(track) {
+                return Some(track);
+            }
+        }
+        tracks
+            .iter()
+            .find(|t| track_is_audio_like(t))
+            .or(default)
+            .or_else(|| tracks.first())
+    }
+
     let file = fs::File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 
@@ -401,9 +477,7 @@ fn extract_quick_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Opti
         metadata: mut probed_metadata,
         ..
     } = probed;
-    let track = format
-        .default_track()
-        .ok_or_else(|| "No audio track found".to_string())?;
+    let track = pick_audio_track(format.as_ref()).ok_or_else(|| "No audio track found".to_string())?;
 
     let sample_rate = track.codec_params.sample_rate;
     let bit_depth = track
@@ -419,6 +493,8 @@ fn extract_quick_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Opti
     let mut title: Option<String> = None;
     let mut artist: Option<String> = None;
     let mut album: Option<String> = None;
+    let mut replay_gain_track_db: Option<f32> = None;
+    let mut replay_gain_album_db: Option<f32> = None;
 
     let mut apply_tags = |rev: &symphonia::core::meta::MetadataRevision| {
         for tag in rev.tags() {
@@ -428,6 +504,12 @@ fn extract_quick_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Opti
                 "title" if title.is_none() => title = Some(value),
                 "artist" if artist.is_none() => artist = Some(value),
                 "album" if album.is_none() => album = Some(value),
+                "replaygain_track_gain" if replay_gain_track_db.is_none() => {
+                    replay_gain_track_db = parse_replaygain_db(&value)
+                }
+                "replaygain_album_gain" if replay_gain_album_db.is_none() => {
+                    replay_gain_album_db = parse_replaygain_db(&value)
+                }
                 _ => {}
             }
         }
@@ -443,7 +525,16 @@ fn extract_quick_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Opti
         apply_tags(rev);
     }
 
-    Ok((duration, sample_rate, bit_depth, title, artist, album))
+    Ok((
+        duration,
+        sample_rate,
+        bit_depth,
+        title,
+        artist,
+        album,
+        replay_gain_track_db,
+        replay_gain_album_db,
+    ))
 }
 
 fn stable_hash_for_path(path: &str) -> u32 {
@@ -798,7 +889,7 @@ pub fn scan_library_paths(
         .unwrap_or(true);
 
     let supported_exts: HashSet<&'static str> =
-        ["mp3", "flac", "wav", "m4a", "ogg", "weba", "aac"].into_iter().collect();
+        ["mp3", "flac", "wav", "m4a", "mp4", "ogg", "weba", "aac"].into_iter().collect();
 
     let mut audio_files: Vec<PathBuf> = Vec::new();
     for root in paths {
@@ -845,7 +936,7 @@ pub fn scan_library_paths(
             .unwrap_or_default()
             .to_string();
 
-        let (duration, sample_rate, bit_depth, title, artist, album) = if include_metadata {
+        let (duration, sample_rate, bit_depth, title, artist, album, replay_gain_track_db, replay_gain_album_db) = if include_metadata {
             match extract_quick_metadata(&path) {
                 Ok(value) => value,
                 Err(_) => {
@@ -866,20 +957,22 @@ pub fn scan_library_paths(
                                     meta.title,
                                     meta.artist,
                                     meta.album,
+                                    meta.replay_gain_track_db,
+                                    meta.replay_gain_album_db,
                                 )
                             } else {
-                                (None, None, None, None, None, None)
+                                (None, None, None, None, None, None, None, None)
                             }
                         } else {
-                            (None, None, None, None, None, None)
+                            (None, None, None, None, None, None, None, None)
                         }
                     } else {
-                        (None, None, None, None, None, None)
+                        (None, None, None, None, None, None, None, None)
                     }
                 }
             }
         } else {
-            (None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None)
         };
 
         let path_str = path.to_string_lossy().to_string();
@@ -894,6 +987,8 @@ pub fn scan_library_paths(
             title,
             artist,
             album,
+            replay_gain_track_db,
+            replay_gain_album_db,
         });
 
         let current = (idx + 1) as u64;
@@ -910,4 +1005,27 @@ pub fn scan_library_paths(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_replaygain_db;
+
+    #[test]
+    fn parse_replaygain_db_parses_db_suffix() {
+        assert_eq!(parse_replaygain_db("+3.50 dB"), Some(3.5));
+        assert_eq!(parse_replaygain_db("-7.23 dB"), Some(-7.23));
+    }
+
+    #[test]
+    fn parse_replaygain_db_parses_plain_number() {
+        assert_eq!(parse_replaygain_db("0"), Some(0.0));
+        assert_eq!(parse_replaygain_db(" -12.0 "), Some(-12.0));
+    }
+
+    #[test]
+    fn parse_replaygain_db_returns_none_on_garbage() {
+        assert_eq!(parse_replaygain_db(""), None);
+        assert_eq!(parse_replaygain_db("abc"), None);
+    }
 }

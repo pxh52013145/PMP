@@ -43,6 +43,30 @@
   --editor-window-glass-blur: 0px;
 }
 
+.editor-window-app.editor-window-app--background {
+  /* Reduce overdraw/composition cost for non-focused windows. */
+  --editor-window-panel-bg: rgba(10, 10, 20, 0.92);
+  --editor-window-glass-blur: 0px;
+}
+
+.editor-window-app.editor-window-app--background .editor-statistics::before,
+.editor-window-app.editor-window-app--background .editor-magnet-library::before,
+.editor-window-app.editor-window-app--background .editor-style-editor::before,
+.editor-window-app.editor-window-app--background .editor-help::before,
+.editor-window-app.editor-window-app--background .editor-creator::before,
+.editor-window-app.editor-window-app--background .background-manager::before,
+.editor-window-app.editor-window-app--background .editor-custom-background::before {
+  box-shadow: none;
+}
+
+.editor-window-app.editor-window-app--background .draggable-control-panel {
+  box-shadow: none;
+}
+
+.editor-window-app.editor-window-app--background .control-header::before {
+  filter: none;
+}
+
 /* 通用编辑器窗口样式 - 半透明玻璃效果 */
 .editor-statistics,
 .editor-magnet-library,

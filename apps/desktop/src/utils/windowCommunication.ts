@@ -99,6 +99,9 @@ export const STORAGE_KEYS = {
   // === Native Audio ===
   NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
+  NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
+  NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
+  NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings（object）
 
   // === Plugins (.pmpm) ===
   PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
@@ -160,9 +163,15 @@ export const TAURI_EVENTS = {
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
   NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',
+  NATIVE_AUDIO_DSP_CHAIN_UPDATED: 'native-audio-dsp-chain-updated',
+  NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',
+  NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED: 'native-audio-crossfade-settings-updated',
 
   // Theme
   THEME_UPDATED: 'theme-config-updated',
+
+  // Plugins (.pmpm)
+  PMPM_PLUGINS_UPDATED: 'pmpm-plugins-updated',
 } as const;
 
 /**

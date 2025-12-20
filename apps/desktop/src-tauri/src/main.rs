@@ -14,7 +14,7 @@ mod music_library;
 
 struct ExitFlag(Arc<AtomicBool>);
 struct EditorEffectsState {
-    blur_enabled: AtomicBool,
+    blur_enabled: Arc<AtomicBool>,
 }
 
 #[tauri::command]
@@ -41,6 +41,15 @@ async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> Resul
 #[tauri::command]
 async fn native_audio_play(app: tauri::AppHandle) -> Result<(), String> {
     native_audio::play(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_crossfade_to(
+    app: tauri::AppHandle,
+    path: String,
+    duration_ms: u64,
+) -> Result<(), String> {
+    native_audio::crossfade_to(&app, path, duration_ms)
 }
 
 #[tauri::command]
@@ -71,6 +80,11 @@ async fn native_audio_set_mute(app: tauri::AppHandle, muted: bool) -> Result<(),
 #[tauri::command(rename_all = "camelCase")]
 async fn native_audio_set_gain(app: tauri::AppHandle, db: f32) -> Result<(), String> {
     native_audio::set_gain(&app, db)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_set_replay_gain(app: tauri::AppHandle, db: Option<f32>) -> Result<(), String> {
+    native_audio::set_replay_gain(&app, db)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -127,7 +141,7 @@ async fn open_editor_window(
             height,
         },
         exit.0.clone(),
-        effects.blur_enabled.load(Ordering::SeqCst),
+        effects.blur_enabled.clone(),
     )
 }
 
@@ -136,12 +150,13 @@ async fn close_editor_window(app: tauri::AppHandle, window_type: String) -> Resu
     let editor_window_type = windows::editor::EditorWindowType::from_str(window_type.as_str())
         .ok_or_else(|| format!("Unknown editor window type: {}", window_type))?;
 
-    windows::editor::hide_editor_window(&app, editor_window_type)
+    windows::editor::close_editor_window(&app, editor_window_type)
 }
 
 #[tauri::command]
 async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), String> {
-    windows::editor::hide_all_editor_windows(&app)
+    windows::editor::close_all_editor_windows(&app);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -209,7 +224,7 @@ fn main() {
     tauri::Builder::default()
         .manage(ExitFlag(Arc::new(AtomicBool::new(false))))
         .manage(EditorEffectsState {
-            blur_enabled: AtomicBool::new(true),
+            blur_enabled: Arc::new(AtomicBool::new(true)),
         })
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| match event {
@@ -253,6 +268,7 @@ fn main() {
             {
                 use window_shadows::set_shadow;
                 let _ = set_shadow(&window, false);
+                windows::taskbar_thumbbar::init_main_window(&app.handle());
             }
 
             let app_handle = app.handle();
@@ -278,12 +294,14 @@ fn main() {
             music_library_cancel_scan,
             native_audio_load,
             native_audio_play,
+            native_audio_crossfade_to,
             native_audio_pause,
             native_audio_stop,
             native_audio_seek,
             native_audio_set_volume,
             native_audio_set_mute,
             native_audio_set_gain,
+            native_audio_set_replay_gain,
             native_audio_set_dsp_chain,
             native_audio_list_devices,
             native_audio_select_device,

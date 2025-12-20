@@ -79,7 +79,9 @@ export function getMagnetRenderer(id: string): MagnetRendererDefinition | null {
 }
 
 export function getMagnetPreviewNode(magnet: Magnet): ReactNode | null {
-  const entry = getMagnetRenderer(magnet.id);
+  const rendererId = magnet.renderer ?? magnet.id;
+  const entry =
+    getMagnetRenderer(rendererId) ?? (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
   return normalizePreview(entry?.preview) ?? magnet.previewText ?? null;
 }
 

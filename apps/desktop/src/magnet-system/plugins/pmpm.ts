@@ -4,8 +4,8 @@ import type { Magnet } from '../../types/pixel';
 import type { MagnetRendererDefinition } from '../registry';
 import { PluginMagnetHost } from './PluginMagnetHost';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
-import { readJson, writeJson } from '../../modules/storage';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { readJson } from '../../modules/storage';
+import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
 
 export type PmpmManifest = {
   formatVersion: '1.0';
@@ -33,7 +33,23 @@ export type InstalledPmpmPlugin = {
   manifest: PmpmManifest;
   entryCode: string;
   installedAt: number;
+  packageSha256?: string;
+  manifestSha256?: string;
+  entrySha256?: string;
 };
+
+function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(data.byteLength);
+  new Uint8Array(buffer).set(data);
+  return buffer;
+}
+
+async function sha256Hex(data: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(data));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
   if (!manifest || typeof manifest !== 'object') {
@@ -54,6 +70,16 @@ function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
   const entryPoint = m.entryPoint;
   if (typeof entryPoint !== 'string' || entryPoint.length < 1) throw new Error('manifest.entryPoint is required');
   if (BUILTIN_MAGNET_IDS.has(id)) throw new Error(`metadata.id "${id}" conflicts with builtin magnets`);
+
+  const permissions = m.permissions;
+  if (typeof permissions !== 'undefined') {
+    if (!Array.isArray(permissions)) throw new Error('manifest.permissions must be an array of strings');
+    for (const perm of permissions) {
+      if (typeof perm !== 'string' || perm.length < 1) {
+        throw new Error('manifest.permissions must be an array of strings');
+      }
+    }
+  }
 }
 
 export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
@@ -69,7 +95,9 @@ export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
 
 function saveInstalledPmpmPlugins(plugins: InstalledPmpmPlugin[]): void {
   if (typeof window === 'undefined') return;
-  writeJson(STORAGE_KEYS.PMPM_PLUGINS, plugins);
+  // Keep localStorage as the source of truth, but also fan out a Tauri event so
+  // other windows can refresh plugin renderer registrations.
+  void broadcastDataUpdate(STORAGE_KEYS.PMPM_PLUGINS, plugins, TAURI_EVENTS.PMPM_PLUGINS_UPDATED);
 }
 
 export function getInstalledPmpmPlugin(id: string): InstalledPmpmPlugin | null {
@@ -91,7 +119,8 @@ export function upsertInstalledPmpmPlugin(plugin: InstalledPmpmPlugin): void {
 export async function parsePmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
   const { readBinaryFile } = await import('@tauri-apps/api/fs');
   const bytes = await readBinaryFile(filePath);
-  const files = unzipSync(new Uint8Array(bytes));
+  const packageBytes = new Uint8Array(bytes);
+  const files = unzipSync(packageBytes);
 
   const manifestBytes = files['manifest.json'];
   if (!manifestBytes) {
@@ -108,10 +137,19 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
     throw new Error(`Invalid .pmpm: missing entryPoint "${manifestUnknown.entryPoint}"`);
   }
 
+  const [packageSha256, manifestSha256, entrySha256] = await Promise.all([
+    sha256Hex(packageBytes),
+    sha256Hex(manifestBytes),
+    sha256Hex(entryBytes),
+  ]);
+
   return {
     manifest: manifestUnknown,
     entryCode: strFromU8(entryBytes),
     installedAt: Date.now(),
+    packageSha256,
+    manifestSha256,
+    entrySha256,
   };
 }
 

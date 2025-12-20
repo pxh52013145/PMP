@@ -18,6 +18,15 @@ import {
 } from '../../utils/windowCommunication';
 import { readJson, writeJson, writeString } from '../../modules/storage';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
+import {
+  createMagnetTemplateFromPlugin,
+  loadInstalledPmpmPlugins,
+  parsePmpmPluginFromFilePath,
+  uninstallPmpmPlugin,
+  upsertInstalledPmpmPlugin,
+  type InstalledPmpmPlugin,
+} from '../../magnet-system/plugins/pmpm';
+import { syncPmpmPluginRenderers } from '../../magnet-system/plugins/pluginRegistry';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -86,6 +95,12 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [importError, setImportError] = useState('');
   const [creatorWindowOpen, setCreatorWindowOpen] = useState(false); // 默认为 false，避免误判
   const [glitchingButton, setGlitchingButton] = useState<string | null>(null);
+  const [installedPlugins, setInstalledPlugins] = useState<InstalledPmpmPlugin[]>(() =>
+    loadInstalledPmpmPlugins()
+  );
+  const [showPlugins, setShowPlugins] = useState(false);
+  const [pluginError, setPluginError] = useState('');
+  const [pluginBusy, setPluginBusy] = useState(false);
 
   // 初始化时清理可能残留的窗口状态
   useEffect(() => {
@@ -124,9 +139,12 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     if (!normalizedQuery) return baseMagnets;
 
     return baseMagnets.filter((magnet) => {
-      const renderer = getMagnetRenderer(magnet.id);
+      const rendererId = magnet.renderer ?? magnet.id;
+      const renderer =
+        getMagnetRenderer(rendererId) ?? (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
       const searchable: string[] = [
         magnet.id,
+        rendererId,
         magnet.name,
         magnet.type,
         magnet.anchorType,
@@ -160,6 +178,23 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       cleanupPromise.then((cleanup) => cleanup());
     };
   }, []);
+
+  const reloadPlugins = useCallback(() => {
+    syncPmpmPluginRenderers();
+    setInstalledPlugins(loadInstalledPmpmPlugins());
+  }, []);
+
+  useEffect(() => {
+    reloadPlugins();
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.PMPM_PLUGINS],
+      [TAURI_EVENTS.PMPM_PLUGINS_UPDATED],
+      reloadPlugins
+    );
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [reloadPlugins]);
 
   // 统计数量
   const counts = useMemo(() => {
@@ -273,6 +308,96 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     }
   }, [importData, magnetLibrary, onMagnetAddToLibrary, validateAndImportMagnet]);
 
+  const handleImportPmpmPlugin = useCallback(async () => {
+    if (pluginBusy) return;
+    setPluginBusy(true);
+    setPluginError('');
+
+    try {
+      const dialog = await import('@tauri-apps/api/dialog');
+      const selected = await dialog.open({
+        multiple: false,
+        filters: [{ name: '.pmpm plugin', extensions: ['pmpm'] }],
+      });
+
+      if (!selected) return;
+      const filePath = Array.isArray(selected) ? selected[0] : selected;
+      if (typeof filePath !== 'string') {
+        throw new Error('无法解析选中的 .pmpm 文件路径');
+      }
+
+      const plugin = await parsePmpmPluginFromFilePath(filePath);
+      const meta = plugin.manifest.metadata;
+      const permissions = plugin.manifest.permissions ?? [];
+      const isUpdate = installedPlugins.some((p) => p.manifest.metadata.id === meta.id);
+
+      if (!isUpdate && magnetLibrary.some((m) => m.id === meta.id)) {
+        throw new Error(`Magnet ID "${meta.id}" 已存在，无法安装同名插件（请先删除/重命名该 Magnet）`);
+      }
+
+      const confirmText = [
+        `安装 .pmpm 插件：${meta.name}`,
+        `${meta.id}@${meta.version}`,
+        meta.author ? `作者：${meta.author}` : null,
+        meta.description ? `说明：${meta.description}` : null,
+        '',
+        '权限声明：',
+        permissions.length > 0 ? permissions.map((p) => `- ${p}`).join('\n') : '(无)',
+        '',
+        plugin.entrySha256 ? `entrySha256: ${plugin.entrySha256}` : null,
+        '',
+        '确认安装？',
+      ]
+        .filter((line): line is string => typeof line === 'string' && line.length > 0)
+        .join('\n');
+
+      if (!window.confirm(confirmText)) return;
+
+      upsertInstalledPmpmPlugin(plugin);
+      reloadPlugins();
+
+      if (!magnetLibrary.some((m) => m.id === meta.id)) {
+        onMagnetAddToLibrary(createMagnetTemplateFromPlugin(plugin));
+      }
+
+      setShowPlugins(true);
+      alert(`插件已安装：${meta.id}`);
+    } catch (error) {
+      setPluginError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPluginBusy(false);
+    }
+  }, [installedPlugins, magnetLibrary, onMagnetAddToLibrary, pluginBusy, reloadPlugins]);
+
+  const handleUninstallPmpmPlugin = useCallback(
+    async (id: string) => {
+      if (pluginBusy) return;
+      setPluginBusy(true);
+      setPluginError('');
+
+      try {
+        if (activeMagnetIds.has(id)) {
+          alert(`请先停用 Magnet "${id}"，再卸载插件。`);
+          return;
+        }
+
+        if (!window.confirm(`确认卸载插件 "${id}"？`)) return;
+
+        uninstallPmpmPlugin(id);
+        reloadPlugins();
+
+        if (magnetLibrary.some((m) => m.id === id)) {
+          onMagnetDeleteFromLibrary(id);
+        }
+      } catch (error) {
+        setPluginError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setPluginBusy(false);
+      }
+    },
+    [activeMagnetIds, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins]
+  );
+
   return (
     <div className="editor-magnet-library">
       {/* 拖动标题栏 */}
@@ -379,6 +504,82 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
         {/* Magnet 列表 */}
         <div className="magnet-list">
+          <div className="import-section" style={{ marginBottom: 6 }}>
+            <div className="import-label">.pmpm 插件</div>
+            {pluginError && <div className="import-error">⚠ {pluginError}</div>}
+            <div className="import-actions">
+              <button
+                className="import-submit-btn"
+                onClick={() => void handleImportPmpmPlugin()}
+                disabled={pluginBusy}
+              >
+                导入 .pmpm
+              </button>
+              <button
+                className="import-submit-btn"
+                style={{ background: 'rgba(255, 255, 255, 0.12)' }}
+                onClick={() => setShowPlugins((prev) => !prev)}
+              >
+                {showPlugins ? '隐藏' : '查看'}已安装 ({installedPlugins.length})
+              </button>
+            </div>
+
+            {showPlugins && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {installedPlugins.length === 0 ? (
+                  <div className="import-hint">暂无已安装插件</div>
+                ) : (
+                  installedPlugins.map((plugin) => {
+                    const { id, name, version } = plugin.manifest.metadata;
+                    const permissions = plugin.manifest.permissions ?? [];
+                    const isActive = activeMagnetIds.has(id);
+                    return (
+                      <div
+                        key={id}
+                        style={{
+                          padding: 10,
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: 8,
+                          background: 'rgba(0,0,0,0.2)',
+                          display: 'flex',
+                          gap: 10,
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <div style={{ fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>
+                            {name} <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)' }}>({id}@{version})</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
+                            权限：{permissions.length > 0 ? permissions.join(', ') : '(无)'}
+                          </div>
+                          {plugin.entrySha256 && (
+                            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+                              entrySha256: {plugin.entrySha256.slice(0, 12)}…
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          className="import-submit-btn"
+                          style={{
+                            background: isActive ? 'rgba(255, 69, 58, 0.35)' : 'rgba(255, 69, 58, 0.9)',
+                          }}
+                          disabled={pluginBusy || isActive}
+                          onClick={() => void handleUninstallPmpmPlugin(id)}
+                          title={isActive ? '请先从点阵停用该 Magnet' : '卸载插件'}
+                        >
+                          卸载
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+
           {displayMagnets.length === 0 ? (
             <div className="empty-state">
               {viewMode === 'active' ? '没有已使用的 Magnet' : '没有未使用的 Magnet'}
@@ -390,7 +591,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               const isActive = activeMagnetIds.has(magnet.id);
               const pixelCount = estimateMagnetPixelCount(magnet);
 
-              const renderer = getMagnetRenderer(magnet.id);
+              const rendererId = magnet.renderer ?? magnet.id;
+              const renderer =
+                getMagnetRenderer(rendererId) ??
+                (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
               const rendererGroup = renderer?.group;
               const rendererDescription = renderer?.description;
 

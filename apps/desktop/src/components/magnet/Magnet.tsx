@@ -230,10 +230,11 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
 
   // 渲染自定义组件内容
   const renderContent = () => {
-    const rendererEntry = getMagnetRenderer(magnet.id);
-    if (rendererEntry) {
-      return rendererEntry.render();
-    }
+    const rendererId = magnet.renderer ?? magnet.id;
+    const rendererEntry =
+      getMagnetRenderer(rendererId) ??
+      (rendererId === magnet.id ? null : getMagnetRenderer(magnet.id));
+    if (rendererEntry) return rendererEntry.render();
 
     // 默认渲染
     if (typeof magnet.content === 'string') {

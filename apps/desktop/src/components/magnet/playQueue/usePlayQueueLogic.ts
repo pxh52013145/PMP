@@ -104,7 +104,7 @@ export function usePlayQueueLogic(): PlayQueueLogic {
           filters: [
             {
               name: 'Audio Files',
-              extensions: ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'weba', 'aac'],
+              extensions: ['mp3', 'flac', 'wav', 'm4a', 'mp4', 'ogg', 'weba', 'aac'],
             },
           ],
         });
@@ -138,7 +138,7 @@ export function usePlayQueueLogic(): PlayQueueLogic {
           {
             description: 'Audio Files',
             accept: {
-              'audio/*': ['.mp3', '.flac', '.wav', '.m4a', '.ogg', '.weba', '.aac'],
+              'audio/*': ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'],
             },
           },
         ],

@@ -32,6 +32,7 @@ import {
 } from './modules/magnets';
 import { readJson, readString, writeJson } from './modules/storage';
 import { gcOrphanBackgroundMedia } from './modules/background/mediaCleanup';
+import { syncPmpmPluginRenderers } from './magnet-system/plugins/pluginRegistry';
 import './App.css';
 
 function AppContent() {
@@ -41,6 +42,18 @@ function AppContent() {
 
   useEffect(() => {
     void syncEditorEffectsFromStorage();
+  }, []);
+
+  useEffect(() => {
+    syncPmpmPluginRenderers();
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.PMPM_PLUGINS],
+      [TAURI_EVENTS.PMPM_PLUGINS_UPDATED],
+      syncPmpmPluginRenderers
+    );
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
   }, []);
 
   useEffect(() => {

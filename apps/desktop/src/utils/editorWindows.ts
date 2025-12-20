@@ -112,25 +112,165 @@ export async function getMainWindowBounds(): Promise<{
   width: number;
   height: number;
   isMaximized: boolean;
+  scaleFactor: number;
 }> {
   try {
     const { appWindow } = await import('@tauri-apps/api/window');
+    const scaleFactor = await appWindow.scaleFactor();
     const position = await appWindow.outerPosition();
     const size = await appWindow.outerSize();
     const isMaximized = await appWindow.isMaximized();
 
+    const logicalPosition =
+      typeof (position as any)?.toLogical === 'function'
+        ? (position as any).toLogical(scaleFactor)
+        : { x: position.x / scaleFactor, y: position.y / scaleFactor };
+    const logicalSize =
+      typeof (size as any)?.toLogical === 'function'
+        ? (size as any).toLogical(scaleFactor)
+        : { width: size.width / scaleFactor, height: size.height / scaleFactor };
+
     return {
-      x: position.x,
-      y: position.y,
-      width: size.width,
-      height: size.height,
+      x: logicalPosition.x,
+      y: logicalPosition.y,
+      width: logicalSize.width,
+      height: logicalSize.height,
       isMaximized,
+      scaleFactor,
     };
   } catch (error) {
     console.error('Failed to get main window bounds:', error);
-    // 返回默认值
-    return { x: 100, y: 100, width: 972, height: 720, isMaximized: false };
+    // Best-effort fallback for web/dev mode.
+    return {
+      x: 100,
+      y: 100,
+      width: 972,
+      height: 720,
+      isMaximized: false,
+      scaleFactor: window.devicePixelRatio || 1,
+    };
   }
+}
+
+type WindowRect = { x: number; y: number; width: number; height: number };
+
+function clamp(value: number, min: number, max: number): number {
+  if (!isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function rectsOverlap(a: WindowRect, b: WindowRect, padding = 12): boolean {
+  return !(
+    a.x + a.width + padding <= b.x ||
+    b.x + b.width + padding <= a.x ||
+    a.y + a.height + padding <= b.y ||
+    b.y + b.height + padding <= a.y
+  );
+}
+
+async function getVisibleEditorWindowRects(
+  excludeType: EditorWindowType,
+  scaleFactor: number
+): Promise<WindowRect[]> {
+  if (!isTauriRuntime()) return [];
+
+  try {
+    const { getAll } = await import('@tauri-apps/api/window');
+    const excludeLabel = `editor-${excludeType}`;
+    const windows = getAll().filter(
+      (win) => win.label.startsWith('editor-') && win.label !== excludeLabel
+    );
+
+    const rects = await Promise.all(
+      windows.map(async (win) => {
+        const visible = await win.isVisible().catch(() => false);
+        if (!visible) return null;
+
+        const [pos, size] = await Promise.all([
+          win.outerPosition().catch(() => null),
+          win.outerSize().catch(() => null),
+        ]);
+        if (!pos || !size) return null;
+
+        const logicalPos =
+          typeof (pos as any)?.toLogical === 'function'
+            ? (pos as any).toLogical(scaleFactor)
+            : { x: pos.x / scaleFactor, y: pos.y / scaleFactor };
+        const logicalSize =
+          typeof (size as any)?.toLogical === 'function'
+            ? (size as any).toLogical(scaleFactor)
+            : { width: size.width / scaleFactor, height: size.height / scaleFactor };
+
+        return {
+          x: logicalPos.x,
+          y: logicalPos.y,
+          width: logicalSize.width,
+          height: logicalSize.height,
+        } satisfies WindowRect;
+      })
+    );
+
+    return rects.filter(Boolean) as WindowRect[];
+  } catch {
+    return [];
+  }
+}
+
+async function resolveNonOverlappingPosition(
+  type: EditorWindowType,
+  base: WindowRect,
+  screenWidth: number,
+  screenHeight: number,
+  scaleFactor: number
+): Promise<WindowRect> {
+  const occupied = await getVisibleEditorWindowRects(type, scaleFactor);
+
+  const margin = 20;
+  const bounds = {
+    minX: margin,
+    minY: margin,
+    maxX: Math.max(margin, screenWidth - base.width - margin),
+    maxY: Math.max(margin, screenHeight - base.height - margin),
+  };
+
+  const normalizedBase: WindowRect = {
+    ...base,
+    x: clamp(base.x, bounds.minX, bounds.maxX),
+    y: clamp(base.y, bounds.minY, bounds.maxY),
+  };
+
+  const overlaps = (candidate: WindowRect) =>
+    occupied.some((rect) => rectsOverlap(candidate, rect));
+
+  if (!overlaps(normalizedBase)) return normalizedBase;
+
+  const step = 36;
+  const maxRadius = 18;
+
+  for (let radius = 1; radius <= maxRadius; radius++) {
+    const d = radius * step;
+    const offsets = [
+      { dx: 0, dy: d },
+      { dx: 0, dy: -d },
+      { dx: d, dy: 0 },
+      { dx: -d, dy: 0 },
+      { dx: d, dy: d },
+      { dx: -d, dy: d },
+      { dx: d, dy: -d },
+      { dx: -d, dy: -d },
+    ];
+
+    for (const { dx, dy } of offsets) {
+      const candidate: WindowRect = {
+        ...normalizedBase,
+        x: clamp(normalizedBase.x + dx, bounds.minX, bounds.maxX),
+        y: clamp(normalizedBase.y + dy, bounds.minY, bounds.maxY),
+      };
+      if (!overlaps(candidate)) return candidate;
+    }
+  }
+
+  return normalizedBase;
 }
 
 /**
@@ -140,17 +280,7 @@ export async function getMainWindowBounds(): Promise<{
 export async function calculateWindowPosition(
   type: EditorWindowType
 ): Promise<{ x: number; y: number; width: number; height: number }> {
-  // 检查缓存
   const cached = windowPositionCache.get(type);
-  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-    return {
-      x: cached.x,
-      y: cached.y,
-      width: cached.width,
-      height: cached.height,
-    };
-  }
-
   const mainBounds = await getMainWindowBounds();
 
   // 默认窗口大小
@@ -194,54 +324,39 @@ export async function calculateWindowPosition(
     debug: 8, // 调试窗口
   };
 
-  // 自定义背景窗口和调试窗口居中显示，其他窗口放在右下角
-  if (type === 'custom-background' || type === 'debug') {
-    // 居中显示，确保能被看到
-    offsetX = Math.max(20, (screenWidth - size.width) / 2);
-    y = Math.max(20, (screenHeight - size.height) / 2);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    offsetX = cached.x;
+    y = cached.y;
+  } else if (type === 'custom-background' || type === 'debug') {
+    offsetX = (screenWidth - size.width) / 2;
+    y = (screenHeight - size.height) / 2;
   } else {
-    // 所有窗口放在主窗口右侧，紧贴主窗口右边框
     offsetX = mainRightX + GAP;
 
-    // 从主窗口底部开始，向上堆叠窗口
-    // control 窗口底部与主窗口底部对齐
     const order = verticalOrder[type];
     if (order === 0) {
-      // control 窗口：底部对齐主窗口底部
       y = mainBottomY - size.height;
     } else {
-      // 其他窗口：在 control 窗口上方依次堆叠
-      // 需要计算之前所有窗口的总高度
-      let accumulatedHeight = 0;
       const controlSize = windowSizes['control'];
-
-      // control 窗口占据的高度
-      accumulatedHeight = controlSize.height + GAP;
-
-      // 根据顺序计算当前窗口应该堆叠的位置
-      // 这里简化处理：每个窗口向上偏移固定距离
-      const verticalOffset = order * 60; // 每个窗口向上偏移60px（部分重叠）
-
+      const accumulatedHeight = controlSize.height + GAP;
+      const verticalOffset = order * 60;
       y = mainBottomY - size.height - accumulatedHeight - verticalOffset;
     }
 
-    // 确保窗口不会超出屏幕右侧
     if (offsetX + size.width > screenWidth) {
-      // 如果右侧超出，放在主窗口左侧
-      offsetX = Math.max(20, mainBounds.x - size.width - GAP);
-    }
-
-    // 确保窗口不会超出屏幕顶部
-    if (y < 20) {
-      y = 20;
+      offsetX = mainBounds.x - size.width - GAP;
     }
   }
 
-  const position = {
-    x: offsetX,
-    y,
-    ...size,
-  };
+  const resolved = await resolveNonOverlappingPosition(
+    type,
+    { x: offsetX, y, ...size },
+    screenWidth,
+    screenHeight,
+    mainBounds.scaleFactor
+  );
+
+  const position = { x: resolved.x, y: resolved.y, ...size };
 
   // 缓存结果
   windowPositionCache.set(type, {

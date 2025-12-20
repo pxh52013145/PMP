@@ -1,13 +1,16 @@
+use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
+    Mutex,
 };
 
+use once_cell::sync::Lazy;
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl};
 
 use super::{EVENT_EDITOR_EXIT, EVENT_EDITOR_WINDOW_HIDDEN, EVENT_EDITOR_WINDOW_SHOWN};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditorWindowType {
     Control,
     Statistics,
@@ -107,6 +110,17 @@ pub struct EditorWindowGeometry {
     pub width: f64,
     pub height: f64,
 }
+
+#[derive(Default)]
+struct HiddenWindowLru {
+    cached_hidden: Option<EditorWindowType>,
+}
+
+static HIDDEN_WINDOW_LRU: Lazy<Mutex<HiddenWindowLru>> =
+    Lazy::new(|| Mutex::new(HiddenWindowLru::default()));
+
+static FORCE_CLOSE_WINDOWS: Lazy<Mutex<HashSet<EditorWindowType>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(target_os = "windows")]
 fn apply_windows_blur_behind(window: &tauri::Window, enabled: bool) {
@@ -218,12 +232,104 @@ fn apply_geometry(window: &tauri::Window, geometry: &EditorWindowGeometry) {
     }
 }
 
+fn evict_previous_cached_window(app: &AppHandle, new_cached: EditorWindowType) {
+    let previous = {
+        let mut cache = match HIDDEN_WINDOW_LRU.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if cache.cached_hidden == Some(new_cached) {
+            return;
+        }
+
+        let previous = cache.cached_hidden;
+        cache.cached_hidden = Some(new_cached);
+        previous
+    };
+
+    let Some(previous) = previous else {
+        return;
+    };
+
+    if previous == new_cached {
+        return;
+    }
+
+    // Only evict if the previous cached window is still hidden. Never close a visible window.
+    let is_visible = app
+        .get_window(label(previous))
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(true);
+    if is_visible {
+        return;
+    }
+
+    request_force_close(app, previous);
+}
+
+fn clear_cached_window(window_type: EditorWindowType) {
+    let mut cache = match HIDDEN_WINDOW_LRU.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if cache.cached_hidden == Some(window_type) {
+        cache.cached_hidden = None;
+    }
+}
+
+fn request_force_close(app: &AppHandle, window_type: EditorWindowType) {
+    let Some(window) = app.get_window(label(window_type)) else {
+        return;
+    };
+
+    {
+        let mut set = match FORCE_CLOSE_WINDOWS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.insert(window_type);
+    }
+
+    if window.close().is_err() {
+        let mut set = match FORCE_CLOSE_WINDOWS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.remove(&window_type);
+    }
+}
+
+fn take_force_close(window_type: EditorWindowType) -> bool {
+    let mut set = match FORCE_CLOSE_WINDOWS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    set.remove(&window_type)
+}
+
+fn cache_window_handle(
+    app: &AppHandle,
+    window: &tauri::Window,
+    window_type: EditorWindowType,
+) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())?;
+    let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
+    evict_previous_cached_window(app, window_type);
+    Ok(())
+}
+
+fn destroy_window(app: &AppHandle, window_type: EditorWindowType) {
+    clear_cached_window(window_type);
+    request_force_close(app, window_type);
+}
+
 pub fn open_editor_window(
     app: &AppHandle,
     window_type: EditorWindowType,
     geometry: EditorWindowGeometry,
     exit_flag: Arc<AtomicBool>,
-    blur_enabled: bool,
+    blur_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let window_label = label(window_type);
 
@@ -231,11 +337,12 @@ pub fn open_editor_window(
         // When the window already exists (possibly hidden/off-screen), always re-apply geometry so the
         // caller can bring it back to a visible location.
         apply_geometry(&existing_window, &geometry);
-        apply_windows_blur_behind(&existing_window, blur_enabled);
+        apply_windows_blur_behind(&existing_window, blur_enabled.load(Ordering::SeqCst));
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
         existing_window.set_focus().map_err(|e| e.to_string())?;
         let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
+        clear_cached_window(window_type);
         return Ok(());
     }
 
@@ -258,31 +365,35 @@ pub fn open_editor_window(
     // IMPORTANT: DWMWA_SYSTEMBACKDROP_TYPE (Mica/Tabbed) paints the whole window background and breaks
     // per-pixel transparency (our "floating" editor windows). Instead, use DWM blur-behind with a region
     // so corners/padding remain truly transparent, while the panel area gets a system blur.
-    apply_windows_blur_behind(&window, blur_enabled);
+    apply_windows_blur_behind(&window, blur_enabled.load(Ordering::SeqCst));
 
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
 
-    let window_for_hide = window.clone();
+    let window_for_events = window.clone();
     let app_handle = app.clone();
+    let blur_enabled_flag = blur_enabled.clone();
     window.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if exit_flag.load(Ordering::SeqCst) {
-                return;
-            }
+        match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if exit_flag.load(Ordering::SeqCst) || take_force_close(window_type) {
+                    return;
+                }
 
-            api.prevent_close();
-            let _ = window_for_hide.hide();
-            let _ = app_handle.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
+                api.prevent_close();
+                let _ = cache_window_handle(&app_handle, &window_for_events, window_type);
 
-            if window_type == EditorWindowType::Control {
-                let _ = app_handle.emit_all(EVENT_EDITOR_EXIT, ());
-                for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
-                    if let Some(w) = app_handle.get_window(label(*wtype)) {
-                        let _ = w.hide();
-                        let _ = app_handle.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, wtype.as_str());
+                if window_type == EditorWindowType::Control {
+                    let _ = app_handle.emit_all(EVENT_EDITOR_EXIT, ());
+                    for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
+                        destroy_window(&app_handle, *wtype);
                     }
                 }
             }
+            tauri::WindowEvent::Focused(focused) => {
+                let enabled = blur_enabled_flag.load(Ordering::SeqCst) && *focused;
+                apply_windows_blur_behind(&window_for_events, enabled);
+            }
+            _ => {}
         }
     });
 
@@ -292,27 +403,24 @@ pub fn open_editor_window(
 pub fn set_editor_windows_blur_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
     for window_type in ALL_EDITOR_WINDOWS {
         if let Some(window) = app.get_window(label(*window_type)) {
-            apply_windows_blur_behind(&window, enabled);
+            // Keep background windows cheap: only apply blur to the focused window.
+            let focused = window.is_focused().unwrap_or(false);
+            apply_windows_blur_behind(&window, enabled && focused);
         }
     }
 
     Ok(())
 }
 
-pub fn hide_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
+pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
     if let Some(window) = app.get_window(label(window_type)) {
-        window.hide().map_err(|e| e.to_string())?;
-        let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
-    }
+        cache_window_handle(app, &window, window_type)?;
 
-    Ok(())
-}
-
-pub fn hide_all_editor_windows(app: &AppHandle) -> Result<(), String> {
-    for window_type in ALL_EDITOR_WINDOWS {
-        if let Some(window) = app.get_window(label(*window_type)) {
-            let _ = window.hide();
-            let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
+        if window_type == EditorWindowType::Control {
+            let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
+            for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
+                destroy_window(app, *wtype);
+            }
         }
     }
 
@@ -320,9 +428,14 @@ pub fn hide_all_editor_windows(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn close_all_editor_windows(app: &AppHandle) {
+    let mut cache = match HIDDEN_WINDOW_LRU.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    cache.cached_hidden = None;
+    drop(cache);
+
     for window_type in ALL_EDITOR_WINDOWS {
-        if let Some(window) = app.get_window(label(*window_type)) {
-            let _ = window.close();
-        }
+        request_force_close(app, *window_type);
     }
 }

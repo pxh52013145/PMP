@@ -43,6 +43,8 @@ export interface Track {
   composer?: string;
   bitrate?: number;
   sampleRate?: number;
+  replayGainTrackGainDb?: number; // ReplayGain track gain in dB (from tags, if present)
+  replayGainAlbumGainDb?: number; // ReplayGain album gain in dB (from tags, if present)
   format?: string;
   codecName?: string; // 编码格式
   fileSize?: number;

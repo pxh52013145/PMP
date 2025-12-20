@@ -23,6 +23,25 @@ type NativeAudioSpectrumPayload = {
   bins: number[];
 };
 
+type NativeAudioErrorPayload = {
+  seq?: number;
+  code?: string;
+  message?: string;
+};
+
+type ReplayGainMode = 'track' | 'album';
+
+type ReplayGainSettings = {
+  enabled: boolean;
+  mode: ReplayGainMode;
+  preampDb: number;
+};
+
+type CrossfadeSettings = {
+  enabled: boolean;
+  durationMs: number;
+};
+
 /**
  * NativeAudioService
  *
@@ -40,13 +59,21 @@ export class NativeAudioService implements IAudioService {
   private errorCallbacks: Set<(error: Error) => void> = new Set();
   private stateListener?: UnlistenFn;
   private spectrumListener?: UnlistenFn;
+  private errorListener?: UnlistenFn;
   private spectrumData: Uint8Array | null = null;
   private restoredOutputDevice = false;
+  private restoredDspChain = false;
+  private restoredDspChainApplied = false;
   private restoredGainDb = false;
+  private lastNativeErrorSeq = 0;
   private fallbackTicker: number | null = null;
   private fallbackClockStartedAtMs: number | null = null;
   private fallbackClockBaseTimeSec: number = 0;
   private lastBackendTimeUpdateAtMs: number = 0;
+
+  private fireAndForgetCommand(cmd: string, payload?: Record<string, unknown>): void {
+    void this.invokeCommand(cmd, payload).catch(() => {});
+  }
 
   private isProbablyAbsolutePath(value: string): boolean {
     if (!value) return false;
@@ -73,7 +100,85 @@ export class NativeAudioService implements IAudioService {
 
     this.setupNativeListeners();
     this.restoreOutputDeviceFromStorage();
+    this.restoreDspChainFromStorage();
     this.restoreGainDbFromStorage();
+  }
+
+  private readCrossfadeSettings(): CrossfadeSettings {
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS);
+      if (!raw) {
+        return { enabled: false, durationMs: 1200 };
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') {
+        return { enabled: false, durationMs: 1200 };
+      }
+
+      const enabled =
+        'enabled' in parsed && typeof (parsed as any).enabled === 'boolean'
+          ? (parsed as any).enabled
+          : false;
+      const durationMs =
+        'durationMs' in parsed && typeof (parsed as any).durationMs === 'number'
+          ? (parsed as any).durationMs
+          : 1200;
+
+      return {
+        enabled,
+        durationMs: isFinite(durationMs) ? Math.max(0, Math.min(30_000, durationMs)) : 0,
+      };
+    } catch {
+      return { enabled: false, durationMs: 1200 };
+    }
+  }
+
+  private readReplayGainSettings(): ReplayGainSettings {
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS);
+      if (!raw) {
+        return { enabled: true, mode: 'track', preampDb: 0 };
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') {
+        return { enabled: true, mode: 'track', preampDb: 0 };
+      }
+
+      const enabled =
+        'enabled' in parsed && typeof (parsed as any).enabled === 'boolean'
+          ? (parsed as any).enabled
+          : true;
+      const modeRaw =
+        'mode' in parsed && typeof (parsed as any).mode === 'string' ? (parsed as any).mode : 'track';
+      const mode: ReplayGainMode = modeRaw === 'album' ? 'album' : 'track';
+      const preampDb =
+        'preampDb' in parsed && typeof (parsed as any).preampDb === 'number'
+          ? (parsed as any).preampDb
+          : 0;
+
+      return { enabled, mode, preampDb };
+    } catch {
+      return { enabled: true, mode: 'track', preampDb: 0 };
+    }
+  }
+
+  private async applyReplayGainForTrack(track: Track): Promise<void> {
+    const settings = this.readReplayGainSettings();
+    if (!settings.enabled) {
+      await this.invokeCommand('native_audio_set_replay_gain', { db: null });
+      return;
+    }
+
+    const base =
+      settings.mode === 'album' ? track.replayGainAlbumGainDb : track.replayGainTrackGainDb;
+    if (typeof base !== 'number' || !isFinite(base)) {
+      await this.invokeCommand('native_audio_set_replay_gain', { db: null });
+      return;
+    }
+
+    const effective = base + (typeof settings.preampDb === 'number' ? settings.preampDb : 0);
+    const clamped = Math.max(-30, Math.min(30, effective));
+    await this.invokeCommand('native_audio_set_replay_gain', { db: clamped });
   }
 
   // ===== Helpers =====
@@ -230,6 +335,23 @@ export class NativeAudioService implements IAudioService {
         }
         this.spectrumData = next;
       });
+
+      this.errorListener = await listen('native_audio_error', (event) => {
+        const payload = event.payload as NativeAudioErrorPayload;
+        const seq = typeof payload?.seq === 'number' ? payload.seq : 0;
+        if (seq > 0 && seq <= this.lastNativeErrorSeq) return;
+        if (seq > 0) this.lastNativeErrorSeq = seq;
+
+        const code = typeof payload?.code === 'string' && payload.code.length > 0 ? payload.code : 'NATIVE_AUDIO_ERROR';
+        const message =
+          typeof payload?.message === 'string' && payload.message.length > 0
+            ? payload.message
+            : 'Native audio error';
+
+        const error = new Error(message) as Error & { code?: string };
+        error.code = code;
+        this.emitError(error);
+      });
     } catch (error) {
       console.warn('[NativeAudio] Failed to register state listener:', error);
     }
@@ -254,6 +376,7 @@ export class NativeAudioService implements IAudioService {
   private restoreGainDbFromStorage() {
     if (this.restoredGainDb) return;
     this.restoredGainDb = true;
+    if (this.restoredDspChainApplied) return;
 
     try {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB);
@@ -262,6 +385,22 @@ export class NativeAudioService implements IAudioService {
       const db = typeof parsed === 'number' ? parsed : null;
       if (db === null) return;
       void invoke('native_audio_set_gain', { db }).catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
+
+  private restoreDspChainFromStorage() {
+    if (this.restoredDspChain) return;
+    this.restoredDspChain = true;
+
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_DSP_CHAIN);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      this.restoredDspChainApplied = true;
+      void invoke('native_audio_set_dsp_chain', { chain: parsed }).catch(() => {});
     } catch {
       // ignore
     }
@@ -365,6 +504,7 @@ export class NativeAudioService implements IAudioService {
 
     this.syncQueueToNative(queue, index);
 
+    await this.applyReplayGainForTrack(track);
     await this.invokeCommand('native_audio_load', { path: trackPath });
 
     this.updateState({
@@ -394,7 +534,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   stop(): void {
-    void this.invokeCommand('native_audio_stop');
+    this.fireAndForgetCommand('native_audio_stop');
     this.updateState({ playbackState: 'stopped', currentTime: 0 });
     this.fallbackClockBaseTimeSec = 0;
     this.fallbackClockStartedAtMs = null;
@@ -404,7 +544,7 @@ export class NativeAudioService implements IAudioService {
   seek(time: number): void {
     const duration = this.state.duration || time;
     const clamped = Math.max(0, Math.min(time, duration));
-    void this.invokeCommand('native_audio_seek', { time: clamped });
+    this.fireAndForgetCommand('native_audio_seek', { time: clamped });
     const nextState = this.updateState({ currentTime: clamped });
     this.fallbackClockBaseTimeSec = clamped;
     this.fallbackClockStartedAtMs = nextState.playbackState === 'playing' ? performance.now() : null;
@@ -417,7 +557,7 @@ export class NativeAudioService implements IAudioService {
   // ===== 音量控制 =====
   setVolume(volume: number): void {
     const clamped = Math.max(0, Math.min(1, volume));
-    void this.invokeCommand('native_audio_set_volume', { volume: clamped });
+    this.fireAndForgetCommand('native_audio_set_volume', { volume: clamped });
     this.updateState({ volume: clamped, muted: clamped === 0 ? true : this.state.muted });
   }
 
@@ -427,7 +567,7 @@ export class NativeAudioService implements IAudioService {
 
   toggleMute(): void {
     const muted = !this.state.muted;
-    void this.invokeCommand('native_audio_set_mute', { muted });
+    this.fireAndForgetCommand('native_audio_set_mute', { muted });
     this.updateState({ muted });
   }
 
@@ -504,7 +644,7 @@ export class NativeAudioService implements IAudioService {
       currentTime: 0,
     });
     this.syncQueueToNative([], -1);
-    void this.invokeCommand('native_audio_stop');
+    this.fireAndForgetCommand('native_audio_stop');
     this.timeUpdateCallbacks.forEach((cb) => cb(0));
   }
 
@@ -514,9 +654,45 @@ export class NativeAudioService implements IAudioService {
 
   async playTrackAtIndex(index: number): Promise<void> {
     if (index < 0 || index >= this.state.queue.length) return;
+    const wasPlaying = this.state.playbackState === 'playing';
+    const previousIndex = this.state.currentIndex;
     const track = this.state.queue[index];
     this.updateState({ currentIndex: index });
     this.syncQueueToNative(this.state.queue, index);
+
+    const crossfade = this.readCrossfadeSettings();
+    const shouldCrossfade = wasPlaying && crossfade.enabled && crossfade.durationMs > 0 && index !== previousIndex;
+
+    if (shouldCrossfade) {
+      const trackPath = this.getTrackPath(track);
+      if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
+        const error = new Error(
+          'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+        ) as Error & { code?: string };
+        error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+        this.emitError(error);
+        return;
+      }
+
+      const nextState = this.updateState({
+        currentTrack: track,
+        playbackState: 'loading',
+        duration: track.duration ?? 0,
+        currentTime: 0,
+      });
+      this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+
+      await this.applyReplayGainForTrack(track);
+      await this.invokeCommand('native_audio_crossfade_to', { path: trackPath, durationMs: crossfade.durationMs });
+
+      const playingState = this.updateState({ playbackState: 'playing', currentTime: 0 });
+      this.fallbackClockBaseTimeSec = playingState.currentTime;
+      this.fallbackClockStartedAtMs = performance.now();
+      this.ensureFallbackTicker();
+      this.applyPlaybackStateSideEffects(playingState.playbackState);
+      return;
+    }
+
     await this.loadTrack(track);
     await this.play();
   }
@@ -715,6 +891,10 @@ export class NativeAudioService implements IAudioService {
     if (this.spectrumListener) {
       this.spectrumListener();
       this.spectrumListener = undefined;
+    }
+    if (this.errorListener) {
+      this.errorListener();
+      this.errorListener = undefined;
     }
     this.spectrumData = null;
   }

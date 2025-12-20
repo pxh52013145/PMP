@@ -1167,6 +1167,8 @@ export class MusicLibraryService {
             title?: string | null;
             artist?: string | null;
             album?: string | null;
+            replayGainTrackDb?: number | null;
+            replayGainAlbumDb?: number | null;
           }>
         >('music_library_scan', {
           paths: needMetadataPaths,
@@ -1194,6 +1196,12 @@ export class MusicLibraryService {
           if (album.length > 0) record.album = album;
           if (typeof meta.duration === 'number') record.duration = meta.duration;
           if (typeof meta.sampleRate === 'number') record.sampleRate = meta.sampleRate;
+          if (typeof meta.replayGainTrackDb === 'number') {
+            record.replayGainTrackGainDb = meta.replayGainTrackDb;
+          }
+          if (typeof meta.replayGainAlbumDb === 'number') {
+            record.replayGainAlbumGainDb = meta.replayGainAlbumDb;
+          }
 
           record.metadataScannedAtMs = now;
         }
@@ -1387,7 +1395,7 @@ export class MusicLibraryService {
     }>,
     basePath: string = ''
   ): Promise<void> {
-    const supportedFormats = ['.mp3', '.flac', '.wav', '.m4a', '.ogg', '.weba', '.aac'];
+    const supportedFormats = ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
     const currentPath = basePath ? `${basePath}/${dirHandle.name}` : dirHandle.name;
 
     try {
@@ -1429,7 +1437,7 @@ export class MusicLibraryService {
     }>,
     relativePath: string = ''
   ): Promise<void> {
-    const supportedFormats = ['.mp3', '.flac', '.wav', '.m4a', '.ogg', '.weba', '.aac'];
+    const supportedFormats = ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
 
     console.log(`Scanning directory: ${dirPath}`);
 

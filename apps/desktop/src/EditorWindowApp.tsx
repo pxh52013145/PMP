@@ -42,6 +42,7 @@ import {
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import { readJson, readString, removeKey, writeJson } from './modules/storage';
+import { syncPmpmPluginRenderers } from './magnet-system/plugins/pluginRegistry';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
@@ -341,7 +342,8 @@ export function EditorWindowApp() {
   const [windowType, setWindowType] = useState<string>(getWindowTypeFromHash());
   const [isWindowVisible, setIsWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
-  const isWindowActive = isWindowVisible && isDocumentVisible;
+  const [isWindowFocused, setIsWindowFocused] = useState(() => document.hasFocus());
+  const isWindowActive = isWindowVisible && isDocumentVisible && isWindowFocused;
   const activityRef = useRef({ isWindowActive });
   activityRef.current.isWindowActive = isWindowActive;
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -355,6 +357,32 @@ export function EditorWindowApp() {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    syncPmpmPluginRenderers();
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.PMPM_PLUGINS],
+      [TAURI_EVENTS.PMPM_PLUGINS_UPDATED],
+      syncPmpmPluginRenderers
+    );
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, []);
+
+  useEffect(() => {
+    const onFocus = () => setIsWindowFocused(true);
+    const onBlur = () => setIsWindowFocused(false);
+
+    setIsWindowFocused(document.hasFocus());
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+    };
   }, []);
 
   useEffect(() => {
@@ -775,7 +803,12 @@ export function EditorWindowApp() {
         <NavigationProvider>
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
-              <div className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''}`} ref={rootRef}>
+              <div
+                className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''} ${
+                  isWindowActive ? '' : 'editor-window-app--background'
+                }`}
+                ref={rootRef}
+              >
                   {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
 
             {windowType === 'statistics' && <EditorStatistics />}

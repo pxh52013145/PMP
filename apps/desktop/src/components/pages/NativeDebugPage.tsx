@@ -21,7 +21,41 @@ type NativeAudioMeta = {
   sampleRate: number | null;
   bitDepth: number | null;
   gainDb: number | null;
+  replayGainDb: number | null;
 };
+
+type NativeDspEqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
+
+type NativeDspEqBand = {
+  kind: NativeDspEqBandKind;
+  frequencyHz: number;
+  q: number;
+  gainDb: number;
+};
+
+type NativeDspNodeConfig =
+  | { type: 'gain'; db: number }
+  | { type: 'eq'; bands: NativeDspEqBand[] }
+  | { type: 'limiter'; thresholdDb: number };
+
+type ReplayGainMode = 'track' | 'album';
+
+type ReplayGainSettings = {
+  enabled: boolean;
+  mode: ReplayGainMode;
+  preampDb: number;
+};
+
+type CrossfadeSettings = {
+  enabled: boolean;
+  durationMs: number;
+};
+
+const DEFAULT_EQ_BANDS: NativeDspEqBand[] = [
+  { kind: 'low-shelf', frequencyHz: 120, q: 1, gainDb: 0 },
+  { kind: 'peaking', frequencyHz: 1000, q: 1, gainDb: 0 },
+  { kind: 'high-shelf', frequencyHz: 8000, q: 1, gainDb: 0 },
+];
 
 export const NativeDebugPage: React.FC = () => {
   const audioService = useAudioService();
@@ -35,9 +69,23 @@ export const NativeDebugPage: React.FC = () => {
     sampleRate: null,
     bitDepth: null,
     gainDb: null,
+    replayGainDb: null,
   });
+  const [dspGainDb, setDspGainDb] = useState(0);
+  const [eqBands, setEqBands] = useState<NativeDspEqBand[]>(DEFAULT_EQ_BANDS);
+  const [limiterEnabled, setLimiterEnabled] = useState(false);
+  const [limiterThresholdDb, setLimiterThresholdDb] = useState(-1);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
+  const [replayGainSettings, setReplayGainSettings] = useState<ReplayGainSettings>({
+    enabled: true,
+    mode: 'track',
+    preampDb: 0,
+  });
+  const [crossfadeSettings, setCrossfadeSettings] = useState<CrossfadeSettings>({
+    enabled: false,
+    durationMs: 1200,
+  });
 
   const getFrequencyData = useCallback(() => audioService.getFrequencyData?.() ?? null, [audioService]);
 
@@ -77,6 +125,112 @@ export const NativeDebugPage: React.FC = () => {
 
   useEffect(() => {
     if (!isNativeEngine) return;
+    const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS);
+    if (!persisted || typeof persisted !== 'object') return;
+
+    const enabled =
+      'enabled' in persisted && typeof (persisted as any).enabled === 'boolean'
+        ? (persisted as any).enabled
+        : true;
+    const modeRaw =
+      'mode' in persisted && typeof (persisted as any).mode === 'string'
+        ? String((persisted as any).mode)
+        : 'track';
+    const mode: ReplayGainMode = modeRaw === 'album' ? 'album' : 'track';
+    const preampDb =
+      'preampDb' in persisted && typeof (persisted as any).preampDb === 'number'
+        ? (persisted as any).preampDb
+        : 0;
+
+    setReplayGainSettings({ enabled, mode, preampDb });
+  }, [isNativeEngine]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS);
+    if (!persisted || typeof persisted !== "object") return;
+
+    const enabled =
+      "enabled" in persisted && typeof (persisted as any).enabled === "boolean"
+        ? (persisted as any).enabled
+        : false;
+    const durationMs =
+      "durationMs" in persisted && typeof (persisted as any).durationMs === "number"
+        ? (persisted as any).durationMs
+        : 1200;
+
+    setCrossfadeSettings({
+      enabled,
+      durationMs: typeof durationMs === "number" && isFinite(durationMs) ? durationMs : 1200,
+    });
+  }, [isNativeEngine]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DSP_CHAIN);
+    if (!Array.isArray(persisted)) return;
+
+    const gainNode = persisted.find((node) => {
+      return (
+        node &&
+        typeof node === 'object' &&
+        'type' in node &&
+        (node as any).type === 'gain' &&
+        typeof (node as any).db === 'number'
+      );
+    }) as { type: 'gain'; db: number } | undefined;
+
+    if (gainNode) {
+      setDspGainDb(gainNode.db);
+    }
+
+    const eqNode = persisted.find((node) => {
+      return (
+        node &&
+        typeof node === 'object' &&
+        'type' in node &&
+        (node as any).type === 'eq' &&
+        Array.isArray((node as any).bands)
+      );
+    }) as { type: 'eq'; bands: unknown[] } | undefined;
+
+    if (eqNode) {
+      const nextBands: NativeDspEqBand[] = [];
+      for (const band of eqNode.bands) {
+        if (!band || typeof band !== 'object') continue;
+        const kind = (band as any).kind as NativeDspEqBandKind | undefined;
+        const frequencyHz = typeof (band as any).frequencyHz === 'number' ? (band as any).frequencyHz : null;
+        const q = typeof (band as any).q === 'number' ? (band as any).q : null;
+        const gainDb = typeof (band as any).gainDb === 'number' ? (band as any).gainDb : null;
+        if (!kind || frequencyHz === null || q === null || gainDb === null) continue;
+        if (kind !== 'peaking' && kind !== 'low-shelf' && kind !== 'high-shelf') continue;
+        nextBands.push({ kind, frequencyHz, q, gainDb });
+      }
+      if (nextBands.length > 0) {
+        setEqBands(nextBands);
+      }
+    }
+
+    const limiterNode = persisted.find((node) => {
+      return (
+        node &&
+        typeof node === 'object' &&
+        'type' in node &&
+        (node as any).type === 'limiter' &&
+        typeof (node as any).thresholdDb === 'number'
+      );
+    }) as { type: 'limiter'; thresholdDb: number } | undefined;
+
+    if (limiterNode) {
+      setLimiterEnabled(true);
+      setLimiterThresholdDb(limiterNode.thresholdDb);
+    } else {
+      setLimiterEnabled(false);
+    }
+  }, [isNativeEngine]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
 
     let unlisten: UnlistenFn | null = null;
     void listen('native_audio_state', (event) => {
@@ -88,8 +242,12 @@ export const NativeDebugPage: React.FC = () => {
       const sampleRate = typeof next.sampleRate === 'number' ? next.sampleRate : null;
       const bitDepth = typeof next.bitDepth === 'number' ? next.bitDepth : null;
       const gainDb = typeof next.gainDb === 'number' ? next.gainDb : null;
+      const replayGainDb = typeof next.replayGainDb === 'number' ? next.replayGainDb : null;
 
-      setNativeMeta({ device, sampleRate, bitDepth, gainDb });
+      setNativeMeta({ device, sampleRate, bitDepth, gainDb, replayGainDb });
+      if (gainDb !== null) {
+        setDspGainDb(gainDb);
+      }
       setSelectedDevice((prev) => prev || device || '');
     })
       .then((fn) => {
@@ -136,23 +294,129 @@ export const NativeDebugPage: React.FC = () => {
     }
   }, [appendLog, selectedDevice]);
 
-  const handleGainChange = useCallback(
-    async (db: number) => {
+  const applyDspChain = useCallback(
+    async (
+      nextGainDb: number,
+      nextEqBands: NativeDspEqBand[],
+      logLine: string,
+      nextLimiterEnabled: boolean = limiterEnabled,
+      nextLimiterThresholdDb: number = limiterThresholdDb
+    ) => {
       try {
+        const chain: NativeDspNodeConfig[] = [
+          { type: 'gain', db: nextGainDb },
+          { type: 'eq', bands: nextEqBands },
+        ];
+        if (nextLimiterEnabled) {
+          chain.push({ type: 'limiter', thresholdDb: nextLimiterThresholdDb });
+        }
+
+        await broadcastDataUpdate(
+          STORAGE_KEYS.NATIVE_AUDIO_DSP_CHAIN,
+          chain,
+          TAURI_EVENTS.NATIVE_AUDIO_DSP_CHAIN_UPDATED
+        );
         await broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB,
-          db,
+          nextGainDb,
           TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
         );
-        await invoke('native_audio_set_gain', { db });
-        appendLog(`设置 Gain：${db.toFixed(1)} dB`);
+        await invoke('native_audio_set_dsp_chain', { chain });
+        appendLog(logLine);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        appendLog(`设置 Gain 失败：${message}`);
+        appendLog(`设置 DSP 失败：${message}`);
       }
     },
-    [appendLog]
+    [appendLog, limiterEnabled, limiterThresholdDb]
   );
+
+  const handleGainChange = useCallback(
+    async (db: number) => {
+      setDspGainDb(db);
+      await applyDspChain(db, eqBands, `设置 DSP Chain：Gain ${db.toFixed(1)} dB`);
+    },
+    [applyDspChain, eqBands]
+  );
+
+  const handleEqBandGainChange = useCallback(
+    async (index: number, gainDb: number) => {
+      const next = eqBands.map((band, i) => (i === index ? { ...band, gainDb } : band));
+      setEqBands(next);
+      await applyDspChain(dspGainDb, next, `设置 EQ：Band ${index + 1} ${gainDb.toFixed(1)} dB`);
+    },
+    [applyDspChain, dspGainDb, eqBands]
+  );
+
+  const handleEqReset = useCallback(async () => {
+    const next = eqBands.map((band) => ({ ...band, gainDb: 0 }));
+    setEqBands(next);
+    await applyDspChain(dspGainDb, next, '重置 EQ：全部归零');
+  }, [applyDspChain, dspGainDb, eqBands]);
+
+  const handleLimiterToggle = useCallback(
+    async (enabled: boolean) => {
+      setLimiterEnabled(enabled);
+      await applyDspChain(dspGainDb, eqBands, `Limiter: ${enabled ? 'on' : 'off'}`, enabled, limiterThresholdDb);
+    },
+    [applyDspChain, dspGainDb, eqBands, limiterThresholdDb]
+  );
+
+  const handleLimiterThresholdChange = useCallback(
+    async (db: number) => {
+      setLimiterThresholdDb(db);
+      await applyDspChain(dspGainDb, eqBands, `Limiter threshold: ${db.toFixed(1)} dB`, limiterEnabled, db);
+    },
+    [applyDspChain, dspGainDb, eqBands, limiterEnabled]
+  );
+
+  const handleApplyCrossfadeSettings = useCallback(async () => {
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS,
+        crossfadeSettings,
+        TAURI_EVENTS.NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED
+      );
+      appendLog(
+        `Crossfade: ${crossfadeSettings.enabled ? 'on' : 'off'} · ${Math.round(crossfadeSettings.durationMs)}ms`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(`Crossfade update failed: ${message}`);
+    }
+  }, [appendLog, crossfadeSettings]);
+
+  const handleApplyReplayGainSettings = useCallback(async () => {
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS,
+        replayGainSettings,
+        TAURI_EVENTS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED
+      );
+
+      const track = audioService.getState().currentTrack;
+      const base =
+        replayGainSettings.mode === 'album'
+          ? track?.replayGainAlbumGainDb
+          : track?.replayGainTrackGainDb;
+      const hasBase = typeof base === 'number' && isFinite(base);
+      const effective =
+        replayGainSettings.enabled && hasBase ? base + replayGainSettings.preampDb : null;
+
+      await invoke('native_audio_set_replay_gain', {
+        db: typeof effective === 'number' ? effective : null,
+      });
+
+      appendLog(
+        `ReplayGain：${replayGainSettings.enabled ? '启用' : '关闭'} · mode=${replayGainSettings.mode} · preamp=${replayGainSettings.preampDb.toFixed(
+          1
+        )}dB`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(`设置 ReplayGain 失败：${message}`);
+    }
+  }, [appendLog, audioService, replayGainSettings]);
 
   const handleSelectTrack = useCallback(async () => {
     setIsSelectingFile(true);
@@ -352,7 +616,7 @@ export const NativeDebugPage: React.FC = () => {
 
           <div className="volume-row">
             <label htmlFor="native-debug-gain">
-              Gain：{typeof nativeMeta.gainDb === 'number' ? `${nativeMeta.gainDb.toFixed(1)} dB` : '—'}
+              Gain：{dspGainDb.toFixed(1)} dB
             </label>
             <input
               id="native-debug-gain"
@@ -360,12 +624,180 @@ export const NativeDebugPage: React.FC = () => {
               min={-24}
               max={12}
               step={0.5}
-              value={typeof nativeMeta.gainDb === 'number' ? nativeMeta.gainDb : 0}
+              value={dspGainDb}
               onChange={(e) => void handleGainChange(Number(e.target.value))}
             />
             <button type="button" onClick={() => void handleGainChange(0)}>
               复位
             </button>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">Crossfade</p>
+              <p className="device-hint">Applies when switching tracks while playing (native)</p>
+            </div>
+            <div className="device-controls" style={{ gap: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={crossfadeSettings.enabled}
+                  onChange={(e) =>
+                    setCrossfadeSettings((prev) => ({ ...prev, enabled: e.target.checked }))
+                  }
+                />
+                Enabled
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Duration</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={100}
+                  value={crossfadeSettings.durationMs}
+                  onChange={(e) =>
+                    setCrossfadeSettings((prev) => ({ ...prev, durationMs: Number(e.target.value) }))
+                  }
+                  style={{ width: 88 }}
+                />
+                <span>ms</span>
+              </label>
+              <button type="button" onClick={() => void handleApplyCrossfadeSettings()}>
+                Apply
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">ReplayGain</p>
+              <p className="device-value">
+                applied：{nativeMeta.replayGainDb === null ? '—' : `${nativeMeta.replayGainDb.toFixed(1)} dB`}
+              </p>
+              <p className="device-hint">
+                track tag：
+                {typeof state.currentTrack?.replayGainTrackGainDb === 'number'
+                  ? `${state.currentTrack.replayGainTrackGainDb.toFixed(1)} dB`
+                  : '—'}{' '}
+                · album tag：
+                {typeof state.currentTrack?.replayGainAlbumGainDb === 'number'
+                  ? `${state.currentTrack.replayGainAlbumGainDb.toFixed(1)} dB`
+                  : '—'}
+              </p>
+            </div>
+            <div className="device-controls" style={{ gap: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={replayGainSettings.enabled}
+                  onChange={(e) =>
+                    setReplayGainSettings((prev) => ({ ...prev, enabled: e.target.checked }))
+                  }
+                />
+                启用
+              </label>
+              <select
+                value={replayGainSettings.mode}
+                onChange={(e) =>
+                  setReplayGainSettings((prev) => ({
+                    ...prev,
+                    mode: (e.target.value === 'album' ? 'album' : 'track') as ReplayGainMode,
+                  }))
+                }
+                aria-label="ReplayGain 模式"
+              >
+                <option value="track">Track</option>
+                <option value="album">Album</option>
+              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Preamp</span>
+                <input
+                  type="number"
+                  step={0.5}
+                  value={replayGainSettings.preampDb}
+                  onChange={(e) =>
+                    setReplayGainSettings((prev) => ({ ...prev, preampDb: Number(e.target.value) }))
+                  }
+                  style={{ width: 72 }}
+                />
+                <span>dB</span>
+              </label>
+              <button type="button" onClick={() => void handleApplyReplayGainSettings()}>
+                应用
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">EQ（3-band）</p>
+              <p className="device-hint">Low shelf 120Hz · Peak 1kHz · High shelf 8kHz</p>
+            </div>
+            <div className="device-controls" style={{ gap: 10 }}>
+              <button type="button" onClick={() => void handleEqReset()}>
+                EQ 归零
+              </button>
+            </div>
+          </div>
+
+          {eqBands.map((band, index) => (
+            <div key={`${band.kind}-${band.frequencyHz}`} className="volume-row">
+              <label htmlFor={`native-debug-eq-${index}`}>
+                {band.kind} {Math.round(band.frequencyHz)}Hz：{band.gainDb.toFixed(1)} dB
+              </label>
+              <input
+                id={`native-debug-eq-${index}`}
+                type="range"
+                min={-12}
+                max={12}
+                step={0.5}
+                value={band.gainDb}
+                onChange={(e) => void handleEqBandGainChange(index, Number(e.target.value))}
+              />
+              <button type="button" onClick={() => void handleEqBandGainChange(index, 0)}>
+                归零
+              </button>
+            </div>
+          ))}
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">Limiter</p>
+              <p className="device-hint">Peak limiter (post EQ)</p>
+            </div>
+            <div className="device-controls" style={{ gap: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={limiterEnabled}
+                  onChange={(e) => void handleLimiterToggle(e.target.checked)}
+                />
+                Enabled
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleLimiterThresholdChange(-1)}
+                disabled={!limiterEnabled}
+              >
+                Default (-1dB)
+              </button>
+            </div>
+          </div>
+
+          <div className="volume-row">
+            <label htmlFor="native-debug-limiter-threshold">
+              Threshold: {limiterThresholdDb.toFixed(1)} dB
+            </label>
+            <input
+              id="native-debug-limiter-threshold"
+              type="range"
+              min={-24}
+              max={0}
+              step={0.5}
+              value={limiterThresholdDb}
+              disabled={!limiterEnabled}
+              onChange={(e) => void handleLimiterThresholdChange(Number(e.target.value))}
+            />
           </div>
 
           <div className="device-row">

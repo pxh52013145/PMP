@@ -45,10 +45,36 @@ type PluginRuntime = {
 
 const runtimeCache = new Map<string, Promise<PluginRuntime>>();
 
+function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(data.byteLength);
+  new Uint8Array(buffer).set(data);
+  return buffer;
+}
+
+async function sha256Hex(data: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(data));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function sha256HexFromString(text: string): Promise<string> {
+  return sha256Hex(new TextEncoder().encode(text));
+}
+
 async function loadPluginRuntime(pluginId: string): Promise<PluginRuntime> {
   const installed = getInstalledPmpmPlugin(pluginId);
   if (!installed) {
     throw new Error(`Plugin not installed: ${pluginId}`);
+  }
+
+  if (installed.entrySha256) {
+    const computed = await sha256HexFromString(installed.entryCode);
+    if (computed !== installed.entrySha256) {
+      throw new Error(
+        `Plugin integrity check failed (entrySha256 mismatch). Please reinstall: ${pluginId}`
+      );
+    }
   }
 
   const blob = new Blob([installed.entryCode], { type: 'text/javascript' });
@@ -80,7 +106,10 @@ async function loadPluginRuntime(pluginId: string): Promise<PluginRuntime> {
 function ensurePluginRuntime(pluginId: string): Promise<PluginRuntime> {
   const existing = runtimeCache.get(pluginId);
   if (existing) return existing;
-  const promise = loadPluginRuntime(pluginId);
+  const promise = loadPluginRuntime(pluginId).catch((err) => {
+    runtimeCache.delete(pluginId);
+    throw err;
+  });
   runtimeCache.set(pluginId, promise);
   return promise;
 }
@@ -92,22 +121,99 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const permissions = useMemo(() => {
+    const installed = getInstalledPmpmPlugin(pluginId);
+    return new Set(installed?.manifest.permissions ?? []);
+  }, [pluginId]);
+
   const api = useMemo<PluginMountApi>(() => {
+    const allowAudioState = permissions.has('api:audio-state');
+    const allowAudioControl = permissions.has('api:audio-control');
+    const allowNavigation = permissions.has('api:navigation');
+
+    const warnDenied = (capability: string, action: string) => {
+      console.warn(`[PluginMagnetHost] Permission denied (${capability}): ${pluginId} -> ${action}`);
+    };
+
     return {
       audio: {
-        getState: () => audioService.getState(),
-        onStateChange: (cb) => audioService.onStateChange((state) => cb(state)),
-        onTimeUpdate: (cb) => audioService.onTimeUpdate(cb),
-        onEnded: (cb) => audioService.onEnded(cb),
-        play: () => audioService.play(),
-        pause: () => audioService.pause(),
-        stop: () => audioService.stop(),
-        seek: (time) => audioService.seek(time),
-        setVolume: (volume) => audioService.setVolume(volume),
-        toggleMute: () => audioService.toggleMute(),
+        getState: () => {
+          if (!allowAudioState) {
+            warnDenied('api:audio-state', 'audio.getState()');
+            return null;
+          }
+          return audioService.getState();
+        },
+        onStateChange: (cb) => {
+          if (!allowAudioState) {
+            warnDenied('api:audio-state', 'audio.onStateChange(cb)');
+            return () => {};
+          }
+          return audioService.onStateChange((state) => cb(state));
+        },
+        onTimeUpdate: (cb) => {
+          if (!allowAudioState) {
+            warnDenied('api:audio-state', 'audio.onTimeUpdate(cb)');
+            return () => {};
+          }
+          return audioService.onTimeUpdate(cb);
+        },
+        onEnded: (cb) => {
+          if (!allowAudioState) {
+            warnDenied('api:audio-state', 'audio.onEnded(cb)');
+            return () => {};
+          }
+          return audioService.onEnded(cb);
+        },
+        play: async () => {
+          if (!allowAudioControl) {
+            warnDenied('api:audio-control', 'audio.play()');
+            return;
+          }
+          await audioService.play();
+        },
+        pause: () => {
+          if (!allowAudioControl) {
+            warnDenied('api:audio-control', 'audio.pause()');
+            return;
+          }
+          return audioService.pause();
+        },
+        stop: () => {
+          if (!allowAudioControl) {
+            warnDenied('api:audio-control', 'audio.stop()');
+            return;
+          }
+          audioService.stop();
+        },
+        seek: (time) => {
+          if (!allowAudioControl) {
+            warnDenied('api:audio-control', `audio.seek(${time})`);
+            return;
+          }
+          audioService.seek(time);
+        },
+        setVolume: (volume) => {
+          if (!allowAudioControl) {
+            warnDenied('api:audio-control', `audio.setVolume(${volume})`);
+            return;
+          }
+          audioService.setVolume(volume);
+        },
+        toggleMute: () => {
+          if (!allowAudioControl) {
+            warnDenied('api:audio-control', 'audio.toggleMute()');
+            return;
+          }
+          audioService.toggleMute();
+        },
       },
       navigation: {
         navigateTo: (page, params) => {
+          if (!allowNavigation) {
+            warnDenied('api:navigation', `navigation.navigateTo(${page})`);
+            return;
+          }
           if (params === undefined) {
             if (PAGES_REQUIRING_PARAMS.has(page)) {
               console.warn(`[PluginMagnetHost] navigateTo(${page}) requires params; ignoring request.`);
@@ -122,13 +228,19 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
             navigation.navigateTo(page as PageWithoutParams);
             return;
           }
-
+ 
           navigation.navigateTo(page as PageWithParams, params as never);
         },
-        goBack: () => navigation.goBack(),
+        goBack: () => {
+          if (!allowNavigation) {
+            warnDenied('api:navigation', 'navigation.goBack()');
+            return;
+          }
+          navigation.goBack();
+        },
       },
     };
-  }, [audioService, navigation]);
+  }, [audioService, navigation, permissions, pluginId]);
 
   useEffect(() => {
     const container = containerRef.current;
