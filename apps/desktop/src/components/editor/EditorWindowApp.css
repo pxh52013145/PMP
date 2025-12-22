@@ -35,6 +35,29 @@
   --editor-window-glass-blur: 0px;
 }
 
+.editor-window-app.editor-window-app--tauri .editor-statistics::before,
+.editor-window-app.editor-window-app--tauri .editor-magnet-library::before,
+.editor-window-app.editor-window-app--tauri .editor-style-editor::before,
+.editor-window-app.editor-window-app--tauri .editor-help::before,
+.editor-window-app.editor-window-app--tauri .editor-debug::before,
+.editor-window-app.editor-window-app--tauri .editor-creator::before,
+.editor-window-app.editor-window-app--tauri .background-manager::before,
+.editor-window-app.editor-window-app--tauri .editor-custom-background::before {
+  /* Windows: `backdrop-filter: blur(0px)` can still trigger expensive composition/flicker while dragging. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.editor-window-app.editor-window-app--tauri .draggable-control-panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.editor-window-app.editor-window-app--tauri .control-header::before,
+.editor-window-app.editor-window-app--tauri .control-header::after {
+  filter: none;
+}
+
 .editor-window-app.editor-window-app--effects-ready:not(.editor-window-app--tauri) {
   --editor-window-glass-blur: 12px;
 }
@@ -53,6 +76,7 @@
 .editor-window-app.editor-window-app--background .editor-magnet-library::before,
 .editor-window-app.editor-window-app--background .editor-style-editor::before,
 .editor-window-app.editor-window-app--background .editor-help::before,
+.editor-window-app.editor-window-app--background .editor-debug::before,
 .editor-window-app.editor-window-app--background .editor-creator::before,
 .editor-window-app.editor-window-app--background .background-manager::before,
 .editor-window-app.editor-window-app--background .editor-custom-background::before {
@@ -72,6 +96,7 @@
 .editor-magnet-library,
 .editor-style-editor,
 .editor-help,
+.editor-debug,
 .editor-creator,
 .background-manager,
 .editor-custom-background {
@@ -108,6 +133,7 @@
 .editor-magnet-library::before,
 .editor-style-editor::before,
 .editor-help::before,
+.editor-debug::before,
 .editor-creator::before,
 .background-manager::before,
 .editor-custom-background::before {
@@ -129,6 +155,7 @@
 .editor-window-app.editor-window-app--scrolling .editor-magnet-library::before,
 .editor-window-app.editor-window-app--scrolling .editor-style-editor::before,
 .editor-window-app.editor-window-app--scrolling .editor-help::before,
+.editor-window-app.editor-window-app--scrolling .editor-debug::before,
 .editor-window-app.editor-window-app--scrolling .editor-creator::before,
 .editor-window-app.editor-window-app--scrolling .background-manager::before,
 .editor-window-app.editor-window-app--scrolling .editor-custom-background::before {
@@ -195,6 +222,7 @@
 .editor-magnet-library *,
 .editor-style-editor *,
 .editor-help *,
+.editor-debug *,
 .editor-creator *,
 .background-manager *,
 .editor-custom-background * {

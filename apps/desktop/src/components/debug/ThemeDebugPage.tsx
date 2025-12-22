@@ -24,13 +24,16 @@ const LEGACY_THEME_KEYS: Record<string, string[]> = {
   'btn-volume': ['volume-control'],
 };
 
-function resolveVariantFromTheme(themeValue: any, componentId: string, fallback: string): string {
-  const direct = themeValue?.componentThemes?.[componentId]?.variant;
+function resolveVariantFromTheme(themeValue: unknown, componentId: string, fallback: string): string {
+  type ThemeLike = { componentThemes?: Record<string, { variant?: unknown }> };
+  const componentThemes = (themeValue as ThemeLike | null | undefined)?.componentThemes;
+
+  const direct = componentThemes?.[componentId]?.variant;
   if (typeof direct === 'string') return direct;
 
   const legacyKeys = LEGACY_THEME_KEYS[componentId] ?? [];
   for (const legacyKey of legacyKeys) {
-    const legacyVariant = themeValue?.componentThemes?.[legacyKey]?.variant;
+    const legacyVariant = componentThemes?.[legacyKey]?.variant;
     if (typeof legacyVariant === 'string') return legacyVariant;
   }
 
@@ -107,7 +110,7 @@ export const ThemeDebugPage: React.FC = () => {
   };
 
   return (
-    <div className="theme-debug-page">
+    <div className="editor-debug">
       {/* 拖动区域标题栏 */}
       <div className="debug-header" data-tauri-drag-region>
         <div className="header-content" data-tauri-drag-region>
@@ -277,20 +280,26 @@ export const ThemeDebugPage: React.FC = () => {
               <div className="action-buttons">
                 <button
                   className="action-btn primary"
-                  onClick={async () => {
-                    try {
-                      // 使用 File System Access API
-                      // @ts-ignore
-                      if (window.showOpenFilePicker) {
-                        // @ts-ignore
-                        const [fileHandle] = await window.showOpenFilePicker({
-                          types: [
-                            {
-                              description: 'Theme Files',
-                              accept: { 'application/json': ['.pmpt', '.json'] },
-                            },
-                          ],
-                        });
+	                  onClick={async () => {
+	                    try {
+	                      // 使用 File System Access API
+	                      const showOpenFilePicker = (window as unknown as {
+	                        showOpenFilePicker?: (options: {
+	                          types?: Array<{
+	                            description?: string;
+	                            accept?: Record<string, string[]>;
+	                          }>;
+	                        }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+	                      }).showOpenFilePicker;
+	                      if (showOpenFilePicker) {
+	                        const [fileHandle] = await showOpenFilePicker({
+	                          types: [
+	                            {
+	                              description: 'Theme Files',
+	                              accept: { 'application/json': ['.pmpt', '.json'] },
+	                            },
+	                          ],
+	                        });
                          const file = await fileHandle.getFile();
                          const text = await file.text();
                          const importedTheme = JSON.parse(text);

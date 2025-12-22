@@ -22,6 +22,7 @@
 - `entryPoint: string`
 - `magnet?: { defaultAnchor?, defaultStyle? }`（用于生成 Magnet 模板）
 - `permissions?: string[]`（现状**仅存储**，尚未裁剪/治理）
+- `contributions?: { commands?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, settingsPanels?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, visualizers?: Array<{ id, title, description?, inputs?, group?, order?, tags?, metadata? }> }`（R2）
 
 ## 3) 插件入口导出（As-Is）
 
@@ -31,25 +32,60 @@
 export function mount(container: HTMLElement, api: PluginMountApi): void | (() => void);
 ```
 
-可选导出：
+可选导出（现状代码已支持的 surface）：
 
 ```ts
 export function unmount?(container: HTMLElement): void;
 export default { mount, unmount? };
 ```
 
+```ts
+export function mountSettings?(
+  container: HTMLElement,
+  api: PluginMountApi,
+  panelId?: string
+): void | (() => void);
+
+export function mountPage?(
+  container: HTMLElement,
+  api: PluginMountApi,
+  pageId: string
+): void | (() => void);
+
+export function mountVisualizer?(
+  container: HTMLElement,
+  api: PluginMountApi,
+  visualizerId: string
+): void | (() => void);
+
+export function mountWindow?(
+  container: HTMLElement,
+  api: PluginMountApi,
+  windowId: string
+): void | (() => void);
+
+export function runCommand?(
+  api: PluginMountApi,
+  commandId: string,
+  args?: unknown
+): void | Promise<void>;
+```
+
 > 卸载时：宿主会调用 cleanup（若 `mount()` 返回函数），并清空 container。
 
 ## 4) Host API（As-Is：当前注入能力）
 
-注入实现：`apps/desktop/src/magnet-system/plugins/PluginMagnetHost.tsx`
+注入实现：
+- Magnet host：`apps/desktop/src/magnet-system/plugins/PluginMagnetHost.tsx`（历史实现，能力较少）
+- Settings/Page/Visualizer/Window/Command：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied 记录）
 
 当前 API（最小集）：
 - `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute`）
 - `navigation`：页面跳转与返回（`navigateTo/goBack`）
 
 限制（现状）：
-- `manifest.permissions` 尚未真正裁剪注入（治理/审计在 R3/R5 补齐）。
+- `manifest.permissions` 已在 host 侧做最小 gate（`pluginHostApi.ts`），但治理/审计/UI 可见性仍需在 R3/R5 补齐。
+- `navigation.navigateTo(page, params)` 的 params 需要满足 Navigation 契约（统一校验入口见 `docs/architecture/contracts/navigation.md`）。
 - API 未版本化（建议先在 contracts 中定义 To-Be 的 `apiVersion` 与兼容策略，见 `docs/architecture/contracts/versioning.md`）。
 
 ## 5) To-Be（规划：贡献点 + SDK + 治理）
