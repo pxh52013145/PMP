@@ -100,11 +100,18 @@ export const STORAGE_KEYS = {
   NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
+  NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph（object）
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
   NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings（object）
 
   // === Plugins (.pmpm) ===
   PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
+
+  // === Shader Packs (.pmps) ===
+  PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）
+  PMPS_MAGNET_SHADER_BINDINGS: 'pixel-matrix-pmps-magnet-shader-bindings', // Magnet -> shader binding
+  PMPS_MAGNET_UNIFORMS: 'pixel-matrix-pmps-magnet-uniforms', // Magnet -> shader uniforms overrides
+  PMPS_SHADER_FUSE: 'pixel-matrix-pmps-shader-fuse', // shader runtime error fuse
 
   // === Theme ===
   THEME_CONFIG: 'pixel-matrix-theme-config',
@@ -164,6 +171,7 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
   NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',
   NATIVE_AUDIO_DSP_CHAIN_UPDATED: 'native-audio-dsp-chain-updated',
+  NATIVE_AUDIO_DSP_GRAPH_UPDATED: 'native-audio-dsp-graph-updated',
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',
   NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED: 'native-audio-crossfade-settings-updated',
 
@@ -172,6 +180,13 @@ export const TAURI_EVENTS = {
 
   // Plugins (.pmpm)
   PMPM_PLUGINS_UPDATED: 'pmpm-plugins-updated',
+  PMPM_PLUGIN_CONFIG_UPDATED: 'pmpm-plugin-config-updated',
+
+  // Shader Packs (.pmps)
+  PMPS_SHADERS_UPDATED: 'pmps-shaders-updated',
+  PMPS_MAGNET_SHADER_BINDINGS_UPDATED: 'pmps-magnet-shader-bindings-updated',
+  PMPS_UNIFORMS_UPDATED: 'pmps-uniforms-updated',
+  PMPS_SHADER_FUSE_UPDATED: 'pmps-shader-fuse-updated',
 } as const;
 
 /**

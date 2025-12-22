@@ -1,0 +1,292 @@
+.shader-debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pmps-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pmps-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.pmps-meta-label {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.pmps-meta-value {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  color: rgba(0, 255, 136, 0.95);
+}
+
+.pmps-install {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pmps-file-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.pmps-file-upload input[type='file'] {
+  display: none;
+}
+
+.pmps-section {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  padding: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.pmps-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.pmps-muted {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.pmps-select {
+  width: 100%;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+}
+
+.pmps-binding-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pmps-binding-actions button {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.pmps-binding-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pmps-binding-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.pmps-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.pmps-setting input,
+.pmps-setting select {
+  padding: 0.45rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+}
+
+.pmps-preview {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.pmps-detected {
+  font-size: 0.85rem;
+}
+
+.pmps-detected summary {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.pmps-detected-list {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pmps-detected-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pmps-detected-type {
+  color: rgba(255, 255, 255, 0.7);
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.8rem;
+}
+
+.pmps-uniforms {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pmps-uniforms-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pmps-uniforms-actions button {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.pmps-uniform-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.pmps-uniform-group-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(0, 255, 136, 0.85);
+}
+
+.pmps-uniform-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pmps-uniform-label {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: 'Fira Code', 'Consolas', monospace;
+}
+
+.pmps-number-controls,
+.pmps-color-controls,
+.pmps-vec-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pmps-number-controls input[type='range'] {
+  width: 140px;
+}
+
+.pmps-number {
+  width: 90px;
+}
+
+.pmps-vec-controls input[type='number'] {
+  width: 70px;
+}
+
+.pmps-alpha {
+  width: 100px;
+}
+
+.pmps-alpha-label {
+  width: 42px;
+  text-align: right;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Installed packs grid (scoped to this panel to avoid leaking styles) */
+.shader-debug-panel .shader-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.shader-debug-panel .shader-card {
+  aspect-ratio: 2/1;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: rgba(0, 0, 0, 0.9);
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  border: 2px solid transparent;
+  position: relative;
+  padding: 0.25rem 0.5rem;
+}
+
+.shader-debug-panel .shader-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.shader-debug-panel .shader-card.selected {
+  border-color: rgba(0, 255, 136, 0.95);
+  box-shadow: 0 0 16px rgba(0, 255, 136, 0.35);
+}
+
+.shader-debug-panel .shader-card.selected::after {
+  content: '✓';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  background: rgba(0, 255, 136, 0.95);
+  color: #000;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+}

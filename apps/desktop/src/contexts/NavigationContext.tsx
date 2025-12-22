@@ -12,6 +12,8 @@ export type NavigationPageType =
   | 'track'
   | 'album'
   | 'artist'
+  | 'plugin-page'
+  | 'plugin-visualizer'
   | 'native-debug';
 
 export type NavigationParamsMap = {
@@ -24,6 +26,8 @@ export type NavigationParamsMap = {
   track: Record<string, any>;
   album: Record<string, any>;
   artist: Record<string, any>;
+  'plugin-page': Record<string, any>;
+  'plugin-visualizer': Record<string, any>;
 };
 
 /**

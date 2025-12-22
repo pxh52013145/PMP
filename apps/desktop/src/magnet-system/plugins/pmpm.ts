@@ -36,7 +36,107 @@ export type InstalledPmpmPlugin = {
   packageSha256?: string;
   manifestSha256?: string;
   entrySha256?: string;
+  enabled?: boolean;
+  disabledReason?: 'manual' | 'crash';
+  lastError?: string;
+  lastErrorAt?: number;
 };
+
+export type PmpmPluginCrashSurface = 'magnet' | 'settings' | 'page' | 'visualizer' | 'window';
+
+type PluginStoreListener = () => void;
+
+let pluginStoreRevision = 0;
+const pluginStoreListeners = new Set<PluginStoreListener>();
+let pluginStoreSyncDisposer: null | (() => void) = null;
+
+function notifyPluginStoreChanged(): void {
+  pluginStoreRevision += 1;
+  for (const listener of Array.from(pluginStoreListeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn('[pmpm] plugin store listener failed', error);
+    }
+  }
+}
+
+function ensurePluginStoreCrossWindowSync(): void {
+  if (typeof window === 'undefined') return;
+  if (pluginStoreSyncDisposer) return;
+
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== STORAGE_KEYS.PMPM_PLUGINS) return;
+    notifyPluginStoreChanged();
+  };
+
+  window.addEventListener('storage', onStorage);
+
+  let disposed = false;
+  let unlistenTauri: null | (() => void) = null;
+
+  void import('../../utils/windowCommunication')
+    .then(({ setupTauriListenerWithPayload }) =>
+      setupTauriListenerWithPayload<{ key?: string }>(TAURI_EVENTS.PMPM_PLUGINS_UPDATED, (payload) => {
+        if (payload?.key && payload.key !== STORAGE_KEYS.PMPM_PLUGINS) return;
+        notifyPluginStoreChanged();
+      })
+    )
+    .then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenTauri = unlisten;
+    })
+    .catch(() => {
+      // ignore (web runtime or tauri listener not available)
+    });
+
+  pluginStoreSyncDisposer = () => {
+    disposed = true;
+    window.removeEventListener('storage', onStorage);
+    try {
+      unlistenTauri?.();
+    } catch {
+      // ignore
+    }
+    pluginStoreSyncDisposer = null;
+  };
+}
+
+export function getPmpmPluginsRevision(): number {
+  return pluginStoreRevision;
+}
+
+export function subscribePmpmPlugins(listener: PluginStoreListener): () => void {
+  pluginStoreListeners.add(listener);
+  ensurePluginStoreCrossWindowSync();
+
+  return () => {
+    pluginStoreListeners.delete(listener);
+    if (pluginStoreListeners.size === 0) {
+      pluginStoreSyncDisposer?.();
+    }
+  };
+}
+
+export function getPmpmPluginEffectivePermissions(pluginId: string): Set<string> {
+  const plugin = getInstalledPmpmPlugin(pluginId);
+  if (!plugin || plugin.enabled === false) return new Set();
+  return new Set(plugin.manifest.permissions ?? []);
+}
+
+export function recordPmpmPermissionDenied(options: {
+  pluginId: string;
+  hostLabel: string;
+  capability: string;
+  action: string;
+}): void {
+  console.warn(
+    `[pmpm][permission] denied plugin=${options.pluginId} host=${options.hostLabel} capability=${options.capability} action=${options.action}`
+  );
+}
 
 function toArrayBuffer(data: Uint8Array): ArrayBuffer {
   const buffer = new ArrayBuffer(data.byteLength);
@@ -95,6 +195,7 @@ export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
 
 function saveInstalledPmpmPlugins(plugins: InstalledPmpmPlugin[]): void {
   if (typeof window === 'undefined') return;
+  notifyPluginStoreChanged();
   // Keep localStorage as the source of truth, but also fan out a Tauri event so
   // other windows can refresh plugin renderer registrations.
   void broadcastDataUpdate(STORAGE_KEYS.PMPM_PLUGINS, plugins, TAURI_EVENTS.PMPM_PLUGINS_UPDATED);
@@ -162,6 +263,40 @@ export async function installPmpmPluginFromFilePath(filePath: string): Promise<I
 export function uninstallPmpmPlugin(id: string): void {
   const plugins = loadInstalledPmpmPlugins();
   saveInstalledPmpmPlugins(plugins.filter((plugin) => plugin.manifest.metadata.id !== id));
+}
+
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.stack || error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+export function recordPmpmPluginCrash(
+  pluginId: string,
+  error: unknown,
+  surface: PmpmPluginCrashSurface
+): void {
+  const plugins = loadInstalledPmpmPlugins();
+  const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
+  if (index < 0) return;
+
+  const now = Date.now();
+  const message = formatErrorMessage(error).slice(0, 2000);
+  const lastError = `[${surface}] ${message}`;
+
+  plugins[index] = {
+    ...plugins[index],
+    enabled: false,
+    disabledReason: 'crash',
+    lastError,
+    lastErrorAt: now,
+  };
+
+  saveInstalledPmpmPlugins(plugins);
 }
 
 function buildAnchorsFromManifest(plugin: InstalledPmpmPlugin): Pick<Magnet, 'anchorType' | 'anchors'> {
@@ -249,6 +384,8 @@ export function getPluginRendererDefinition(id: string): MagnetRendererDefinitio
   const plugin = getInstalledPmpmPlugin(id);
   if (!plugin) return null;
 
+  const enabled = plugin.enabled ?? true;
+
   return {
     id,
     source: 'plugin',
@@ -258,8 +395,45 @@ export function getPluginRendererDefinition(id: string): MagnetRendererDefinitio
     metadata: {
       pluginVersion: plugin.manifest.metadata.version,
       permissions: plugin.manifest.permissions ?? [],
+      enabled,
     },
-    render: () => React.createElement(PluginMagnetHost, { pluginId: id }),
+    render: () =>
+      enabled
+        ? React.createElement(PluginMagnetHost, { pluginId: id })
+        : React.createElement(DisabledPluginMagnet, { pluginId: id }),
     preview: plugin.manifest.metadata.name,
   };
+}
+
+function DisabledPluginMagnet({ pluginId }: { pluginId: string }) {
+  const plugin = getInstalledPmpmPlugin(pluginId);
+  const name = plugin?.manifest.metadata.name ?? pluginId;
+  const reason = plugin?.disabledReason;
+  const lastError = plugin?.lastError;
+
+  return React.createElement(
+    'div',
+    {
+      style: {
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        gap: 6,
+        padding: 10,
+        boxSizing: 'border-box',
+        color: 'rgba(255,255,255,0.78)',
+      },
+    },
+    React.createElement('div', { style: { fontWeight: 700 } }, name || pluginId),
+    React.createElement(
+      'div',
+      { style: { fontSize: 12, opacity: 0.75 } },
+      reason === 'crash' ? 'Plugin disabled (crashed)' : 'Plugin disabled'
+    ),
+    lastError
+      ? React.createElement('div', { style: { fontSize: 11, opacity: 0.7, whiteSpace: 'pre-wrap' } }, lastError)
+      : null
+  );
 }
