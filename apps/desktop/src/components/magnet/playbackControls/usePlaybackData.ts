@@ -4,13 +4,14 @@
  */
 
 import { useState, useEffect } from 'react';
+import type { Track } from '../../../services/audio';
 import { PlaybackState } from '../../../services/audio';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 
 export interface PlaybackData {
   playbackState: PlaybackState;
   hasQueue: boolean;
-  currentTrack: any;
+  currentTrack: Track | null;
   queueLength: number;
 }
 
@@ -21,7 +22,7 @@ export function usePlaybackData(): PlaybackData {
   const audioService = useAudioService();
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [hasQueue, setHasQueue] = useState(false);
-  const [currentTrack, setCurrentTrack] = useState<any>(null);
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queueLength, setQueueLength] = useState(0);
 
   useEffect(() => {

@@ -103,7 +103,7 @@ export async function parseAudioFile(file: File): Promise<Track> {
     const format = metadata.format;
 
     // 获取文件路径（如果存在）
-    const path = (file as any).webkitRelativePath || file.name;
+    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
 
     // 提取封面 - 转换为 Base64 Data URL 以便持久化存储
     let coverUrl: string | undefined;
@@ -144,7 +144,7 @@ export async function parseAudioFile(file: File): Promise<Track> {
   } catch (error) {
     console.error('Failed to parse audio file:', error);
     // 如果解析失败，返回基本信息
-    const path = (file as any).webkitRelativePath || file.name;
+    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     return {
       id: generateId(),
       title: file.name.replace(/\.[^/.]+$/, ''),

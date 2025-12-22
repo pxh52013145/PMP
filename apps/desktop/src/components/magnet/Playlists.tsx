@@ -38,12 +38,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   }, [audioService]);
 
   useEffect(() => {
-    if (showAddTrackModal) {
-      void loadAvailableTracks(searchQuery);
-    }
-  }, [showAddTrackModal]);
-
-  useEffect(() => {
     if (!showAddTrackModal) return;
     const handle = setTimeout(() => {
       void loadAvailableTracks(searchQuery);

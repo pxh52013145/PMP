@@ -20,13 +20,12 @@ import { readJson, writeJson, writeString } from '../../modules/storage';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
 import {
   createMagnetTemplateFromPlugin,
+  installPmpmPluginFromFilePath,
   loadInstalledPmpmPlugins,
   parsePmpmPluginFromFilePath,
   uninstallPmpmPlugin,
-  upsertInstalledPmpmPlugin,
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
-import { syncPmpmPluginRenderers } from '../../magnet-system/plugins/pluginRegistry';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -168,7 +167,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       setCreatorWindowOpen(isOpen);
     };
 
-    let cleanupPromise = setupConfigSync(
+    const cleanupPromise = setupConfigSync(
       [STORAGE_KEYS.CREATOR_WINDOW_OPEN],
       [TAURI_EVENTS.CREATOR_WINDOW_OPENED, TAURI_EVENTS.CREATOR_WINDOW_CLOSED],
       reloadStatus
@@ -180,7 +179,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   }, []);
 
   const reloadPlugins = useCallback(() => {
-    syncPmpmPluginRenderers();
     setInstalledPlugins(loadInstalledPmpmPlugins());
   }, []);
 
@@ -353,7 +351,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       if (!window.confirm(confirmText)) return;
 
-      upsertInstalledPmpmPlugin(plugin);
+      await installPmpmPluginFromFilePath(filePath);
       reloadPlugins();
 
       if (!magnetLibrary.some((m) => m.id === meta.id)) {
@@ -583,7 +581,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
           {displayMagnets.length === 0 ? (
             <div className="empty-state">
               {viewMode === 'active' ? '没有已使用的 Magnet' : '没有未使用的 Magnet'}
-              {filterMode !== 'all' && <div className="empty-hint">尝试切换到"全部"查看</div>}
+              {filterMode !== 'all' && <div className="empty-hint">尝试切换到“全部”查看</div>}
             </div>
           ) : (
             displayMagnets.map((magnet) => {

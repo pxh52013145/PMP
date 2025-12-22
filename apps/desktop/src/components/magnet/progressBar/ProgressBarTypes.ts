@@ -13,6 +13,5 @@ export interface ProgressBarVariantProps {
   data: ProgressBarData;
   logic: ProgressBarLogic;
   dynamicColors?: DynamicColors;
-  variantConfig?: any;
+  variantConfig?: unknown;
 }
-

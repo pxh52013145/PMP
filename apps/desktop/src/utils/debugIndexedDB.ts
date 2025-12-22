@@ -60,7 +60,11 @@ export async function clearIndexedDB() {
 
 // 在浏览器控制台中可用
 if (typeof window !== 'undefined') {
-  (window as any).debugIndexedDB = debugIndexedDB;
-  (window as any).clearIndexedDB = clearIndexedDB;
+  const win = window as unknown as Window & {
+    debugIndexedDB?: typeof debugIndexedDB;
+    clearIndexedDB?: typeof clearIndexedDB;
+  };
+  win.debugIndexedDB = debugIndexedDB;
+  win.clearIndexedDB = clearIndexedDB;
   console.log('Debug tools available: debugIndexedDB(), clearIndexedDB()');
 }

@@ -1,14 +1,14 @@
 import { Magnet } from '../../types/pixel';
 
 /**
- * 调试按钮 Magnet
+ * 设置按钮 Magnet（历史 id：btn-debug）
  * 位置：(0, 19) - 左下角
- * 用于打开主题系统调试页面
+ * 用于切换到 Settings 页面
  */
 export const DEBUG_BUTTON_MAGNET: Magnet = {
   id: 'btn-debug',
   type: 'custom',
-  name: '调试',
+  name: '设置',
 
   // 单点锚定在左下角
   anchorType: 'single',
@@ -53,7 +53,7 @@ export const DEBUG_BUTTON_MAGNET: Magnet = {
     draggable: true,
     clickable: true,
     onClick: () => {
-      console.log('打开调试页面');
+      console.log('打开设置');
     },
   },
 };

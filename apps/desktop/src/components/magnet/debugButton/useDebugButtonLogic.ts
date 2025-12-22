@@ -1,9 +1,9 @@
 /**
  * DebugButton 逻辑层 Hook
- * 负责调试窗口打开/关闭逻辑
+ * 历史为调试按钮（id: btn-debug），现用于 Settings 页面切换
  */
 
-import { isTauriRuntime } from '../../../utils/tauriRuntime';
+import { useNavigation } from '../../../contexts/NavigationContext';
 
 export interface DebugButtonLogic {
   toggleDebugWindow: (isOpen: boolean, setIsOpen: (value: boolean) => void) => Promise<void>;
@@ -11,50 +11,31 @@ export interface DebugButtonLogic {
   getButtonIcon: () => string;
 }
 
-/**
- * DebugButton的逻辑层
- */
 export function useDebugButtonLogic(): DebugButtonLogic {
+  const navigation = useNavigation();
+
   const toggleDebugWindow = async (isOpen: boolean, setIsOpen: (value: boolean) => void) => {
     try {
-      if (!isTauriRuntime()) {
-        // Web/Vite fallback: open debug page in the same window (no multi-window support).
-        if (isOpen) {
-          window.location.hash = '';
-          setIsOpen(false);
-        } else {
-          window.location.hash = '#/editor/debug';
-          setIsOpen(true);
-        }
+      if (isOpen) {
+        navigation.goBack();
+        setIsOpen(false);
         return;
       }
 
-      if (isOpen) {
-        // 关闭窗口
-        const { closeEditorWindow } = await import('../../../utils/editorWindows');
-        await closeEditorWindow('debug');
-        setIsOpen(false);
-      } else {
-        // 打开窗口
-        const { openEditorWindow, calculateWindowPosition } = await import(
-          '../../../utils/editorWindows'
-        );
-        const position = await calculateWindowPosition('debug');
-        await openEditorWindow({ type: 'debug', ...position });
-        setIsOpen(true);
-      }
+      navigation.navigateTo('settings');
+      setIsOpen(true);
     } catch (error) {
-      console.error('Failed to toggle debug window:', error);
+      console.error('Failed to toggle settings:', error);
       setIsOpen(false);
     }
   };
 
   const getButtonTitle = (isOpen: boolean): string => {
-    return isOpen ? '关闭调试面板' : '打开调试面板';
+    return isOpen ? '返回上一页' : '打开设置';
   };
 
   const getButtonIcon = (): string => {
-    return '🛠️';
+    return 'SET';
   };
 
   return {
@@ -63,3 +44,4 @@ export function useDebugButtonLogic(): DebugButtonLogic {
     getButtonIcon,
   };
 }
+

@@ -114,15 +114,10 @@ export class NativeAudioService implements IAudioService {
       if (!parsed || typeof parsed !== 'object') {
         return { enabled: false, durationMs: 1200 };
       }
+      const record = parsed as Record<string, unknown>;
 
-      const enabled =
-        'enabled' in parsed && typeof (parsed as any).enabled === 'boolean'
-          ? (parsed as any).enabled
-          : false;
-      const durationMs =
-        'durationMs' in parsed && typeof (parsed as any).durationMs === 'number'
-          ? (parsed as any).durationMs
-          : 1200;
+      const enabled = typeof record.enabled === 'boolean' ? record.enabled : false;
+      const durationMs = typeof record.durationMs === 'number' ? record.durationMs : 1200;
 
       return {
         enabled,
@@ -143,18 +138,12 @@ export class NativeAudioService implements IAudioService {
       if (!parsed || typeof parsed !== 'object') {
         return { enabled: true, mode: 'track', preampDb: 0 };
       }
+      const record = parsed as Record<string, unknown>;
 
-      const enabled =
-        'enabled' in parsed && typeof (parsed as any).enabled === 'boolean'
-          ? (parsed as any).enabled
-          : true;
-      const modeRaw =
-        'mode' in parsed && typeof (parsed as any).mode === 'string' ? (parsed as any).mode : 'track';
+      const enabled = typeof record.enabled === 'boolean' ? record.enabled : true;
+      const modeRaw = typeof record.mode === 'string' ? record.mode : 'track';
       const mode: ReplayGainMode = modeRaw === 'album' ? 'album' : 'track';
-      const preampDb =
-        'preampDb' in parsed && typeof (parsed as any).preampDb === 'number'
-          ? (parsed as any).preampDb
-          : 0;
+      const preampDb = typeof record.preampDb === 'number' ? record.preampDb : 0;
 
       return { enabled, mode, preampDb };
     } catch {

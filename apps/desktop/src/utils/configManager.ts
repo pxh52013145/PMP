@@ -14,9 +14,9 @@ export interface MagnetStateConfig {
   variantConfig?: Record<string, unknown>;
   previewText?: string;
   styleOverride?: {
-    style?: any;
-    animation?: any;
-    content?: any;
+    style?: Magnet['style'];
+    animation?: Magnet['animation'];
+    content?: Magnet['content'];
   };
 }
 
@@ -67,7 +67,7 @@ export function saveConfig(
         const defaultMagnet = defaultMagnetLibrary.find((m) => m.id === magnet.id);
 
         if (defaultMagnet) {
-          const styleOverride: any = {};
+          const styleOverride: NonNullable<MagnetStateConfig['styleOverride']> = {};
           let hasOverride = false;
 
           // 检查 style 是否修改
@@ -218,7 +218,7 @@ export function exportConfig(
       const defaultMagnet = defaultMagnetLibrary.find((m) => m.id === magnet.id);
 
       if (defaultMagnet) {
-        const styleOverride: any = {};
+        const styleOverride: NonNullable<MagnetStateConfig['styleOverride']> = {};
         let hasOverride = false;
 
         if (JSON.stringify(magnet.style) !== JSON.stringify(defaultMagnet.style)) {

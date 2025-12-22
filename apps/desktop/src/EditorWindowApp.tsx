@@ -7,7 +7,6 @@ import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { EditorStatistics } from './components/editor/EditorStatistics';
 import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
 import { StyleEditor } from './components/editor/StyleEditor';
-import { EditorHelp } from './components/editor/EditorHelp';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
@@ -42,12 +41,10 @@ import {
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import { readJson, readString, removeKey, writeJson } from './modules/storage';
-import { syncPmpmPluginRenderers } from './magnet-system/plugins/pluginRegistry';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
 import './components/editor/StyleEditor.css';
-import './components/editor/EditorHelp.css';
 import './components/editor/EditorWindowApp.css';
 import './components/editor/MagnetCreator.css';
 import './components/editor/BackgroundManager.css';
@@ -61,7 +58,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
 
@@ -79,18 +76,18 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         }
       };
 
-      const [statistics, library, style, help, background] = await Promise.all([
+      const [statistics, library, style, debug, background] = await Promise.all([
         getVisible('statistics'),
         getVisible('library'),
         getVisible('style'),
-        getVisible('help'),
+        getVisible('debug'),
         getVisible('background'),
       ]);
 
       setStatisticsOpen(statistics);
       setLibraryOpen(library);
       setStyleOpen(style);
-      setHelpOpen(help);
+      setDebugOpen(debug);
       setBackgroundOpen(background);
     } catch {
       // best-effort: visibility sync is non-critical
@@ -181,23 +178,23 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     }
   };
 
-  const handleToggleHelp = async () => {
-    const newState = !helpOpen;
-    setHelpOpen(newState);
+  const handleToggleDebug = async () => {
+    const newState = !debugOpen;
+    setDebugOpen(newState);
 
     try {
       if (newState) {
         // 打开窗口
         const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('help');
-        await openEditorWindow({ type: 'help', ...position });
+        const position = await calculateWindowPosition('debug');
+        await openEditorWindow({ type: 'debug', ...position });
       } else {
         // 关闭窗口
         const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('help');
+        await closeEditorWindow('debug');
       }
     } catch (error) {
-      console.error('Failed to toggle help window:', error);
+      console.error('Failed to toggle debug window:', error);
     }
   };
 
@@ -317,15 +314,15 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         <span className="glow-label">BG</span>
       </div>
 
-      {/* 帮助开关 */}
+      {/* Debug 开关 */}
       <div className="switch-container">
         <button
-          className={`cyber-switch-btn ${helpOpen ? 'active' : ''}`}
-          onClick={handleToggleHelp}
+          className={`cyber-switch-btn ${debugOpen ? 'active' : ''}`}
+          onClick={handleToggleDebug}
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">help</span>
+        <span className="glow-label">debug</span>
       </div>
     </div>
   );
@@ -335,7 +332,8 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
 const getWindowTypeFromHash = (): string => {
   const hash = window.location.hash;
   const match = hash.match(/#\/editor\/([\w-]+)/);
-  return match ? match[1] : 'control';
+  const raw = match ? match[1] : 'control';
+  return raw === 'help' ? 'debug' : raw;
 };
 
 export function EditorWindowApp() {
@@ -357,18 +355,6 @@ export function EditorWindowApp() {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, []);
-
-  useEffect(() => {
-    syncPmpmPluginRenderers();
-    const cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.PMPM_PLUGINS],
-      [TAURI_EVENTS.PMPM_PLUGINS_UPDATED],
-      syncPmpmPluginRenderers
-    );
-    return () => {
-      cleanupPromise.then((cleanup) => cleanup());
-    };
   }, []);
 
   useEffect(() => {
@@ -407,7 +393,7 @@ export function EditorWindowApp() {
       };
     };
 
-    let cleanupPromise = setup();
+    const cleanupPromise = setup();
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
@@ -501,7 +487,7 @@ export function EditorWindowApp() {
       };
     };
 
-    let cleanupPromise = setup();
+    const cleanupPromise = setup();
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
@@ -627,7 +613,7 @@ export function EditorWindowApp() {
       }, 60);
     };
 
-    let cleanupPromise = setupConfigSync(
+    const cleanupPromise = setupConfigSync(
       [STORAGE_KEYS.CONFIG],
       [
         TAURI_EVENTS.MAGNET_LIBRARY_UPDATED,
@@ -799,7 +785,7 @@ export function EditorWindowApp() {
 
   return (
     <ThemeProvider>
-      <AudioEngineProvider mode="noop">
+      <AudioEngineProvider>
         <NavigationProvider>
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
@@ -826,8 +812,6 @@ export function EditorWindowApp() {
             )}
 
             {windowType === 'style' && <StyleEditor />}
-
-            {windowType === 'help' && <EditorHelp />}
 
             {windowType === 'creator' && (
               <MagnetCreator

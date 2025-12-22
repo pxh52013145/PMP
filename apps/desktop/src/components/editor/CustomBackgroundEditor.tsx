@@ -163,6 +163,18 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   );
 
   // 处理鼠标移动
+  const saveToHistory = useCallback(
+    (rect: typeof cropRect) => {
+      setSelectionHistory((prev) => {
+        const newHistory = prev.slice(0, historyIndex + 1);
+        newHistory.push(rect);
+        return newHistory;
+      });
+      setHistoryIndex((prev) => prev + 1);
+    },
+    [historyIndex]
+  );
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging && !isResizing) return;
@@ -175,7 +187,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       const currentY = ((e.clientY - rect.top) / rect.height) * 100;
 
       setCropRect((prev) => {
-        let newRect = { ...prev };
+        const newRect = { ...prev };
 
         if (isDragging) {
           // 拖动
@@ -192,19 +204,21 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
               newRect.width = Math.max(minSize, Math.min(100 - prev.x, currentX - prev.x));
               newRect.height = Math.max(minSize, Math.min(100 - prev.y, currentY - prev.y));
               break;
-            case 'sw':
+            case 'sw': {
               const newWidth = Math.max(minSize, prev.x + prev.width - currentX);
               newRect.x = Math.max(0, prev.x + prev.width - newWidth);
               newRect.width = newWidth;
               newRect.height = Math.max(minSize, Math.min(100 - prev.y, currentY - prev.y));
               break;
-            case 'ne':
+            }
+            case 'ne': {
               newRect.width = Math.max(minSize, Math.min(100 - prev.x, currentX - prev.x));
               const newHeight = Math.max(minSize, prev.y + prev.height - currentY);
               newRect.y = Math.max(0, prev.y + prev.height - newHeight);
               newRect.height = newHeight;
               break;
-            case 'nw':
+            }
+            case 'nw': {
               const nwNewWidth = Math.max(minSize, prev.x + prev.width - currentX);
               newRect.x = Math.max(0, prev.x + prev.width - nwNewWidth);
               newRect.width = nwNewWidth;
@@ -212,19 +226,22 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
               newRect.y = Math.max(0, prev.y + prev.height - nwNewHeight);
               newRect.height = nwNewHeight;
               break;
-            case 'n':
+            }
+            case 'n': {
               const nNewHeight = Math.max(minSize, prev.y + prev.height - currentY);
               newRect.y = Math.max(0, prev.y + prev.height - nNewHeight);
               newRect.height = nNewHeight;
               break;
+            }
             case 's':
               newRect.height = Math.max(minSize, Math.min(100 - prev.y, currentY - prev.y));
               break;
-            case 'w':
+            case 'w': {
               const wNewWidth = Math.max(minSize, prev.x + prev.width - currentX);
               newRect.x = Math.max(0, prev.x + prev.width - wNewWidth);
               newRect.width = wNewWidth;
               break;
+            }
             case 'e':
               newRect.width = Math.max(minSize, Math.min(100 - prev.x, currentX - prev.x));
               break;
@@ -252,20 +269,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         document.removeEventListener('mouseup', handleMouseUp);
       };
     }
-  }, [isDragging, isResizing, dragStart, cropRect]);
-
-  // 保存到历史记录
-  const saveToHistory = useCallback(
-    (rect: typeof cropRect) => {
-      setSelectionHistory((prev) => {
-        const newHistory = prev.slice(0, historyIndex + 1);
-        newHistory.push(rect);
-        return newHistory;
-      });
-      setHistoryIndex((prev) => prev + 1);
-    },
-    [historyIndex]
-  );
+  }, [isDragging, isResizing, dragStart, cropRect, saveToHistory]);
 
   // 撤销
   const handleUndo = useCallback(() => {
@@ -379,7 +383,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           let persistedUrl: string;
           try {
             stage = 'persist';
-            const appDataDirKey = (fs as any).BaseDirectory?.AppData ?? (fs as any).Dir?.AppData;
+            const appDataDirKey = fs.BaseDirectory.AppData;
             await fs.createDir('background-media', { dir: appDataDirKey, recursive: true });
             await fs.writeBinaryFile({ path: relativePath, contents: blobBytes }, { dir: appDataDirKey });
 
@@ -532,7 +536,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     const imageDisplayUrl = imagePreviewUrl || imageUrl;
     const style = (() => {
       switch (customType) {
-        case 'image':
+        case 'image': {
           if (!imageDisplayUrl) return { background: 'rgba(255, 255, 255, 0.05)' };
 
           // 选取模式且已应用：不使用背景图，用 img 元素
@@ -558,6 +562,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             backgroundPosition: 'center center',
             backgroundRepeat: 'no-repeat',
           };
+        }
         case 'video':
           return {};
         case 'html':

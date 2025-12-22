@@ -60,6 +60,24 @@ describe('background media cleanup', () => {
     expect(referenced.has('background-media/background-4.webp')).toBe(true);
   });
 
+  it('supports Windows convertFileSrc URLs (https://asset.localhost/...)', () => {
+    const encodedPath = encodeURIComponent('C:\\AppData\\background-media\\background-5.png');
+
+    localStorage.setItem(
+      STORAGE_KEYS.BACKGROUND_SETTINGS,
+      JSON.stringify({
+        maximized: {
+          type: 'image',
+          image: { url: `https://asset.localhost/${encodedPath}` },
+        },
+        windowed: { type: 'color', color: '#000' },
+      })
+    );
+
+    const referenced = collectReferencedBackgroundMedia();
+    expect(referenced.has('background-media/background-5.png')).toBe(true);
+  });
+
   it('ignores non-managed URLs', () => {
     localStorage.setItem(
       STORAGE_KEYS.BACKGROUND_SETTINGS,
@@ -73,4 +91,3 @@ describe('background media cleanup', () => {
     expect(Array.from(referenced)).toEqual([]);
   });
 });
-

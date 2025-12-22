@@ -1,4 +1,4 @@
-import { getInstalledPmpmPlugin } from './pmpm';
+import { getInstalledPmpmPlugin, readPmpmPluginEntryCode } from './pmpm';
 
 export type PmpmPluginRuntime = {
   mount: (container: HTMLElement, api: unknown) => void | (() => void);
@@ -11,6 +11,7 @@ export type PmpmPluginRuntime = {
   unmountVisualizer?: (container: HTMLElement, visualizerId: string) => void;
   mountWindow?: (container: HTMLElement, api: unknown, windowId: string) => void | (() => void);
   unmountWindow?: (container: HTMLElement, windowId: string) => void;
+  runCommand?: (api: unknown, commandId: string, args?: unknown) => void | Promise<void>;
 };
 
 type CachedRuntime = {
@@ -43,8 +44,13 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
     throw new Error(`Plugin not installed: ${pluginId}`);
   }
 
+  const entryCode = (await readPmpmPluginEntryCode(pluginId)) ?? installed.entryCode ?? null;
+  if (!entryCode) {
+    throw new Error(`Plugin entryCode missing: ${pluginId}`);
+  }
+
   if (installed.entrySha256) {
-    const computed = await sha256HexFromString(installed.entryCode);
+    const computed = await sha256HexFromString(entryCode);
     if (computed !== installed.entrySha256) {
       throw new Error(
         `Plugin integrity check failed (entrySha256 mismatch). Please reinstall: ${pluginId}`
@@ -52,7 +58,7 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
     }
   }
 
-  const blob = new Blob([installed.entryCode], { type: 'text/javascript' });
+  const blob = new Blob([entryCode], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);
 
   try {
@@ -90,6 +96,9 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
     const unmountVisualizer =
       (mod.unmountVisualizer as PmpmPluginRuntime['unmountVisualizer'] | undefined) ??
       (defaultExport?.unmountVisualizer as PmpmPluginRuntime['unmountVisualizer'] | undefined);
+    const runCommand =
+      (mod.runCommand as PmpmPluginRuntime['runCommand'] | undefined) ??
+      (defaultExport?.runCommand as PmpmPluginRuntime['runCommand'] | undefined);
 
     if (typeof mount !== 'function') {
       throw new Error('Plugin entry must export `mount(container, api)`');
@@ -106,6 +115,7 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
       unmountVisualizer,
       mountWindow,
       unmountWindow,
+      runCommand,
     };
   } finally {
     URL.revokeObjectURL(url);

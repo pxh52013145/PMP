@@ -1,5 +1,5 @@
 ﻿import { strFromU8, unzipSync } from 'fflate';
-import { readJson } from '../modules/storage';
+import { readDurableText, readJson, removeDurableText, writeDurableText } from '../modules/storage';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../utils/windowCommunication';
 
 export type PmpsEntryPoint = 'auto' | 'main' | 'shadertoy';
@@ -42,7 +42,7 @@ export type PmpsManifest = {
 
 export type InstalledPmpsShaderPack = {
   manifest: PmpsManifest;
-  fragmentCode: string;
+  fragmentCode?: string;
   installedAt: number;
   source: 'pmps' | 'glsl';
   packageSha256?: string;
@@ -66,6 +66,23 @@ async function sha256HexIfAvailable(data: Uint8Array): Promise<string | undefine
   } catch {
     return undefined;
   }
+}
+
+export type ResolvedPmpsShaderPack = InstalledPmpsShaderPack & { fragmentCode: string };
+
+export async function readPmpsFragmentCode(shaderId: string): Promise<string | null> {
+  return readDurableText('pmps-fragment', shaderId);
+}
+
+async function persistPmpsFragmentCode(shaderId: string, fragmentCode: string): Promise<boolean> {
+  const ok = await writeDurableText('pmps-fragment', shaderId, fragmentCode);
+  if (!ok) return false;
+  const readBack = await readDurableText('pmps-fragment', shaderId);
+  return readBack === fragmentCode;
+}
+
+async function removePmpsFragmentCode(shaderId: string): Promise<void> {
+  await removeDurableText('pmps-fragment', shaderId);
 }
 
 function assertObject(value: unknown, path: string): asserts value is Record<string, unknown> {
@@ -312,6 +329,43 @@ export function loadInstalledPmpsShaderPacks(): InstalledPmpsShaderPack[] {
   }
 }
 
+export async function migrateInstalledPmpsShaderPacksToDurableStorage(): Promise<{
+  migrated: number;
+  failed: number;
+}> {
+  const packs = loadInstalledPmpsShaderPacks();
+  if (packs.length === 0) return { migrated: 0, failed: 0 };
+
+  let migrated = 0;
+  let failed = 0;
+  let changed = false;
+
+  const next = packs.map((pack) => ({ ...pack }));
+
+  for (let i = 0; i < next.length; i += 1) {
+    const pack = next[i];
+    const shaderId = pack.manifest.metadata.id;
+    const fragmentCode = pack.fragmentCode;
+    if (typeof fragmentCode !== 'string' || fragmentCode.length === 0) continue;
+
+    const ok = await persistPmpsFragmentCode(shaderId, fragmentCode);
+    if (!ok) {
+      failed += 1;
+      continue;
+    }
+
+    delete pack.fragmentCode;
+    migrated += 1;
+    changed = true;
+  }
+
+  if (changed) {
+    saveInstalledPmpsShaderPacks(next);
+  }
+
+  return { migrated, failed };
+}
+
 function saveInstalledPmpsShaderPacks(packs: InstalledPmpsShaderPack[]): void {
   if (typeof window === 'undefined') return;
   void broadcastDataUpdate(STORAGE_KEYS.PMPS_SHADERS, packs, TAURI_EVENTS.PMPS_SHADERS_UPDATED);
@@ -320,6 +374,20 @@ function saveInstalledPmpsShaderPacks(packs: InstalledPmpsShaderPack[]): void {
 export function getInstalledPmpsShaderPack(id: string): InstalledPmpsShaderPack | null {
   const packs = loadInstalledPmpsShaderPacks();
   return packs.find((p) => p.manifest.metadata.id === id) ?? null;
+}
+
+export async function resolveInstalledPmpsShaderPack(id: string): Promise<ResolvedPmpsShaderPack | null> {
+  const pack = getInstalledPmpsShaderPack(id);
+  if (!pack) return null;
+
+  const existing = pack.fragmentCode;
+  if (typeof existing === 'string' && existing.length > 0) {
+    return pack as ResolvedPmpsShaderPack;
+  }
+
+  const fragmentCode = await readPmpsFragmentCode(id);
+  if (!fragmentCode) return null;
+  return { ...pack, fragmentCode };
 }
 
 export function upsertInstalledPmpsShaderPack(pack: InstalledPmpsShaderPack): void {
@@ -336,6 +404,7 @@ export function upsertInstalledPmpsShaderPack(pack: InstalledPmpsShaderPack): vo
 export function uninstallPmpsShaderPack(id: string): void {
   const packs = loadInstalledPmpsShaderPacks();
   saveInstalledPmpsShaderPacks(packs.filter((p) => p.manifest.metadata.id !== id));
+  void removePmpsFragmentCode(id);
 }
 
 export async function installPmpsShaderPackFromFilePath(
@@ -347,8 +416,16 @@ export async function installPmpsShaderPackFromFilePath(
   if (exists && options.overwrite === false) {
     throw new Error(`Shader "${pack.manifest.metadata.id}" is already installed`);
   }
-  upsertInstalledPmpsShaderPack(pack);
-  return pack;
+
+  const fragmentCode = pack.fragmentCode;
+  const stored =
+    typeof fragmentCode === 'string' && fragmentCode.length > 0
+      ? await persistPmpsFragmentCode(pack.manifest.metadata.id, fragmentCode)
+      : false;
+
+  const persisted = stored ? { ...pack, fragmentCode: undefined } : pack;
+  upsertInstalledPmpsShaderPack(persisted);
+  return persisted;
 }
 
 export async function installPmpsShaderPackFromFile(
@@ -360,6 +437,14 @@ export async function installPmpsShaderPackFromFile(
   if (exists && options.overwrite === false) {
     throw new Error(`Shader "${pack.manifest.metadata.id}" is already installed`);
   }
-  upsertInstalledPmpsShaderPack(pack);
-  return pack;
+
+  const fragmentCode = pack.fragmentCode;
+  const stored =
+    typeof fragmentCode === 'string' && fragmentCode.length > 0
+      ? await persistPmpsFragmentCode(pack.manifest.metadata.id, fragmentCode)
+      : false;
+
+  const persisted = stored ? { ...pack, fragmentCode: undefined } : pack;
+  upsertInstalledPmpsShaderPack(persisted);
+  return persisted;
 }

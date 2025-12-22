@@ -213,7 +213,7 @@ export function validateMagnetImport(data: unknown): MagnetValidationResult {
   // 构造完整的 Magnet 对象
   const magnet: Magnet = {
     id: schema.id!,
-    type: schema.type as any,
+    type: schema.type as Magnet['type'],
     name: schema.name!,
     anchorType: schema.anchorType!,
     anchors: schema.anchors!,

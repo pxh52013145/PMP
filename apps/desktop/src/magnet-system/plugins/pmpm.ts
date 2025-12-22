@@ -4,11 +4,12 @@ import type { Magnet } from '../../types/pixel';
 import type { MagnetRendererDefinition } from '../registry';
 import { PluginMagnetHost } from './PluginMagnetHost';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
-import { readJson } from '../../modules/storage';
+import { readDurableText, readJson, removeDurableText, writeDurableText } from '../../modules/storage';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
 
 export type PmpmManifest = {
   formatVersion: '1.0';
+  apiVersion?: string;
   type: 'magnet-plugin';
   metadata: {
     id: string;
@@ -19,6 +20,36 @@ export type PmpmManifest = {
     tags?: string[];
   };
   entryPoint: string;
+  contributions?: {
+    commands?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      group?: string;
+      order?: number;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    }>;
+    settingsPanels?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      group?: string;
+      order?: number;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    }>;
+    visualizers?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      group?: string;
+      order?: number;
+      tags?: string[];
+      inputs?: string[];
+      metadata?: Record<string, unknown>;
+    }>;
+  };
   magnet?: {
     defaultAnchor?: {
       type?: 'single' | 'range';
@@ -31,7 +62,7 @@ export type PmpmManifest = {
 
 export type InstalledPmpmPlugin = {
   manifest: PmpmManifest;
-  entryCode: string;
+  entryCode?: string;
   installedAt: number;
   packageSha256?: string;
   manifestSha256?: string;
@@ -42,7 +73,7 @@ export type InstalledPmpmPlugin = {
   lastErrorAt?: number;
 };
 
-export type PmpmPluginCrashSurface = 'magnet' | 'settings' | 'page' | 'visualizer' | 'window';
+export type PmpmPluginCrashSurface = 'magnet' | 'settings' | 'page' | 'visualizer' | 'window' | 'command';
 
 type PluginStoreListener = () => void;
 
@@ -158,6 +189,10 @@ function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
   const m = manifest as Record<string, unknown>;
   if (m.formatVersion !== '1.0') throw new Error('manifest.formatVersion must be "1.0"');
   if (m.type !== 'magnet-plugin') throw new Error('manifest.type must be "magnet-plugin"');
+  const apiVersion = m.apiVersion;
+  if (typeof apiVersion !== 'undefined' && typeof apiVersion !== 'string') {
+    throw new Error('manifest.apiVersion must be a string');
+  }
   const metadata = m.metadata as Record<string, unknown> | undefined;
   if (!metadata) throw new Error('manifest.metadata is required');
   const id = metadata.id;
@@ -180,6 +215,288 @@ function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
       }
     }
   }
+
+  const contributions = m.contributions;
+  if (typeof contributions !== 'undefined') {
+    if (!contributions || typeof contributions !== 'object' || Array.isArray(contributions)) {
+      throw new Error('manifest.contributions must be an object');
+    }
+
+    const c = contributions as Record<string, unknown>;
+    const commands = c.commands;
+    if (typeof commands !== 'undefined') {
+      if (!Array.isArray(commands)) throw new Error('manifest.contributions.commands must be an array');
+
+      const ids = new Set<string>();
+      for (const item of commands) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.contributions.commands entries must be objects');
+        }
+        const cmd = item as Record<string, unknown>;
+        const cmdId = cmd.id;
+        if (typeof cmdId !== 'string' || cmdId.length < 1) {
+          throw new Error('manifest.contributions.commands[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(cmdId)) {
+          throw new Error('manifest.contributions.commands[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(cmdId)) {
+          throw new Error(`manifest.contributions.commands[].id duplicated: "${cmdId}"`);
+        }
+        ids.add(cmdId);
+
+        const title = cmd.title;
+        if (typeof title !== 'string' || title.length < 1) {
+          throw new Error(`manifest.contributions.commands["${cmdId}"].title is required`);
+        }
+
+        const description = cmd.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(`manifest.contributions.commands["${cmdId}"].description must be a string`);
+        }
+
+        const group = cmd.group;
+        if (typeof group !== 'undefined' && typeof group !== 'string') {
+          throw new Error(`manifest.contributions.commands["${cmdId}"].group must be a string`);
+        }
+
+        const order = cmd.order;
+        if (
+          typeof order !== 'undefined' &&
+          (typeof order !== 'number' || !Number.isFinite(order))
+        ) {
+          throw new Error(`manifest.contributions.commands["${cmdId}"].order must be a number`);
+        }
+
+        const tags = cmd.tags;
+        if (typeof tags !== 'undefined') {
+          if (!Array.isArray(tags)) {
+            throw new Error(`manifest.contributions.commands["${cmdId}"].tags must be an array`);
+          }
+          for (const tag of tags) {
+            if (typeof tag !== 'string' || tag.length < 1) {
+              throw new Error(
+                `manifest.contributions.commands["${cmdId}"].tags must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const metadata = cmd.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.contributions.commands["${cmdId}"].metadata must be an object`);
+          }
+        }
+      }
+    }
+
+    const settingsPanels = c.settingsPanels;
+    if (typeof settingsPanels !== 'undefined') {
+      if (!Array.isArray(settingsPanels)) {
+        throw new Error('manifest.contributions.settingsPanels must be an array');
+      }
+
+      const ids = new Set<string>();
+      for (const item of settingsPanels) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.contributions.settingsPanels entries must be objects');
+        }
+        const panel = item as Record<string, unknown>;
+        const panelId = panel.id;
+        if (typeof panelId !== 'string' || panelId.length < 1) {
+          throw new Error('manifest.contributions.settingsPanels[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(panelId)) {
+          throw new Error('manifest.contributions.settingsPanels[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(panelId)) {
+          throw new Error(`manifest.contributions.settingsPanels[].id duplicated: "${panelId}"`);
+        }
+        ids.add(panelId);
+
+        const title = panel.title;
+        if (typeof title !== 'string' || title.length < 1) {
+          throw new Error(`manifest.contributions.settingsPanels["${panelId}"].title is required`);
+        }
+
+        const description = panel.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(`manifest.contributions.settingsPanels["${panelId}"].description must be a string`);
+        }
+
+        const group = panel.group;
+        if (typeof group !== 'undefined' && typeof group !== 'string') {
+          throw new Error(`manifest.contributions.settingsPanels["${panelId}"].group must be a string`);
+        }
+
+        const order = panel.order;
+        if (
+          typeof order !== 'undefined' &&
+          (typeof order !== 'number' || !Number.isFinite(order))
+        ) {
+          throw new Error(`manifest.contributions.settingsPanels["${panelId}"].order must be a number`);
+        }
+
+        const tags = panel.tags;
+        if (typeof tags !== 'undefined') {
+          if (!Array.isArray(tags)) {
+            throw new Error(`manifest.contributions.settingsPanels["${panelId}"].tags must be an array`);
+          }
+          for (const tag of tags) {
+            if (typeof tag !== 'string' || tag.length < 1) {
+              throw new Error(
+                `manifest.contributions.settingsPanels["${panelId}"].tags must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const metadata = panel.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.contributions.settingsPanels["${panelId}"].metadata must be an object`);
+          }
+        }
+      }
+    }
+
+    const visualizers = c.visualizers;
+    if (typeof visualizers !== 'undefined') {
+      if (!Array.isArray(visualizers)) {
+        throw new Error('manifest.contributions.visualizers must be an array');
+      }
+
+      const ids = new Set<string>();
+      for (const item of visualizers) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.contributions.visualizers entries must be objects');
+        }
+        const visualizer = item as Record<string, unknown>;
+        const visualizerId = visualizer.id;
+        if (typeof visualizerId !== 'string' || visualizerId.length < 1) {
+          throw new Error('manifest.contributions.visualizers[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(visualizerId)) {
+          throw new Error('manifest.contributions.visualizers[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(visualizerId)) {
+          throw new Error(`manifest.contributions.visualizers[].id duplicated: "${visualizerId}"`);
+        }
+        ids.add(visualizerId);
+
+        const title = visualizer.title;
+        if (typeof title !== 'string' || title.length < 1) {
+          throw new Error(`manifest.contributions.visualizers["${visualizerId}"].title is required`);
+        }
+
+        const description = visualizer.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(`manifest.contributions.visualizers["${visualizerId}"].description must be a string`);
+        }
+
+        const group = visualizer.group;
+        if (typeof group !== 'undefined' && typeof group !== 'string') {
+          throw new Error(`manifest.contributions.visualizers["${visualizerId}"].group must be a string`);
+        }
+
+        const order = visualizer.order;
+        if (
+          typeof order !== 'undefined' &&
+          (typeof order !== 'number' || !Number.isFinite(order))
+        ) {
+          throw new Error(`manifest.contributions.visualizers["${visualizerId}"].order must be a number`);
+        }
+
+        const tags = visualizer.tags;
+        if (typeof tags !== 'undefined') {
+          if (!Array.isArray(tags)) {
+            throw new Error(`manifest.contributions.visualizers["${visualizerId}"].tags must be an array`);
+          }
+          for (const tag of tags) {
+            if (typeof tag !== 'string' || tag.length < 1) {
+              throw new Error(
+                `manifest.contributions.visualizers["${visualizerId}"].tags must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const inputs = visualizer.inputs;
+        if (typeof inputs !== 'undefined') {
+          if (!Array.isArray(inputs)) {
+            throw new Error(`manifest.contributions.visualizers["${visualizerId}"].inputs must be an array`);
+          }
+          for (const input of inputs) {
+            if (typeof input !== 'string' || input.length < 1) {
+              throw new Error(
+                `manifest.contributions.visualizers["${visualizerId}"].inputs must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const metadata = visualizer.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.contributions.visualizers["${visualizerId}"].metadata must be an object`);
+          }
+        }
+      }
+    }
+  }
+}
+
+export async function readPmpmPluginEntryCode(pluginId: string): Promise<string | null> {
+  return readDurableText('pmpm-entry', pluginId);
+}
+
+async function persistPmpmPluginEntryCode(pluginId: string, entryCode: string): Promise<boolean> {
+  const ok = await writeDurableText('pmpm-entry', pluginId, entryCode);
+  if (!ok) return false;
+  const readBack = await readDurableText('pmpm-entry', pluginId);
+  return readBack === entryCode;
+}
+
+async function removePmpmPluginEntryCode(pluginId: string): Promise<void> {
+  await removeDurableText('pmpm-entry', pluginId);
+}
+
+export async function migrateInstalledPmpmPluginsToDurableStorage(): Promise<{
+  migrated: number;
+  failed: number;
+}> {
+  const plugins = loadInstalledPmpmPlugins();
+  if (plugins.length === 0) return { migrated: 0, failed: 0 };
+
+  let migrated = 0;
+  let failed = 0;
+  let changed = false;
+
+  const next = plugins.map((plugin) => ({ ...plugin }));
+
+  for (let i = 0; i < next.length; i += 1) {
+    const plugin = next[i];
+    const pluginId = plugin.manifest.metadata.id;
+    const entryCode = plugin.entryCode;
+    if (typeof entryCode !== 'string' || entryCode.length === 0) continue;
+
+    const ok = await persistPmpmPluginEntryCode(pluginId, entryCode);
+    if (!ok) {
+      failed += 1;
+      continue;
+    }
+
+    delete plugin.entryCode;
+    migrated += 1;
+    changed = true;
+  }
+
+  if (changed) {
+    saveInstalledPmpmPlugins(next);
+  }
+
+  return { migrated, failed };
 }
 
 export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
@@ -256,13 +573,20 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
 
 export async function installPmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
   const plugin = await parsePmpmPluginFromFilePath(filePath);
-  upsertInstalledPmpmPlugin(plugin);
-  return plugin;
+  const entryCode = plugin.entryCode;
+  const stored =
+    typeof entryCode === 'string' && entryCode.length > 0
+      ? await persistPmpmPluginEntryCode(plugin.manifest.metadata.id, entryCode)
+      : false;
+  const persisted = stored ? { ...plugin, entryCode: undefined } : plugin;
+  upsertInstalledPmpmPlugin(persisted);
+  return persisted;
 }
 
 export function uninstallPmpmPlugin(id: string): void {
   const plugins = loadInstalledPmpmPlugins();
   saveInstalledPmpmPlugins(plugins.filter((plugin) => plugin.manifest.metadata.id !== id));
+  void removePmpmPluginEntryCode(id);
 }
 
 function formatErrorMessage(error: unknown): string {

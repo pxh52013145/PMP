@@ -11,5 +11,5 @@ import { PlayQueueLogic } from './usePlayQueueLogic';
 export interface PlayQueueVariantProps {
   data: PlayQueueData;
   logic: PlayQueueLogic;
-  variantConfig?: any;
+  variantConfig?: unknown;
 }

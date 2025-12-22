@@ -130,7 +130,7 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     return () => {
       cancelled = true;
     };
-  }, [track?.id, track?.filePath, track?.path]);
+  }, [track]);
 
   return {
     currentTime,

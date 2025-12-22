@@ -174,10 +174,10 @@ export function ShaderDebugPanel({ magnetId }: ShaderDebugPanelProps) {
           <div key={group.name} className="pmps-uniform-group">
             <div className="pmps-uniform-group-title">{group.name}</div>
 
-            {group.items.map((def) => {
-              const current = (uniformValues as any)[def.name];
-              const label = `${def.name} (${def.type})`;
-              const range = getUniformRange(def);
+	            {group.items.map((def) => {
+	              const current = (uniformValues as Record<string, unknown>)[def.name];
+	              const label = `${def.name} (${def.type})`;
+	              const range = getUniformRange(def);
 
               if (def.type === 'bool') {
                 const checked = Boolean(current);
@@ -411,11 +411,16 @@ export function ShaderDebugPanel({ magnetId }: ShaderDebugPanelProps) {
         <div className="pmps-binding-settings">
           <label className="pmps-setting">
             <span>entryPoint</span>
-            <select
-              value={binding?.entryPoint ?? 'auto'}
-              disabled={!binding || selectedValue === '__inherit__'}
-              onChange={(e) => updateBinding({ entryPoint: e.target.value as any })}
-            >
+	            <select
+	              value={binding?.entryPoint ?? 'auto'}
+	              disabled={!binding || selectedValue === '__inherit__'}
+	              onChange={(e) => {
+	                const next = e.target.value;
+	                if (next === 'auto' || next === 'main' || next === 'shadertoy') {
+	                  updateBinding({ entryPoint: next });
+	                }
+	              }}
+	            >
               <option value="auto">auto</option>
               <option value="main">main</option>
               <option value="shadertoy">shadertoy</option>

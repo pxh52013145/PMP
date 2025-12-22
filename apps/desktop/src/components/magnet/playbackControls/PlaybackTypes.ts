@@ -11,5 +11,5 @@ import { PlaybackLogic } from './usePlaybackLogic';
 export interface PlaybackVariantProps {
   data: PlaybackData;
   logic: PlaybackLogic;
-  variantConfig?: any;
+  variantConfig?: unknown;
 }

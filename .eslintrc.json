@@ -26,6 +26,101 @@
     "@typescript-eslint/no-explicit-any": "warn",
     "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }]
   },
+  "overrides": [
+    {
+      "files": ["apps/desktop/src/kernel/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/components/**",
+                  "**/contexts/**",
+                  "**/services/**",
+                  "**/magnet-system/**",
+                  "**/shader-system/**",
+                  "**/themes/**",
+                  "**/modules/**",
+                  "**/utils/**",
+                  "**/pixelEngine/**"
+                ],
+                "message": "Kernel must not depend on UI/features; expose capabilities via ServiceRegistry/EventBus/ContributionRegistry and contracts."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/desktop/src/services/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/components/**", "**/contexts/**"],
+                "message": "Services must not import UI (components/contexts). Keep services UI-agnostic and communicate via registry/events."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "apps/desktop/src/magnet-system/registry.tsx",
+        "apps/desktop/src/magnet-system/variantRegistry.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/components/**", "**/contexts/**"],
+                "message": "Registries must stay pure (no UI imports). Register builtins via builtin modules."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/desktop/src/modules/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/components/**", "**/contexts/**"],
+                "message": "Modules must not import UI (components/contexts). Keep modules reusable and UI-agnostic."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/desktop/src/contracts/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/components/**", "**/contexts/**"],
+                "message": "Contracts must stay UI-agnostic (no components/contexts imports)."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
   "settings": {
     "react": {
       "version": "detect"

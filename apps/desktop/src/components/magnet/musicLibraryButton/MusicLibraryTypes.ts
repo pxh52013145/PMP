@@ -11,5 +11,5 @@ import { MusicLibraryLogic } from './useMusicLibraryLogic';
 export interface MusicLibraryVariantProps {
   data: MusicLibraryData;
   logic: MusicLibraryLogic;
-  variantConfig?: any;
+  variantConfig?: unknown;
 }

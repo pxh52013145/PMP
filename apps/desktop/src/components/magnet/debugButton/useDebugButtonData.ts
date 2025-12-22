@@ -1,9 +1,10 @@
 /**
  * DebugButton 数据层 Hook
- * 负责管理调试窗口状态数据
+ * 历史为调试按钮（id: btn-debug），现用于 Settings 页面切换状态
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigation } from '../../../contexts/NavigationContext';
 
 export interface DebugButtonData {
   isOpen: boolean;
@@ -15,7 +16,12 @@ export interface DebugButtonData {
 export function useDebugButtonData(): DebugButtonData & {
   setIsOpen: (value: boolean) => void;
 } {
-  const [isOpen, setIsOpen] = useState(false);
+  const navigation = useNavigation();
+  const [isOpen, setIsOpen] = useState(() => navigation.currentPage.type === 'settings');
+
+  useEffect(() => {
+    setIsOpen(navigation.currentPage.type === 'settings');
+  }, [navigation.currentPage.type]);
 
   return {
     isOpen,

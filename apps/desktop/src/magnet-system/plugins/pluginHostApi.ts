@@ -1,5 +1,6 @@
 import type { NavigationPageType, NavigationParamsMap } from '../../contexts/NavigationContext';
 import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
+import { parseNavigationParams } from '../../contracts/navigationParams';
 import {
   patchPmpmPluginConfig,
   readPmpmPluginConfig,
@@ -293,7 +294,13 @@ export function createPluginMountApi({
           return;
         }
 
-        navigation.navigateTo(page as PageWithParams, params as never);
+        const validated = parseNavigationParams(page, params);
+        if (!validated) {
+          console.warn(`[${hostLabel}] navigateTo(${page}) params invalid; ignoring request.`);
+          return;
+        }
+
+        navigation.navigateTo(page as PageWithParams, validated as Record<string, unknown>);
       },
       goBack: () => {
         if (!allowNavigation) {

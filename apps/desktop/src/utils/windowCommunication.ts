@@ -247,7 +247,7 @@ export function readData<T>(storageKey: string): T | null {
  */
 export function setupStorageListener(
   keys: string[],
-  callback: (key: string, newValue: any) => void
+  callback: (key: string, newValue: unknown) => void
 ): () => void {
   const handleStorageChange = (e: StorageEvent) => {
     if (e.key && keys.includes(e.key) && e.newValue) {

@@ -91,10 +91,11 @@ export function usePlayQueueLogic(): PlayQueueLogic {
     audioService.clearQueue();
   };
 
-  const addFiles = async () => {
-    try {
-      const isTauriRuntime =
-        typeof window !== 'undefined' && typeof (window as any).__TAURI__ !== 'undefined';
+	  const addFiles = async () => {
+	    try {
+	      const isTauriRuntime =
+	        typeof window !== 'undefined' &&
+	        typeof (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== 'undefined';
 
       if (isTauriRuntime) {
         const selected = await open({
@@ -131,12 +132,22 @@ export function usePlayQueueLogic(): PlayQueueLogic {
         return;
       }
 
-      // @ts-ignore - File System Access API
-      const fileHandles = await window.showOpenFilePicker({
-        multiple: true,
-        types: [
-          {
-            description: 'Audio Files',
+	      const showOpenFilePicker = (window as unknown as {
+	        showOpenFilePicker?: (options: {
+	          multiple?: boolean;
+	          types?: Array<{
+	            description?: string;
+	            accept?: Record<string, string[]>;
+	          }>;
+	        }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+	      }).showOpenFilePicker;
+	      if (!showOpenFilePicker) return;
+
+	      const fileHandles = await showOpenFilePicker({
+	        multiple: true,
+	        types: [
+	          {
+	            description: 'Audio Files',
             accept: {
               'audio/*': ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'],
             },

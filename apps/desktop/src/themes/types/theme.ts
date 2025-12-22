@@ -75,16 +75,16 @@ export interface ComponentTheme {
     };
 
     // 自定义参数
-    [key: string]: any;
+    [key: string]: unknown;
   };
 
   // 3. 渲染插槽
   slots?: {
-    [slotName: string]: React.ComponentType<any>;
+    [slotName: string]: React.ComponentType<Record<string, unknown>>;
   };
 
   // 4. 完全自定义渲染器
-  customRenderer?: React.ComponentType<any>;
+  customRenderer?: React.ComponentType<Record<string, unknown>>;
 
   // 5. 样式覆盖（CSS-in-JS）
   styleOverride?: {

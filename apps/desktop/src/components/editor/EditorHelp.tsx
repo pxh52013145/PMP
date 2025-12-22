@@ -50,7 +50,7 @@ export const EditorHelp = memo(function EditorHelp() {
               <div className="help-icon">➕</div>
               <div className="help-text">
                 <strong>导入 Magnet</strong>
-                <p>在 Magnet 库面板点击"导入"，粘贴 JSON 数据</p>
+                <p>在 Magnet 库面板点击“导入”，粘贴 JSON 数据</p>
               </div>
             </div>
           </div>

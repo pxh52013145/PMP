@@ -30,7 +30,7 @@ type GainNode = DspNodeBase & { type: 'gain'; db: number };
 type EqNode = DspNodeBase & { type: 'eq'; bands: EqBand[] };
 type LimiterNode = DspNodeBase & { type: 'limiter'; thresholdDb: number };
 type VstNode = DspNodeBase & { type: 'vst'; pluginId: string; params?: VstParamValue[] };
-type DspNode = GainNode | EqNode | LimiterNode | VstNode | (DspNodeBase & Record<string, any>);
+type DspNode = GainNode | EqNode | LimiterNode | VstNode | (DspNodeBase & Record<string, unknown>);
 
 type DspGraphConfig = { nodes: DspNode[] };
 
@@ -56,12 +56,32 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  return value as Record<string, unknown>;
+}
+
+function readStringField(value: unknown, field: string): string | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const candidate = record[field];
+  return typeof candidate === 'string' ? candidate : null;
+}
+
+function readNumberField(value: unknown, field: string): number | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const candidate = record[field];
+  return typeof candidate === 'number' && isFinite(candidate) ? candidate : null;
+}
+
 function computeTotalGainDb(nodes: DspNode[]) {
   let sum = 0;
   for (const node of nodes) {
     if (!node.enabled) continue;
-    if (node.type === 'gain' && typeof (node as any).db === 'number') {
-      sum += (node as any).db;
+    if (node.type === 'gain') {
+      const db = readNumberField(node, 'db');
+      if (db !== null) sum += db;
     }
   }
   return clamp(sum, -60, 12);
@@ -75,16 +95,32 @@ function ensureEqBands(value: unknown): EqBand[] {
   if (!Array.isArray(value)) return [];
   const out: EqBand[] = [];
   for (const entry of value) {
-    if (!entry || typeof entry !== 'object') continue;
-    const kindRaw = (entry as any).kind;
+    const record = asRecord(entry);
+    if (!record) continue;
+    const kindRaw = record.kind;
     const kind: EqBandKind =
       kindRaw === 'low-shelf' || kindRaw === 'high-shelf' || kindRaw === 'peaking' ? kindRaw : 'peaking';
     out.push({
       kind,
-      frequencyHz: ensureNumber((entry as any).frequencyHz, 1000),
-      q: ensureNumber((entry as any).q, 1),
-      gainDb: ensureNumber((entry as any).gainDb, 0),
+      frequencyHz: ensureNumber(record.frequencyHz, 1000),
+      q: ensureNumber(record.q, 1),
+      gainDb: ensureNumber(record.gainDb, 0),
     });
+  }
+  return out;
+}
+
+function ensureVstParamValues(value: unknown): VstParamValue[] {
+  if (!Array.isArray(value)) return [];
+  const out: VstParamValue[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const key = record.key;
+    if (typeof key !== 'string') continue;
+    const num = ensureNumber(record.value, Number.NaN);
+    if (!isFinite(num)) continue;
+    out.push({ key, value: num });
   }
   return out;
 }
@@ -340,7 +376,7 @@ export const DspRackPage: React.FC = () => {
                       onClick={() =>
                         void openVstEditorWindow({
                           nodeId: node.id,
-                          title: `VST Editor (${typeof (node as any).pluginId === 'string' ? (node as any).pluginId : 'vst'})`,
+                          title: `VST Editor (${readStringField(node, 'pluginId') ?? 'vst'})`,
                         })
                       }
                       disabled={busy}
@@ -356,7 +392,7 @@ export const DspRackPage: React.FC = () => {
                       onClick={() =>
                         void invoke('native_audio_vst_open_native_editor', {
                           nodeId: node.id,
-                          title: `VST3 (${typeof (node as any).pluginId === 'string' ? (node as any).pluginId : 'vst'})`,
+                          title: `VST3 (${readStringField(node, 'pluginId') ?? 'vst'})`,
                         }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
                       }
                       disabled={busy || !node.enabled}
@@ -391,7 +427,7 @@ export const DspRackPage: React.FC = () => {
                       min={-60}
                       max={12}
                       step={0.1}
-                      value={ensureNumber((node as any).db, 0)}
+                      value={readNumberField(node, 'db') ?? 0}
                       onChange={(e) =>
                         updateNode(node.id, (n) => ({
                           ...n,
@@ -399,7 +435,7 @@ export const DspRackPage: React.FC = () => {
                         }))
                       }
                     />
-                    <span className="dsp-param-value">{ensureNumber((node as any).db, 0).toFixed(1)} dB</span>
+                    <span className="dsp-param-value">{(readNumberField(node, 'db') ?? 0).toFixed(1)} dB</span>
                   </div>
                 </div>
               )}
@@ -414,7 +450,7 @@ export const DspRackPage: React.FC = () => {
                       min={-30}
                       max={0}
                       step={0.1}
-                      value={ensureNumber((node as any).thresholdDb, -6)}
+                      value={readNumberField(node, 'thresholdDb') ?? -6}
                       onChange={(e) =>
                         updateNode(node.id, (n) => ({
                           ...n,
@@ -423,7 +459,7 @@ export const DspRackPage: React.FC = () => {
                       }
                     />
                     <span className="dsp-param-value">
-                      {ensureNumber((node as any).thresholdDb, -6).toFixed(1)} dB
+                      {(readNumberField(node, 'thresholdDb') ?? -6).toFixed(1)} dB
                     </span>
                   </div>
                 </div>
@@ -431,7 +467,7 @@ export const DspRackPage: React.FC = () => {
 
               {node.type === 'eq' && (
                 <div className="dsp-node-body">
-                  {ensureEqBands((node as any).bands).map((band, bandIndex) => (
+                  {ensureEqBands(asRecord(node)?.bands).map((band, bandIndex) => (
                     <div key={`${band.kind}-${band.frequencyHz}-${bandIndex}`} className="dsp-param-row">
                       <span className="dsp-param-label">
                         {band.kind} {Math.round(band.frequencyHz)}Hz
@@ -446,7 +482,7 @@ export const DspRackPage: React.FC = () => {
                         onChange={(e) => {
                           const gainDb = clamp(Number(e.target.value), -24, 24);
                           updateNode(node.id, (n) => {
-                            const nextBands = ensureEqBands((n as any).bands);
+                            const nextBands = ensureEqBands(asRecord(n)?.bands);
                             if (bandIndex >= nextBands.length) return n;
                             nextBands[bandIndex] = { ...nextBands[bandIndex], gainDb };
                             return { ...n, bands: nextBands };
@@ -465,7 +501,7 @@ export const DspRackPage: React.FC = () => {
                     <span className="dsp-param-label">Plugin</span>
                     <select
                       className="dsp-param-select"
-                      value={typeof (node as any).pluginId === 'string' ? (node as any).pluginId : 'demo.gain'}
+                      value={readStringField(node, 'pluginId') ?? 'demo.gain'}
                       onChange={(e) =>
                         updateNode(node.id, (n) => ({
                           ...n,
@@ -484,16 +520,13 @@ export const DspRackPage: React.FC = () => {
                   </div>
 
                   {(() => {
-                    const pluginId =
-                      typeof (node as any).pluginId === 'string' ? (node as any).pluginId : 'demo.gain';
+                    const pluginId = readStringField(node, 'pluginId') ?? 'demo.gain';
                     const plugin = plugins.find((p) => p.id === pluginId);
                     if (!plugin) {
                       return <div className="dsp-rack-note">未找到插件描述（可能需要刷新）。</div>;
                     }
 
-                    const currentParams: VstParamValue[] = Array.isArray((node as any).params)
-                      ? (node as any).params
-                      : [];
+                    const currentParams = ensureVstParamValues(asRecord(node)?.params);
 
                     return (
                       <>
@@ -525,9 +558,7 @@ export const DspRackPage: React.FC = () => {
                                 onChange={(e) => {
                                   const value = clamp(Number(e.target.value), param.min, param.max);
                                   updateNode(node.id, (n) => {
-                                    const nextParams: VstParamValue[] = Array.isArray((n as any).params)
-                                      ? [...(n as any).params]
-                                      : [];
+                                    const nextParams = [...ensureVstParamValues(asRecord(n)?.params)];
                                     const idx = nextParams.findIndex((p) => p.key === param.key);
                                     if (idx >= 0) {
                                       nextParams[idx] = { ...nextParams[idx], value };

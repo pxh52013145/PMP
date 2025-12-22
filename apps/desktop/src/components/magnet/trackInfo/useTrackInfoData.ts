@@ -75,7 +75,7 @@ export function useTrackInfoData(): TrackInfoData {
     return () => {
       cancelled = true;
     };
-  }, [baseTrack?.id, baseTrack?.filePath, baseTrack?.path, baseTrack?.album, baseTrack?.artist]);
+  }, [baseTrack]);
 
   const track = useMemo(() => {
     if (!baseTrack) return null;

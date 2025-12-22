@@ -11,5 +11,5 @@ import { PlaylistsLogic } from './usePlaylistsLogic';
 export interface PlaylistsVariantProps {
   data: PlaylistsData;
   logic: PlaylistsLogic;
-  variantConfig?: any;
+  variantConfig?: unknown;
 }

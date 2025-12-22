@@ -32,7 +32,7 @@ describe('NativeAudioService', () => {
     await service.loadTrack({ id: 't1', title: 'No Path', path: 'folder/song.mp3' });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const error = onError.mock.calls[0]?.[0] as any;
+    const error = onError.mock.calls[0]?.[0] as { code?: unknown; message?: unknown } | undefined;
     expect(error?.code).toBe('NATIVE_TRACK_PATH_NOT_ABSOLUTE');
     expect(invoke).not.toHaveBeenCalledWith('native_audio_load', expect.anything());
     service.destroy();
@@ -40,12 +40,14 @@ describe('NativeAudioService', () => {
 
   it('emits error when receiving native_audio_error event', async () => {
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
-    listenMock.mockImplementation(async (eventName: string, handler: (event: any) => void) => {
+    listenMock.mockImplementation(
+      async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
       if (eventName === 'native_audio_error') {
         handler({ payload: { seq: 1, code: 'NATIVE_AUDIO_STREAM_ERROR', message: 'decoder failed' } });
       }
       return () => {};
-    });
+    }
+    );
 
     const service = new NativeAudioService();
     const onError = vi.fn();
@@ -54,7 +56,7 @@ describe('NativeAudioService', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const error = onError.mock.calls[0]?.[0] as any;
+    const error = onError.mock.calls[0]?.[0] as { code?: unknown; message?: unknown } | undefined;
     expect(error?.code).toBe('NATIVE_AUDIO_STREAM_ERROR');
     expect(String(error?.message)).toContain('decoder failed');
     service.destroy();

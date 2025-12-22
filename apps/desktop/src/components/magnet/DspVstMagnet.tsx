@@ -11,7 +11,7 @@ type VstNodeSnapshot = {
 };
 
 type DspGraphConfig = {
-  nodes?: any[];
+  nodes?: unknown[];
 };
 
 function pickVstNodes(graph: DspGraphConfig | null): VstNodeSnapshot[] {
@@ -19,11 +19,12 @@ function pickVstNodes(graph: DspGraphConfig | null): VstNodeSnapshot[] {
   const out: VstNodeSnapshot[] = [];
   for (const node of nodes) {
     if (!node || typeof node !== 'object') continue;
-    if ((node as any).type !== 'vst') continue;
-    const id = typeof (node as any).id === 'string' ? (node as any).id : '';
-    const pluginId = typeof (node as any).pluginId === 'string' ? (node as any).pluginId : 'demo.gain';
+    const record = node as Record<string, unknown>;
+    if (record.type !== 'vst') continue;
+    const id = typeof record.id === 'string' ? record.id : '';
+    const pluginId = typeof record.pluginId === 'string' ? record.pluginId : 'demo.gain';
     if (!id) continue;
-    out.push({ id, enabled: Boolean((node as any).enabled), pluginId });
+    out.push({ id, enabled: typeof record.enabled === 'boolean' ? record.enabled : Boolean(record.enabled), pluginId });
   }
   return out;
 }
@@ -80,4 +81,3 @@ export const DspVstMagnet: React.FC = () => {
     </button>
   );
 };
-

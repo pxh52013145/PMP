@@ -14,6 +14,7 @@ import MatrixRainEffect from './components/effects/MatrixRainEffect';
 import { MagnetLayer } from './components/magnet/MagnetLayer';
 import { EditorOverlay } from './components/core/EditorOverlay';
 import { EditorPanel } from './components/core/EditorPanel';
+import { CommandPalette } from './components/commands/CommandPalette';
 import { EditorProvider, useEditor } from './contexts/EditorContext';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
@@ -32,34 +33,88 @@ import {
 } from './modules/magnets';
 import { readJson, readString, writeJson } from './modules/storage';
 import { gcOrphanBackgroundMedia } from './modules/background/mediaCleanup';
-import { syncPmpmPluginRenderers } from './magnet-system/plugins/pluginRegistry';
 import './App.css';
+
+type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
+const DEFAULT_BACKGROUND_THEME_COLOR: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
 
 function AppContent() {
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const isWindowActive = isMainWindowVisible && isDocumentVisible;
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useEffect(() => {
     void syncEditorEffectsFromStorage();
   }, []);
 
   useEffect(() => {
-    syncPmpmPluginRenderers();
-    const cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.PMPM_PLUGINS],
-      [TAURI_EVENTS.PMPM_PLUGINS_UPDATED],
-      syncPmpmPluginRenderers
-    );
-    return () => {
-      cleanupPromise.then((cleanup) => cleanup());
+    const run = async () => {
+      try {
+        const [{ migrateInstalledPmpmPluginsToDurableStorage }, { migrateInstalledPmpsShaderPacksToDurableStorage }] =
+          await Promise.all([
+            import('./magnet-system/plugins/pmpm'),
+            import('./shader-system/pmps'),
+          ]);
+
+        const [pmpm, pmps] = await Promise.all([
+          migrateInstalledPmpmPluginsToDurableStorage(),
+          migrateInstalledPmpsShaderPacksToDurableStorage(),
+        ]);
+
+        if (pmpm.migrated || pmps.migrated || pmpm.failed || pmps.failed) {
+          console.info('[storage] migration result', { pmpm, pmps });
+        }
+      } catch {
+        // best-effort: migration should not block app boot
+      }
     };
+
+    const requestIdleCallback = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
+    }).requestIdleCallback;
+    if (requestIdleCallback) {
+      requestIdleCallback(() => void run(), { timeout: 1500 });
+      return;
+    }
+
+    const timer = window.setTimeout(() => void run(), 800);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!target || !(target instanceof HTMLElement)) return false;
+      const tag = target.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+      return target.isContentEditable;
+    };
+
+    const isMac = navigator.platform.toLowerCase().includes('mac');
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+
+      const modifier = isMac ? e.metaKey : e.ctrlKey;
+      if (modifier && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setCommandPaletteOpen((value) => !value);
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        setCommandPaletteOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
 
   useEffect(() => {
@@ -83,7 +138,7 @@ function AppContent() {
       };
     };
 
-    let cleanupPromise = init();
+    const cleanupPromise = init();
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
@@ -103,10 +158,11 @@ function AppContent() {
   const [backgroundEffect, setBackgroundEffect] = useState(() => {
     return readString(STORAGE_KEYS.BACKGROUND_EFFECT) || 'none';
   });
-  type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
-  const defaultBackgroundThemeColor: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
   const [backgroundThemeColor, setBackgroundThemeColor] = useState<BackgroundThemeColor>(() => {
-    return readJson<BackgroundThemeColor>(STORAGE_KEYS.BACKGROUND_THEME_COLOR, defaultBackgroundThemeColor);
+    return readJson<BackgroundThemeColor>(
+      STORAGE_KEYS.BACKGROUND_THEME_COLOR,
+      DEFAULT_BACKGROUND_THEME_COLOR
+    );
   });
 
   // 监听背景效果和主题色变化
@@ -125,7 +181,7 @@ function AppContent() {
           setBackgroundThemeColor(
             readJson<BackgroundThemeColor>(
               STORAGE_KEYS.BACKGROUND_THEME_COLOR,
-              defaultBackgroundThemeColor
+              DEFAULT_BACKGROUND_THEME_COLOR
             )
           );
         }
@@ -149,7 +205,7 @@ function AppContent() {
 
   // 监听背景设置变化（从编辑器窗口更新）
   useEffect(() => {
-    let updateTimeout: NodeJS.Timeout | null = null;
+    const updateTimeout: NodeJS.Timeout | null = null;
 
     // 防抖更新函数（降低更新频率）
     // 已迁移到 setupConfigSync 统一框架，此处删除旧代码
@@ -222,8 +278,13 @@ function AppContent() {
       }
     };
 
-    if ('requestIdleCallback' in window) {
-      (window as any).requestIdleCallback(() => run(), { timeout: 2000 });
+    const requestIdleCallback = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
+    }).requestIdleCallback;
+    if (requestIdleCallback) {
+      requestIdleCallback(() => {
+        void run();
+      }, { timeout: 2000 });
       return;
     }
     const timer = setTimeout(() => run(), 800);
@@ -237,7 +298,7 @@ function AppContent() {
       setBackgroundSettings(readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS));
     };
 
-    let cleanupPromise = setupConfigSync(
+    const cleanupPromise = setupConfigSync(
       [STORAGE_KEYS.BACKGROUND_SETTINGS],
       [TAURI_EVENTS.BACKGROUND_UPDATED],
       reloadBackgroundSettings
@@ -259,7 +320,7 @@ function AppContent() {
       return unlisten;
     };
 
-    let unlistenPromise = setupExitListener();
+    const unlistenPromise = setupExitListener();
 
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
@@ -340,6 +401,8 @@ function AppContent() {
       {/* 窗口边框 */}
       <WindowBorder />
       </div>
+
+      <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
     </WindowActivityProvider>
   );
 }

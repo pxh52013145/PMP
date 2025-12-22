@@ -136,7 +136,7 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
     return () => {
       cancelled = true;
     };
-  }, [currentTrack?.id, currentTrack?.filePath, currentTrack?.path]);
+  }, [currentTrack]);
 
   // 提取封面颜色
   useEffect(() => {

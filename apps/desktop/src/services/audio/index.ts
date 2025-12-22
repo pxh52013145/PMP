@@ -7,3 +7,6 @@ export type { Track, AudioState, PlaybackState, PlayMode, Playlist } from './typ
 export type { IAudioService } from './types';
 export { WebAudioService } from './WebAudioService';
 export { NativeAudioService } from './NativeAudioService';
+export type { AudioEngineService, AudioEngineSnapshot, AudioEngineType } from './AudioEngineService';
+export { AUDIO_ENGINE_SERVICE_TOKEN, DefaultAudioEngineService } from './AudioEngineService';
+export { createAudioModule } from './audioModule';

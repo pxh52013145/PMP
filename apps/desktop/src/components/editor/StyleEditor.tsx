@@ -342,7 +342,7 @@ export const StyleEditor = memo(function StyleEditor() {
       '--border-theme-color-b',
       borderThemeColor.rgb[2].toString()
     );
-  }, []);
+  }, [backgroundThemeColor.rgb, borderThemeColor.rgb]);
 
   return (
     <div className="editor-style-editor">

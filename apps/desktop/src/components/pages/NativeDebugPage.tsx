@@ -16,6 +16,11 @@ function getFileName(filePath: string): string {
 
 const SUPPORTED_EXTENSIONS = ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'];
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  return value as Record<string, unknown>;
+}
+
 type NativeAudioMeta = {
   device: string | null;
   sampleRate: number | null;
@@ -126,21 +131,14 @@ export const NativeDebugPage: React.FC = () => {
   useEffect(() => {
     if (!isNativeEngine) return;
     const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS);
-    if (!persisted || typeof persisted !== 'object') return;
+    const record = asRecord(persisted);
+    if (!record) return;
 
-    const enabled =
-      'enabled' in persisted && typeof (persisted as any).enabled === 'boolean'
-        ? (persisted as any).enabled
-        : true;
-    const modeRaw =
-      'mode' in persisted && typeof (persisted as any).mode === 'string'
-        ? String((persisted as any).mode)
-        : 'track';
+    const enabled = typeof record.enabled === 'boolean' ? record.enabled : true;
+    const modeRaw = typeof record.mode === 'string' ? record.mode : 'track';
     const mode: ReplayGainMode = modeRaw === 'album' ? 'album' : 'track';
     const preampDb =
-      'preampDb' in persisted && typeof (persisted as any).preampDb === 'number'
-        ? (persisted as any).preampDb
-        : 0;
+      typeof record.preampDb === 'number' && isFinite(record.preampDb) ? record.preampDb : 0;
 
     setReplayGainSettings({ enabled, mode, preampDb });
   }, [isNativeEngine]);
@@ -148,20 +146,15 @@ export const NativeDebugPage: React.FC = () => {
   useEffect(() => {
     if (!isNativeEngine) return;
     const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS);
-    if (!persisted || typeof persisted !== "object") return;
+    const record = asRecord(persisted);
+    if (!record) return;
 
-    const enabled =
-      "enabled" in persisted && typeof (persisted as any).enabled === "boolean"
-        ? (persisted as any).enabled
-        : false;
-    const durationMs =
-      "durationMs" in persisted && typeof (persisted as any).durationMs === "number"
-        ? (persisted as any).durationMs
-        : 1200;
+    const enabled = typeof record.enabled === 'boolean' ? record.enabled : false;
+    const durationMs = typeof record.durationMs === 'number' ? record.durationMs : 1200;
 
     setCrossfadeSettings({
       enabled,
-      durationMs: typeof durationMs === "number" && isFinite(durationMs) ? durationMs : 1200,
+      durationMs: typeof durationMs === 'number' && isFinite(durationMs) ? durationMs : 1200,
     });
   }, [isNativeEngine]);
 
@@ -170,38 +163,29 @@ export const NativeDebugPage: React.FC = () => {
     const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DSP_CHAIN);
     if (!Array.isArray(persisted)) return;
 
-    const gainNode = persisted.find((node) => {
-      return (
-        node &&
-        typeof node === 'object' &&
-        'type' in node &&
-        (node as any).type === 'gain' &&
-        typeof (node as any).db === 'number'
-      );
-    }) as { type: 'gain'; db: number } | undefined;
+    const gainNode = persisted.find((node): node is { type: 'gain'; db: number } => {
+      const record = asRecord(node);
+      return record?.type === 'gain' && typeof record.db === 'number';
+    });
 
     if (gainNode) {
       setDspGainDb(gainNode.db);
     }
 
-    const eqNode = persisted.find((node) => {
-      return (
-        node &&
-        typeof node === 'object' &&
-        'type' in node &&
-        (node as any).type === 'eq' &&
-        Array.isArray((node as any).bands)
-      );
-    }) as { type: 'eq'; bands: unknown[] } | undefined;
+    const eqNode = persisted.find((node): node is { type: 'eq'; bands: unknown[] } => {
+      const record = asRecord(node);
+      return record?.type === 'eq' && Array.isArray(record.bands);
+    });
 
     if (eqNode) {
       const nextBands: NativeDspEqBand[] = [];
       for (const band of eqNode.bands) {
-        if (!band || typeof band !== 'object') continue;
-        const kind = (band as any).kind as NativeDspEqBandKind | undefined;
-        const frequencyHz = typeof (band as any).frequencyHz === 'number' ? (band as any).frequencyHz : null;
-        const q = typeof (band as any).q === 'number' ? (band as any).q : null;
-        const gainDb = typeof (band as any).gainDb === 'number' ? (band as any).gainDb : null;
+        const bandRecord = asRecord(band);
+        if (!bandRecord) continue;
+        const kind = bandRecord.kind as NativeDspEqBandKind | undefined;
+        const frequencyHz = typeof bandRecord.frequencyHz === 'number' ? bandRecord.frequencyHz : null;
+        const q = typeof bandRecord.q === 'number' ? bandRecord.q : null;
+        const gainDb = typeof bandRecord.gainDb === 'number' ? bandRecord.gainDb : null;
         if (!kind || frequencyHz === null || q === null || gainDb === null) continue;
         if (kind !== 'peaking' && kind !== 'low-shelf' && kind !== 'high-shelf') continue;
         nextBands.push({ kind, frequencyHz, q, gainDb });
@@ -211,15 +195,10 @@ export const NativeDebugPage: React.FC = () => {
       }
     }
 
-    const limiterNode = persisted.find((node) => {
-      return (
-        node &&
-        typeof node === 'object' &&
-        'type' in node &&
-        (node as any).type === 'limiter' &&
-        typeof (node as any).thresholdDb === 'number'
-      );
-    }) as { type: 'limiter'; thresholdDb: number } | undefined;
+    const limiterNode = persisted.find((node): node is { type: 'limiter'; thresholdDb: number } => {
+      const record = asRecord(node);
+      return record?.type === 'limiter' && typeof record.thresholdDb === 'number';
+    });
 
     if (limiterNode) {
       setLimiterEnabled(true);

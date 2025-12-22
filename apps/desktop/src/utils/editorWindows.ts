@@ -6,7 +6,6 @@ export type EditorWindowType =
   | 'statistics'
   | 'library'
   | 'style'
-  | 'help'
   | 'creator'
   | 'background'
   | 'custom-background'
@@ -53,15 +52,14 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
  * 当父窗口关闭时，其所有子窗口也应该关闭
  */
 const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
-  control: ['statistics', 'library', 'style', 'help', 'background'], // control 关闭时关闭所有主要窗口（debug独立，不关闭）
+  control: ['statistics', 'library', 'style', 'background', 'debug'], // control 关闭时关闭所有主要窗口
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
   style: [],
-  help: [],
   creator: [],
   'custom-background': [],
-  debug: [], // 独立窗口，无父窗口，无子窗口
+  debug: [],
 };
 
 /**
@@ -106,6 +104,23 @@ export async function closeAllEditorWindows(): Promise<void> {
 /**
  * 获取主窗口的位置和大小，用于计算子窗口位置
  */
+type PositionLike = { x: number; y: number };
+type SizeLike = { width: number; height: number };
+
+function toLogicalPosition(position: PositionLike, scaleFactor: number): PositionLike {
+  const record = position as unknown as { toLogical?: (scaleFactor: number) => PositionLike };
+  return typeof record.toLogical === 'function'
+    ? record.toLogical(scaleFactor)
+    : { x: position.x / scaleFactor, y: position.y / scaleFactor };
+}
+
+function toLogicalSize(size: SizeLike, scaleFactor: number): SizeLike {
+  const record = size as unknown as { toLogical?: (scaleFactor: number) => SizeLike };
+  return typeof record.toLogical === 'function'
+    ? record.toLogical(scaleFactor)
+    : { width: size.width / scaleFactor, height: size.height / scaleFactor };
+}
+
 export async function getMainWindowBounds(): Promise<{
   x: number;
   y: number;
@@ -121,14 +136,8 @@ export async function getMainWindowBounds(): Promise<{
     const size = await appWindow.outerSize();
     const isMaximized = await appWindow.isMaximized();
 
-    const logicalPosition =
-      typeof (position as any)?.toLogical === 'function'
-        ? (position as any).toLogical(scaleFactor)
-        : { x: position.x / scaleFactor, y: position.y / scaleFactor };
-    const logicalSize =
-      typeof (size as any)?.toLogical === 'function'
-        ? (size as any).toLogical(scaleFactor)
-        : { width: size.width / scaleFactor, height: size.height / scaleFactor };
+    const logicalPosition = toLogicalPosition(position, scaleFactor);
+    const logicalSize = toLogicalSize(size, scaleFactor);
 
     return {
       x: logicalPosition.x,
@@ -192,14 +201,8 @@ async function getVisibleEditorWindowRects(
         ]);
         if (!pos || !size) return null;
 
-        const logicalPos =
-          typeof (pos as any)?.toLogical === 'function'
-            ? (pos as any).toLogical(scaleFactor)
-            : { x: pos.x / scaleFactor, y: pos.y / scaleFactor };
-        const logicalSize =
-          typeof (size as any)?.toLogical === 'function'
-            ? (size as any).toLogical(scaleFactor)
-            : { width: size.width / scaleFactor, height: size.height / scaleFactor };
+        const logicalPos = toLogicalPosition(pos, scaleFactor);
+        const logicalSize = toLogicalSize(size, scaleFactor);
 
         return {
           x: logicalPos.x,
@@ -289,7 +292,6 @@ export async function calculateWindowPosition(
     statistics: { width: 380, height: 500 },
     library: { width: 520, height: 680 },
     style: { width: 520, height: 720 },
-    help: { width: 450, height: 650 },
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
@@ -317,11 +319,10 @@ export async function calculateWindowPosition(
     statistics: 1,
     library: 2,
     style: 3,
-    help: 4,
-    creator: 5,
-    background: 6,
-    'custom-background': 7,
-    debug: 8, // 调试窗口
+    creator: 4,
+    background: 5,
+    'custom-background': 6,
+    debug: 7, // 调试窗口
   };
 
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {

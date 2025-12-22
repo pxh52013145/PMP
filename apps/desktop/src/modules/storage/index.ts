@@ -16,5 +16,11 @@ export {
   type StorageWriteMode,
   type StorageWriteOptions,
 } from './localStorage';
+export {
+  readDurableText,
+  writeDurableText,
+  removeDurableText,
+  type DurableTextNamespace,
+} from './durableTextStore';
 export { usePersistentSetting } from './usePersistentSetting';
 export type { UsePersistentSettingOptions, PersistentFormat } from './usePersistentSetting';

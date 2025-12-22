@@ -36,6 +36,13 @@ export interface LibraryPath {
 }
 
 // 扫描进度信息
+type StoredLibraryPathRecord = Omit<LibraryPath, 'addedAt' | 'lastScanned'> & {
+  addedAt?: number;
+  lastScanned?: number;
+};
+
+type StoredTrackRecord = Omit<Track, 'addedAt'> & { addedAt?: number };
+
 export interface ScanProgress {
   total: number;
   current: number;
@@ -74,7 +81,9 @@ export class MusicLibraryService {
   private CACHE_TTL = 5000; // 5秒缓存
 
   private constructor() {
-    this.initDB();
+    void this.initDB().catch((error) => {
+      console.warn('[MusicLibraryService] initDB failed:', error);
+    });
     this.scheduleStartupRefresh();
   }
 
@@ -298,17 +307,19 @@ export class MusicLibraryService {
       const oldestKey = this.coverBlobUrlCache.keys().next().value as string | undefined;
       if (!oldestKey) break;
       const oldest = this.coverBlobUrlCache.get(oldestKey);
-      this.coverBlobUrlCache.delete(oldestKey);
-      if (oldest) {
-        this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - oldest.bytes);
-        try {
-          URL.revokeObjectURL(oldest.url);
-        } catch {}
+        this.coverBlobUrlCache.delete(oldestKey);
+        if (oldest) {
+          this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - oldest.bytes);
+          try {
+            URL.revokeObjectURL(oldest.url);
+          } catch (err) {
+            void err;
+          }
 
-        const cached = this.coverUrlCache.get(oldestKey);
-        if (cached === oldest.url) {
-          this.coverUrlCache.delete(oldestKey);
-        }
+          const cached = this.coverUrlCache.get(oldestKey);
+          if (cached === oldest.url) {
+            this.coverUrlCache.delete(oldestKey);
+          }
       }
     }
   }
@@ -514,6 +525,10 @@ export class MusicLibraryService {
 
   // 初始化数据库
   private async initDB(): Promise<void> {
+    if (typeof indexedDB === 'undefined') {
+      return;
+    }
+
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -579,9 +594,9 @@ export class MusicLibraryService {
             const cursor = (evt.target as IDBRequest).result as IDBCursorWithValue | null;
             if (!cursor) return;
 
-            const value: any = cursor.value;
-            const coverUrl = String(value.coverUrl || '');
-            const filePath = String(value.filePath || value.path || '');
+            const value = cursor.value as unknown as Record<string, unknown>;
+            const coverUrl = String(value.coverUrl ?? '');
+            const filePath = String(value.filePath ?? value.path ?? '');
             const isAbs = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('/');
 
             if (isAbs && coverUrl.startsWith('data:')) {
@@ -602,8 +617,8 @@ export class MusicLibraryService {
             const cursor = (evt.target as IDBRequest).result as IDBCursorWithValue | null;
             if (!cursor) return;
 
-            const value: any = cursor.value;
-            const coverUrl = String(value.coverUrl || '').trim();
+            const value = cursor.value as unknown as Record<string, unknown>;
+            const coverUrl = String(value.coverUrl ?? '').trim();
             const lower = coverUrl.toLowerCase();
             const shouldDrop =
               !coverUrl ||
@@ -690,11 +705,15 @@ export class MusicLibraryService {
     return new Promise((resolve, reject) => {
       const request = store.getAll();
       request.onsuccess = () => {
-        const paths = (request.result || []).map((path: any) => ({
-          ...path,
-          addedAt: path.addedAt ? new Date(path.addedAt) : new Date(),
-          lastScanned: path.lastScanned ? new Date(path.lastScanned) : undefined,
-        }));
+        const raw = Array.isArray(request.result) ? request.result : [];
+        const paths: LibraryPath[] = raw.map((entry) => {
+          const stored = entry as unknown as StoredLibraryPathRecord;
+          return {
+            ...stored,
+            addedAt: stored.addedAt ? new Date(stored.addedAt) : new Date(),
+            lastScanned: stored.lastScanned ? new Date(stored.lastScanned) : undefined,
+          };
+        });
         resolve(paths);
       };
       request.onerror = () => reject(request.error);
@@ -729,19 +748,24 @@ export class MusicLibraryService {
         }
 
         // 尝试重新获取文件夹句柄
-        // @ts-ignore - File System Access API
-        if (window.showDirectoryPicker) {
+        const showDirectoryPicker = (window as unknown as {
+          showDirectoryPicker?: (options: { mode: 'read' | 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>;
+        }).showDirectoryPicker;
+        if (showDirectoryPicker) {
           console.log(`请授权访问文件夹: ${pathInfo.path}`);
           // 注意：每次都需要用户重新授权
-          // @ts-ignore
-          const folderHandle = await window.showDirectoryPicker({
+          const folderHandle = await showDirectoryPicker({
             mode: 'read',
             id: pathInfo.id, // 尝试使用相同的ID来获取之前的权限
           });
           await this.scanFolder(folderHandle, pathInfo.id);
         }
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
+      } catch (error: unknown) {
+        const name =
+          typeof (error as { name?: unknown }).name === 'string'
+            ? (error as { name: string }).name
+            : undefined;
+        if (name === 'AbortError') {
           console.log(`User cancelled scanning for path: ${pathInfo.path}`);
         } else {
           console.error(`Failed to scan path ${pathInfo.path}:`, error);
@@ -766,11 +790,12 @@ export class MusicLibraryService {
     if (!folderPathOrHandle) {
       try {
         // 检查是否支持 File System Access API
-        // @ts-ignore
         // NOTE: In Tauri, we prefer native dialogs so we always have absolute file paths for NativeAudio.
-        if (!tauriRuntime && window.showDirectoryPicker) {
-          // @ts-ignore
-          folderHandle = await window.showDirectoryPicker({ mode: 'read' });
+        const showDirectoryPicker = (window as unknown as {
+          showDirectoryPicker?: (options: { mode: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+        }).showDirectoryPicker;
+        if (!tauriRuntime && showDirectoryPicker) {
+          folderHandle = await showDirectoryPicker({ mode: 'read' });
           useFileSystemAPI = true;
           shouldAddPath = true;
           console.log('Using File System Access API (fast)');
@@ -791,8 +816,12 @@ export class MusicLibraryService {
           shouldAddPath = true;
           console.log('Using Tauri dialog (fallback)');
         }
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
+      } catch (error: unknown) {
+        const name =
+          typeof (error as { name?: unknown }).name === 'string'
+            ? (error as { name: string }).name
+            : undefined;
+        if (name === 'AbortError') {
           console.log('User cancelled folder selection');
           return;
         }
@@ -876,8 +905,8 @@ export class MusicLibraryService {
       const batch = audioFiles.slice(i, Math.min(i + BATCH_SIZE, audioFiles.length));
 
       // 并行解析文件元数据
-      const parsedTracks = await Promise.all(
-        batch.map(async (audioFile, batchIndex) => {
+      const parsedTracks: Array<StoredTrackRecord | null> = await Promise.all(
+        batch.map(async (audioFile, batchIndex): Promise<StoredTrackRecord | null> => {
           const absoluteIndex = i + batchIndex;
 
           // 更新进度（使用索引而不是共享变量，避免竞争）
@@ -938,9 +967,9 @@ export class MusicLibraryService {
       );
 
       // 批量存储到数据库（一个事务处理整个批次）
-      const validTracks = parsedTracks.filter((t) => t !== null);
+      const validTracks = parsedTracks.filter((t): t is StoredTrackRecord => t !== null);
       if (validTracks.length > 0) {
-        await this.batchStoreTracks(validTracks as any[]);
+        await this.batchStoreTracks(validTracks);
       }
 
       current = i + batch.length;
@@ -1095,7 +1124,7 @@ export class MusicLibraryService {
       await this.ensureDB();
 
       const existing = await this.getStoredTracksForBackendScan(folderPath, pathId);
-      const existingByPath = new Map<string, any>();
+      const existingByPath = new Map<string, StoredTrackRecord>();
       for (const t of existing) {
         const p = String(t.filePath || t.path || '');
         if (!p) continue;
@@ -1103,7 +1132,7 @@ export class MusicLibraryService {
       }
 
       const seen = new Set<string>();
-      const upserts: any[] = [];
+      const upserts: StoredTrackRecord[] = [];
       const needMetadataPaths: string[] = [];
 
       for (const item of quick) {
@@ -1127,21 +1156,23 @@ export class MusicLibraryService {
         if (!isNew && unchanged && !needsLibraryPathLink && !shouldProbeMetadata) continue;
 
         const fallbackTitle = item.fileName.replace(/\.[^/.]+$/, '');
-        upserts.push({
-          ...(prev ?? {}),
-          id: prev?.id ?? this.stableIdFromPath(item.path),
-          title: prev?.title ?? fallbackTitle,
-          fileSize: item.size,
-          mtimeMs: item.mtimeMs,
-          filePath: item.path,
-          originalPath: item.path,
-          path: item.path,
-          libraryPathId: pathId ?? prev?.libraryPathId,
-          addedAt: prev?.addedAt ?? Date.now(),
-          mimeType: prev?.mimeType ?? this.guessMimeTypeFromPath(item.path),
-          file: undefined,
-          fileContent: undefined,
-        });
+        upserts.push(
+          {
+            ...(prev ?? {}),
+            id: prev?.id ?? this.stableIdFromPath(item.path),
+            title: prev?.title ?? fallbackTitle,
+            fileSize: item.size,
+            mtimeMs: item.mtimeMs,
+            filePath: item.path,
+            originalPath: item.path,
+            path: item.path,
+            libraryPathId: pathId ?? prev?.libraryPathId,
+            addedAt: prev?.addedAt ?? Date.now(),
+            mimeType: prev?.mimeType ?? this.guessMimeTypeFromPath(item.path),
+            file: undefined,
+            fileContent: undefined,
+          } as StoredTrackRecord
+        );
       }
 
       const deletions = existing
@@ -1175,7 +1206,7 @@ export class MusicLibraryService {
           options: { includeMetadata: true },
         });
 
-        const metaByPath = new Map<string, any>();
+        const metaByPath = new Map<string, (typeof scannedMeta)[number]>();
         for (const item of scannedMeta) {
           metaByPath.set(this.normalizePathForCompare(item.path), item);
         }
@@ -1243,8 +1274,9 @@ export class MusicLibraryService {
           console.error('Failed to update library path metadata:', error);
         }
       }
-    } catch (error: any) {
-      if (String(error?.message || error).includes('Scan cancelled')) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('Scan cancelled')) {
         return;
       }
       throw error;
@@ -1257,7 +1289,10 @@ export class MusicLibraryService {
     }
   }
 
-  private async getStoredTracksForBackendScan(folderPath: string, pathId?: string): Promise<any[]> {
+  private async getStoredTracksForBackendScan(
+    folderPath: string,
+    pathId?: string
+  ): Promise<StoredTrackRecord[]> {
     const db = await this.ensureDB();
 
     return new Promise((resolve, reject) => {
@@ -1266,7 +1301,7 @@ export class MusicLibraryService {
       const folderPrefix = this.normalizeFolderPrefix(folderPath);
 
       const scanByPrefix = () => {
-        const results: any[] = [];
+        const results: StoredTrackRecord[] = [];
         const request = store.openCursor();
         request.onsuccess = (event) => {
           const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
@@ -1274,7 +1309,7 @@ export class MusicLibraryService {
             resolve(results);
             return;
           }
-          const value = cursor.value;
+          const value = cursor.value as unknown as StoredTrackRecord;
           const p = String(value.filePath || value.path || '');
           if (p) {
             const normalized = this.normalizePathForCompare(p);
@@ -1290,7 +1325,7 @@ export class MusicLibraryService {
           const index = store.index('libraryPathId');
           const request = index.getAll(pathId);
           request.onsuccess = () => {
-            const result = request.result || [];
+            const result = (request.result || []) as unknown as StoredTrackRecord[];
             if (result.length > 0) {
               resolve(result);
               return;
@@ -1309,7 +1344,10 @@ export class MusicLibraryService {
     });
   }
 
-  private async applyBackendScanDiff(upserts: any[], deletions: string[]): Promise<void> {
+  private async applyBackendScanDiff(
+    upserts: StoredTrackRecord[],
+    deletions: string[]
+  ): Promise<void> {
     if (upserts.length === 0 && deletions.length === 0) return;
 
     const db = await this.ensureDB();
@@ -1331,7 +1369,7 @@ export class MusicLibraryService {
   }
 
   // 批量存储轨道到数据库（优化：一个事务处理多条记录）
-  private async batchStoreTracks(tracks: any[]): Promise<void> {
+  private async batchStoreTracks(tracks: StoredTrackRecord[]): Promise<void> {
     const db = await this.ensureDB();
     const transaction = db.transaction(['tracks'], 'readwrite');
     const store = transaction.objectStore('tracks');
@@ -1355,10 +1393,11 @@ export class MusicLibraryService {
                   addRequest.onsuccess = () => resolve();
                   addRequest.onerror = () => reject(addRequest.error);
                 } else {
-                  const updatedTrack = {
-                    ...existingRequest.result,
+                  const existing = existingRequest.result as unknown as StoredTrackRecord;
+                  const updatedTrack: StoredTrackRecord = {
+                    ...existing,
                     ...trackToStore,
-                    id: existingRequest.result.id,
+                    id: existing.id,
                   };
                   const updateRequest = store.put(updatedTrack);
                   updateRequest.onsuccess = () => resolve();
@@ -1399,8 +1438,10 @@ export class MusicLibraryService {
     const currentPath = basePath ? `${basePath}/${dirHandle.name}` : dirHandle.name;
 
     try {
-      // @ts-ignore
-      for await (const entry of dirHandle.values()) {
+      const values = (dirHandle as unknown as {
+        values: () => AsyncIterable<FileSystemHandle>;
+      }).values();
+      for await (const entry of values) {
         if (entry.kind === 'file') {
           const fileHandle = entry as FileSystemFileHandle;
           const ext = '.' + entry.name.split('.').pop()?.toLowerCase();
@@ -1520,14 +1561,14 @@ export class MusicLibraryService {
 
       if (limit) {
         // 使用游标限制结果数量
-        const tracks: any[] = [];
+        const tracks: Track[] = [];
         const request = store.openCursor();
         let count = 0;
 
         request.onsuccess = (event) => {
           const cursor = (event.target as IDBRequest).result;
           if (cursor && count < limit) {
-            tracks.push(this.restoreTrackForPlayback(cursor.value));
+            tracks.push(this.restoreTrackForPlayback(cursor.value as unknown as StoredTrackRecord));
             count++;
             cursor.continue();
           } else {
@@ -1539,8 +1580,10 @@ export class MusicLibraryService {
         // 获取所有
         const request = store.getAll();
         request.onsuccess = () => {
-          const tracks = request.result || [];
-          const restoredTracks = tracks.map((track: any) => this.restoreTrackForPlayback(track));
+          const raw = Array.isArray(request.result) ? request.result : [];
+          const restoredTracks = raw.map((track) =>
+            this.restoreTrackForPlayback(track as unknown as StoredTrackRecord)
+          );
           resolve(restoredTracks);
         };
         request.onerror = () => reject(request.error);
@@ -1568,7 +1611,7 @@ export class MusicLibraryService {
           return;
         }
 
-        const value = cursor.value;
+        const value = cursor.value as unknown as StoredTrackRecord;
         const title = String(value.title || '').toLowerCase();
         const artist = String(value.artist || '').toLowerCase();
         const album = String(value.album || '').toLowerCase();
@@ -1589,10 +1632,15 @@ export class MusicLibraryService {
   }
 
   // 从存储的track恢复用于播放的track对象
-  private restoreTrackForPlayback(storedTrack: any): Track {
-    const track = { ...storedTrack };
+  private restoreTrackForPlayback(storedTrack: StoredTrackRecord): Track {
+    const { addedAt, ...rest } = storedTrack;
+    const track: Track = { ...rest };
 
     track.coverUrl = this.sanitizeCoverUrl(track.coverUrl);
+
+    if (typeof addedAt === 'number') {
+      track.addedAt = new Date(addedAt);
+    }
 
     // 直接使用文件路径，WebAudioService 会负责处理
     if (track.filePath) {
@@ -1630,8 +1678,12 @@ export class MusicLibraryService {
   // ✅ 请求单个 FileHandle 的权限
   async requestFileHandlePermission(fileHandle: FileSystemFileHandle): Promise<boolean> {
     try {
-      const handle = fileHandle as any;
-      if (!handle.queryPermission || !handle.requestPermission) {
+      type PermissionCapableFileHandle = FileSystemFileHandle & {
+        queryPermission?: (descriptor: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+        requestPermission?: (descriptor: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+      };
+      const handle = fileHandle as unknown as PermissionCapableFileHandle;
+      if (typeof handle.queryPermission !== 'function' || typeof handle.requestPermission !== 'function') {
         // 浏览器不支持权限 API
         return false;
       }
@@ -1666,8 +1718,11 @@ export class MusicLibraryService {
     for (const path of paths) {
       if (path.folderHandle) {
         try {
-          const handle = path.folderHandle as any;
-          if (handle.requestPermission) {
+          type PermissionCapableDirectoryHandle = FileSystemDirectoryHandle & {
+            requestPermission?: (descriptor: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
+          };
+          const handle = path.folderHandle as unknown as PermissionCapableDirectoryHandle;
+          if (typeof handle.requestPermission === 'function') {
             const permission = await handle.requestPermission({ mode: 'read' });
             if (permission === 'granted') {
               granted++;
@@ -1731,8 +1786,10 @@ export class MusicLibraryService {
       const request = index.getAll(artist);
 
       request.onsuccess = () => {
-        const tracks = request.result || [];
-        const restoredTracks = tracks.map((track: any) => this.restoreTrackForPlayback(track));
+        const raw = Array.isArray(request.result) ? request.result : [];
+        const restoredTracks = raw.map((track) =>
+          this.restoreTrackForPlayback(track as unknown as StoredTrackRecord)
+        );
         resolve(restoredTracks);
       };
       request.onerror = () => reject(request.error);
@@ -1749,8 +1806,10 @@ export class MusicLibraryService {
       const request = index.getAll(album);
 
       request.onsuccess = () => {
-        const tracks = request.result || [];
-        const restoredTracks = tracks.map((track: any) => this.restoreTrackForPlayback(track));
+        const raw = Array.isArray(request.result) ? request.result : [];
+        const restoredTracks = raw.map((track) =>
+          this.restoreTrackForPlayback(track as unknown as StoredTrackRecord)
+        );
         resolve(restoredTracks);
       };
       request.onerror = () => reject(request.error);
@@ -1774,8 +1833,8 @@ export class MusicLibraryService {
           resolve(Array.from(seen).sort());
           return;
         }
-        const value: any = cursor.value;
-        const artist = String(value.artist || '').trim();
+        const value = cursor.value as unknown as Partial<Track>;
+        const artist = String(value.artist ?? '').trim();
         if (artist) seen.add(artist);
         cursor.continue();
       };
@@ -1826,10 +1885,10 @@ export class MusicLibraryService {
           return;
         }
 
-        const value: any = cursor.value;
-        const album = String(value.album || '');
+        const value = cursor.value as unknown as StoredTrackRecord;
+        const album = String(value.album ?? '');
         if (album) {
-          const artist = String(value.artist || 'Unknown Artist');
+          const artist = String(value.artist ?? 'Unknown Artist');
           const key = `${album}::${artist}`;
           if (!albumMap.has(key)) {
             albumMap.set(key, {
@@ -1865,8 +1924,8 @@ export class MusicLibraryService {
           resolve(Array.from(seen).sort());
           return;
         }
-        const value: any = cursor.value;
-        const genre = String(value.genre || '').trim();
+        const value = cursor.value as unknown as Partial<Track>;
+        const genre = String(value.genre ?? '').trim();
         if (genre) seen.add(genre);
         cursor.continue();
       };
@@ -1902,14 +1961,14 @@ export class MusicLibraryService {
           return;
         }
 
-        const value: any = cursor.value;
+        const value = cursor.value as unknown as Partial<Track>;
         totalTracks++;
-        const artist = String(value.artist || '').trim();
-        const album = String(value.album || '').trim();
+        const artist = String(value.artist ?? '').trim();
+        const album = String(value.album ?? '').trim();
         if (artist) artists.add(artist);
         if (album) albums.add(album);
-        totalSize += Number(value.fileSize || 0);
-        totalDuration += Number(value.duration || 0);
+        totalSize += Number(value.fileSize ?? 0);
+        totalDuration += Number(value.duration ?? 0);
 
         cursor.continue();
       };

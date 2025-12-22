@@ -497,8 +497,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const sorted = [...items];
     sorted.sort((a, b) => {
-      let compareA: any;
-      let compareB: any;
+      let compareA: string | number = '';
+      let compareB: string | number = '';
 
       // 根据排序字段获取比较值
       if ('title' in a && sortBy === 'title') {
@@ -522,10 +522,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       // 比较
       let result = 0;
-      if (typeof compareA === 'string') {
+      if (typeof compareA === 'string' && typeof compareB === 'string') {
         result = compareA.localeCompare(compareB);
       } else {
-        result = compareA - compareB;
+        result = Number(compareA) - Number(compareB);
       }
 
       // 应用排序方向
@@ -1099,7 +1099,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 <div className="paths-manager-empty">
                   <div className="paths-empty-icon">📁</div>
                   <div className="paths-empty-text">暂无库路径</div>
-                  <div className="paths-empty-hint">点击"+ 添加文件夹"扫描音乐库</div>
+                  <div className="paths-empty-hint">点击“+ 添加文件夹”扫描音乐库</div>
                 </div>
               ) : (
                 <div className="paths-manager-list">
@@ -1164,7 +1164,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             <div className="paths-manager-footer">
               <div className="paths-manager-info">
-                管理音乐库扫描路径。点击"⊞ 添加文件夹"扫描新的音乐文件夹，会自动保存路径。
+                管理音乐库扫描路径。点击“⊞ 添加文件夹”扫描新的音乐文件夹，会自动保存路径。
               </div>
             </div>
           </div>

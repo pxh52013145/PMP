@@ -111,8 +111,6 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     }
   }, [magnet, pixelPositions, PIXEL_SIZE]);
 
-  if (!bounds) return null;
-
   const handleClick = () => {
     if (magnet.interactions.clickable && magnet.interactions.onClick) {
       magnet.interactions.onClick();
@@ -214,6 +212,8 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
 
   // 组合最终样式
   const finalStyle = useMemo(() => {
+    if (!bounds) return null;
+
     return {
       position: 'absolute' as const,
       left: `${bounds.x}px`,
@@ -243,6 +243,8 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
 
     return magnet.content;
   };
+
+  if (!bounds || !finalStyle) return null;
 
   return (
     <div

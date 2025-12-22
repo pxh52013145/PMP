@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import {
   useNavigation,
   type NavigationPageType,
   type NavigationParamsMap,
 } from '../../contexts/NavigationContext';
-import { getInstalledPmpmPlugin } from './pmpm';
+import { parseNavigationParams } from '../../contracts/navigationParams';
+import {
+  getPmpmPluginEffectivePermissions,
+  getPmpmPluginsRevision,
+  recordPmpmPluginCrash,
+  subscribePmpmPlugins,
+} from './pmpm';
+import { ensurePmpmPluginRuntime, type PmpmPluginRuntime } from './pmpmRuntime';
 
 type PluginAudioApi = {
   getState: () => unknown;
@@ -31,88 +38,18 @@ type PageWithoutParams = {
 
 type PageWithParams = Exclude<NavigationPageType, PageWithoutParams>;
 
-const PAGES_REQUIRING_PARAMS = new Set<NavigationPageType>(['track', 'album', 'artist']);
+const PAGES_REQUIRING_PARAMS = new Set<NavigationPageType>([
+  'track',
+  'album',
+  'artist',
+  'plugin-page',
+  'plugin-visualizer',
+]);
 
 export type PluginMountApi = {
   audio: PluginAudioApi;
   navigation: PluginNavigationApi;
 };
-
-type PluginRuntime = {
-  mount: (container: HTMLElement, api: PluginMountApi) => void | (() => void);
-  unmount?: (container: HTMLElement) => void;
-};
-
-const runtimeCache = new Map<string, Promise<PluginRuntime>>();
-
-function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(buffer).set(data);
-  return buffer;
-}
-
-async function sha256Hex(data: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(data));
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-async function sha256HexFromString(text: string): Promise<string> {
-  return sha256Hex(new TextEncoder().encode(text));
-}
-
-async function loadPluginRuntime(pluginId: string): Promise<PluginRuntime> {
-  const installed = getInstalledPmpmPlugin(pluginId);
-  if (!installed) {
-    throw new Error(`Plugin not installed: ${pluginId}`);
-  }
-
-  if (installed.entrySha256) {
-    const computed = await sha256HexFromString(installed.entryCode);
-    if (computed !== installed.entrySha256) {
-      throw new Error(
-        `Plugin integrity check failed (entrySha256 mismatch). Please reinstall: ${pluginId}`
-      );
-    }
-  }
-
-  const blob = new Blob([installed.entryCode], { type: 'text/javascript' });
-  const url = URL.createObjectURL(blob);
-
-  try {
-    const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
-    const mount =
-      (mod.mount as PluginRuntime['mount'] | undefined) ??
-      ((mod.default as { mount?: PluginRuntime['mount'] } | undefined)?.mount as
-        | PluginRuntime['mount']
-        | undefined);
-    const unmount =
-      (mod.unmount as PluginRuntime['unmount'] | undefined) ??
-      ((mod.default as { unmount?: PluginRuntime['unmount'] } | undefined)?.unmount as
-        | PluginRuntime['unmount']
-        | undefined);
-
-    if (typeof mount !== 'function') {
-      throw new Error('Plugin entry must export `mount(container, api)`');
-    }
-
-    return { mount, unmount };
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function ensurePluginRuntime(pluginId: string): Promise<PluginRuntime> {
-  const existing = runtimeCache.get(pluginId);
-  if (existing) return existing;
-  const promise = loadPluginRuntime(pluginId).catch((err) => {
-    runtimeCache.delete(pluginId);
-    throw err;
-  });
-  runtimeCache.set(pluginId, promise);
-  return promise;
-}
 
 export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const audioService = useAudioService();
@@ -121,10 +58,16 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const pluginStoreRevision = useSyncExternalStore(
+    subscribePmpmPlugins,
+    getPmpmPluginsRevision,
+    getPmpmPluginsRevision
+  );
+
   const permissions = useMemo(() => {
-    const installed = getInstalledPmpmPlugin(pluginId);
-    return new Set(installed?.manifest.permissions ?? []);
-  }, [pluginId]);
+    void pluginStoreRevision;
+    return getPmpmPluginEffectivePermissions(pluginId);
+  }, [pluginId, pluginStoreRevision]);
 
   const api = useMemo<PluginMountApi>(() => {
     const allowAudioState = permissions.has('api:audio-state');
@@ -216,7 +159,9 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
           }
           if (params === undefined) {
             if (PAGES_REQUIRING_PARAMS.has(page)) {
-              console.warn(`[PluginMagnetHost] navigateTo(${page}) requires params; ignoring request.`);
+              console.warn(
+                `[PluginMagnetHost] navigateTo(${page}) requires params; ignoring request.`
+              );
               return;
             }
             navigation.navigateTo(page as PageWithoutParams);
@@ -224,12 +169,22 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
           }
 
           if (!PAGES_REQUIRING_PARAMS.has(page)) {
-            console.warn(`[PluginMagnetHost] navigateTo(${page}) ignores params; navigating without params.`);
+            console.warn(
+              `[PluginMagnetHost] navigateTo(${page}) ignores params; navigating without params.`
+            );
             navigation.navigateTo(page as PageWithoutParams);
             return;
           }
- 
-          navigation.navigateTo(page as PageWithParams, params as never);
+
+          const validated = parseNavigationParams(page, params);
+          if (!validated) {
+            console.warn(
+              `[PluginMagnetHost] navigateTo(${page}) params invalid; ignoring request.`
+            );
+            return;
+          }
+
+          navigation.navigateTo(page as PageWithParams, validated as Record<string, unknown>);
         },
         goBack: () => {
           if (!allowNavigation) {
@@ -249,11 +204,11 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     let cancelled = false;
     setError(null);
 
-    void ensurePluginRuntime(pluginId)
+    void ensurePmpmPluginRuntime(pluginId)
       .then((runtime) => {
         if (cancelled) return;
         try {
-          const cleanup = runtime.mount(container, api);
+          const cleanup = (runtime as PmpmPluginRuntime).mount(container, api);
           cleanupRef.current = typeof cleanup === 'function' ? cleanup : null;
         } catch (err) {
           throw err instanceof Error ? err : new Error(String(err));
@@ -261,6 +216,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
       })
       .catch((err) => {
         if (cancelled) return;
+        recordPmpmPluginCrash(pluginId, err, 'magnet');
         setError(err instanceof Error ? err.message : String(err));
       });
 
@@ -286,3 +242,4 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }
+

@@ -4,6 +4,16 @@ import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunicat
 import { readJson, readString, tryWriteJson, writeString } from '../../modules/storage';
 import './BackgroundManager.css';
 
+function isTauriLocalhostHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
 interface BackgroundManagerProps {
   settings: BackgroundSettings;
   onSettingsChange: (settings: BackgroundSettings) => void;
@@ -425,7 +435,8 @@ export const BackgroundManager = memo(function BackgroundManager({
 
   const tryGetManagedMediaRelPath = useCallback((url: string | undefined): string | null => {
     if (!url) return null;
-    if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+    if (url.startsWith('data:')) return null;
+    if ((url.startsWith('http://') || url.startsWith('https://')) && !isTauriLocalhostHttpUrl(url)) {
       return null;
     }
 

@@ -1,46 +1,20 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from 'react';
+import type { NavigationPageData, NavigationPageType } from '../contracts/navigation';
+import { NAVIGATION_SERVICE_TOKEN, type NavigationSnapshot } from '../services/navigation';
+import { useKernel } from './KernelContext';
 
-/**
- * 导航页面类型
- */
-export type NavigationPageType =
-  | 'home'
-  | 'settings'
-  | 'music-library'
-  | 'playlists'
-  | 'play-queue'
-  | 'track'
-  | 'album'
-  | 'artist'
-  | 'plugin-page'
-  | 'plugin-visualizer'
-  | 'native-debug';
-
-export type NavigationParamsMap = {
-  home: undefined;
-  settings: undefined;
-  'music-library': undefined;
-  playlists: undefined;
-  'play-queue': undefined;
-  'native-debug': undefined;
-  track: Record<string, any>;
-  album: Record<string, any>;
-  artist: Record<string, any>;
-  'plugin-page': Record<string, any>;
-  'plugin-visualizer': Record<string, any>;
-};
-
-/**
- * 导航页面数据（可携带额外参数）
- */
-export interface NavigationPageData {
-  type: NavigationPageType;
-  params?: Record<string, any>;
-}
+export type { NavigationPageData, NavigationPageType, NavigationParamsMap } from '../contracts/navigation';
 
 interface NavigationContextType {
   currentPage: NavigationPageData;
-  navigateTo: (page: NavigationPageType, params?: Record<string, any>) => void;
+  navigateTo: (page: NavigationPageType, params?: Record<string, unknown>) => void;
   goBack: () => void;
   history: NavigationPageData[];
 }
@@ -51,66 +25,37 @@ interface NavigationProviderProps {
   children: ReactNode;
 }
 
-/**
- * 导航状态提供者
- */
 export function NavigationProvider({ children }: NavigationProviderProps) {
-  const [history, setHistory] = useState<NavigationPageData[]>([{ type: 'home' }]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const kernel = useKernel();
+  const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
 
-  const currentPage = history[currentIndex];
+  const [snapshot, setSnapshot] = useState<NavigationSnapshot>(() => navigationService.getSnapshot());
 
-  const navigateTo = (type: NavigationPageType, params?: Record<string, any>) => {
-    const newPage: NavigationPageData = { type, params };
+  useEffect(() => {
+    setSnapshot(navigationService.getSnapshot());
+    return kernel.events.on('navigation/changed', (next) => {
+      setSnapshot(next);
+    });
+  }, [kernel.events, navigationService]);
 
-    // 智能去重：如果当前页面和目标页面完全相同（包括参数），则忽略
-    // 这样可以防止重复点击同一个按钮产生重复历史
-    if (currentPage.type === type) {
-      // 对于没有参数的页面（如 music-library, home），直接忽略
-      if (!params && !currentPage.params) {
-        console.log(`Already on ${type} page, ignoring navigation`);
-        return;
-      }
+  const navigateTo = useCallback(
+    (page: NavigationPageType, params?: Record<string, unknown>) => {
+      navigationService.navigateTo(page, params);
+    },
+    [navigationService]
+  );
 
-      // 对于有参数的页面（如 track），比较参数是否相同
-      // 如果参数不同，则替换当前页面（避免历史堆积）
-      // 如果参数相同，则忽略（避免重复）
-      const paramsEqual = JSON.stringify(params || {}) === JSON.stringify(currentPage.params || {});
-      if (paramsEqual) {
-        console.log(`Already on ${type} page with same params, ignoring navigation`);
-        return;
-      }
-
-      // 参数不同时，替换当前页面而不是添加新历史
-      const newHistory = [...history];
-      newHistory[currentIndex] = newPage;
-      setHistory(newHistory);
-      console.log(`Replaced ${type} page with new params`);
-      return;
-    }
-
-    // 添加到历史记录
-    const newHistory = history.slice(0, currentIndex + 1);
-    newHistory.push(newPage);
-
-    setHistory(newHistory);
-    setCurrentIndex(newHistory.length - 1);
-    console.log(`Navigated to ${type} page`);
-  };
-
-  const goBack = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
-    }
-  };
+  const goBack = useCallback(() => {
+    navigationService.goBack();
+  }, [navigationService]);
 
   return (
     <NavigationContext.Provider
       value={{
-        currentPage,
+        currentPage: snapshot.currentPage,
         navigateTo,
         goBack,
-        history,
+        history: snapshot.history,
       }}
     >
       {children}
@@ -118,9 +63,6 @@ export function NavigationProvider({ children }: NavigationProviderProps) {
   );
 }
 
-/**
- * 使用导航上下文
- */
 export function useNavigation() {
   const context = useContext(NavigationContext);
   if (!context) {

@@ -21,9 +21,20 @@ function safeParseJson<T>(raw: string | null): T | null {
   }
 }
 
+function isTauriLocalhostHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
 function tryGetManagedMediaRelPath(url: string | undefined): string | null {
   if (!url) return null;
-  if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) {
+  if (url.startsWith('data:')) return null;
+  if ((url.startsWith('http://') || url.startsWith('https://')) && !isTauriLocalhostHttpUrl(url)) {
     return null;
   }
 

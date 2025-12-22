@@ -707,12 +707,12 @@ export function MagnetCreator({
         default:
           return null;
       }
-    }, [magnet, previewPixelPositions]);
+    }, [magnet]);
 
     if (!bounds) return null;
 
     // 计算当前应用的样式
-    const currentStyle: MagnetStyle = useMemo(() => {
+    const currentStyle: MagnetStyle = (() => {
       let appliedStyle = { ...magnet.style };
       if (isHovering && magnet.animation?.hoverStyle) {
         appliedStyle = { ...appliedStyle, ...magnet.animation.hoverStyle };
@@ -721,7 +721,7 @@ export function MagnetCreator({
         appliedStyle = { ...appliedStyle, ...magnet.animation.activeStyle };
       }
       return appliedStyle;
-    }, [magnet.style, magnet.animation, isHovering, isActive]);
+    })();
 
     const finalStyle = {
       position: 'absolute' as const,
@@ -1076,7 +1076,7 @@ export function MagnetCreator({
               {animationError && <div className="creator-error">{animationError}</div>}
               <div className="creator-hint">
                 💡 动画配置说明：
-                <br />• <strong>transition</strong>: 过渡动画，如 "all 0.2s ease"
+                <br />• <strong>transition</strong>: 过渡动画，如 “all 0.2s ease”
                 <br />• <strong>hoverStyle</strong>: 鼠标悬停时的样式（可包含任何 CSS 属性）
                 <br />• <strong>activeStyle</strong>: 点击/按下时的样式（可包含任何 CSS 属性）
                 <br />
@@ -1210,7 +1210,7 @@ export function MagnetCreator({
             {importError && <div className="creator-import-error">{importError}</div>}
             <div className="creator-import-hint">
               💡 使用说明：
-              <br />• 点击"选择文件"按钮，选择 .json 配置文件
+              <br />• 点击“选择文件”按钮，选择 .json 配置文件
               <br />• 或手动粘贴从其他 Magnet 导出的 JSON 配置
               <br />• 配置必须包含 id, name, anchorType, style 等字段
               <br />

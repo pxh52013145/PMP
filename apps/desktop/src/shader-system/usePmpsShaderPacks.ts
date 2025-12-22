@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { STORAGE_KEYS, TAURI_EVENTS, setupConfigSync } from '../utils/windowCommunication';
-import { loadInstalledPmpsShaderPacks, type InstalledPmpsShaderPack } from './pmps';
+import {
+  loadInstalledPmpsShaderPacks,
+  resolveInstalledPmpsShaderPack,
+  type InstalledPmpsShaderPack,
+  type ResolvedPmpsShaderPack,
+} from './pmps';
 
 export function useInstalledPmpsShaderPacks(): InstalledPmpsShaderPack[] {
   const [packs, setPacks] = useState<InstalledPmpsShaderPack[]>(() => loadInstalledPmpsShaderPacks());
@@ -24,12 +29,39 @@ export function useInstalledPmpsShaderPacks(): InstalledPmpsShaderPack[] {
   return packs;
 }
 
-export function useInstalledPmpsShaderPack(shaderId: string | null | undefined): InstalledPmpsShaderPack | null {
+export function useInstalledPmpsShaderPack(
+  shaderId: string | null | undefined
+): ResolvedPmpsShaderPack | null {
   const packs = useInstalledPmpsShaderPacks();
 
-  return useMemo(() => {
-    if (!shaderId) return null;
-    return packs.find((pack) => pack.manifest.metadata.id === shaderId) ?? null;
-  }, [packs, shaderId]);
-}
+  const [resolved, setResolved] = useState<ResolvedPmpsShaderPack | null>(null);
 
+  const packExists = useMemo(() => {
+    if (!shaderId) return false;
+    return packs.some((pack) => pack.manifest.metadata.id === shaderId);
+  }, [packs, shaderId]);
+
+  useEffect(() => {
+    if (!shaderId || !packExists) {
+      setResolved(null);
+      return;
+    }
+
+    let cancelled = false;
+    void resolveInstalledPmpsShaderPack(shaderId)
+      .then((next) => {
+        if (cancelled) return;
+        setResolved(next);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setResolved(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [packExists, shaderId]);
+
+  return resolved;
+}

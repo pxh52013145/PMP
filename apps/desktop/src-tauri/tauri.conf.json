@@ -37,7 +37,10 @@
         "confirm": true
       },
       "fs": {
-        "all": true
+        "all": true,
+        "scope": [
+          "$APPDATA/**"
+        ]
       }
     },
     "bundle": {
