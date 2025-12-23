@@ -111,18 +111,19 @@ export const ThemeDebugPage: React.FC = () => {
 
   return (
     <div className="editor-debug">
-      {/* 拖动区域标题栏 */}
-      <div className="debug-header" data-tauri-drag-region>
-        <div className="header-content" data-tauri-drag-region>
-          <h1 data-tauri-drag-region>🎨 主题系统调试</h1>
-          <p className="debug-subtitle" data-tauri-drag-region>
-            Theme & Shader System Development Panel
-          </p>
-        </div>
+      <div className="editor-window-header" data-tauri-drag-region>
+        <span className="window-title" data-tauri-drag-region>
+          ⋮⋮
+        </span>
       </div>
 
-      {/* 主内容区域 */}
-      <div className="debug-main">
+      <div className="editor-window-content editor-debug-content">
+        <div className="debug-title">
+          <h2>主题系统调试</h2>
+          <p className="debug-subtitle">Theme & Shader System Development Panel</p>
+        </div>
+
+        <div className="debug-main">
         {/* 左侧：控制面板 */}
         <div className="debug-control-panel">
           <div className="control-section">
@@ -429,6 +430,7 @@ export const ThemeDebugPage: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

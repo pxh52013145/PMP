@@ -11,6 +11,7 @@ export type { MagnetConfig, MagnetStateConfig };
 
 export interface ScheduleSaveMagnetConfigOptions {
   debounceMs?: number;
+  afterSave?: () => void | Promise<void>;
 }
 
 let scheduledSaveTimeout: number | null = null;
@@ -22,6 +23,7 @@ let scheduledSaveArgs:
       defaultMagnetLibrary?: Magnet[];
     }
   | null = null;
+let scheduledAfterSave: null | (() => void | Promise<void>) = null;
 
 /**
  * Magnets persistence/config public API.
@@ -55,6 +57,7 @@ export function scheduleSaveMagnetConfig(
   const debounceMs = options.debounceMs ?? 300;
 
   scheduledSaveArgs = { magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary };
+  scheduledAfterSave = options.afterSave ?? null;
 
   if (scheduledSaveTimeout !== null) {
     window.clearTimeout(scheduledSaveTimeout);
@@ -64,9 +67,16 @@ export function scheduleSaveMagnetConfig(
     scheduledSaveTimeout = null;
     const args = scheduledSaveArgs;
     scheduledSaveArgs = null;
+    const afterSave = scheduledAfterSave;
+    scheduledAfterSave = null;
     if (!args) return;
     try {
       saveMagnetConfig(args.magnetLibrary, args.activeMagnetIds, args.gridSize, args.defaultMagnetLibrary);
+      if (afterSave) {
+        Promise.resolve(afterSave()).catch((error) => {
+          console.warn('[magnets] afterSave callback failed', error);
+        });
+      }
     } catch (error) {
       console.warn('[magnets] Failed to save config (scheduled)', error);
     }
@@ -79,6 +89,32 @@ export function cancelScheduledMagnetConfigSave(): void {
     scheduledSaveTimeout = null;
   }
   scheduledSaveArgs = null;
+  scheduledAfterSave = null;
+}
+
+export function flushScheduledMagnetConfigSave(): void {
+  if (scheduledSaveTimeout !== null) {
+    window.clearTimeout(scheduledSaveTimeout);
+    scheduledSaveTimeout = null;
+  }
+
+  const args = scheduledSaveArgs;
+  scheduledSaveArgs = null;
+  const afterSave = scheduledAfterSave;
+  scheduledAfterSave = null;
+
+  if (!args) return;
+
+  try {
+    saveMagnetConfig(args.magnetLibrary, args.activeMagnetIds, args.gridSize, args.defaultMagnetLibrary);
+    if (afterSave) {
+      Promise.resolve(afterSave()).catch((error) => {
+        console.warn('[magnets] afterSave callback failed', error);
+      });
+    }
+  } catch (error) {
+    console.warn('[magnets] Failed to save config (flush)', error);
+  }
 }
 
 export function applyMagnetConfig(

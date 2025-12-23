@@ -62,6 +62,28 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
 
+  const setOpenStateForType = useCallback((type: string, open: boolean) => {
+    switch (type) {
+      case 'statistics':
+        setStatisticsOpen(open);
+        return;
+      case 'library':
+        setLibraryOpen(open);
+        return;
+      case 'style':
+        setStyleOpen(open);
+        return;
+      case 'debug':
+        setDebugOpen(open);
+        return;
+      case 'background':
+        setBackgroundOpen(open);
+        return;
+      default:
+        return;
+    }
+  }, []);
+
   const syncWindowStates = useCallback(async () => {
     try {
       const { WebviewWindow } = await import('@tauri-apps/api/window');
@@ -93,6 +115,54 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       // best-effort: visibility sync is non-critical
     }
   }, []);
+
+  // Keep toggle UI in sync with actual window lifecycle (including force-close paths).
+  useEffect(() => {
+    const setup = async () => {
+      const unlistenHidden = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_HIDDEN,
+        (payload) => {
+          if (payload === 'control') {
+            // Closing the control window exits edit mode and force-closes children; reset the UI state
+            // so the next time this cached window is shown it won't display stale toggles.
+            setStatisticsOpen(false);
+            setLibraryOpen(false);
+            setStyleOpen(false);
+            setDebugOpen(false);
+            setBackgroundOpen(false);
+            return;
+          }
+          setOpenStateForType(payload, false);
+        }
+      );
+
+      const unlistenShown = await setupTauriListenerWithPayload<string>(
+        TAURI_EVENTS.EDITOR_WINDOW_SHOWN,
+        (payload) => {
+          if (payload === 'control') {
+            setStatisticsOpen(false);
+            setLibraryOpen(false);
+            setStyleOpen(false);
+            setDebugOpen(false);
+            setBackgroundOpen(false);
+            void syncWindowStates();
+            return;
+          }
+          setOpenStateForType(payload, true);
+        }
+      );
+
+      return () => {
+        unlistenHidden();
+        unlistenShown();
+      };
+    };
+
+    const cleanupPromise = setup();
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [setOpenStateForType, syncWindowStates]);
 
   useEffect(() => {
     let isActive = true;
@@ -358,18 +428,62 @@ export function EditorWindowApp() {
   }, []);
 
   useEffect(() => {
-    const onFocus = () => setIsWindowFocused(true);
-    const onBlur = () => setIsWindowFocused(false);
+    let disposed = false;
+    let blurTimer: number | null = null;
+    let unlisten: (() => void) | null = null;
 
-    setIsWindowFocused(document.hasFocus());
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('blur', onBlur);
+    const applyFocus = (focused: boolean) => {
+      if (blurTimer !== null) {
+        window.clearTimeout(blurTimer);
+        blurTimer = null;
+      }
+
+      if (focused) {
+        setIsWindowFocused(true);
+        return;
+      }
+
+      // Debounce blur: some platforms briefly drop focus while dragging the window.
+      blurTimer = window.setTimeout(() => {
+        blurTimer = null;
+        if (!disposed) setIsWindowFocused(false);
+      }, 160);
+    };
+
+    const setup = async () => {
+      if (isTauri) {
+        try {
+          const { appWindow } = await import('@tauri-apps/api/window');
+          const initialFocused = await appWindow.isFocused().catch(() => document.hasFocus());
+          applyFocus(initialFocused);
+          unlisten = await appWindow.onFocusChanged(({ payload: focused }) => {
+            applyFocus(focused);
+          });
+          return;
+        } catch (error) {
+          console.warn('[EditorWindow] Failed to subscribe to focus events:', error);
+        }
+      }
+
+      const onFocus = () => applyFocus(true);
+      const onBlur = () => applyFocus(false);
+      applyFocus(document.hasFocus());
+      window.addEventListener('focus', onFocus);
+      window.addEventListener('blur', onBlur);
+      unlisten = () => {
+        window.removeEventListener('focus', onFocus);
+        window.removeEventListener('blur', onBlur);
+      };
+    };
+
+    void setup();
 
     return () => {
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('blur', onBlur);
+      disposed = true;
+      if (blurTimer !== null) window.clearTimeout(blurTimer);
+      if (unlisten) unlisten();
     };
-  }, []);
+  }, [isTauri]);
 
   useEffect(() => {
     const setup = async () => {
@@ -635,12 +749,11 @@ export function EditorWindowApp() {
   const handleExitEditMode = async () => {
     try {
       // 通知主窗口退出编辑模式
-      await broadcastSignal(TAURI_EVENTS.EDITOR_EXIT);
       await broadcastSignal(TAURI_EVENTS.EDITOR_STYLE_APPLY);
 
       // 关闭所有编辑器窗口
-      const { closeAllEditorWindows } = await import('./utils/editorWindows');
-      await closeAllEditorWindows();
+      const { closeEditorWindow } = await import('./utils/editorWindows');
+      await closeEditorWindow('control');
     } catch (error) {
       console.error('Failed to exit edit mode:', error);
     }
@@ -790,9 +903,7 @@ export function EditorWindowApp() {
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
               <div
-                className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''} ${
-                  isWindowActive ? '' : 'editor-window-app--background'
-                }`}
+                className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''}`}
                 ref={rootRef}
               >
                   {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}

@@ -314,8 +314,6 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   const handleFileSelect = useCallback(async (type: 'image' | 'video') => {
     try {
       const dialog = await import('@tauri-apps/api/dialog');
-      const fs = await import('@tauri-apps/api/fs');
-      const pathApi = await import('@tauri-apps/api/path');
       const tauri = await import('@tauri-apps/api/tauri');
 
       const filterConfig =
@@ -335,92 +333,32 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       });
 
       if (selected && typeof selected === 'string') {
-        let stage = 'init';
         try {
-          stage = 'read';
-          const contents = await fs.readBinaryFile(selected);
-          const fileSizeMB = contents.length / 1024 / 1024;
-
-          // 文件大小限制
-          const maxSize = type === 'image' ? 5 * 1024 * 1024 : 20 * 1024 * 1024; // 图片5MB，视频20MB
-          if (contents.length > maxSize) {
-            const limitMB = maxSize / 1024 / 1024;
-            console.error(`File too large: ${fileSizeMB.toFixed(2)}MB > ${limitMB}MB`);
-            setErrorMessage(
-              `<FILE_OVERSIZE>\n` +
-                `当前大小: ${fileSizeMB.toFixed(2)}MB\n` +
-                `最大限制: ${limitMB}MB\n\n` +
-                `[建议操作]\n` +
-                `> 压缩文件后重试\n` +
-                `> 使用在线 URL 地址`
-            );
-            return;
-          }
-
-          const ext = selected.split('.').pop()?.toLowerCase() || '';
-          const mimeTypes: Record<string, string> = {
-            png: 'image/png',
-            jpg: 'image/jpeg',
-            jpeg: 'image/jpeg',
-            gif: 'image/gif',
-            webp: 'image/webp',
-            svg: 'image/svg+xml',
-            bmp: 'image/bmp',
-            mp4: 'video/mp4',
-            webm: 'video/webm',
-            ogg: 'video/ogg',
-          };
-          const mimeType = mimeTypes[ext] || 'application/octet-stream';
-
-          // Preview uses a blob URL (fast, no base64). Persisted value is a stable AppData file URL.
-          stage = 'preview';
-          const blobBytes = Uint8Array.from(contents);
-          const blobUrl = URL.createObjectURL(new Blob([blobBytes], { type: mimeType }));
-
-          const fileName = `background-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext || (type === 'image' ? 'png' : 'mp4')}`;
-          const relativePath = `background-media/${fileName}`;
-
-          let persistedUrl: string;
-          try {
-            stage = 'persist';
-            const appDataDirKey = fs.BaseDirectory.AppData;
-            await fs.createDir('background-media', { dir: appDataDirKey, recursive: true });
-            await fs.writeBinaryFile({ path: relativePath, contents: blobBytes }, { dir: appDataDirKey });
-
-            stage = 'persist-url';
-            const appDataDir = await pathApi.appDataDir();
-            const fullPath = await pathApi.join(appDataDir, 'background-media', fileName);
-            persistedUrl = tauri.convertFileSrc(fullPath);
-          } catch (persistError) {
-            // Fallback: reference the original file path directly if writing to AppData fails.
-            console.warn('[CustomBackgroundEditor] Failed to persist media into AppData; falling back to source path.', persistError);
-            persistedUrl = tauri.convertFileSrc(selected);
-          }
+          const destPath = await tauri.invoke<string>('background_import_media', {
+            sourcePath: selected,
+            kind: type,
+          });
+          const persistedUrl = tauri.convertFileSrc(destPath);
 
           if (type === 'image') {
             setImageUrl(persistedUrl);
-            setImagePreviewUrl((prev) => {
-              if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
-              return blobUrl;
-            });
+            setImagePreviewUrl(persistedUrl);
             setSelectionApplied(false);
           } else {
             setVideoUrl(persistedUrl);
-            setVideoPreviewUrl((prev) => {
-              if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
-              return blobUrl;
-            });
+            setVideoPreviewUrl(persistedUrl);
             setSelectionApplied(false);
           }
         } catch (readError) {
-          console.error(`❌ File processing failed (stage=${stage}):`, readError);
+          console.error('[CustomBackgroundEditor] File import failed:', readError);
           setErrorMessage(
-            `<FILE_READ_ERROR>\n` +
-              `文件处理失败\n\n` +
-              `[阶段]\n` +
-              `${stage}\n\n` +
+            `<FILE_IMPORT_ERROR>\n` +
+              `文件导入失败\n\n` +
               `[错误详情]\n` +
-              `${readError instanceof Error ? readError.message : String(readError)}`
+              `${readError instanceof Error ? readError.message : String(readError)}\n\n` +
+              `[建议操作]\n` +
+              `> 确认文件格式与大小限制（图片≤5MB，视频≤20MB）\n` +
+              `> 尝试复制文件到本地磁盘后重试`
           );
           return;
         }

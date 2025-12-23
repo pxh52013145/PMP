@@ -323,9 +323,6 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
       );
 
       if (hasChanged) {
-        console.log('Moving Magnet:', draggingMagnet.magnet.id);
-        console.log('From:', originalAnchors);
-        console.log('To:', newAnchors);
         // 应用移动
         onMagnetMove(draggingMagnet.magnet.id, draggingMagnet.previewAnchors);
       }
@@ -335,7 +332,6 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
     // 否则结束 Pixel 拖拽
     if (draggingMagnet) {
-      console.log('Drag cancelled: collision detected');
       setDraggingMagnet(null);
       return;
     }

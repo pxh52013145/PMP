@@ -8,7 +8,7 @@ use std::sync::{
 use once_cell::sync::Lazy;
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl};
 
-use super::{EVENT_EDITOR_EXIT, EVENT_EDITOR_WINDOW_HIDDEN, EVENT_EDITOR_WINDOW_SHOWN};
+use super::{EVENT_EDITOR_EXIT, EVENT_EDITOR_WINDOW_HIDDEN, EVENT_EDITOR_WINDOW_SHOWN, MAIN_WINDOW_LABEL};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditorWindowType {
@@ -292,7 +292,12 @@ fn request_force_close(app: &AppHandle, window_type: EditorWindowType) {
             Err(poisoned) => poisoned.into_inner(),
         };
         set.remove(&window_type);
+        return;
     }
+
+    // Keep the JS side in sync even when we force-close (destroy) a window: the normal "CloseRequested"
+    // handler is bypassed and therefore would not emit a hidden event.
+    let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
 }
 
 fn take_force_close(window_type: EditorWindowType) -> bool {
@@ -327,15 +332,27 @@ pub fn open_editor_window(
     blur_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let window_label = label(window_type);
+    // Avoid stealing focus from the main window when entering edit mode: on some Windows setups,
+    // rapidly switching focus between two transparent WebView2 windows can cause a visible "flash".
+    // Users can still click the editor window to focus it when needed.
+    let should_focus = window_type != EditorWindowType::Control;
 
     if let Some(existing_window) = app.get_window(window_label) {
         // When the window already exists (possibly hidden/off-screen), always re-apply geometry so the
         // caller can bring it back to a visible location.
         apply_geometry(&existing_window, &geometry);
-        apply_windows_blur_behind(&existing_window, blur_enabled.load(Ordering::SeqCst));
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
-        existing_window.set_focus().map_err(|e| e.to_string())?;
+        if should_focus {
+            existing_window.set_focus().map_err(|e| e.to_string())?;
+        } else if window_type == EditorWindowType::Control {
+            // Best-effort: keep the main window focused to avoid transient focus swaps between transparent
+            // WebView2 windows, which can trigger a visible "flash" on some Windows setups.
+            if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
+                let _ = main_window.set_focus();
+            }
+        }
+        apply_windows_blur_behind(&existing_window, blur_enabled.load(Ordering::SeqCst));
         let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
         clear_cached_window(window_type);
         return Ok(());
@@ -352,6 +369,8 @@ pub fn open_editor_window(
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
+        .focused(false)
+        .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -360,13 +379,22 @@ pub fn open_editor_window(
     // IMPORTANT: DWMWA_SYSTEMBACKDROP_TYPE (Mica/Tabbed) paints the whole window background and breaks
     // per-pixel transparency (our "floating" editor windows). Instead, use DWM blur-behind with a region
     // so corners/padding remain truly transparent, while the panel area gets a system blur.
+    let _ = window.show();
+    let _ = window.unminimize();
+    if should_focus {
+        window.set_focus().map_err(|e| e.to_string())?;
+    } else if window_type == EditorWindowType::Control {
+        if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
+            let _ = main_window.set_focus();
+        }
+    }
+
     apply_windows_blur_behind(&window, blur_enabled.load(Ordering::SeqCst));
 
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
 
     let window_for_events = window.clone();
     let app_handle = app.clone();
-    let blur_enabled_flag = blur_enabled.clone();
     window.on_window_event(move |event| {
         match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -384,10 +412,6 @@ pub fn open_editor_window(
                     }
                 }
             }
-            tauri::WindowEvent::Focused(focused) => {
-                let enabled = blur_enabled_flag.load(Ordering::SeqCst) && *focused;
-                apply_windows_blur_behind(&window_for_events, enabled);
-            }
             _ => {}
         }
     });
@@ -398,9 +422,7 @@ pub fn open_editor_window(
 pub fn set_editor_windows_blur_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
     for window_type in ALL_EDITOR_WINDOWS {
         if let Some(window) = app.get_window(label(*window_type)) {
-            // Keep background windows cheap: only apply blur to the focused window.
-            let focused = window.is_focused().unwrap_or(false);
-            apply_windows_blur_behind(&window, enabled && focused);
+            apply_windows_blur_behind(&window, enabled);
         }
     }
 

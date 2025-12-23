@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createKernel, ModuleLoader, type Kernel } from '../kernel';
 import type { AppEvents } from '../contracts/events';
+import { createLifecycleModule } from '../services/lifecycle';
 import { createNavigationModule } from '../services/navigation';
 import { createAudioModule } from '../services/audio';
 import { createCommandsModule } from '../services/commands';
@@ -19,40 +20,58 @@ type KernelRuntime = {
 
 const KernelContext = createContext<DesktopKernel | undefined>(undefined);
 
+let cachedRuntime: KernelRuntime | null = null;
+
+function createRuntime(): KernelRuntime {
+  const kernel = createKernel<AppEvents>();
+  const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
+
+  const hash = typeof window === 'undefined' ? '' : window.location.hash;
+  const isEditorWindow = hash.startsWith('#/editor/');
+  const isPluginWindow = hash.startsWith('#/plugin-window/');
+  const isVstEditorWindow = hash.startsWith('#/vst-editor/');
+
+  const modules = [
+    createLifecycleModule(),
+    createNavigationModule(),
+    createAudioModule({
+      mode: isEditorWindow ? 'noop' : 'real',
+      enableTaskbarMediaControls: !isEditorWindow && !isPluginWindow && !isVstEditorWindow,
+    }),
+    createCommandsModule(),
+    createBuiltinMagnetRenderersModule(),
+    createPmpmMagnetRenderersModule(),
+    createBuiltinCommandsModule(),
+  ];
+
+  if (!isEditorWindow && !isPluginWindow && !isVstEditorWindow) {
+    modules.push(createBuiltinContributionsModule());
+  }
+
+  if (!isEditorWindow) {
+    modules.push(createPmpmContributionsModule());
+  }
+
+  loader.activate(modules);
+  return { kernel, loader };
+}
+
+function getOrCreateRuntime(): KernelRuntime {
+  if (cachedRuntime) return cachedRuntime;
+  cachedRuntime = createRuntime();
+  return cachedRuntime;
+}
+
+function disposeRuntime(runtime: KernelRuntime): void {
+  runtime.loader.deactivateAll();
+  if (cachedRuntime === runtime) {
+    cachedRuntime = null;
+  }
+}
+
 export function KernelProvider({ children }: { children: ReactNode }) {
   const pendingDeactivate = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const [runtime] = useState<KernelRuntime>(() => {
-    const kernel = createKernel<AppEvents>();
-    const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
-    const hash = typeof window === 'undefined' ? '' : window.location.hash;
-    const isEditorWindow = hash.startsWith('#/editor/');
-    const isPluginWindow = hash.startsWith('#/plugin-window/');
-    const isVstEditorWindow = hash.startsWith('#/vst-editor/');
-
-      const modules = [
-        createNavigationModule(),
-        createAudioModule({
-          mode: isEditorWindow ? 'noop' : 'real',
-          enableTaskbarMediaControls: !isEditorWindow && !isPluginWindow && !isVstEditorWindow,
-        }),
-        createCommandsModule(),
-        createBuiltinMagnetRenderersModule(),
-        createPmpmMagnetRenderersModule(),
-        createBuiltinCommandsModule(),
-      ];
-
-    if (!isEditorWindow && !isPluginWindow && !isVstEditorWindow) {
-      modules.push(createBuiltinContributionsModule());
-    }
-
-    if (!isEditorWindow) {
-      modules.push(createPmpmContributionsModule());
-    }
-
-    loader.activate(modules);
-    return { kernel, loader };
-  });
+  const [runtime] = useState<KernelRuntime>(() => getOrCreateRuntime());
 
   useEffect(() => {
     if (pendingDeactivate.current) {
@@ -62,7 +81,7 @@ export function KernelProvider({ children }: { children: ReactNode }) {
 
     return () => {
       pendingDeactivate.current = setTimeout(() => {
-        runtime.loader.deactivateAll();
+        disposeRuntime(runtime);
         pendingDeactivate.current = null;
       }, 0);
     };

@@ -177,10 +177,17 @@ export const BackgroundManager = memo(function BackgroundManager({
 
   // 防抖保存（用于滑块等频繁操作）
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPatchRef = useRef<Partial<BackgroundConfig> | null>(null);
+  const pendingModeRef = useRef<BackgroundMode | null>(null);
 
   const debouncedUpdateConfig = useCallback(
     (config: Partial<BackgroundConfig>) => {
       const modeSnapshot = modeRef.current;
+      pendingModeRef.current = modeSnapshot;
+      pendingPatchRef.current = {
+        ...(pendingPatchRef.current ?? {}),
+        ...config,
+      };
       // 清除之前的定时器
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -188,7 +195,13 @@ export const BackgroundManager = memo(function BackgroundManager({
 
       // 延迟保存到 localStorage
       saveTimeoutRef.current = setTimeout(() => {
-        applyConfigPatch(config, modeSnapshot);
+        saveTimeoutRef.current = null;
+        const patch = pendingPatchRef.current;
+        const mode = pendingModeRef.current ?? modeSnapshot;
+        pendingPatchRef.current = null;
+        pendingModeRef.current = null;
+        if (!patch) return;
+        applyConfigPatch(patch, mode);
       }, 300); // 300ms 防抖
     },
     [applyConfigPatch]
@@ -198,9 +211,18 @@ export const BackgroundManager = memo(function BackgroundManager({
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
+      const patch = pendingPatchRef.current;
+      const mode = pendingModeRef.current;
+      pendingPatchRef.current = null;
+      pendingModeRef.current = null;
+      if (patch) {
+        applyConfigPatch(patch, mode ?? modeRef.current);
       }
     };
-  }, []);
+  }, [applyConfigPatch]);
 
   // 应用预设背景
   const applyPreset = useCallback(

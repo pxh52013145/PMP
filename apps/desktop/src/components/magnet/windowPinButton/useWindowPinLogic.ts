@@ -14,19 +14,15 @@ export function useWindowPinLogic(): WindowPinLogic {
     e.preventDefault();
     e.stopPropagation();
 
-    console.log('窗口置顶按钮被点击，当前状态:', isPinned);
-
     try {
       const newPinState = !isPinned;
-      console.log('正在设置窗口置顶状态为:', newPinState);
 
       await appWindow.setAlwaysOnTop(newPinState);
 
       // 更新状态
       setIsPinned(newPinState);
-      console.log(`✅ 窗口置顶: ${newPinState ? '已开启' : '已关闭'}`);
     } catch (error) {
-      console.error('❌ 切换窗口置顶状态失败:', error);
+      console.error('Failed to toggle window pin state:', error);
     }
   };
 

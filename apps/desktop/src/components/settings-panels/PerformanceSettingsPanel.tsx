@@ -14,26 +14,27 @@ export function PerformanceSettingsPanel() {
   }, [lowPerformanceMode]);
 
   return (
-    <div className="settings-card">
-      <div className="settings-card-header">
-        <div>
-          <p className="settings-card-label">低性能模式</p>
-          <p className="settings-card-desc">多开 Editor 窗口时推荐开启，减少滚动卡顿。</p>
+    <>
+      <div className="settings-card">
+        <div className="settings-card-header">
+          <div>
+            <p className="settings-card-label">低性能模式</p>
+            <p className="settings-card-desc">多开 Editor 窗口时推荐开启，减少滚动卡顿。</p>
+          </div>
+          <span className="settings-card-badge">{lowPerformanceMode ? 'ON' : 'OFF'}</span>
         </div>
-        <span className="settings-card-badge">{lowPerformanceMode ? 'ON' : 'OFF'}</span>
-      </div>
 
-      <div className="settings-toggle">
-        <button type="button" data-active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
-          标准
-        </button>
-        <button type="button" data-active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
-          低性能
-        </button>
-      </div>
+        <div className="settings-toggle">
+          <button type="button" data-active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
+            标准
+          </button>
+          <button type="button" data-active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
+            低性能
+          </button>
+        </div>
 
-      <p className="settings-card-note">保持透明与剪角，禁用 Windows Blur Behind。</p>
-    </div>
+        <p className="settings-card-note">禁用 Editor 窗口的高开销效果（如 Blur Behind）。</p>
+      </div>
+    </>
   );
 }
-

@@ -102,7 +102,6 @@ export function saveConfig(
     config.customMagnets = magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id));
 
     writeString(CONFIG_KEY, JSON.stringify(config));
-    console.log('配置已保存:', config);
   } catch (error) {
     console.error('保存配置失败:', error);
   }
@@ -128,7 +127,6 @@ function migrateMagnetIds(config: MagnetConfig): MagnetConfig {
   const migratedCustomMagnets = config.customMagnets.map((magnet) => {
     const newId = idMigrationMap[magnet.id] || magnet.id;
     if (newId !== magnet.id) {
-      console.log(`迁移 Magnet ID: ${magnet.id} → ${newId}`);
       return { ...magnet, id: newId };
     }
     return magnet;
@@ -148,7 +146,6 @@ export function loadConfig(): MagnetConfig | null {
   try {
     const configStr = readString(CONFIG_KEY);
     if (!configStr) {
-      console.log('未找到保存的配置');
       return null;
     }
 
@@ -163,21 +160,17 @@ export function loadConfig(): MagnetConfig | null {
 
       // 保存迁移后的配置
       writeString(CONFIG_KEY, JSON.stringify(config));
-      console.log('配置已迁移到新版本');
     } else {
       // 即使版本相同，也检查是否有旧 ID 需要迁移
       const oldIds = ['btn-prev', 'song-info'];
       const hasOldIds = Object.keys(config.magnets).some((id) => oldIds.includes(id));
 
         if (hasOldIds) {
-          console.log('检测到旧的 Magnet ID，正在迁移...');
           config = migrateMagnetIds(config);
           writeString(CONFIG_KEY, JSON.stringify(config));
-          console.log('配置已迁移');
         }
       }
 
-    console.log('配置已加载:', config);
     return config;
   } catch (error) {
     console.error('加载配置失败:', error);
@@ -281,7 +274,6 @@ export function importConfig(jsonStr: string): MagnetConfig | null {
 export function clearConfig(): void {
   try {
     removeKey(CONFIG_KEY);
-    console.log('配置已清除');
   } catch (error) {
     console.error('清除配置失败:', error);
   }
@@ -454,8 +446,6 @@ export function applyConfig(
       }
     });
   }
-
-  console.log(`配置应用完成: 共 ${magnetLibrary.length} 个 magnet, ${activeMagnetIds.size} 个激活`);
 
   // 仅对“激活的 magnets”进行冲突检测/自动解决：
   // - 未激活 magnets 不参与占用，不需要为其耗时解析位置

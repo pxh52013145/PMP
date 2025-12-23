@@ -5,6 +5,7 @@ import { EditorWindowApp } from './EditorWindowApp';
 import { PluginWindowApp } from './PluginWindowApp';
 import { VstEditorWindowApp } from './VstEditorWindowApp';
 import { KernelProvider } from './contexts/KernelContext';
+import { isTauriRuntime } from './utils/tauriRuntime';
 import './index.css';
 
 // 根据 URL 判断渲染哪个应用
@@ -21,10 +22,28 @@ const RootApp = isEditorWindow
       ? VstEditorWindowApp
       : App;
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <KernelProvider>
-      <RootApp />
-    </KernelProvider>
-  </React.StrictMode>
-);
+async function bootstrap(): Promise<void> {
+  if (RootApp === App && isTauriRuntime()) {
+    try {
+      const { restoreBackgroundSnapshots } = await import('./modules/background/backgroundSnapshot');
+      await restoreBackgroundSnapshots();
+
+      const { migrateBackgroundStorageToManagedMedia } = await import(
+        './modules/background/backgroundMediaMigration'
+      );
+      await migrateBackgroundStorageToManagedMedia();
+    } catch (error) {
+      console.warn('[background] bootstrap failed:', error);
+    }
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <KernelProvider>
+        <RootApp />
+      </KernelProvider>
+    </React.StrictMode>
+  );
+}
+
+void bootstrap();

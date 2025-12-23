@@ -12,7 +12,12 @@ interface PixelMatrixCanvasProps {
 export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatrixCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PixelMatrixRenderer | null>(null);
+  const onPixelPositionsUpdateRef = useRef(onPixelPositionsUpdate);
   const { isActive } = useWindowActivity();
+
+  useEffect(() => {
+    onPixelPositionsUpdateRef.current = onPixelPositionsUpdate;
+  }, [onPixelPositionsUpdate]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -38,9 +43,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
       renderer.updatePixelOpacity(parseFloat(savedOpacity));
     }
 
-    if (onPixelPositionsUpdate) {
-      onPixelPositionsUpdate(renderer.getAllPixelPositions());
-    }
+    onPixelPositionsUpdateRef.current?.(renderer.getAllPixelPositions());
 
     let resizeRaf: number | null = null;
     const handleResize = () => {
@@ -53,9 +56,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
         if (!rendererInstance) return;
 
         rendererInstance.updateLayout(window.innerWidth, window.innerHeight);
-        if (onPixelPositionsUpdate) {
-          onPixelPositionsUpdate(rendererInstance.getAllPixelPositions());
-        }
+        onPixelPositionsUpdateRef.current?.(rendererInstance.getAllPixelPositions());
       });
     };
 
@@ -97,7 +98,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
       cleanupPromise.then((cleanup) => cleanup());
       rendererRef.current?.destroy();
     };
-  }, [onPixelPositionsUpdate]);
+  }, []);
 
   useEffect(() => {
     rendererRef.current?.setActive(isActive);

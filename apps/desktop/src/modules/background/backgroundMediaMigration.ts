@@ -44,26 +44,14 @@ function extractLocalPathFromBackgroundUrl(url: string): string | null {
   }
 }
 
-async function importFileToManagedBackgroundMedia(sourcePath: string, extensionHint?: string): Promise<string | null> {
+async function importFileToManagedBackgroundMedia(
+  sourcePath: string,
+  kind: 'image' | 'video'
+): Promise<string | null> {
   try {
-    const fs = await import('@tauri-apps/api/fs');
-    const pathApi = await import('@tauri-apps/api/path');
     const tauri = await import('@tauri-apps/api/tauri');
-
-    const exists = await fs.exists(sourcePath);
-    if (!exists) return null;
-
-    const extFromPath = sourcePath.split('.').pop()?.toLowerCase();
-    const ext = extFromPath || extensionHint || 'png';
-    const fileName = `background-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-    const relativePath = `background-media/${fileName}`;
-
-    await fs.createDir('background-media', { dir: fs.BaseDirectory.AppData, recursive: true });
-    await fs.copyFile(sourcePath, relativePath, { dir: fs.BaseDirectory.AppData });
-
-    const appDataDir = await pathApi.appDataDir();
-    const fullPath = await pathApi.join(appDataDir, 'background-media', fileName);
-    return tauri.convertFileSrc(fullPath);
+    const destPath = await tauri.invoke<string>('background_import_media', { sourcePath, kind });
+    return tauri.convertFileSrc(destPath);
   } catch (error) {
     console.warn('[background] Failed to import external background media:', error);
     return null;
@@ -78,7 +66,7 @@ async function migrateConfig(config: BackgroundConfig): Promise<{ config: Backgr
     const sourcePath = extractLocalPathFromBackgroundUrl(url);
     if (!sourcePath) return { config, migrated: false };
 
-    const migratedUrl = await importFileToManagedBackgroundMedia(sourcePath, 'png');
+    const migratedUrl = await importFileToManagedBackgroundMedia(sourcePath, 'image');
     if (!migratedUrl) return { config, migrated: false };
 
     const image = config.image ?? { url: '', fit: 'cover', position: 'center center', repeat: 'no-repeat' };
@@ -92,7 +80,7 @@ async function migrateConfig(config: BackgroundConfig): Promise<{ config: Backgr
     const sourcePath = extractLocalPathFromBackgroundUrl(url);
     if (!sourcePath) return { config, migrated: false };
 
-    const migratedUrl = await importFileToManagedBackgroundMedia(sourcePath, 'mp4');
+    const migratedUrl = await importFileToManagedBackgroundMedia(sourcePath, 'video');
     if (!migratedUrl) return { config, migrated: false };
 
     const video = config.video ?? { url: '', fit: 'contain', loop: true, muted: true };

@@ -16,7 +16,7 @@ import {
   setupConfigSync,
   broadcastDataUpdate,
 } from '../../utils/windowCommunication';
-import { readJson, writeJson, writeString } from '../../modules/storage';
+import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
 import {
   createMagnetTemplateFromPlugin,
@@ -696,6 +696,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               }
 
               try {
+                writeString(STORAGE_KEYS.MAGNET_EDITOR_MODE, 'create');
+                removeKey(STORAGE_KEYS.MAGNET_EDITOR_DATA);
+
                 // 标记窗口打开
                 await broadcastDataUpdate(
                   STORAGE_KEYS.CREATOR_WINDOW_OPEN,

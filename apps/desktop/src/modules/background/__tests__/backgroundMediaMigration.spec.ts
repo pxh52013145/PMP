@@ -4,37 +4,25 @@ import { migrateBackgroundStorageToManagedMedia, __testOnly__ } from '../backgro
 
 const fsMocks = vi.hoisted(() => ({
   BaseDirectory: { AppData: 'AppData' as const },
-  createDir: vi.fn(),
-  copyFile: vi.fn(),
-  exists: vi.fn(),
   writeFile: vi.fn(),
   readTextFile: vi.fn(),
 }));
 
-const pathMocks = vi.hoisted(() => ({
-  appDataDir: vi.fn(),
-  join: vi.fn(),
-}));
-
 const tauriMocks = vi.hoisted(() => ({
   convertFileSrc: vi.fn(),
+  invoke: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/fs', () => fsMocks);
-vi.mock('@tauri-apps/api/path', () => pathMocks);
 vi.mock('@tauri-apps/api/tauri', () => tauriMocks);
 
 describe('background media migration', () => {
   beforeEach(() => {
     localStorage.clear();
-    fsMocks.createDir.mockReset();
-    fsMocks.copyFile.mockReset();
-    fsMocks.exists.mockReset();
     fsMocks.writeFile.mockReset();
     fsMocks.readTextFile.mockReset();
-    pathMocks.appDataDir.mockReset();
-    pathMocks.join.mockReset();
     tauriMocks.convertFileSrc.mockReset();
+    tauriMocks.invoke.mockReset();
   });
 
   it('extracts local paths from asset URLs', () => {
@@ -55,16 +43,15 @@ describe('background media migration', () => {
       })
     );
 
-    fsMocks.exists.mockResolvedValue(true);
-    pathMocks.appDataDir.mockResolvedValue('C:\\AppData\\com.pixelmatrix.player');
-    pathMocks.join.mockImplementation(async (...parts: string[]) => parts.join('\\'));
+    tauriMocks.invoke.mockResolvedValue('C:\\AppData\\com.pixelmatrix.player\\background-media\\background-1.gif');
     tauriMocks.convertFileSrc.mockImplementation((path: string) => `asset://localhost/${path.replace(/\\/g, '/')}`);
 
     const result = await migrateBackgroundStorageToManagedMedia();
     expect(result.migratedSettings).toBe(true);
     expect(result.migratedCount).toBe(1);
-    expect(fsMocks.copyFile).toHaveBeenCalledWith('C:/Users/31625/Desktop/a.gif', expect.stringContaining('background-media/background-'), {
-      dir: fsMocks.BaseDirectory.AppData,
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('background_import_media', {
+      sourcePath: 'C:/Users/31625/Desktop/a.gif',
+      kind: 'image',
     });
 
     const stored = localStorage.getItem(STORAGE_KEYS.BACKGROUND_SETTINGS) || '';

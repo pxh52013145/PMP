@@ -17,7 +17,6 @@ export function useBackButtonLogic(): BackButtonLogic {
   const { goBack } = useNavigation();
 
   const handleGoBack = () => {
-    console.log('Navigating back');
     goBack();
   };
 

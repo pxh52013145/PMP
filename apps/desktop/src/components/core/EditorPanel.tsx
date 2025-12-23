@@ -1,63 +1,60 @@
-import { useEffect, useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
-import {
-  openEditorWindow,
-  closeAllEditorWindows,
-  calculateWindowPosition,
-} from '../../utils/editorWindows';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
-import { writeJson } from '../../modules/storage';
+import { writeJson, type StorageWriteMode } from '../../modules/storage';
 import { useMagnetConfig } from '../../modules/magnets';
-import './EditorPanel.css';
 
 export function EditorPanel() {
   const { editorState } = useEditor();
   const { magnetLibrary, activeMagnetIds, builtInMagnetIds } = useMagnetConfig();
 
-  // 同步数据到 localStorage（供编辑器窗口初始化时读取）
-  const syncDataToStorage = useCallback(() => {
-    writeJson(STORAGE_KEYS.MAGNET_LIBRARY, magnetLibrary, { mode: 'idle', debounceMs: 250 });
-    writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...activeMagnetIds], { mode: 'idle', debounceMs: 250 });
-    writeJson(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds], { mode: 'idle', debounceMs: 250 });
-  }, [magnetLibrary, activeMagnetIds, builtInMagnetIds]);
+  const syncDataToStorage = useCallback(
+    (mode: StorageWriteMode = 'idle') => {
+      const options =
+        mode === 'sync'
+          ? { mode: 'sync' as const }
+          : { mode: 'idle' as const, debounceMs: 250 };
 
-  // 当进入编辑模式时，打开控制窗口
+      writeJson(STORAGE_KEYS.MAGNET_LIBRARY, magnetLibrary, options);
+      writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...activeMagnetIds], options);
+      writeJson(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds], options);
+    },
+    [magnetLibrary, activeMagnetIds, builtInMagnetIds]
+  );
+
   useEffect(() => {
     if (editorState.isEditing) {
-      // 优化：异步写入数据
-      syncDataToStorage();
+      syncDataToStorage('sync');
 
-      // 先计算精确位置，再打开窗口
       const openControlWindow = async () => {
         try {
-          // 先计算编辑器按钮附近的精确位置
+          const { calculateWindowPosition, openEditorWindow } = await import('../../utils/editorWindows');
           const position = await calculateWindowPosition('control');
-
-          // 使用精确位置打开窗口
-          await openEditorWindow({
-            type: 'control',
-            ...position,
-          });
+          await openEditorWindow({ type: 'control', ...position });
         } catch (error) {
           console.error('Failed to open control window:', error);
         }
       };
 
-      openControlWindow();
-    } else {
-      // 退出编辑模式时，关闭所有窗口
-      closeAllEditorWindows().catch((error) => {
-        console.error('Failed to close editor windows:', error);
-      });
+      void openControlWindow();
+      return;
     }
+
+    const close = async () => {
+      try {
+        const { closeEditorWindow } = await import('../../utils/editorWindows');
+        await closeEditorWindow('control');
+      } catch (error) {
+        console.error('Failed to close editor windows:', error);
+      }
+    };
+    void close();
   }, [editorState.isEditing, syncDataToStorage]);
 
-  // 实时同步数据到 localStorage（供编辑器窗口读取）
   useEffect(() => {
-    if (editorState.isEditing) {
-      syncDataToStorage();
-    }
-  }, [magnetLibrary, activeMagnetIds, builtInMagnetIds, editorState.isEditing, syncDataToStorage]);
+    if (!editorState.isEditing) return;
+    syncDataToStorage();
+  }, [activeMagnetIds, builtInMagnetIds, editorState.isEditing, magnetLibrary, syncDataToStorage]);
 
-  return null; // 不再渲染浮动面板，所有内容都在独立窗口中
+  return null;
 }

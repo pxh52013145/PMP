@@ -8,6 +8,34 @@
   overflow: hidden;
 }
 
+.editor-debug-content {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.debug-title {
+  padding: 14px 20px 12px;
+  background: rgba(0, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(0, 255, 255, 0.18);
+}
+
+.debug-title h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(0, 255, 255, 0.9);
+  text-shadow: 0 0 10px rgba(0, 255, 255, 0.35);
+}
+
+.debug-title .debug-subtitle {
+  margin: 4px 0 0;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  font-family: monospace;
+}
+
 .debug-header {
   padding: 1.5rem 2rem;
   background: rgba(255, 255, 255, 0.05);
@@ -24,7 +52,7 @@
   margin: 0 0 0.5rem 0;
   font-size: 1.75rem;
   font-weight: 600;
-  color: #00ff88;
+  color: #00ffff;
   pointer-events: none;
 }
 
@@ -41,6 +69,7 @@
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0;
 }
 
 /* 左侧控制面板 */
@@ -53,6 +82,7 @@
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  min-height: 0;
 }
 
 /* 右侧预览面板 */
@@ -61,6 +91,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
 /* 控制面板部分 */
@@ -103,9 +134,9 @@
 }
 
 .mode-btn.active {
-  background: #00ff88;
+  background: #00ffff;
   color: #000;
-  border-color: #00ff88;
+  border-color: #00ffff;
   font-weight: 600;
 }
 
@@ -126,7 +157,7 @@
 .theme-selector:hover,
 .magnet-selector:hover,
 .config-select:hover {
-  border-color: #00ff88;
+  border-color: #00ffff;
 }
 
 .theme-selector option,
@@ -164,8 +195,8 @@
 }
 
 .shader-card.selected {
-  border-color: #00ff88;
-  box-shadow: 0 0 15px rgba(0, 255, 136, 0.5);
+  border-color: #00ffff;
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
 }
 
 .shader-card.selected::after {
@@ -175,7 +206,7 @@
   right: 4px;
   width: 20px;
   height: 20px;
-  background: #00ff88;
+  background: #00ffff;
   color: #000;
   border-radius: 50%;
   display: flex;
@@ -363,7 +394,7 @@
   width: 3rem;
   text-align: right;
   font-family: monospace;
-  color: #00ff88;
+  color: #00ffff;
   font-size: 0.85rem;
 }
 
@@ -395,18 +426,18 @@
 
 .action-btn:hover {
   background: rgba(255, 255, 255, 0.1);
-  border-color: #00ff88;
+  border-color: #00ffff;
 }
 
 .action-btn.primary {
-  background: #00ff88;
+  background: #00ffff;
   color: #000;
-  border-color: #00ff88;
+  border-color: #00ffff;
 }
 
 .action-btn.primary:hover {
-  background: #00cc6f;
-  box-shadow: 0 0 15px rgba(0, 255, 136, 0.4);
+  background: #00cccc;
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
 }
 
 /* 预览区域 */
@@ -422,7 +453,7 @@
 .preview-header h2 {
   margin: 0;
   font-size: 1.25rem;
-  color: #00ff88;
+  color: #00ffff;
 }
 
 .preview-subtitle {
@@ -487,7 +518,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 30px rgba(0, 255, 136, 0.4);
+  box-shadow: 0 0 30px rgba(0, 255, 255, 0.4);
   position: relative;
 }
 
@@ -558,7 +589,7 @@
   top: 0;
   left: 0;
   height: 100%;
-  background: linear-gradient(90deg, #00ff88, #00cc6f);
+  background: linear-gradient(90deg, #00ffff, #00cccc);
   border-radius: 20px;
 }
 
@@ -578,7 +609,7 @@
   width: 60px;
   height: 60px;
   background: rgba(26, 26, 46, 0.8);
-  border: 2px solid #00ff88;
+  border: 2px solid #00ffff;
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -591,7 +622,7 @@
 
 .preview-button:hover {
   transform: scale(1.1);
-  box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
 }
 
 /* 材质通道信息 */
@@ -627,7 +658,7 @@
 }
 
 .channel-property {
-  color: #00ff88;
+  color: #00ffff;
   flex: 1;
 }
 
@@ -665,6 +696,6 @@
   margin: 0;
   font-family: monospace;
   font-size: 0.85rem;
-  color: #00ff88;
+  color: #00ffff;
   line-height: 1.6;
 }

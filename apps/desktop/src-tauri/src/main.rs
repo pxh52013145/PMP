@@ -11,6 +11,7 @@ use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu
 mod native_audio;
 mod windows;
 mod music_library;
+mod background_media;
 
 struct ExitFlag(Arc<AtomicBool>);
 struct EditorEffectsState {
@@ -209,6 +210,19 @@ fn music_library_cancel_scan() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn background_import_media(
+    app: tauri::AppHandle,
+    source_path: String,
+    kind: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        background_media::import_background_media(&app, source_path, kind)
+    })
+    .await
+    .map_err(|e| format!("Import task failed: {e}"))?
+}
+
 fn main() {
     let show = CustomMenuItem::new("show".to_string(), "显示窗口");
     let hide = CustomMenuItem::new("hide".to_string(), "隐藏窗口");
@@ -284,6 +298,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            background_import_media,
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,

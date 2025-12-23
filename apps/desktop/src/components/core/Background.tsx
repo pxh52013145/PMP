@@ -13,6 +13,10 @@ interface BackgroundProps {
 export default function Background({ config }: BackgroundProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  const imageConfig = config.type === 'image' ? config.image : undefined;
+  const shouldRenderImageElement =
+    !!imageConfig && !!imageConfig.url && !imageConfig.crop && imageConfig.repeat === 'no-repeat';
+
   useEffect(() => {
     // 如果是视频背景，自动播放
     if (config.type === 'video' && videoRef.current) {
@@ -71,6 +75,13 @@ export default function Background({ config }: BackgroundProps) {
             };
           }
 
+          if (shouldRenderImageElement) {
+            return {
+              ...baseStyle,
+              opacity: config.image.opacity ?? config.opacity ?? 1,
+            };
+          }
+
           // 处理 fill 模式（拉伸）
           const backgroundSize = config.image.fit === 'fill' ? '100% 100%' : config.image.fit;
 
@@ -105,6 +116,20 @@ export default function Background({ config }: BackgroundProps) {
 
   return (
     <div className="background-container" style={getBackgroundStyle()}>
+      {shouldRenderImageElement && imageConfig && (
+        <img
+          className="background-image"
+          src={imageConfig.url}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{
+            objectFit: imageConfig.fit === 'fill' ? 'fill' : imageConfig.fit,
+            objectPosition: imageConfig.position,
+          }}
+        />
+      )}
+
       {/* 图片选取背景 - 精确复制选取区域 */}
       {config.type === 'image' && config.image?.crop && config.image.url && (
         <div

@@ -7,6 +7,7 @@ import {
   setupTauriListener,
 } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
+import { useKernel } from './contexts/KernelContext';
 import Background from './components/core/Background';
 import PixelMatrixCanvas from './components/core/PixelMatrixCanvas';
 import WindowBorder from './components/core/WindowBorder';
@@ -33,6 +34,8 @@ import {
 } from './modules/magnets';
 import { readJson, readString, writeJson } from './modules/storage';
 import { gcOrphanBackgroundMedia } from './modules/background/mediaCleanup';
+import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
+import { isTauriRuntime } from './utils/tauriRuntime';
 import './App.css';
 
 type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
@@ -203,65 +206,68 @@ function AppContent() {
     return readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
   });
 
-  // 监听背景设置变化（从编辑器窗口更新）
-  useEffect(() => {
-    const updateTimeout: NodeJS.Timeout | null = null;
-
-    // 防抖更新函数（降低更新频率）
-    // 已迁移到 setupConfigSync 统一框架，此处删除旧代码
-    return () => {
-      if (updateTimeout) {
-        clearTimeout(updateTimeout);
-      }
-    };
-  }, []);
-
   // 边框动画已移至 WindowBorder 组件管理
 
-  const { toggleEditMode, updateOccupancy } = useEditor();
+  const { toggleEditMode, exitEditMode, updateOccupancy } = useEditor();
   const { magnetLibrary, activeMagnetIds, updateMagnetAnchors } = useMagnetConfig();
 
   // ============ 新的状态管理系统 ============
 
   useEffect(() => {
+    const preventDefault = (e: Event) => e.preventDefault();
+
     // 防止上下文菜单
-    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('contextmenu', preventDefault);
 
     // 禁用默认的拖放行为
-    document.addEventListener('drop', (e) => e.preventDefault());
-    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', preventDefault);
+    document.addEventListener('dragover', preventDefault);
+
+    const isTauri = isTauriRuntime();
 
     // 初始化时检查窗口是否最大化
-    appWindow.isMaximized().then(setIsMaximized);
+    if (isTauri) {
+      appWindow.isMaximized().then(setIsMaximized).catch(() => {
+        // ignore
+      });
+    }
 
     // 监听窗口大小变化
     const handleResize = async () => {
+      if (!isTauri) return;
       const maximized = await appWindow.isMaximized();
       setIsMaximized(maximized);
       // 不再清除位置缓存，保持编辑器窗口的用户自定义位置
     };
 
     // 监听 resize 事件（窗口大小改变时触发）
-    window.addEventListener('resize', handleResize);
+    if (isTauri) {
+      window.addEventListener('resize', handleResize);
 
-    // 预热：预先计算编辑器窗口位置
-    if ('requestIdleCallback' in window) {
-      requestIdleCallback(() => {
-        calculateWindowPosition('control').catch(() => {
-          // 忽略错误，这只是预热
+      // 预热：预先计算编辑器窗口位置
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => {
+          calculateWindowPosition('control').catch(() => {
+            // 忽略错误，这只是预热
+          });
         });
-      });
-    } else {
-      // 降级方案
-      setTimeout(() => {
-        calculateWindowPosition('control').catch(() => {
-          // 忽略错误，这只是预热
-        });
-      }, 1000);
+      } else {
+        // 降级方案
+        setTimeout(() => {
+          calculateWindowPosition('control').catch(() => {
+            // 忽略错误，这只是预热
+          });
+        }, 1000);
+      }
     }
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      document.removeEventListener('contextmenu', preventDefault);
+      document.removeEventListener('drop', preventDefault);
+      document.removeEventListener('dragover', preventDefault);
+      if (isTauri) {
+        window.removeEventListener('resize', handleResize);
+      }
     };
   }, []);
 
@@ -294,7 +300,6 @@ function AppContent() {
   // 监听背景设置变化（使用统一的通信机制）
   useEffect(() => {
     const reloadBackgroundSettings = () => {
-      console.log('Main window: Background settings changed');
       setBackgroundSettings(readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS));
     };
 
@@ -314,8 +319,7 @@ function AppContent() {
     // 监听 Tauri 退出编辑模式事件
     const setupExitListener = async () => {
       const unlisten = await setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
-        console.log('Main window: Received exit edit mode signal');
-        toggleEditMode();
+        exitEditMode();
       });
       return unlisten;
     };
@@ -325,7 +329,7 @@ function AppContent() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [toggleEditMode]);
+  }, [exitEditMode]);
 
   // 获取当前激活的 Magnet（显示在点阵上的）
   const activeMagnets = useMemo(() => {
@@ -344,7 +348,6 @@ function AppContent() {
         }
         return m;
       });
-    console.log('App: activeMagnets computed, count:', filtered.length);
     return filtered;
   }, [magnetLibrary, activeMagnetIds, toggleEditMode]);
 
@@ -355,7 +358,6 @@ function AppContent() {
 
   // 处理 Magnet 移动（只更新库中的 Magnet）
   const handleMagnetMove = useCallback((magnetId: string, newAnchors: PixelAnchor[]) => {
-    console.log('App.handleMagnetMove called:', magnetId);
     updateMagnetAnchors(magnetId, newAnchors);
   }, [updateMagnetAnchors]);
 
@@ -408,6 +410,13 @@ function AppContent() {
 }
 
 function App() {
+  const kernel = useKernel();
+  const lifecycle = kernel.services.get(APP_LIFECYCLE_SERVICE_TOKEN);
+  const registerFlushHandler = useCallback(
+    (handler: () => void) => lifecycle.registerFlushHandler(() => handler()),
+    [lifecycle]
+  );
+
   // 从 localStorage 加载保存的配置以获取正确的 magnet 位置
   // 注意：magnetsForContext 仅用于 EditorProvider 的初始化
   // 后续更新通过 AppContent 内部的 updateOccupancy 方法进行
@@ -424,6 +433,7 @@ function App() {
           <NavigationProvider>
             <MagnetLibraryProvider
               gridSize={{ columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS }}
+              registerFlushHandler={registerFlushHandler}
             >
               <AppContent />
             </MagnetLibraryProvider>

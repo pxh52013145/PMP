@@ -5,6 +5,7 @@
 
 import { emit, listen, UnlistenFn } from '@tauri-apps/api/event';
 import { readString, writeJson } from '../modules/storage';
+import { isTauriRuntime } from './tauriRuntime';
 
 const DEBUG_STORAGE_KEY = 'pixel-matrix-debug-window-comm';
 let debugEnabledCache: boolean | null = null;
@@ -12,11 +13,7 @@ let debugEnabledCache: boolean | null = null;
 function isDebugEnabled(): boolean {
   if (debugEnabledCache !== null) return debugEnabledCache;
   let enabled = false;
-  try {
-    enabled = localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
-  } catch {
-    enabled = false;
-  }
+  enabled = readString(DEBUG_STORAGE_KEY) === '1';
   debugEnabledCache = enabled;
   return enabled;
 }
@@ -202,7 +199,7 @@ export async function broadcastDataUpdate<T>(
     writeJson(storageKey, data, { mode: 'sync' });
 
     // 2. 发送 Tauri 事件（如果提供）
-    if (tauriEvent) {
+    if (tauriEvent && isTauriRuntime()) {
       recordEmit(tauriEvent);
       await emit(tauriEvent, { timestamp: Date.now(), key: storageKey });
       debugLog(`Broadcasted: ${storageKey} via ${tauriEvent}`);
@@ -219,6 +216,7 @@ export async function broadcastDataUpdate<T>(
  * 发送信号（只触发事件，不存储数据）
  */
 export async function broadcastSignal(tauriEvent: string): Promise<void> {
+  if (!isTauriRuntime()) return;
   try {
     recordEmit(tauriEvent);
     await emit(tauriEvent, { timestamp: Date.now() });
@@ -250,13 +248,18 @@ export function setupStorageListener(
   callback: (key: string, newValue: unknown) => void
 ): () => void {
   const handleStorageChange = (e: StorageEvent) => {
-    if (e.key && keys.includes(e.key) && e.newValue) {
-      try {
-        const parsed = JSON.parse(e.newValue);
-        callback(e.key, parsed);
-      } catch (error) {
-        console.error(`Failed to parse storage event (${e.key}):`, error);
-      }
+    if (e.storageArea !== localStorage) return;
+    if (!e.key || !keys.includes(e.key)) return;
+
+    if (e.newValue === null) {
+      callback(e.key, null);
+      return;
+    }
+
+    try {
+      callback(e.key, JSON.parse(e.newValue));
+    } catch {
+      callback(e.key, e.newValue);
     }
   };
 
@@ -271,6 +274,10 @@ export async function setupTauriListener(
   eventName: string,
   callback: () => void
 ): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) {
+    return () => {};
+  }
+
   try {
     const unlisten = await listen(eventName, () => {
       debugLog(`Tauri event received: ${eventName}`);
@@ -280,7 +287,7 @@ export async function setupTauriListener(
     return unlisten;
   } catch (error) {
     console.error(`Failed to setup Tauri listener (${eventName}):`, error);
-    throw error;
+    return () => {};
   }
 }
 
@@ -291,6 +298,10 @@ export async function setupTauriListenerWithPayload<T>(
   eventName: string,
   callback: (payload: T) => void
 ): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) {
+    return () => {};
+  }
+
   try {
     const unlisten = await listen<T>(eventName, (event) => {
       debugLog(`Tauri event received: ${eventName}`);
@@ -300,7 +311,7 @@ export async function setupTauriListenerWithPayload<T>(
     return unlisten;
   } catch (error) {
     console.error(`Failed to setup Tauri listener (${eventName}):`, error);
-    throw error;
+    return () => {};
   }
 }
 

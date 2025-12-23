@@ -16,7 +16,6 @@ export function useMusicLibraryLogic(): MusicLibraryLogic {
   const { navigateTo } = useNavigation();
 
   const navigateToMusicLibrary = () => {
-    console.log('Music Library button clicked - navigating to music library');
     navigateTo('music-library');
   };
 
