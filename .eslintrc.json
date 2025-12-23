@@ -61,8 +61,46 @@
           {
             "patterns": [
               {
-                "group": ["**/components/**", "**/contexts/**"],
-                "message": "Services must not import UI (components/contexts). Keep services UI-agnostic and communicate via registry/events."
+                "group": [
+                  "**/components/**",
+                  "**/contexts/**",
+                  "**/magnet-system/**",
+                  "**/shader-system/**",
+                  "**/themes/**"
+                ],
+                "message": "Services must not import UI/features (components/contexts/magnet-system/shader-system/themes). Keep services UI-agnostic and communicate via registry/events."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/desktop/src/magnet-system/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/shader-system/**"],
+                "message": "Feature boundary: magnet-system must not depend on shader-system; communicate via contracts/services/events if needed."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/desktop/src/shader-system/**/*.{ts,tsx}"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/magnet-system/**"],
+                "message": "Feature boundary: shader-system must not depend on magnet-system; communicate via contracts/services/events if needed."
               }
             ]
           }

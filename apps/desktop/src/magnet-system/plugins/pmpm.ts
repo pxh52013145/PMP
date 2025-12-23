@@ -1,11 +1,33 @@
 import React from 'react';
-import { unzipSync, strFromU8 } from 'fflate';
+import { unzip, strFromU8 } from 'fflate';
+import type { Unzipped } from 'fflate';
 import type { Magnet } from '../../types/pixel';
 import type { MagnetRendererDefinition } from '../registry';
 import { PluginMagnetHost } from './PluginMagnetHost';
 import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
-import { readDurableText, readJson, removeDurableText, writeDurableText } from '../../modules/storage';
-import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
+import {
+  readDurableText,
+  readJson,
+  readString,
+  removeDurableText,
+  tryWriteJson,
+  writeDurableText,
+  writeJson,
+  writeString,
+} from '../../modules/storage';
+import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
+
+async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
+  return await new Promise((resolve, reject) => {
+    unzip(bytes, (err, data) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(data);
+    });
+  });
+}
 
 export type PmpmManifest = {
   formatVersion: '1.0';
@@ -462,18 +484,122 @@ async function removePmpmPluginEntryCode(pluginId: string): Promise<void> {
   await removeDurableText('pmpm-entry', pluginId);
 }
 
-export async function migrateInstalledPmpmPluginsToDurableStorage(): Promise<{
+const PMPM_DURABLE_MIGRATION_V1_BACKUP_ID = 'pmpm-plugins-v1';
+
+type PmpmDurableMigrationStatus = 'running' | 'done' | 'partial' | 'failed' | 'rolled-back';
+
+type PmpmDurableMigrationFailureStage = 'backup' | 'persist' | 'save';
+
+export type PmpmDurableMigrationFailure = {
+  pluginId: string;
+  stage: PmpmDurableMigrationFailureStage;
+  message: string;
+};
+
+export type PmpmDurableMigrationReport = {
+  version: 1;
+  startedAt: number;
+  finishedAt: number;
+  status: PmpmDurableMigrationStatus;
+  candidates: number;
   migrated: number;
   failed: number;
+  backup: { existed: boolean; created: boolean };
+  failures: PmpmDurableMigrationFailure[];
+};
+
+function persistPmpmMigrationReport(report: PmpmDurableMigrationReport): void {
+  writeJson(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1_REPORT, report, { mode: 'sync' });
+}
+
+async function ensurePmpmMigrationBackup(raw: string): Promise<
+  | { ok: true; existed: boolean; created: boolean }
+  | { ok: false; message: string }
+> {
+  const existing = await readDurableText('migration-backup', PMPM_DURABLE_MIGRATION_V1_BACKUP_ID);
+  if (typeof existing === 'string') {
+    return { ok: true, existed: true, created: false };
+  }
+
+  const written = await writeDurableText('migration-backup', PMPM_DURABLE_MIGRATION_V1_BACKUP_ID, raw);
+  if (!written) {
+    return { ok: false, message: 'writeDurableText failed' };
+  }
+
+  const readBack = await readDurableText('migration-backup', PMPM_DURABLE_MIGRATION_V1_BACKUP_ID);
+  if (readBack !== raw) {
+    return { ok: false, message: 'backup readback mismatch' };
+  }
+
+  return { ok: true, existed: false, created: true };
+}
+
+function saveInstalledPmpmPlugins(plugins: InstalledPmpmPlugin[]): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const ok = tryWriteJson(STORAGE_KEYS.PMPM_PLUGINS, plugins);
+  if (!ok) return false;
+
+  notifyPluginStoreChanged();
+  void broadcastSignal(TAURI_EVENTS.PMPM_PLUGINS_UPDATED);
+  return true;
+}
+
+export async function migrateInstalledPmpmPluginsToDurableStorage(options: {
+  force?: boolean;
+} = {}): Promise<{
+  migrated: number;
+  failed: number;
+  skipped?: boolean;
 }> {
   const plugins = loadInstalledPmpmPlugins();
   if (plugins.length === 0) return { migrated: 0, failed: 0 };
 
+  const candidates = plugins.filter((plugin) => {
+    const entryCode = plugin.entryCode;
+    return typeof entryCode === 'string' && entryCode.length > 0;
+  });
+
+  const migrationFlag = readString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1);
+  if (!options.force && migrationFlag === 'rolled-back') {
+    return { migrated: 0, failed: 0, skipped: true };
+  }
+  if (!options.force && migrationFlag === 'done' && candidates.length === 0) {
+    return { migrated: 0, failed: 0, skipped: true };
+  }
+
+  const startedAt = Date.now();
+  writeString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1, 'running');
+
   let migrated = 0;
   let failed = 0;
   let changed = false;
+  const failures: PmpmDurableMigrationFailure[] = [];
+  let backupInfo: PmpmDurableMigrationReport['backup'] = { existed: false, created: false };
 
   const next = plugins.map((plugin) => ({ ...plugin }));
+
+  if (candidates.length > 0) {
+    const raw = readString(STORAGE_KEYS.PMPM_PLUGINS) ?? JSON.stringify(plugins);
+    const backup = await ensurePmpmMigrationBackup(raw);
+    if (!backup.ok) {
+      const report: PmpmDurableMigrationReport = {
+        version: 1,
+        startedAt,
+        finishedAt: Date.now(),
+        status: 'failed',
+        candidates: candidates.length,
+        migrated: 0,
+        failed: candidates.length,
+        backup: backupInfo,
+        failures: [{ pluginId: '*', stage: 'backup', message: backup.message }],
+      };
+      persistPmpmMigrationReport(report);
+      writeString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1, 'failed');
+      return { migrated: 0, failed: candidates.length };
+    }
+    backupInfo = { existed: backup.existed, created: backup.created };
+  }
 
   for (let i = 0; i < next.length; i += 1) {
     const plugin = next[i];
@@ -484,6 +610,7 @@ export async function migrateInstalledPmpmPluginsToDurableStorage(): Promise<{
     const ok = await persistPmpmPluginEntryCode(pluginId, entryCode);
     if (!ok) {
       failed += 1;
+      failures.push({ pluginId, stage: 'persist', message: 'persist durable entry failed' });
       continue;
     }
 
@@ -493,8 +620,34 @@ export async function migrateInstalledPmpmPluginsToDurableStorage(): Promise<{
   }
 
   if (changed) {
-    saveInstalledPmpmPlugins(next);
+    const ok = saveInstalledPmpmPlugins(next);
+    if (!ok) {
+      failures.push({ pluginId: '*', stage: 'save', message: 'failed to persist localStorage index' });
+      failed = Math.max(failed, 1);
+    }
   }
+
+  const finishedAt = Date.now();
+  const status: PmpmDurableMigrationStatus =
+    failures.some((item) => item.stage === 'backup' || item.stage === 'save')
+      ? 'failed'
+      : failed === 0
+        ? 'done'
+        : 'partial';
+
+  writeString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1, status);
+
+  persistPmpmMigrationReport({
+    version: 1,
+    startedAt,
+    finishedAt,
+    status,
+    candidates: candidates.length,
+    migrated,
+    failed,
+    backup: backupInfo,
+    failures,
+  });
 
   return { migrated, failed };
 }
@@ -508,14 +661,6 @@ export function loadInstalledPmpmPlugins(): InstalledPmpmPlugin[] {
   } catch {
     return [];
   }
-}
-
-function saveInstalledPmpmPlugins(plugins: InstalledPmpmPlugin[]): void {
-  if (typeof window === 'undefined') return;
-  notifyPluginStoreChanged();
-  // Keep localStorage as the source of truth, but also fan out a Tauri event so
-  // other windows can refresh plugin renderer registrations.
-  void broadcastDataUpdate(STORAGE_KEYS.PMPM_PLUGINS, plugins, TAURI_EVENTS.PMPM_PLUGINS_UPDATED);
 }
 
 export function getInstalledPmpmPlugin(id: string): InstalledPmpmPlugin | null {
@@ -538,7 +683,7 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
   const { readBinaryFile } = await import('@tauri-apps/api/fs');
   const bytes = await readBinaryFile(filePath);
   const packageBytes = new Uint8Array(bytes);
-  const files = unzipSync(packageBytes);
+  const files = await unzipAsync(packageBytes);
 
   const manifestBytes = files['manifest.json'];
   if (!manifestBytes) {
@@ -587,6 +732,82 @@ export function uninstallPmpmPlugin(id: string): void {
   const plugins = loadInstalledPmpmPlugins();
   saveInstalledPmpmPlugins(plugins.filter((plugin) => plugin.manifest.metadata.id !== id));
   void removePmpmPluginEntryCode(id);
+}
+
+function isPluginList(value: unknown): value is InstalledPmpmPlugin[] {
+  return Array.isArray(value);
+}
+
+export async function rollbackPmpmDurableMigrationV1(options: {
+  strategy?: 'backup' | 'rehydrate';
+  removeDurableEntries?: boolean;
+} = {}): Promise<{
+  restored: number;
+  missing: number;
+  usedBackup: boolean;
+  ok: boolean;
+}> {
+  if (typeof window === 'undefined') {
+    return { restored: 0, missing: 0, usedBackup: false, ok: false };
+  }
+
+  const backupRaw = await readDurableText('migration-backup', PMPM_DURABLE_MIGRATION_V1_BACKUP_ID);
+  const preferBackup =
+    options.strategy === 'backup' || (options.strategy !== 'rehydrate' && typeof backupRaw === 'string');
+
+  if (preferBackup && typeof backupRaw === 'string') {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(backupRaw) as unknown;
+    } catch {
+      parsed = null;
+    }
+
+    if (isPluginList(parsed)) {
+      const ok = saveInstalledPmpmPlugins(parsed);
+      if (!ok) return { restored: 0, missing: 0, usedBackup: true, ok: false };
+
+      writeString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1, 'rolled-back');
+      return { restored: parsed.length, missing: 0, usedBackup: true, ok: true };
+    }
+  }
+
+  const installed = loadInstalledPmpmPlugins();
+  if (installed.length === 0) {
+    writeString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1, 'rolled-back');
+    return { restored: 0, missing: 0, usedBackup: false, ok: true };
+  }
+
+  let restored = 0;
+  let missing = 0;
+
+  const next = installed.map((plugin) => ({ ...plugin }));
+
+  for (let i = 0; i < next.length; i += 1) {
+    const plugin = next[i];
+    const pluginId = plugin.manifest.metadata.id;
+    if (typeof plugin.entryCode === 'string' && plugin.entryCode.length > 0) continue;
+    const entryCode = await readPmpmPluginEntryCode(pluginId);
+    if (!entryCode) {
+      missing += 1;
+      continue;
+    }
+    plugin.entryCode = entryCode;
+    restored += 1;
+  }
+
+  const ok = saveInstalledPmpmPlugins(next);
+  if (!ok) return { restored: 0, missing, usedBackup: false, ok: false };
+
+  if (options.removeDurableEntries) {
+    for (const plugin of next) {
+      const pluginId = plugin.manifest.metadata.id;
+      await removePmpmPluginEntryCode(pluginId);
+    }
+  }
+
+  writeString(STORAGE_KEYS.PMPM_DURABLE_MIGRATION_V1, 'rolled-back');
+  return { restored, missing, usedBackup: false, ok: true };
 }
 
 function formatErrorMessage(error: unknown): string {

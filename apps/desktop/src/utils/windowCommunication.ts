@@ -103,9 +103,13 @@ export const STORAGE_KEYS = {
 
   // === Plugins (.pmpm) ===
   PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
+  PMPM_DURABLE_MIGRATION_V1: 'pixel-matrix-pmpm-durable-migration-v1', // durable migration state flag (R3)
+  PMPM_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmpm-durable-migration-v1-report', // migration report (R3)
 
   // === Shader Packs (.pmps) ===
   PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）
+  PMPS_DURABLE_MIGRATION_V1: 'pixel-matrix-pmps-durable-migration-v1', // durable migration state flag (R3)
+  PMPS_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmps-durable-migration-v1-report', // migration report (R3)
   PMPS_MAGNET_SHADER_BINDINGS: 'pixel-matrix-pmps-magnet-shader-bindings', // Magnet -> shader binding
   PMPS_MAGNET_UNIFORMS: 'pixel-matrix-pmps-magnet-uniforms', // Magnet -> shader uniforms overrides
   PMPS_SHADER_FUSE: 'pixel-matrix-pmps-shader-fuse', // shader runtime error fuse

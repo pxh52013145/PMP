@@ -1,6 +1,6 @@
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
-export type DurableTextNamespace = 'pmpm-entry' | 'pmps-fragment';
+export type DurableTextNamespace = 'pmpm-entry' | 'pmps-fragment' | 'migration-backup';
 
 const IDB_DB_NAME = 'pixel-matrix-player';
 const IDB_STORE_NAME = 'durableText';
@@ -161,4 +161,3 @@ export async function removeDurableText(namespace: DurableTextNamespace, id: str
     console.warn(`[storage] Failed to remove durable text ${namespace}/${id}`, error);
   }
 }
-

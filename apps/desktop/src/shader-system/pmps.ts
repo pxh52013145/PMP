@@ -1,6 +1,28 @@
-﻿import { strFromU8, unzipSync } from 'fflate';
-import { readDurableText, readJson, removeDurableText, writeDurableText } from '../modules/storage';
-import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../utils/windowCommunication';
+﻿import { strFromU8, unzip } from 'fflate';
+import type { Unzipped } from 'fflate';
+import {
+  readDurableText,
+  readJson,
+  readString,
+  removeDurableText,
+  tryWriteJson,
+  writeDurableText,
+  writeJson,
+  writeString,
+} from '../modules/storage';
+import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../utils/windowCommunication';
+
+async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
+  return await new Promise((resolve, reject) => {
+    unzip(bytes, (err, data) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(data);
+    });
+  });
+}
 
 export type PmpsEntryPoint = 'auto' | 'main' | 'shadertoy';
 
@@ -83,6 +105,64 @@ async function persistPmpsFragmentCode(shaderId: string, fragmentCode: string): 
 
 async function removePmpsFragmentCode(shaderId: string): Promise<void> {
   await removeDurableText('pmps-fragment', shaderId);
+}
+
+const PMPS_DURABLE_MIGRATION_V1_BACKUP_ID = 'pmps-shaders-v1';
+
+type PmpsDurableMigrationStatus = 'running' | 'done' | 'partial' | 'failed' | 'rolled-back';
+
+type PmpsDurableMigrationFailureStage = 'backup' | 'persist' | 'save';
+
+export type PmpsDurableMigrationFailure = {
+  shaderId: string;
+  stage: PmpsDurableMigrationFailureStage;
+  message: string;
+};
+
+export type PmpsDurableMigrationReport = {
+  version: 1;
+  startedAt: number;
+  finishedAt: number;
+  status: PmpsDurableMigrationStatus;
+  candidates: number;
+  migrated: number;
+  failed: number;
+  backup: { existed: boolean; created: boolean };
+  failures: PmpsDurableMigrationFailure[];
+};
+
+function persistPmpsMigrationReport(report: PmpsDurableMigrationReport): void {
+  writeJson(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1_REPORT, report, { mode: 'sync' });
+}
+
+async function ensurePmpsMigrationBackup(raw: string): Promise<
+  | { ok: true; existed: boolean; created: boolean }
+  | { ok: false; message: string }
+> {
+  const existing = await readDurableText('migration-backup', PMPS_DURABLE_MIGRATION_V1_BACKUP_ID);
+  if (typeof existing === 'string') {
+    return { ok: true, existed: true, created: false };
+  }
+
+  const written = await writeDurableText('migration-backup', PMPS_DURABLE_MIGRATION_V1_BACKUP_ID, raw);
+  if (!written) {
+    return { ok: false, message: 'writeDurableText failed' };
+  }
+
+  const readBack = await readDurableText('migration-backup', PMPS_DURABLE_MIGRATION_V1_BACKUP_ID);
+  if (readBack !== raw) {
+    return { ok: false, message: 'backup readback mismatch' };
+  }
+
+  return { ok: true, existed: false, created: true };
+}
+
+function saveInstalledPmpsShaderPacks(packs: InstalledPmpsShaderPack[]): boolean {
+  if (typeof window === 'undefined') return false;
+  const ok = tryWriteJson(STORAGE_KEYS.PMPS_SHADERS, packs);
+  if (!ok) return false;
+  void broadcastSignal(TAURI_EVENTS.PMPS_SHADERS_UPDATED);
+  return true;
 }
 
 function assertObject(value: unknown, path: string): asserts value is Record<string, unknown> {
@@ -204,7 +284,7 @@ export function validatePmpsManifest(manifest: unknown): asserts manifest is Pmp
 export async function parsePmpsShaderPackFromZipBytes(
   bytes: Uint8Array
 ): Promise<Omit<InstalledPmpsShaderPack, 'installedAt'>> {
-  const files = unzipSync(bytes);
+  const files = await unzipAsync(bytes);
 
   const manifestBytes = findZipEntry(files, 'manifest.json');
   if (!manifestBytes) {
@@ -329,18 +409,59 @@ export function loadInstalledPmpsShaderPacks(): InstalledPmpsShaderPack[] {
   }
 }
 
-export async function migrateInstalledPmpsShaderPacksToDurableStorage(): Promise<{
+export async function migrateInstalledPmpsShaderPacksToDurableStorage(options: { force?: boolean } = {}): Promise<{
   migrated: number;
   failed: number;
+  skipped?: boolean;
 }> {
   const packs = loadInstalledPmpsShaderPacks();
   if (packs.length === 0) return { migrated: 0, failed: 0 };
 
+  const candidates = packs.filter((pack) => {
+    const fragmentCode = pack.fragmentCode;
+    return typeof fragmentCode === 'string' && fragmentCode.length > 0;
+  });
+
+  const migrationFlag = readString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1);
+  if (!options.force && migrationFlag === 'rolled-back') {
+    return { migrated: 0, failed: 0, skipped: true };
+  }
+  if (!options.force && migrationFlag === 'done' && candidates.length === 0) {
+    return { migrated: 0, failed: 0, skipped: true };
+  }
+
+  const startedAt = Date.now();
+  writeString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1, 'running');
+
   let migrated = 0;
   let failed = 0;
   let changed = false;
+  const failures: PmpsDurableMigrationFailure[] = [];
+  let backupInfo: PmpsDurableMigrationReport['backup'] = { existed: false, created: false };
 
   const next = packs.map((pack) => ({ ...pack }));
+
+  if (candidates.length > 0) {
+    const raw = readString(STORAGE_KEYS.PMPS_SHADERS) ?? JSON.stringify(packs);
+    const backup = await ensurePmpsMigrationBackup(raw);
+    if (!backup.ok) {
+      const report: PmpsDurableMigrationReport = {
+        version: 1,
+        startedAt,
+        finishedAt: Date.now(),
+        status: 'failed',
+        candidates: candidates.length,
+        migrated: 0,
+        failed: candidates.length,
+        backup: backupInfo,
+        failures: [{ shaderId: '*', stage: 'backup', message: backup.message }],
+      };
+      persistPmpsMigrationReport(report);
+      writeString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1, 'failed');
+      return { migrated: 0, failed: candidates.length };
+    }
+    backupInfo = { existed: backup.existed, created: backup.created };
+  }
 
   for (let i = 0; i < next.length; i += 1) {
     const pack = next[i];
@@ -351,6 +472,7 @@ export async function migrateInstalledPmpsShaderPacksToDurableStorage(): Promise
     const ok = await persistPmpsFragmentCode(shaderId, fragmentCode);
     if (!ok) {
       failed += 1;
+      failures.push({ shaderId, stage: 'persist', message: 'persist durable fragment failed' });
       continue;
     }
 
@@ -360,15 +482,36 @@ export async function migrateInstalledPmpsShaderPacksToDurableStorage(): Promise
   }
 
   if (changed) {
-    saveInstalledPmpsShaderPacks(next);
+    const ok = saveInstalledPmpsShaderPacks(next);
+    if (!ok) {
+      failures.push({ shaderId: '*', stage: 'save', message: 'failed to persist localStorage index' });
+      failed = Math.max(failed, 1);
+    }
   }
 
-  return { migrated, failed };
-}
+  const finishedAt = Date.now();
+  const status: PmpsDurableMigrationStatus =
+    failures.some((item) => item.stage === 'backup' || item.stage === 'save')
+      ? 'failed'
+      : failed === 0
+        ? 'done'
+        : 'partial';
 
-function saveInstalledPmpsShaderPacks(packs: InstalledPmpsShaderPack[]): void {
-  if (typeof window === 'undefined') return;
-  void broadcastDataUpdate(STORAGE_KEYS.PMPS_SHADERS, packs, TAURI_EVENTS.PMPS_SHADERS_UPDATED);
+  writeString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1, status);
+
+  persistPmpsMigrationReport({
+    version: 1,
+    startedAt,
+    finishedAt,
+    status,
+    candidates: candidates.length,
+    migrated,
+    failed,
+    backup: backupInfo,
+    failures,
+  });
+
+  return { migrated, failed };
 }
 
 export function getInstalledPmpsShaderPack(id: string): InstalledPmpsShaderPack | null {
@@ -405,6 +548,82 @@ export function uninstallPmpsShaderPack(id: string): void {
   const packs = loadInstalledPmpsShaderPacks();
   saveInstalledPmpsShaderPacks(packs.filter((p) => p.manifest.metadata.id !== id));
   void removePmpsFragmentCode(id);
+}
+
+function isShaderPackList(value: unknown): value is InstalledPmpsShaderPack[] {
+  return Array.isArray(value);
+}
+
+export async function rollbackPmpsDurableMigrationV1(options: {
+  strategy?: 'backup' | 'rehydrate';
+  removeDurableEntries?: boolean;
+} = {}): Promise<{
+  restored: number;
+  missing: number;
+  usedBackup: boolean;
+  ok: boolean;
+}> {
+  if (typeof window === 'undefined') {
+    return { restored: 0, missing: 0, usedBackup: false, ok: false };
+  }
+
+  const backupRaw = await readDurableText('migration-backup', PMPS_DURABLE_MIGRATION_V1_BACKUP_ID);
+  const preferBackup =
+    options.strategy === 'backup' || (options.strategy !== 'rehydrate' && typeof backupRaw === 'string');
+
+  if (preferBackup && typeof backupRaw === 'string') {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(backupRaw) as unknown;
+    } catch {
+      parsed = null;
+    }
+
+    if (isShaderPackList(parsed)) {
+      const ok = saveInstalledPmpsShaderPacks(parsed);
+      if (!ok) return { restored: 0, missing: 0, usedBackup: true, ok: false };
+
+      writeString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1, 'rolled-back');
+      return { restored: parsed.length, missing: 0, usedBackup: true, ok: true };
+    }
+  }
+
+  const installed = loadInstalledPmpsShaderPacks();
+  if (installed.length === 0) {
+    writeString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1, 'rolled-back');
+    return { restored: 0, missing: 0, usedBackup: false, ok: true };
+  }
+
+  let restored = 0;
+  let missing = 0;
+
+  const next = installed.map((pack) => ({ ...pack }));
+
+  for (let i = 0; i < next.length; i += 1) {
+    const pack = next[i];
+    const shaderId = pack.manifest.metadata.id;
+    if (typeof pack.fragmentCode === 'string' && pack.fragmentCode.length > 0) continue;
+    const fragmentCode = await readPmpsFragmentCode(shaderId);
+    if (!fragmentCode) {
+      missing += 1;
+      continue;
+    }
+    pack.fragmentCode = fragmentCode;
+    restored += 1;
+  }
+
+  const ok = saveInstalledPmpsShaderPacks(next);
+  if (!ok) return { restored: 0, missing, usedBackup: false, ok: false };
+
+  if (options.removeDurableEntries) {
+    for (const pack of next) {
+      const shaderId = pack.manifest.metadata.id;
+      await removePmpsFragmentCode(shaderId);
+    }
+  }
+
+  writeString(STORAGE_KEYS.PMPS_DURABLE_MIGRATION_V1, 'rolled-back');
+  return { restored, missing, usedBackup: false, ok: true };
 }
 
 export async function installPmpsShaderPackFromFilePath(
