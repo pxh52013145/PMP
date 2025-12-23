@@ -1,6 +1,8 @@
 import { useState, useCallback, memo, useEffect } from 'react';
 import { BackgroundConfig } from '../../types/background';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
+import { readJson } from '../../modules/storage';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import './CustomBackgroundEditor.css';
 
 interface CustomBackgroundEditorProps {
@@ -334,9 +336,18 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
       if (selected && typeof selected === 'string') {
         try {
+          const gifMaxFpsRaw =
+            type === 'image'
+              ? readJson<number>(STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS, 30)
+              : undefined;
+          const gifMaxFps =
+            typeof gifMaxFpsRaw === 'number' && Number.isFinite(gifMaxFpsRaw)
+              ? Math.max(0, Math.min(60, Math.round(gifMaxFpsRaw)))
+              : 30;
           const destPath = await tauri.invoke<string>('background_import_media', {
             sourcePath: selected,
             kind: type,
+            gifMaxFps: type === 'image' ? gifMaxFps : undefined,
           });
           const persistedUrl = tauri.convertFileSrc(destPath);
 

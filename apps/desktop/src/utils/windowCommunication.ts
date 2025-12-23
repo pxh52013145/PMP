@@ -124,6 +124,9 @@ export const STORAGE_KEYS = {
   // === Editor Performance ===
   EDITOR_LOW_PERFORMANCE_MODE: 'pixel-matrix-editor-low-performance-mode',
 
+  // === Background GIF Optimization ===
+  BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',
+
   // === Background Migration Flags ===
   BACKGROUND_MEDIA_MIGRATION_V1: 'pixel-matrix-background-media-migration-v1',
 } as const;

@@ -215,9 +215,10 @@ async fn background_import_media(
     app: tauri::AppHandle,
     source_path: String,
     kind: String,
+    gif_max_fps: Option<u16>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        background_media::import_background_media(&app, source_path, kind)
+        background_media::import_background_media(&app, source_path, kind, gif_max_fps)
     })
     .await
     .map_err(|e| format!("Import task failed: {e}"))?
