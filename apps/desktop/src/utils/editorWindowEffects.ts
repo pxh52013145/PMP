@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { readJson } from '../modules/storage';
-import { STORAGE_KEYS } from './windowCommunication';
+import { broadcastSignal, STORAGE_KEYS, TAURI_EVENTS } from './windowCommunication';
 import { isTauriRuntime } from './tauriRuntime';
 
 export function readEditorLowPerformanceMode(): boolean {
@@ -18,9 +18,9 @@ export async function setEditorBlurEnabled(enabled: boolean): Promise<void> {
 
 export async function applyEditorLowPerformanceMode(lowPerformanceMode: boolean): Promise<void> {
   await setEditorBlurEnabled(!lowPerformanceMode);
+  await broadcastSignal(TAURI_EVENTS.EDITOR_LOW_PERFORMANCE_MODE_UPDATED);
 }
 
 export async function syncEditorEffectsFromStorage(): Promise<void> {
   await applyEditorLowPerformanceMode(readEditorLowPerformanceMode());
 }
-

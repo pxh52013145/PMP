@@ -6,6 +6,12 @@ interface BackgroundProps {
   config: BackgroundConfig;
 }
 
+function isLikelyGifUrl(url: string): boolean {
+  const normalized = url.trim().toLowerCase();
+  if (normalized.startsWith('data:image/gif')) return true;
+  return /\.gif($|[?#&])/.test(normalized);
+}
+
 /**
  * 背景组件
  * 支持纯色、渐变、图片、视频等多种背景类型
@@ -14,6 +20,8 @@ export default function Background({ config }: BackgroundProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const imageConfig = config.type === 'image' ? config.image : undefined;
+  const shouldForceOpaqueBaseForGif =
+    !!imageConfig && typeof imageConfig.url === 'string' && imageConfig.url.length > 0 && isLikelyGifUrl(imageConfig.url);
   const shouldRenderImageElement =
     !!imageConfig && !!imageConfig.url && !imageConfig.crop && imageConfig.repeat === 'no-repeat';
 
@@ -30,6 +38,9 @@ export default function Background({ config }: BackgroundProps) {
     const baseStyle: React.CSSProperties = {
       opacity: config.opacity ?? 1,
       filter: config.blur ? `blur(${config.blur}px)` : undefined,
+      // Some GIFs contain transparent frames/disposal gaps; in a transparent Tauri window this can
+      // show through as "flicker". Provide an opaque base so those gaps render consistently.
+      backgroundColor: shouldForceOpaqueBaseForGif ? '#000000' : undefined,
     };
 
     switch (config.type) {
@@ -126,6 +137,7 @@ export default function Background({ config }: BackgroundProps) {
           style={{
             objectFit: imageConfig.fit === 'fill' ? 'fill' : imageConfig.fit,
             objectPosition: imageConfig.position,
+            backgroundColor: shouldForceOpaqueBaseForGif ? '#000000' : undefined,
           }}
         />
       )}
@@ -155,6 +167,7 @@ export default function Background({ config }: BackgroundProps) {
               backgroundSize: 'contain',
               backgroundPosition: 'center center',
               backgroundRepeat: 'no-repeat',
+              backgroundColor: shouldForceOpaqueBaseForGif ? '#000000' : undefined,
               opacity: config.image.opacity ?? 1,
             }}
           />

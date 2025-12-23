@@ -66,6 +66,12 @@
   --editor-window-glass-blur: 0px;
 }
 
+.editor-window-app.editor-window-app--low-performance {
+  /* Prefer flatter (cheaper) visuals when low-performance mode is enabled. */
+  --editor-window-panel-bg: rgba(10, 10, 20, 0.92);
+  --editor-window-glass-blur: 0px;
+}
+
 /* 通用编辑器窗口样式 - 半透明玻璃效果 */
 .editor-statistics,
 .editor-magnet-library,
@@ -141,6 +147,45 @@
 .editor-window-app.editor-window-app--scrolling .draggable-control-panel {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+
+.editor-window-app.editor-window-app--low-performance .editor-statistics,
+.editor-window-app.editor-window-app--low-performance .editor-magnet-library,
+.editor-window-app.editor-window-app--low-performance .editor-style-editor,
+.editor-window-app.editor-window-app--low-performance .editor-help,
+.editor-window-app.editor-window-app--low-performance .editor-debug,
+.editor-window-app.editor-window-app--low-performance .editor-creator,
+.editor-window-app.editor-window-app--low-performance .background-manager,
+.editor-window-app.editor-window-app--low-performance .editor-custom-background,
+.editor-window-app.editor-window-app--low-performance .draggable-control-panel {
+  clip-path: none;
+  border-radius: 12px;
+}
+
+.editor-window-app.editor-window-app--low-performance .editor-statistics::before,
+.editor-window-app.editor-window-app--low-performance .editor-magnet-library::before,
+.editor-window-app.editor-window-app--low-performance .editor-style-editor::before,
+.editor-window-app.editor-window-app--low-performance .editor-help::before,
+.editor-window-app.editor-window-app--low-performance .editor-debug::before,
+.editor-window-app.editor-window-app--low-performance .editor-creator::before,
+.editor-window-app.editor-window-app--low-performance .background-manager::before,
+.editor-window-app.editor-window-app--low-performance .editor-custom-background::before {
+  border-radius: 12px;
+  box-shadow: none;
+  border-color: rgba(0, 255, 255, 0.25);
+}
+
+.editor-window-app.editor-window-app--low-performance .draggable-control-panel {
+  box-shadow: none;
+  border-color: rgba(0, 255, 255, 0.25);
+}
+
+.editor-window-app.editor-window-app--low-performance .editor-window-header {
+  transition: none;
+}
+
+.editor-window-app.editor-window-app--low-performance .window-title {
+  text-shadow: none;
 }
 
 /* 编辑器窗口拖动标题栏 */

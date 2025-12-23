@@ -37,6 +37,7 @@ import {
   broadcastDataUpdate,
   broadcastSignal,
   setupConfigSync,
+  setupStorageListener,
   setupTauriListener,
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
@@ -411,6 +412,9 @@ export function EditorWindowApp() {
   const [isWindowVisible, setIsWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isWindowFocused, setIsWindowFocused] = useState(() => document.hasFocus());
+  const [editorLowPerformanceMode, setEditorLowPerformanceMode] = useState(() =>
+    readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false)
+  );
   const isWindowActive = isWindowVisible && isDocumentVisible && isWindowFocused;
   const activityRef = useRef({ isWindowActive });
   activityRef.current.isWindowActive = isWindowActive;
@@ -426,6 +430,40 @@ export function EditorWindowApp() {
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, []);
+
+  const refreshEditorLowPerformanceMode = useCallback(() => {
+    setEditorLowPerformanceMode(readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false));
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    refreshEditorLowPerformanceMode();
+
+    const teardownStorage = setupStorageListener(
+      [STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE],
+      refreshEditorLowPerformanceMode
+    );
+
+    let unlistenTauri: (() => void) | null = null;
+    const setup = async () => {
+      const unlisten = await setupTauriListener(
+        TAURI_EVENTS.EDITOR_LOW_PERFORMANCE_MODE_UPDATED,
+        refreshEditorLowPerformanceMode
+      );
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenTauri = unlisten;
+    };
+    void setup();
+
+    return () => {
+      disposed = true;
+      teardownStorage();
+      if (unlistenTauri) unlistenTauri();
+    };
+  }, [refreshEditorLowPerformanceMode]);
 
   useEffect(() => {
     let disposed = false;
@@ -903,7 +941,7 @@ export function EditorWindowApp() {
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
               <div
-                className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''}`}
+                className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
                 ref={rootRef}
               >
                   {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
