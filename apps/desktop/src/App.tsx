@@ -44,8 +44,10 @@ const DEFAULT_BACKGROUND_THEME_COLOR: BackgroundThemeColor = { id: 'cyan', rgb: 
 function AppContent() {
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
-  const isWindowActive = isMainWindowVisible && isDocumentVisible;
+  const [isMainWindowFocused, setIsMainWindowFocused] = useState(() => document.hasFocus());
+  const isWindowActive = isMainWindowVisible && isDocumentVisible && isMainWindowFocused;
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const isTauri = useMemo(() => isTauriRuntime(), []);
 
   useEffect(() => {
     void syncEditorEffectsFromStorage();
@@ -90,6 +92,63 @@ function AppContent() {
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let blurTimer: number | null = null;
+    let unlisten: (() => void) | null = null;
+
+    const applyFocus = (focused: boolean) => {
+      if (blurTimer !== null) {
+        window.clearTimeout(blurTimer);
+        blurTimer = null;
+      }
+
+      if (focused) {
+        setIsMainWindowFocused(true);
+        return;
+      }
+
+      // Debounce blur: some platforms briefly drop focus while spawning child windows or dragging.
+      blurTimer = window.setTimeout(() => {
+        blurTimer = null;
+        if (!disposed) setIsMainWindowFocused(false);
+      }, 160);
+    };
+
+    const setup = async () => {
+      if (isTauri) {
+        try {
+          const initialFocused = await appWindow.isFocused().catch(() => document.hasFocus());
+          applyFocus(initialFocused);
+          unlisten = await appWindow.onFocusChanged(({ payload: focused }) => {
+            applyFocus(focused);
+          });
+          return;
+        } catch (error) {
+          console.warn('[MainWindow] Failed to subscribe to focus events:', error);
+        }
+      }
+
+      const onFocus = () => applyFocus(true);
+      const onBlur = () => applyFocus(false);
+      applyFocus(document.hasFocus());
+      window.addEventListener('focus', onFocus);
+      window.addEventListener('blur', onBlur);
+      unlisten = () => {
+        window.removeEventListener('focus', onFocus);
+        window.removeEventListener('blur', onBlur);
+      };
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      if (blurTimer !== null) window.clearTimeout(blurTimer);
+      if (unlisten) unlisten();
+    };
+  }, [isTauri]);
 
   useEffect(() => {
     const isEditableTarget = (target: EventTarget | null): boolean => {
@@ -223,8 +282,6 @@ function AppContent() {
     document.addEventListener('drop', preventDefault);
     document.addEventListener('dragover', preventDefault);
 
-    const isTauri = isTauriRuntime();
-
     // 初始化时检查窗口是否最大化
     if (isTauri) {
       appWindow.isMaximized().then(setIsMaximized).catch(() => {
@@ -269,7 +326,7 @@ function AppContent() {
         window.removeEventListener('resize', handleResize);
       }
     };
-  }, []);
+  }, [isTauri]);
 
   // Background media GC (runs on startup; no UI blocking).
   useEffect(() => {
