@@ -26,6 +26,8 @@ import {
 } from './pmpm';
 import { clearPmpmPluginRuntimeCache, ensurePmpmPluginRuntime } from './pmpmRuntime';
 import { requestPmpmPluginRuntimeRestart } from './pmpmRuntimeSupervisor';
+import { runPmpmSandboxedCommand } from './pmpmSandboxCommandRunner';
+import { getPmpmSandboxRuntimeEnabled } from './pmpmSandboxConfig';
 
 function buildPluginCommandId(pluginId: string, commandId: string): string {
   return `pmpm:${pluginId}:${commandId}`;
@@ -258,20 +260,32 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 commandId: command.id,
               },
               run: async (args?: unknown) => {
-                const permissions = getPmpmPluginEffectivePermissions(pluginId);
                 const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
                 const audioService = audioEngine.getSnapshot().audioService;
                 const navigation = services.get(NAVIGATION_SERVICE_TOKEN);
 
-                const api = createPluginMountApi({
-                  pluginId,
-                  hostLabel: 'PluginCommand',
-                  permissions,
-                  audioService,
-                  navigation,
-                });
-
                 try {
+                  if (getPmpmSandboxRuntimeEnabled()) {
+                    await runPmpmSandboxedCommand({
+                      pluginId,
+                      commandId: command.id,
+                      args,
+                      hostLabel: 'PluginCommand',
+                      audioService,
+                      navigation,
+                    });
+                    return;
+                  }
+
+                  const permissions = getPmpmPluginEffectivePermissions(pluginId);
+                  const api = createPluginMountApi({
+                    pluginId,
+                    hostLabel: 'PluginCommand',
+                    permissions,
+                    audioService,
+                    navigation,
+                  });
+
                   const runtime = await ensurePmpmPluginRuntime(pluginId);
                   const runCommand = runtime.runCommand;
                   if (typeof runCommand !== 'function') {

@@ -35,7 +35,7 @@ function ensureSandboxSync(): void {
 }
 
 export function getPmpmSandboxRuntimeEnabled(): boolean {
-  return Boolean(readJson(STORAGE_KEYS.PMPM_SANDBOX_RUNTIME_ENABLED, false));
+  return Boolean(readJson(STORAGE_KEYS.PMPM_SANDBOX_RUNTIME_ENABLED, true));
 }
 
 export function setPmpmSandboxRuntimeEnabled(enabled: boolean): void {
@@ -57,4 +57,3 @@ export function subscribePmpmSandbox(listener: PmpmSandboxListener): () => void 
     }
   };
 }
-
