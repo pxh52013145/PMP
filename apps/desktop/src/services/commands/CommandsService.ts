@@ -1,5 +1,5 @@
 import { createServiceToken } from '../../kernel';
-import type { ContributionRegistry } from '../../kernel';
+import type { ContributionRegistryApi } from '../../kernel';
 import type { CommandContribution } from '../../contracts/contributions';
 
 export type CommandsService = {
@@ -11,7 +11,7 @@ export type CommandsService = {
 export const COMMANDS_SERVICE_TOKEN = createServiceToken<CommandsService>('CommandsService');
 
 export class DefaultCommandsService implements CommandsService {
-  constructor(private readonly contributions: ContributionRegistry) {}
+  constructor(private readonly contributions: ContributionRegistryApi) {}
 
   list(): CommandContribution[] {
     return this.contributions.list<CommandContribution>('command');
@@ -29,4 +29,3 @@ export class DefaultCommandsService implements CommandsService {
     await command.run(args);
   }
 }
-

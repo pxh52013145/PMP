@@ -1,11 +1,11 @@
 import type { ScopedEventBus, EventMap } from './EventBus';
-import type { ServiceRegistry } from './ServiceRegistry';
-import type { ContributionRegistry } from './ContributionRegistry';
+import type { ServiceRegistryApi } from './ServiceRegistry';
+import type { ContributionRegistryApi } from './ContributionRegistry';
 
 export type ModuleContext<Events extends EventMap> = {
-  services: ServiceRegistry;
+  services: ServiceRegistryApi;
   events: ScopedEventBus<Events>;
-  contributions: ContributionRegistry;
+  contributions: ContributionRegistryApi;
 };
 
 export type KernelModule<Events extends EventMap> = {

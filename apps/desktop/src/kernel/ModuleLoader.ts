@@ -1,29 +1,108 @@
 import type { EventMap, EventBus } from './EventBus';
 import type { KernelModule } from './Module';
-import type { ServiceRegistry } from './ServiceRegistry';
-import type { ContributionRegistry } from './ContributionRegistry';
+import type { ServiceRegistryApi } from './ServiceRegistry';
+import type { ContributionRegistryApi } from './ContributionRegistry';
+import type { ServiceToken } from './tokens';
+import type { RegisterOptions } from './ServiceRegistry';
+import type { Contribution, RegisterContributionOptions } from './ContributionRegistry';
+import type { EventListener, ScopedEventBus } from './EventBus';
+
+type Disposable = () => void;
+
+class DisposableBag {
+  private readonly disposers = new Set<Disposable>();
+
+  track(disposer: Disposable): Disposable {
+    this.disposers.add(disposer);
+
+    let called = false;
+    return () => {
+      if (called) return;
+      called = true;
+      this.disposers.delete(disposer);
+      disposer();
+    };
+  }
+
+  disposeAll(): void {
+    for (const disposer of Array.from(this.disposers)) {
+      try {
+        disposer();
+      } catch (error) {
+        console.warn('[ModuleLoader] scoped disposer failed', error);
+      }
+    }
+    this.disposers.clear();
+  }
+}
 
 export class ModuleLoader<Events extends EventMap> {
   private readonly active: Array<{
     module: KernelModule<Events>;
     cleanupFromActivate?: (() => void) | void;
+    bag: DisposableBag;
   }> = [];
 
   constructor(
-    private readonly services: ServiceRegistry,
+    private readonly services: ServiceRegistryApi,
     private readonly events: EventBus<Events>,
-    private readonly contributions: ContributionRegistry
+    private readonly contributions: ContributionRegistryApi
   ) {}
 
   activate(modules: KernelModule<Events>[]): void {
     for (const module of modules) {
-      const ctx = {
-        services: this.services,
-        events: this.events.withSource(module.id),
-        contributions: this.contributions,
+      const bag = new DisposableBag();
+
+      const scopedServices: ServiceRegistryApi = {
+        register: <T>(token: ServiceToken<T>, service: T, options: RegisterOptions = {}) => {
+          return bag.track(this.services.register(token, service, options));
+        },
+        get: <T>(token: ServiceToken<T>) => this.services.get(token),
+        getOptional: <T>(token: ServiceToken<T>) => this.services.getOptional(token),
+        has: <T>(token: ServiceToken<T>) => this.services.has(token),
       };
-      const cleanupFromActivate = module.activate(ctx);
-      this.active.push({ module, cleanupFromActivate });
+
+      const scopedEvents: ScopedEventBus<Events> = (() => {
+        const scoped = this.events.withSource(module.id);
+        return {
+          emit: scoped.emit,
+          on: <K extends keyof Events & string>(event: K, listener: EventListener<Events[K]>) =>
+            bag.track(scoped.on(event, listener)),
+        };
+      })();
+
+      const scopedContributions: ContributionRegistryApi = {
+        register: <C extends Contribution>(
+          contribution: C,
+          options: RegisterContributionOptions = {}
+        ): Disposable => {
+          return bag.track(this.contributions.register(contribution, options));
+        },
+        get: <C extends Contribution>(kind: C['kind'], id: string): C | null =>
+          this.contributions.get(kind, id),
+        list: <C extends Contribution>(kind: C['kind']): C[] => this.contributions.list(kind),
+        listAll: <C extends Contribution>(): C[] => this.contributions.listAll(),
+        subscribe: (listener) => bag.track(this.contributions.subscribe(listener)),
+      };
+
+      const ctx = {
+        services: scopedServices,
+        events: scopedEvents,
+        contributions: scopedContributions,
+      };
+
+      try {
+        const cleanupFromActivate = module.activate(ctx);
+        this.active.push({ module, cleanupFromActivate, bag });
+      } catch (error) {
+        bag.disposeAll();
+        try {
+          this.deactivateAll();
+        } catch {
+          // ignore
+        }
+        throw error;
+      }
     }
   }
 
@@ -42,6 +121,8 @@ export class ModuleLoader<Events extends EventMap> {
           console.warn(`[ModuleLoader] activate cleanup failed: ${entry.module.id}`, error);
         }
       }
+
+      entry.bag.disposeAll();
     }
     this.active.length = 0;
   }

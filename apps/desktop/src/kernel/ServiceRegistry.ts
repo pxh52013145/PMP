@@ -4,7 +4,14 @@ export type RegisterOptions = {
   replace?: boolean;
 };
 
-export class ServiceRegistry {
+export interface ServiceRegistryApi {
+  register<T>(token: ServiceToken<T>, service: T, options?: RegisterOptions): () => void;
+  get<T>(token: ServiceToken<T>): T;
+  getOptional<T>(token: ServiceToken<T>): T | null;
+  has<T>(token: ServiceToken<T>): boolean;
+}
+
+export class ServiceRegistry implements ServiceRegistryApi {
   private readonly services = new Map<symbol, unknown>();
 
   register<T>(token: ServiceToken<T>, service: T, options: RegisterOptions = {}): () => void {
@@ -41,4 +48,3 @@ export class ServiceRegistry {
     this.services.clear();
   }
 }
-

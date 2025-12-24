@@ -9,7 +9,15 @@ export type RegisterContributionOptions = {
   replace?: boolean;
 };
 
-export class ContributionRegistry {
+export interface ContributionRegistryApi {
+  register<C extends Contribution>(contribution: C, options?: RegisterContributionOptions): () => void;
+  get<C extends Contribution>(kind: C['kind'], id: string): C | null;
+  list<C extends Contribution>(kind: C['kind']): C[];
+  listAll<C extends Contribution>(): C[];
+  subscribe(listener: ContributionListener): () => void;
+}
+
+export class ContributionRegistry implements ContributionRegistryApi {
   private readonly byKind = new Map<string, Map<string, unknown>>();
   private readonly listeners = new Set<ContributionListener>();
 
@@ -91,4 +99,3 @@ export class ContributionRegistry {
     }
   }
 }
-
