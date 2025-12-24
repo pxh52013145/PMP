@@ -89,6 +89,7 @@ export function runCommand?(
 注入实现：
 - Host API（统一实现）：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied audit）
 - Sandbox runtime（实验特性，R5）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + heartbeat）
+- Runtime restart/kill（R5，best-effort）：`apps/desktop/src/magnet-system/plugins/pmpmRuntimeSupervisor.ts`（跨窗口同步 + audit `runtime-restart`）
 
 当前 API（最小集）：
 - `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute`）
