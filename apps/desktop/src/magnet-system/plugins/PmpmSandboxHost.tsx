@@ -420,7 +420,11 @@ function DisabledPluginNotice({ pluginId }: { pluginId: string }) {
     <div style={{ width: '100%', height: '100%', padding: 10, color: 'rgba(255,255,255,0.75)' }}>
       <div style={{ fontWeight: 600 }}>{name}</div>
       <div style={{ fontSize: 12, marginTop: 6, opacity: 0.8 }}>
-        {reason === 'crash' ? 'Plugin disabled (crashed)' : 'Plugin disabled'}
+        {reason === 'crash'
+          ? 'Plugin disabled (crashed)'
+          : reason === 'policy'
+            ? 'Plugin disabled (policy)'
+            : 'Plugin disabled'}
       </div>
       {lastError && <div style={{ fontSize: 11, marginTop: 6, opacity: 0.75 }}>{lastError}</div>}
     </div>

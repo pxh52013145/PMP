@@ -111,6 +111,8 @@ export const STORAGE_KEYS = {
   PMPM_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmpm-durable-migration-v1-report', // migration report (R3)
   PMPM_AUDIT_LOG_V1: 'pixel-matrix-pmpm-audit-log-v1', // plugin governance audit log (R5, ring buffer)
   PMPM_ALLOW_UNSIGNED_PLUGINS: 'pixel-matrix-pmpm-allow-unsigned-plugins', // signature policy (R5)
+  PMPM_REQUIRE_TRUSTED_SIGNATURES: 'pixel-matrix-pmpm-require-trusted-signatures', // signature trust policy (R5)
+  PMPM_TRUSTED_KEY_IDS_V1: 'pixel-matrix-pmpm-trusted-key-ids-v1', // trusted signing keys (R5)
   PMPM_SANDBOX_RUNTIME_ENABLED: 'pixel-matrix-pmpm-sandbox-runtime-enabled', // sandboxed runtime flag (R5, experimental)
   PMPM_RUNTIME_RESTART_V1: 'pixel-matrix-pmpm-runtime-restart-v1', // runtime restart request (R5)
 

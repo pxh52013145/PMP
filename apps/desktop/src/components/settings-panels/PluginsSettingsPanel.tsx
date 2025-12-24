@@ -17,6 +17,13 @@ import {
   uninstallPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
 import {
+  getPmpmTrustedKeysRevision,
+  readPmpmTrustedKeyIds,
+  subscribePmpmTrustedKeys,
+  trustPmpmSigningKeyId,
+  untrustPmpmSigningKeyId,
+} from '../../magnet-system/plugins/pmpmTrust';
+import {
   clearPmpmAuditLog,
   getPmpmAuditRevision,
   readPmpmAuditLog,
@@ -67,6 +74,10 @@ export function PluginsSettingsPanel() {
     STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS,
     true
   );
+  const [requireTrustedSignatures, setRequireTrustedSignatures] = usePersistentSetting(
+    STORAGE_KEYS.PMPM_REQUIRE_TRUSTED_SIGNATURES,
+    false
+  );
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -80,6 +91,12 @@ export function PluginsSettingsPanel() {
     getPmpmAuditRevision
   );
 
+  const trustedKeysRevision = useSyncExternalStore(
+    subscribePmpmTrustedKeys,
+    getPmpmTrustedKeysRevision,
+    getPmpmTrustedKeysRevision
+  );
+
   const sandboxRevision = useSyncExternalStore(
     subscribePmpmSandbox,
     getPmpmSandboxRevision,
@@ -90,6 +107,13 @@ export function PluginsSettingsPanel() {
     void pluginStoreRevision;
     return loadInstalledPmpmPlugins();
   }, [pluginStoreRevision]);
+
+  const trustedKeyIds = useMemo(() => {
+    void trustedKeysRevision;
+    return readPmpmTrustedKeyIds();
+  }, [trustedKeysRevision]);
+
+  const trustedKeySet = useMemo(() => new Set(trustedKeyIds), [trustedKeyIds]);
 
   const auditLog = useMemo(() => {
     void auditRevision;
@@ -139,10 +163,12 @@ export function PluginsSettingsPanel() {
         meta.description ? `说明：${meta.description}` : null,
         '',
         parsed.signature
-          ? `Signature: OK (keyId=${parsed.signature.keyId.slice(0, 12)}…)`
-          : allowUnsignedPlugins
-            ? 'Signature: (none)'
-            : 'Signature: required (unsigned not allowed)',
+          ? `Signature: OK (${trustedKeySet.has(parsed.signature.keyId) ? 'trusted' : 'untrusted'}) (keyId=${parsed.signature.keyId.slice(0, 12)}…)`
+          : requireTrustedSignatures
+            ? 'Signature: required (trusted signatures enabled)'
+            : allowUnsignedPlugins
+              ? 'Signature: (none)'
+              : 'Signature: required (unsigned not allowed)',
         '',
         '权限声明：',
         permissions.length > 0 ? permissions.map((p) => `- ${p}`).join('\n') : '(无)',
@@ -166,7 +192,16 @@ export function PluginsSettingsPanel() {
     } finally {
       setBusy(false);
     }
-  }, [allowUnsignedPlugins, busy, installedPlugins, isTauri, magnetLibrary, setMagnetLibrary]);
+  }, [
+    allowUnsignedPlugins,
+    busy,
+    installedPlugins,
+    isTauri,
+    magnetLibrary,
+    requireTrustedSignatures,
+    setMagnetLibrary,
+    trustedKeySet,
+  ]);
 
   const handleUninstall = useCallback(
     async (pluginId: string) => {
@@ -251,7 +286,20 @@ export function PluginsSettingsPanel() {
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
           <input
             type="checkbox"
+            checked={requireTrustedSignatures}
+            onChange={(e) => {
+              const next = Boolean(e.target.checked);
+              setRequireTrustedSignatures(next);
+              if (next) setAllowUnsignedPlugins(false);
+            }}
+          />
+          <span>Require trusted signatures (security)</span>
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+          <input
+            type="checkbox"
             checked={allowUnsignedPlugins}
+            disabled={requireTrustedSignatures}
             onChange={(e) => setAllowUnsignedPlugins(Boolean(e.target.checked))}
           />
           <span>Allow unsigned .pmpm plugins (security)</span>
@@ -269,6 +317,8 @@ export function PluginsSettingsPanel() {
             const deniedSet = new Set(deniedPermissions);
             const isActive = activeMagnetIds.has(meta.id);
             const enabled = plugin.enabled ?? true;
+            const signatureKeyId = plugin.signature?.keyId ?? null;
+            const signatureTrusted = signatureKeyId ? trustedKeySet.has(signatureKeyId) : false;
             const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
             const pages = plugin.manifest.contributions?.pages?.length ?? 0;
             const windows = plugin.manifest.contributions?.windows?.length ?? 0;
@@ -293,8 +343,12 @@ export function PluginsSettingsPanel() {
 
                   <div className="settings-plugin-tags">
                     <span className="settings-plugin-tag">{enabled ? 'enabled' : 'disabled'}</span>
-                    <span className="settings-plugin-tag" title={plugin.signature?.keyId ?? undefined}>
-                      {plugin.signature ? 'signed' : 'unsigned'}
+                    <span className="settings-plugin-tag" title={signatureKeyId ?? undefined}>
+                      {signatureKeyId
+                        ? signatureTrusted
+                          ? 'signed:trusted'
+                          : 'signed:untrusted'
+                        : 'unsigned'}
                     </span>
                     {panels > 0 && <span className="settings-plugin-tag">settings: {panels}</span>}
                     {pages > 0 && <span className="settings-plugin-tag">pages: {pages}</span>}
@@ -395,6 +449,34 @@ export function PluginsSettingsPanel() {
                   >
                     Restart
                   </button>
+
+                  {signatureKeyId && (
+                    <button
+                      type="button"
+                      className="settings-action-btn"
+                      disabled={busy}
+                      onClick={() => {
+                        try {
+                          if (signatureTrusted) {
+                            untrustPmpmSigningKeyId(signatureKeyId);
+                          } else {
+                            trustPmpmSigningKeyId(signatureKeyId);
+                            if (plugin.disabledReason === 'policy') {
+                              setPmpmPluginEnabled(meta.id, true);
+                            }
+                          }
+                          governance.restartPmpmPluginRuntime(meta.id, {
+                            reason: signatureTrusted ? 'key-untrusted' : 'key-trusted',
+                          });
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : String(err));
+                        }
+                      }}
+                      title={signatureTrusted ? 'Untrust this signing key' : 'Trust this signing key'}
+                    >
+                      {signatureTrusted ? 'Untrust Key' : 'Trust Key'}
+                    </button>
+                  )}
 
                   <button
                     type="button"

@@ -126,7 +126,7 @@ export type InstalledPmpmPlugin = {
   entrySha256?: string;
   signature?: PmpmVerifiedSignature;
   enabled?: boolean;
-  disabledReason?: 'manual' | 'crash';
+  disabledReason?: 'manual' | 'crash' | 'policy';
   deniedPermissions?: string[];
   lastError?: string;
   lastErrorAt?: number;
@@ -1131,6 +1131,31 @@ function formatErrorMessage(error: unknown): string {
   }
 }
 
+export function disablePmpmPluginByPolicy(pluginId: string, message: string): void {
+  const plugins = loadInstalledPmpmPlugins();
+  const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
+  if (index < 0) return;
+
+  const now = Date.now();
+  const details = String(message).slice(0, 2000);
+  const lastError = `[policy] ${details}`;
+
+  plugins[index] = {
+    ...plugins[index],
+    enabled: false,
+    disabledReason: 'policy',
+    lastError,
+    lastErrorAt: now,
+  };
+
+  saveInstalledPmpmPlugins(plugins);
+  try {
+    recordPmpmAuditEvent({ type: 'disabled', pluginId, reason: 'policy' });
+  } catch {
+    // ignore
+  }
+}
+
 export function recordPmpmPluginCrash(
   pluginId: string,
   error: unknown,
@@ -1140,12 +1165,17 @@ export function recordPmpmPluginCrash(
   const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
   if (index < 0) return;
 
+  const existing = plugins[index];
+  if (existing.enabled === false && existing.disabledReason === 'policy') {
+    return;
+  }
+
   const now = Date.now();
   const message = formatErrorMessage(error).slice(0, 2000);
   const lastError = `[${surface}] ${message}`;
 
   plugins[index] = {
-    ...plugins[index],
+    ...existing,
     enabled: false,
     disabledReason: 'crash',
     lastError,

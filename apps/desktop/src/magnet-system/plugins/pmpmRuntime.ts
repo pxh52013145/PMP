@@ -1,6 +1,7 @@
 import { readJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
-import { getInstalledPmpmPlugin, readPmpmPluginEntryCode } from './pmpm';
+import { disablePmpmPluginByPolicy, getInstalledPmpmPlugin, readPmpmPluginEntryCode } from './pmpm';
+import { isPmpmSigningKeyTrusted } from './pmpmTrust';
 
 export type PmpmPluginRuntime = {
   mount: (container: HTMLElement, api: unknown) => void | (() => void);
@@ -48,9 +49,26 @@ export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise
     throw new Error(`Plugin not installed: ${pluginId}`);
   }
 
+  const requireTrustedSignatures = Boolean(readJson(STORAGE_KEYS.PMPM_REQUIRE_TRUSTED_SIGNATURES, false));
   const allowUnsigned = Boolean(readJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true));
-  if (!allowUnsigned && !installed.signature) {
-    throw new Error(`Plugin signature is required (unsigned): ${pluginId}`);
+
+  if (requireTrustedSignatures) {
+    if (!installed.signature) {
+      const message = `Plugin signature is required (trusted signatures required): ${pluginId}`;
+      disablePmpmPluginByPolicy(pluginId, message);
+      throw new Error(message);
+    }
+
+    const keyId = installed.signature.keyId;
+    if (!isPmpmSigningKeyTrusted(keyId)) {
+      const message = `Plugin signature key is not trusted: ${pluginId} (keyId=${keyId})`;
+      disablePmpmPluginByPolicy(pluginId, message);
+      throw new Error(message);
+    }
+  } else if (!allowUnsigned && !installed.signature) {
+    const message = `Plugin signature is required (unsigned): ${pluginId}`;
+    disablePmpmPluginByPolicy(pluginId, message);
+    throw new Error(message);
   }
 
   const entryCode = (await readPmpmPluginEntryCode(pluginId)) ?? installed.entryCode ?? null;
