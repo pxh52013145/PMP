@@ -17,6 +17,11 @@ import {
 } from '../../modules/storage';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
 import { recordPmpmAuditEvent } from './pmpmGovernance';
+import {
+  parsePmpmPackageSignatureFileV1,
+  verifyPmpmPackageSignatureV1,
+  type PmpmVerifiedSignature,
+} from './pmpmSignature';
 
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
   return await new Promise((resolve, reject) => {
@@ -119,6 +124,7 @@ export type InstalledPmpmPlugin = {
   packageSha256?: string;
   manifestSha256?: string;
   entrySha256?: string;
+  signature?: PmpmVerifiedSignature;
   enabled?: boolean;
   disabledReason?: 'manual' | 'crash';
   deniedPermissions?: string[];
@@ -983,6 +989,20 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
     sha256Hex(entryBytes),
   ]);
 
+  const allowUnsigned = Boolean(readJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true));
+  const signatureBytes = files['signature.json'] ?? null;
+  const signature: PmpmVerifiedSignature | undefined = signatureBytes
+    ? await verifyPmpmPackageSignatureV1({
+        signature: parsePmpmPackageSignatureFileV1(signatureBytes),
+        manifestSha256,
+        entrySha256,
+      })
+    : undefined;
+
+  if (!signature && !allowUnsigned) {
+    throw new Error('Unsigned .pmpm is not allowed (signature.json missing).');
+  }
+
   return {
     manifest: manifestUnknown,
     entryCode: strFromU8(entryBytes),
@@ -990,6 +1010,7 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
     packageSha256,
     manifestSha256,
     entrySha256,
+    signature,
   };
 }
 

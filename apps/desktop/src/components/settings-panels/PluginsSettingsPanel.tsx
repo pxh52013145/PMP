@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useMagnetConfig } from '../../modules/magnets';
+import { usePersistentSetting } from '../../modules/storage';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import {
@@ -61,6 +63,10 @@ export function PluginsSettingsPanel() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [allowUnsignedPlugins, setAllowUnsignedPlugins] = usePersistentSetting(
+    STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS,
+    true
+  );
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -132,6 +138,12 @@ export function PluginsSettingsPanel() {
         meta.author ? `作者：${meta.author}` : null,
         meta.description ? `说明：${meta.description}` : null,
         '',
+        parsed.signature
+          ? `Signature: OK (keyId=${parsed.signature.keyId.slice(0, 12)}…)`
+          : allowUnsignedPlugins
+            ? 'Signature: (none)'
+            : 'Signature: required (unsigned not allowed)',
+        '',
         '权限声明：',
         permissions.length > 0 ? permissions.map((p) => `- ${p}`).join('\n') : '(无)',
         '',
@@ -154,7 +166,7 @@ export function PluginsSettingsPanel() {
     } finally {
       setBusy(false);
     }
-  }, [busy, installedPlugins, isTauri, magnetLibrary, setMagnetLibrary]);
+  }, [allowUnsignedPlugins, busy, installedPlugins, isTauri, magnetLibrary, setMagnetLibrary]);
 
   const handleUninstall = useCallback(
     async (pluginId: string) => {
@@ -216,7 +228,7 @@ export function PluginsSettingsPanel() {
         <div>
           <p className="settings-card-label">.pmpm 插件</p>
           <p className="settings-card-desc">
-            安装/卸载 Magnet 插件，并查看它们声明的贡献点（R5：sandbox runtime 为实验特性）。
+            安装/卸载 Magnet 插件，并查看它们声明的贡献点（R5：默认启用隔离运行时）。
           </p>
         </div>
 
@@ -234,7 +246,15 @@ export function PluginsSettingsPanel() {
             checked={sandboxEnabled}
             onChange={(e) => setPmpmSandboxRuntimeEnabled(Boolean(e.target.checked))}
           />
-          <span>Enable sandbox runtime (experimental, R5)</span>
+          <span>Enable isolated runtime (sandbox iframe, recommended)</span>
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={allowUnsignedPlugins}
+            onChange={(e) => setAllowUnsignedPlugins(Boolean(e.target.checked))}
+          />
+          <span>Allow unsigned .pmpm plugins (security)</span>
         </label>
       </div>
 
@@ -273,6 +293,9 @@ export function PluginsSettingsPanel() {
 
                   <div className="settings-plugin-tags">
                     <span className="settings-plugin-tag">{enabled ? 'enabled' : 'disabled'}</span>
+                    <span className="settings-plugin-tag" title={plugin.signature?.keyId ?? undefined}>
+                      {plugin.signature ? 'signed' : 'unsigned'}
+                    </span>
                     {panels > 0 && <span className="settings-plugin-tag">settings: {panels}</span>}
                     {pages > 0 && <span className="settings-plugin-tag">pages: {pages}</span>}
                     {windows > 0 && <span className="settings-plugin-tag">windows: {windows}</span>}

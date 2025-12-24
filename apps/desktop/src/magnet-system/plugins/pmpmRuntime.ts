@@ -1,3 +1,5 @@
+import { readJson } from '../../modules/storage';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { getInstalledPmpmPlugin, readPmpmPluginEntryCode } from './pmpm';
 
 export type PmpmPluginRuntime = {
@@ -44,6 +46,11 @@ export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise
   const installed = getInstalledPmpmPlugin(pluginId);
   if (!installed) {
     throw new Error(`Plugin not installed: ${pluginId}`);
+  }
+
+  const allowUnsigned = Boolean(readJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true));
+  if (!allowUnsigned && !installed.signature) {
+    throw new Error(`Plugin signature is required (unsigned): ${pluginId}`);
   }
 
   const entryCode = (await readPmpmPluginEntryCode(pluginId)) ?? installed.entryCode ?? null;
