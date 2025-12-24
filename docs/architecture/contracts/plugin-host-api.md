@@ -10,7 +10,7 @@
 - 最少包含：
   - `manifest.json`
   - `entryPoint` 指向的 ESM 模块代码
-- 安装方式（现状）：读取文件 → unzipSync → 解析 manifest → 提取 entryPoint code → 写入 localStorage（`STORAGE_KEYS.PMPM_PLUGINS`）。
+- 安装方式（现状）：读取文件 → `fflate.unzip`（异步）→ 解析 manifest → 提取 entryPoint code → 写入“索引（localStorage）+ 代码（durable store）”（R3）。
 
 ## 2) Manifest（As-Is：当前代码支持的字段）
 
@@ -21,8 +21,9 @@
 - `metadata: { id, name, version, author?, description?, tags? }`
 - `entryPoint: string`
 - `magnet?: { defaultAnchor?, defaultStyle? }`（用于生成 Magnet 模板）
-- `permissions?: string[]`（现状**仅存储**，尚未裁剪/治理）
-- `contributions?: { pages?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, windows?: Array<{ id, title, description?, width?, height?, group?, order?, tags?, metadata? }>, commands?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, settingsPanels?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, visualizers?: Array<{ id, title, description?, inputs?, group?, order?, tags?, metadata? }> }`（R2）
+- `permissions?: string[]`（R5 partial：Host API 会按权限 gate，并记录 denied audit）
+- `contributions?: { workbenches?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, pages?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, windows?: Array<{ id, title, description?, width?, height?, group?, order?, tags?, metadata? }>, commands?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, settingsPanels?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, visualizers?: Array<{ id, title, description?, inputs?, group?, order?, tags?, metadata? }> }`（R2/R4）
+  - `workbenches`：Host 会生成并注册 workbench id：`pmpm:<pluginId>:workbench:<workbenchId>`（渲染时调用插件 `mountWorkbench(container, api, workbenchId)`）
   - `pages`：Host 会生成并注册页面 id：`pmpm:<pluginId>:page:<pageId>`（渲染时调用插件 `mountPage(container, api, pageId)`）
   - `windows`：Host 会生成并注册窗口贡献：`id=pmpm:<pluginId>:window:<windowId>`，`label=plugin-<pluginId>-<windowId>`，`route=/#/plugin-window/<pluginId>/<windowId>`
 
@@ -42,6 +43,14 @@ export default { mount, unmount? };
 ```
 
 ```ts
+export function mountWorkbench?(
+  container: HTMLElement,
+  api: PluginMountApi,
+  workbenchId: string
+): void | (() => void);
+
+export function unmountWorkbench?(container: HTMLElement, workbenchId: string): void;
+
 export function mountSettings?(
   container: HTMLElement,
   api: PluginMountApi,
@@ -83,10 +92,14 @@ export function runCommand?(
 
 当前 API（最小集）：
 - `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute`）
-- `navigation`：页面跳转与返回（`navigateTo/goBack`）
+- `visualizer`：频谱（`getSpectrum/onSpectrum`）
+- `navigation`：页面跳转与返回（`navigateTo/goBack`，params 会走统一校验）
+- `config`：插件本地配置（`get/set/patch/reset/onChange`，由宿主持久化）
+- `window`：打开/关闭插件窗口（`open/close`，按 label/route 规范）
 
 限制（现状）：
 - `manifest.permissions` 已在 host 侧做最小 gate（`pluginHostApi.ts`），并已提供 denied audit + enable/disable UI；更细的策略与强隔离仍在 R5 演进。
+- Host 可能基于用户配置进一步禁用部分权限（per-plugin denied permissions），插件必须处理 API 返回空值/拒绝的情况。
 - `navigation.navigateTo(page, params)` 的 params 需要满足 Navigation 契约（统一校验入口见 `docs/architecture/contracts/navigation.md`）。
 - API 未版本化（建议先在 contracts 中定义 To-Be 的 `apiVersion` 与兼容策略，见 `docs/architecture/contracts/versioning.md`）。
 

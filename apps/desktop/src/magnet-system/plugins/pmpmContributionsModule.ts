@@ -6,6 +6,7 @@ import type {
   PageContribution,
   SettingsPanelContribution,
   VisualizerContribution,
+  WorkbenchContribution,
   WindowContribution,
 } from '../../contracts/contributions';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
@@ -14,6 +15,7 @@ import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
 import { createPluginMountApi } from './pluginHostApi';
 import { PluginSettingsHost } from './PluginSettingsHost';
 import { PluginPageHost } from './PluginPageHost';
+import { PluginWorkbenchHost } from './PluginWorkbenchHost';
 import {
   getPmpmPluginEffectivePermissions,
   loadInstalledPmpmPlugins,
@@ -50,6 +52,10 @@ function buildPluginVisualizerId(pluginId: string, visualizerId: string): string
   return `pmpm:${pluginId}:visualizer:${visualizerId}`;
 }
 
+function buildPluginWorkbenchId(pluginId: string, workbenchId: string): string {
+  return `pmpm:${pluginId}:workbench:${workbenchId}`;
+}
+
 export function createPmpmContributionsModule(): KernelModule<AppEvents> {
   return {
     id: 'pmpm-contributions',
@@ -64,6 +70,46 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
           const pluginId = plugin.manifest.metadata.id;
           const enabled = plugin.enabled ?? true;
           if (!enabled) continue;
+
+          const declaredWorkbenches = plugin.manifest.contributions?.workbenches ?? [];
+          for (const workbench of declaredWorkbenches) {
+            const workbenchKey = buildPluginWorkbenchId(pluginId, workbench.id);
+            nextIds.add(workbenchKey);
+
+            const existingUnregister = unregisters.get(workbenchKey);
+            if (existingUnregister) {
+              try {
+                existingUnregister();
+              } catch (error) {
+                console.warn('[pmpm-contributions] unregister failed', error);
+              }
+              unregisters.delete(workbenchKey);
+            }
+
+            const contribution: WorkbenchContribution = {
+              kind: 'workbench',
+              id: workbenchKey,
+              title: `${plugin.manifest.metadata.name}: ${workbench.title}`,
+              render: () =>
+                React.createElement(PluginWorkbenchHost, {
+                  pluginId,
+                  workbenchId: workbench.id,
+                }),
+              source: 'plugin',
+              order: workbench.order,
+              group: workbench.group ?? plugin.manifest.metadata.id,
+              tags: workbench.tags,
+              metadata: {
+                pluginId,
+                pluginName: plugin.manifest.metadata.name,
+                workbenchId: workbench.id,
+                ...(workbench.metadata ?? {}),
+              },
+            };
+
+            const unregister = contributions.register(contribution, { replace: true });
+            unregisters.set(workbenchKey, unregister);
+          }
 
           const declaredPages = plugin.manifest.contributions?.pages ?? [];
           for (const page of declaredPages) {

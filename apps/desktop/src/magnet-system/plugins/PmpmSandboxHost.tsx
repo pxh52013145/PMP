@@ -16,6 +16,7 @@ import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 
 type SandboxSurface =
+  | { kind: 'workbench'; workbenchId: string }
   | { kind: 'magnet' }
   | { kind: 'settings'; panelId?: string }
   | { kind: 'page'; pageId: string }
@@ -211,6 +212,15 @@ function buildSandboxSrcDoc(frameId: string): string {
         if (!ROOT) throw new Error('root missing');
 
         let mount = null;
+        if (surface === 'workbench') {
+          mount = runtime.mountWorkbench;
+          if (typeof mount !== 'function') {
+            throw new Error('Plugin entry must export "mountWorkbench(container, api, workbenchId)"');
+          }
+          cleanup = mount(ROOT, api, surfaceId);
+          return;
+        }
+
         if (surface === 'magnet') {
           mount = runtime.mount;
           if (typeof mount !== 'function') throw new Error('Plugin entry must export "mount(container, api)"');
@@ -284,6 +294,8 @@ function buildSandboxSrcDoc(frameId: string): string {
               runtime = {
                 mount: pickExport(mod, 'mount'),
                 unmount: pickExport(mod, 'unmount'),
+                mountWorkbench: pickExport(mod, 'mountWorkbench'),
+                unmountWorkbench: pickExport(mod, 'unmountWorkbench'),
                 mountSettings: pickExport(mod, 'mountSettings'),
                 unmountSettings: pickExport(mod, 'unmountSettings'),
                 mountPage: pickExport(mod, 'mountPage'),
@@ -382,6 +394,8 @@ function buildSandboxSrcDoc(frameId: string): string {
 
 function resolveCrashSurface(surface: SandboxSurface['kind']): PmpmPluginCrashSurface {
   switch (surface) {
+    case 'workbench':
+      return 'workbench';
     case 'magnet':
       return 'magnet';
     case 'settings':
@@ -456,7 +470,9 @@ export function PmpmSandboxHost({
   }, [audioService, hostLabel, navigation, permissions, pluginId]);
 
   const surfaceId =
-    surface.kind === 'page'
+    surface.kind === 'workbench'
+      ? surface.workbenchId
+      : surface.kind === 'page'
       ? surface.pageId
       : surface.kind === 'visualizer'
         ? surface.visualizerId

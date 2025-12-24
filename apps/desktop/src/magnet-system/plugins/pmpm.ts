@@ -44,6 +44,15 @@ export type PmpmManifest = {
   };
   entryPoint: string;
   contributions?: {
+    workbenches?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      group?: string;
+      order?: number;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    }>;
     pages?: Array<{
       id: string;
       title: string;
@@ -112,11 +121,19 @@ export type InstalledPmpmPlugin = {
   entrySha256?: string;
   enabled?: boolean;
   disabledReason?: 'manual' | 'crash';
+  deniedPermissions?: string[];
   lastError?: string;
   lastErrorAt?: number;
 };
 
-export type PmpmPluginCrashSurface = 'magnet' | 'settings' | 'page' | 'visualizer' | 'window' | 'command';
+export type PmpmPluginCrashSurface =
+  | 'workbench'
+  | 'magnet'
+  | 'settings'
+  | 'page'
+  | 'visualizer'
+  | 'window'
+  | 'command';
 
 type PluginStoreListener = () => void;
 
@@ -198,7 +215,15 @@ export function subscribePmpmPlugins(listener: PluginStoreListener): () => void 
 export function getPmpmPluginEffectivePermissions(pluginId: string): Set<string> {
   const plugin = getInstalledPmpmPlugin(pluginId);
   if (!plugin || plugin.enabled === false) return new Set();
-  return new Set(plugin.manifest.permissions ?? []);
+
+  const declared = plugin.manifest.permissions ?? [];
+  const denied = new Set(
+    Array.isArray(plugin.deniedPermissions)
+      ? plugin.deniedPermissions.filter((perm) => typeof perm === 'string' && perm.length > 0)
+      : []
+  );
+
+  return new Set(declared.filter((perm) => !denied.has(perm)));
 }
 
 export function recordPmpmPermissionDenied(options: {
@@ -277,6 +302,75 @@ export function validatePmpmManifest(manifest: unknown): asserts manifest is Pmp
     }
 
     const c = contributions as Record<string, unknown>;
+
+    const workbenches = c.workbenches;
+    if (typeof workbenches !== 'undefined') {
+      if (!Array.isArray(workbenches)) {
+        throw new Error('manifest.contributions.workbenches must be an array');
+      }
+
+      const ids = new Set<string>();
+      for (const item of workbenches) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.contributions.workbenches entries must be objects');
+        }
+        const workbench = item as Record<string, unknown>;
+        const workbenchId = workbench.id;
+        if (typeof workbenchId !== 'string' || workbenchId.length < 1) {
+          throw new Error('manifest.contributions.workbenches[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(workbenchId)) {
+          throw new Error('manifest.contributions.workbenches[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(workbenchId)) {
+          throw new Error(`manifest.contributions.workbenches[].id duplicated: "${workbenchId}"`);
+        }
+        ids.add(workbenchId);
+
+        const title = workbench.title;
+        if (typeof title !== 'string' || title.length < 1) {
+          throw new Error(`manifest.contributions.workbenches["${workbenchId}"].title is required`);
+        }
+
+        const description = workbench.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(
+            `manifest.contributions.workbenches["${workbenchId}"].description must be a string`
+          );
+        }
+
+        const group = workbench.group;
+        if (typeof group !== 'undefined' && typeof group !== 'string') {
+          throw new Error(`manifest.contributions.workbenches["${workbenchId}"].group must be a string`);
+        }
+
+        const order = workbench.order;
+        if (typeof order !== 'undefined' && (typeof order !== 'number' || !Number.isFinite(order))) {
+          throw new Error(`manifest.contributions.workbenches["${workbenchId}"].order must be a number`);
+        }
+
+        const tags = workbench.tags;
+        if (typeof tags !== 'undefined') {
+          if (!Array.isArray(tags)) {
+            throw new Error(`manifest.contributions.workbenches["${workbenchId}"].tags must be an array`);
+          }
+          for (const tag of tags) {
+            if (typeof tag !== 'string' || tag.length < 1) {
+              throw new Error(
+                `manifest.contributions.workbenches["${workbenchId}"].tags must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const metadata = workbench.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.contributions.workbenches["${workbenchId}"].metadata must be an object`);
+          }
+        }
+      }
+    }
 
     const pages = c.pages;
     if (typeof pages !== 'undefined') {
@@ -901,12 +995,25 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
 
 export async function installPmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
   const plugin = await parsePmpmPluginFromFilePath(filePath);
-  const entryCode = plugin.entryCode;
+  const existing = getInstalledPmpmPlugin(plugin.manifest.metadata.id);
+
+  const merged: InstalledPmpmPlugin = existing
+    ? {
+        ...plugin,
+        enabled: existing.enabled,
+        disabledReason: existing.disabledReason,
+        deniedPermissions: existing.deniedPermissions,
+        lastError: existing.lastError,
+        lastErrorAt: existing.lastErrorAt,
+      }
+    : plugin;
+
+  const entryCode = merged.entryCode;
   const stored =
     typeof entryCode === 'string' && entryCode.length > 0
       ? await persistPmpmPluginEntryCode(plugin.manifest.metadata.id, entryCode)
       : false;
-  const persisted = stored ? { ...plugin, entryCode: undefined } : plugin;
+  const persisted = stored ? { ...merged, entryCode: undefined } : merged;
   upsertInstalledPmpmPlugin(persisted);
   return persisted;
 }
@@ -1054,6 +1161,50 @@ export function setPmpmPluginEnabled(pluginId: string, enabled: boolean): void {
       pluginId,
       reason: nextEnabled ? undefined : 'manual',
     });
+  } catch {
+    // ignore
+  }
+}
+
+function normalizePermissionList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    out.add(trimmed);
+  }
+  return Array.from(out).sort();
+}
+
+function isSameStringList(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+export function setPmpmPluginDeniedPermissions(pluginId: string, denied: string[]): void {
+  const plugins = loadInstalledPmpmPlugins();
+  const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
+  if (index < 0) return;
+
+  const prev = plugins[index];
+  const nextDenied = normalizePermissionList(denied);
+  const prevDenied = normalizePermissionList(prev.deniedPermissions);
+
+  if (isSameStringList(prevDenied, nextDenied)) return;
+
+  plugins[index] = {
+    ...prev,
+    deniedPermissions: nextDenied.length > 0 ? nextDenied : undefined,
+  };
+
+  saveInstalledPmpmPlugins(plugins);
+  try {
+    recordPmpmAuditEvent({ type: 'permissions-updated', pluginId, deniedPermissions: nextDenied });
   } catch {
     // ignore
   }

@@ -100,4 +100,29 @@ describe('pmpm plugins', () => {
     };
     expect(() => validatePmpmManifest(invalidWidth)).toThrow(/width/);
   });
+
+  it('validates contributions.workbenches entries', () => {
+    const manifest = {
+      formatVersion: '1.0',
+      type: 'magnet-plugin',
+      metadata: { id: 'magnet-demo', name: 'Demo', version: '0.1.0' },
+      entryPoint: 'dist/plugin.js',
+      contributions: {
+        workbenches: [{ id: 'alt', title: 'Alternate Workbench', order: 10 }],
+      },
+    };
+
+    expect(() => validatePmpmManifest(manifest)).not.toThrow();
+
+    const duplicated = {
+      ...manifest,
+      contributions: {
+        workbenches: [
+          { id: 'alt', title: 'Alternate Workbench' },
+          { id: 'alt', title: 'Duplicate' },
+        ],
+      },
+    };
+    expect(() => validatePmpmManifest(duplicated)).toThrow(/duplicated/);
+  });
 });

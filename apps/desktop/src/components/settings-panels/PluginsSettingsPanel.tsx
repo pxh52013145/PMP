@@ -7,6 +7,7 @@ import {
   installPmpmPluginFromFilePath,
   loadInstalledPmpmPlugins,
   parsePmpmPluginFromFilePath,
+  setPmpmPluginDeniedPermissions,
   setPmpmPluginEnabled,
   subscribePmpmPlugins,
   uninstallPmpmPlugin,
@@ -41,6 +42,9 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
   }
   if (event.type === 'disabled') {
     return `[disabled] ${event.reason ?? ''}`.trim();
+  }
+  if (event.type === 'permissions-updated') {
+    return `[permissions] denied=${event.deniedPermissions.join(',') || '(none)'}`;
   }
   return '[event]';
 }
@@ -235,6 +239,8 @@ export function PluginsSettingsPanel() {
           installedPlugins.map((plugin) => {
             const meta = plugin.manifest.metadata;
             const permissions = plugin.manifest.permissions ?? [];
+            const deniedPermissions = plugin.deniedPermissions ?? [];
+            const deniedSet = new Set(deniedPermissions);
             const isActive = activeMagnetIds.has(meta.id);
             const enabled = plugin.enabled ?? true;
             const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
@@ -269,7 +275,44 @@ export function PluginsSettingsPanel() {
                   </div>
 
                   <div className="settings-plugin-permissions">
-                    权限：{permissions.length > 0 ? permissions.join(', ') : '(无)'}
+                    <div>权限：</div>
+                    {permissions.length === 0 ? (
+                      <div style={{ opacity: 0.8 }}>(无)</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                        {permissions.map((perm) => {
+                          const allowed = !deniedSet.has(perm);
+                          return (
+                            <label
+                              key={perm}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                                opacity: busy ? 0.6 : 0.9,
+                                fontSize: 12,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={allowed}
+                                disabled={busy}
+                                onChange={(e) => {
+                                  const nextAllowed = Boolean(e.target.checked);
+                                  const nextDenied = new Set(deniedPermissions);
+                                  if (nextAllowed) nextDenied.delete(perm);
+                                  else nextDenied.add(perm);
+                                  setPmpmPluginDeniedPermissions(meta.id, Array.from(nextDenied));
+                                  clearPmpmPluginRuntimeCache(meta.id);
+                                }}
+                              />
+                              <span>{perm}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {plugin.lastError && (

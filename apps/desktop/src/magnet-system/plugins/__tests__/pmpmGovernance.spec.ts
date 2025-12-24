@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { InstalledPmpmPlugin } from '../pmpm';
 import {
+  getPmpmPluginEffectivePermissions,
   loadInstalledPmpmPlugins,
   recordPmpmPermissionDenied,
   recordPmpmPluginCrash,
+  setPmpmPluginDeniedPermissions,
   setPmpmPluginEnabled,
 } from '../pmpm';
 import { readPmpmAuditLog } from '../pmpmGovernance';
@@ -80,5 +82,29 @@ describe('pmpm governance', () => {
     const events = readPmpmAuditLog();
     expect(events.some((e) => e.type === 'crash' && e.pluginId === 'magnet-demo')).toBe(true);
   });
-});
 
+  it('applies deniedPermissions to effective permissions and audits updates', () => {
+    const plugin: InstalledPmpmPlugin = {
+      manifest: {
+        formatVersion: '1.0',
+        type: 'magnet-plugin',
+        metadata: { id: 'magnet-demo', name: 'Demo', version: '0.1.0' },
+        entryPoint: 'dist/plugin.js',
+        permissions: ['api:navigation', 'api:audio-state'],
+      },
+      installedAt: Date.now(),
+      entryCode: 'export function mount() {}',
+    };
+    installPlugin(plugin);
+
+    setPmpmPluginDeniedPermissions('magnet-demo', ['api:navigation']);
+    const perms = getPmpmPluginEffectivePermissions('magnet-demo');
+    expect(perms.has('api:navigation')).toBe(false);
+    expect(perms.has('api:audio-state')).toBe(true);
+
+    const events = readPmpmAuditLog();
+    expect(events.some((e) => e.type === 'permissions-updated' && e.pluginId === 'magnet-demo')).toBe(
+      true
+    );
+  });
+});
