@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkbenchContribution } from '../../contracts/contributions';
-import { resolveActiveWorkbenchId } from '../workbenchSelection';
+import { resolveActiveContributionId, resolveActiveWorkbenchId } from '../workbenchSelection';
 
 function wb(id: string, title: string, order?: number): WorkbenchContribution {
   return { kind: 'workbench', id, title, render: () => null, order };
@@ -20,5 +20,13 @@ describe('workbenchSelection', () => {
   it('returns null when no workbenches registered', () => {
     expect(resolveActiveWorkbenchId([], 'default')).toBeNull();
   });
-});
 
+  it('resolveActiveContributionId falls back to lowest order and title', () => {
+    const items = [
+      { id: 'b', title: 'B', order: 10 },
+      { id: 'a', title: 'A', order: 10 },
+      { id: 'c', title: 'C', order: 5 },
+    ];
+    expect(resolveActiveContributionId(items, '')).toBe('c');
+  });
+});

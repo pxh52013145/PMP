@@ -1,6 +1,5 @@
-import { MatrixWorkbench } from '../matrix/MatrixWorkbench';
+import { ComposedWorkbench } from '../composed/ComposedWorkbench';
 
 export function DefaultWorkbench() {
-  return <MatrixWorkbench showEditorOverlay showEditorPanel showWindowBorder />;
+  return <ComposedWorkbench />;
 }
-
