@@ -1,55 +1,25 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import { useNavigation } from '../../contexts/NavigationContext';
 import {
-  useNavigation,
-  type NavigationPageType,
-  type NavigationParamsFor,
-} from '../../contexts/NavigationContext';
-import { parseNavigationParams } from '../../contracts/navigationParams';
-import {
+  getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
   getPmpmPluginsRevision,
   recordPmpmPluginCrash,
   subscribePmpmPlugins,
 } from './pmpm';
-import { ensurePmpmPluginRuntime, type PmpmPluginRuntime } from './pmpmRuntime';
-
-type PluginAudioApi = {
-  getState: () => unknown;
-  onStateChange: (cb: (state: unknown) => void) => () => void;
-  onTimeUpdate: (cb: (time: number) => void) => () => void;
-  onEnded: (cb: () => void) => () => void;
-  play: () => Promise<void>;
-  pause: () => Promise<void> | void;
-  stop: () => void;
-  seek: (time: number) => void;
-  setVolume: (volume: number) => void;
-  toggleMute: () => void;
-};
-
-type PluginNavigationApi = {
-  navigateTo: (page: NavigationPageType, params?: Record<string, unknown>) => void;
-  goBack: () => void;
-};
-
-type PageWithoutParams = {
-  [K in NavigationPageType]: NavigationParamsFor<K> extends undefined ? K : never;
-}[NavigationPageType];
-
-type PageWithParams = Exclude<NavigationPageType, PageWithoutParams>;
-
-const PAGES_REQUIRING_PARAMS = new Set<NavigationPageType>([
-  'track',
-  'album',
-  'artist',
-  'plugin-page',
-  'plugin-visualizer',
-]);
-
-export type PluginMountApi = {
-  audio: PluginAudioApi;
-  navigation: PluginNavigationApi;
-};
+import {
+  clearPmpmPluginRuntimeCache,
+  ensurePmpmPluginRuntime,
+  type PmpmPluginRuntime,
+} from './pmpmRuntime';
+import { PmpmSandboxHost } from './PmpmSandboxHost';
+import { createPluginMountApi, type PluginMountApi } from './pluginHostApi';
+import {
+  getPmpmSandboxRevision,
+  getPmpmSandboxRuntimeEnabled,
+  subscribePmpmSandbox,
+} from './pmpmSandboxConfig';
 
 export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const audioService = useAudioService();
@@ -64,140 +34,42 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     getPmpmPluginsRevision
   );
 
+  const sandboxRevision = useSyncExternalStore(
+    subscribePmpmSandbox,
+    getPmpmSandboxRevision,
+    getPmpmSandboxRevision
+  );
+
+  const sandboxEnabled = useMemo(() => {
+    void sandboxRevision;
+    return getPmpmSandboxRuntimeEnabled();
+  }, [sandboxRevision]);
+
+  const plugin = useMemo(() => {
+    void pluginStoreRevision;
+    return getInstalledPmpmPlugin(pluginId);
+  }, [pluginId, pluginStoreRevision]);
+
+  const enabled = plugin ? (plugin.enabled ?? true) : false;
+
   const permissions = useMemo(() => {
     void pluginStoreRevision;
     return getPmpmPluginEffectivePermissions(pluginId);
   }, [pluginId, pluginStoreRevision]);
 
   const api = useMemo<PluginMountApi>(() => {
-    const allowAudioState = permissions.has('api:audio-state');
-    const allowAudioControl = permissions.has('api:audio-control');
-    const allowNavigation = permissions.has('api:navigation');
-
-    const warnDenied = (capability: string, action: string) => {
-      console.warn(`[PluginMagnetHost] Permission denied (${capability}): ${pluginId} -> ${action}`);
-    };
-
-    return {
-      audio: {
-        getState: () => {
-          if (!allowAudioState) {
-            warnDenied('api:audio-state', 'audio.getState()');
-            return null;
-          }
-          return audioService.getState();
-        },
-        onStateChange: (cb) => {
-          if (!allowAudioState) {
-            warnDenied('api:audio-state', 'audio.onStateChange(cb)');
-            return () => {};
-          }
-          return audioService.onStateChange((state) => cb(state));
-        },
-        onTimeUpdate: (cb) => {
-          if (!allowAudioState) {
-            warnDenied('api:audio-state', 'audio.onTimeUpdate(cb)');
-            return () => {};
-          }
-          return audioService.onTimeUpdate(cb);
-        },
-        onEnded: (cb) => {
-          if (!allowAudioState) {
-            warnDenied('api:audio-state', 'audio.onEnded(cb)');
-            return () => {};
-          }
-          return audioService.onEnded(cb);
-        },
-        play: async () => {
-          if (!allowAudioControl) {
-            warnDenied('api:audio-control', 'audio.play()');
-            return;
-          }
-          await audioService.play();
-        },
-        pause: () => {
-          if (!allowAudioControl) {
-            warnDenied('api:audio-control', 'audio.pause()');
-            return;
-          }
-          return audioService.pause();
-        },
-        stop: () => {
-          if (!allowAudioControl) {
-            warnDenied('api:audio-control', 'audio.stop()');
-            return;
-          }
-          audioService.stop();
-        },
-        seek: (time) => {
-          if (!allowAudioControl) {
-            warnDenied('api:audio-control', `audio.seek(${time})`);
-            return;
-          }
-          audioService.seek(time);
-        },
-        setVolume: (volume) => {
-          if (!allowAudioControl) {
-            warnDenied('api:audio-control', `audio.setVolume(${volume})`);
-            return;
-          }
-          audioService.setVolume(volume);
-        },
-        toggleMute: () => {
-          if (!allowAudioControl) {
-            warnDenied('api:audio-control', 'audio.toggleMute()');
-            return;
-          }
-          audioService.toggleMute();
-        },
-      },
-      navigation: {
-        navigateTo: (page, params) => {
-          if (!allowNavigation) {
-            warnDenied('api:navigation', `navigation.navigateTo(${page})`);
-            return;
-          }
-          if (params === undefined) {
-            if (PAGES_REQUIRING_PARAMS.has(page)) {
-              console.warn(
-                `[PluginMagnetHost] navigateTo(${page}) requires params; ignoring request.`
-              );
-              return;
-            }
-            navigation.navigateTo(page as PageWithoutParams);
-            return;
-          }
-
-          if (!PAGES_REQUIRING_PARAMS.has(page)) {
-            console.warn(
-              `[PluginMagnetHost] navigateTo(${page}) ignores params; navigating without params.`
-            );
-            navigation.navigateTo(page as PageWithoutParams);
-            return;
-          }
-
-          const validated = parseNavigationParams(page, params);
-          if (!validated) {
-            console.warn(
-              `[PluginMagnetHost] navigateTo(${page}) params invalid; ignoring request.`
-            );
-            return;
-          }
-
-          navigation.navigateTo(page as PageWithParams, validated as Record<string, unknown>);
-        },
-        goBack: () => {
-          if (!allowNavigation) {
-            warnDenied('api:navigation', 'navigation.goBack()');
-            return;
-          }
-          navigation.goBack();
-        },
-      },
-    };
+    return createPluginMountApi({
+      pluginId,
+      hostLabel: 'PluginMagnetHost',
+      permissions,
+      audioService,
+      navigation,
+    });
   }, [audioService, navigation, permissions, pluginId]);
 
   useEffect(() => {
+    if (!enabled) return;
+    if (sandboxEnabled) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -217,6 +89,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
       .catch((err) => {
         if (cancelled) return;
         recordPmpmPluginCrash(pluginId, err, 'magnet');
+        clearPmpmPluginRuntimeCache(pluginId);
         setError(err instanceof Error ? err.message : String(err));
       });
 
@@ -229,7 +102,29 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
         container.innerHTML = '';
       }
     };
-  }, [api, pluginId]);
+  }, [api, enabled, pluginId, sandboxEnabled]);
+
+  if (!plugin) {
+    return (
+      <div style={{ width: '100%', height: '100%', padding: 10, color: 'rgba(255,255,255,0.75)' }}>
+        <div style={{ fontWeight: 600 }}>Plugin Not Installed</div>
+        <div style={{ fontSize: 12, marginTop: 6 }}>{pluginId}</div>
+      </div>
+    );
+  }
+
+  if (!enabled) {
+    return (
+      <div style={{ width: '100%', height: '100%', padding: 10, color: 'rgba(255,255,255,0.75)' }}>
+        <div style={{ fontWeight: 600 }}>Plugin Disabled</div>
+        <div style={{ fontSize: 12, marginTop: 6 }}>{pluginId}</div>
+      </div>
+    );
+  }
+
+  if (sandboxEnabled) {
+    return <PmpmSandboxHost pluginId={pluginId} hostLabel="PluginMagnetHost" kind="magnet" />;
+  }
 
   if (error) {
     return (

@@ -16,6 +16,7 @@ import {
   writeString,
 } from '../../modules/storage';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
+import { recordPmpmAuditEvent } from './pmpmGovernance';
 
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
   return await new Promise((resolve, reject) => {
@@ -209,6 +210,17 @@ export function recordPmpmPermissionDenied(options: {
   console.warn(
     `[pmpm][permission] denied plugin=${options.pluginId} host=${options.hostLabel} capability=${options.capability} action=${options.action}`
   );
+  try {
+    recordPmpmAuditEvent({
+      type: 'permission-denied',
+      pluginId: options.pluginId,
+      hostLabel: options.hostLabel,
+      capability: options.capability,
+      action: options.action,
+    });
+  } catch {
+    // ignore
+  }
 }
 
 function toArrayBuffer(data: Uint8Array): ArrayBuffer {
@@ -1013,6 +1025,38 @@ export function recordPmpmPluginCrash(
   };
 
   saveInstalledPmpmPlugins(plugins);
+  try {
+    recordPmpmAuditEvent({ type: 'crash', pluginId, surface, message });
+  } catch {
+    // ignore
+  }
+}
+
+export function setPmpmPluginEnabled(pluginId: string, enabled: boolean): void {
+  const plugins = loadInstalledPmpmPlugins();
+  const index = plugins.findIndex((plugin) => plugin.manifest.metadata.id === pluginId);
+  if (index < 0) return;
+
+  const prev = plugins[index];
+  const nextEnabled = Boolean(enabled);
+  const prevEnabled = prev.enabled ?? true;
+
+  if (prevEnabled === nextEnabled) return;
+
+  plugins[index] = nextEnabled
+    ? { ...prev, enabled: true, disabledReason: undefined }
+    : { ...prev, enabled: false, disabledReason: 'manual' };
+
+  saveInstalledPmpmPlugins(plugins);
+  try {
+    recordPmpmAuditEvent({
+      type: nextEnabled ? 'enabled' : 'disabled',
+      pluginId,
+      reason: nextEnabled ? undefined : 'manual',
+    });
+  } catch {
+    // ignore
+  }
 }
 
 function buildAnchorsFromManifest(plugin: InstalledPmpmPlugin): Pick<Magnet, 'anchorType' | 'anchors'> {

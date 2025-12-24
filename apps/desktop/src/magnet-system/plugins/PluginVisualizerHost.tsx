@@ -2,13 +2,20 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import {
+  getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
   getPmpmPluginsRevision,
   recordPmpmPluginCrash,
   subscribePmpmPlugins,
 } from './pmpm';
-import { ensurePmpmPluginRuntime, type PmpmPluginRuntime } from './pmpmRuntime';
+import { ensurePmpmPluginRuntime, clearPmpmPluginRuntimeCache, type PmpmPluginRuntime } from './pmpmRuntime';
+import { PmpmSandboxHost } from './PmpmSandboxHost';
 import { createPluginMountApi, type PluginMountApi } from './pluginHostApi';
+import {
+  getPmpmSandboxRevision,
+  getPmpmSandboxRuntimeEnabled,
+  subscribePmpmSandbox,
+} from './pmpmSandboxConfig';
 
 export function PluginVisualizerHost({
   pluginId,
@@ -29,6 +36,24 @@ export function PluginVisualizerHost({
     getPmpmPluginsRevision
   );
 
+  const sandboxRevision = useSyncExternalStore(
+    subscribePmpmSandbox,
+    getPmpmSandboxRevision,
+    getPmpmSandboxRevision
+  );
+
+  const sandboxEnabled = useMemo(() => {
+    void sandboxRevision;
+    return getPmpmSandboxRuntimeEnabled();
+  }, [sandboxRevision]);
+
+  const plugin = useMemo(() => {
+    void pluginStoreRevision;
+    return getInstalledPmpmPlugin(pluginId);
+  }, [pluginId, pluginStoreRevision]);
+
+  const enabled = plugin ? (plugin.enabled ?? true) : false;
+
   const permissions = useMemo(() => {
     void pluginStoreRevision;
     return getPmpmPluginEffectivePermissions(pluginId);
@@ -45,6 +70,8 @@ export function PluginVisualizerHost({
   }, [audioService, navigation, permissions, pluginId]);
 
   useEffect(() => {
+    if (!enabled) return;
+    if (sandboxEnabled) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -70,6 +97,7 @@ export function PluginVisualizerHost({
       .catch((err) => {
         if (cancelled) return;
         recordPmpmPluginCrash(pluginId, err, 'visualizer');
+        clearPmpmPluginRuntimeCache(pluginId);
         setError(err instanceof Error ? err.message : String(err));
       });
 
@@ -82,7 +110,36 @@ export function PluginVisualizerHost({
         container.innerHTML = '';
       }
     };
-  }, [api, pluginId, visualizerId]);
+  }, [api, enabled, pluginId, sandboxEnabled, visualizerId]);
+
+  if (!plugin) {
+    return (
+      <div style={{ width: '100%', padding: 10, color: 'rgba(255,255,255,0.75)' }}>
+        <div style={{ fontWeight: 600 }}>Plugin Not Installed</div>
+        <div style={{ fontSize: 12, marginTop: 6 }}>{pluginId}</div>
+      </div>
+    );
+  }
+
+  if (!enabled) {
+    return (
+      <div style={{ width: '100%', padding: 10, color: 'rgba(255,255,255,0.75)' }}>
+        <div style={{ fontWeight: 600 }}>Plugin Disabled</div>
+        <div style={{ fontSize: 12, marginTop: 6 }}>{pluginId}</div>
+      </div>
+    );
+  }
+
+  if (sandboxEnabled) {
+    return (
+      <PmpmSandboxHost
+        pluginId={pluginId}
+        hostLabel="PluginVisualizerHost"
+        kind="visualizer"
+        visualizerId={visualizerId}
+      />
+    );
+  }
 
   if (error) {
     return (

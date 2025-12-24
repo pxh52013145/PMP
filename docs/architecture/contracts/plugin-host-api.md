@@ -78,15 +78,15 @@ export function runCommand?(
 ## 4) Host API（As-Is：当前注入能力）
 
 注入实现：
-- Magnet host：`apps/desktop/src/magnet-system/plugins/PluginMagnetHost.tsx`（历史实现，能力较少）
-- Settings/Page/Visualizer/Window/Command：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied 记录）
+- Host API（统一实现）：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied audit）
+- Sandbox runtime（实验特性，R5）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + heartbeat）
 
 当前 API（最小集）：
 - `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute`）
 - `navigation`：页面跳转与返回（`navigateTo/goBack`）
 
 限制（现状）：
-- `manifest.permissions` 已在 host 侧做最小 gate（`pluginHostApi.ts`），但治理/审计/UI 可见性仍需在 R3/R5 补齐。
+- `manifest.permissions` 已在 host 侧做最小 gate（`pluginHostApi.ts`），并已提供 denied audit + enable/disable UI；更细的策略与强隔离仍在 R5 演进。
 - `navigation.navigateTo(page, params)` 的 params 需要满足 Navigation 契约（统一校验入口见 `docs/architecture/contracts/navigation.md`）。
 - API 未版本化（建议先在 contracts 中定义 To-Be 的 `apiVersion` 与兼容策略，见 `docs/architecture/contracts/versioning.md`）。
 
@@ -95,6 +95,6 @@ export function runCommand?(
 - Host SDK 抽离为独立 package（例如 `packages/host-sdk`），统一 types/版本/运行时 helper。
 - 扩展贡献点：`settingsPanels/pages/windows/visualizers/commands` 统一走 ContributionRegistry（R2）。
 - 权限与审计：deny-by-default + 记录拒绝（best-effort）+ UI 可见（R3）。
-- 强隔离（R5）：插件运行时通过 RPC 提供 Host API，支持 kill/超时/回收。
+- 强隔离（R5）：插件运行时通过 RPC 提供 Host API，支持 kill/超时/回收（现状已提供 iframe sandbox MVP，仍需完善 worker/资源回收策略）。
 
 实现状态：见 `docs/architecture/status.md`。

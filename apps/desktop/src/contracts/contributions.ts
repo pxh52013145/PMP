@@ -66,9 +66,22 @@ export type CommandContribution = {
   metadata?: Record<string, unknown>;
 };
 
+export type WorkbenchContribution = {
+  kind: 'workbench';
+  id: string;
+  title: string;
+  render: () => unknown;
+  source?: ContributionSource;
+  order?: number;
+  group?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+};
+
 export type DesktopContribution =
   | PageContribution
   | WindowContribution
   | SettingsPanelContribution
   | VisualizerContribution
-  | CommandContribution;
+  | CommandContribution
+  | WorkbenchContribution;

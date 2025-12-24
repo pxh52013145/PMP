@@ -8,6 +8,7 @@ import { createCommandsModule } from '../services/commands';
 import { createBuiltinContributionsModule } from '../builtin-modules/builtinContributionsModule';
 import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMagnetRenderersModule';
 import { createBuiltinCommandsModule } from '../builtin-modules/builtinCommandsModule';
+import { createBuiltinWorkbenchesModule } from '../builtin-modules/builtinWorkbenchesModule';
 import { createPmpmContributionsModule } from '../magnet-system/plugins/pmpmContributionsModule';
 import { createPmpmMagnetRenderersModule } from '../magnet-system/plugins/pmpmMagnetRenderersModule';
 
@@ -45,6 +46,7 @@ function createRuntime(): KernelRuntime {
   ];
 
   if (!isEditorWindow && !isPluginWindow && !isVstEditorWindow) {
+    modules.push(createBuiltinWorkbenchesModule());
     modules.push(createBuiltinContributionsModule());
   }
 

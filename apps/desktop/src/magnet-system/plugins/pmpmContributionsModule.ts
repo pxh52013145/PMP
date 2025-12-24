@@ -20,7 +20,7 @@ import {
   recordPmpmPluginCrash,
   subscribePmpmPlugins,
 } from './pmpm';
-import { ensurePmpmPluginRuntime } from './pmpmRuntime';
+import { clearPmpmPluginRuntimeCache, ensurePmpmPluginRuntime } from './pmpmRuntime';
 
 function buildPluginCommandId(pluginId: string, commandId: string): string {
   return `pmpm:${pluginId}:${commandId}`;
@@ -221,6 +221,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                   await runCommand(api, command.id, args);
                 } catch (error) {
                   recordPmpmPluginCrash(pluginId, error, 'command');
+                  clearPmpmPluginRuntimeCache(pluginId);
                   throw error;
                 }
               },

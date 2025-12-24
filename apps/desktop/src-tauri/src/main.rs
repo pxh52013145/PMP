@@ -12,6 +12,9 @@ mod native_audio;
 mod windows;
 mod music_library;
 mod background_media;
+mod dsp_graph;
+mod vst_bridge;
+mod vst_runtime;
 
 struct ExitFlag(Arc<AtomicBool>);
 struct EditorEffectsState {
@@ -119,6 +122,59 @@ async fn native_audio_sync_queue(
 }
 
 #[tauri::command]
+async fn native_audio_get_dsp_graph(
+    app: tauri::AppHandle,
+) -> Result<dsp_graph::DspGraphConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || dsp_graph::get_dsp_graph(&app))
+        .await
+        .map_err(|e| format!("Get DSP graph task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_set_dsp_graph(
+    app: tauri::AppHandle,
+    graph: dsp_graph::DspGraphConfig,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || dsp_graph::set_dsp_graph(&app, graph))
+        .await
+        .map_err(|e| format!("Set DSP graph task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_list_plugins() -> Result<Vec<vst_bridge::BridgePluginDescriptor>, String> {
+    tauri::async_runtime::spawn_blocking(|| vst_runtime::list_plugins())
+        .await
+        .map_err(|e| format!("VST list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_describe_plugin(
+    plugin_id: String,
+) -> Result<vst_bridge::BridgePluginDescriptor, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::describe_plugin(plugin_id.as_str()))
+        .await
+        .map_err(|e| format!("VST describe task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_open_native_editor(
+    app: tauri::AppHandle,
+    node_id: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::open_native_editor(&app, node_id, title))
+        .await
+        .map_err(|e| format!("VST open editor task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_close_native_editor(node_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::close_native_editor(node_id))
+        .await
+        .map_err(|e| format!("VST close editor task failed: {e}"))?
+}
+
+#[tauri::command]
 async fn open_editor_window(
     app: tauri::AppHandle,
     window_type: String,
@@ -194,6 +250,36 @@ async fn close_plugin_window(
     window_id: String,
 ) -> Result<(), String> {
     windows::plugin::close_plugin_window(&app, plugin_id, window_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn open_vst_editor_window(
+    app: tauri::AppHandle,
+    node_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    title: Option<String>,
+    exit: tauri::State<'_, ExitFlag>,
+) -> Result<(), String> {
+    windows::vst::open_vst_editor_window(
+        &app,
+        node_id,
+        windows::vst::VstEditorWindowGeometry {
+            x,
+            y,
+            width,
+            height,
+        },
+        exit.0.clone(),
+        title,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn close_vst_editor_window(app: tauri::AppHandle, node_id: String) -> Result<(), String> {
+    windows::vst::close_vst_editor_window(&app, node_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -329,6 +415,8 @@ fn main() {
                     exit_flag.store(true, Ordering::SeqCst);
                     windows::editor::close_all_editor_windows(&app_handle);
                     windows::plugin::close_all_plugin_windows(&app_handle);
+                    windows::vst::close_all_vst_editor_windows(&app_handle);
+                    vst_runtime::close_all();
                 }
             });
 
@@ -342,6 +430,8 @@ fn main() {
             close_all_editor_windows,
             open_plugin_window,
             close_plugin_window,
+            open_vst_editor_window,
+            close_vst_editor_window,
             set_editor_blur_enabled,
             music_library_scan,
             music_library_get_cover,
@@ -358,6 +448,12 @@ fn main() {
             native_audio_set_gain,
             native_audio_set_replay_gain,
             native_audio_set_dsp_chain,
+            native_audio_get_dsp_graph,
+            native_audio_set_dsp_graph,
+            native_audio_vst_list_plugins,
+            native_audio_vst_describe_plugin,
+            native_audio_vst_open_native_editor,
+            native_audio_vst_close_native_editor,
             native_audio_list_devices,
             native_audio_select_device,
             native_audio_sync_queue

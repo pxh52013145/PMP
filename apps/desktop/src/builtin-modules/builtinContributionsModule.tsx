@@ -9,6 +9,7 @@ import { TrackDetailPage } from '../components/pages/TrackDetailPage';
 import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
 import { NativeDebugPage } from '../components/pages/NativeDebugPage';
 import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
+import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
 import { PerformanceSettingsPanel } from '../components/settings-panels/PerformanceSettingsPanel';
 import { PluginsSettingsPanel } from '../components/settings-panels/PluginsSettingsPanel';
 import { VisualizersSettingsPanel } from '../components/settings-panels/VisualizersSettingsPanel';
@@ -50,6 +51,16 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
       });
 
       // Settings panels (rendered inside SettingsPage)
+      register<SettingsPanelContribution>({
+        kind: 'settings-panel',
+        id: 'workbench',
+        title: 'Workbench',
+        render: () => <WorkbenchSettingsPanel />,
+        source: 'builtin',
+        order: 5,
+        group: 'core',
+      });
+
       register<SettingsPanelContribution>({
         kind: 'settings-panel',
         id: 'performance',

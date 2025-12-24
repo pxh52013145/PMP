@@ -38,7 +38,7 @@ async function sha256HexFromString(text: string): Promise<string> {
   return sha256Hex(new TextEncoder().encode(text));
 }
 
-async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
+export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise<string> {
   const installed = getInstalledPmpmPlugin(pluginId);
   if (!installed) {
     throw new Error(`Plugin not installed: ${pluginId}`);
@@ -57,6 +57,12 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
       );
     }
   }
+
+  return entryCode;
+}
+
+async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
+  const entryCode = await readVerifiedPmpmPluginEntryCode(pluginId);
 
   const blob = new Blob([entryCode], { type: 'text/javascript' });
   const url = URL.createObjectURL(blob);

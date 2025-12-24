@@ -67,6 +67,7 @@ function recordReceive(eventName: string): void {
 export const STORAGE_KEYS = {
   // === 配置数据（主要数据源） ===
   CONFIG: 'pixel-matrix-player-config', // 主配置文件（包含 magnet、grid、styleOverride）
+  WORKBENCH_ID: 'pixel-matrix-workbench-id', // 当前 Workbench id（R4）
 
   // === 运行时数据（辅助/缓存） ===
   MAGNET_LIBRARY: 'pixel-matrix-magnet-library', // Magnet 库（兼容旧版）
@@ -105,6 +106,8 @@ export const STORAGE_KEYS = {
   PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
   PMPM_DURABLE_MIGRATION_V1: 'pixel-matrix-pmpm-durable-migration-v1', // durable migration state flag (R3)
   PMPM_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmpm-durable-migration-v1-report', // migration report (R3)
+  PMPM_AUDIT_LOG_V1: 'pixel-matrix-pmpm-audit-log-v1', // plugin governance audit log (R5, ring buffer)
+  PMPM_SANDBOX_RUNTIME_ENABLED: 'pixel-matrix-pmpm-sandbox-runtime-enabled', // sandboxed runtime flag (R5, experimental)
 
   // === Shader Packs (.pmps) ===
   PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）

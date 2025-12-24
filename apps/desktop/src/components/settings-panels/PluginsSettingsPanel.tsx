@@ -7,9 +7,43 @@ import {
   installPmpmPluginFromFilePath,
   loadInstalledPmpmPlugins,
   parsePmpmPluginFromFilePath,
+  setPmpmPluginEnabled,
   subscribePmpmPlugins,
   uninstallPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
+import {
+  clearPmpmAuditLog,
+  getPmpmAuditRevision,
+  readPmpmAuditLog,
+  subscribePmpmAudit,
+  type PmpmAuditEvent,
+} from '../../magnet-system/plugins/pmpmGovernance';
+import {
+  getPmpmSandboxRevision,
+  getPmpmSandboxRuntimeEnabled,
+  setPmpmSandboxRuntimeEnabled,
+  subscribePmpmSandbox,
+} from '../../magnet-system/plugins/pmpmSandboxConfig';
+import { clearPmpmPluginRuntimeCache } from '../../magnet-system/plugins/pmpmRuntime';
+
+function formatAuditEvent(event: PmpmAuditEvent): string {
+  if (event.type === 'permission-denied') {
+    return `[denied] ${event.hostLabel} ${event.capability} ${event.action}`;
+  }
+  if (event.type === 'crash') {
+    return `[crash:${event.surface}] ${event.message}`;
+  }
+  if (event.type === 'runtime-unresponsive') {
+    return `[hang:${event.surface}] timeout=${event.timeoutMs}ms`;
+  }
+  if (event.type === 'enabled') {
+    return '[enabled]';
+  }
+  if (event.type === 'disabled') {
+    return `[disabled] ${event.reason ?? ''}`.trim();
+  }
+  return '[event]';
+}
 
 export function PluginsSettingsPanel() {
   const { activeMagnetIds, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
@@ -24,10 +58,32 @@ export function PluginsSettingsPanel() {
     getPmpmPluginsRevision
   );
 
+  const auditRevision = useSyncExternalStore(
+    subscribePmpmAudit,
+    getPmpmAuditRevision,
+    getPmpmAuditRevision
+  );
+
+  const sandboxRevision = useSyncExternalStore(
+    subscribePmpmSandbox,
+    getPmpmSandboxRevision,
+    getPmpmSandboxRevision
+  );
+
   const installedPlugins = useMemo(() => {
     void pluginStoreRevision;
     return loadInstalledPmpmPlugins();
   }, [pluginStoreRevision]);
+
+  const auditLog = useMemo(() => {
+    void auditRevision;
+    return readPmpmAuditLog();
+  }, [auditRevision]);
+
+  const sandboxEnabled = useMemo(() => {
+    void sandboxRevision;
+    return getPmpmSandboxRuntimeEnabled();
+  }, [sandboxRevision]);
 
   const handleInstall = useCallback(async () => {
     if (!isTauri) {
@@ -104,6 +160,8 @@ export function PluginsSettingsPanel() {
         if (!window.confirm(`确认卸载插件 "${pluginId}"？`)) return;
 
         uninstallPmpmPlugin(pluginId);
+        clearPmpmPluginRuntimeCache(pluginId);
+        clearPmpmAuditLog(pluginId);
 
         if (magnetLibrary.some((m) => m.id === pluginId)) {
           setMagnetLibrary((prev) => prev.filter((m) => m.id !== pluginId));
@@ -117,12 +175,39 @@ export function PluginsSettingsPanel() {
     [activeMagnetIds, busy, magnetLibrary, setMagnetLibrary]
   );
 
+  const handleToggleEnabled = useCallback(
+    async (pluginId: string, enabled: boolean) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+
+      try {
+        if (!enabled && activeMagnetIds.has(pluginId)) {
+          const ok = window.confirm(
+            `Magnet "${pluginId}" 当前处于激活状态，禁用后将显示为 Disabled 占位。确认禁用？`
+          );
+          if (!ok) return;
+        }
+
+        setPmpmPluginEnabled(pluginId, enabled);
+        clearPmpmPluginRuntimeCache(pluginId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activeMagnetIds, busy]
+  );
+
   return (
     <div className="settings-card">
       <div className="settings-card-header">
         <div>
           <p className="settings-card-label">.pmpm 插件</p>
-          <p className="settings-card-desc">安装/卸载 Magnet 插件，并查看它们声明的贡献点。</p>
+          <p className="settings-card-desc">
+            安装/卸载 Magnet 插件，并查看它们声明的贡献点（R5：sandbox runtime 为实验特性）。
+          </p>
         </div>
 
         <button type="button" className="settings-action-btn" onClick={() => void handleInstall()} disabled={busy}>
@@ -131,6 +216,17 @@ export function PluginsSettingsPanel() {
       </div>
 
       {error && <div className="settings-inline-error">{error}</div>}
+
+      <div className="settings-card-note" style={{ marginBottom: 10 }}>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={sandboxEnabled}
+            onChange={(e) => setPmpmSandboxRuntimeEnabled(Boolean(e.target.checked))}
+          />
+          <span>Enable sandbox runtime (experimental, R5)</span>
+        </label>
+      </div>
 
       <div className="settings-plugin-list">
         {installedPlugins.length === 0 ? (
@@ -146,6 +242,10 @@ export function PluginsSettingsPanel() {
             const windows = plugin.manifest.contributions?.windows?.length ?? 0;
             const visualizers = plugin.manifest.contributions?.visualizers?.length ?? 0;
             const commands = plugin.manifest.contributions?.commands?.length ?? 0;
+            const pluginAudit = auditLog
+              .filter((event) => event.pluginId === meta.id)
+              .slice(-8)
+              .reverse();
 
             return (
               <div key={meta.id} className="settings-plugin-item">
@@ -177,9 +277,41 @@ export function PluginsSettingsPanel() {
                       {plugin.lastError}
                     </div>
                   )}
+
+                  {pluginAudit.length > 0 && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary style={{ cursor: 'pointer', fontSize: 12, opacity: 0.85 }}>
+                        Audit ({pluginAudit.length})
+                      </summary>
+                      <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75, whiteSpace: 'pre-wrap' }}>
+                        {pluginAudit.map((event, idx) => (
+                          <div key={idx}>{formatAuditEvent(event)}</div>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className="settings-action-btn"
+                        style={{ marginTop: 6 }}
+                        onClick={() => clearPmpmAuditLog(meta.id)}
+                        disabled={busy}
+                      >
+                        Clear Audit
+                      </button>
+                    </details>
+                  )}
                 </div>
 
                 <div className="settings-plugin-actions">
+                  <button
+                    type="button"
+                    className="settings-action-btn"
+                    disabled={busy}
+                    onClick={() => void handleToggleEnabled(meta.id, !enabled)}
+                    title={enabled ? '禁用该插件（会移除插件贡献点）' : '启用该插件'}
+                  >
+                    {enabled ? '禁用' : '启用'}
+                  </button>
+
                   <button
                     type="button"
                     className="settings-danger-btn"
