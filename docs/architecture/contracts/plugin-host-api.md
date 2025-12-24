@@ -10,7 +10,10 @@
 - 最少包含：
   - `manifest.json`
   - `entryPoint` 指向的 ESM 模块代码
+- 可选包含（R5）：
+  - `signature.json`：ECDSA P-256 签名（签名内容：`manifestSha256` + `entrySha256`），用于安装时校验与“允许未签名”策略。
 - 安装方式（现状）：读取文件 → `fflate.unzip`（异步）→ 解析 manifest → 提取 entryPoint code → 写入“索引（localStorage）+ 代码（durable store）”（R3）。
+  - 签名校验实现：`apps/desktop/src/magnet-system/plugins/pmpmSignature.ts`（安装时验证 `signature.json`）
 
 ## 2) Manifest（As-Is：当前代码支持的字段）
 
@@ -88,7 +91,7 @@ export function runCommand?(
 
 注入实现：
 - Host API（统一实现）：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied audit）
-- Sandbox runtime（实验特性，R5）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + heartbeat）
+- Sandbox runtime（R5，默认启用）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + heartbeat）+ Commands：`apps/desktop/src/magnet-system/plugins/pmpmSandboxCommandRunner.ts`
 - Runtime restart/kill（R5，best-effort）：`apps/desktop/src/magnet-system/plugins/pmpmRuntimeSupervisor.ts`（跨窗口同步 + audit `runtime-restart`）
 
 当前 API（最小集）：
