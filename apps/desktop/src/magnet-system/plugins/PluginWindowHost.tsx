@@ -16,6 +16,7 @@ import {
   getPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from './pmpmSandboxConfig';
+import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
 export function PluginWindowHost({
   pluginId,
@@ -29,6 +30,7 @@ export function PluginWindowHost({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const restartToken = usePmpmRuntimeRestartToken(pluginId);
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -110,7 +112,7 @@ export function PluginWindowHost({
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, pluginId, sandboxEnabled, windowId]);
+  }, [api, enabled, pluginId, restartToken, sandboxEnabled, windowId]);
 
   if (!plugin) {
     return (

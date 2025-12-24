@@ -9,6 +9,8 @@ import type {
   WorkbenchContribution,
   WindowContribution,
 } from '../../contracts/contributions';
+import type { GovernanceService } from '../../services/governance';
+import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import { AUDIO_ENGINE_SERVICE_TOKEN } from '../../services/audio';
 import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
@@ -23,6 +25,7 @@ import {
   subscribePmpmPlugins,
 } from './pmpm';
 import { clearPmpmPluginRuntimeCache, ensurePmpmPluginRuntime } from './pmpmRuntime';
+import { requestPmpmPluginRuntimeRestart } from './pmpmRuntimeSupervisor';
 
 function buildPluginCommandId(pluginId: string, commandId: string): string {
   return `pmpm:${pluginId}:${commandId}`;
@@ -61,6 +64,16 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
     id: 'pmpm-contributions',
     activate: ({ contributions, services }) => {
       const unregisters = new Map<string, () => void>();
+
+      const governance: GovernanceService = {
+        restartPmpmPluginRuntime: (pluginId, options = {}) => {
+          requestPmpmPluginRuntimeRestart(pluginId, { reason: options.reason });
+        },
+      };
+
+      const unregisterGovernance = services.register(GOVERNANCE_SERVICE_TOKEN, governance, {
+        replace: true,
+      });
 
       const sync = () => {
         const installed = loadInstalledPmpmPlugins();
@@ -381,6 +394,12 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
           unsubscribe();
         } catch (error) {
           console.warn('[pmpm-contributions] unsubscribe failed', error);
+        }
+
+        try {
+          unregisterGovernance();
+        } catch (error) {
+          console.warn('[pmpm-contributions] unregister governance failed', error);
         }
 
         for (const unregister of Array.from(unregisters.values())) {

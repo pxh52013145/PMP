@@ -39,6 +39,13 @@ export type PmpmRuntimeUnresponsiveAuditEvent = {
   timeoutMs: number;
 };
 
+export type PmpmRuntimeRestartAuditEvent = {
+  type: 'runtime-restart';
+  at: number;
+  pluginId: string;
+  reason?: string;
+};
+
 export type PmpmPermissionsUpdatedAuditEvent = {
   type: 'permissions-updated';
   at: number;
@@ -52,6 +59,7 @@ export type PmpmAuditEvent =
   | PmpmEnabledAuditEvent
   | PmpmDisabledAuditEvent
   | PmpmRuntimeUnresponsiveAuditEvent
+  | PmpmRuntimeRestartAuditEvent
   | PmpmPermissionsUpdatedAuditEvent;
 
 export type PmpmAuditEventInput =
@@ -60,6 +68,7 @@ export type PmpmAuditEventInput =
   | Omit<PmpmEnabledAuditEvent, 'at'>
   | Omit<PmpmDisabledAuditEvent, 'at'>
   | Omit<PmpmRuntimeUnresponsiveAuditEvent, 'at'>
+  | Omit<PmpmRuntimeRestartAuditEvent, 'at'>
   | Omit<PmpmPermissionsUpdatedAuditEvent, 'at'>;
 
 export type PmpmAuditListener = () => void;

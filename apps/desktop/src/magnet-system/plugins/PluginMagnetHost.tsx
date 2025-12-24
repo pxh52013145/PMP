@@ -20,6 +20,7 @@ import {
   getPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from './pmpmSandboxConfig';
+import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
 export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const audioService = useAudioService();
@@ -27,6 +28,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const restartToken = usePmpmRuntimeRestartToken(pluginId);
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -102,7 +104,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, pluginId, sandboxEnabled]);
+  }, [api, enabled, pluginId, restartToken, sandboxEnabled]);
 
   if (!plugin) {
     return (

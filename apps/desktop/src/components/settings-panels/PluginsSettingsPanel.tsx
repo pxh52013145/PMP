@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useMagnetConfig } from '../../modules/magnets';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { useKernel } from '../../contexts/KernelContext';
+import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
 import {
   createMagnetTemplateFromPlugin,
   getPmpmPluginsRevision,
@@ -25,7 +27,6 @@ import {
   setPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from '../../magnet-system/plugins/pmpmSandboxConfig';
-import { clearPmpmPluginRuntimeCache } from '../../magnet-system/plugins/pmpmRuntime';
 
 function formatAuditEvent(event: PmpmAuditEvent): string {
   if (event.type === 'permission-denied') {
@@ -36,6 +37,9 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
   }
   if (event.type === 'runtime-unresponsive') {
     return `[hang:${event.surface}] timeout=${event.timeoutMs}ms`;
+  }
+  if (event.type === 'runtime-restart') {
+    return `[restart] ${event.reason ?? ''}`.trim();
   }
   if (event.type === 'enabled') {
     return '[enabled]';
@@ -50,6 +54,8 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
 }
 
 export function PluginsSettingsPanel() {
+  const kernel = useKernel();
+  const governance = kernel.services.get(GOVERNANCE_SERVICE_TOKEN);
   const { activeMagnetIds, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
   const isTauri = isTauriRuntime();
 
@@ -164,7 +170,7 @@ export function PluginsSettingsPanel() {
         if (!window.confirm(`确认卸载插件 "${pluginId}"？`)) return;
 
         uninstallPmpmPlugin(pluginId);
-        clearPmpmPluginRuntimeCache(pluginId);
+        governance.restartPmpmPluginRuntime(pluginId, { reason: 'uninstall' });
         clearPmpmAuditLog(pluginId);
 
         if (magnetLibrary.some((m) => m.id === pluginId)) {
@@ -176,7 +182,7 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, magnetLibrary, setMagnetLibrary]
+    [activeMagnetIds, busy, governance, magnetLibrary, setMagnetLibrary]
   );
 
   const handleToggleEnabled = useCallback(
@@ -194,14 +200,14 @@ export function PluginsSettingsPanel() {
         }
 
         setPmpmPluginEnabled(pluginId, enabled);
-        clearPmpmPluginRuntimeCache(pluginId);
+        governance.restartPmpmPluginRuntime(pluginId, { reason: enabled ? 'enabled' : 'disabled' });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy]
+    [activeMagnetIds, busy, governance]
   );
 
   return (
@@ -304,7 +310,9 @@ export function PluginsSettingsPanel() {
                                   if (nextAllowed) nextDenied.delete(perm);
                                   else nextDenied.add(perm);
                                   setPmpmPluginDeniedPermissions(meta.id, Array.from(nextDenied));
-                                  clearPmpmPluginRuntimeCache(meta.id);
+                                  governance.restartPmpmPluginRuntime(meta.id, {
+                                    reason: 'permissions-updated',
+                                  });
                                 }}
                               />
                               <span>{perm}</span>
@@ -353,6 +361,16 @@ export function PluginsSettingsPanel() {
                     title={enabled ? '禁用该插件（会移除插件贡献点）' : '启用该插件'}
                   >
                     {enabled ? '禁用' : '启用'}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="settings-action-btn"
+                    disabled={busy}
+                    onClick={() => governance.restartPmpmPluginRuntime(meta.id, { reason: 'manual' })}
+                    title="Restart plugin runtime (best-effort)."
+                  >
+                    Restart
                   </button>
 
                   <button

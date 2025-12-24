@@ -14,6 +14,7 @@ import { createPluginMountApi } from './pluginHostApi';
 import { readPmpmPluginConfig, subscribePmpmPluginConfig } from './pluginConfig';
 import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
+import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
 type SandboxSurface =
   | { kind: 'workbench'; workbenchId: string }
@@ -434,8 +435,10 @@ export function PmpmSandboxHost({
   const audioService = useAudioService();
   const navigation = useNavigation();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const frameIdRef = useRef(`${pluginId}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const frameId = frameIdRef.current;
+  const restartToken = usePmpmRuntimeRestartToken(pluginId);
+  const frameId = useMemo(() => {
+    return `${pluginId}-${restartToken}-${Math.random().toString(16).slice(2)}`;
+  }, [pluginId, restartToken]);
 
   const [frameReady, setFrameReady] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -487,6 +490,13 @@ export function PmpmSandboxHost({
     return readPmpmPluginConfig(pluginId);
   }, [permissions, pluginId]);
   const lastPongAtRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    setFrameReady(false);
+    setMounted(false);
+    setError(null);
+    lastPongAtRef.current = Date.now();
+  }, [frameId]);
 
   const postToFrame = useMemo(() => {
     return (message: Record<string, unknown>) => {
@@ -762,6 +772,7 @@ export function PmpmSandboxHost({
 
   return (
     <iframe
+      key={frameId}
       ref={iframeRef}
       title={`pmpm:${pluginId}`}
       sandbox="allow-scripts"

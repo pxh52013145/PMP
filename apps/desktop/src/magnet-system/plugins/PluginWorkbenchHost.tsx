@@ -20,6 +20,7 @@ import {
   getPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from './pmpmSandboxConfig';
+import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
 export function PluginWorkbenchHost({ pluginId, workbenchId }: { pluginId: string; workbenchId: string }) {
   const audioService = useAudioService();
@@ -27,6 +28,7 @@ export function PluginWorkbenchHost({ pluginId, workbenchId }: { pluginId: strin
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const restartToken = usePmpmRuntimeRestartToken(pluginId);
 
   const pluginStoreRevision = useSyncExternalStore(
     subscribePmpmPlugins,
@@ -108,7 +110,7 @@ export function PluginWorkbenchHost({ pluginId, workbenchId }: { pluginId: strin
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, pluginId, sandboxEnabled, workbenchId]);
+  }, [api, enabled, pluginId, restartToken, sandboxEnabled, workbenchId]);
 
   if (!plugin) {
     return (
@@ -150,4 +152,3 @@ export function PluginWorkbenchHost({ pluginId, workbenchId }: { pluginId: strin
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }
-
