@@ -68,6 +68,9 @@ export const STORAGE_KEYS = {
   // === 配置数据（主要数据源） ===
   CONFIG: 'pixel-matrix-player-config', // 主配置文件（包含 magnet、grid、styleOverride）
   WORKBENCH_ID: 'pixel-matrix-workbench-id', // 当前 Workbench id（R4）
+  WORKBENCH_LAYOUT_ID: 'pixel-matrix-workbench-layout-id', // Workbench layout contribution id（R4）
+  WORKBENCH_NAVIGATION_ID: 'pixel-matrix-workbench-navigation-id', // Workbench navigation contribution id（R4）
+  WORKBENCH_PAGE_CONTAINER_ID: 'pixel-matrix-workbench-page-container-id', // Workbench page container contribution id（R4）
 
   // === 运行时数据（辅助/缓存） ===
   MAGNET_LIBRARY: 'pixel-matrix-magnet-library', // Magnet 库（兼容旧版）
@@ -108,6 +111,7 @@ export const STORAGE_KEYS = {
   PMPM_DURABLE_MIGRATION_V1_REPORT: 'pixel-matrix-pmpm-durable-migration-v1-report', // migration report (R3)
   PMPM_AUDIT_LOG_V1: 'pixel-matrix-pmpm-audit-log-v1', // plugin governance audit log (R5, ring buffer)
   PMPM_SANDBOX_RUNTIME_ENABLED: 'pixel-matrix-pmpm-sandbox-runtime-enabled', // sandboxed runtime flag (R5, experimental)
+  PMPM_RUNTIME_RESTART_V1: 'pixel-matrix-pmpm-runtime-restart-v1', // runtime restart request (R5)
 
   // === Shader Packs (.pmps) ===
   PMPS_SHADERS: 'pixel-matrix-pmps-shaders', // 已安装 shader pack（manifest + fragmentCode）
@@ -174,6 +178,12 @@ export const TAURI_EVENTS = {
   // 主窗口可见性
   MAIN_WINDOW_HIDDEN: 'main-window-hidden',
   MAIN_WINDOW_SHOWN: 'main-window-shown',
+
+  // Plugin windows / VST editor windows
+  PLUGIN_WINDOW_HIDDEN: 'plugin-window-hidden',
+  PLUGIN_WINDOW_SHOWN: 'plugin-window-shown',
+  VST_EDITOR_WINDOW_HIDDEN: 'vst-editor-window-hidden',
+  VST_EDITOR_WINDOW_SHOWN: 'vst-editor-window-shown',
 
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
