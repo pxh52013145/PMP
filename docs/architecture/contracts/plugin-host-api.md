@@ -11,7 +11,7 @@
   - `manifest.json`
   - `entryPoint` 指向的 ESM 模块代码
 - 可选包含（R5）：
-  - `signature.json`：ECDSA P-256 签名（签名内容：`manifestSha256` + `entrySha256`），用于安装时校验与“允许未签名”策略。
+  - `signature.json`：ECDSA P-256 签名（签名内容：`manifestSha256` + `entrySha256`），用于安装时校验与签名策略（Allow unsigned / Require trusted signatures + trusted key allowlist）。
 - 安装方式（现状）：读取文件 → `fflate.unzip`（异步）→ 解析 manifest → 提取 entryPoint code → 写入“索引（localStorage）+ 代码（durable store）”（R3）。
   - 签名校验实现：`apps/desktop/src/magnet-system/plugins/pmpmSignature.ts`（安装时验证 `signature.json`）
 
@@ -112,6 +112,6 @@ export function runCommand?(
 - Host SDK 抽离为独立 package（例如 `packages/host-sdk`），统一 types/版本/运行时 helper。
 - 扩展贡献点：`settingsPanels/pages/windows/visualizers/commands` 统一走 ContributionRegistry（R2）。
 - 权限与审计：deny-by-default + 记录拒绝（best-effort）+ UI 可见（R3）。
-- 强隔离（R5）：插件运行时通过 RPC 提供 Host API，支持 kill/超时/回收（现状已提供 iframe sandbox MVP，仍需完善 worker/资源回收策略）。
+- 强隔离（R5）：插件运行时通过 RPC 提供 Host API，支持 kill/超时/回收（现状：UI surfaces 走 iframe sandbox；Commands 走 worker sandbox（terminate kill + timeout），worker/资源配额仍需演进）。
 
 实现状态：见 `docs/architecture/status.md`。
