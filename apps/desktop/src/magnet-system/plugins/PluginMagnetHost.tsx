@@ -3,7 +3,7 @@ import { useAudioService } from '../../contexts/AudioEngineContext';
 import {
   useNavigation,
   type NavigationPageType,
-  type NavigationParamsMap,
+  type NavigationParamsFor,
 } from '../../contexts/NavigationContext';
 import { parseNavigationParams } from '../../contracts/navigationParams';
 import {
@@ -33,7 +33,7 @@ type PluginNavigationApi = {
 };
 
 type PageWithoutParams = {
-  [K in NavigationPageType]: NavigationParamsMap[K] extends undefined ? K : never;
+  [K in NavigationPageType]: NavigationParamsFor<K> extends undefined ? K : never;
 }[NavigationPageType];
 
 type PageWithParams = Exclude<NavigationPageType, PageWithoutParams>;
@@ -242,4 +242,3 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
 }
-

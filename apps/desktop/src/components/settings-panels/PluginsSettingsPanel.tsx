@@ -142,6 +142,8 @@ export function PluginsSettingsPanel() {
             const isActive = activeMagnetIds.has(meta.id);
             const enabled = plugin.enabled ?? true;
             const panels = plugin.manifest.contributions?.settingsPanels?.length ?? 0;
+            const pages = plugin.manifest.contributions?.pages?.length ?? 0;
+            const windows = plugin.manifest.contributions?.windows?.length ?? 0;
             const visualizers = plugin.manifest.contributions?.visualizers?.length ?? 0;
             const commands = plugin.manifest.contributions?.commands?.length ?? 0;
 
@@ -160,6 +162,8 @@ export function PluginsSettingsPanel() {
                   <div className="settings-plugin-tags">
                     <span className="settings-plugin-tag">{enabled ? 'enabled' : 'disabled'}</span>
                     {panels > 0 && <span className="settings-plugin-tag">settings: {panels}</span>}
+                    {pages > 0 && <span className="settings-plugin-tag">pages: {pages}</span>}
+                    {windows > 0 && <span className="settings-plugin-tag">windows: {windows}</span>}
                     {visualizers > 0 && <span className="settings-plugin-tag">visualizers: {visualizers}</span>}
                     {commands > 0 && <span className="settings-plugin-tag">commands: {commands}</span>}
                   </div>

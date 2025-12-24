@@ -11,6 +11,7 @@ import { NAVIGATION_SERVICE_TOKEN, type NavigationSnapshot } from '../services/n
 import { useKernel } from './KernelContext';
 
 export type { NavigationPageData, NavigationPageType, NavigationParamsMap } from '../contracts/navigation';
+export type { NavigationParamsFor } from '../contracts/navigation';
 
 interface NavigationContextType {
   currentPage: NavigationPageData;

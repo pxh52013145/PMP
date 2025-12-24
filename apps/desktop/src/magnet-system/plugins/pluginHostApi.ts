@@ -1,4 +1,4 @@
-import type { NavigationPageType, NavigationParamsMap } from '../../contexts/NavigationContext';
+import type { NavigationPageType, NavigationParamsFor } from '../../contexts/NavigationContext';
 import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
 import { parseNavigationParams } from '../../contracts/navigationParams';
 import {
@@ -60,7 +60,7 @@ export type PluginWindowApi = {
 };
 
 type PageWithoutParams = {
-  [K in NavigationPageType]: NavigationParamsMap[K] extends undefined ? K : never;
+  [K in NavigationPageType]: NavigationParamsFor<K> extends undefined ? K : never;
 }[NavigationPageType];
 
 type PageWithParams = Exclude<NavigationPageType, PageWithoutParams>;

@@ -6,6 +6,8 @@ import type {
   TrackPageParams,
 } from './navigationParams';
 
+export type PmpmPluginPageType = `pmpm:${string}:page:${string}`;
+
 export type NavigationPageType =
   | 'home'
   | 'settings'
@@ -17,7 +19,8 @@ export type NavigationPageType =
   | 'artist'
   | 'plugin-page'
   | 'plugin-visualizer'
-  | 'native-debug';
+  | 'native-debug'
+  | PmpmPluginPageType;
 
 export type NavigationParamsMap = {
   home: undefined;
@@ -33,7 +36,10 @@ export type NavigationParamsMap = {
   'plugin-visualizer': PluginVisualizerParams;
 };
 
-export interface NavigationPageData {
-  type: NavigationPageType;
-  params?: NavigationParamsMap[NavigationPageType];
+export type NavigationParamsFor<T extends NavigationPageType> =
+  T extends keyof NavigationParamsMap ? NavigationParamsMap[T] : undefined;
+
+export interface NavigationPageData<T extends NavigationPageType = NavigationPageType> {
+  type: T;
+  params?: NavigationParamsFor<T>;
 }

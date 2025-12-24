@@ -161,6 +161,42 @@ async fn close_all_editor_windows(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn open_plugin_window(
+    app: tauri::AppHandle,
+    plugin_id: String,
+    window_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    title: Option<String>,
+    exit: tauri::State<'_, ExitFlag>,
+) -> Result<(), String> {
+    windows::plugin::open_plugin_window(
+        &app,
+        plugin_id,
+        window_id,
+        windows::plugin::PluginWindowGeometry {
+            x,
+            y,
+            width,
+            height,
+        },
+        exit.0.clone(),
+        title,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn close_plugin_window(
+    app: tauri::AppHandle,
+    plugin_id: String,
+    window_id: String,
+) -> Result<(), String> {
+    windows::plugin::close_plugin_window(&app, plugin_id, window_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn set_editor_blur_enabled(
     app: tauri::AppHandle,
     enabled: bool,
@@ -292,6 +328,7 @@ fn main() {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
                     exit_flag.store(true, Ordering::SeqCst);
                     windows::editor::close_all_editor_windows(&app_handle);
+                    windows::plugin::close_all_plugin_windows(&app_handle);
                 }
             });
 
@@ -303,6 +340,8 @@ fn main() {
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,
+            open_plugin_window,
+            close_plugin_window,
             set_editor_blur_enabled,
             music_library_scan,
             music_library_get_cover,

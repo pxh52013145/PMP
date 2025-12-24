@@ -22,7 +22,9 @@
 - `entryPoint: string`
 - `magnet?: { defaultAnchor?, defaultStyle? }`（用于生成 Magnet 模板）
 - `permissions?: string[]`（现状**仅存储**，尚未裁剪/治理）
-- `contributions?: { commands?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, settingsPanels?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, visualizers?: Array<{ id, title, description?, inputs?, group?, order?, tags?, metadata? }> }`（R2）
+- `contributions?: { pages?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, windows?: Array<{ id, title, description?, width?, height?, group?, order?, tags?, metadata? }>, commands?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, settingsPanels?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, visualizers?: Array<{ id, title, description?, inputs?, group?, order?, tags?, metadata? }> }`（R2）
+  - `pages`：Host 会生成并注册页面 id：`pmpm:<pluginId>:page:<pageId>`（渲染时调用插件 `mountPage(container, api, pageId)`）
+  - `windows`：Host 会生成并注册窗口贡献：`id=pmpm:<pluginId>:window:<windowId>`，`label=plugin-<pluginId>-<windowId>`，`route=/#/plugin-window/<pluginId>/<windowId>`
 
 ## 3) 插件入口导出（As-Is）
 

@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createMagnetTemplateFromPlugin, getPluginRendererDefinition } from '../pmpm';
+import {
+  createMagnetTemplateFromPlugin,
+  getPluginRendererDefinition,
+  validatePmpmManifest,
+} from '../pmpm';
 import type { InstalledPmpmPlugin } from '../pmpm';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 
@@ -48,5 +52,52 @@ describe('pmpm plugins', () => {
     expect(def?.id).toBe('magnet-demo');
     expect(def?.source).toBe('plugin');
     expect(typeof def?.render).toBe('function');
+  });
+
+  it('validates contributions.pages entries', () => {
+    const manifest = {
+      formatVersion: '1.0',
+      type: 'magnet-plugin',
+      metadata: { id: 'magnet-demo', name: 'Demo', version: '0.1.0' },
+      entryPoint: 'dist/plugin.js',
+      contributions: {
+        pages: [{ id: 'main', title: 'Main Page', order: 10 }],
+      },
+    };
+
+    expect(() => validatePmpmManifest(manifest)).not.toThrow();
+
+    const duplicated = {
+      ...manifest,
+      contributions: {
+        pages: [
+          { id: 'main', title: 'Main Page' },
+          { id: 'main', title: 'Duplicate' },
+        ],
+      },
+    };
+    expect(() => validatePmpmManifest(duplicated)).toThrow(/duplicated/);
+  });
+
+  it('validates contributions.windows entries', () => {
+    const manifest = {
+      formatVersion: '1.0',
+      type: 'magnet-plugin',
+      metadata: { id: 'magnet-demo', name: 'Demo', version: '0.1.0' },
+      entryPoint: 'dist/plugin.js',
+      contributions: {
+        windows: [{ id: 'panel', title: 'Panel', width: 640, height: 480 }],
+      },
+    };
+
+    expect(() => validatePmpmManifest(manifest)).not.toThrow();
+
+    const invalidWidth = {
+      ...manifest,
+      contributions: {
+        windows: [{ id: 'panel', title: 'Panel', width: -1 }],
+      },
+    };
+    expect(() => validatePmpmManifest(invalidWidth)).toThrow(/width/);
   });
 });

@@ -43,6 +43,26 @@ export type PmpmManifest = {
   };
   entryPoint: string;
   contributions?: {
+    pages?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      group?: string;
+      order?: number;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    }>;
+    windows?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      width?: number;
+      height?: number;
+      group?: string;
+      order?: number;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    }>;
     commands?: Array<{
       id: string;
       title: string;
@@ -204,7 +224,7 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
     .join('');
 }
 
-function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
+export function validatePmpmManifest(manifest: unknown): asserts manifest is PmpmManifest {
   if (!manifest || typeof manifest !== 'object') {
     throw new Error('manifest.json must be an object');
   }
@@ -245,6 +265,157 @@ function validateManifest(manifest: unknown): asserts manifest is PmpmManifest {
     }
 
     const c = contributions as Record<string, unknown>;
+
+    const pages = c.pages;
+    if (typeof pages !== 'undefined') {
+      if (!Array.isArray(pages)) throw new Error('manifest.contributions.pages must be an array');
+
+      const ids = new Set<string>();
+      for (const item of pages) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.contributions.pages entries must be objects');
+        }
+        const page = item as Record<string, unknown>;
+        const pageId = page.id;
+        if (typeof pageId !== 'string' || pageId.length < 1) {
+          throw new Error('manifest.contributions.pages[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(pageId)) {
+          throw new Error('manifest.contributions.pages[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(pageId)) {
+          throw new Error(`manifest.contributions.pages[].id duplicated: "${pageId}"`);
+        }
+        ids.add(pageId);
+
+        const title = page.title;
+        if (typeof title !== 'string' || title.length < 1) {
+          throw new Error(`manifest.contributions.pages["${pageId}"].title is required`);
+        }
+
+        const description = page.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(`manifest.contributions.pages["${pageId}"].description must be a string`);
+        }
+
+        const group = page.group;
+        if (typeof group !== 'undefined' && typeof group !== 'string') {
+          throw new Error(`manifest.contributions.pages["${pageId}"].group must be a string`);
+        }
+
+        const order = page.order;
+        if (
+          typeof order !== 'undefined' &&
+          (typeof order !== 'number' || !Number.isFinite(order))
+        ) {
+          throw new Error(`manifest.contributions.pages["${pageId}"].order must be a number`);
+        }
+
+        const tags = page.tags;
+        if (typeof tags !== 'undefined') {
+          if (!Array.isArray(tags)) {
+            throw new Error(`manifest.contributions.pages["${pageId}"].tags must be an array`);
+          }
+          for (const tag of tags) {
+            if (typeof tag !== 'string' || tag.length < 1) {
+              throw new Error(
+                `manifest.contributions.pages["${pageId}"].tags must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const metadata = page.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.contributions.pages["${pageId}"].metadata must be an object`);
+          }
+        }
+      }
+    }
+    const windows = c.windows;
+    if (typeof windows !== 'undefined') {
+      if (!Array.isArray(windows)) throw new Error('manifest.contributions.windows must be an array');
+
+      const ids = new Set<string>();
+      for (const item of windows) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.contributions.windows entries must be objects');
+        }
+        const window = item as Record<string, unknown>;
+        const windowId = window.id;
+        if (typeof windowId !== 'string' || windowId.length < 1) {
+          throw new Error('manifest.contributions.windows[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(windowId)) {
+          throw new Error('manifest.contributions.windows[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(windowId)) {
+          throw new Error(`manifest.contributions.windows[].id duplicated: "${windowId}"`);
+        }
+        ids.add(windowId);
+
+        const title = window.title;
+        if (typeof title !== 'string' || title.length < 1) {
+          throw new Error(`manifest.contributions.windows["${windowId}"].title is required`);
+        }
+
+        const description = window.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(`manifest.contributions.windows["${windowId}"].description must be a string`);
+        }
+
+        const width = window.width;
+        if (
+          typeof width !== 'undefined' &&
+          (typeof width !== 'number' || !Number.isFinite(width) || width <= 0)
+        ) {
+          throw new Error(`manifest.contributions.windows["${windowId}"].width must be a positive number`);
+        }
+
+        const height = window.height;
+        if (
+          typeof height !== 'undefined' &&
+          (typeof height !== 'number' || !Number.isFinite(height) || height <= 0)
+        ) {
+          throw new Error(`manifest.contributions.windows["${windowId}"].height must be a positive number`);
+        }
+
+        const group = window.group;
+        if (typeof group !== 'undefined' && typeof group !== 'string') {
+          throw new Error(`manifest.contributions.windows["${windowId}"].group must be a string`);
+        }
+
+        const order = window.order;
+        if (
+          typeof order !== 'undefined' &&
+          (typeof order !== 'number' || !Number.isFinite(order))
+        ) {
+          throw new Error(`manifest.contributions.windows["${windowId}"].order must be a number`);
+        }
+
+        const tags = window.tags;
+        if (typeof tags !== 'undefined') {
+          if (!Array.isArray(tags)) {
+            throw new Error(`manifest.contributions.windows["${windowId}"].tags must be an array`);
+          }
+          for (const tag of tags) {
+            if (typeof tag !== 'string' || tag.length < 1) {
+              throw new Error(
+                `manifest.contributions.windows["${windowId}"].tags must be an array of strings`
+              );
+            }
+          }
+        }
+
+        const metadata = window.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.contributions.windows["${windowId}"].metadata must be an object`);
+          }
+        }
+      }
+    }
     const commands = c.commands;
     if (typeof commands !== 'undefined') {
       if (!Array.isArray(commands)) throw new Error('manifest.contributions.commands must be an array');
@@ -692,7 +863,7 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
 
   const manifestRaw = strFromU8(manifestBytes);
   const manifestUnknown = JSON.parse(manifestRaw) as unknown;
-  validateManifest(manifestUnknown);
+  validatePmpmManifest(manifestUnknown);
 
   const entryKey = manifestUnknown.entryPoint.replace(/^\.?\//, '');
   const entryBytes = files[entryKey] ?? files[manifestUnknown.entryPoint];
