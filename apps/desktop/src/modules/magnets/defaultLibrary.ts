@@ -6,6 +6,7 @@ import { MUSIC_PLAYER_MAGNETS } from '../../data/builtin/musicPlayerMagnets';
 import { EDITOR_BUTTON_MAGNET } from '../../data/builtin/editorMagnet';
 import { DEBUG_BUTTON_MAGNET } from '../../data/builtin/debugButtonMagnet';
 import { MATRIX_CHANGE_MAGNET } from '../../data/builtin/matrixChangeMagnet';
+import { DSP_VST_MAGNET } from '../../data/builtin/dspVstMagnet';
 import { NAVIGATION_PAGE_MAGNET } from '../../data/builtin/navigationPageMagnet';
 import { BACK_BUTTON_MAGNET } from '../../data/builtin/backButtonMagnet';
 import { AUDIO_VISUALIZER_MAGNET } from '../../data/builtin/audioVisualizerMagnet';
@@ -30,6 +31,7 @@ export function createDefaultMagnetLibrary(): Magnet[] {
     EDITOR_BUTTON_MAGNET,
     DEBUG_BUTTON_MAGNET,
     MATRIX_CHANGE_MAGNET,
+    DSP_VST_MAGNET,
     PLAY_QUEUE_MAGNET,
     PLAYLISTS_MAGNET,
     MUSIC_LIBRARY_MAGNET,

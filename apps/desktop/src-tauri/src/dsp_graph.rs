@@ -87,6 +87,17 @@ fn to_native_dsp_chain(graph: &DspGraphConfig) -> Vec<DspNodeConfig> {
                     threshold_db: *threshold_db,
                 });
             }
+            DspGraphNode::Vst {
+                enabled,
+                id,
+                plugin_id,
+                ..
+            } if *enabled && !plugin_id.trim().is_empty() => {
+                chain.push(DspNodeConfig::Vst {
+                    id: id.clone(),
+                    plugin_id: plugin_id.clone(),
+                });
+            }
             _ => {}
         }
     }
@@ -125,6 +136,9 @@ pub fn resolve_vst_plugin_id(app: &AppHandle, node_id: &str) -> Result<String, S
     for node in graph.nodes {
         if let DspGraphNode::Vst { id, plugin_id, .. } = node {
             if id == node_id {
+                if plugin_id.trim().is_empty() {
+                    return Err(format!("VST node has no plugin selected: {node_id}"));
+                }
                 return Ok(plugin_id);
             }
         }
@@ -154,18 +168,24 @@ mod tests {
                 DspGraphNode::Vst {
                     id: "vst1".into(),
                     enabled: true,
-                    plugin_id: "demo.gain".into(),
+                    plugin_id: "VST3-TestPlugin-123".into(),
                     params: None,
                 },
             ],
         };
 
         let chain = to_native_dsp_chain(&graph);
-        assert_eq!(chain.len(), 1);
+        assert_eq!(chain.len(), 2);
         match chain[0] {
             DspNodeConfig::Gain { db } => assert!((db + 6.0).abs() < 1e-6),
             _ => panic!("expected gain node"),
         }
+        match &chain[1] {
+            DspNodeConfig::Vst { id, plugin_id } => {
+                assert_eq!(id, "vst1");
+                assert_eq!(plugin_id, "VST3-TestPlugin-123");
+            }
+            _ => panic!("expected vst node"),
+        }
     }
 }
-

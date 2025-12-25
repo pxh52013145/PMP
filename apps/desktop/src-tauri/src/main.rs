@@ -14,7 +14,12 @@ mod music_library;
 mod background_media;
 mod dsp_graph;
 mod vst_bridge;
+mod vst_audit;
+mod vst_dsp;
+mod vst_governance;
 mod vst_runtime;
+mod vst_settings;
+mod vst_shm;
 
 struct ExitFlag(Arc<AtomicBool>);
 struct EditorEffectsState {
@@ -172,6 +177,97 @@ async fn native_audio_vst_close_native_editor(node_id: String) -> Result<(), Str
     tauri::async_runtime::spawn_blocking(move || vst_runtime::close_native_editor(node_id))
         .await
         .map_err(|e| format!("VST close editor task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_set_params(
+    app: tauri::AppHandle,
+    node_id: String,
+    params: Vec<dsp_graph::VstParamValue>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::set_params(&app, node_id, params))
+        .await
+        .map_err(|e| format!("VST set params task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_get_params(
+    app: tauri::AppHandle,
+    node_id: String,
+) -> Result<Vec<dsp_graph::VstParamValue>, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::get_params(&app, node_id))
+        .await
+        .map_err(|e| format!("VST get params task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_dispose_session(node_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::dispose_session(node_id))
+        .await
+        .map_err(|e| format!("VST dispose task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_get_settings(app: tauri::AppHandle) -> Result<vst_settings::VstSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_settings::get_settings(&app))
+        .await
+        .map_err(|e| format!("VST get settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_set_settings(
+    app: tauri::AppHandle,
+    settings: vst_settings::VstSettings,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_settings::set_settings(&app, settings))
+        .await
+        .map_err(|e| format!("VST set settings task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_get_audit_log() -> Result<vst_audit::VstAuditLog, String> {
+    tauri::async_runtime::spawn_blocking(|| vst_audit::get_log())
+        .await
+        .map_err(|e| format!("VST audit log task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_clear_audit_log() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| vst_audit::clear_events())
+        .await
+        .map_err(|e| format!("VST audit log clear task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_get_governance() -> Result<vst_governance::VstGovernanceState, String> {
+    tauri::async_runtime::spawn_blocking(|| vst_governance::state())
+        .await
+        .map_err(|e| format!("VST governance task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_disable_plugin(
+    plugin_id: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_governance::disable_plugin(
+            plugin_id,
+            None,
+            reason.unwrap_or_else(|| "Disabled by user".to_string()),
+            None,
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("VST disable plugin task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_enable_plugin(plugin_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_governance::enable_plugin(plugin_id.as_str()).map(|_| ()))
+        .await
+        .map_err(|e| format!("VST enable plugin task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -420,6 +516,13 @@ fn main() {
                 }
             });
 
+            if let Err(error) = vst_audit::init(&app.handle()) {
+                eprintln!("[VST] Failed to init audit log: {error}");
+            }
+            if let Err(error) = vst_governance::init(&app.handle()) {
+                eprintln!("[VST] Failed to init governance: {error}");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -454,6 +557,16 @@ fn main() {
             native_audio_vst_describe_plugin,
             native_audio_vst_open_native_editor,
             native_audio_vst_close_native_editor,
+            native_audio_vst_set_params,
+            native_audio_vst_get_params,
+            native_audio_vst_dispose_session,
+            native_audio_vst_get_settings,
+            native_audio_vst_set_settings,
+            native_audio_vst_get_audit_log,
+            native_audio_vst_clear_audit_log,
+            native_audio_vst_get_governance,
+            native_audio_vst_disable_plugin,
+            native_audio_vst_enable_plugin,
             native_audio_list_devices,
             native_audio_select_device,
             native_audio_sync_queue

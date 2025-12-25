@@ -1,5 +1,5 @@
 import { Magnet, PixelAnchor } from '../types/pixel';
-import { BUILTIN_MAGNET_IDS } from '../constants/magnets';
+import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from '../constants/magnets';
 import { resolveMagnetPositions, detectConflicts } from './magnetPositionResolver';
 import { readString, removeKey, writeString } from '../modules/storage';
 
@@ -404,8 +404,10 @@ export function applyConfig(
       // 使用默认配置
       magnetLibrary.push(defaultMagnet);
       addedIds.add(defaultMagnet.id);
-      // 默认激活（新添加的内置 Magnet）
-      activeMagnetIds.add(defaultMagnet.id);
+      // 默认激活（仅对“默认激活集合”中的内置 Magnet）
+      if (DEFAULT_ACTIVE_MAGNET_IDS.has(defaultMagnet.id)) {
+        activeMagnetIds.add(defaultMagnet.id);
+      }
     }
   });
 

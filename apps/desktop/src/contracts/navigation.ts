@@ -17,6 +17,7 @@ export type NavigationPageType =
   | 'track'
   | 'album'
   | 'artist'
+  | 'vst-manager'
   | 'plugin-page'
   | 'plugin-visualizer'
   | 'native-debug'
@@ -29,6 +30,7 @@ export type NavigationParamsMap = {
   playlists: undefined;
   'play-queue': undefined;
   'native-debug': undefined;
+  'vst-manager': undefined;
   track: TrackPageParams;
   album: AlbumPageParams;
   artist: ArtistPageParams;

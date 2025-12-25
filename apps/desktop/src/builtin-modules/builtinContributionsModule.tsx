@@ -8,6 +8,7 @@ import { MusicLibrary } from '../components/pages/MusicLibrary';
 import { TrackDetailPage } from '../components/pages/TrackDetailPage';
 import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
 import { NativeDebugPage } from '../components/pages/NativeDebugPage';
+import { DspRackPage } from '../components/pages/DspRackPage';
 import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
 import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
 import { PerformanceSettingsPanel } from '../components/settings-panels/PerformanceSettingsPanel';
@@ -183,6 +184,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         order: 90,
         group: 'debug',
         tags: ['debug', 'native'],
+      });
+
+      register<PageContribution>({
+        kind: 'page',
+        id: 'vst-manager',
+        title: 'VST 管理器',
+        render: () => <DspRackPage />,
+        source: 'builtin',
+        order: 95,
+        group: 'plugin',
+        tags: ['audio', 'dsp', 'vst'],
       });
 
       register<PageContribution>({

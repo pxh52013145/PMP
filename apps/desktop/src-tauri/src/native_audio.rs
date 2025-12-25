@@ -192,6 +192,11 @@ pub enum DspNodeConfig {
     Gain { db: f32 },
     Eq { bands: Vec<EqBandConfig> },
     Limiter { #[serde(rename = "thresholdDb")] threshold_db: f32 },
+    Vst {
+        id: String,
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+    },
 }
 
 fn gain_db_to_linear(db: f32) -> f32 {
@@ -205,6 +210,7 @@ struct DspRuntimeConfig {
     gain_linear: f32,
     eq_bands: Vec<EqBandConfig>,
     limiter_threshold_db: Option<f32>,
+    vst_nodes: Vec<crate::vst_dsp::VstNodeKey>,
 }
 
 impl Default for DspRuntimeConfig {
@@ -215,6 +221,7 @@ impl Default for DspRuntimeConfig {
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
+            vst_nodes: Vec::new(),
         }
     }
 }
@@ -269,6 +276,7 @@ impl DspRuntime {
                         limiter_threshold_db = None;
                     }
                 }
+                DspNodeConfig::Vst { .. } => {}
             }
         }
 
@@ -282,13 +290,11 @@ impl DspRuntime {
         let gain_linear = gain_db_to_linear(total_gain_db);
 
         if let Ok(mut guard) = self.config.lock() {
-            *guard = DspRuntimeConfig {
-                gain_db,
-                replay_gain_db,
-                gain_linear,
-                eq_bands,
-                limiter_threshold_db,
-            };
+            guard.gain_db = gain_db;
+            guard.replay_gain_db = replay_gain_db;
+            guard.gain_linear = gain_linear;
+            guard.eq_bands = eq_bands;
+            guard.limiter_threshold_db = limiter_threshold_db;
         }
         self.config_version.fetch_add(1, Ordering::AcqRel);
 
@@ -309,6 +315,13 @@ impl DspRuntime {
         }
         self.config_version.fetch_add(1, Ordering::AcqRel);
         replay_gain_db
+    }
+
+    fn set_vst_nodes(&self, nodes: Vec<crate::vst_dsp::VstNodeKey>) {
+        if let Ok(mut guard) = self.config.lock() {
+            guard.vst_nodes = nodes;
+        }
+        self.config_version.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -670,6 +683,8 @@ where
     processor: DspChainProcessor,
     processor_version: u64,
     processor_reset_serial: u64,
+    vst_keys: Vec<crate::vst_dsp::VstNodeKey>,
+    vst_nodes: Vec<crate::vst_dsp::VstDspNode>,
     local: Vec<f32>,
     local_index: usize,
 }
@@ -688,6 +703,12 @@ where
         let processor_reset_serial = dsp.reset_serial();
         let snapshot = dsp.snapshot();
         let processor = DspChainProcessor::from_runtime_config(&snapshot, sample_rate, channels as usize);
+        let vst_keys = snapshot.vst_nodes.clone();
+        let vst_nodes = vst_keys
+            .iter()
+            .cloned()
+            .map(|key| crate::vst_dsp::VstDspNode::new(crate::vst_dsp::VstNodeSpec { key }))
+            .collect();
 
         Self {
             inner,
@@ -699,6 +720,8 @@ where
             processor,
             processor_version,
             processor_reset_serial,
+            vst_keys,
+            vst_nodes,
             local: Vec::new(),
             local_index: 0,
         }
@@ -710,12 +733,25 @@ where
             let snapshot = self.dsp.snapshot();
             self.processor =
                 DspChainProcessor::from_runtime_config(&snapshot, self.sample_rate, self.channels as usize);
+
+            if snapshot.vst_nodes != self.vst_keys {
+                self.vst_keys = snapshot.vst_nodes.clone();
+                self.vst_nodes = self
+                    .vst_keys
+                    .iter()
+                    .cloned()
+                    .map(|key| crate::vst_dsp::VstDspNode::new(crate::vst_dsp::VstNodeSpec { key }))
+                    .collect();
+            }
             self.processor_version = version;
         }
 
         let reset_serial = self.dsp.reset_serial();
         if reset_serial != self.processor_reset_serial {
             self.processor.reset();
+            for node in &mut self.vst_nodes {
+                node.reset();
+            }
             self.processor_reset_serial = reset_serial;
         }
     }
@@ -738,6 +774,9 @@ where
 
         self.ensure_processor_uptodate();
         self.processor.process_interleaved_in_place(&mut self.local);
+        for node in &mut self.vst_nodes {
+            node.process_interleaved_in_place(&mut self.local);
+        }
         self.tap
             .push_interleaved(&self.local, self.channels.max(1) as usize);
         true
@@ -1364,7 +1403,13 @@ impl NativeAudioEngine {
 
     fn crossfade_to(&mut self, path: PathBuf, duration_ms: u64) -> Result<(), String> {
         let was_playing = matches!(self.playback_state, PlaybackState::Playing);
-        let can_crossfade = was_playing && self.sink.is_some() && duration_ms > 0;
+        // VST nodes currently run as out-of-process sidecars and are not safe to drive from two
+        // concurrent sinks during crossfade; fall back to non-crossfade load for stability.
+        let has_vst = self
+            .dsp_chain
+            .iter()
+            .any(|node| matches!(node, DspNodeConfig::Vst { .. }));
+        let can_crossfade = was_playing && self.sink.is_some() && duration_ms > 0 && !has_vst;
         if !can_crossfade {
             self.load(path)?;
             if was_playing {
@@ -3098,11 +3143,67 @@ pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> R
 
 pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Result<(), String> {
     init_emitter(app_handle);
+
+    let sample_rate = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.output_sample_rate.unwrap_or(48_000).max(1)
+    };
+
+    let channels = 2usize;
+    let capacity_frames = 8192u32;
+
+    let buffer_profile = crate::vst_settings::get_settings(app_handle)
+        .ok()
+        .map(|settings| settings.buffer_profile)
+        .unwrap_or_default();
+    let latency_frames = crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
+
+    let mut desired_vst_node_ids = Vec::new();
+    let mut vst_keys: Vec<crate::vst_dsp::VstNodeKey> = Vec::new();
+
+    for node in &chain {
+        let DspNodeConfig::Vst { id, plugin_id } = node else {
+            continue;
+        };
+
+        desired_vst_node_ids.push(id.clone());
+        match crate::vst_runtime::ensure_audio_session(
+            id.as_str(),
+            plugin_id.as_str(),
+            sample_rate,
+            channels,
+            capacity_frames,
+        ) {
+            Ok(info) => {
+                vst_keys.push(crate::vst_dsp::VstNodeKey {
+                    node_id: id.clone(),
+                    plugin_id: plugin_id.clone(),
+                    shm_in_name: info.shm_in_name,
+                    shm_out_name: info.shm_out_name,
+                    sample_rate: info.sample_rate,
+                    channels: info.channels as u32,
+                    capacity_frames: info.capacity_frames,
+                    latency_frames,
+                });
+            }
+            Err(err) => {
+                eprintln!(
+                    "[NativeAudio][VST] ensure session failed (node={id}, plugin={plugin_id}): {err}"
+                );
+            }
+        }
+    }
+
+    crate::vst_runtime::dispose_sessions_except(&desired_vst_node_ids);
+
     let payload = {
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_dsp_chain(chain);
+        engine.dsp_runtime.set_vst_nodes(vst_keys);
         engine.build_state_payload(false)
     };
     emit_state(app_handle, payload)?;
@@ -3274,6 +3375,7 @@ mod tests {
             gain_linear: gain_db_to_linear(gain_db),
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
+            vst_nodes: Vec::new(),
         };
 
         let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);
@@ -3296,6 +3398,7 @@ mod tests {
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: Some(threshold_db),
+            vst_nodes: Vec::new(),
         };
 
         let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);

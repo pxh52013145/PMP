@@ -29,6 +29,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-back',
   'btn-debug', // 调试按钮
   'audio-visualizer',
+  'dsp-vst',
 ] as const;
 
 /**
@@ -53,6 +54,7 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-maximize',
   'btn-close',
   'btn-window-pin',
+  'btn-matrix-change',
   'btn-editor',
   'btn-debug', // 调试按钮
   // 导航页面

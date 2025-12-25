@@ -65,10 +65,17 @@ export function MagnetLibraryProvider({
     [workbenchLayoutId]
   );
 
+  const resolvedDefaultActiveMagnetIds = useMemo(() => {
+    if (workbenchLayoutId !== 'matrix2') return defaultActiveMagnetIds;
+    const next = new Set(defaultActiveMagnetIds);
+    next.add('dsp-vst');
+    return next;
+  }, [defaultActiveMagnetIds, workbenchLayoutId]);
+
   const initialRef = useRef<ReturnType<typeof createInitialMagnetState> | null>(null);
   if (!initialRef.current) {
     initialRef.current = createInitialMagnetState(defaultMagnetLibrary, {
-      defaultActiveMagnetIds,
+      defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
       storageKey: magnetConfigStorageKey,
     });
   }
@@ -83,20 +90,67 @@ export function MagnetLibraryProvider({
   const reloadFromStorage = useCallback(() => {
     suppressNextAutoSaveRef.current = true;
     cancelScheduledMagnetConfigSave();
-    const config =
-      loadMagnetConfig(magnetConfigStorageKey) ??
-      (magnetConfigStorageKey !== STORAGE_KEYS.CONFIG ? loadMagnetConfig(STORAGE_KEYS.CONFIG) : null);
+    const isMatrix2 = workbenchLayoutId === 'matrix2';
+    const primaryConfig = loadMagnetConfig(magnetConfigStorageKey);
+    const fallbackConfig =
+      magnetConfigStorageKey !== STORAGE_KEYS.CONFIG ? loadMagnetConfig(STORAGE_KEYS.CONFIG) : null;
+    const config = primaryConfig ?? fallbackConfig;
     if (config) {
       const applied = applyMagnetConfig(config, defaultMagnetLibrary);
+
+      const shouldBootstrapMatrix2 =
+        isMatrix2 && (!primaryConfig || !primaryConfig.magnets || !primaryConfig.magnets['dsp-vst']);
+
+      if (shouldBootstrapMatrix2) {
+        const nextActiveMagnetIds = new Set(applied.activeMagnetIds);
+        nextActiveMagnetIds.add('dsp-vst');
+        setMagnetLibrary(applied.magnetLibrary);
+        setActiveMagnetIds(nextActiveMagnetIds);
+        try {
+          saveMagnetConfig(
+            applied.magnetLibrary,
+            nextActiveMagnetIds,
+            gridSize,
+            defaultMagnetLibrary,
+            magnetConfigStorageKey
+          );
+        } catch (error) {
+          console.warn('[magnets] Failed to bootstrap matrix2 config', error);
+        }
+        return;
+      }
+
       setMagnetLibrary(applied.magnetLibrary);
       setActiveMagnetIds(applied.activeMagnetIds);
       return;
     }
 
-    const fallback = createInitialMagnetState(defaultMagnetLibrary, { defaultActiveMagnetIds });
+    const fallback = createInitialMagnetState(defaultMagnetLibrary, {
+      defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
+    });
     setMagnetLibrary(fallback.magnetLibrary);
     setActiveMagnetIds(fallback.activeMagnetIds);
-  }, [defaultActiveMagnetIds, defaultMagnetLibrary, magnetConfigStorageKey]);
+
+    if (workbenchLayoutId === 'matrix2') {
+      try {
+        saveMagnetConfig(
+          fallback.magnetLibrary,
+          fallback.activeMagnetIds,
+          gridSize,
+          defaultMagnetLibrary,
+          magnetConfigStorageKey
+        );
+      } catch (error) {
+        console.warn('[magnets] Failed to bootstrap matrix2 fallback config', error);
+      }
+    }
+  }, [
+    defaultMagnetLibrary,
+    gridSize,
+    magnetConfigStorageKey,
+    resolvedDefaultActiveMagnetIds,
+    workbenchLayoutId,
+  ]);
 
   const saveNow = useCallback(() => {
     cancelScheduledMagnetConfigSave();

@@ -48,8 +48,57 @@ type BridgePluginDescriptor = {
   id: string;
   name: string;
   vendor?: string | null;
+  version?: string | null;
+  path?: string | null;
   parameters: BridgeParamDescriptor[];
 };
+
+type VstDisabledPlugin = {
+  pluginId: string;
+  nodeId?: string | null;
+  disabledAtMs: number;
+  reason: string;
+  failures?: number | null;
+};
+
+type VstGovernanceState = {
+  version: number;
+  disabledPlugins: VstDisabledPlugin[];
+};
+
+type VstAuditEvent = {
+  atMs: number;
+  kind: string;
+  nodeId?: string | null;
+  pluginId?: string | null;
+  message: string;
+};
+
+type VstAuditLog = {
+  version: number;
+  events: VstAuditEvent[];
+  lastScan?: {
+    atMs: number;
+    plugins: Array<{
+      id: string;
+      name: string;
+      vendor?: string | null;
+      version?: string | null;
+      path?: string | null;
+    }>;
+  } | null;
+};
+
+function mergePlugins(prev: BridgePluginDescriptor[], incoming: BridgePluginDescriptor[]) {
+  const prevById = new Map(prev.map((plugin) => [plugin.id, plugin]));
+  return incoming.map((plugin) => {
+    const existing = prevById.get(plugin.id);
+    if (existing && existing.parameters.length > 0 && plugin.parameters.length === 0) {
+      return { ...plugin, parameters: existing.parameters };
+    }
+    return plugin;
+  });
+}
 
 function clamp(value: number, min: number, max: number) {
   if (!isFinite(value)) return min;
@@ -142,7 +191,10 @@ export const DspRackPage: React.FC = () => {
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const [graph, setGraph] = React.useState<DspGraphConfig | null>(null);
   const [plugins, setPlugins] = React.useState<BridgePluginDescriptor[]>([]);
+  const [governance, setGovernance] = React.useState<VstGovernanceState | null>(null);
+  const [auditLog, setAuditLog] = React.useState<VstAuditLog | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [pluginsBusy, setPluginsBusy] = React.useState(false);
   const [describing, setDescribing] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const describingRef = React.useRef<Set<string>>(new Set());
@@ -153,26 +205,45 @@ export const DspRackPage: React.FC = () => {
     setBusy(true);
     setError(null);
     try {
-      const [graphResp, pluginResp] = await Promise.all([
+      const [graphResp, governanceResp, auditResp] = await Promise.all([
         invoke<DspGraphConfig>('native_audio_get_dsp_graph'),
-        invoke<BridgePluginDescriptor[]>('native_audio_vst_list_plugins').catch(() => [] as BridgePluginDescriptor[]),
+        invoke<VstGovernanceState>('native_audio_vst_get_governance').catch(() => null),
+        invoke<VstAuditLog>('native_audio_vst_get_audit_log').catch(() => null),
       ]);
       setGraph(graphResp && typeof graphResp === 'object' ? graphResp : { nodes: [] });
-      setPlugins((prev) => {
-        const next = Array.isArray(pluginResp) ? pluginResp : [];
-        const prevById = new Map(prev.map((p) => [p.id, p]));
-        return next.map((p) => {
-          const existing = prevById.get(p.id);
-          if (existing && existing.parameters.length > 0 && p.parameters.length === 0) {
-            return { ...p, parameters: existing.parameters };
-          }
-          return p;
-        });
-      });
+      setGovernance(governanceResp && typeof governanceResp === 'object' ? governanceResp : null);
+      const nextAudit = auditResp && typeof auditResp === 'object' ? auditResp : null;
+      setAuditLog(nextAudit);
+      if (nextAudit?.lastScan?.plugins?.length) {
+        const snapshot = nextAudit.lastScan.plugins.map((plugin) => ({
+          ...plugin,
+          parameters: [],
+        }));
+        setPlugins((prev) => mergePlugins(prev, snapshot));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  }, [isTauri]);
+
+  const scanPlugins = React.useCallback(async () => {
+    if (!isTauri) return;
+    setPluginsBusy(true);
+    setError(null);
+    try {
+      const pluginResp = await invoke<BridgePluginDescriptor[]>('native_audio_vst_list_plugins').catch(
+        () => [] as BridgePluginDescriptor[]
+      );
+      const next = Array.isArray(pluginResp) ? pluginResp : [];
+      setPlugins((prev) => mergePlugins(prev, next));
+      const auditResp = await invoke<VstAuditLog>('native_audio_vst_get_audit_log').catch(() => null);
+      setAuditLog(auditResp && typeof auditResp === 'object' ? auditResp : null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPluginsBusy(false);
     }
   }, [isTauri]);
 
@@ -276,13 +347,13 @@ export const DspRackPage: React.FC = () => {
           node = { id, enabled: true, type: 'limiter', thresholdDb: -6 };
           break;
         case 'vst': {
-          const fallback = plugins[0]?.id ?? 'demo.gain';
+          const fallback = (plugins[0]?.id ?? '').trim();
           node = {
             id,
-            enabled: true,
+            enabled: Boolean(fallback),
             type: 'vst',
             pluginId: fallback,
-            params: fallback === 'demo.gain' ? [{ key: 'gainDb', value: 0 }] : [],
+            params: [],
           };
           break;
         }
@@ -291,6 +362,38 @@ export const DspRackPage: React.FC = () => {
     },
     [applyGraph, graph, plugins]
   );
+
+  const enablePlugin = React.useCallback(
+    async (pluginId: string) => {
+      if (!isTauri) return;
+      if (!pluginId) return;
+      setError(null);
+      setBusy(true);
+      try {
+        await invoke('native_audio_vst_enable_plugin', { pluginId });
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [isTauri, refresh]
+  );
+
+  const clearAuditLog = React.useCallback(async () => {
+    if (!isTauri) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke('native_audio_vst_clear_audit_log');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [isTauri, refresh]);
 
   if (!isTauri) {
     return (
@@ -333,6 +436,9 @@ export const DspRackPage: React.FC = () => {
           <button type="button" onClick={() => addNode('vst')} disabled={!graph || busy}>
             + VST
           </button>
+          <button type="button" onClick={() => void scanPlugins()} disabled={busy || pluginsBusy}>
+            {pluginsBusy ? '扫描中…' : '扫描插件'}
+          </button>
           <button type="button" onClick={() => void refresh()} disabled={busy}>
             刷新
           </button>
@@ -345,6 +451,72 @@ export const DspRackPage: React.FC = () => {
 
       {graph && (
         <div className="dsp-rack-list">
+          {governance?.disabledPlugins?.length ? (
+            <div className="dsp-node-card">
+              <div className="dsp-node-header">
+                <div className="dsp-node-title">
+                  <span className="dsp-node-type">VST Governance</span>
+                  <span className="dsp-node-id">{governance.disabledPlugins.length} plugin(s) disabled</span>
+                </div>
+
+                <div className="dsp-node-controls">
+                  <button type="button" onClick={() => void clearAuditLog()} disabled={busy}>
+                    Clear Audit
+                  </button>
+                </div>
+              </div>
+
+              <div className="dsp-node-body">
+                {governance.disabledPlugins.map((plugin) => (
+                  <div key={plugin.pluginId} className="dsp-param-row">
+                    <span className="dsp-param-label">{plugin.pluginId}</span>
+                    <span className="dsp-param-label" style={{ opacity: 0.85 }}>
+                      {plugin.reason}
+                      {plugin.failures ? ` (failures=${plugin.failures})` : ''}
+                    </span>
+                    <button type="button" onClick={() => void enablePlugin(plugin.pluginId)} disabled={busy}>
+                      Enable
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {auditLog?.events?.length ? (
+            <div className="dsp-node-card">
+              <div className="dsp-node-header">
+                <div className="dsp-node-title">
+                  <span className="dsp-node-type">VST Audit</span>
+                  <span className="dsp-node-id">
+                    latest {Math.min(20, auditLog.events.length)} event(s)
+                    {auditLog.lastScan ? ` · lastScan=${auditLog.lastScan.plugins.length}` : ''}
+                  </span>
+                </div>
+
+                <div className="dsp-node-controls">
+                  <button type="button" onClick={() => void clearAuditLog()} disabled={busy}>
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="dsp-node-body">
+                {auditLog.events
+                  .slice(-20)
+                  .reverse()
+                  .map((event) => (
+                    <div key={`${event.atMs}-${event.kind}-${event.nodeId ?? ''}`} className="dsp-rack-note">
+                      {new Date(event.atMs).toLocaleString()} · {event.kind}
+                      {event.pluginId ? ` · ${event.pluginId}` : ''}
+                      {event.nodeId ? ` · ${event.nodeId}` : ''}
+                      {event.message ? ` · ${event.message}` : ''}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          ) : null}
+
           {graph.nodes.length === 0 && <div className="dsp-rack-empty">当前 DSP Graph 为空。</div>}
 
           {graph.nodes.map((node, index) => (
@@ -379,7 +551,7 @@ export const DspRackPage: React.FC = () => {
                           title: `VST Editor (${readStringField(node, 'pluginId') ?? 'vst'})`,
                         })
                       }
-                      disabled={busy}
+                      disabled={busy || !(readStringField(node, 'pluginId') ?? '').trim()}
                     >
                       编辑
                     </button>
@@ -395,7 +567,7 @@ export const DspRackPage: React.FC = () => {
                           title: `VST3 (${readStringField(node, 'pluginId') ?? 'vst'})`,
                         }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
                       }
-                      disabled={busy || !node.enabled}
+                      disabled={busy || !node.enabled || !(readStringField(node, 'pluginId') ?? '').trim()}
                     >
                       Native UI
                     </button>
@@ -501,7 +673,7 @@ export const DspRackPage: React.FC = () => {
                     <span className="dsp-param-label">Plugin</span>
                     <select
                       className="dsp-param-select"
-                      value={readStringField(node, 'pluginId') ?? 'demo.gain'}
+                      value={readStringField(node, 'pluginId') ?? ''}
                       onChange={(e) =>
                         updateNode(node.id, (n) => ({
                           ...n,
@@ -510,7 +682,7 @@ export const DspRackPage: React.FC = () => {
                         }))
                       }
                     >
-                      {plugins.length === 0 && <option value="demo.gain">demo.gain</option>}
+                      <option value="">{plugins.length === 0 ? '暂无插件（请先扫描）' : '请选择插件…'}</option>
                       {plugins.map((plugin) => (
                         <option key={plugin.id} value={plugin.id}>
                           {plugin.name} ({plugin.id})
@@ -520,7 +692,10 @@ export const DspRackPage: React.FC = () => {
                   </div>
 
                   {(() => {
-                    const pluginId = readStringField(node, 'pluginId') ?? 'demo.gain';
+                    const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
+                    if (!pluginId) {
+                      return <div className="dsp-rack-note">请先选择 VST3 插件（如未扫描，请点击“扫描插件”）。</div>;
+                    }
                     const plugin = plugins.find((p) => p.id === pluginId);
                     if (!plugin) {
                       return <div className="dsp-rack-note">未找到插件描述（可能需要刷新）。</div>;

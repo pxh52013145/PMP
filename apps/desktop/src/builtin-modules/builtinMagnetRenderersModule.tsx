@@ -14,6 +14,7 @@ import { BackButton } from '../components/magnet/BackButton';
 import { DebugButton } from '../components/magnet/DebugButton';
 import { AudioVisualizerMagnet } from '../components/magnet/AudioVisualizerMagnet';
 import { MatrixChangeMagnet } from '../components/magnet/MatrixChangeMagnet';
+import { DspVstMagnet } from '../components/magnet/DspVstMagnet';
 import { registerMagnetRenderer, unregisterMagnetRenderer, type MagnetRendererDefinition } from '../magnet-system/registry';
 import { clearMagnetVariants, registerMagnetVariant } from '../magnet-system/variantRegistry';
 
@@ -141,6 +142,15 @@ const BUILTIN_DEFINITIONS: MagnetRendererDefinition[] = [
     description: '切换 Matrix 1 / Matrix 2（Workbench layout）',
     group: 'layout',
     tags: ['layout', 'matrix', 'workbench'],
+    source: 'builtin',
+  },
+  {
+    id: 'dsp-vst',
+    render: () => <DspVstMagnet />,
+    preview: () => createTextPreview('VST'),
+    description: 'VST 管理入口（左键打开管理页；右键打开 editor）',
+    group: 'navigation',
+    tags: ['audio', 'dsp', 'vst', 'native'],
     source: 'builtin',
   },
   {

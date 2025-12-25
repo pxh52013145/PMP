@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -23,6 +24,15 @@
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#undef min
+#undef max
 #endif
 
 namespace {
@@ -31,7 +41,97 @@ constexpr uint8_t MSG_SET_PARAMS = 1;
 constexpr uint8_t MSG_PROCESS_AUDIO = 2;
 constexpr uint8_t MSG_OPEN_EDITOR = 3;
 constexpr uint8_t MSG_CLOSE_EDITOR = 4;
+constexpr uint8_t MSG_PING = 5;
+constexpr uint8_t MSG_SCAN_PLUGINS = 6;
+constexpr uint8_t MSG_DESCRIBE_PLUGIN = 7;
+constexpr uint8_t MSG_GET_PARAMS = 8;
+constexpr uint8_t MSG_INSTANTIATE = 9;
+constexpr uint8_t MSG_DISPOSE = 10;
 constexpr uint8_t MSG_ERROR = 255;
+
+constexpr uint32_t BRIDGE_PROTOCOL_VERSION = 1;
+constexpr char SHM_RING_MAGIC[8] = {'P', 'M', 'P', '_', 'S', 'H', 'M', '1'};
+constexpr uint32_t SHM_RING_VERSION = 1;
+constexpr uint32_t SHM_FLAG_PEER_READY = 1u << 1;
+
+struct ShmRingHeaderV1 {
+  char magic[8];
+  uint32_t version;
+  uint32_t channels;
+  uint32_t sampleRate;
+  uint32_t capacityFrames;
+  std::atomic<uint32_t> flags;
+  std::atomic<uint32_t> heartbeat;
+  uint32_t reserved[2];
+  std::atomic<uint64_t> writeIndex;
+  std::atomic<uint64_t> readIndex;
+  uint64_t reservedTail;
+};
+
+static_assert(sizeof(ShmRingHeaderV1) == 64, "ShmRingHeaderV1 size mismatch");
+static_assert(alignof(ShmRingHeaderV1) == 8, "ShmRingHeaderV1 alignment mismatch");
+static_assert(std::atomic<uint32_t>::is_always_lock_free, "atomic<uint32_t> must be lock-free");
+static_assert(std::atomic<uint64_t>::is_always_lock_free, "atomic<uint64_t> must be lock-free");
+
+struct ParamUpdate {
+  int index = 0;
+  float normalized = 0.0f;
+};
+
+class ParamUpdateQueue {
+ public:
+  static constexpr uint32_t kCapacity = 256;
+
+  bool push(int index, float normalized) {
+    const uint32_t write = writeIndex_.load(std::memory_order_relaxed);
+    const uint32_t read = readIndex_.load(std::memory_order_acquire);
+    if (write - read >= kCapacity) {
+      dropped_.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+
+    buffer_[write % kCapacity] = ParamUpdate{index, normalized};
+    writeIndex_.store(write + 1, std::memory_order_release);
+    return true;
+  }
+
+  bool pop(ParamUpdate& out) {
+    const uint32_t read = readIndex_.load(std::memory_order_relaxed);
+    const uint32_t write = writeIndex_.load(std::memory_order_acquire);
+    if (read == write) return false;
+
+    out = buffer_[read % kCapacity];
+    readIndex_.store(read + 1, std::memory_order_release);
+    return true;
+  }
+
+  void clear() {
+    const uint32_t write = writeIndex_.load(std::memory_order_relaxed);
+    readIndex_.store(write, std::memory_order_release);
+  }
+
+  uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+
+ private:
+  std::atomic<uint32_t> writeIndex_{0};
+  std::atomic<uint32_t> readIndex_{0};
+  std::atomic<uint64_t> dropped_{0};
+  ParamUpdate buffer_[kCapacity] = {};
+};
+
+inline uint32_t floatToBits(float value) {
+  uint32_t bits = 0;
+  static_assert(sizeof(bits) == sizeof(value), "floatToBits expects 32-bit float");
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+inline float bitsToFloat(uint32_t bits) {
+  float value = 0.0f;
+  static_assert(sizeof(bits) == sizeof(value), "bitsToFloat expects 32-bit float");
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
 
 struct ParamDescriptor {
   std::string key;
@@ -47,6 +147,8 @@ struct PluginDescriptor {
   std::string id;
   std::string name;
   std::optional<std::string> vendor;
+  std::optional<std::string> version;
+  std::optional<std::string> path;
   std::vector<ParamDescriptor> parameters;
 };
 
@@ -99,10 +201,7 @@ bool writeMessage(std::FILE* stdoutFile, uint8_t type, const std::vector<uint8_t
   return true;
 }
 
-std::vector<uint8_t> encodeErrorPayload(const std::string& message) {
-  auto* obj = new juce::DynamicObject();
-  obj->setProperty("message", juce::String(message));
-  juce::var payloadVar(obj);
+std::vector<uint8_t> encodeJsonPayload(const juce::var& payloadVar) {
   const auto json = juce::JSON::toString(payloadVar, true);
   const auto utf8 = json.toRawUTF8();
   std::vector<uint8_t> out;
@@ -111,9 +210,451 @@ std::vector<uint8_t> encodeErrorPayload(const std::string& message) {
   return out;
 }
 
+std::vector<uint8_t> encodeErrorPayload(const std::string& message) {
+  auto* obj = new juce::DynamicObject();
+  obj->setProperty("message", juce::String(message));
+  return encodeJsonPayload(juce::var(obj));
+}
+
+std::vector<uint8_t> encodePingPayload(const std::string& pluginId) {
+  auto* obj = new juce::DynamicObject();
+  obj->setProperty("protocolVersion", static_cast<int>(BRIDGE_PROTOCOL_VERSION));
+  obj->setProperty("pluginId", juce::String(pluginId));
+  return encodeJsonPayload(juce::var(obj));
+}
+
 bool writeError(std::FILE* stdoutFile, const std::string& message) {
   const auto payload = encodeErrorPayload(message);
   return writeMessage(stdoutFile, MSG_ERROR, payload);
+}
+
+#if defined(_WIN32)
+
+struct SharedMemoryView {
+  HANDLE handle = nullptr;
+  void* view = nullptr;
+  ShmRingHeaderV1* header = nullptr;
+  float* data = nullptr;
+  size_t channels = 0;
+  size_t capacityFrames = 0;
+
+  void close() {
+    if (view != nullptr) {
+      UnmapViewOfFile(view);
+      view = nullptr;
+    }
+    if (handle != nullptr) {
+      CloseHandle(handle);
+      handle = nullptr;
+    }
+    header = nullptr;
+    data = nullptr;
+    channels = 0;
+    capacityFrames = 0;
+  }
+
+  ~SharedMemoryView() { close(); }
+
+  SharedMemoryView() = default;
+  SharedMemoryView(const SharedMemoryView&) = delete;
+  SharedMemoryView& operator=(const SharedMemoryView&) = delete;
+};
+
+std::wstring widenUtf8(const std::string& input) {
+  if (input.empty()) return std::wstring();
+  const int needed = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, nullptr, 0);
+  if (needed <= 0) return std::wstring();
+  std::wstring out;
+  out.resize(static_cast<size_t>(needed));
+  MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, out.data(), needed);
+  return out;
+}
+
+bool openSharedMemory(const std::string& name, SharedMemoryView& out, std::string& errorOut) {
+  out.close();
+
+  const auto wide = widenUtf8(name);
+  if (wide.empty()) {
+    errorOut = "Failed to convert shared memory name to UTF-16";
+    return false;
+  }
+
+  HANDLE handle = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, wide.c_str());
+  if (handle == nullptr) {
+    errorOut = "OpenFileMappingW failed";
+    return false;
+  }
+
+  void* view = MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+  if (view == nullptr) {
+    CloseHandle(handle);
+    errorOut = "MapViewOfFile failed";
+    return false;
+  }
+
+  auto* header = reinterpret_cast<ShmRingHeaderV1*>(view);
+  if (std::memcmp(header->magic, SHM_RING_MAGIC, 8) != 0) {
+    UnmapViewOfFile(view);
+    CloseHandle(handle);
+    errorOut = "Shared memory magic mismatch";
+    return false;
+  }
+
+  if (header->version != SHM_RING_VERSION) {
+    UnmapViewOfFile(view);
+    CloseHandle(handle);
+    errorOut = "Shared memory version mismatch";
+    return false;
+  }
+
+  if (header->channels == 0 || header->capacityFrames == 0) {
+    UnmapViewOfFile(view);
+    CloseHandle(handle);
+    errorOut = "Shared memory header invalid (channels/capacityFrames)";
+    return false;
+  }
+
+  header->flags.fetch_or(SHM_FLAG_PEER_READY, std::memory_order_acq_rel);
+
+  out.handle = handle;
+  out.view = view;
+  out.header = header;
+  out.channels = static_cast<size_t>(header->channels);
+  out.capacityFrames = static_cast<size_t>(header->capacityFrames);
+  out.data = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(view) + sizeof(ShmRingHeaderV1));
+  return true;
+}
+
+size_t ringTryWrite(SharedMemoryView& view, const float* samples, size_t frames) {
+  if (view.header == nullptr || view.data == nullptr) return 0;
+  const size_t channels = view.channels;
+  const size_t capacity = view.capacityFrames;
+  if (channels == 0 || capacity == 0) return 0;
+  if (frames == 0) return 0;
+
+  ShmRingHeaderV1* header = view.header;
+  const uint64_t write = header->writeIndex.load(std::memory_order_relaxed);
+  const uint64_t read = header->readIndex.load(std::memory_order_acquire);
+  const size_t used = write >= read ? static_cast<size_t>(write - read) : 0;
+  const size_t freeFrames = used >= capacity ? 0 : (capacity - used);
+  const size_t framesToWrite = std::min(frames, freeFrames);
+  if (framesToWrite == 0) return 0;
+
+  const size_t startFrame = static_cast<size_t>(write % static_cast<uint64_t>(capacity));
+  const size_t firstFrames = std::min(framesToWrite, capacity - startFrame);
+
+  if (firstFrames > 0) {
+    const size_t startSample = startFrame * channels;
+    const size_t countSamples = firstFrames * channels;
+    std::memcpy(view.data + startSample, samples, countSamples * sizeof(float));
+  }
+
+  const size_t remainingFrames = framesToWrite - firstFrames;
+  if (remainingFrames > 0) {
+    const size_t offsetSamples = firstFrames * channels;
+    const size_t countSamples = remainingFrames * channels;
+    std::memcpy(view.data, samples + offsetSamples, countSamples * sizeof(float));
+  }
+
+  header->writeIndex.store(write + static_cast<uint64_t>(framesToWrite), std::memory_order_release);
+  return framesToWrite;
+}
+
+size_t ringTryRead(SharedMemoryView& view, float* outSamples, size_t maxFrames) {
+  if (view.header == nullptr || view.data == nullptr) return 0;
+  const size_t channels = view.channels;
+  const size_t capacity = view.capacityFrames;
+  if (channels == 0 || capacity == 0) return 0;
+  if (maxFrames == 0) return 0;
+
+  ShmRingHeaderV1* header = view.header;
+  const uint64_t write = header->writeIndex.load(std::memory_order_acquire);
+  const uint64_t read = header->readIndex.load(std::memory_order_relaxed);
+  const size_t availableFrames = write >= read ? static_cast<size_t>(write - read) : 0;
+  const size_t framesToRead = std::min(maxFrames, availableFrames);
+  if (framesToRead == 0) return 0;
+
+  const size_t startFrame = static_cast<size_t>(read % static_cast<uint64_t>(capacity));
+  const size_t firstFrames = std::min(framesToRead, capacity - startFrame);
+
+  if (firstFrames > 0) {
+    const size_t startSample = startFrame * channels;
+    const size_t countSamples = firstFrames * channels;
+    std::memcpy(outSamples, view.data + startSample, countSamples * sizeof(float));
+  }
+
+  const size_t remainingFrames = framesToRead - firstFrames;
+  if (remainingFrames > 0) {
+    const size_t offsetSamples = firstFrames * channels;
+    const size_t countSamples = remainingFrames * channels;
+    std::memcpy(outSamples + offsetSamples, view.data, countSamples * sizeof(float));
+  }
+
+  header->readIndex.store(read + static_cast<uint64_t>(framesToRead), std::memory_order_release);
+  return framesToRead;
+}
+
+struct ShmAudioArgs {
+  std::string shmInName;
+  std::string shmOutName;
+  std::string mode;
+};
+
+class AudioShmBypass {
+ public:
+  AudioShmBypass() = default;
+  AudioShmBypass(const AudioShmBypass&) = delete;
+  AudioShmBypass& operator=(const AudioShmBypass&) = delete;
+
+  ~AudioShmBypass() { stopAndJoin(); }
+
+  bool start(const ShmAudioArgs& args, std::string& errorOut) {
+    stopAndJoin();
+
+    std::string err;
+    if (!openSharedMemory(args.shmInName, inView_, err)) {
+      errorOut = "Failed to open shm-in: " + err;
+      return false;
+    }
+    if (!openSharedMemory(args.shmOutName, outView_, err)) {
+      errorOut = "Failed to open shm-out: " + err;
+      return false;
+    }
+    if (inView_.channels != outView_.channels) {
+      errorOut = "Shared memory channels mismatch";
+      return false;
+    }
+
+    stopFlag_.store(false, std::memory_order_release);
+    worker_ = std::thread([this]() { this->runLoop(); });
+    return true;
+  }
+
+  void stopAndJoin() {
+    stopFlag_.store(true, std::memory_order_release);
+    if (worker_.joinable()) worker_.join();
+    inView_.close();
+    outView_.close();
+  }
+
+ private:
+  void runLoop() {
+    constexpr size_t kMaxFramesPerTick = 512;
+    const size_t channels = inView_.channels;
+    std::vector<float> buffer;
+    buffer.resize(kMaxFramesPerTick * channels);
+
+    while (!stopFlag_.load(std::memory_order_acquire)) {
+      if (inView_.header) inView_.header->heartbeat.fetch_add(1, std::memory_order_relaxed);
+      if (outView_.header) outView_.header->heartbeat.fetch_add(1, std::memory_order_relaxed);
+
+      const size_t framesRead = ringTryRead(inView_, buffer.data(), kMaxFramesPerTick);
+      if (framesRead == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+
+      (void)ringTryWrite(outView_, buffer.data(), framesRead);
+    }
+  }
+
+  SharedMemoryView inView_;
+  SharedMemoryView outView_;
+  std::atomic<bool> stopFlag_{false};
+  std::thread worker_;
+};
+
+class AudioShmVstProcessor {
+ public:
+  AudioShmVstProcessor() = default;
+  AudioShmVstProcessor(const AudioShmVstProcessor&) = delete;
+  AudioShmVstProcessor& operator=(const AudioShmVstProcessor&) = delete;
+
+  ~AudioShmVstProcessor() { stopAndJoin(); }
+
+  bool start(const ShmAudioArgs& args,
+             juce::AudioPluginInstance* instance,
+             int channels,
+             int blockSize,
+             ParamUpdateQueue* paramQueue,
+             std::string& errorOut) {
+    stopAndJoin();
+
+    if (instance == nullptr) {
+      errorOut = "VST processor requires a plugin instance";
+      return false;
+    }
+
+    std::string err;
+    if (!openSharedMemory(args.shmInName, inView_, err)) {
+      errorOut = "Failed to open shm-in: " + err;
+      return false;
+    }
+    if (!openSharedMemory(args.shmOutName, outView_, err)) {
+      errorOut = "Failed to open shm-out: " + err;
+      return false;
+    }
+    if (inView_.channels != outView_.channels) {
+      errorOut = "Shared memory channels mismatch";
+      return false;
+    }
+
+    const int safeChannels = std::max(1, channels);
+    if (static_cast<int>(inView_.channels) != safeChannels) {
+      errorOut = "Shared memory channels do not match requested channels";
+      return false;
+    }
+
+    instance_ = instance;
+    paramQueue_ = paramQueue;
+    channels_ = static_cast<size_t>(safeChannels);
+    const size_t maxByShm = std::max<size_t>(1, std::min<size_t>(512, inView_.capacityFrames));
+    const size_t maxByBlock = std::max<size_t>(1, std::min<size_t>(512, static_cast<size_t>(std::max(1, blockSize))));
+    maxFramesPerTick_ = std::min(maxByShm, maxByBlock);
+
+    stopFlag_.store(false, std::memory_order_release);
+    worker_ = std::thread([this]() { this->runLoop(); });
+    return true;
+  }
+
+  void stopAndJoin() {
+    stopFlag_.store(true, std::memory_order_release);
+    if (worker_.joinable()) worker_.join();
+    inView_.close();
+    outView_.close();
+    instance_ = nullptr;
+    paramQueue_ = nullptr;
+    channels_ = 0;
+    maxFramesPerTick_ = 0;
+  }
+
+ private:
+  void applyQueuedParams() {
+    if (instance_ == nullptr || paramQueue_ == nullptr) return;
+
+    ParamUpdate update;
+    auto& params = instance_->getParameters();
+    while (paramQueue_->pop(update)) {
+      const int index = update.index;
+      if (index < 0 || static_cast<size_t>(index) >= params.size()) continue;
+      auto* param = params[static_cast<size_t>(index)];
+      if (param == nullptr) continue;
+
+      float normalized = update.normalized;
+      if (!std::isfinite(normalized)) normalized = 0.0f;
+      if (normalized < 0.0f) normalized = 0.0f;
+      if (normalized > 1.0f) normalized = 1.0f;
+      param->setValue(normalized);
+    }
+  }
+
+  void runLoop() {
+    if (instance_ == nullptr) return;
+
+    const size_t channels = channels_;
+    const size_t maxFrames = maxFramesPerTick_ > 0 ? maxFramesPerTick_ : 1;
+
+    std::vector<float> interleaved;
+    interleaved.resize(maxFrames * channels);
+
+    juce::AudioBuffer<float> buffer(static_cast<int>(channels), static_cast<int>(maxFrames));
+    juce::MidiBuffer midi;
+
+    while (!stopFlag_.load(std::memory_order_acquire)) {
+      if (inView_.header) inView_.header->heartbeat.fetch_add(1, std::memory_order_relaxed);
+      if (outView_.header) outView_.header->heartbeat.fetch_add(1, std::memory_order_relaxed);
+
+      const size_t framesRead = ringTryRead(inView_, interleaved.data(), maxFrames);
+      if (framesRead == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+
+      applyQueuedParams();
+
+      buffer.setSize(static_cast<int>(channels), static_cast<int>(framesRead), false, false, true);
+      for (size_t ch = 0; ch < channels; ch++) {
+        float* dst = buffer.getWritePointer(static_cast<int>(ch));
+        for (size_t frame = 0; frame < framesRead; frame++) {
+          dst[frame] = interleaved[frame * channels + ch];
+        }
+      }
+
+      midi.clear();
+      instance_->processBlock(buffer, midi);
+
+      for (size_t ch = 0; ch < channels; ch++) {
+        const float* src = buffer.getReadPointer(static_cast<int>(ch));
+        for (size_t frame = 0; frame < framesRead; frame++) {
+          interleaved[frame * channels + ch] = src[frame];
+        }
+      }
+
+      (void)ringTryWrite(outView_, interleaved.data(), framesRead);
+    }
+  }
+
+  SharedMemoryView inView_;
+  SharedMemoryView outView_;
+  juce::AudioPluginInstance* instance_ = nullptr;
+  ParamUpdateQueue* paramQueue_ = nullptr;
+  size_t channels_ = 0;
+  size_t maxFramesPerTick_ = 0;
+  std::atomic<bool> stopFlag_{false};
+  std::thread worker_;
+};
+
+#else
+
+struct ShmAudioArgs {
+  std::string shmInName;
+  std::string shmOutName;
+  std::string mode;
+};
+
+class AudioShmBypass {
+ public:
+  bool start(const ShmAudioArgs&, std::string& errorOut) {
+    errorOut = "Shared memory is only supported on Windows";
+    return false;
+  }
+  void stopAndJoin() {}
+};
+
+class AudioShmVstProcessor {
+ public:
+  bool start(const ShmAudioArgs&,
+             juce::AudioPluginInstance*,
+             int,
+             int,
+             ParamUpdateQueue*,
+             std::string& errorOut) {
+    errorOut = "Shared memory is only supported on Windows";
+    return false;
+  }
+  void stopAndJoin() {}
+};
+
+#endif
+
+juce::var decodeJson(const std::vector<uint8_t>& payload) {
+  const juce::String jsonText = juce::String::fromUTF8(reinterpret_cast<const char*>(payload.data()),
+                                                       static_cast<int>(payload.size()));
+  juce::var parsed;
+  const auto result = juce::JSON::parse(jsonText, parsed);
+  if (result.failed()) return {};
+  return parsed;
+}
+
+std::optional<std::string> decodeStringField(const std::vector<uint8_t>& payload, const char* field) {
+  const auto parsed = decodeJson(payload);
+  auto* obj = parsed.getDynamicObject();
+  if (obj == nullptr) return std::nullopt;
+  const auto valueVar = obj->getProperty(field);
+  if (!valueVar.isString()) return std::nullopt;
+  const auto value = valueVar.toString();
+  if (value.isEmpty()) return std::nullopt;
+  return value.toStdString();
 }
 
 bool readMessage(std::FILE* stdinFile, uint8_t& typeOut, std::vector<uint8_t>& payloadOut) {
@@ -181,29 +722,13 @@ float guessStep(float min, float max) {
   return step;
 }
 
-PluginDescriptor demoGainDescriptor() {
-  PluginDescriptor desc;
-  desc.id = "demo.gain";
-  desc.name = "Demo Gain";
-  desc.vendor = std::string("Pixel Matrix Player");
-
-  ParamDescriptor gain;
-  gain.key = "gainDb";
-  gain.title = "Gain";
-  gain.min = -60.0f;
-  gain.max = 24.0f;
-  gain.def = 0.0f;
-  gain.step = 0.1f;
-  gain.unit = std::string("dB");
-  desc.parameters.push_back(std::move(gain));
-  return desc;
-}
-
 juce::var pluginDescriptorToVar(const PluginDescriptor& desc) {
   auto* obj = new juce::DynamicObject();
   obj->setProperty("id", juce::String(desc.id));
   obj->setProperty("name", juce::String(desc.name));
   if (desc.vendor.has_value()) obj->setProperty("vendor", juce::String(*desc.vendor));
+  if (desc.version.has_value()) obj->setProperty("version", juce::String(*desc.version));
+  if (desc.path.has_value()) obj->setProperty("path", juce::String(*desc.path));
 
   juce::Array<juce::var> params;
   for (const auto& param : desc.parameters) {
@@ -219,6 +744,46 @@ juce::var pluginDescriptorToVar(const PluginDescriptor& desc) {
   }
   obj->setProperty("parameters", juce::var(params));
   return juce::var(obj);
+}
+
+std::vector<juce::PluginDescription> scanVst3Plugins();
+
+std::vector<uint8_t> encodeScanPluginsPayload() {
+  juce::Array<juce::var> out;
+
+  const auto types = scanVst3Plugins();
+  std::unordered_set<std::string> seen;
+  for (const auto& type : types) {
+    if (type.isInstrument) continue;
+    const auto id = type.createIdentifierString().toStdString();
+    if (!seen.insert(id).second) continue;
+
+    PluginDescriptor desc;
+    desc.id = id;
+    desc.name = type.name.toStdString();
+    if (type.manufacturerName.isNotEmpty()) desc.vendor = type.manufacturerName.toStdString();
+    if (type.version.isNotEmpty()) desc.version = type.version.toStdString();
+    if (type.fileOrIdentifier.isNotEmpty()) desc.path = type.fileOrIdentifier.toStdString();
+    // Avoid enumerating parameters here: loading each plugin is expensive and can hang/crash.
+    out.add(pluginDescriptorToVar(desc));
+  }
+
+  return encodeJsonPayload(juce::var(out));
+}
+
+std::vector<uint8_t> encodeParamValuesPayload(const std::vector<std::pair<std::string, float>>& params) {
+  auto* obj = new juce::DynamicObject();
+  obj->setProperty("protocolVersion", static_cast<int>(BRIDGE_PROTOCOL_VERSION));
+
+  juce::Array<juce::var> out;
+  for (const auto& entry : params) {
+    auto* item = new juce::DynamicObject();
+    item->setProperty("key", juce::String(entry.first));
+    item->setProperty("value", entry.second);
+    out.add(juce::var(item));
+  }
+  obj->setProperty("params", juce::var(out));
+  return encodeJsonPayload(juce::var(obj));
 }
 
 void writeJsonToStdout(const juce::var& jsonVar) {
@@ -285,8 +850,6 @@ juce::String getVst3ScanIdHint() {
 }
 
 std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pluginId) {
-  if (pluginId == "demo.gain") return demoGainDescriptor();
-
   const auto typeOpt = findVst3PluginById(pluginId);
   if (!typeOpt.has_value()) return std::nullopt;
   const auto& type = *typeOpt;
@@ -301,6 +864,8 @@ std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pl
   desc.id = pluginId;
   desc.name = type.name.toStdString();
   if (type.manufacturerName.isNotEmpty()) desc.vendor = type.manufacturerName.toStdString();
+  if (type.version.isNotEmpty()) desc.version = type.version.toStdString();
+  if (type.fileOrIdentifier.isNotEmpty()) desc.path = type.fileOrIdentifier.toStdString();
 
   const auto& params = instance->getParameters();
   const int maxParams = std::min<int>(static_cast<int>(params.size()), 256);
@@ -378,12 +943,11 @@ struct LivePluginHost {
   std::unique_ptr<PluginEditorWindow> editorWindow;
 };
 
-bool applyParamSet(LivePluginHost& host, const std::vector<uint8_t>& payload) {
-  const juce::String jsonText = juce::String::fromUTF8(
-      reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
-  juce::var parsed;
-  const auto result = juce::JSON::parse(jsonText, parsed);
-  if (result.failed()) return false;
+bool applyParamSet(LivePluginHost& host, const std::vector<uint8_t>& payload, ParamUpdateQueue* realtimeQueue) {
+  if (!host.instance) return false;
+
+  const auto parsed = decodeJson(payload);
+  if (parsed.isVoid()) return false;
   auto* obj = parsed.getDynamicObject();
   if (obj == nullptr) return false;
   const auto paramsVar = obj->getProperty("params");
@@ -413,6 +977,12 @@ bool applyParamSet(LivePluginHost& host, const std::vector<uint8_t>& payload) {
     } else {
       normalized = clampFinite(value, 0.0f, 1.0f, param->getDefaultValue());
     }
+
+    if (realtimeQueue != nullptr) {
+      realtimeQueue->push(index, normalized);
+      continue;
+    }
+
     param->beginChangeGesture();
     param->setValueNotifyingHost(normalized);
     param->endChangeGesture();
@@ -426,11 +996,8 @@ struct OpenEditorRequest {
 
 OpenEditorRequest decodeOpenEditorRequest(const std::vector<uint8_t>& payload) {
   OpenEditorRequest out;
-  const juce::String jsonText = juce::String::fromUTF8(
-      reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
-  juce::var parsed;
-  const auto result = juce::JSON::parse(jsonText, parsed);
-  if (result.failed()) return out;
+  const auto parsed = decodeJson(payload);
+  if (parsed.isVoid()) return out;
   auto* obj = parsed.getDynamicObject();
   if (obj == nullptr) return out;
   const auto titleVar = obj->getProperty("title");
@@ -497,85 +1064,56 @@ std::optional<std::string> closeEditor(LivePluginHost& host) {
   return result;
 }
 
-int runDemoGain() {
-  float gainLinear = 1.0f;
+std::vector<std::pair<std::string, float>> collectCurrentParams(LivePluginHost& host) {
+  std::vector<std::pair<std::string, float>> out;
 
-  std::FILE* stdinFile = stdin;
-  std::FILE* stdoutFile = stdout;
+  if (!host.instance) return out;
+  const auto& params = host.instance->getParameters();
+  const int maxParams = std::min<int>(static_cast<int>(params.size()), 256);
+  out.reserve(static_cast<size_t>(maxParams));
+  for (int idx = 0; idx < maxParams; idx++) {
+    auto* param = params[static_cast<size_t>(idx)];
+    if (param == nullptr) continue;
 
-  std::vector<uint8_t> payload;
-  std::vector<float> samples;
-  while (true) {
-    uint8_t type = 0;
-    if (!readMessage(stdinFile, type, payload)) break;
-
-    switch (type) {
-      case MSG_SET_PARAMS: {
-        const juce::String jsonText = juce::String::fromUTF8(
-            reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
-        juce::var parsed;
-        const auto result = juce::JSON::parse(jsonText, parsed);
-        if (result.failed()) {
-          writeError(stdoutFile, "Bad params payload");
-          break;
-        }
-        if (auto* obj = parsed.getDynamicObject()) {
-          if (auto* arr = obj->getProperty("params").getArray()) {
-            for (const auto& entry : *arr) {
-              if (auto* entryObj = entry.getDynamicObject()) {
-                const auto key = entryObj->getProperty("key").toString();
-                if (key == "gainDb") {
-                  const float db = static_cast<float>(static_cast<double>(entryObj->getProperty("value")));
-                  const float clamped = clampFinite(db, -60.0f, 24.0f, 0.0f);
-                  gainLinear = std::pow(10.0f, clamped / 20.0f);
-                }
-              }
-            }
-          }
-        }
-        writeMessage(stdoutFile, MSG_SET_PARAMS, {});
-        break;
-      }
-      case MSG_PROCESS_AUDIO: {
-        if (!decodeAudioPayload(payload, samples)) {
-          writeError(stdoutFile, "Bad audio payload");
-          return 2;
-        }
-        for (auto& s : samples) s *= gainLinear;
-        const auto out = encodeAudioPayload(samples);
-        writeMessage(stdoutFile, MSG_PROCESS_AUDIO, out);
-        break;
-      }
-      case MSG_OPEN_EDITOR: {
-        writeMessage(stdoutFile, MSG_OPEN_EDITOR, {});
-        break;
-      }
-      case MSG_CLOSE_EDITOR: {
-        writeMessage(stdoutFile, MSG_CLOSE_EDITOR, {});
-        break;
-      }
-      default:
-        writeError(stdoutFile, "Unsupported message type");
-        return 2;
+    float actual = param->getValue();
+    if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(param)) {
+      const auto range = ranged->getNormalisableRange();
+      actual = range.convertFrom0to1(param->getValue());
     }
+
+    out.emplace_back(std::to_string(idx), actual);
   }
-  return 0;
+
+  return out;
 }
 
-int runVst3Plugin(const std::string& pluginId, uint32_t sampleRate, int channels) {
-  std::FILE* stdinFile = stdin;
-  std::FILE* stdoutFile = stdout;
-
+std::optional<std::string> instantiatePlugin(LivePluginHost& host,
+                                             Vst3ScanResult& scan,
+                                             const std::string& pluginId,
+                                             juce::String& error) {
   const auto typeOpt = findVst3PluginById(pluginId);
   if (!typeOpt.has_value()) {
-    std::fprintf(stderr, "VST3 plugin not found: %s\n%s\n", pluginId.c_str(), getVst3ScanIdHint().toRawUTF8());
-    return 2;
+    return std::string("VST3 plugin not found");
   }
   const auto& type = *typeOpt;
   if (type.isInstrument) {
-    std::fprintf(stderr, "Unsupported plugin type: Instrument (MVP supports effects only)\n");
-    return 2;
+    return std::string("Unsupported plugin type: Instrument (effects only)");
   }
+
+  host.instance = scan.formatManager.createPluginInstance(type, host.sampleRate, host.blockSize, error);
+  if (!host.instance) {
+    return std::string("Failed to load VST3 plugin: ") + error.toStdString();
+  }
+  host.instance->prepareToPlay(host.sampleRate, host.blockSize);
+  return std::nullopt;
+}
+
+int runVst3Plugin(const std::string& pluginId,
+                  uint32_t sampleRate,
+                  int channels,
+                  const std::optional<ShmAudioArgs>& shmArgs) {
+  std::FILE* stdinFile = stdin;
+  std::FILE* stdoutFile = stdout;
 
   Vst3ScanResult scan;
   juce::String error;
@@ -587,13 +1125,34 @@ int runVst3Plugin(const std::string& pluginId, uint32_t sampleRate, int channels
   host.channels = safeChannels;
   host.blockSize = blockSize;
 
-  host.instance = scan.formatManager.createPluginInstance(type, host.sampleRate, blockSize, error);
-  if (!host.instance) {
-    std::fprintf(stderr, "Failed to load VST3 plugin: %s\n", error.toRawUTF8());
+  std::string currentPluginId = pluginId;
+  if (const auto err = instantiatePlugin(host, scan, currentPluginId, error)) {
+    std::fprintf(stderr, "Failed to load VST3 plugin: %s\n%s\n", currentPluginId.c_str(), getVst3ScanIdHint().toRawUTF8());
     return 2;
   }
 
-  host.instance->prepareToPlay(host.sampleRate, blockSize);
+  ParamUpdateQueue realtimeParamQueue;
+  std::unique_ptr<AudioShmBypass> shmBypass;
+  std::unique_ptr<AudioShmVstProcessor> shmVst;
+  if (shmArgs.has_value()) {
+    if (shmArgs->mode == "bypass") {
+      std::string err;
+      auto bypass = std::make_unique<AudioShmBypass>();
+      if (!bypass->start(*shmArgs, err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 2;
+      }
+      shmBypass = std::move(bypass);
+    } else if (shmArgs->mode == "process") {
+      std::string err;
+      auto processor = std::make_unique<AudioShmVstProcessor>();
+      if (!processor->start(*shmArgs, host.instance.get(), safeChannels, blockSize, &realtimeParamQueue, err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 2;
+      }
+      shmVst = std::move(processor);
+    }
+  }
 
   std::vector<uint8_t> payload;
   std::vector<float> interleaved;
@@ -606,7 +1165,7 @@ int runVst3Plugin(const std::string& pluginId, uint32_t sampleRate, int channels
 
     switch (typeByte) {
       case MSG_SET_PARAMS: {
-        if (!applyParamSet(host, payload)) {
+        if (!applyParamSet(host, payload, shmVst ? &realtimeParamQueue : nullptr)) {
           writeError(stdoutFile, "Bad params payload");
           break;
         }
@@ -616,6 +1175,10 @@ int runVst3Plugin(const std::string& pluginId, uint32_t sampleRate, int channels
       case MSG_PROCESS_AUDIO: {
         if (!decodeAudioPayload(payload, interleaved)) {
           writeError(stdoutFile, "Bad audio payload");
+          return 2;
+        }
+        if (!host.instance) {
+          writeError(stdoutFile, "Plugin instance is not available");
           return 2;
         }
         const int totalSamples = static_cast<int>(interleaved.size());
@@ -670,6 +1233,77 @@ int runVst3Plugin(const std::string& pluginId, uint32_t sampleRate, int channels
         }
         break;
       }
+      case MSG_PING: {
+        writeMessage(stdoutFile, MSG_PING, encodePingPayload(currentPluginId));
+        break;
+      }
+      case MSG_SCAN_PLUGINS: {
+        writeMessage(stdoutFile, MSG_SCAN_PLUGINS, encodeScanPluginsPayload());
+        break;
+      }
+      case MSG_DESCRIBE_PLUGIN: {
+        const auto requestId = decodeStringField(payload, "pluginId");
+        if (!requestId.has_value()) {
+          writeError(stdoutFile, "Missing pluginId");
+          break;
+        }
+        const auto descriptor = buildDescriptorForPluginId(*requestId);
+        if (!descriptor.has_value()) {
+          writeError(stdoutFile, "Failed to describe plugin");
+          break;
+        }
+        writeMessage(stdoutFile, MSG_DESCRIBE_PLUGIN, encodeJsonPayload(pluginDescriptorToVar(*descriptor)));
+        break;
+      }
+      case MSG_GET_PARAMS: {
+        const auto params = collectCurrentParams(host);
+        writeMessage(stdoutFile, MSG_GET_PARAMS, encodeParamValuesPayload(params));
+        break;
+      }
+      case MSG_INSTANTIATE: {
+        const auto requested = decodeStringField(payload, "pluginId");
+        if (!requested.has_value()) {
+          writeError(stdoutFile, "Missing pluginId");
+          break;
+        }
+
+        if (*requested != currentPluginId) {
+          closeEditor(host);
+          if (shmVst) shmVst->stopAndJoin();
+          realtimeParamQueue.clear();
+          if (host.instance) host.instance->releaseResources();
+          host.instance.reset();
+
+          error = {};
+          const auto err = instantiatePlugin(host, scan, *requested, error);
+          if (err.has_value()) {
+            writeError(stdoutFile, *err);
+            break;
+          }
+
+          currentPluginId = *requested;
+
+          if (shmVst && shmArgs.has_value() && shmArgs->mode == "process") {
+            std::string shmErr;
+            if (!shmVst->start(*shmArgs, host.instance.get(), safeChannels, blockSize, &realtimeParamQueue, shmErr)) {
+              writeError(stdoutFile, shmErr);
+              break;
+            }
+          }
+        }
+
+        writeMessage(stdoutFile, MSG_INSTANTIATE, encodePingPayload(currentPluginId));
+        break;
+      }
+      case MSG_DISPOSE: {
+        closeEditor(host);
+        if (shmVst) shmVst->stopAndJoin();
+        realtimeParamQueue.clear();
+        if (host.instance) host.instance->releaseResources();
+        host.instance.reset();
+        writeMessage(stdoutFile, MSG_DISPOSE, {});
+        return 0;
+      }
       default:
         writeError(stdoutFile, "Unsupported message type");
         return 2;
@@ -677,7 +1311,9 @@ int runVst3Plugin(const std::string& pluginId, uint32_t sampleRate, int channels
   }
 
   closeEditor(host);
-  host.instance->releaseResources();
+  if (shmVst) shmVst->stopAndJoin();
+  realtimeParamQueue.clear();
+  if (host.instance) host.instance->releaseResources();
   host.instance.reset();
 
   return 0;
@@ -709,7 +1345,6 @@ int main(int argc, char* argv[]) {
 
   if (hasArg(argc, argv, "--list-plugins")) {
     juce::Array<juce::var> out;
-    out.add(pluginDescriptorToVar(demoGainDescriptor()));
 
     const auto types = scanVst3Plugins();
     std::unordered_set<std::string> seen;
@@ -740,17 +1375,25 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  const auto pluginId = readArgValue(argc, argv, "--plugin-id").value_or("demo.gain");
+  const auto pluginId = readArgValue(argc, argv, "--plugin-id").value_or("");
+  if (pluginId.empty()) {
+    std::fprintf(stderr, "Missing required arg: --plugin-id\n");
+    return 2;
+  }
   const uint32_t sampleRate = static_cast<uint32_t>(std::stoul(readArgValue(argc, argv, "--sample-rate").value_or("48000")));
   const int channels = std::max(1, std::stoi(readArgValue(argc, argv, "--channels").value_or("2")));
 
-  if (pluginId == "demo.gain") {
-    return runDemoGain();
+  const auto shmInName = readArgValue(argc, argv, "--shm-in");
+  const auto shmOutName = readArgValue(argc, argv, "--shm-out");
+  const auto shmMode = readArgValue(argc, argv, "--shm-audio-mode").value_or("bypass");
+  std::optional<ShmAudioArgs> shmArgs;
+  if (shmInName.has_value() && shmOutName.has_value()) {
+    shmArgs = ShmAudioArgs{*shmInName, *shmOutName, shmMode};
   }
 
   std::atomic<int> engineExitCode = 0;
   std::thread engine([&]() {
-    engineExitCode.store(runVst3Plugin(pluginId, sampleRate, channels));
+    engineExitCode.store(runVst3Plugin(pluginId, sampleRate, channels, shmArgs));
     juce::MessageManager::getInstance()->stopDispatchLoop();
   });
 
