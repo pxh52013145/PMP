@@ -13,6 +13,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-maximize',
   'btn-close',
   'btn-window-pin',
+  'btn-matrix-change',
   'btn-play-pause',
   'btn-previous',
   'btn-next',

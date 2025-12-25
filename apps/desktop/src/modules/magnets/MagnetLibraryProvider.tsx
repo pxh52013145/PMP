@@ -14,11 +14,13 @@ import {
   cancelScheduledMagnetConfigSave,
   flushScheduledMagnetConfigSave,
   loadMagnetConfig,
+  resolveMagnetConfigStorageKey,
   saveMagnetConfig,
   scheduleSaveMagnetConfig,
 } from './config';
 import { createInitialMagnetState } from './state';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { usePersistentSetting } from '../storage';
 
 export interface MagnetLibraryProviderProps {
   children: ReactNode;
@@ -55,10 +57,20 @@ export function MagnetLibraryProvider({
   const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
   const builtInMagnetIds = useMemo(() => new Set(BUILTIN_MAGNET_IDS), []);
   const suppressNextAutoSaveRef = useRef(false);
+  const [workbenchLayoutId] = usePersistentSetting(STORAGE_KEYS.WORKBENCH_LAYOUT_ID, '', {
+    format: 'string',
+  });
+  const magnetConfigStorageKey = useMemo(
+    () => resolveMagnetConfigStorageKey(workbenchLayoutId),
+    [workbenchLayoutId]
+  );
 
   const initialRef = useRef<ReturnType<typeof createInitialMagnetState> | null>(null);
   if (!initialRef.current) {
-    initialRef.current = createInitialMagnetState(defaultMagnetLibrary, { defaultActiveMagnetIds });
+    initialRef.current = createInitialMagnetState(defaultMagnetLibrary, {
+      defaultActiveMagnetIds,
+      storageKey: magnetConfigStorageKey,
+    });
   }
 
   const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => initialRef.current!.magnetLibrary);
@@ -71,7 +83,9 @@ export function MagnetLibraryProvider({
   const reloadFromStorage = useCallback(() => {
     suppressNextAutoSaveRef.current = true;
     cancelScheduledMagnetConfigSave();
-    const config = loadMagnetConfig();
+    const config =
+      loadMagnetConfig(magnetConfigStorageKey) ??
+      (magnetConfigStorageKey !== STORAGE_KEYS.CONFIG ? loadMagnetConfig(STORAGE_KEYS.CONFIG) : null);
     if (config) {
       const applied = applyMagnetConfig(config, defaultMagnetLibrary);
       setMagnetLibrary(applied.magnetLibrary);
@@ -82,12 +96,12 @@ export function MagnetLibraryProvider({
     const fallback = createInitialMagnetState(defaultMagnetLibrary, { defaultActiveMagnetIds });
     setMagnetLibrary(fallback.magnetLibrary);
     setActiveMagnetIds(fallback.activeMagnetIds);
-  }, [defaultActiveMagnetIds, defaultMagnetLibrary]);
+  }, [defaultActiveMagnetIds, defaultMagnetLibrary, magnetConfigStorageKey]);
 
   const saveNow = useCallback(() => {
     cancelScheduledMagnetConfigSave();
-    saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary);
-  }, [activeMagnetIds, defaultMagnetLibrary, gridSize, magnetLibrary]);
+    saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, magnetConfigStorageKey);
+  }, [activeMagnetIds, defaultMagnetLibrary, gridSize, magnetLibrary, magnetConfigStorageKey]);
 
   const updateMagnetAnchors = useCallback((magnetId: string, newAnchors: PixelAnchor[]) => {
     setMagnetLibrary((prev) => prev.map((m) => (m.id === magnetId ? { ...m, anchors: newAnchors } : m)));
@@ -121,12 +135,43 @@ export function MagnetLibraryProvider({
 
     scheduleSaveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, {
       debounceMs: autoSaveDebounceMs,
+      storageKey: magnetConfigStorageKey,
       afterSave: () => {
         if (!isTauriRuntime()) return;
         void broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
       },
     });
-  }, [activeMagnetIds, autoSaveDebounceMs, defaultMagnetLibrary, gridSize, magnetLibrary]);
+  }, [
+    activeMagnetIds,
+    autoSaveDebounceMs,
+    defaultMagnetLibrary,
+    gridSize,
+    magnetConfigStorageKey,
+    magnetLibrary,
+  ]);
+
+  const lastConfigKeyRef = useRef(magnetConfigStorageKey);
+  useEffect(() => {
+    const previousKey = lastConfigKeyRef.current;
+    if (previousKey === magnetConfigStorageKey) return;
+
+    try {
+      flushScheduledMagnetConfigSave();
+      saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, previousKey);
+    } catch (error) {
+      console.warn(`[magnets] Failed to persist config before switching key "${previousKey}"`, error);
+    }
+
+    lastConfigKeyRef.current = magnetConfigStorageKey;
+    reloadFromStorage();
+  }, [
+    activeMagnetIds,
+    defaultMagnetLibrary,
+    gridSize,
+    magnetConfigStorageKey,
+    magnetLibrary,
+    reloadFromStorage,
+  ]);
 
   useEffect(() => {
     if (!registerFlushHandler) return;
@@ -143,14 +188,14 @@ export function MagnetLibraryProvider({
 
   useEffect(() => {
     const cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.CONFIG],
+      [magnetConfigStorageKey],
       [TAURI_EVENTS.MAGNET_LIBRARY_UPDATED, TAURI_EVENTS.MAGNET_ACTIVATED, TAURI_EVENTS.MAGNET_DEACTIVATED],
       reloadFromStorage
     );
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [reloadFromStorage]);
+  }, [magnetConfigStorageKey, reloadFromStorage]);
 
   const value: MagnetConfigContextValue = {
     defaultMagnetLibrary,

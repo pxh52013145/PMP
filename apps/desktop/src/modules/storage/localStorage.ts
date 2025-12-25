@@ -5,6 +5,25 @@ export interface StorageWriteOptions {
   debounceMs?: number;
 }
 
+export const PMP_STORAGE_CHANGE_EVENT = 'pmp-storage-change';
+
+export type PmpStorageChangeDetail = {
+  key: string;
+  value: string | null;
+};
+
+function emitStorageChange(key: string, value: string | null): void {
+  try {
+    window.dispatchEvent(
+      new CustomEvent<PmpStorageChangeDetail>(PMP_STORAGE_CHANGE_EVENT, {
+        detail: { key, value },
+      })
+    );
+  } catch {
+    // ignore: best-effort notification only
+  }
+}
+
 const pendingWrites = new Map<string, string>();
 let flushTimeout: number | null = null;
 let idleHandle: number | null = null;
@@ -64,11 +83,13 @@ export function writeString(key: string, value: string, options: StorageWriteOpt
   try {
     if (mode === 'sync') {
       localStorage.setItem(key, value);
+      emitStorageChange(key, value);
       return;
     }
 
     pendingWrites.set(key, value);
     scheduleFlush(mode, debounceMs);
+    emitStorageChange(key, value);
   } catch (error) {
     console.warn(`[storage] Failed to write key "${key}"`, error);
   }
@@ -77,6 +98,7 @@ export function writeString(key: string, value: string, options: StorageWriteOpt
 export function tryWriteString(key: string, value: string): boolean {
   try {
     localStorage.setItem(key, value);
+    emitStorageChange(key, value);
     return true;
   } catch (error) {
     console.warn(`[storage] Failed to write key "${key}"`, error);
@@ -104,6 +126,7 @@ export function tryWriteJson<T>(key: string, value: T): boolean {
 export function removeKey(key: string): void {
   try {
     localStorage.removeItem(key);
+    emitStorageChange(key, null);
   } catch (error) {
     console.warn(`[storage] Failed to remove key "${key}"`, error);
   }

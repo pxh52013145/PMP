@@ -50,6 +50,112 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         } catch {}
       };
 
+      const hasPermission = (capability) => {
+        if (permissions.has(capability)) return true;
+        if (capability.startsWith('net:') && (permissions.has('net:*') || permissions.has('net:all'))) return true;
+        return false;
+      };
+
+      const describeNetTarget = (value) => {
+        try {
+          if (typeof value === 'string') return value;
+          if (value && typeof value === 'object' && typeof value.url === 'string') return value.url;
+        } catch {}
+        return '';
+      };
+
+      const denyNetwork = (capability, action) => {
+        warnDenied(capability, action);
+        throw new Error('Permission denied: ' + capability);
+      };
+
+      // Best-effort network gating for sandboxed plugins (deny-by-default).
+      try {
+        const rawFetch = globalThis.fetch;
+        if (typeof rawFetch === 'function') {
+          globalThis.fetch = (input, init) => {
+            if (!hasPermission('net:fetch')) {
+              const target = describeNetTarget(input);
+              warnDenied('net:fetch', target ? 'fetch(' + target.slice(0, 200) + ')' : 'fetch(...)');
+              return Promise.reject(new Error('Permission denied: net:fetch'));
+            }
+            return rawFetch(input, init);
+          };
+        }
+      } catch {}
+
+      try {
+        const rawXhrOpen = globalThis.XMLHttpRequest?.prototype?.open;
+        if (typeof rawXhrOpen === 'function') {
+          globalThis.XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+            if (!hasPermission('net:fetch')) {
+              const target = describeNetTarget(url);
+              denyNetwork(
+                'net:fetch',
+                target
+                  ? 'XMLHttpRequest.open(' +
+                      String(method || '').slice(0, 16) +
+                      ', ' +
+                      target.slice(0, 200) +
+                      ')'
+                  : 'XMLHttpRequest.open(...)'
+              );
+            }
+            return rawXhrOpen.call(this, method, url, ...rest);
+          };
+        }
+      } catch {}
+
+      try {
+        const RawWebSocket = globalThis.WebSocket;
+        if (typeof RawWebSocket === 'function') {
+          const WebSocketProxy = function (url, protocols) {
+            if (!hasPermission('net:websocket')) {
+              const target = describeNetTarget(url);
+              denyNetwork('net:websocket', target ? 'WebSocket(' + target.slice(0, 200) + ')' : 'WebSocket(...)');
+            }
+            return new RawWebSocket(url, protocols);
+          };
+          WebSocketProxy.prototype = RawWebSocket.prototype;
+          globalThis.WebSocket = WebSocketProxy;
+        }
+      } catch {}
+
+      try {
+        const RawEventSource = globalThis.EventSource;
+        if (typeof RawEventSource === 'function') {
+          const EventSourceProxy = function (url, options) {
+            if (!hasPermission('net:eventsource')) {
+              const target = describeNetTarget(url);
+              denyNetwork(
+                'net:eventsource',
+                target ? 'EventSource(' + target.slice(0, 200) + ')' : 'EventSource(...)'
+              );
+            }
+            return new RawEventSource(url, options);
+          };
+          EventSourceProxy.prototype = RawEventSource.prototype;
+          globalThis.EventSource = EventSourceProxy;
+        }
+      } catch {}
+
+      try {
+        const rawBeacon = globalThis.navigator?.sendBeacon;
+        if (typeof rawBeacon === 'function') {
+          globalThis.navigator.sendBeacon = (url, data) => {
+            if (!hasPermission('net:fetch')) {
+              const target = describeNetTarget(url);
+              warnDenied(
+                'net:fetch',
+                target ? 'navigator.sendBeacon(' + target.slice(0, 200) + ')' : 'navigator.sendBeacon(...)'
+              );
+              return false;
+            }
+            return rawBeacon.call(globalThis.navigator, url, data);
+          };
+        }
+      } catch {}
+
       const rpcCall = (method, args = []) => {
         const id = String(++rpcSeq);
         post({ type: 'pmpm:rpc', id, method, args });
@@ -363,4 +469,3 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
   </body>
 </html>`;
 }
-

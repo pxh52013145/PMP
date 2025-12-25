@@ -13,6 +13,7 @@ import { MusicLibraryButton } from '../components/magnet/MusicLibraryButton';
 import { BackButton } from '../components/magnet/BackButton';
 import { DebugButton } from '../components/magnet/DebugButton';
 import { AudioVisualizerMagnet } from '../components/magnet/AudioVisualizerMagnet';
+import { MatrixChangeMagnet } from '../components/magnet/MatrixChangeMagnet';
 import { registerMagnetRenderer, unregisterMagnetRenderer, type MagnetRendererDefinition } from '../magnet-system/registry';
 import { clearMagnetVariants, registerMagnetVariant } from '../magnet-system/variantRegistry';
 
@@ -131,6 +132,15 @@ const BUILTIN_DEFINITIONS: MagnetRendererDefinition[] = [
     preview: () => createTextPreview('Settings'),
     description: '设置按钮（历史 id: btn-debug）',
     group: 'utility',
+    source: 'builtin',
+  },
+  {
+    id: 'btn-matrix-change',
+    render: () => <MatrixChangeMagnet />,
+    preview: () => createTextPreview('M1/M2'),
+    description: '切换 Matrix 1 / Matrix 2（Workbench layout）',
+    group: 'layout',
+    tags: ['layout', 'matrix', 'workbench'],
     source: 'builtin',
   },
   {

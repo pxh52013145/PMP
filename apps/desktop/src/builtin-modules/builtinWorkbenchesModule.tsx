@@ -29,20 +29,45 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
         unregisters.push(contributions.register(contribution));
       };
 
+      const renderStackLayout = (slots: { navigation: unknown; content: unknown }) => (
+        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+          <div style={{ position: 'absolute', inset: 0 }}>{slots.content as ReactNode}</div>
+          {slots.navigation ? (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 10 }}>{slots.navigation as ReactNode}</div>
+          ) : null}
+        </div>
+      );
+
+      register({
+        kind: 'workbench-layout',
+        id: 'matrix1',
+        title: 'Matrix 1 Layout',
+        render: (slots) => renderStackLayout(slots),
+        source: 'builtin',
+        order: 5,
+        group: 'matrix',
+        tags: ['layout', 'matrix', 'matrix1'],
+      });
+
+      register({
+        kind: 'workbench-layout',
+        id: 'matrix2',
+        title: 'Matrix 2 Layout',
+        render: (slots) => renderStackLayout(slots),
+        source: 'builtin',
+        order: 6,
+        group: 'matrix',
+        tags: ['layout', 'matrix', 'matrix2'],
+        metadata: {
+          experimental: true,
+        },
+      });
+
       register({
         kind: 'workbench-layout',
         id: 'stack',
         title: 'Stack Layout',
-        render: (slots) => (
-          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-            <div style={{ position: 'absolute', inset: 0 }}>{slots.content as ReactNode}</div>
-            {slots.navigation ? (
-              <div style={{ position: 'absolute', inset: 0, zIndex: 10 }}>
-                {slots.navigation as ReactNode}
-              </div>
-            ) : null}
-          </div>
-        ),
+        render: (slots) => renderStackLayout(slots),
         source: 'builtin',
         order: 10,
         group: 'core',

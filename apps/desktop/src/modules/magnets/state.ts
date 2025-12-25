@@ -10,6 +10,7 @@ export interface MagnetStateSnapshot {
 
 export interface CreateInitialMagnetStateOptions {
   defaultActiveMagnetIds?: ReadonlySet<string>;
+  storageKey?: string;
 }
 
 /**
@@ -22,7 +23,7 @@ export function createInitialMagnetState(
   defaultMagnetLibrary: Magnet[],
   options: CreateInitialMagnetStateOptions = {}
 ): MagnetStateSnapshot {
-  const savedConfig = loadMagnetConfig();
+  const savedConfig = loadMagnetConfig(options.storageKey);
   if (savedConfig) {
     const applied = applyMagnetConfig(savedConfig, defaultMagnetLibrary);
     return {

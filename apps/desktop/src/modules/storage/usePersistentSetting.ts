@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { readJson, readString, writeJson, writeString, StorageWriteOptions } from './localStorage';
+import {
+  readJson,
+  readString,
+  writeJson,
+  writeString,
+  PMP_STORAGE_CHANGE_EVENT,
+  type PmpStorageChangeDetail,
+  StorageWriteOptions,
+} from './localStorage';
 
 export type PersistentFormat = 'string' | 'json';
 
@@ -48,6 +56,32 @@ export function usePersistentSetting<T>(
   );
 
   useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<PmpStorageChangeDetail>).detail;
+      if (!detail || detail.key !== key) return;
+
+      if (format === 'string') {
+        setValue(((detail.value ?? defaultValue) as unknown) as T);
+        return;
+      }
+
+      if (detail.value === null) {
+        setValue(defaultValue);
+        return;
+      }
+
+      try {
+        setValue(JSON.parse(detail.value) as T);
+      } catch {
+        setValue(defaultValue);
+      }
+    };
+
+    window.addEventListener(PMP_STORAGE_CHANGE_EVENT, handler as EventListener);
+    return () => window.removeEventListener(PMP_STORAGE_CHANGE_EVENT, handler as EventListener);
+  }, [defaultValue, format, key]);
+
+  useEffect(() => {
     if (!listenStorageEvents) return;
 
     const handler = (event: StorageEvent) => {
@@ -62,4 +96,3 @@ export function usePersistentSetting<T>(
 
   return [value, setAndPersist];
 }
-

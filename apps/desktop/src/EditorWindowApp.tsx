@@ -23,12 +23,14 @@ import { DEBUG_BUTTON_MAGNET } from './data/builtin/debugButtonMagnet';
 import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
 import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
 import { AUDIO_VISUALIZER_MAGNET } from './data/builtin/audioVisualizerMagnet';
+import { MATRIX_CHANGE_MAGNET } from './data/builtin/matrixChangeMagnet';
 import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
   MUSIC_LIBRARY_MAGNET,
 } from './data/builtin/musicMagnets';
 import { saveConfig, loadConfig, applyConfig } from './utils/configManager';
+import { resolveMagnetConfigStorageKey } from './modules/magnets';
 import { MATRIX_CONFIG } from './constants/config';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import {
@@ -561,6 +563,7 @@ export function EditorWindowApp() {
       AUDIO_VISUALIZER_MAGNET,
       EDITOR_BUTTON_MAGNET,
       DEBUG_BUTTON_MAGNET,
+      MATRIX_CHANGE_MAGNET,
       PLAY_QUEUE_MAGNET,
       PLAYLISTS_MAGNET,
       MUSIC_LIBRARY_MAGNET,
@@ -716,7 +719,8 @@ export function EditorWindowApp() {
       try {
         if (needsMagnetConfigSync) {
           // 从配置文件加载（支持 styleOverride）
-          const config = loadConfig();
+          const configKey = resolveMagnetConfigStorageKey(readString(STORAGE_KEYS.WORKBENCH_LAYOUT_ID));
+          const config = loadConfig(configKey);
           if (config) {
             const applied = applyConfig(config, defaultMagnetLibrary);
             setMagnetLibrary(applied.magnetLibrary);
@@ -766,7 +770,7 @@ export function EditorWindowApp() {
     };
 
     const cleanupPromise = setupConfigSync(
-      [STORAGE_KEYS.CONFIG],
+      [STORAGE_KEYS.CONFIG, resolveMagnetConfigStorageKey('matrix2'), STORAGE_KEYS.WORKBENCH_LAYOUT_ID],
       [
         TAURI_EVENTS.MAGNET_LIBRARY_UPDATED,
         TAURI_EVENTS.MAGNET_ACTIVATED,
@@ -807,7 +811,8 @@ export function EditorWindowApp() {
       magnetLibrary,
       newActive,
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
-      defaultMagnetLibrary
+      defaultMagnetLibrary,
+      resolveMagnetConfigStorageKey(readString(STORAGE_KEYS.WORKBENCH_LAYOUT_ID))
     );
     writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...newActive]);
     await broadcastSignal(TAURI_EVENTS.MAGNET_ACTIVATED);
@@ -824,7 +829,8 @@ export function EditorWindowApp() {
       magnetLibrary,
       newActive,
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
-      defaultMagnetLibrary
+      defaultMagnetLibrary,
+      resolveMagnetConfigStorageKey(readString(STORAGE_KEYS.WORKBENCH_LAYOUT_ID))
     );
     writeJson(STORAGE_KEYS.ACTIVE_MAGNETS, [...newActive]);
     await broadcastSignal(TAURI_EVENTS.MAGNET_DEACTIVATED);
@@ -840,7 +846,8 @@ export function EditorWindowApp() {
       newLibrary,
       activeMagnetIds,
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
-      defaultMagnetLibrary
+      defaultMagnetLibrary,
+      resolveMagnetConfigStorageKey(readString(STORAGE_KEYS.WORKBENCH_LAYOUT_ID))
     );
     writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
@@ -856,7 +863,8 @@ export function EditorWindowApp() {
       newLibrary,
       activeMagnetIds,
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
-      defaultMagnetLibrary
+      defaultMagnetLibrary,
+      resolveMagnetConfigStorageKey(readString(STORAGE_KEYS.WORKBENCH_LAYOUT_ID))
     );
     writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
@@ -872,7 +880,8 @@ export function EditorWindowApp() {
       newLibrary,
       activeMagnetIds,
       { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
-      defaultMagnetLibrary
+      defaultMagnetLibrary,
+      resolveMagnetConfigStorageKey(readString(STORAGE_KEYS.WORKBENCH_LAYOUT_ID))
     );
     writeJson(STORAGE_KEYS.MAGNET_LIBRARY, newLibrary);
     await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);

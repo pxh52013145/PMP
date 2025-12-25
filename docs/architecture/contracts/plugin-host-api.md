@@ -11,7 +11,7 @@
   - `manifest.json`
   - `entryPoint` 指向的 ESM 模块代码
 - 可选包含（R5）：
-  - `signature.json`：ECDSA P-256 签名（签名内容：`manifestSha256` + `entrySha256`），用于安装时校验与签名策略（Allow unsigned / Require trusted signatures + trusted key allowlist）。
+  - `signature.json`：ECDSA P-256 签名（`formatVersion="1"`，`algorithm="ECDSA-P256-SHA256"`；签名内容：`pmpm-signature-v1:${manifestSha256}:${entrySha256}`），用于安装校验与签名策略（Allow unsigned / Require trusted signatures + trusted key allowlist）。
 - 安装方式（现状）：读取文件 → `fflate.unzip`（异步）→ 解析 manifest → 提取 entryPoint code → 写入“索引（localStorage）+ 代码（durable store）”（R3）。
   - 签名校验实现：`apps/desktop/src/magnet-system/plugins/pmpmSignature.ts`（安装时验证 `signature.json`）
 
@@ -24,7 +24,15 @@
 - `metadata: { id, name, version, author?, description?, tags? }`
 - `entryPoint: string`
 - `magnet?: { defaultAnchor?, defaultStyle? }`（用于生成 Magnet 模板）
-- `permissions?: string[]`（R5 partial：Host API 会按权限 gate，并记录 denied audit）
+- `permissions?: string[]`（R5：deny-by-default 权限 gate + denied audit + per-plugin denylist；sandbox 内网络能力也会按权限 best-effort gate）
+- 常用权限（As-Is）：
+  - `api:audio-state` / `api:audio-control` / `api:audio-visual`
+  - `api:navigation`
+  - `api:window`
+  - `storage:local`（插件配置）
+  - `net:fetch`（`fetch`/`XMLHttpRequest`/`sendBeacon`）
+  - `net:websocket` / `net:eventsource`
+  - `net:all` / `net:*`（允许全部网络能力）
 - `contributions?: { workbenches?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, pages?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, windows?: Array<{ id, title, description?, width?, height?, group?, order?, tags?, metadata? }>, commands?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, settingsPanels?: Array<{ id, title, description?, group?, order?, tags?, metadata? }>, visualizers?: Array<{ id, title, description?, inputs?, group?, order?, tags?, metadata? }> }`（R2/R4）
   - `workbenches`：Host 会生成并注册 workbench id：`pmpm:<pluginId>:workbench:<workbenchId>`（渲染时调用插件 `mountWorkbench(container, api, workbenchId)`）
   - `pages`：Host 会生成并注册页面 id：`pmpm:<pluginId>:page:<pageId>`（渲染时调用插件 `mountPage(container, api, pageId)`）
@@ -91,8 +99,8 @@ export function runCommand?(
 
 注入实现：
 - Host API（统一实现）：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied audit）
-- Sandbox runtime（R5，默认启用）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + heartbeat）+ Commands：`apps/desktop/src/magnet-system/plugins/pmpmSandboxCommandRunner.ts`
-- Runtime restart/kill（R5，best-effort）：`apps/desktop/src/magnet-system/plugins/pmpmRuntimeSupervisor.ts`（跨窗口同步 + audit `runtime-restart`）
+- Sandbox runtime（R5，默认启用）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + boot timeout + heartbeat + network gate）+ Commands：`apps/desktop/src/magnet-system/plugins/pmpmSandboxCommandRunner.ts`（worker 优先 + terminate kill + timeout）
+- Runtime restart/kill（R5）：`apps/desktop/src/magnet-system/plugins/pmpmRuntimeSupervisor.ts`（跨窗口同步 + audit `runtime-restart`）
 
 当前 API（最小集）：
 - `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute`）
@@ -102,7 +110,8 @@ export function runCommand?(
 - `window`：打开/关闭插件窗口（`open/close`，按 label/route 规范）
 
 限制（现状）：
-- `manifest.permissions` 已在 host 侧做最小 gate（`pluginHostApi.ts`），并已提供 denied audit + enable/disable UI；更细的策略与强隔离仍在 R5 演进。
+- `manifest.permissions` 已在 host 侧做权限 gate（`pluginHostApi.ts`）并记录 denied audit；Settings UI 支持 per-plugin denylist 与 enable/disable。
+- sandbox 内网络访问为 best-effort gate（`net:*` 权限）：覆盖 `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`/`sendBeacon` 等常见入口，但无法保证阻止所有侧信道（例如 `<img src>`）。
 - Host 可能基于用户配置进一步禁用部分权限（per-plugin denied permissions），插件必须处理 API 返回空值/拒绝的情况。
 - `navigation.navigateTo(page, params)` 的 params 需要满足 Navigation 契约（统一校验入口见 `docs/architecture/contracts/navigation.md`）。
 - API 未版本化（建议先在 contracts 中定义 To-Be 的 `apiVersion` 与兼容策略，见 `docs/architecture/contracts/versioning.md`）。

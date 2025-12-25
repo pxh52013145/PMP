@@ -40,7 +40,8 @@ export function saveConfig(
   magnetLibrary: Magnet[],
   activeMagnetIds: Set<string>,
   gridSize: { columns: number; rows: number },
-  defaultMagnetLibrary?: Magnet[] // 可选：默认 Magnet 库，用于对比检测修改
+  defaultMagnetLibrary?: Magnet[], // 可选：默认 Magnet 库，用于对比检测修改
+  storageKey: string = CONFIG_KEY
 ): void {
   try {
     const config: MagnetConfig = {
@@ -101,7 +102,7 @@ export function saveConfig(
     // 保存自定义 Magnet 的完整定义
     config.customMagnets = magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id));
 
-    writeString(CONFIG_KEY, JSON.stringify(config));
+    writeString(storageKey, JSON.stringify(config));
   } catch (error) {
     console.error('保存配置失败:', error);
   }
@@ -142,9 +143,9 @@ function migrateMagnetIds(config: MagnetConfig): MagnetConfig {
 /**
  * 从 localStorage 加载配置
  */
-export function loadConfig(): MagnetConfig | null {
+export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null {
   try {
-    const configStr = readString(CONFIG_KEY);
+    const configStr = readString(storageKey);
     if (!configStr) {
       return null;
     }
@@ -159,7 +160,7 @@ export function loadConfig(): MagnetConfig | null {
       config.version = CONFIG_VERSION;
 
       // 保存迁移后的配置
-      writeString(CONFIG_KEY, JSON.stringify(config));
+      writeString(storageKey, JSON.stringify(config));
     } else {
       // 即使版本相同，也检查是否有旧 ID 需要迁移
       const oldIds = ['btn-prev', 'song-info'];
@@ -167,7 +168,7 @@ export function loadConfig(): MagnetConfig | null {
 
         if (hasOldIds) {
           config = migrateMagnetIds(config);
-          writeString(CONFIG_KEY, JSON.stringify(config));
+          writeString(storageKey, JSON.stringify(config));
         }
       }
 
