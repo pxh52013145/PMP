@@ -110,10 +110,6 @@ pub struct VstDspNode {
 }
 
 impl VstDspNode {
-    pub fn key(&self) -> &VstNodeKey {
-        &self.key
-    }
-
     pub fn new(spec: VstNodeSpec) -> Self {
         let key = spec.key;
         let transport = ShmAudioTransport::open(key.shm_in_name.as_str(), key.shm_out_name.as_str());
@@ -308,6 +304,8 @@ impl VstDspNode {
             Ok(Ok(info)) => {
                 match ShmAudioTransport::open(info.shm_in_name.as_str(), info.shm_out_name.as_str()) {
                     Some(transport) => {
+                        self.key.node_id = info.node_id;
+                        self.key.plugin_id = info.plugin_id;
                         self.key.shm_in_name = info.shm_in_name;
                         self.key.shm_out_name = info.shm_out_name;
                         self.key.sample_rate = info.sample_rate;

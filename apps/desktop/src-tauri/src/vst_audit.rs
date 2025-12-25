@@ -9,6 +9,35 @@ use crate::vst_bridge::BridgePluginDescriptor;
 
 const AUDIT_LOG_VERSION: u32 = 1;
 const MAX_EVENTS: usize = 200;
+const DEMO_VST_PLUGIN_ID: &str = "demo.gain";
+
+fn is_demo_vst_plugin_id(plugin_id: &str) -> bool {
+    plugin_id.trim() == DEMO_VST_PLUGIN_ID
+}
+
+fn normalize_audit_log(log: &mut VstAuditLog) -> bool {
+    let mut changed = false;
+
+    if let Some(snapshot) = log.last_scan.as_mut() {
+        let before = snapshot.plugins.len();
+        snapshot
+            .plugins
+            .retain(|plugin| !is_demo_vst_plugin_id(plugin.id.as_str()));
+        changed |= snapshot.plugins.len() != before;
+    }
+
+    let before = log.events.len();
+    log.events.retain(|event| {
+        event
+            .plugin_id
+            .as_deref()
+            .map(|id| !is_demo_vst_plugin_id(id))
+            .unwrap_or(true)
+    });
+    changed |= log.events.len() != before;
+
+    changed
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -130,7 +159,10 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = audit_file_path(app)?;
     let _ = AUDIT_PATH.set(path.clone());
 
-    let loaded = load_from_disk(&path);
+    let mut loaded = load_from_disk(&path);
+    if normalize_audit_log(&mut loaded) {
+        let _ = persist_to_disk(&path, &loaded);
+    }
     let mut guard = AUDIT_STATE
         .lock()
         .map_err(|_| "VST audit log state is locked".to_string())?;

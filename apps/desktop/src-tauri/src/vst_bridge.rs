@@ -11,13 +11,15 @@ use std::{
 pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
 
 pub const MSG_SET_PARAMS: u8 = 1;
-pub const MSG_PROCESS_AUDIO: u8 = 2;
 pub const MSG_OPEN_EDITOR: u8 = 3;
 pub const MSG_CLOSE_EDITOR: u8 = 4;
 pub const MSG_PING: u8 = 5;
+#[allow(dead_code)]
 pub const MSG_SCAN_PLUGINS: u8 = 6;
+#[allow(dead_code)]
 pub const MSG_DESCRIBE_PLUGIN: u8 = 7;
 pub const MSG_GET_PARAMS: u8 = 8;
+#[allow(dead_code)]
 pub const MSG_INSTANTIATE: u8 = 9;
 pub const MSG_DISPOSE: u8 = 10;
 pub const MSG_ERROR: u8 = 255;
@@ -389,6 +391,7 @@ impl BridgeClient {
         Ok(response)
     }
 
+    #[allow(dead_code)]
     pub fn instantiate(&mut self, plugin_id: &str) -> Result<BridgePingResponse, String> {
         let payload = serde_json::to_vec(&serde_json::json!({
             "protocolVersion": BRIDGE_PROTOCOL_VERSION,
@@ -457,52 +460,6 @@ impl BridgeClient {
             ));
         }
         Ok(response.params)
-    }
-
-    pub fn process_audio(&mut self, input: &[f32], output: &mut Vec<f32>) -> Result<(), String> {
-        let sample_count = input.len() as u32;
-        let payload_len = 4usize
-            .checked_add(input.len().saturating_mul(4))
-            .ok_or_else(|| "Bridge payload length overflow".to_string())?;
-
-        let mut payload = Vec::with_capacity(payload_len);
-        payload.extend_from_slice(&sample_count.to_le_bytes());
-        for sample in input {
-            payload.extend_from_slice(&sample.to_le_bytes());
-        }
-
-        let (ty, payload) = self.request_raw(MSG_PROCESS_AUDIO, payload, bridge_request_timeout())?;
-        if ty == MSG_ERROR {
-            return Err(parse_error_payload(&payload));
-        }
-        if ty != MSG_PROCESS_AUDIO {
-            return Err(format!("Unexpected bridge response type: {ty}"));
-        }
-        if payload.len() < 4 {
-            return Err("Bridge audio response too short".to_string());
-        }
-        let mut count_bytes = [0u8; 4];
-        count_bytes.copy_from_slice(&payload[..4]);
-        let out_count = u32::from_le_bytes(count_bytes) as usize;
-        let expected_bytes = 4usize
-            .checked_add(out_count.saturating_mul(4))
-            .ok_or_else(|| "Bridge audio response length overflow".to_string())?;
-        if payload.len() != expected_bytes {
-            return Err(format!(
-                "Bridge audio response length mismatch: expected {expected_bytes}, got {}",
-                payload.len()
-            ));
-        }
-
-        output.clear();
-        output.reserve(out_count.saturating_sub(output.len()));
-        for idx in 0..out_count {
-            let base = 4 + idx * 4;
-            let mut bytes = [0u8; 4];
-            bytes.copy_from_slice(&payload[base..base + 4]);
-            output.push(f32::from_le_bytes(bytes));
-        }
-        Ok(())
     }
 
     pub fn open_editor_window(&mut self, title: Option<&str>) -> Result<(), String> {

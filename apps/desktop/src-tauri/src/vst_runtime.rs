@@ -12,6 +12,12 @@ use crate::vst_bridge::{BridgeClient, BridgeParamValue, BridgePluginDescriptor};
 use crate::vst_governance;
 use crate::vst_shm::ShmRing;
 
+const DEMO_VST_PLUGIN_ID: &str = "demo.gain";
+
+fn is_demo_vst_plugin_id(plugin_id: &str) -> bool {
+    plugin_id.trim() == DEMO_VST_PLUGIN_ID
+}
+
 #[derive(Clone, Debug)]
 pub struct VstAudioSessionInfo {
     pub node_id: String,
@@ -31,8 +37,6 @@ struct VstNodeSession {
     client: BridgeClient,
     shm_in_name: String,
     shm_out_name: String,
-    shm_in: ShmRing,
-    shm_out: ShmRing,
 }
 
 static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -40,11 +44,18 @@ static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
     let plugins = crate::vst_bridge::list_plugins()?;
+    let plugins = plugins
+        .into_iter()
+        .filter(|plugin| !is_demo_vst_plugin_id(plugin.id.as_str()))
+        .collect::<Vec<_>>();
     vst_audit::record_scan_snapshot(&plugins);
     Ok(plugins)
 }
 
 pub fn describe_plugin(plugin_id: &str) -> Result<BridgePluginDescriptor, String> {
+    if is_demo_vst_plugin_id(plugin_id) {
+        return Err("Demo VST entry was removed: demo.gain".to_string());
+    }
     crate::vst_bridge::describe_plugin(plugin_id)
 }
 
@@ -201,8 +212,6 @@ fn ensure_session_internal(
             client,
             shm_in_name: shm_in_name.clone(),
             shm_out_name: shm_out_name.clone(),
-            shm_in,
-            shm_out,
         },
     );
 

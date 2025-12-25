@@ -48,6 +48,7 @@ impl ShmRingHeaderV1 {
 }
 
 pub struct ShmRing {
+    #[allow(dead_code)]
     mapping: SharedMemoryMapping,
     header_ptr: *mut ShmRingHeaderV1,
     data_ptr: *mut f32,
@@ -152,6 +153,8 @@ impl ShmRing {
         (write.saturating_sub(read)) as usize
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn available_to_write_frames(&self) -> usize {
         let header = self.header();
         let write = header.write_index.load(Ordering::Relaxed);
@@ -189,6 +192,7 @@ impl ShmRing {
         true
     }
 
+    #[cfg(test)]
     pub fn try_write_interleaved(&self, samples: &[f32]) -> usize {
         if self.channels == 0 {
             return 0;
@@ -247,6 +251,7 @@ impl ShmRing {
         true
     }
 
+    #[cfg(test)]
     pub fn try_read_interleaved(&self, out: &mut [f32]) -> usize {
         if self.channels == 0 {
             return 0;

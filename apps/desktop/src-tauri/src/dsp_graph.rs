@@ -40,6 +40,33 @@ pub struct DspGraphConfig {
 
 static DSP_GRAPH: Lazy<Mutex<Option<DspGraphConfig>>> = Lazy::new(|| Mutex::new(None));
 
+const DEMO_VST_PLUGIN_ID: &str = "demo.gain";
+
+fn normalize_graph(graph: &mut DspGraphConfig) -> bool {
+    let mut changed = false;
+    for node in &mut graph.nodes {
+        let DspGraphNode::Vst {
+            enabled,
+            plugin_id,
+            params,
+            ..
+        } = node
+        else {
+            continue;
+        };
+
+        if plugin_id.trim() != DEMO_VST_PLUGIN_ID {
+            continue;
+        }
+
+        *enabled = false;
+        *plugin_id = String::new();
+        *params = None;
+        changed = true;
+    }
+    changed
+}
+
 fn graph_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_data_dir = app
         .path_resolver()
@@ -92,7 +119,7 @@ fn to_native_dsp_chain(graph: &DspGraphConfig) -> Vec<DspNodeConfig> {
                 id,
                 plugin_id,
                 ..
-            } if *enabled && !plugin_id.trim().is_empty() => {
+            } if *enabled && !plugin_id.trim().is_empty() && plugin_id.trim() != DEMO_VST_PLUGIN_ID => {
                 chain.push(DspNodeConfig::Vst {
                     id: id.clone(),
                     plugin_id: plugin_id.clone(),
@@ -112,7 +139,10 @@ pub fn get_dsp_graph(app: &AppHandle) -> Result<DspGraphConfig, String> {
         return Ok(graph.clone());
     }
 
-    let graph = read_graph_from_disk(app).unwrap_or_default();
+    let mut graph = read_graph_from_disk(app).unwrap_or_default();
+    if normalize_graph(&mut graph) {
+        let _ = write_graph_to_disk(app, &graph);
+    }
     *guard = Some(graph.clone());
     Ok(graph)
 }
@@ -136,7 +166,7 @@ pub fn resolve_vst_plugin_id(app: &AppHandle, node_id: &str) -> Result<String, S
     for node in graph.nodes {
         if let DspGraphNode::Vst { id, plugin_id, .. } = node {
             if id == node_id {
-                if plugin_id.trim().is_empty() {
+                if plugin_id.trim().is_empty() || plugin_id.trim() == DEMO_VST_PLUGIN_ID {
                     return Err(format!("VST node has no plugin selected: {node_id}"));
                 }
                 return Ok(plugin_id);
