@@ -964,6 +964,13 @@ class PluginEditorWindow : public juce::DocumentWindow {
     applyWin32Style();
   }
 
+  int getDesktopWindowStyleFlags() const override {
+    int styleFlags = juce::DocumentWindow::getDesktopWindowStyleFlags();
+    styleFlags |= juce::ComponentPeer::windowIsTemporary;
+    styleFlags &= ~juce::ComponentPeer::windowAppearsOnTaskbar;
+    return styleFlags;
+  }
+
   void closeButtonPressed() override {
     if (!onRequestDestroy_) {
       setVisible(false);
