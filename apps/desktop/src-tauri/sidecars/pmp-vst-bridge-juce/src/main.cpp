@@ -959,9 +959,15 @@ class PluginEditorWindow : public juce::DocumentWindow {
     const int width = std::max(320, getContentComponent()->getWidth());
     const int height = std::max(240, getContentComponent()->getHeight());
     centreWithSize(width, height);
-    setVisible(true);
 
+    // Create the native peer while hidden so we can apply Win32 styles/owner before the first
+    // show(), avoiding a transient taskbar icon flash on open.
+    setVisible(false);
+    if (!isOnDesktop()) {
+      addToDesktop(getDesktopWindowStyleFlags());
+    }
     applyWin32Style();
+    setVisible(true);
   }
 
   int getDesktopWindowStyleFlags() const override {
