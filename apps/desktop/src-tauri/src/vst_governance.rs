@@ -68,7 +68,9 @@ fn ensure_governance_path() -> Result<&'static PathBuf, String> {
 fn load_from_disk(path: &PathBuf) -> VstGovernanceState {
     let data = match std::fs::read(path) {
         Ok(data) => data,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return VstGovernanceState::default(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return VstGovernanceState::default()
+        }
         Err(err) => {
             eprintln!("[VST][governance] Failed to read governance file: {err}");
             return VstGovernanceState::default();
@@ -175,7 +177,9 @@ pub fn enable_plugin(plugin_id: &str) -> Result<bool, String> {
     };
 
     let before = guard.disabled_plugins.len();
-    guard.disabled_plugins.retain(|entry| entry.plugin_id != plugin_id);
+    guard
+        .disabled_plugins
+        .retain(|entry| entry.plugin_id != plugin_id);
     let changed = guard.disabled_plugins.len() != before;
     if !changed {
         return Ok(false);
@@ -192,4 +196,3 @@ pub fn enable_plugin(plugin_id: &str) -> Result<bool, String> {
 
     Ok(true)
 }
-

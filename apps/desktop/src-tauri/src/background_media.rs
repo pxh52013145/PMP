@@ -1,7 +1,7 @@
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::fs::File;
 
 use tauri::AppHandle;
 
@@ -49,7 +49,11 @@ fn min_gif_delay_cs_for_max_fps(max_fps: u16) -> Result<u16, String> {
     Ok(min_delay.max(1))
 }
 
-fn rewrite_gif_with_min_delay(source: &PathBuf, dest: &PathBuf, min_delay_cs: u16) -> Result<(), String> {
+fn rewrite_gif_with_min_delay(
+    source: &PathBuf,
+    dest: &PathBuf,
+    min_delay_cs: u16,
+) -> Result<(), String> {
     let mut decoder_opts = gif::DecodeOptions::new();
     decoder_opts.set_color_output(gif::ColorOutput::Indexed);
 
@@ -63,10 +67,8 @@ fn rewrite_gif_with_min_delay(source: &PathBuf, dest: &PathBuf, min_delay_cs: u1
     let global_palette = decoder.global_palette().unwrap_or(&[]);
 
     let mut output = File::create(dest).map_err(|e| format!("Unable to create GIF output: {e}"))?;
-    let mut encoder =
-        gif::Encoder::new(&mut output, width, height, global_palette).map_err(|e| {
-            format!("Unable to create GIF encoder: {e}")
-        })?;
+    let mut encoder = gif::Encoder::new(&mut output, width, height, global_palette)
+        .map_err(|e| format!("Unable to create GIF encoder: {e}"))?;
     encoder
         .set_repeat(decoder.repeat())
         .map_err(|e| format!("Unable to set GIF repeat: {e}"))?;
@@ -117,11 +119,12 @@ pub fn import_background_media(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| config.default_ext.to_string());
 
-    if !config.allowed_exts.iter().any(|allowed| allowed.eq_ignore_ascii_case(ext.as_str())) {
-        return Err(format!(
-            "Unsupported {} extension: .{}",
-            config.label, ext
-        ));
+    if !config
+        .allowed_exts
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(ext.as_str()))
+    {
+        return Err(format!("Unsupported {} extension: .{}", config.label, ext));
     }
 
     let app_data_dir = app

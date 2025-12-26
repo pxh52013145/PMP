@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     io::{Read, Write},
     path::PathBuf,
@@ -97,11 +98,11 @@ fn bridge_request_timeout() -> Duration {
 }
 
 fn bridge_editor_timeout() -> Duration {
-    timeout_from_env_ms("PMP_VST_BRIDGE_EDITOR_TIMEOUT_MS", 10_000)
+    timeout_from_env_ms("PMP_VST_BRIDGE_EDITOR_TIMEOUT_MS", 30_000)
 }
 
 fn bridge_ping_timeout() -> Duration {
-    timeout_from_env_ms("PMP_VST_BRIDGE_PING_TIMEOUT_MS", 10_000)
+    timeout_from_env_ms("PMP_VST_BRIDGE_PING_TIMEOUT_MS", 30_000)
 }
 
 fn bridge_executable_path() -> Result<PathBuf, String> {
@@ -139,7 +140,11 @@ struct BridgeOutput {
     stderr: Vec<u8>,
 }
 
-fn run_bridge_cli(args: &[&str], timeout: Duration) -> Result<BridgeOutput, String> {
+fn run_bridge_cli_cancellable(
+    args: &[&str],
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<BridgeOutput, String> {
     let bridge = bridge_executable_path()?;
     let mut child = Command::new(bridge)
         .args(args)
@@ -176,10 +181,22 @@ fn run_bridge_cli(args: &[&str], timeout: Duration) -> Result<BridgeOutput, Stri
 
     let start = Instant::now();
     let status = loop {
+        if let Some(cancel) = cancel {
+            if cancel.load(Ordering::Acquire) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Bridge command cancelled".to_string());
+            }
+        }
+
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
-            Err(err) => return Err(format!("Failed to poll bridge process: {err}")),
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Failed to poll bridge process: {err}"));
+            }
         }
 
         if start.elapsed() >= timeout {
@@ -210,18 +227,32 @@ fn run_bridge_cli(args: &[&str], timeout: Duration) -> Result<BridgeOutput, Stri
 }
 
 pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
-    let output = run_bridge_cli(&["--list-plugins"], bridge_list_timeout())?;
+    list_plugins_with_cancel(None)
+}
+
+pub fn describe_plugin(plugin_id: &str) -> Result<BridgePluginDescriptor, String> {
+    describe_plugin_with_cancel(plugin_id, None)
+}
+
+pub fn list_plugins_with_cancel(cancel: Option<&AtomicBool>) -> Result<Vec<BridgePluginDescriptor>, String> {
+    let output =
+        run_bridge_cli_cancellable(&["--list-plugins"], bridge_list_timeout(), cancel)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Bridge list failed: {stderr}"));
     }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse bridge plugins: {e}"))
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse bridge plugins: {e}"))
 }
 
-pub fn describe_plugin(plugin_id: &str) -> Result<BridgePluginDescriptor, String> {
-    let output = run_bridge_cli(
+pub fn describe_plugin_with_cancel(
+    plugin_id: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<BridgePluginDescriptor, String> {
+    let output = run_bridge_cli_cancellable(
         &["--describe-plugin", plugin_id],
         bridge_describe_timeout(),
+        cancel,
     )?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -240,28 +271,29 @@ pub struct BridgeClient {
 impl BridgeClient {
     pub fn spawn(
         plugin_id: &str,
+        plugin_path: &str,
         sample_rate: u32,
         channels: usize,
         shm_in: Option<&str>,
         shm_out: Option<&str>,
     ) -> Result<Self, String> {
         let bridge = bridge_executable_path()?;
-        let debug_stderr = matches!(
-            std::env::var("PMP_RACK_VST3_DEBUG").as_deref(),
-            Ok("1")
-        ) || matches!(std::env::var("PMP_VST_BRIDGE_DEBUG").as_deref(), Ok("1"))
+        let debug_stderr = matches!(std::env::var("PMP_RACK_VST3_DEBUG").as_deref(), Ok("1"))
+            || matches!(std::env::var("PMP_VST_BRIDGE_DEBUG").as_deref(), Ok("1"))
             || matches!(std::env::var("PMP_VST_BRIDGE_STDERR").as_deref(), Ok("1"));
         let mut cmd = Command::new(bridge);
         cmd.arg("--plugin-id")
             .arg(plugin_id)
+            .arg("--plugin-path")
+            .arg(plugin_path)
             .arg("--sample-rate")
             .arg(sample_rate.to_string())
             .arg("--channels")
             .arg(channels.to_string());
 
         if let (Some(shm_in), Some(shm_out)) = (shm_in, shm_out) {
-            let shm_mode_raw =
-                std::env::var("PMP_VST_BRIDGE_SHM_AUDIO_MODE").unwrap_or_else(|_| "process".to_string());
+            let shm_mode_raw = std::env::var("PMP_VST_BRIDGE_SHM_AUDIO_MODE")
+                .unwrap_or_else(|_| "process".to_string());
             let shm_mode = match shm_mode_raw.as_str() {
                 "bypass" | "process" => shm_mode_raw,
                 _ => "process".to_string(),
@@ -275,7 +307,8 @@ impl BridgeClient {
                 .arg(shm_mode);
         }
 
-        let mut child = cmd.stdin(Stdio::piped())
+        let mut child = cmd
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(if debug_stderr {
                 Stdio::inherit()
@@ -329,7 +362,12 @@ impl BridgeClient {
         }
     }
 
-    fn request_raw(&mut self, ty: u8, payload: Vec<u8>, timeout: Duration) -> Result<(u8, Vec<u8>), String> {
+    fn request_raw(
+        &mut self,
+        ty: u8,
+        payload: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(u8, Vec<u8>), String> {
         self.ensure_running()?;
 
         let Some(tx) = self.request_tx.as_ref() else {
@@ -348,7 +386,10 @@ impl BridgeClient {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 self.kill();
-                Err(format!("Bridge request timed out after {}ms", timeout.as_millis()))
+                Err(format!(
+                    "Bridge request timed out after {}ms",
+                    timeout.as_millis()
+                ))
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 self.kill();
@@ -462,10 +503,17 @@ impl BridgeClient {
         Ok(response.params)
     }
 
-    pub fn open_editor_window(&mut self, title: Option<&str>) -> Result<(), String> {
+    pub fn open_editor_window(
+        &mut self,
+        title: Option<&str>,
+        owner_hwnd: Option<u64>,
+        pinned: bool,
+    ) -> Result<(), String> {
         let payload = serde_json::to_vec(&serde_json::json!({
             "protocolVersion": BRIDGE_PROTOCOL_VERSION,
-            "title": title
+            "title": title,
+            "ownerHwnd": owner_hwnd,
+            "pinned": pinned,
         }))
         .map_err(|e| e.to_string())?;
 
@@ -480,7 +528,8 @@ impl BridgeClient {
     }
 
     pub fn close_editor_window(&mut self) -> Result<(), String> {
-        let (ty, payload) = self.request_raw(MSG_CLOSE_EDITOR, Vec::new(), bridge_editor_timeout())?;
+        let (ty, payload) =
+            self.request_raw(MSG_CLOSE_EDITOR, Vec::new(), bridge_editor_timeout())?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }

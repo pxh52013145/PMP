@@ -50,7 +50,35 @@ type BridgePluginDescriptor = {
   vendor?: string | null;
   version?: string | null;
   path?: string | null;
+  status?: string | null;
+  lastSeenAtMs?: number | null;
+  paramsScannedAtMs?: number | null;
   parameters: BridgeParamDescriptor[];
+};
+
+type VstScanMode = 'fast' | 'full' | 'params';
+
+type VstScanProgressPayload = {
+  runId: string;
+  mode: VstScanMode;
+  stage: string;
+  total: number;
+  current: number;
+  currentPluginId?: string | null;
+  message?: string | null;
+  status: string;
+  error?: string | null;
+};
+
+type VstScanState = {
+  running: boolean;
+  runId?: string | null;
+  mode?: VstScanMode | null;
+  stage?: string | null;
+  total: number;
+  current: number;
+  currentPluginId?: string | null;
+  lastError?: string | null;
 };
 
 type VstDisabledPlugin = {
@@ -98,6 +126,109 @@ function mergePlugins(prev: BridgePluginDescriptor[], incoming: BridgePluginDesc
     }
     return plugin;
   });
+}
+
+function isVstScanMode(value: string): value is VstScanMode {
+  return value === 'fast' || value === 'full' || value === 'params';
+}
+
+function ensureLibraryPlugins(value: unknown): BridgePluginDescriptor[] {
+  if (!Array.isArray(value)) return [];
+  const out: BridgePluginDescriptor[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const id = readStringField(record, 'id');
+    const name = readStringField(record, 'name') ?? id;
+    if (!id || !name) continue;
+
+    out.push({
+      id,
+      name,
+      vendor: typeof record.vendor === 'string' ? record.vendor : null,
+      version: typeof record.version === 'string' ? record.version : null,
+      path: typeof record.path === 'string' ? record.path : null,
+      status: typeof record.status === 'string' ? record.status : null,
+      lastSeenAtMs: typeof record.lastSeenAtMs === 'number' ? record.lastSeenAtMs : null,
+      paramsScannedAtMs:
+        typeof record.paramsScannedAtMs === 'number' ? record.paramsScannedAtMs : null,
+      parameters: [],
+    });
+  }
+  return out;
+}
+
+function ensureLibraryParams(value: unknown): BridgeParamDescriptor[] {
+  if (!Array.isArray(value)) return [];
+  const out: BridgeParamDescriptor[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const key = readStringField(record, 'key');
+    const title = readStringField(record, 'title') ?? key;
+    if (!key || !title) continue;
+
+    const min = ensureNumber(record.min, Number.NaN);
+    const max = ensureNumber(record.max, Number.NaN);
+    const def = ensureNumber(record.default, Number.NaN);
+    const step = ensureNumber(record.step, Number.NaN);
+    if (![min, max, def, step].every((v) => isFinite(v))) continue;
+
+    out.push({
+      key,
+      title,
+      min,
+      max,
+      default: def,
+      step,
+      unit: typeof record.unit === 'string' ? record.unit : null,
+    });
+  }
+  return out;
+}
+
+function ensureVstScanState(value: unknown): VstScanState | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const running = typeof record.running === 'boolean' ? record.running : null;
+  if (running === null) return null;
+
+  const mode = typeof record.mode === 'string' && isVstScanMode(record.mode) ? record.mode : null;
+  return {
+    running,
+    runId: typeof record.runId === 'string' ? record.runId : null,
+    mode,
+    stage: typeof record.stage === 'string' ? record.stage : null,
+    total: typeof record.total === 'number' ? record.total : 0,
+    current: typeof record.current === 'number' ? record.current : 0,
+    currentPluginId:
+      typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
+    lastError: typeof record.lastError === 'string' ? record.lastError : null,
+  };
+}
+
+function ensureVstScanProgressPayload(value: unknown): VstScanProgressPayload | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const runId = readStringField(record, 'runId');
+  const mode = readStringField(record, 'mode');
+  const stage = readStringField(record, 'stage');
+  const status = readStringField(record, 'status');
+  if (!runId || !mode || !stage || !status) return null;
+  if (!isVstScanMode(mode)) return null;
+
+  return {
+    runId,
+    mode,
+    stage,
+    total: typeof record.total === 'number' ? record.total : 0,
+    current: typeof record.current === 'number' ? record.current : 0,
+    currentPluginId:
+      typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
+    message: typeof record.message === 'string' ? record.message : null,
+    status,
+    error: typeof record.error === 'string' ? record.error : null,
+  };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -193,33 +324,40 @@ export const DspRackPage: React.FC = () => {
   const [plugins, setPlugins] = React.useState<BridgePluginDescriptor[]>([]);
   const [governance, setGovernance] = React.useState<VstGovernanceState | null>(null);
   const [auditLog, setAuditLog] = React.useState<VstAuditLog | null>(null);
+  const [scanState, setScanState] = React.useState<VstScanState | null>(null);
+  const [scanProgress, setScanProgress] = React.useState<VstScanProgressPayload | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [pluginsBusy, setPluginsBusy] = React.useState(false);
   const [describing, setDescribing] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const describingRef = React.useRef<Set<string>>(new Set());
   const describedOkRef = React.useRef<Set<string>>(new Set());
+  const pendingParamsScanPluginIdRef = React.useRef<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     if (!isTauri) return;
     setBusy(true);
     setError(null);
     try {
-      const [graphResp, governanceResp, auditResp] = await Promise.all([
+      const [graphResp, governanceResp, auditResp, libraryResp, scanResp] = await Promise.all([
         invoke<DspGraphConfig>('native_audio_get_dsp_graph'),
         invoke<VstGovernanceState>('native_audio_vst_get_governance').catch(() => null),
         invoke<VstAuditLog>('native_audio_vst_get_audit_log').catch(() => null),
+        invoke<unknown>('native_audio_vst_library_list_plugins').catch(() => []),
+        invoke<unknown>('native_audio_vst_scan_state').catch(() => null),
       ]);
       setGraph(graphResp && typeof graphResp === 'object' ? graphResp : { nodes: [] });
       setGovernance(governanceResp && typeof governanceResp === 'object' ? governanceResp : null);
       const nextAudit = auditResp && typeof auditResp === 'object' ? auditResp : null;
       setAuditLog(nextAudit);
-      if (nextAudit?.lastScan?.plugins?.length) {
-        const snapshot = nextAudit.lastScan.plugins.map((plugin) => ({
-          ...plugin,
-          parameters: [],
-        }));
-        setPlugins((prev) => mergePlugins(prev, snapshot));
+      const libraryPlugins = ensureLibraryPlugins(libraryResp);
+      if (libraryPlugins.length) {
+        setPlugins((prev) => mergePlugins(prev, libraryPlugins));
+      }
+      const nextScanState = ensureVstScanState(scanResp);
+      setScanState(nextScanState);
+      if (nextScanState?.running) {
+        setPluginsBusy(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -228,22 +366,58 @@ export const DspRackPage: React.FC = () => {
     }
   }, [isTauri]);
 
+  const refreshPluginsFromLibrary = React.useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      const resp = await invoke<unknown>('native_audio_vst_library_list_plugins').catch(() => []);
+      const next = ensureLibraryPlugins(resp);
+      setPlugins((prev) => mergePlugins(prev, next));
+    } catch {
+      // best-effort
+    }
+  }, [isTauri]);
+
   const scanPlugins = React.useCallback(async () => {
     if (!isTauri) return;
     setPluginsBusy(true);
     setError(null);
     try {
-      const pluginResp = await invoke<BridgePluginDescriptor[]>('native_audio_vst_list_plugins').catch(
-        () => [] as BridgePluginDescriptor[]
-      );
-      const next = Array.isArray(pluginResp) ? pluginResp : [];
-      setPlugins((prev) => mergePlugins(prev, next));
-      const auditResp = await invoke<VstAuditLog>('native_audio_vst_get_audit_log').catch(() => null);
-      setAuditLog(auditResp && typeof auditResp === 'object' ? auditResp : null);
+      await invoke<string>('native_audio_vst_scan_start', {
+        request: { mode: 'fast', pluginIds: [] },
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setPluginsBusy(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isTauri]);
+
+  const scanPluginParams = React.useCallback(
+    async (pluginId: string) => {
+      if (!isTauri) return;
+      const trimmed = pluginId.trim();
+      if (!trimmed) return;
+      setPluginsBusy(true);
+      setError(null);
+      pendingParamsScanPluginIdRef.current = trimmed;
+      try {
+        await invoke<string>('native_audio_vst_scan_start', {
+          request: { mode: 'params', pluginIds: [trimmed] },
+        });
+      } catch (err) {
+        pendingParamsScanPluginIdRef.current = null;
+        setPluginsBusy(false);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [isTauri]
+  );
+
+  const cancelScan = React.useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      await invoke('native_audio_vst_scan_cancel');
+    } catch {
+      // best-effort
     }
   }, [isTauri]);
 
@@ -262,9 +436,14 @@ export const DspRackPage: React.FC = () => {
       setDescribing(pluginId);
       setError(null);
       try {
-        const desc = await invoke<BridgePluginDescriptor>('native_audio_vst_describe_plugin', { pluginId });
-        setPlugins((prev) => prev.map((p) => (p.id === pluginId ? desc : p)));
-        describedOkRef.current.add(pluginId);
+        const paramsResp = await invoke<unknown>('native_audio_vst_library_get_plugin_params', { pluginId });
+        const params = ensureLibraryParams(paramsResp);
+        setPlugins((prev) =>
+          prev.map((p) => (p.id === pluginId ? { ...p, parameters: params } : p))
+        );
+        if (params.length > 0) {
+          describedOkRef.current.add(pluginId);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -274,6 +453,31 @@ export const DspRackPage: React.FC = () => {
     },
     [isTauri]
   );
+
+  React.useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void | Promise<void>) | null = null;
+    void (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlisten = await listen('vst-scan-progress', (event) => {
+        const payload = ensureVstScanProgressPayload(event.payload);
+        if (!payload) return;
+        setScanProgress(payload);
+        setPluginsBusy(payload.status === 'running');
+        if (payload.status !== 'running') {
+          void refreshPluginsFromLibrary();
+          const pending = pendingParamsScanPluginIdRef.current;
+          if (pending && payload.mode === 'params' && payload.status === 'ok') {
+            void describePlugin(pending);
+          }
+          pendingParamsScanPluginIdRef.current = null;
+        }
+      });
+    })();
+    return () => {
+      if (unlisten) void unlisten();
+    };
+  }, [describePlugin, isTauri, refreshPluginsFromLibrary]);
 
   const applyGraph = React.useCallback(
     async (next: DspGraphConfig) => {
@@ -437,7 +641,7 @@ export const DspRackPage: React.FC = () => {
             + VST
           </button>
           <button type="button" onClick={() => void scanPlugins()} disabled={busy || pluginsBusy}>
-            {pluginsBusy ? '扫描中…' : '扫描插件'}
+            {pluginsBusy ? '扫描中…' : '扫描插件（fast）'}
           </button>
           <button type="button" onClick={() => void refresh()} disabled={busy}>
             刷新
@@ -446,6 +650,22 @@ export const DspRackPage: React.FC = () => {
       </div>
 
       {error && <div className="dsp-rack-error">{error}</div>}
+
+      {(pluginsBusy || scanState?.running) && (
+        <div className="dsp-rack-note">
+          VST 扫描中：
+          {scanProgress?.message ||
+            scanProgress?.currentPluginId ||
+            scanState?.currentPluginId ||
+            scanProgress?.stage ||
+            scanState?.stage ||
+            'running'}
+          {scanProgress?.total ? ` (${scanProgress.current}/${scanProgress.total})` : ''}{' '}
+          <button type="button" onClick={() => void cancelScan()} disabled={busy}>
+            取消
+          </button>
+        </div>
+      )}
 
       {!graph && <div className="dsp-rack-loading">Loading...</div>}
 
@@ -707,13 +927,24 @@ export const DspRackPage: React.FC = () => {
                       <>
                         {plugin.parameters.length === 0 && (
                           <div className="dsp-rack-note">
-                            {describing === pluginId ? 'Loading parameters…' : 'Parameters not loaded yet.'}{' '}
+                            {describing === pluginId
+                              ? '读取参数缓存中…'
+                              : plugin.paramsScannedAtMs
+                                ? '参数已扫描但尚未加载到 UI。'
+                                : '参数未缓存（建议先扫描参数）。'}{' '}
                             <button
                               type="button"
                               onClick={() => void describePlugin(pluginId)}
                               disabled={busy || describing === pluginId}
                             >
-                              Load Params
+                              加载缓存
+                            </button>{' '}
+                            <button
+                              type="button"
+                              onClick={() => void scanPluginParams(pluginId)}
+                              disabled={busy || pluginsBusy}
+                            >
+                              扫描参数
                             </button>
                           </div>
                         )}

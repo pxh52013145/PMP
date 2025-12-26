@@ -16,8 +16,16 @@ pub struct VstParamValue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DspGraphNode {
-    Gain { id: String, enabled: bool, db: f32 },
-    Eq { id: String, enabled: bool, bands: Vec<EqBandConfig> },
+    Gain {
+        id: String,
+        enabled: bool,
+        db: f32,
+    },
+    Eq {
+        id: String,
+        enabled: bool,
+        bands: Vec<EqBandConfig>,
+    },
     Limiter {
         id: String,
         enabled: bool,
@@ -81,7 +89,9 @@ fn read_graph_from_disk(app: &AppHandle) -> Result<DspGraphConfig, String> {
     let path = graph_file_path(app)?;
     let data = match std::fs::read(&path) {
         Ok(data) => data,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(DspGraphConfig::default()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DspGraphConfig::default())
+        }
         Err(err) => return Err(format!("Failed to read DSP graph: {err}")),
     };
 
@@ -91,7 +101,8 @@ fn read_graph_from_disk(app: &AppHandle) -> Result<DspGraphConfig, String> {
 
 fn write_graph_to_disk(app: &AppHandle, graph: &DspGraphConfig) -> Result<(), String> {
     let path = graph_file_path(app)?;
-    let data = serde_json::to_vec_pretty(graph).map_err(|e| format!("Failed to encode DSP graph: {e}"))?;
+    let data =
+        serde_json::to_vec_pretty(graph).map_err(|e| format!("Failed to encode DSP graph: {e}"))?;
     std::fs::write(&path, data).map_err(|e| format!("Failed to write DSP graph: {e}"))
 }
 
@@ -103,7 +114,9 @@ fn to_native_dsp_chain(graph: &DspGraphConfig) -> Vec<DspNodeConfig> {
                 chain.push(DspNodeConfig::Gain { db: *db });
             }
             DspGraphNode::Eq { enabled, bands, .. } if *enabled => {
-                chain.push(DspNodeConfig::Eq { bands: bands.clone() });
+                chain.push(DspNodeConfig::Eq {
+                    bands: bands.clone(),
+                });
             }
             DspGraphNode::Limiter {
                 enabled,
@@ -119,7 +132,10 @@ fn to_native_dsp_chain(graph: &DspGraphConfig) -> Vec<DspNodeConfig> {
                 id,
                 plugin_id,
                 ..
-            } if *enabled && !plugin_id.trim().is_empty() && plugin_id.trim() != DEMO_VST_PLUGIN_ID => {
+            } if *enabled
+                && !plugin_id.trim().is_empty()
+                && plugin_id.trim() != DEMO_VST_PLUGIN_ID =>
+            {
                 chain.push(DspNodeConfig::Vst {
                     id: id.clone(),
                     plugin_id: plugin_id.clone(),
@@ -143,21 +159,21 @@ pub fn get_dsp_graph(app: &AppHandle) -> Result<DspGraphConfig, String> {
     if normalize_graph(&mut graph) {
         let _ = write_graph_to_disk(app, &graph);
     }
+    crate::vst_instance_manager::sync_from_graph(&graph);
     *guard = Some(graph.clone());
     Ok(graph)
 }
 
 pub fn set_dsp_graph(app: &AppHandle, graph: DspGraphConfig) -> Result<(), String> {
-    {
-        let mut guard = DSP_GRAPH
-            .lock()
-            .map_err(|_| "DSP graph state is locked".to_string())?;
-        *guard = Some(graph.clone());
-    }
-
+    crate::vst_instance_manager::sync_from_graph(&graph);
     let chain = to_native_dsp_chain(&graph);
     crate::native_audio::set_dsp_chain(app, chain)?;
     write_graph_to_disk(app, &graph)?;
+
+    let mut guard = DSP_GRAPH
+        .lock()
+        .map_err(|_| "DSP graph state is locked".to_string())?;
+    *guard = Some(graph.clone());
     Ok(())
 }
 

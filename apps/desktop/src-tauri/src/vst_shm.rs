@@ -62,7 +62,12 @@ pub struct ShmRing {
 unsafe impl Send for ShmRing {}
 
 impl ShmRing {
-    pub fn create(name: &str, sample_rate: u32, channels: u32, capacity_frames: u32) -> Result<Self, String> {
+    pub fn create(
+        name: &str,
+        sample_rate: u32,
+        channels: u32,
+        capacity_frames: u32,
+    ) -> Result<Self, String> {
         if channels == 0 {
             return Err("channels must be > 0".to_string());
         }
@@ -86,7 +91,8 @@ impl ShmRing {
         }
 
         let data_ptr =
-            unsafe { (mapping.view_ptr as *mut u8).add(std::mem::size_of::<ShmRingHeaderV1>()) } as *mut f32;
+            unsafe { (mapping.view_ptr as *mut u8).add(std::mem::size_of::<ShmRingHeaderV1>()) }
+                as *mut f32;
 
         Ok(Self {
             mapping,
@@ -123,7 +129,8 @@ impl ShmRing {
         let channels = header.channels as usize;
         let capacity_frames = header.capacity_frames as usize;
         let data_ptr =
-            unsafe { (mapping.view_ptr as *mut u8).add(std::mem::size_of::<ShmRingHeaderV1>()) } as *mut f32;
+            unsafe { (mapping.view_ptr as *mut u8).add(std::mem::size_of::<ShmRingHeaderV1>()) }
+                as *mut f32;
 
         Ok(Self {
             mapping,
@@ -214,12 +221,17 @@ impl ShmRing {
 
         let start = (write % self.capacity_frames as u64) as usize;
         unsafe {
-            self.write_frames_at(start, &samples[..frames_to_write * self.channels], frames_to_write);
+            self.write_frames_at(
+                start,
+                &samples[..frames_to_write * self.channels],
+                frames_to_write,
+            );
         }
 
-        header
-            .write_index
-            .store(write.saturating_add(frames_to_write as u64), Ordering::Release);
+        header.write_index.store(
+            write.saturating_add(frames_to_write as u64),
+            Ordering::Release,
+        );
         frames_to_write
     }
 
@@ -272,12 +284,17 @@ impl ShmRing {
 
         let start = (read % self.capacity_frames as u64) as usize;
         unsafe {
-            self.read_frames_at(start, &mut out[..frames_to_read * self.channels], frames_to_read);
+            self.read_frames_at(
+                start,
+                &mut out[..frames_to_read * self.channels],
+                frames_to_read,
+            );
         }
 
-        header
-            .read_index
-            .store(read.saturating_add(frames_to_read as u64), Ordering::Release);
+        header.read_index.store(
+            read.saturating_add(frames_to_read as u64),
+            Ordering::Release,
+        );
         frames_to_read
     }
 
@@ -289,7 +306,8 @@ impl ShmRing {
         if first_frames > 0 {
             let start_sample = start_frame * channels;
             let count_samples = first_frames * channels;
-            let dst = std::slice::from_raw_parts_mut(self.data_ptr.add(start_sample), count_samples);
+            let dst =
+                std::slice::from_raw_parts_mut(self.data_ptr.add(start_sample), count_samples);
             dst.copy_from_slice(&samples[..count_samples]);
         }
 
@@ -340,7 +358,9 @@ impl Drop for SharedMemoryMapping {
             use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
             if !self.view_ptr.is_null() {
-                let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: self.view_ptr });
+                let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: self.view_ptr,
+                });
             }
             if !self.handle.is_null() {
                 let _ = CloseHandle(self.handle);
@@ -402,7 +422,9 @@ impl SharedMemoryMapping {
     fn open(name: &str) -> Result<Self, String> {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
-        use windows_sys::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_ALL_ACCESS};
+        use windows_sys::Win32::System::Memory::{
+            MapViewOfFile, OpenFileMappingW, FILE_MAP_ALL_ACCESS,
+        };
 
         let wide = std::ffi::OsStr::new(name)
             .encode_wide()
@@ -460,10 +482,16 @@ mod tests {
         let name = format!("Local\\pmp-shm-test-{pid}-{nonce}");
 
         let ring_host = ShmRing::create(&name, 48_000, 2, 16).expect("create shm ring");
-        assert!(!ring_host.header().is_peer_ready(), "peerReady should be false before open");
+        assert!(
+            !ring_host.header().is_peer_ready(),
+            "peerReady should be false before open"
+        );
 
         let ring_peer = ShmRing::open(&name).expect("open shm ring");
-        assert!(ring_host.header().is_peer_ready(), "peerReady should be true after open");
+        assert!(
+            ring_host.header().is_peer_ready(),
+            "peerReady should be true after open"
+        );
 
         let channels = ring_host.channels();
         assert_eq!(channels, 2);
@@ -525,7 +553,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(shm_in.header().is_peer_ready(), "shm-in peerReady not set");
-        assert!(shm_out.header().is_peer_ready(), "shm-out peerReady not set");
+        assert!(
+            shm_out.header().is_peer_ready(),
+            "shm-out peerReady not set"
+        );
 
         let channels = shm_in.channels();
         let frames = 32usize;

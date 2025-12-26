@@ -5,7 +5,9 @@ use std::sync::{
 };
 
 use once_cell::sync::Lazy;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
+};
 
 use super::{EVENT_PLUGIN_WINDOW_HIDDEN, EVENT_PLUGIN_WINDOW_SHOWN, MAIN_WINDOW_LABEL};
 
@@ -195,7 +197,11 @@ pub fn open_plugin_window(
     Ok(())
 }
 
-pub fn close_plugin_window(app: &AppHandle, plugin_id: String, window_id: String) -> Result<(), String> {
+pub fn close_plugin_window(
+    app: &AppHandle,
+    plugin_id: String,
+    window_id: String,
+) -> Result<(), String> {
     let window_label = plugin_window_label(plugin_id.as_str(), window_id.as_str())?;
     if let Some(window) = app.get_window(window_label.as_str()) {
         let _ = app.emit_all(
@@ -220,4 +226,3 @@ pub fn close_all_plugin_windows(app: &AppHandle) {
         request_force_close(app, label.as_str());
     }
 }
-

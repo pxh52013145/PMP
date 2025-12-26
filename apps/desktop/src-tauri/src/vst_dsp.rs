@@ -94,6 +94,7 @@ pub struct VstDspNode {
     delay_ring: Vec<f32>,
     write_total_frames: u64,
     shm_base_frame: u64,
+    drop_output_before_frame: u64,
     shm_written_frames: u64,
     shm_read_frames: u64,
     scratch_in: Vec<f32>,
@@ -112,7 +113,8 @@ pub struct VstDspNode {
 impl VstDspNode {
     pub fn new(spec: VstNodeSpec) -> Self {
         let key = spec.key;
-        let transport = ShmAudioTransport::open(key.shm_in_name.as_str(), key.shm_out_name.as_str());
+        let transport =
+            ShmAudioTransport::open(key.shm_in_name.as_str(), key.shm_out_name.as_str());
 
         let channels = key.channels.max(1) as usize;
         let mut latency_frames = key.latency_frames.max(1) as usize;
@@ -128,10 +130,21 @@ impl VstDspNode {
 
         let delay_ring = vec![0.0; latency_frames.saturating_mul(channels).max(1)];
         let now = Instant::now();
-        let (last_heartbeat_in, last_heartbeat_out) = transport
+        let (write_total_frames, shm_base_frame, last_heartbeat_in, last_heartbeat_out) = transport
             .as_ref()
-            .map(|transport| transport.heartbeats())
-            .unwrap_or((0, 0));
+            .map(|transport| {
+                let in_write = transport
+                    .in_ring
+                    .header()
+                    .write_index
+                    .load(Ordering::Acquire);
+                let out_header = transport.out_ring.header();
+                let out_write = out_header.write_index.load(Ordering::Acquire);
+                out_header.read_index.store(out_write, Ordering::Release);
+                let (hb_in, hb_out) = transport.heartbeats();
+                (in_write, out_write, hb_in, hb_out)
+            })
+            .unwrap_or((0, 0, 0, 0));
 
         Self {
             key,
@@ -139,8 +152,9 @@ impl VstDspNode {
             latency_frames,
             channels,
             delay_ring,
-            write_total_frames: 0,
-            shm_base_frame: 0,
+            write_total_frames,
+            shm_base_frame,
+            drop_output_before_frame: write_total_frames,
             shm_written_frames: 0,
             shm_read_frames: 0,
             scratch_in: Vec::new(),
@@ -159,8 +173,36 @@ impl VstDspNode {
 
     pub fn reset(&mut self) {
         self.delay_ring.fill(0.0);
-        self.write_total_frames = 0;
-        self.shm_base_frame = 0;
+
+        if let Some(transport) = self.transport.as_ref() {
+            let in_write = transport
+                .in_ring
+                .header()
+                .write_index
+                .load(Ordering::Acquire);
+            let out_header = transport.out_ring.header();
+            let out_write = out_header.write_index.load(Ordering::Acquire);
+            out_header.read_index.store(out_write, Ordering::Release);
+
+            self.write_total_frames = in_write;
+            self.shm_base_frame = out_write;
+            self.drop_output_before_frame = in_write;
+
+            let (hb_in, hb_out) = transport.heartbeats();
+            self.last_heartbeat_in = hb_in;
+            self.last_heartbeat_out = hb_out;
+            self.last_heartbeat_progress = Instant::now();
+            self.last_health_check = Instant::now();
+        } else {
+            self.write_total_frames = 0;
+            self.shm_base_frame = 0;
+            self.drop_output_before_frame = 0;
+            self.last_heartbeat_in = 0;
+            self.last_heartbeat_out = 0;
+            self.last_heartbeat_progress = Instant::now();
+            self.last_health_check = Instant::now();
+        }
+
         self.shm_written_frames = 0;
         self.shm_read_frames = 0;
         self.consecutive_failures = 0;
@@ -217,7 +259,9 @@ impl VstDspNode {
 
         if let Some(transport) = self.transport.as_ref() {
             if transport.channels == self.channels {
-                let ok = transport.in_ring.try_write_interleaved_all(&self.scratch_in);
+                let ok = transport
+                    .in_ring
+                    .try_write_interleaved_all(&self.scratch_in);
                 if ok {
                     self.shm_written_frames += frames as u64;
                 } else {
@@ -263,6 +307,9 @@ impl VstDspNode {
 
             for frame in 0..frames {
                 let global_frame = self.shm_base_frame + self.shm_read_frames + frame as u64;
+                if global_frame < self.drop_output_before_frame {
+                    continue;
+                }
                 if global_frame + self.latency_frames as u64 <= self.write_total_frames {
                     continue;
                 }
@@ -302,7 +349,8 @@ impl VstDspNode {
 
         match rx.try_recv() {
             Ok(Ok(info)) => {
-                match ShmAudioTransport::open(info.shm_in_name.as_str(), info.shm_out_name.as_str()) {
+                match ShmAudioTransport::open(info.shm_in_name.as_str(), info.shm_out_name.as_str())
+                {
                     Some(transport) => {
                         self.key.node_id = info.node_id;
                         self.key.plugin_id = info.plugin_id;
@@ -314,6 +362,7 @@ impl VstDspNode {
 
                         self.transport = Some(transport);
                         self.shm_base_frame = self.write_total_frames;
+                        self.drop_output_before_frame = self.write_total_frames;
                         self.shm_written_frames = 0;
                         self.shm_read_frames = 0;
                         self.consecutive_failures = 0;
@@ -386,7 +435,9 @@ impl VstDspNode {
                     disable_reason,
                     Some(failures),
                 );
-                let _ = tx.send(Err(format!("VST plugin disabled by governance: {plugin_id}")));
+                let _ = tx.send(Err(format!(
+                    "VST plugin disabled by governance: {plugin_id}"
+                )));
                 return;
             }
 

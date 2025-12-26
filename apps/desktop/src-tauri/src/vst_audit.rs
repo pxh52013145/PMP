@@ -150,8 +150,8 @@ fn load_from_disk(path: &PathBuf) -> VstAuditLog {
 }
 
 fn persist_to_disk(path: &PathBuf, state: &VstAuditLog) -> Result<(), String> {
-    let data =
-        serde_json::to_vec_pretty(state).map_err(|e| format!("Failed to encode VST audit log: {e}"))?;
+    let data = serde_json::to_vec_pretty(state)
+        .map_err(|e| format!("Failed to encode VST audit log: {e}"))?;
     std::fs::write(path, data).map_err(|e| format!("Failed to write VST audit log: {e}"))
 }
 
@@ -241,6 +241,25 @@ pub fn record_scan_snapshot(plugins: &[BridgePluginDescriptor]) {
     if let Err(err) = persist_to_disk(path, &guard) {
         eprintln!("[VST][audit] Failed to persist scan snapshot: {err}");
     }
+}
+
+pub fn lookup_last_scan_path(plugin_id: &str) -> Option<String> {
+    let guard = match AUDIT_STATE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let snapshot = guard.last_scan.as_ref()?;
+    for plugin in &snapshot.plugins {
+        if plugin.id == plugin_id {
+            return plugin
+                .path
+                .as_ref()
+                .map(|path| path.trim())
+                .filter(|path| !path.is_empty())
+                .map(|path| path.to_string());
+        }
+    }
+    None
 }
 
 pub fn get_log() -> Result<VstAuditLog, String> {

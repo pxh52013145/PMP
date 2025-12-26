@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
 
 use crate::dsp_graph::VstParamValue;
 use crate::vst_audit::{self, VstAuditEventKind};
@@ -31,6 +31,7 @@ pub struct VstAudioSessionInfo {
 
 struct VstNodeSession {
     plugin_id: String,
+    applied_generation: u64,
     sample_rate: u32,
     channels: usize,
     capacity_frames: u32,
@@ -39,7 +40,8 @@ struct VstNodeSession {
     shm_out_name: String,
 }
 
-static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
@@ -49,6 +51,28 @@ pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
         .filter(|plugin| !is_demo_vst_plugin_id(plugin.id.as_str()))
         .collect::<Vec<_>>();
     vst_audit::record_scan_snapshot(&plugins);
+
+    let run_id = format!(
+        "legacy-list-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+    let started_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let _ = crate::vst_library::record_scan_run_started(&run_id, started_at_ms, "legacy");
+    for plugin in &plugins {
+        let _ = crate::vst_library::upsert_plugin_snapshot(&run_id, plugin);
+    }
+    let finished_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let _ = crate::vst_library::record_scan_run_finished(&run_id, finished_at_ms, "ok", None);
+
     Ok(plugins)
 }
 
@@ -60,11 +84,15 @@ pub fn describe_plugin(plugin_id: &str) -> Result<BridgePluginDescriptor, String
 }
 
 fn resolve_capacity_frames(requested: u32) -> u32 {
-    std::env::var("PMP_VST_BRIDGE_AUDIO_CAPACITY_FRAMES")
+    let requested = requested.max(1);
+    let from_env = std::env::var("PMP_VST_BRIDGE_AUDIO_CAPACITY_FRAMES")
         .ok()
         .and_then(|raw| raw.parse::<u32>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or_else(|| requested.max(1))
+        .filter(|value| *value > 0);
+    match from_env {
+        Some(value) => value.max(requested),
+        None => requested,
+    }
 }
 
 fn shm_handshake_timeout() -> Duration {
@@ -73,7 +101,7 @@ fn shm_handshake_timeout() -> Duration {
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value > 0)
         .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(10_000))
+        .unwrap_or_else(|| Duration::from_millis(30_000))
 }
 
 fn ensure_session_internal(
@@ -113,6 +141,61 @@ fn ensure_session_internal(
     };
 
     if !needs_spawn {
+        let desired_generation = crate::vst_instance_manager::desired_generation(node_id, plugin_id)
+            .unwrap_or(0);
+
+        let needs_apply = {
+            let map = match SESSIONS.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            match map.get(node_id) {
+                Some(existing) if existing.plugin_id == plugin_id => {
+                    desired_generation > 0 && existing.applied_generation != desired_generation
+                }
+                _ => false,
+            }
+        };
+
+        if needs_apply {
+            let desired_params = crate::vst_instance_manager::desired_params(node_id, plugin_id);
+
+            let mut session = {
+                let mut map = match SESSIONS.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                map.remove(node_id)
+            }
+            .ok_or_else(|| "VST session missing".to_string())?;
+
+            let result = session.client.set_params(&desired_params);
+            if result.is_ok() {
+                session.applied_generation = desired_generation;
+            } else if let Err(err) = result {
+                eprintln!(
+                    "[VST] Failed to refresh params (node={node_id}, plugin={plugin_id}): {err}"
+                );
+            }
+
+            let info = VstAudioSessionInfo {
+                node_id: node_id.to_string(),
+                plugin_id: session.plugin_id.clone(),
+                shm_in_name: session.shm_in_name.clone(),
+                shm_out_name: session.shm_out_name.clone(),
+                sample_rate: session.sample_rate,
+                channels: session.channels,
+                capacity_frames: session.capacity_frames,
+            };
+
+            let mut map = match SESSIONS.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            map.insert(node_id.to_string(), session);
+            return Ok(info);
+        }
+
         let map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -143,6 +226,14 @@ fn ensure_session_internal(
         session.client.kill();
     }
 
+    let plugin_path = crate::vst_library::lookup_plugin_path(plugin_id)
+        .or_else(|| crate::vst_audit::lookup_last_scan_path(plugin_id))
+        .ok_or_else(|| {
+        format!(
+            "VST plugin not in scan cache: {plugin_id}. Run Scan Plugins in VST Manager first."
+        )
+    })?;
+
     let nonce = SHM_NONCE.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
 
@@ -154,6 +245,7 @@ fn ensure_session_internal(
 
     let mut client = match BridgeClient::spawn(
         plugin_id,
+        plugin_path.as_str(),
         sample_rate,
         channels,
         Some(shm_in_name.as_str()),
@@ -170,7 +262,10 @@ fn ensure_session_internal(
             return Err(err);
         }
     };
-    if let Err(err) = client.ping().map_err(|e| format!("Bridge ping failed: {e}")) {
+    if let Err(err) = client
+        .ping()
+        .map_err(|e| format!("Bridge ping failed: {e}"))
+    {
         vst_audit::record_event(
             VstAuditEventKind::SessionSpawnFailed,
             Some(node_id.to_string()),
@@ -198,6 +293,22 @@ fn ensure_session_internal(
         return Err("Bridge shared memory handshake timed out".to_string());
     }
 
+    let desired_generation =
+        crate::vst_instance_manager::desired_generation(node_id, plugin_id).unwrap_or(0);
+    let desired_params = crate::vst_instance_manager::desired_params(node_id, plugin_id);
+    let mut applied_generation = 0u64;
+    if desired_generation > 0 {
+        if desired_params.is_empty() {
+            applied_generation = desired_generation;
+        } else if let Err(err) = client.set_params(&desired_params) {
+            eprintln!(
+                "[VST] Failed to apply cached params (node={node_id}, plugin={plugin_id}): {err}"
+            );
+        } else {
+            applied_generation = desired_generation;
+        }
+    }
+
     let mut map = match SESSIONS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -206,6 +317,7 @@ fn ensure_session_internal(
         node_id.to_string(),
         VstNodeSession {
             plugin_id: plugin_id.to_string(),
+            applied_generation,
             sample_rate,
             channels,
             capacity_frames,
@@ -238,10 +350,21 @@ pub fn ensure_audio_session(
     channels: usize,
     capacity_frames: u32,
 ) -> Result<VstAudioSessionInfo, String> {
-    ensure_session_internal(node_id, plugin_id, sample_rate, channels, capacity_frames, true)
+    ensure_session_internal(
+        node_id,
+        plugin_id,
+        sample_rate,
+        channels,
+        capacity_frames,
+        true,
+    )
 }
 
-pub fn open_native_editor(app: &AppHandle, node_id: String, title: Option<String>) -> Result<(), String> {
+pub fn open_native_editor(
+    app: &AppHandle,
+    node_id: String,
+    title: Option<String>,
+) -> Result<(), String> {
     let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
 
     ensure_control_session(node_id.as_str(), plugin_id.as_str())?;
@@ -255,9 +378,22 @@ pub fn open_native_editor(app: &AppHandle, node_id: String, title: Option<String
             .ok_or_else(|| "VST session missing".to_string())?
     };
 
+    let owner_hwnd = {
+        #[cfg(target_os = "windows")]
+        {
+            app.get_window(crate::windows::MAIN_WINDOW_LABEL)
+                .and_then(|window| window.hwnd().ok())
+                .map(|hwnd| hwnd.0 as u64)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    };
+
     let result = session
         .client
-        .open_editor_window(title.as_deref())
+        .open_editor_window(title.as_deref(), owner_hwnd, true)
         .map_err(|e| format!("Bridge open editor failed: {e}"));
 
     if result.is_ok() {
@@ -300,9 +436,17 @@ pub fn close_native_editor(node_id: String) -> Result<(), String> {
     result
 }
 
-pub fn set_params(app: &AppHandle, node_id: String, params: Vec<VstParamValue>) -> Result<(), String> {
+pub fn set_params(
+    app: &AppHandle,
+    node_id: String,
+    params: Vec<VstParamValue>,
+) -> Result<(), String> {
     let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
     ensure_control_session(node_id.as_str(), plugin_id.as_str())?;
+    crate::vst_instance_manager::set_node_params(node_id.as_str(), plugin_id.as_str(), params.clone());
+    let desired_generation =
+        crate::vst_instance_manager::desired_generation(node_id.as_str(), plugin_id.as_str())
+            .unwrap_or(0);
 
     let mut session = {
         let mut map = match SESSIONS.lock() {
@@ -324,6 +468,7 @@ pub fn set_params(app: &AppHandle, node_id: String, params: Vec<VstParamValue>) 
         .map_err(|e| format!("Bridge set params failed: {e}"));
 
     if result.is_ok() {
+        session.applied_generation = desired_generation;
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),

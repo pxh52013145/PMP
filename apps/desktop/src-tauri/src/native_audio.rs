@@ -1,9 +1,9 @@
 use once_cell::sync::{Lazy, OnceCell};
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
+use rodio::{decoder::Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use rodio::{decoder::Decoder, OutputStream, OutputStreamHandle, Sink, Source};
-use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,10 +12,10 @@ use std::{
     io::BufReader,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    sync::mpsc,
     sync::Arc,
     sync::Condvar,
     sync::Mutex,
-    sync::mpsc,
     time::{Duration, Instant},
 };
 use symphonia::core::{
@@ -189,9 +189,16 @@ pub struct EqBandConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DspNodeConfig {
-    Gain { db: f32 },
-    Eq { bands: Vec<EqBandConfig> },
-    Limiter { #[serde(rename = "thresholdDb")] threshold_db: f32 },
+    Gain {
+        db: f32,
+    },
+    Eq {
+        bands: Vec<EqBandConfig>,
+    },
+    Limiter {
+        #[serde(rename = "thresholdDb")]
+        threshold_db: f32,
+    },
     Vst {
         id: String,
         #[serde(rename = "pluginId")]
@@ -685,6 +692,8 @@ where
     processor_reset_serial: u64,
     vst_keys: Vec<crate::vst_dsp::VstNodeKey>,
     vst_nodes: Vec<crate::vst_dsp::VstDspNode>,
+    fade_in_remaining_frames: u32,
+    fade_in_total_frames: u32,
     local: Vec<f32>,
     local_index: usize,
 }
@@ -702,7 +711,8 @@ where
         let processor_version = dsp.version();
         let processor_reset_serial = dsp.reset_serial();
         let snapshot = dsp.snapshot();
-        let processor = DspChainProcessor::from_runtime_config(&snapshot, sample_rate, channels as usize);
+        let processor =
+            DspChainProcessor::from_runtime_config(&snapshot, sample_rate, channels as usize);
         let vst_keys = snapshot.vst_nodes.clone();
         let vst_nodes = vst_keys
             .iter()
@@ -722,17 +732,60 @@ where
             processor_reset_serial,
             vst_keys,
             vst_nodes,
+            fade_in_remaining_frames: 0,
+            fade_in_total_frames: 0,
             local: Vec::new(),
             local_index: 0,
         }
+    }
+
+    fn begin_fade_in(&mut self) {
+        const RAMP_MS: u64 = 5;
+        let frames = ((self.sample_rate as u64).saturating_mul(RAMP_MS) / 1000)
+            .max(1)
+            .min(2048) as u32;
+        self.fade_in_remaining_frames = frames;
+        self.fade_in_total_frames = frames;
+    }
+
+    fn apply_fade_in(&mut self) {
+        if self.fade_in_remaining_frames == 0 {
+            return;
+        }
+        let channels = self.channels.max(1) as usize;
+        let frames = self.local.len() / channels;
+        if frames == 0 {
+            self.fade_in_remaining_frames = 0;
+            return;
+        }
+
+        let total = self.fade_in_total_frames.max(1);
+        let remaining = self.fade_in_remaining_frames.min(frames as u32);
+        let already = total.saturating_sub(self.fade_in_remaining_frames);
+
+        for frame in 0..remaining as usize {
+            let gain = ((already + frame as u32 + 1) as f32 / total as f32).min(1.0);
+            let base = frame * channels;
+            for ch in 0..channels {
+                let idx = base + ch;
+                if idx < self.local.len() {
+                    self.local[idx] *= gain;
+                }
+            }
+        }
+
+        self.fade_in_remaining_frames = self.fade_in_remaining_frames.saturating_sub(remaining);
     }
 
     fn ensure_processor_uptodate(&mut self) {
         let version = self.dsp.version();
         if version != self.processor_version {
             let snapshot = self.dsp.snapshot();
-            self.processor =
-                DspChainProcessor::from_runtime_config(&snapshot, self.sample_rate, self.channels as usize);
+            self.processor = DspChainProcessor::from_runtime_config(
+                &snapshot,
+                self.sample_rate,
+                self.channels as usize,
+            );
 
             if snapshot.vst_nodes != self.vst_keys {
                 self.vst_keys = snapshot.vst_nodes.clone();
@@ -742,6 +795,7 @@ where
                     .cloned()
                     .map(|key| crate::vst_dsp::VstDspNode::new(crate::vst_dsp::VstNodeSpec { key }))
                     .collect();
+                self.begin_fade_in();
             }
             self.processor_version = version;
         }
@@ -752,6 +806,7 @@ where
             for node in &mut self.vst_nodes {
                 node.reset();
             }
+            self.begin_fade_in();
             self.processor_reset_serial = reset_serial;
         }
     }
@@ -777,6 +832,7 @@ where
         for node in &mut self.vst_nodes {
             node.process_interleaved_in_place(&mut self.local);
         }
+        self.apply_fade_in();
         self.tap
             .push_interleaved(&self.local, self.channels.max(1) as usize);
         true
@@ -1444,7 +1500,9 @@ impl NativeAudioEngine {
         let mut decoded_sample_rate: u32 = 0;
         let mut decoded_bit_depth: Option<u32> = None;
 
-        if let Ok((source, meta, streaming)) = start_symphonia_stream(&path, self.output_sample_rate) {
+        if let Ok((source, meta, streaming)) =
+            start_symphonia_stream(&path, self.output_sample_rate)
+        {
             duration = meta.duration;
             decoded_channels = meta.channels;
             decoded_sample_rate = meta.sample_rate;
@@ -1826,7 +1884,10 @@ impl NativeAudioEngine {
 
     fn snapshot_for_spectrum(&self) -> Option<SpectrumSnapshot> {
         let (window, sample_rate) = self.spectrum_tap.snapshot()?;
-        Some(SpectrumSnapshot { sample_rate, window })
+        Some(SpectrumSnapshot {
+            sample_rate,
+            window,
+        })
     }
 
     fn update_position_from_clock(&mut self) {
@@ -2055,7 +2116,10 @@ fn emit_state(app_handle: &AppHandle, payload: NativeAudioStatePayload) -> Resul
         .map_err(|e| format!("Failed to emit state: {e}"))
 }
 
-fn emit_spectrum(app_handle: &AppHandle, payload: NativeAudioSpectrumPayload) -> Result<(), String> {
+fn emit_spectrum(
+    app_handle: &AppHandle,
+    payload: NativeAudioSpectrumPayload,
+) -> Result<(), String> {
     app_handle
         .emit_all("native_audio_spectrum", payload)
         .map_err(|e| format!("Failed to emit spectrum: {e}"))
@@ -2112,7 +2176,9 @@ impl SharedSamplesSource {
             return None;
         }
         let frames = self.samples.len() / channels;
-        Some(Duration::from_secs_f64(frames as f64 / self.sample_rate as f64))
+        Some(Duration::from_secs_f64(
+            frames as f64 / self.sample_rate as f64,
+        ))
     }
 }
 
@@ -2187,7 +2253,11 @@ fn compute_spectrum(
             let mag = (c.re * c.re + c.im * c.im).sqrt();
             acc += mag;
         }
-        let avg = if end > start { acc / (end - start) as f32 } else { 0.0 };
+        let avg = if end > start {
+            acc / (end - start) as f32
+        } else {
+            0.0
+        };
         mags[i] = avg;
         if avg > max_mag {
             max_mag = avg;
@@ -2338,7 +2408,8 @@ fn start_symphonia_stream(
                                 Err(err) => {
                                     if let Ok(mut guard) = error_clone.lock() {
                                         if guard.is_none() {
-                                            *guard = Some(format!("Failed to create decoder: {err}"));
+                                            *guard =
+                                                Some(format!("Failed to create decoder: {err}"));
                                         }
                                     }
                                     buffer_clone.mark_finished();
@@ -2404,7 +2475,8 @@ fn start_symphonia_stream(
                 Ok(decoded) => {
                     let spec = *decoded.spec();
                     if sample_buf.is_none() {
-                        sample_buf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+                        sample_buf =
+                            Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
                     }
 
                     if let Some(buf) = &mut sample_buf {
@@ -2415,7 +2487,8 @@ fn start_symphonia_stream(
                             let input_sample_rate = spec.rate.max(1);
                             effective_sample_rate = input_sample_rate;
 
-                            let requested_sample_rate = output_sample_rate.unwrap_or(input_sample_rate);
+                            let requested_sample_rate =
+                                output_sample_rate.unwrap_or(input_sample_rate);
                             if requested_sample_rate != input_sample_rate {
                                 let params = SincInterpolationParameters {
                                     sinc_len: 256,
@@ -2496,15 +2569,14 @@ fn start_symphonia_stream(
                                         input_block.push(drained);
                                     }
 
-                                    let output_blocks = match resampler.process(&input_block, None) {
+                                    let output_blocks = match resampler.process(&input_block, None)
+                                    {
                                         Ok(value) => value,
                                         Err(_) => break,
                                     };
 
-                                    let out_frames = output_blocks
-                                        .get(0)
-                                        .map(|v| v.len())
-                                        .unwrap_or(0);
+                                    let out_frames =
+                                        output_blocks.get(0).map(|v| v.len()).unwrap_or(0);
                                     if out_frames == 0 {
                                         continue;
                                     }
@@ -2557,20 +2629,32 @@ fn start_symphonia_stream(
                                                 track_id: Some(track_id),
                                             };
 
-                                            if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
-                                                if let Some(time_base) = track.codec_params.time_base {
-                                                    let required = time_base.calc_time(seeked.required_ts);
-                                                    let actual = time_base.calc_time(seeked.actual_ts);
-                                                    let required_seconds = required.seconds as f64 + required.frac;
-                                                    let actual_seconds = actual.seconds as f64 + actual.frac;
-                                                    let delta = (required_seconds - actual_seconds).max(0.0);
-                                                    pending_trim_frames_out =
-                                    (delta * effective_sample_rate as f64) as usize;
+                                            if let Ok(seeked) =
+                                                format.seek(SeekMode::Accurate, seek_to)
+                                            {
+                                                if let Some(time_base) =
+                                                    track.codec_params.time_base
+                                                {
+                                                    let required =
+                                                        time_base.calc_time(seeked.required_ts);
+                                                    let actual =
+                                                        time_base.calc_time(seeked.actual_ts);
+                                                    let required_seconds =
+                                                        required.seconds as f64 + required.frac;
+                                                    let actual_seconds =
+                                                        actual.seconds as f64 + actual.frac;
+                                                    let delta = (required_seconds - actual_seconds)
+                                                        .max(0.0);
+                                                    pending_trim_frames_out = (delta
+                                                        * effective_sample_rate as f64)
+                                                        as usize;
                                                 }
 
                                                 decoder = match symphonia::default::get_codecs()
-                                                    .make(&track.codec_params, &DecoderOptions::default())
-                                                {
+                                                    .make(
+                                                        &track.codec_params,
+                                                        &DecoderOptions::default(),
+                                                    ) {
                                                     Ok(decoder) => decoder,
                                                     Err(_) => {
                                                         buffer_clone.mark_finished();
@@ -2647,7 +2731,12 @@ fn start_symphonia_stream(
     };
 
     Ok((
-        StreamingSamplesSource::new(buffer.clone(), meta.channels, meta.sample_rate, meta.duration),
+        StreamingSamplesSource::new(
+            buffer.clone(),
+            meta.channels,
+            meta.sample_rate,
+            meta.duration,
+        ),
         meta,
         StreamingPlayback {
             buffer,
@@ -2682,7 +2771,10 @@ fn init_emitter(app_handle: &AppHandle) {
                 }
                 let is_stopped = matches!(engine.playback_state, PlaybackState::Stopped);
                 let ended = was_playing && is_stopped;
-                Some((engine.build_state_payload(ended), engine.snapshot_for_spectrum()))
+                Some((
+                    engine.build_state_payload(ended),
+                    engine.snapshot_for_spectrum(),
+                ))
             })() else {
                 continue;
             };
@@ -2759,10 +2851,12 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        let result = engine.crossfade_to(PathBuf::from(&path), duration_ms).map_err(|err| {
-            engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", err.clone());
-            err
-        });
+        let result = engine
+            .crossfade_to(PathBuf::from(&path), duration_ms)
+            .map_err(|err| {
+                engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", err.clone());
+                err
+            });
         (result, engine.build_state_payload(false))
     };
 
@@ -2771,7 +2865,9 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         payload.error_code.clone(),
         payload.error_message.clone(),
     ) {
-        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+        (Some(seq), Some(code), Some(message)) => {
+            Some(NativeAudioErrorPayload { seq, code, message })
+        }
         _ => None,
     };
 
@@ -2802,7 +2898,9 @@ pub fn play(app_handle: &AppHandle) -> Result<(), String> {
         payload.error_code.clone(),
         payload.error_message.clone(),
     ) {
-        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+        (Some(seq), Some(code), Some(message)) => {
+            Some(NativeAudioErrorPayload { seq, code, message })
+        }
         _ => None,
     };
     emit_state(app_handle, payload)?;
@@ -2832,7 +2930,9 @@ pub fn pause(app_handle: &AppHandle) -> Result<(), String> {
         payload.error_code.clone(),
         payload.error_message.clone(),
     ) {
-        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+        (Some(seq), Some(code), Some(message)) => {
+            Some(NativeAudioErrorPayload { seq, code, message })
+        }
         _ => None,
     };
     emit_state(app_handle, payload)?;
@@ -2859,7 +2959,9 @@ pub fn stop(app_handle: &AppHandle) -> Result<(), String> {
         payload.error_code.clone(),
         payload.error_message.clone(),
     ) {
-        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+        (Some(seq), Some(code), Some(message)) => {
+            Some(NativeAudioErrorPayload { seq, code, message })
+        }
         _ => None,
     };
 
@@ -2905,7 +3007,9 @@ pub fn seek(app_handle: &AppHandle, time: f64) -> Result<(), String> {
         payload.error_code.clone(),
         payload.error_message.clone(),
     ) {
-        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+        (Some(seq), Some(code), Some(message)) => {
+            Some(NativeAudioErrorPayload { seq, code, message })
+        }
         _ => None,
     };
     emit_state(app_handle, payload)?;
@@ -2927,7 +3031,10 @@ struct DecodedAudioBuffer {
     duration: f64,
 }
 
-fn decode_track_to_buffer(path: &Path, output_sample_rate: Option<u32>) -> Result<DecodedAudioBuffer, String> {
+fn decode_track_to_buffer(
+    path: &Path,
+    output_sample_rate: Option<u32>,
+) -> Result<DecodedAudioBuffer, String> {
     let file = File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
@@ -2943,7 +3050,8 @@ fn decode_track_to_buffer(path: &Path, output_sample_rate: Option<u32>) -> Resul
         )
         .map_err(|e| format!("Failed to probe format: {e}"))?;
     let mut format = probed.format;
-    let track = pick_audio_track(format.as_ref()).ok_or_else(|| "No audio track found".to_string())?;
+    let track =
+        pick_audio_track(format.as_ref()).ok_or_else(|| "No audio track found".to_string())?;
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("Failed to create decoder: {e}"))?;
@@ -3152,13 +3260,14 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
     };
 
     let channels = 2usize;
-    let capacity_frames = 8192u32;
 
     let buffer_profile = crate::vst_settings::get_settings(app_handle)
         .ok()
         .map(|settings| settings.buffer_profile)
         .unwrap_or_default();
-    let latency_frames = crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
+    let latency_frames =
+        crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
+    let capacity_frames = latency_frames.saturating_add(2048).max(8192u32);
 
     let mut desired_vst_node_ids = Vec::new();
     let mut vst_keys: Vec<crate::vst_dsp::VstNodeKey> = Vec::new();
@@ -3227,7 +3336,10 @@ pub fn list_output_devices() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-pub fn select_output_device(app_handle: &AppHandle, device_name: Option<String>) -> Result<(), String> {
+pub fn select_output_device(
+    app_handle: &AppHandle,
+    device_name: Option<String>,
+) -> Result<(), String> {
     init_emitter(app_handle);
 
     let already_selected = {

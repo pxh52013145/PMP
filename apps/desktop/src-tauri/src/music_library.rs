@@ -172,7 +172,9 @@ fn parse_replaygain_db(raw: &str) -> Option<f32> {
     out.parse::<f32>().ok()
 }
 
-fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(reader: &mut R) -> Result<FlacQuickMetadata, String> {
+fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(
+    reader: &mut R,
+) -> Result<FlacQuickMetadata, String> {
     let mut magic = [0u8; 4];
     read_exact_or_err(reader, &mut magic, "Failed to read FLAC magic")?;
     if &magic != b"fLaC" {
@@ -299,7 +301,13 @@ fn parse_flac_quick_metadata_from_reader<R: Read + Seek>(reader: &mut R) -> Resu
             .seek(SeekFrom::Current(length as i64))
             .map_err(|e| format!("Failed to skip FLAC block type {block_type}: {e}"))?;
 
-        if duration.is_some() && sample_rate.is_some() && bit_depth.is_some() && title.is_some() && artist.is_some() && album.is_some() {
+        if duration.is_some()
+            && sample_rate.is_some()
+            && bit_depth.is_some()
+            && title.is_some()
+            && artist.is_some()
+            && album.is_some()
+        {
             // We have everything we want.
             break;
         }
@@ -394,10 +402,15 @@ fn parse_flac_picture_from_reader<R: Read + Seek>(
 
         // Prefer Front Cover (type 3).
         let priority = if picture_type == 3 { 0 } else { 1 };
-        let candidate = FlacPicture { data, media_type: mime };
+        let candidate = FlacPicture {
+            data,
+            media_type: mime,
+        };
         match &best {
             None => best = Some((priority, candidate)),
-            Some((best_priority, _)) if priority < *best_priority => best = Some((priority, candidate)),
+            Some((best_priority, _)) if priority < *best_priority => {
+                best = Some((priority, candidate))
+            }
             _ => {}
         }
 
@@ -430,8 +443,7 @@ fn extract_quick_metadata(
         Option<f32>,
     ),
     String,
->
-{
+> {
     fn track_is_audio_like(track: &Track) -> bool {
         track.codec_params.sample_rate.is_some()
             || track.codec_params.channels.is_some()
@@ -477,7 +489,8 @@ fn extract_quick_metadata(
         metadata: mut probed_metadata,
         ..
     } = probed;
-    let track = pick_audio_track(format.as_ref()).ok_or_else(|| "No audio track found".to_string())?;
+    let track =
+        pick_audio_track(format.as_ref()).ok_or_else(|| "No audio track found".to_string())?;
 
     let sample_rate = track.codec_params.sample_rate;
     let bit_depth = track
@@ -575,7 +588,11 @@ fn cover_extension_from_media_type(media_type: &str) -> &'static str {
 }
 
 fn media_type_from_cover_path(path: &Path) -> Option<String> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     match ext.as_str() {
         "png" => Some("image/png".to_string()),
         "webp" => Some("image/webp".to_string()),
@@ -642,12 +659,14 @@ pub fn get_or_create_cover(
         return Ok(None);
     }
     let size = meta.len();
-    let mtime_ms = meta
-        .modified()
-        .map(system_time_to_millis)
-        .unwrap_or(0);
+    let mtime_ms = meta.modified().map(system_time_to_millis).unwrap_or(0);
 
-    let key = format!("cover-{:08x}-{}-{}", stable_hash_for_path(&audio_path), mtime_ms, size);
+    let key = format!(
+        "cover-{:08x}-{}-{}",
+        stable_hash_for_path(&audio_path),
+        mtime_ms,
+        size
+    );
     let dir = cover_cache_dir(app)?;
 
     let max_bytes = max_bytes.unwrap_or(256 * 1024);
@@ -714,7 +733,12 @@ pub fn get_or_create_cover(
         ..MetadataOptions::default()
     };
 
-    let probed = match symphonia::default::get_probe().format(&hint, mss, &format_options, &metadata_options) {
+    let probed = match symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &format_options,
+        &metadata_options,
+    ) {
         Ok(probed) => probed,
         Err(err) => {
             // If symphonia cannot probe the file, still try sidecar covers (folder.jpg, cover.png, etc.)
@@ -801,7 +825,8 @@ pub fn get_or_create_cover(
                 None => return Ok(None),
             };
 
-            let meta = fs::metadata(&sidecar).map_err(|e| format!("Failed to stat cover image: {e}"))?;
+            let meta =
+                fs::metadata(&sidecar).map_err(|e| format!("Failed to stat cover image: {e}"))?;
             if !meta.is_file() {
                 return Ok(None);
             }
@@ -810,7 +835,8 @@ pub fn get_or_create_cover(
                 return Ok(None);
             }
 
-            let bytes = fs::read(&sidecar).map_err(|e| format!("Failed to read cover image: {e}"))?;
+            let bytes =
+                fs::read(&sidecar).map_err(|e| format!("Failed to read cover image: {e}"))?;
             if bytes.len() > max_bytes as usize {
                 return Ok(None);
             }
@@ -823,7 +849,8 @@ pub fn get_or_create_cover(
                 sidecar_size
             );
 
-            let media_type = media_type_from_cover_path(&sidecar).unwrap_or_else(|| "image/jpeg".to_string());
+            let media_type =
+                media_type_from_cover_path(&sidecar).unwrap_or_else(|| "image/jpeg".to_string());
             let bytes_base64 = general_purpose::STANDARD.encode(&bytes);
 
             let ext = cover_extension_from_media_type(&media_type);
@@ -884,12 +911,12 @@ pub fn scan_library_paths(
 ) -> Result<Vec<ScannedTrack>, String> {
     MUSIC_LIBRARY_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
 
-    let include_metadata = options
-        .and_then(|o| o.include_metadata)
-        .unwrap_or(true);
+    let include_metadata = options.and_then(|o| o.include_metadata).unwrap_or(true);
 
     let supported_exts: HashSet<&'static str> =
-        ["mp3", "flac", "wav", "m4a", "mp4", "ogg", "weba", "aac"].into_iter().collect();
+        ["mp3", "flac", "wav", "m4a", "mp4", "ogg", "weba", "aac"]
+            .into_iter()
+            .collect();
 
     let mut audio_files: Vec<PathBuf> = Vec::new();
     for root in paths {
@@ -926,17 +953,23 @@ pub fn scan_library_paths(
 
         let meta = fs::metadata(&path).map_err(|e| format!("Failed to stat {path:?}: {e}"))?;
         let size = meta.len();
-        let mtime_ms = meta
-            .modified()
-            .map(system_time_to_millis)
-            .unwrap_or(0);
+        let mtime_ms = meta.modified().map(system_time_to_millis).unwrap_or(0);
         let file_name = path
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default()
             .to_string();
 
-        let (duration, sample_rate, bit_depth, title, artist, album, replay_gain_track_db, replay_gain_album_db) = if include_metadata {
+        let (
+            duration,
+            sample_rate,
+            bit_depth,
+            title,
+            artist,
+            album,
+            replay_gain_track_db,
+            replay_gain_album_db,
+        ) = if include_metadata {
             match extract_quick_metadata(&path) {
                 Ok(value) => value,
                 Err(_) => {

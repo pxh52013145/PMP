@@ -15,21 +15,19 @@ mod windows_impl {
     use super::TaskbarMediaControlPayload;
     use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
     use once_cell::sync::{Lazy, OnceCell};
-    use std::{
-        collections::HashMap,
-        mem,
-        sync::Mutex,
-    };
+    use std::{collections::HashMap, mem, sync::Mutex};
     use tauri::{AppHandle, Manager};
     use windows::{
         core::w,
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-            System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+            },
             UI::{
                 Shell::{
-                    ITaskbarList3, TaskbarList, THUMBBUTTON, THB_FLAGS, THB_ICON, THB_TOOLTIP,
-                    THBF_ENABLED,
+                    ITaskbarList3, TaskbarList, THBF_ENABLED, THB_FLAGS, THB_ICON, THB_TOOLTIP,
+                    THUMBBUTTON,
                 },
                 WindowsAndMessaging::{
                     CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, LoadIconW,
@@ -47,16 +45,16 @@ mod windows_impl {
     const BUTTON_ID_NEXT: u32 = 0x9003;
 
     static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
-    static TASKBAR_BUTTON_CREATED_MSG: Lazy<u32> = Lazy::new(|| {
-        unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) }
-    });
+    static TASKBAR_BUTTON_CREATED_MSG: Lazy<u32> =
+        Lazy::new(|| unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) });
 
     #[derive(Default)]
     struct WndProcRegistry {
         original: HashMap<isize, isize>,
     }
 
-    static WNDPROCS: Lazy<Mutex<WndProcRegistry>> = Lazy::new(|| Mutex::new(WndProcRegistry::default()));
+    static WNDPROCS: Lazy<Mutex<WndProcRegistry>> =
+        Lazy::new(|| Mutex::new(WndProcRegistry::default()));
 
     fn utf16_tip(text: &str) -> [u16; 260] {
         let mut tip = [0u16; 260];
@@ -77,9 +75,8 @@ mod windows_impl {
 
     unsafe fn create_taskbar_list3() -> Result<ITaskbarList3, String> {
         ensure_com_initialized();
-        let taskbar: ITaskbarList3 =
-            CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("CoCreateInstance(TaskbarList) failed: {e:?}"))?;
+        let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| format!("CoCreateInstance(TaskbarList) failed: {e:?}"))?;
         taskbar
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e:?}"))?;
@@ -128,10 +125,18 @@ mod windows_impl {
         let Some(app) = APP_HANDLE.get() else {
             return;
         };
-        let _ = app.emit_all(EVENT_TASKBAR_MEDIA_CONTROL, TaskbarMediaControlPayload { action });
+        let _ = app.emit_all(
+            EVENT_TASKBAR_MEDIA_CONTROL,
+            TaskbarMediaControlPayload { action },
+        );
     }
 
-    unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         if msg == *TASKBAR_BUTTON_CREATED_MSG {
             let _ = add_buttons(hwnd);
         } else if msg == WM_COMMAND {
@@ -157,7 +162,13 @@ mod windows_impl {
         if original == 0 {
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
-        CallWindowProcW(mem::transmute::<isize, WNDPROC>(original), hwnd, msg, wparam, lparam)
+        CallWindowProcW(
+            mem::transmute::<isize, WNDPROC>(original),
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+        )
     }
 
     pub fn init_main_window(app: &AppHandle) {

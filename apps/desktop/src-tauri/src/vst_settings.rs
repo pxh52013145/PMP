@@ -53,12 +53,14 @@ fn read_settings_from_disk(app: &AppHandle) -> Result<VstSettings, String> {
         Err(err) => return Err(format!("Failed to read VST settings: {err}")),
     };
 
-    serde_json::from_slice::<VstSettings>(&data).map_err(|e| format!("Failed to parse VST settings: {e}"))
+    serde_json::from_slice::<VstSettings>(&data)
+        .map_err(|e| format!("Failed to parse VST settings: {e}"))
 }
 
 fn write_settings_to_disk(app: &AppHandle, settings: &VstSettings) -> Result<(), String> {
     let path = settings_file_path(app)?;
-    let data = serde_json::to_vec_pretty(settings).map_err(|e| format!("Failed to encode VST settings: {e}"))?;
+    let data = serde_json::to_vec_pretty(settings)
+        .map_err(|e| format!("Failed to encode VST settings: {e}"))?;
     std::fs::write(&path, data).map_err(|e| format!("Failed to write VST settings: {e}"))
 }
 
@@ -99,4 +101,3 @@ pub fn buffer_profile_latency_frames(profile: VstBufferProfile, sample_rate: u32
     let ms = buffer_profile_latency_ms(profile);
     ((sample_rate.saturating_mul(ms)) / 1000).max(1) as u32
 }
-

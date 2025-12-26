@@ -8,18 +8,21 @@ use std::sync::{
 
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
-mod native_audio;
-mod windows;
-mod music_library;
 mod background_media;
 mod dsp_graph;
-mod vst_bridge;
+mod music_library;
+mod native_audio;
 mod vst_audit;
+mod vst_bridge;
 mod vst_dsp;
 mod vst_governance;
+mod vst_instance_manager;
+mod vst_library;
 mod vst_runtime;
+mod vst_scanner;
 mod vst_settings;
 mod vst_shm;
+mod windows;
 
 struct ExitFlag(Arc<AtomicBool>);
 struct EditorEffectsState {
@@ -92,7 +95,10 @@ async fn native_audio_set_gain(app: tauri::AppHandle, db: f32) -> Result<(), Str
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn native_audio_set_replay_gain(app: tauri::AppHandle, db: Option<f32>) -> Result<(), String> {
+async fn native_audio_set_replay_gain(
+    app: tauri::AppHandle,
+    db: Option<f32>,
+) -> Result<(), String> {
     native_audio::set_replay_gain(&app, db)
 }
 
@@ -146,7 +152,8 @@ async fn native_audio_set_dsp_graph(
 }
 
 #[tauri::command]
-async fn native_audio_vst_list_plugins() -> Result<Vec<vst_bridge::BridgePluginDescriptor>, String> {
+async fn native_audio_vst_list_plugins() -> Result<Vec<vst_bridge::BridgePluginDescriptor>, String>
+{
     tauri::async_runtime::spawn_blocking(|| vst_runtime::list_plugins())
         .await
         .map_err(|e| format!("VST list task failed: {e}"))?
@@ -161,15 +168,52 @@ async fn native_audio_vst_describe_plugin(
         .map_err(|e| format!("VST describe task failed: {e}"))?
 }
 
+#[tauri::command]
+async fn native_audio_vst_library_list_plugins() -> Result<Vec<vst_library::VstLibraryPlugin>, String>
+{
+    tauri::async_runtime::spawn_blocking(|| vst_library::list_plugins())
+        .await
+        .map_err(|e| format!("VST library list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_library_get_plugin_params(
+    plugin_id: String,
+) -> Result<Vec<vst_library::VstLibraryParamDescriptor>, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_library::get_plugin_params(plugin_id.as_str()))
+        .await
+        .map_err(|e| format!("VST library params task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_scan_start(
+    app: tauri::AppHandle,
+    request: vst_scanner::VstScanRequest,
+) -> Result<String, String> {
+    vst_scanner::start_scan(&app, request)
+}
+
+#[tauri::command]
+async fn native_audio_vst_scan_cancel() -> Result<(), String> {
+    vst_scanner::cancel_scan()
+}
+
+#[tauri::command]
+async fn native_audio_vst_scan_state() -> Result<vst_scanner::VstScanState, String> {
+    vst_scanner::get_state()
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_open_native_editor(
     app: tauri::AppHandle,
     node_id: String,
     title: Option<String>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vst_runtime::open_native_editor(&app, node_id, title))
-        .await
-        .map_err(|e| format!("VST open editor task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_runtime::open_native_editor(&app, node_id, title)
+    })
+    .await
+    .map_err(|e| format!("VST open editor task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -208,7 +252,9 @@ async fn native_audio_vst_dispose_session(node_id: String) -> Result<(), String>
 }
 
 #[tauri::command]
-async fn native_audio_vst_get_settings(app: tauri::AppHandle) -> Result<vst_settings::VstSettings, String> {
+async fn native_audio_vst_get_settings(
+    app: tauri::AppHandle,
+) -> Result<vst_settings::VstSettings, String> {
     tauri::async_runtime::spawn_blocking(move || vst_settings::get_settings(&app))
         .await
         .map_err(|e| format!("VST get settings task failed: {e}"))?
@@ -265,9 +311,11 @@ async fn native_audio_vst_disable_plugin(
 
 #[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_enable_plugin(plugin_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vst_governance::enable_plugin(plugin_id.as_str()).map(|_| ()))
-        .await
-        .map_err(|e| format!("VST enable plugin task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_governance::enable_plugin(plugin_id.as_str()).map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("VST enable plugin task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -407,16 +455,15 @@ async fn music_library_get_cover(
     path: String,
     max_bytes: Option<u64>,
 ) -> Result<Option<music_library::CachedCover>, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library::get_or_create_cover(&app, path, max_bytes))
-        .await
-        .map_err(|e| format!("Cover task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library::get_or_create_cover(&app, path, max_bytes)
+    })
+    .await
+    .map_err(|e| format!("Cover task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn music_library_remove_cover(
-    app: tauri::AppHandle,
-    key: String,
-) -> Result<u64, String> {
+async fn music_library_remove_cover(app: tauri::AppHandle, key: String) -> Result<u64, String> {
     tauri::async_runtime::spawn_blocking(move || music_library::remove_cached_cover(&app, key))
         .await
         .map_err(|e| format!("Remove cover task failed: {e}"))?
@@ -522,6 +569,9 @@ fn main() {
             if let Err(error) = vst_governance::init(&app.handle()) {
                 eprintln!("[VST] Failed to init governance: {error}");
             }
+            if let Err(error) = vst_library::init(&app.handle()) {
+                eprintln!("[VST] Failed to init library: {error}");
+            }
 
             Ok(())
         })
@@ -555,6 +605,11 @@ fn main() {
             native_audio_set_dsp_graph,
             native_audio_vst_list_plugins,
             native_audio_vst_describe_plugin,
+            native_audio_vst_library_list_plugins,
+            native_audio_vst_library_get_plugin_params,
+            native_audio_vst_scan_start,
+            native_audio_vst_scan_cancel,
+            native_audio_vst_scan_state,
             native_audio_vst_open_native_editor,
             native_audio_vst_close_native_editor,
             native_audio_vst_set_params,

@@ -1,14 +1,17 @@
 use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
-    Mutex,
+    Arc, Mutex,
 };
 
 use once_cell::sync::Lazy;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
+};
 
-use super::{EVENT_EDITOR_EXIT, EVENT_EDITOR_WINDOW_HIDDEN, EVENT_EDITOR_WINDOW_SHOWN, MAIN_WINDOW_LABEL};
+use super::{
+    EVENT_EDITOR_EXIT, EVENT_EDITOR_WINDOW_HIDDEN, EVENT_EDITOR_WINDOW_SHOWN, MAIN_WINDOW_LABEL,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditorWindowType {
@@ -212,7 +215,11 @@ fn apply_windows_blur_behind(_window: &tauri::Window, _enabled: bool) {}
 
 fn apply_geometry(window: &tauri::Window, geometry: &EditorWindowGeometry) {
     // Best-effort: avoid failing to reopen a window just because geometry is invalid.
-    if geometry.width.is_finite() && geometry.height.is_finite() && geometry.width > 0.0 && geometry.height > 0.0 {
+    if geometry.width.is_finite()
+        && geometry.height.is_finite()
+        && geometry.width > 0.0
+        && geometry.height > 0.0
+    {
         let _ = window.set_size(Size::Logical(LogicalSize {
             width: geometry.width,
             height: geometry.height,
@@ -395,25 +402,23 @@ pub fn open_editor_window(
 
     let window_for_events = window.clone();
     let app_handle = app.clone();
-    window.on_window_event(move |event| {
-        match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
-                if exit_flag.load(Ordering::SeqCst) || take_force_close(window_type) {
-                    return;
-                }
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            if exit_flag.load(Ordering::SeqCst) || take_force_close(window_type) {
+                return;
+            }
 
-                api.prevent_close();
-                let _ = cache_window_handle(&app_handle, &window_for_events, window_type);
+            api.prevent_close();
+            let _ = cache_window_handle(&app_handle, &window_for_events, window_type);
 
-                if window_type == EditorWindowType::Control {
-                    let _ = app_handle.emit_all(EVENT_EDITOR_EXIT, ());
-                    for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
-                        destroy_window(&app_handle, *wtype);
-                    }
+            if window_type == EditorWindowType::Control {
+                let _ = app_handle.emit_all(EVENT_EDITOR_EXIT, ());
+                for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
+                    destroy_window(&app_handle, *wtype);
                 }
             }
-            _ => {}
         }
+        _ => {}
     });
 
     Ok(())

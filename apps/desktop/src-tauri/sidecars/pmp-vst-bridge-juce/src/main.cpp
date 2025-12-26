@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -849,6 +850,24 @@ juce::String getVst3ScanIdHint() {
   return "Use the id returned by --list-plugins (JUCE PluginDescription identifier).";
 }
 
+std::optional<juce::PluginDescription> findVst3PluginInFile(Vst3ScanResult& scan,
+                                                            const std::string& pluginId,
+                                                            const std::string& pluginPath) {
+  if (scan.format == nullptr) return std::nullopt;
+  const juce::File pluginFile{juce::String(pluginPath)};
+  if (!pluginFile.existsAsFile() && !pluginFile.isDirectory()) return std::nullopt;
+
+  juce::OwnedArray<juce::PluginDescription> types;
+  scan.format->findAllTypesForFile(types, pluginFile.getFullPathName());
+  for (auto* type : types) {
+    if (type == nullptr) continue;
+    if (type->isInstrument) continue;
+    const auto id = type->createIdentifierString().toStdString();
+    if (id == pluginId) return *type;
+  }
+  return std::nullopt;
+}
+
 std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pluginId) {
   const auto typeOpt = findVst3PluginById(pluginId);
   if (!typeOpt.has_value()) return std::nullopt;
@@ -916,21 +935,100 @@ std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pl
 
 class PluginEditorWindow : public juce::DocumentWindow {
  public:
-  PluginEditorWindow(const juce::String& title, std::unique_ptr<juce::AudioProcessorEditor> editor)
+  PluginEditorWindow(const juce::String& title,
+                     std::unique_ptr<juce::AudioProcessorEditor> editor,
+                     uint64_t ownerHwnd,
+                     bool pinned,
+                     std::function<void()> onRequestDestroy)
       : DocumentWindow(title,
                        juce::Colours::darkgrey,
-                       juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton) {
-    setUsingNativeTitleBar(true);
-    setResizable(true, true);
+                       juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
+        ownerHwnd_(ownerHwnd),
+        pinned_(pinned),
+        onRequestDestroy_(std::move(onRequestDestroy)) {
+    setUsingNativeTitleBar(false);
+    setResizable(false, false);
     setContentOwned(editor.release(), true);
+
+    pinButton_.setButtonText("Pin");
+    pinButton_.setClickingTogglesState(true);
+    pinButton_.setToggleState(pinned_, juce::dontSendNotification);
+    pinButton_.onClick = [this]() { setPinned(pinButton_.getToggleState()); };
+    addAndMakeVisible(pinButton_);
 
     const int width = std::max(320, getContentComponent()->getWidth());
     const int height = std::max(240, getContentComponent()->getHeight());
     centreWithSize(width, height);
     setVisible(true);
+
+    applyWin32Style();
   }
 
-  void closeButtonPressed() override { setVisible(false); }
+  void closeButtonPressed() override {
+    if (!onRequestDestroy_) {
+      setVisible(false);
+      return;
+    }
+
+    auto callback = onRequestDestroy_;
+    juce::MessageManager::callAsync([callback]() mutable { callback(); });
+  }
+
+  void minimiseButtonPressed() override { setVisible(false); }
+
+  void resized() override {
+    juce::DocumentWindow::resized();
+
+    const int margin = 6;
+    const int buttonWidth = 48;
+    const int buttonHeight = 20;
+    pinButton_.setBounds(margin, margin, buttonWidth, buttonHeight);
+  }
+
+  void setPinned(bool pinned) {
+    pinned_ = pinned;
+    applyWin32Style();
+    toFront(true);
+  }
+
+ private:
+  void applyWin32Style() {
+#if defined(_WIN32)
+    auto* peer = getPeer();
+    if (peer == nullptr) {
+      juce::Component::SafePointer<PluginEditorWindow> safeThis(this);
+      juce::MessageManager::callAsync([safeThis]() mutable {
+        if (safeThis != nullptr) safeThis->applyWin32Style();
+      });
+      return;
+    }
+
+    HWND hwnd = (HWND)peer->getNativeHandle();
+    if (hwnd == nullptr) return;
+
+    LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+    exStyle |= static_cast<LONG_PTR>(WS_EX_TOOLWINDOW);
+    exStyle &= ~static_cast<LONG_PTR>(WS_EX_APPWINDOW);
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
+
+    const LONG_PTR owner =
+        (pinned_ && ownerHwnd_ != 0) ? static_cast<LONG_PTR>(ownerHwnd_) : static_cast<LONG_PTR>(0);
+    SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, owner);
+
+    SetWindowPos(hwnd,
+                 nullptr,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#endif
+  }
+
+  uint64_t ownerHwnd_ = 0;
+  bool pinned_ = true;
+  juce::TextButton pinButton_;
+  std::function<void()> onRequestDestroy_;
 };
 
 struct LivePluginHost {
@@ -992,6 +1090,8 @@ bool applyParamSet(LivePluginHost& host, const std::vector<uint8_t>& payload, Pa
 
 struct OpenEditorRequest {
   std::optional<std::string> title;
+  std::optional<uint64_t> ownerHwnd;
+  bool pinned = true;
 };
 
 OpenEditorRequest decodeOpenEditorRequest(const std::vector<uint8_t>& payload) {
@@ -1005,6 +1105,25 @@ OpenEditorRequest decodeOpenEditorRequest(const std::vector<uint8_t>& payload) {
     const auto title = titleVar.toString();
     if (title.isNotEmpty()) out.title = title.toStdString();
   }
+
+  const auto ownerVar = obj->getProperty("ownerHwnd");
+  if (ownerVar.isString()) {
+    const auto raw = ownerVar.toString().toStdString();
+    try {
+      const uint64_t value = std::stoull(raw);
+      if (value != 0) out.ownerHwnd = value;
+    } catch (...) {
+      // ignore
+    }
+  } else if (ownerVar.isInt() || ownerVar.isDouble()) {
+    const auto value = static_cast<uint64_t>(static_cast<double>(ownerVar));
+    if (value != 0) out.ownerHwnd = value;
+  }
+
+  const auto pinnedVar = obj->getProperty("pinned");
+  if (pinnedVar.isBool()) {
+    out.pinned = static_cast<bool>(pinnedVar);
+  }
   return out;
 }
 
@@ -1012,7 +1131,11 @@ std::optional<std::string> openEditor(LivePluginHost& host, const OpenEditorRequ
   auto promise = std::make_shared<std::promise<std::optional<std::string>>>();
   auto future = promise->get_future();
 
-  juce::MessageManager::callAsync([&host, reqTitle = request.title, promise]() mutable {
+  juce::MessageManager::callAsync([&host,
+                                  reqTitle = request.title,
+                                  reqOwnerHwnd = request.ownerHwnd,
+                                  reqPinned = request.pinned,
+                                  promise]() mutable {
     std::lock_guard<std::mutex> guard(host.editorMutex);
 
     if (host.instance == nullptr) {
@@ -1020,7 +1143,8 @@ std::optional<std::string> openEditor(LivePluginHost& host, const OpenEditorRequ
       return;
     }
 
-    if (host.editorWindow && host.editorWindow->isVisible()) {
+    if (host.editorWindow) {
+      host.editorWindow->setVisible(true);
       host.editorWindow->toFront(true);
       promise->set_value(std::nullopt);
       return;
@@ -1039,7 +1163,21 @@ std::optional<std::string> openEditor(LivePluginHost& host, const OpenEditorRequ
 
     const juce::String title =
         reqTitle.has_value() ? juce::String(*reqTitle) : juce::String("VST3 Editor");
-    host.editorWindow = std::make_unique<PluginEditorWindow>(title, std::move(editor));
+    const uint64_t ownerHwnd = reqOwnerHwnd.value_or(0);
+    const bool pinned = reqPinned;
+
+    host.editorWindow = std::make_unique<PluginEditorWindow>(
+        title,
+        std::move(editor),
+        ownerHwnd,
+        pinned,
+        [&host]() {
+          std::lock_guard<std::mutex> guard(host.editorMutex);
+          if (host.editorWindow) {
+            host.editorWindow->setVisible(false);
+            host.editorWindow.reset();
+          }
+        });
     promise->set_value(std::nullopt);
   });
 
@@ -1090,10 +1228,11 @@ std::vector<std::pair<std::string, float>> collectCurrentParams(LivePluginHost& 
 std::optional<std::string> instantiatePlugin(LivePluginHost& host,
                                              Vst3ScanResult& scan,
                                              const std::string& pluginId,
+                                             const std::string& pluginPath,
                                              juce::String& error) {
-  const auto typeOpt = findVst3PluginById(pluginId);
+  const auto typeOpt = findVst3PluginInFile(scan, pluginId, pluginPath);
   if (!typeOpt.has_value()) {
-    return std::string("VST3 plugin not found");
+    return std::string("VST3 plugin not found in cached path: ") + pluginPath;
   }
   const auto& type = *typeOpt;
   if (type.isInstrument) {
@@ -1109,6 +1248,7 @@ std::optional<std::string> instantiatePlugin(LivePluginHost& host,
 }
 
 int runVst3Plugin(const std::string& pluginId,
+                  const std::string& pluginPath,
                   uint32_t sampleRate,
                   int channels,
                   const std::optional<ShmAudioArgs>& shmArgs) {
@@ -1126,8 +1266,12 @@ int runVst3Plugin(const std::string& pluginId,
   host.blockSize = blockSize;
 
   std::string currentPluginId = pluginId;
-  if (const auto err = instantiatePlugin(host, scan, currentPluginId, error)) {
-    std::fprintf(stderr, "Failed to load VST3 plugin: %s\n%s\n", currentPluginId.c_str(), getVst3ScanIdHint().toRawUTF8());
+  if (const auto err = instantiatePlugin(host, scan, currentPluginId, pluginPath, error)) {
+    std::fprintf(stderr,
+                 "Failed to load VST3 plugin: %s\npath=%s\n%s\n",
+                 currentPluginId.c_str(),
+                 pluginPath.c_str(),
+                 getVst3ScanIdHint().toRawUTF8());
     return 2;
   }
 
@@ -1268,28 +1412,8 @@ int runVst3Plugin(const std::string& pluginId,
         }
 
         if (*requested != currentPluginId) {
-          closeEditor(host);
-          if (shmVst) shmVst->stopAndJoin();
-          realtimeParamQueue.clear();
-          if (host.instance) host.instance->releaseResources();
-          host.instance.reset();
-
-          error = {};
-          const auto err = instantiatePlugin(host, scan, *requested, error);
-          if (err.has_value()) {
-            writeError(stdoutFile, *err);
-            break;
-          }
-
-          currentPluginId = *requested;
-
-          if (shmVst && shmArgs.has_value() && shmArgs->mode == "process") {
-            std::string shmErr;
-            if (!shmVst->start(*shmArgs, host.instance.get(), safeChannels, blockSize, &realtimeParamQueue, shmErr)) {
-              writeError(stdoutFile, shmErr);
-              break;
-            }
-          }
+          writeError(stdoutFile, "Plugin replace is not supported: restart bridge required");
+          break;
         }
 
         writeMessage(stdoutFile, MSG_INSTANTIATE, encodePingPayload(currentPluginId));
@@ -1357,6 +1481,8 @@ int main(int argc, char* argv[]) {
       desc.id = id;
       desc.name = type.name.toStdString();
       if (type.manufacturerName.isNotEmpty()) desc.vendor = type.manufacturerName.toStdString();
+      if (type.version.isNotEmpty()) desc.version = type.version.toStdString();
+      if (type.fileOrIdentifier.isNotEmpty()) desc.path = type.fileOrIdentifier.toStdString();
       // Avoid enumerating parameters here: loading each plugin is expensive and can hang/crash.
       out.add(pluginDescriptorToVar(desc));
     }
@@ -1380,6 +1506,11 @@ int main(int argc, char* argv[]) {
     std::fprintf(stderr, "Missing required arg: --plugin-id\n");
     return 2;
   }
+  const auto pluginPath = readArgValue(argc, argv, "--plugin-path").value_or("");
+  if (pluginPath.empty()) {
+    std::fprintf(stderr, "Missing required arg: --plugin-path\n");
+    return 2;
+  }
   const uint32_t sampleRate = static_cast<uint32_t>(std::stoul(readArgValue(argc, argv, "--sample-rate").value_or("48000")));
   const int channels = std::max(1, std::stoi(readArgValue(argc, argv, "--channels").value_or("2")));
 
@@ -1393,7 +1524,7 @@ int main(int argc, char* argv[]) {
 
   std::atomic<int> engineExitCode = 0;
   std::thread engine([&]() {
-    engineExitCode.store(runVst3Plugin(pluginId, sampleRate, channels, shmArgs));
+    engineExitCode.store(runVst3Plugin(pluginId, pluginPath, sampleRate, channels, shmArgs));
     juce::MessageManager::getInstance()->stopDispatchLoop();
   });
 
