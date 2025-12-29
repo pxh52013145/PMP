@@ -1,4 +1,4 @@
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { broadcastSignal, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { readString, writeString } from '../storage';
 
 const SETTINGS_FILE = 'pixel-matrix-background-settings.snapshot.json';
@@ -13,11 +13,10 @@ async function tryWriteSnapshot(fileName: string, json: string): Promise<void> {
   }
 }
 
-async function tryReadSnapshot<T>(fileName: string): Promise<T | null> {
+async function tryReadSnapshotText(fileName: string): Promise<string | null> {
   try {
     const fs = await import('@tauri-apps/api/fs');
-    const contents = await fs.readTextFile(fileName, { dir: fs.BaseDirectory.AppData });
-    return JSON.parse(contents) as T;
+    return await fs.readTextFile(fileName, { dir: fs.BaseDirectory.AppData });
   } catch {
     return null;
   }
@@ -35,27 +34,37 @@ export async function persistBackgroundSnapshots(options: {
   }
 }
 
-export async function restoreBackgroundSnapshots(): Promise<{
-  restoredSettings: boolean;
-  restoredHistory: boolean;
-}> {
+export async function restoreBackgroundSnapshots(options: {
+  restoreSettings?: boolean;
+  restoreHistory?: boolean;
+} = {}): Promise<{ restoredSettings: boolean; restoredHistory: boolean }> {
+  const restoreSettings = options.restoreSettings ?? true;
+  const restoreHistory = options.restoreHistory ?? true;
+
   let restoredSettings = false;
   let restoredHistory = false;
+  let emitted = false;
 
-  if (!readString(STORAGE_KEYS.BACKGROUND_SETTINGS)) {
-    const settings = await tryReadSnapshot<unknown>(SETTINGS_FILE);
-    if (settings) {
-      writeString(STORAGE_KEYS.BACKGROUND_SETTINGS, JSON.stringify(settings));
+  if (restoreSettings && !readString(STORAGE_KEYS.BACKGROUND_SETTINGS)) {
+    const settingsJson = await tryReadSnapshotText(SETTINGS_FILE);
+    if (settingsJson) {
+      writeString(STORAGE_KEYS.BACKGROUND_SETTINGS, settingsJson);
       restoredSettings = true;
+      emitted = true;
     }
   }
 
-  if (!readString(STORAGE_KEYS.BACKGROUND_HISTORY)) {
-    const history = await tryReadSnapshot<unknown>(HISTORY_FILE);
-    if (history) {
-      writeString(STORAGE_KEYS.BACKGROUND_HISTORY, JSON.stringify(history));
+  if (restoreHistory && !readString(STORAGE_KEYS.BACKGROUND_HISTORY)) {
+    const historyJson = await tryReadSnapshotText(HISTORY_FILE);
+    if (historyJson) {
+      writeString(STORAGE_KEYS.BACKGROUND_HISTORY, historyJson);
       restoredHistory = true;
+      emitted = true;
     }
+  }
+
+  if (emitted) {
+    await broadcastSignal(TAURI_EVENTS.BACKGROUND_UPDATED);
   }
 
   return { restoredSettings, restoredHistory };

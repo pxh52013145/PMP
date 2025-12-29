@@ -8,6 +8,8 @@ import { readString, writeJson } from '../modules/storage';
 import { isTauriRuntime } from './tauriRuntime';
 
 const DEBUG_STORAGE_KEY = 'pixel-matrix-debug-window-comm';
+const LOCAL_COMM_EVENT = 'pixel-matrix-window-comm';
+const BROADCAST_CHANNEL_NAME = 'pixel-matrix-window-comm';
 let debugEnabledCache: boolean | null = null;
 
 function isDebugEnabled(): boolean {
@@ -61,6 +63,51 @@ function recordReceive(eventName: string): void {
   exposeStats();
 }
 
+type WindowCommMessage =
+  | {
+      kind: 'data-update';
+      key: string;
+      timestamp: number;
+    }
+  | {
+      kind: 'signal';
+      eventName: string;
+      timestamp: number;
+    };
+
+let broadcastChannel: BroadcastChannel | null = null;
+
+function getBroadcastChannel(): BroadcastChannel | null {
+  if (typeof window === 'undefined') return null;
+  if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) return null;
+  if (typeof window.BroadcastChannel === 'undefined') return null;
+  if (broadcastChannel) return broadcastChannel;
+  try {
+    broadcastChannel = new window.BroadcastChannel(BROADCAST_CHANNEL_NAME);
+    return broadcastChannel;
+  } catch {
+    return null;
+  }
+}
+
+function emitLocalMessage(message: WindowCommMessage): void {
+  try {
+    window.dispatchEvent(new CustomEvent<WindowCommMessage>(LOCAL_COMM_EVENT, { detail: message }));
+  } catch {
+    // best-effort
+  }
+}
+
+function broadcastChannelMessage(message: WindowCommMessage): void {
+  const channel = getBroadcastChannel();
+  if (!channel) return;
+  try {
+    channel.postMessage(message);
+  } catch {
+    // best-effort
+  }
+}
+
 /**
  * localStorage 数据 key 定义
  */
@@ -102,8 +149,13 @@ export const STORAGE_KEYS = {
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
   NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph（object）
+  DSP_RACK_LOCATE_NODE: 'pixel-matrix-dsp-rack-locate-node-v1', // DSP Rack 定位/高亮节点（object）
+  NAVIGATION_REQUEST: 'pixel-matrix-navigation-request-v1', // 跨窗口导航请求（object）
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
   NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings（object）
+
+  // === VST3 ===
+  VST_SCAN_SETTINGS: 'pixel-matrix-vst3-scan-settings-v1', // VST3 扫描设置（object，含 scan paths）
 
   // === Plugins (.pmpm) ===
   PMPM_PLUGINS: 'pixel-matrix-pmpm-plugins', // 已安装插件（manifest + entryCode）
@@ -182,11 +234,11 @@ export const TAURI_EVENTS = {
   MAIN_WINDOW_HIDDEN: 'main-window-hidden',
   MAIN_WINDOW_SHOWN: 'main-window-shown',
 
-  // Plugin windows / VST editor windows
+  // Plugin windows / VST manager window
   PLUGIN_WINDOW_HIDDEN: 'plugin-window-hidden',
   PLUGIN_WINDOW_SHOWN: 'plugin-window-shown',
-  VST_EDITOR_WINDOW_HIDDEN: 'vst-editor-window-hidden',
-  VST_EDITOR_WINDOW_SHOWN: 'vst-editor-window-shown',
+  VST_MANAGER_WINDOW_HIDDEN: 'vst-manager-window-hidden',
+  VST_MANAGER_WINDOW_SHOWN: 'vst-manager-window-shown',
 
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
@@ -195,6 +247,8 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_DSP_GRAPH_UPDATED: 'native-audio-dsp-graph-updated',
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',
   NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED: 'native-audio-crossfade-settings-updated',
+  DSP_RACK_LOCATE_NODE: 'dsp-rack-locate-node',
+  NAVIGATION_REQUESTED: 'navigation-requested',
 
   // Theme
   THEME_UPDATED: 'theme-config-updated',
@@ -221,11 +275,20 @@ export async function broadcastDataUpdate<T>(
   try {
     // 1. 更新 localStorage
     writeJson(storageKey, data, { mode: 'sync' });
+    const timestamp = Date.now();
+
+    // Current-window notification (fast, no backend dependency)
+    emitLocalMessage({ kind: 'data-update', key: storageKey, timestamp });
+
+    // Cross-window notification (fast, no backend dependency)
+    broadcastChannelMessage({ kind: 'data-update', key: storageKey, timestamp });
 
     // 2. 发送 Tauri 事件（如果提供）
     if (tauriEvent && isTauriRuntime()) {
       recordEmit(tauriEvent);
-      await emit(tauriEvent, { timestamp: Date.now(), key: storageKey });
+      void emit(tauriEvent, { timestamp, key: storageKey }).catch((error) => {
+        console.error(`Failed to broadcast tauri event (${tauriEvent}):`, error);
+      });
       debugLog(`Broadcasted: ${storageKey} via ${tauriEvent}`);
     } else {
       debugLog(`Saved to localStorage: ${storageKey}`);
@@ -240,10 +303,16 @@ export async function broadcastDataUpdate<T>(
  * 发送信号（只触发事件，不存储数据）
  */
 export async function broadcastSignal(tauriEvent: string): Promise<void> {
+  const timestamp = Date.now();
+  emitLocalMessage({ kind: 'signal', eventName: tauriEvent, timestamp });
+  broadcastChannelMessage({ kind: 'signal', eventName: tauriEvent, timestamp });
+
   if (!isTauriRuntime()) return;
   try {
     recordEmit(tauriEvent);
-    await emit(tauriEvent, { timestamp: Date.now() });
+    void emit(tauriEvent, { timestamp }).catch((error) => {
+      console.error(`Failed to broadcast signal (${tauriEvent}):`, error);
+    });
     debugLog(`Signal broadcasted: ${tauriEvent}`);
   } catch (error) {
     console.error(`Failed to broadcast signal (${tauriEvent}):`, error);
@@ -348,16 +417,69 @@ export async function setupDualListener(
   callback: () => void
 ): Promise<() => void> {
   // 设置 localStorage 监听
+  let scheduled = false;
+  const run = () => {
+    if (scheduled) return;
+    scheduled = true;
+    void Promise.resolve().then(() => {
+      scheduled = false;
+      try {
+        callback();
+      } catch (error) {
+        console.error('windowCommunication callback failed:', error);
+      }
+    });
+  };
+
   const unlistenStorage = setupStorageListener(storageKeys, () => {
     debugLog('Storage event triggered, calling callback');
-    callback();
+    run();
   });
 
   // 设置 Tauri 事件监听
+  const handleLocalComm = (event: Event) => {
+    const detail = (event as CustomEvent<WindowCommMessage>).detail;
+    if (!detail) return;
+
+    if (detail.kind === 'data-update') {
+      if (!storageKeys.includes(detail.key)) return;
+      debugLog(`Local comm received: ${detail.key}`);
+      run();
+      return;
+    }
+
+    if (detail.kind === 'signal') {
+      if (!tauriEvents.includes(detail.eventName)) return;
+      debugLog(`Local comm received: ${detail.eventName}`);
+      run();
+    }
+  };
+  window.addEventListener(LOCAL_COMM_EVENT, handleLocalComm as EventListener);
+
+  const channel = getBroadcastChannel();
+  const handleBroadcastChannel = (event: MessageEvent) => {
+    const detail = event.data as WindowCommMessage | null | undefined;
+    if (!detail) return;
+
+    if (detail.kind === 'data-update') {
+      if (!storageKeys.includes(detail.key)) return;
+      debugLog(`BroadcastChannel received: ${detail.key}`);
+      run();
+      return;
+    }
+
+    if (detail.kind === 'signal') {
+      if (!tauriEvents.includes(detail.eventName)) return;
+      debugLog(`BroadcastChannel received: ${detail.eventName}`);
+      run();
+    }
+  };
+  channel?.addEventListener('message', handleBroadcastChannel as EventListener);
+
   const tauriUnlisteners: UnlistenFn[] = [];
   for (const eventName of tauriEvents) {
     try {
-      const unlisten = await setupTauriListener(eventName, callback);
+      const unlisten = await setupTauriListener(eventName, run);
       tauriUnlisteners.push(unlisten);
     } catch (error) {
       console.error(`Failed to setup listener for ${eventName}:`, error);
@@ -367,6 +489,8 @@ export async function setupDualListener(
   // 返回统一的清理函数
   return () => {
     unlistenStorage();
+    window.removeEventListener(LOCAL_COMM_EVENT, handleLocalComm as EventListener);
+    channel?.removeEventListener('message', handleBroadcastChannel as EventListener);
     tauriUnlisteners.forEach((unlisten) => unlisten());
   };
 }

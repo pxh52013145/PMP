@@ -101,7 +101,16 @@ fn shm_handshake_timeout() -> Duration {
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|value| *value > 0)
         .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(30_000))
+        .unwrap_or_else(|| Duration::from_millis(60_000))
+}
+
+fn bridge_ping_timeout() -> Duration {
+    let ms = std::env::var("PMP_VST_BRIDGE_PING_TIMEOUT_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(5_000);
+    Duration::from_millis(ms.clamp(500, 120_000))
 }
 
 fn ensure_session_internal(
@@ -262,21 +271,22 @@ fn ensure_session_internal(
             return Err(err);
         }
     };
-    if let Err(err) = client
-        .ping()
-        .map_err(|e| format!("Bridge ping failed: {e}"))
-    {
-        vst_audit::record_event(
-            VstAuditEventKind::SessionSpawnFailed,
-            Some(node_id.to_string()),
-            Some(plugin_id.to_string()),
-            err.clone(),
-        );
-        return Err(err);
-    }
 
     let deadline = Instant::now() + shm_handshake_timeout();
+    let mut last_alive_check = Instant::now();
     while Instant::now() < deadline {
+        if last_alive_check.elapsed() >= Duration::from_millis(200) {
+            if let Err(err) = client.check_alive() {
+                vst_audit::record_event(
+                    VstAuditEventKind::SessionSpawnFailed,
+                    Some(node_id.to_string()),
+                    Some(plugin_id.to_string()),
+                    err.clone(),
+                );
+                return Err(err);
+            }
+            last_alive_check = Instant::now();
+        }
         if shm_in.header().is_peer_ready() && shm_out.header().is_peer_ready() {
             break;
         }
@@ -291,6 +301,20 @@ fn ensure_session_internal(
             "Bridge shared memory handshake timed out".to_string(),
         );
         return Err("Bridge shared memory handshake timed out".to_string());
+    }
+
+    if let Err(err) = client
+        .ping_with_timeout(bridge_ping_timeout())
+        .map_err(|e| format!("Bridge ping failed: {e}"))
+    {
+        client.kill();
+        vst_audit::record_event(
+            VstAuditEventKind::SessionSpawnFailed,
+            Some(node_id.to_string()),
+            Some(plugin_id.to_string()),
+            err.clone(),
+        );
+        return Err(err);
     }
 
     let desired_generation =

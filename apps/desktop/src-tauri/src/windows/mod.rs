@@ -1,6 +1,6 @@
 pub mod editor;
 pub mod plugin;
-pub mod vst;
+pub mod vst_manager;
 
 #[cfg(target_os = "windows")]
 pub mod taskbar_thumbbar;
@@ -17,7 +17,7 @@ pub const EVENT_EDITOR_EXIT: &str = "editor-exit";
 pub const EVENT_PLUGIN_WINDOW_SHOWN: &str = "plugin-window-shown";
 pub const EVENT_PLUGIN_WINDOW_HIDDEN: &str = "plugin-window-hidden";
 
-pub const EVENT_VST_EDITOR_WINDOW_SHOWN: &str = "vst-editor-window-shown";
-pub const EVENT_VST_EDITOR_WINDOW_HIDDEN: &str = "vst-editor-window-hidden";
+pub const EVENT_VST_MANAGER_WINDOW_SHOWN: &str = "vst-manager-window-shown";
+pub const EVENT_VST_MANAGER_WINDOW_HIDDEN: &str = "vst-manager-window-hidden";
 
 pub const EVENT_TASKBAR_MEDIA_CONTROL: &str = "taskbar-media-control";

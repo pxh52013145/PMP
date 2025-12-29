@@ -748,6 +748,16 @@ juce::var pluginDescriptorToVar(const PluginDescriptor& desc) {
 }
 
 std::vector<juce::PluginDescription> scanVst3Plugins();
+std::vector<juce::PluginDescription> scanVst3Plugins(const std::vector<std::string>& scanPaths);
+std::vector<juce::PluginDescription> scanVst3Plugins(const std::vector<std::string>& scanPaths,
+                                                     bool includeDefaultPaths);
+std::optional<juce::PluginDescription> findVst3PluginById(const std::string& pluginId,
+                                                          const std::vector<std::string>& scanPaths,
+                                                          bool includeDefaultPaths);
+std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pluginId,
+                                                           const std::vector<std::string>& scanPaths,
+                                                           bool includeDefaultPaths,
+                                                           const std::optional<std::string>& pluginPath);
 
 std::vector<uint8_t> encodeScanPluginsPayload() {
   juce::Array<juce::var> out;
@@ -806,6 +816,16 @@ struct Vst3ScanResult {
 };
 
 std::vector<juce::PluginDescription> scanVst3Plugins() {
+  static const std::vector<std::string> emptyPaths;
+  return scanVst3Plugins(emptyPaths, true);
+}
+
+std::vector<juce::PluginDescription> scanVst3Plugins(const std::vector<std::string>& scanPaths) {
+  return scanVst3Plugins(scanPaths, false);
+}
+
+std::vector<juce::PluginDescription> scanVst3Plugins(const std::vector<std::string>& scanPaths,
+                                                     bool includeDefaultPaths) {
   Vst3ScanResult scan;
   juce::File deadMansPedalFile =
       juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
@@ -813,9 +833,34 @@ std::vector<juce::PluginDescription> scanVst3Plugins() {
           .getChildFile("vst3_scanner_deadman.txt");
   deadMansPedalFile.getParentDirectory().createDirectory();
 
+  juce::FileSearchPath searchPaths = scan.format->getDefaultLocationsToSearch();
+  if (!scanPaths.empty() && !includeDefaultPaths) {
+    searchPaths = juce::FileSearchPath{};
+  }
+
+  if (!scanPaths.empty()) {
+    std::unordered_set<std::string> seen;
+    for (const auto& raw : scanPaths) {
+      juce::String pathStr{raw};
+      pathStr = pathStr.trim();
+      if (pathStr.isEmpty()) continue;
+
+      const juce::File dir{pathStr};
+      if (!dir.exists()) continue;
+      const auto full = dir.getFullPathName();
+      const auto key = full.toLowerCase().toStdString();
+      if (!seen.insert(key).second) continue;
+      searchPaths.add(full);
+    }
+
+    if (searchPaths.getNumPaths() == 0) {
+      searchPaths = scan.format->getDefaultLocationsToSearch();
+    }
+  }
+
   juce::PluginDirectoryScanner scanner(scan.knownList,
                                        *scan.format,
-                                       scan.format->getDefaultLocationsToSearch(),
+                                       searchPaths,
                                        true,
                                        deadMansPedalFile,
                                        true);
@@ -835,7 +880,19 @@ std::vector<juce::PluginDescription> scanVst3Plugins() {
 }
 
 std::optional<juce::PluginDescription> findVst3PluginById(const std::string& pluginId) {
-  const auto types = scanVst3Plugins();
+  static const std::vector<std::string> emptyPaths;
+  return findVst3PluginById(pluginId, emptyPaths, true);
+}
+
+std::optional<juce::PluginDescription> findVst3PluginById(const std::string& pluginId,
+                                                          const std::vector<std::string>& scanPaths) {
+  return findVst3PluginById(pluginId, scanPaths, false);
+}
+
+std::optional<juce::PluginDescription> findVst3PluginById(const std::string& pluginId,
+                                                          const std::vector<std::string>& scanPaths,
+                                                          bool includeDefaultPaths) {
+  const auto types = scanVst3Plugins(scanPaths, includeDefaultPaths);
   for (const auto& type : types) {
     const auto id = type.createIdentifierString();
     if (id.toStdString() == pluginId) {
@@ -869,12 +926,34 @@ std::optional<juce::PluginDescription> findVst3PluginInFile(Vst3ScanResult& scan
 }
 
 std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pluginId) {
-  const auto typeOpt = findVst3PluginById(pluginId);
+  static const std::vector<std::string> emptyPaths;
+  return buildDescriptorForPluginId(pluginId, emptyPaths, true, std::nullopt);
+}
+
+std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pluginId,
+                                                           const std::vector<std::string>& scanPaths,
+                                                           const std::optional<std::string>& pluginPath) {
+  return buildDescriptorForPluginId(pluginId, scanPaths, false, pluginPath);
+}
+
+std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pluginId,
+                                                           const std::vector<std::string>& scanPaths,
+                                                           bool includeDefaultPaths,
+                                                           const std::optional<std::string>& pluginPath) {
+  std::optional<juce::PluginDescription> typeOpt;
+
+  Vst3ScanResult scan;
+  if (pluginPath.has_value() && !pluginPath->empty()) {
+    typeOpt = findVst3PluginInFile(scan, pluginId, *pluginPath);
+  }
+  if (!typeOpt.has_value()) {
+    typeOpt = findVst3PluginById(pluginId, scanPaths, includeDefaultPaths);
+  }
   if (!typeOpt.has_value()) return std::nullopt;
+
   const auto& type = *typeOpt;
   if (type.isInstrument) return std::nullopt;
 
-  Vst3ScanResult scan;
   juce::String error;
   auto instance = scan.formatManager.createPluginInstance(type, 48'000.0, 512, error);
   if (!instance) return std::nullopt;
@@ -1463,6 +1542,14 @@ std::optional<std::string> readArgValue(int argc, char* argv[], const char* key)
   return std::nullopt;
 }
 
+std::vector<std::string> readArgValues(int argc, char* argv[], const char* key) {
+  std::vector<std::string> out;
+  for (int i = 1; i + 1 < argc; i++) {
+    if (std::strcmp(argv[i], key) == 0) out.emplace_back(argv[i + 1]);
+  }
+  return out;
+}
+
 bool hasArg(int argc, char* argv[], const char* key) {
   for (int i = 1; i < argc; i++) {
     if (std::strcmp(argv[i], key) == 0) return true;
@@ -1483,7 +1570,9 @@ int main(int argc, char* argv[]) {
   if (hasArg(argc, argv, "--list-plugins")) {
     juce::Array<juce::var> out;
 
-    const auto types = scanVst3Plugins();
+    const auto scanPaths = readArgValues(argc, argv, "--scan-path");
+    const auto includeDefaultPaths = hasArg(argc, argv, "--include-default-paths");
+    const auto types = scanVst3Plugins(scanPaths, includeDefaultPaths);
     std::unordered_set<std::string> seen;
     for (const auto& type : types) {
       if (type.isInstrument) continue;
@@ -1505,7 +1594,15 @@ int main(int argc, char* argv[]) {
   }
 
   if (const auto describeId = readArgValue(argc, argv, "--describe-plugin")) {
-    const auto descriptor = buildDescriptorForPluginId(*describeId);
+    const auto scanPaths = readArgValues(argc, argv, "--scan-path");
+    const auto includeDefaultPaths = hasArg(argc, argv, "--include-default-paths");
+    std::optional<std::string> pluginPath;
+    if (const auto rawPluginPath = readArgValue(argc, argv, "--plugin-path")) {
+      juce::String pathStr{*rawPluginPath};
+      pathStr = pathStr.trim();
+      if (pathStr.isNotEmpty()) pluginPath = pathStr.toStdString();
+    }
+    const auto descriptor = buildDescriptorForPluginId(*describeId, scanPaths, includeDefaultPaths, pluginPath);
     if (!descriptor.has_value()) {
       std::fprintf(stderr, "Failed to describe plugin: %s\n", describeId->c_str());
       return 2;

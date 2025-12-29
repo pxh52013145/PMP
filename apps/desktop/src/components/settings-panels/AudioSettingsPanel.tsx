@@ -1,10 +1,13 @@
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import type { AudioEngineType } from '../../contexts/AudioEngineContext';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { openVstManagerWindow } from '../../utils/vstManagerWindows';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 export function AudioSettingsPanel() {
   const { engineType, isNativeAvailable, setEngineType } = useAudioEngine();
   const { navigateTo } = useNavigation();
+  const isTauri = isTauriRuntime();
 
   const handleEngineChange = (type: AudioEngineType) => {
     if (type === engineType) return;
@@ -41,6 +44,24 @@ export function AudioSettingsPanel() {
       <button className="native-debug-link" onClick={() => navigateTo('native-debug')} disabled={!isNativeAvailable}>
         原生引擎调试
       </button>
+
+      <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button className="native-debug-link" onClick={() => navigateTo('dsp-rack')} disabled={!isNativeAvailable}>
+          打开 DSP Rack
+        </button>
+        <button
+          className="native-debug-link"
+          onClick={() =>
+            void openVstManagerWindow({ title: 'VST3 Plugin Manager' }).catch((error) => {
+              console.warn('[AudioSettingsPanel] Failed to open VST3 plugin manager window', error);
+            })
+          }
+          disabled={!isNativeAvailable || !isTauri}
+          title={isTauri ? undefined : '需要在 Tauri 桌面环境运行（pnpm dev:tauri）'}
+        >
+          打开 VST3 插件管理器
+        </button>
+      </div>
     </div>
   );
 }

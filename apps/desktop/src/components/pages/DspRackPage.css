@@ -70,6 +70,13 @@
   overflow: hidden;
 }
 
+.dsp-node-card--highlight {
+  border-color: rgba(0, 255, 136, 0.45);
+  box-shadow:
+    0 0 0 2px rgba(0, 255, 136, 0.12),
+    0 10px 25px rgba(0, 255, 136, 0.08);
+}
+
 .dsp-node-header {
   display: flex;
   justify-content: space-between;
@@ -160,4 +167,3 @@
   background: rgba(0, 0, 0, 0.25);
   color: inherit;
 }
-

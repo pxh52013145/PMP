@@ -39,7 +39,7 @@ export function createLifecycleModule(): KernelModule<AppEvents> {
       let unlistenMainHidden: null | (() => void) = null;
       let unlistenEditorHidden: null | (() => void) = null;
       let unlistenPluginHidden: null | (() => void) = null;
-      let unlistenVstHidden: null | (() => void) = null;
+      let unlistenVstManagerHidden: null | (() => void) = null;
 
       if (isTauriRuntime()) {
         void import('@tauri-apps/api/event')
@@ -48,14 +48,14 @@ export function createLifecycleModule(): KernelModule<AppEvents> {
               listen(TAURI_EVENTS.MAIN_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
               listen(TAURI_EVENTS.EDITOR_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
               listen(TAURI_EVENTS.PLUGIN_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
-              listen(TAURI_EVENTS.VST_EDITOR_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
+              listen(TAURI_EVENTS.VST_MANAGER_WINDOW_HIDDEN, () => flush('tauri-window-hidden')),
             ])
           )
-          .then(([mainHidden, editorHidden, pluginHidden, vstHidden]) => {
+          .then(([mainHidden, editorHidden, pluginHidden, vstManagerHidden]) => {
             unlistenMainHidden = mainHidden;
             unlistenEditorHidden = editorHidden;
             unlistenPluginHidden = pluginHidden;
-            unlistenVstHidden = vstHidden;
+            unlistenVstManagerHidden = vstManagerHidden;
           })
           .catch(() => {
             // best-effort
@@ -83,7 +83,7 @@ export function createLifecycleModule(): KernelModule<AppEvents> {
           // ignore
         }
         try {
-          unlistenVstHidden?.();
+          unlistenVstManagerHidden?.();
         } catch {
           // ignore
         }

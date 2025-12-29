@@ -1,7 +1,10 @@
 use once_cell::sync::{Lazy, OnceCell};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
@@ -36,6 +39,25 @@ pub struct VstLibraryParamDescriptor {
     pub scanned_at_ms: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VstScanRun {
+    pub run_id: String,
+    pub started_at_ms: u64,
+    pub finished_at_ms: Option<u64>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VstScanEvent {
+    pub at_ms: u64,
+    pub kind: String,
+    pub plugin_id: Option<String>,
+    pub message: String,
+}
+
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 
@@ -44,6 +66,86 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn system_time_to_ms(value: SystemTime) -> Option<i64> {
+    value
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+}
+
+fn resolve_vst3_binary_path(bundle_path: &Path) -> Option<PathBuf> {
+    if bundle_path.is_file() {
+        return Some(bundle_path.to_path_buf());
+    }
+    if !bundle_path.is_dir() {
+        return None;
+    }
+
+    let candidates = [
+        bundle_path.join("Contents").join("x86_64-win"),
+        bundle_path.join("Contents").join("x86-win"),
+        bundle_path.join("Contents").join("Win64"),
+        bundle_path.join("Contents").join("Win32"),
+    ];
+
+    for dir in candidates {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("vst3"))
+                .unwrap_or(false)
+            {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn paths_equal(a: &str, b: &str) -> bool {
+    let a = a.trim();
+    let b = b.trim();
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
+fn sha256_prefix_hex(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut remaining = max_bytes;
+    let mut buf = [0u8; 16 * 1024];
+
+    while remaining > 0 {
+        let to_read = std::cmp::min(buf.len() as u64, remaining) as usize;
+        let read = file.read(&mut buf[..to_read]).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        remaining = remaining.saturating_sub(read as u64);
+    }
+
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(12);
+    for b in digest.iter().take(6) {
+        out.push_str(&format!("{:02x}", b));
+    }
+    Some(out)
 }
 
 fn db_file_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -260,6 +362,78 @@ pub fn record_scan_event(run_id: &str, kind: &str, plugin_id: Option<&str>, mess
     });
 }
 
+pub fn list_scan_runs(limit: u32) -> Result<Vec<VstScanRun>, String> {
+    let limit = limit.clamp(1, 200) as i64;
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT run_id, started_at_ms, finished_at_ms, status, error
+                FROM vst_scan_runs
+                ORDER BY started_at_ms DESC
+                LIMIT ?1
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare scan runs query: {e}"))?;
+
+        let mut out = Vec::new();
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok(VstScanRun {
+                    run_id: row.get::<_, String>(0)?,
+                    started_at_ms: row.get::<_, i64>(1)? as u64,
+                    finished_at_ms: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                    status: row.get::<_, String>(3)?,
+                    error: row.get::<_, Option<String>>(4)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query scan runs: {e}"))?;
+
+        for row in rows {
+            out.push(row.map_err(|e| format!("Failed to read scan run row: {e}"))?);
+        }
+        Ok(out)
+    })
+}
+
+pub fn list_scan_events(run_id: &str, limit: u32) -> Result<Vec<VstScanEvent>, String> {
+    let run_id = run_id.trim();
+    if run_id.is_empty() {
+        return Err("Missing runId".to_string());
+    }
+    let limit = limit.clamp(1, 500) as i64;
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT at_ms, kind, plugin_id, message
+                FROM vst_scan_events
+                WHERE run_id = ?1
+                ORDER BY at_ms DESC
+                LIMIT ?2
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare scan events query: {e}"))?;
+
+        let mut out = Vec::new();
+        let rows = stmt
+            .query_map(params![run_id, limit], |row| {
+                Ok(VstScanEvent {
+                    at_ms: row.get::<_, i64>(0)? as u64,
+                    kind: row.get::<_, String>(1)?,
+                    plugin_id: row.get::<_, Option<String>>(2)?,
+                    message: row.get::<_, String>(3)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query scan events: {e}"))?;
+
+        for row in rows {
+            out.push(row.map_err(|e| format!("Failed to read scan event row: {e}"))?);
+        }
+        Ok(out)
+    })
+}
+
 pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> Result<(), String> {
     with_conn(|conn| {
         let tx = conn
@@ -267,6 +441,32 @@ pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> 
             .map_err(|e| format!("Failed to start VST library transaction: {e}"))?;
 
         let now = now_ms() as i64;
+        let existing_params_scanned_at_ms: Option<i64> = tx
+            .query_row(
+                "SELECT params_scanned_at_ms FROM vst_plugins WHERE plugin_id = ?1",
+                params![plugin.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query plugin params scan time: {e}"))?;
+        let had_cached_params = existing_params_scanned_at_ms.is_some();
+
+        let existing_file: Option<(String, Option<i64>, Option<i64>, Option<String>)> = tx
+            .query_row(
+                "SELECT path, mtime_ms, size, sha256_prefix FROM vst_files WHERE plugin_id = ?1",
+                params![plugin.id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query plugin fingerprint: {e}"))?;
+
         tx.execute(
             r#"
             INSERT INTO vst_plugins(plugin_id, name, vendor, version, format, status, last_seen_at_ms, params_scanned_at_ms)
@@ -293,16 +493,86 @@ pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> 
             .map(|p| p.trim())
             .filter(|p| !p.is_empty())
         {
+            let (prev_path, prev_mtime_ms, prev_size, prev_sha) = existing_file
+                .as_ref()
+                .map(|(path, mtime_ms, size, sha)| {
+                    (
+                        Some(path.as_str()),
+                        *mtime_ms,
+                        *size,
+                        sha.as_deref().map(|v| v.to_string()),
+                    )
+                })
+                .unwrap_or((None, None, None, None));
+
+            let bundle_path = Path::new(path);
+            let fingerprint_path =
+                resolve_vst3_binary_path(bundle_path).unwrap_or_else(|| bundle_path.to_path_buf());
+
+            let (mtime_ms, size) = match std::fs::metadata(&fingerprint_path) {
+                Ok(meta) => (
+                    meta.modified().ok().and_then(system_time_to_ms),
+                    i64::try_from(meta.len()).ok(),
+                ),
+                Err(_) => (None, None),
+            };
+
+            let sha256_prefix = if prev_sha.is_none() || prev_mtime_ms != mtime_ms || prev_size != size {
+                sha256_prefix_hex(&fingerprint_path, 1024 * 1024)
+            } else {
+                prev_sha.clone()
+            };
+
+            let fingerprint_known =
+                prev_mtime_ms.is_some() || prev_size.is_some() || prev_sha.is_some();
+            let path_changed = prev_path
+                .map(|prev| !paths_equal(prev, path))
+                .unwrap_or(true);
+            let fingerprint_changed = fingerprint_known
+                && (prev_mtime_ms != mtime_ms || prev_size != size || prev_sha != sha256_prefix);
+            let file_changed = path_changed || fingerprint_changed;
+
             tx.execute(
                 r#"
                 INSERT INTO vst_files(plugin_id, path, mtime_ms, size, sha256_prefix)
-                VALUES (?1, ?2, NULL, NULL, NULL)
+                VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(plugin_id) DO UPDATE SET
                   path = excluded.path
+                  , mtime_ms = excluded.mtime_ms
+                  , size = excluded.size
+                  , sha256_prefix = excluded.sha256_prefix
                 "#,
-                params![plugin.id, path],
+                params![plugin.id, path, mtime_ms, size, sha256_prefix],
             )
             .map_err(|e| format!("Failed to upsert file row: {e}"))?;
+
+            if file_changed && had_cached_params {
+                tx.execute(
+                    "UPDATE vst_plugins SET params_scanned_at_ms = NULL WHERE plugin_id = ?1",
+                    params![plugin.id],
+                )
+                .map_err(|e| format!("Failed to invalidate params cache: {e}"))?;
+
+                tx.execute(
+                    "DELETE FROM vst_params WHERE plugin_id = ?1",
+                    params![plugin.id],
+                )
+                .map_err(|e| format!("Failed to clear cached params: {e}"))?;
+
+                tx.execute(
+                    "INSERT INTO vst_scan_events(run_id, at_ms, kind, plugin_id, message) VALUES (?1, ?2, 'plugin-changed', ?3, ?4)",
+                    params![
+                        run_id,
+                        now,
+                        plugin.id,
+                        format!(
+                            "Invalidated cached params (path/mtime/size/sha changed): {}",
+                            fingerprint_path.display()
+                        )
+                    ],
+                )
+                .map_err(|e| format!("Failed to insert plugin-changed event: {e}"))?;
+            }
         }
 
         tx.execute(

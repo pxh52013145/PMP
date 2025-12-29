@@ -9,7 +9,6 @@ import { createBuiltinContributionsModule } from '../builtin-modules/builtinCont
 import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMagnetRenderersModule';
 import { createBuiltinCommandsModule } from '../builtin-modules/builtinCommandsModule';
 import { createBuiltinWorkbenchesModule } from '../builtin-modules/builtinWorkbenchesModule';
-import { createBuiltinVstEditorWindowsModule } from '../builtin-modules/builtinVstEditorWindowsModule';
 import { createPmpmContributionsModule } from '../magnet-system/plugins/pmpmContributionsModule';
 import { createPmpmMagnetRenderersModule } from '../magnet-system/plugins/pmpmMagnetRenderersModule';
 
@@ -31,14 +30,15 @@ function createRuntime(): KernelRuntime {
   const hash = typeof window === 'undefined' ? '' : window.location.hash;
   const isEditorWindow = hash.startsWith('#/editor/');
   const isPluginWindow = hash.startsWith('#/plugin-window/');
-  const isVstEditorWindow = hash.startsWith('#/vst-editor/');
+  const isVstManagerWindow = hash.startsWith('#/vst-manager');
+  const isAuxWindow = isEditorWindow || isPluginWindow || isVstManagerWindow;
 
   const modules = [
     createLifecycleModule(),
     createNavigationModule(),
     createAudioModule({
       mode: isEditorWindow ? 'noop' : 'real',
-      enableTaskbarMediaControls: !isEditorWindow && !isPluginWindow && !isVstEditorWindow,
+      enableTaskbarMediaControls: !isAuxWindow,
     }),
     createCommandsModule(),
     createBuiltinMagnetRenderersModule(),
@@ -46,10 +46,9 @@ function createRuntime(): KernelRuntime {
     createBuiltinCommandsModule(),
   ];
 
-  if (!isEditorWindow && !isPluginWindow && !isVstEditorWindow) {
+  if (!isAuxWindow) {
     modules.push(createBuiltinWorkbenchesModule());
     modules.push(createBuiltinContributionsModule());
-    modules.push(createBuiltinVstEditorWindowsModule());
   }
 
   if (!isEditorWindow) {

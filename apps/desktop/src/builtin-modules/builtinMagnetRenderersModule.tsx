@@ -148,7 +148,7 @@ const BUILTIN_DEFINITIONS: MagnetRendererDefinition[] = [
     id: 'dsp-vst',
     render: () => <DspVstMagnet />,
     preview: () => createTextPreview('VST'),
-    description: 'VST 管理入口（左键打开管理页；右键打开 editor）',
+    description: 'VST 管理入口（打开 DSP Rack）',
     group: 'navigation',
     tags: ['audio', 'dsp', 'vst', 'native'],
     source: 'builtin',

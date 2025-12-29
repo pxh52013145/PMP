@@ -2,6 +2,7 @@ import type { KernelModule } from '../kernel';
 import type { AppEvents } from '../contracts/events';
 import type { CommandContribution } from '../contracts/contributions';
 import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
+import { openVstManagerWindow } from '../utils/vstManagerWindows';
 
 export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
   return {
@@ -54,6 +55,19 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
 
       register({
         kind: 'command',
+        id: 'app:navigate-dsp-rack',
+        title: '导航：DSP Rack',
+        description: '打开 DSP Rack（管理 DSP Graph）',
+        source: 'builtin',
+        group: 'audio',
+        order: 50,
+        run: async () => {
+          services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('dsp-rack');
+        },
+      });
+
+      register({
+        kind: 'command',
         id: 'app:navigate-native-debug',
         title: '导航：Native Debug',
         description: '跳转到原生引擎调试页',
@@ -62,6 +76,19 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
         order: 90,
         run: async () => {
           services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('native-debug');
+        },
+      });
+
+      register({
+        kind: 'command',
+        id: 'app:open-vst3-plugin-manager',
+        title: '窗口：VST3 Plugin Manager',
+        description: '打开 VST3 插件管理窗口',
+        source: 'builtin',
+        group: 'audio',
+        order: 60,
+        run: async () => {
+          await openVstManagerWindow({ title: 'VST3 Plugin Manager' });
         },
       });
 
@@ -90,4 +117,3 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
     },
   };
 }
-

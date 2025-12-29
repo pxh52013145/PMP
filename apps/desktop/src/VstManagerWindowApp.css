@@ -1,0 +1,13 @@
+.vst-manager-window-root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: radial-gradient(circle at top, rgba(0, 255, 255, 0.12), rgba(0, 0, 0, 0.92));
+}
+
+.vst-manager-window-error {
+  padding: 16px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+}
+

@@ -34,6 +34,7 @@ reqwest = { version = "0.11", default-features = false, features = ["json", "rus
 # 数据库
 rusqlite = { version = "0.30", features = ["bundled"] }
 gif = "0.14"
+sha2 = "0.10"
 
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem

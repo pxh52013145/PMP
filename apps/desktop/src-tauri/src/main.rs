@@ -186,6 +186,27 @@ async fn native_audio_vst_library_get_plugin_params(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_library_list_scan_runs(
+    limit: Option<u32>,
+) -> Result<Vec<vst_library::VstScanRun>, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_library::list_scan_runs(limit.unwrap_or(40)))
+        .await
+        .map_err(|e| format!("VST library scan runs task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_library_list_scan_events(
+    run_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<vst_library::VstScanEvent>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_library::list_scan_events(run_id.as_str(), limit.unwrap_or(80))
+    })
+    .await
+    .map_err(|e| format!("VST library scan events task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_scan_start(
     app: tauri::AppHandle,
     request: vst_scanner::VstScanRequest,
@@ -397,9 +418,8 @@ async fn close_plugin_window(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn open_vst_editor_window(
+async fn open_vst_manager_window(
     app: tauri::AppHandle,
-    node_id: String,
     x: f64,
     y: f64,
     width: f64,
@@ -407,10 +427,9 @@ async fn open_vst_editor_window(
     title: Option<String>,
     exit: tauri::State<'_, ExitFlag>,
 ) -> Result<(), String> {
-    windows::vst::open_vst_editor_window(
+    windows::vst_manager::open_vst_manager_window(
         &app,
-        node_id,
-        windows::vst::VstEditorWindowGeometry {
+        windows::vst_manager::VstManagerWindowGeometry {
             x,
             y,
             width,
@@ -421,9 +440,9 @@ async fn open_vst_editor_window(
     )
 }
 
-#[tauri::command(rename_all = "camelCase")]
-async fn close_vst_editor_window(app: tauri::AppHandle, node_id: String) -> Result<(), String> {
-    windows::vst::close_vst_editor_window(&app, node_id)
+#[tauri::command]
+async fn close_vst_manager_window(app: tauri::AppHandle) -> Result<(), String> {
+    windows::vst_manager::close_vst_manager_window(&app)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -558,7 +577,7 @@ fn main() {
                     exit_flag.store(true, Ordering::SeqCst);
                     windows::editor::close_all_editor_windows(&app_handle);
                     windows::plugin::close_all_plugin_windows(&app_handle);
-                    windows::vst::close_all_vst_editor_windows(&app_handle);
+                    windows::vst_manager::close_all_vst_manager_windows(&app_handle);
                     vst_runtime::close_all();
                 }
             });
@@ -583,8 +602,8 @@ fn main() {
             close_all_editor_windows,
             open_plugin_window,
             close_plugin_window,
-            open_vst_editor_window,
-            close_vst_editor_window,
+            open_vst_manager_window,
+            close_vst_manager_window,
             set_editor_blur_enabled,
             music_library_scan,
             music_library_get_cover,
@@ -607,6 +626,8 @@ fn main() {
             native_audio_vst_describe_plugin,
             native_audio_vst_library_list_plugins,
             native_audio_vst_library_get_plugin_params,
+            native_audio_vst_library_list_scan_runs,
+            native_audio_vst_library_list_scan_events,
             native_audio_vst_scan_start,
             native_audio_vst_scan_cancel,
             native_audio_vst_scan_state,

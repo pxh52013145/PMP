@@ -5,8 +5,46 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pixel Matrix Player</title>
+    <style>
+      #pmp-startup-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.94);
+        color: #00ff88;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+          'Apple Color Emoji', 'Segoe UI Emoji';
+        user-select: none;
+        pointer-events: none;
+      }
+      #pmp-startup-overlay__spinner {
+        width: 20px;
+        height: 20px;
+        border-radius: 9999px;
+        border: 2px solid rgba(0, 255, 136, 0.25);
+        border-top-color: rgba(0, 255, 136, 0.95);
+        animation: pmp-startup-spin 0.9s linear infinite;
+      }
+      @keyframes pmp-startup-spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="pmp-startup-overlay">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 12px">
+        <div style="font-size: 13px; font-weight: 650; letter-spacing: 0.02em">启动中…</div>
+        <div id="pmp-startup-overlay__spinner"></div>
+      </div>
+    </div>
     <div id="root"></div>
     <script>
       // 扫描线动画触发器 - 确保动画完整执行

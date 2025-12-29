@@ -6,7 +6,7 @@ export const DSP_VST_MAGNET: Magnet = {
   name: 'VST Slot',
   renderer: 'dsp-vst',
   previewText: 'VST',
-  description: 'VST 管理入口：左键打开管理页，右键打开 editor（读取 DSP Graph）',
+  description: 'VST 管理入口：打开 DSP Rack（读取 DSP Graph）',
   tags: ['dsp', 'vst', 'vst3', 'native'],
   anchorType: 'single',
   anchors: [

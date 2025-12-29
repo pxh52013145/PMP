@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react from '@vitejs/plugin-react-swc';
 import { resolve } from 'path';
 
 // https://vitejs.dev/config/
@@ -10,6 +10,14 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      ignored: [
+        '**/src-tauri/target/**',
+        '**/src-tauri/vendor/**',
+        '**/src-tauri/sidecars/**',
+        '**/src-tauri/binaries/**',
+      ],
+    },
   },
 
   // Env variables starting with VITE_ will be exposed to your frontend code

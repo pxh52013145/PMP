@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
+    collections::HashSet,
     io::{Read, Write},
     path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
@@ -101,8 +102,9 @@ fn bridge_editor_timeout() -> Duration {
     timeout_from_env_ms("PMP_VST_BRIDGE_EDITOR_TIMEOUT_MS", 30_000)
 }
 
+#[allow(dead_code)]
 fn bridge_ping_timeout() -> Duration {
-    timeout_from_env_ms("PMP_VST_BRIDGE_PING_TIMEOUT_MS", 30_000)
+    timeout_from_env_ms("PMP_VST_BRIDGE_PING_TIMEOUT_MS", 5_000)
 }
 
 fn bridge_executable_path() -> Result<PathBuf, String> {
@@ -140,14 +142,14 @@ struct BridgeOutput {
     stderr: Vec<u8>,
 }
 
-fn run_bridge_cli_cancellable(
-    args: &[&str],
+fn run_bridge_cli_cancellable_dynamic(
+    args: Vec<String>,
     timeout: Duration,
     cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutput, String> {
     let bridge = bridge_executable_path()?;
     let mut child = Command::new(bridge)
-        .args(args)
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -235,8 +237,20 @@ pub fn describe_plugin(plugin_id: &str) -> Result<BridgePluginDescriptor, String
 }
 
 pub fn list_plugins_with_cancel(cancel: Option<&AtomicBool>) -> Result<Vec<BridgePluginDescriptor>, String> {
-    let output =
-        run_bridge_cli_cancellable(&["--list-plugins"], bridge_list_timeout(), cancel)?;
+    list_plugins_with_scan_paths_with_cancel(&[], false, cancel)
+}
+
+pub fn list_plugins_with_scan_paths_with_cancel(
+    scan_paths: &[String],
+    include_default_paths: bool,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<BridgePluginDescriptor>, String> {
+    let mut args = vec!["--list-plugins".to_string()];
+    if include_default_paths {
+        args.push("--include-default-paths".to_string());
+    }
+    append_scan_paths(&mut args, scan_paths);
+    let output = run_bridge_cli_cancellable_dynamic(args, bridge_list_timeout(), cancel)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Bridge list failed: {stderr}"));
@@ -249,17 +263,46 @@ pub fn describe_plugin_with_cancel(
     plugin_id: &str,
     cancel: Option<&AtomicBool>,
 ) -> Result<BridgePluginDescriptor, String> {
-    let output = run_bridge_cli_cancellable(
-        &["--describe-plugin", plugin_id],
-        bridge_describe_timeout(),
-        cancel,
-    )?;
+    describe_plugin_with_scan_paths_with_cancel(plugin_id, None, &[], false, cancel)
+}
+
+pub fn describe_plugin_with_scan_paths_with_cancel(
+    plugin_id: &str,
+    plugin_path: Option<&str>,
+    scan_paths: &[String],
+    include_default_paths: bool,
+    cancel: Option<&AtomicBool>,
+) -> Result<BridgePluginDescriptor, String> {
+    let mut args = vec!["--describe-plugin".to_string(), plugin_id.to_string()];
+    if let Some(path) = plugin_path {
+        if !path.trim().is_empty() {
+            args.push("--plugin-path".to_string());
+            args.push(path.to_string());
+        }
+    }
+    if include_default_paths {
+        args.push("--include-default-paths".to_string());
+    }
+    append_scan_paths(&mut args, scan_paths);
+    let output = run_bridge_cli_cancellable_dynamic(args, bridge_describe_timeout(), cancel)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Bridge describe failed: {stderr}"));
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Failed to parse bridge plugin descriptor: {e}"))
+}
+
+fn append_scan_paths(args: &mut Vec<String>, scan_paths: &[String]) {
+    let mut seen = HashSet::<String>::new();
+    for raw in scan_paths.iter().map(|path| path.trim()).filter(|path| !path.is_empty()) {
+        let key = raw.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        args.push("--scan-path".to_string());
+        args.push(raw.to_string());
+    }
 }
 
 pub struct BridgeClient {
@@ -362,6 +405,10 @@ impl BridgeClient {
         }
     }
 
+    pub fn check_alive(&mut self) -> Result<(), String> {
+        self.ensure_running()
+    }
+
     fn request_raw(
         &mut self,
         ty: u8,
@@ -398,13 +445,18 @@ impl BridgeClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn ping(&mut self) -> Result<BridgePingResponse, String> {
+        self.ping_with_timeout(bridge_ping_timeout())
+    }
+
+    pub fn ping_with_timeout(&mut self, timeout: Duration) -> Result<BridgePingResponse, String> {
         let payload = serde_json::to_vec(&serde_json::json!({
             "protocolVersion": BRIDGE_PROTOCOL_VERSION,
         }))
         .map_err(|e| format!("Failed to encode ping payload: {e}"))?;
 
-        let (ty, payload) = self.request_raw(MSG_PING, payload, bridge_ping_timeout())?;
+        let (ty, payload) = self.request_raw(MSG_PING, payload, timeout)?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }

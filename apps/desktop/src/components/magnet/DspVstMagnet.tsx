@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readData, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
-import { openVstEditorWindow } from '../../utils/vstWindows';
 import { useNavigation } from '../../contexts/NavigationContext';
 import './DspVstMagnet.css';
 
@@ -59,33 +57,17 @@ export const DspVstMagnet: React.FC = () => {
     return `${primary}${suffix ? ` ${suffix}` : ''}`;
   }, [firstEnabled, vstNodes.length]);
 
-  const handleOpenManager = useCallback(() => {
-    navigation.navigateTo('vst-manager');
+  const handleOpenRack = useCallback(() => {
+    navigation.navigateTo('dsp-rack');
   }, [navigation]);
-
-  const handleOpenEditor = useCallback(async () => {
-    if (!isTauriRuntime()) return;
-    if (!firstEnabled) return;
-    const titleSuffix = firstEnabled.pluginId?.trim() ? ` (${firstEnabled.pluginId})` : '';
-    await openVstEditorWindow({
-      nodeId: firstEnabled.id,
-      title: `VST Editor${titleSuffix}`,
-    });
-  }, [firstEnabled]);
 
   return (
     <button
       type="button"
       className="dsp-vst-magnet"
-      onClick={handleOpenManager}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        void handleOpenEditor();
-      }}
+      onClick={handleOpenRack}
       title={
-        firstEnabled
-          ? `左键打开 VST 管理器；右键打开 VST editor${firstEnabled.pluginId?.trim() ? `：${firstEnabled.pluginId}` : ''} (${firstEnabled.id})`
-          : '左键打开 VST 管理器（当前 DSP Graph 无 VST 节点）'
+        firstEnabled ? `打开 DSP Rack（当前：${firstEnabled.pluginId?.trim() ? firstEnabled.pluginId : 'VST'}）` : '打开 DSP Rack'
       }
     >
       <span className="dsp-vst-magnet-label">{label}</span>

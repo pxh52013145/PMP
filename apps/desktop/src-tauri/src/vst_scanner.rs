@@ -32,6 +32,10 @@ pub struct VstScanRequest {
     pub mode: VstScanMode,
     #[serde(default)]
     pub plugin_ids: Vec<String>,
+    #[serde(default)]
+    pub scan_paths: Vec<String>,
+    #[serde(default)]
+    pub include_default_paths: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -150,7 +154,14 @@ pub fn start_scan(app: &AppHandle, request: VstScanRequest) -> Result<String, St
 
 fn run_scan_thread(app: AppHandle, request: VstScanRequest, run_id: String, cancel: Arc<AtomicBool>) {
     let started_at = now_ms();
-    let mode_str = match request.mode {
+    let VstScanRequest {
+        mode,
+        plugin_ids,
+        scan_paths,
+        include_default_paths,
+    } = request;
+
+    let mode_str = match mode {
         VstScanMode::Fast => "fast",
         VstScanMode::Full => "full",
         VstScanMode::Params => "params",
@@ -158,10 +169,12 @@ fn run_scan_thread(app: AppHandle, request: VstScanRequest, run_id: String, canc
 
     let _ = vst_library::record_scan_run_started(&run_id, started_at, mode_str);
 
-    let result = match request.mode {
-        VstScanMode::Fast => scan_fast(&app, &run_id, &cancel),
-        VstScanMode::Full => scan_full(&app, &run_id, &cancel),
-        VstScanMode::Params => scan_params(&app, &run_id, &cancel, request.plugin_ids),
+    let result = match mode {
+        VstScanMode::Fast => scan_fast(&app, &run_id, &cancel, &scan_paths, include_default_paths),
+        VstScanMode::Full => scan_full(&app, &run_id, &cancel, &scan_paths, include_default_paths),
+        VstScanMode::Params => {
+            scan_params(&app, &run_id, &cancel, plugin_ids, &scan_paths, include_default_paths)
+        }
     };
 
     let finished_at = now_ms();
@@ -192,7 +205,7 @@ fn run_scan_thread(app: AppHandle, request: VstScanRequest, run_id: String, canc
         &app,
         VstScanProgressPayload {
             run_id: run_id.clone(),
-            mode: request.mode,
+            mode,
             stage: "done".to_string(),
             total: 0,
             current: 0,
@@ -210,7 +223,13 @@ fn run_scan_thread(app: AppHandle, request: VstScanRequest, run_id: String, canc
     *guard = None;
 }
 
-fn scan_fast(app: &AppHandle, run_id: &str, cancel: &AtomicBool) -> Result<(), String> {
+fn scan_fast(
+    app: &AppHandle,
+    run_id: &str,
+    cancel: &AtomicBool,
+    scan_paths: &[String],
+    include_default_paths: bool,
+) -> Result<(), String> {
     update_state(|state| state.stage = Some("list-plugins".to_string()));
     emit_progress(
         app,
@@ -227,8 +246,11 @@ fn scan_fast(app: &AppHandle, run_id: &str, cancel: &AtomicBool) -> Result<(), S
         },
     );
 
-    let plugins: Vec<BridgePluginDescriptor> =
-        vst_bridge::list_plugins_with_cancel(Some(cancel))?;
+    let plugins: Vec<BridgePluginDescriptor> = vst_bridge::list_plugins_with_scan_paths_with_cancel(
+        scan_paths,
+        include_default_paths,
+        Some(cancel),
+    )?;
     let total = plugins.len().min(u32::MAX as usize) as u32;
     update_state(|state| {
         state.total = total;
@@ -275,6 +297,8 @@ fn scan_params(
     run_id: &str,
     cancel: &AtomicBool,
     plugin_ids: Vec<String>,
+    scan_paths: &[String],
+    include_default_paths: bool,
 ) -> Result<(), String> {
     let plugin_ids = plugin_ids
         .into_iter()
@@ -313,7 +337,14 @@ fn scan_params(
             },
         );
 
-        let desc = match vst_bridge::describe_plugin_with_cancel(plugin_id.as_str(), Some(cancel)) {
+        let plugin_path = vst_library::lookup_plugin_path(plugin_id.as_str());
+        let desc = match vst_bridge::describe_plugin_with_scan_paths_with_cancel(
+            plugin_id.as_str(),
+            plugin_path.as_deref(),
+            scan_paths,
+            include_default_paths,
+            Some(cancel),
+        ) {
             Ok(desc) => desc,
             Err(err) => {
                 vst_library::record_scan_event(run_id, "describe-failed", Some(plugin_id.as_str()), &err);
@@ -330,15 +361,36 @@ fn scan_params(
     Ok(())
 }
 
-fn scan_full(app: &AppHandle, run_id: &str, cancel: &AtomicBool) -> Result<(), String> {
-    scan_fast(app, run_id, cancel)?;
+fn scan_full(
+    app: &AppHandle,
+    run_id: &str,
+    cancel: &AtomicBool,
+    scan_paths: &[String],
+    include_default_paths: bool,
+) -> Result<(), String> {
+    scan_fast(app, run_id, cancel, scan_paths, include_default_paths)?;
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
 
     update_state(|state| state.stage = Some("list-from-library".to_string()));
     let plugins = vst_library::list_plugins()?;
-    let plugin_ids = plugins.into_iter().map(|p| p.id).collect::<Vec<_>>();
-    scan_params(app, run_id, cancel, plugin_ids)?;
+    let plugin_ids = plugins
+        .into_iter()
+        .filter(|plugin| plugin.params_scanned_at_ms.is_none())
+        .map(|plugin| plugin.id)
+        .collect::<Vec<_>>();
+    if plugin_ids.is_empty() {
+        vst_library::record_scan_event(run_id, "params-skip", None, "All plugins have cached params.");
+        return Ok(());
+    }
+    scan_params(
+        app,
+        run_id,
+        cancel,
+        plugin_ids,
+        scan_paths,
+        include_default_paths,
+    )?;
     Ok(())
 }

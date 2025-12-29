@@ -12,7 +12,8 @@ incremental = true   # 增量编译
 
 [profile.dev.package."*"]
 # 依赖包使用更高优化级别（编译慢但运行快）
-opt-level = 3
+opt-level = 1
+debug = 0
 
 # Windows 专用配置
 [target.x86_64-pc-windows-msvc]
@@ -28,4 +29,3 @@ opt-level = 3
 # macOS 专用配置
 # [target.x86_64-apple-darwin]
 # rustflags = ["-C", "link-arg=-fuse-ld=ld64.lld"]
-

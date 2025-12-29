@@ -1,4 +1,4 @@
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import type { BackgroundConfig, BackgroundSettings } from '../../types/background';
 import { persistBackgroundSnapshots } from './backgroundSnapshot';
 import { readString, writeString } from '../storage';
@@ -95,45 +95,64 @@ export async function migrateBackgroundStorageToManagedMedia(): Promise<{
   migratedHistory: boolean;
   migratedCount: number;
 }> {
+  const status = readString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1);
+  if (status === 'done' || status === '1') {
+    return { migratedSettings: false, migratedHistory: false, migratedCount: 0 };
+  }
+
   let migratedSettings = false;
   let migratedHistory = false;
   let migratedCount = 0;
 
-  const settings = safeParseJson<BackgroundSettings>(readString(STORAGE_KEYS.BACKGROUND_SETTINGS));
-  if (settings) {
-    const [maximized, windowed] = await Promise.all([migrateConfig(settings.maximized), migrateConfig(settings.windowed)]);
-    if (maximized.migrated || windowed.migrated) {
-      const next: BackgroundSettings = {
-        ...settings,
-        maximized: maximized.config,
-        windowed: windowed.config,
-      };
-      const json = JSON.stringify(next);
-      writeString(STORAGE_KEYS.BACKGROUND_SETTINGS, json);
-      await persistBackgroundSnapshots({ storageKey: STORAGE_KEYS.BACKGROUND_SETTINGS, json });
-      migratedSettings = true;
-      migratedCount += Number(maximized.migrated) + Number(windowed.migrated);
+  try {
+    const settings = safeParseJson<BackgroundSettings>(readString(STORAGE_KEYS.BACKGROUND_SETTINGS));
+    if (settings) {
+      const [maximized, windowed] = await Promise.all([
+        migrateConfig(settings.maximized),
+        migrateConfig(settings.windowed),
+      ]);
+      if (maximized.migrated || windowed.migrated) {
+        const next: BackgroundSettings = {
+          ...settings,
+          maximized: maximized.config,
+          windowed: windowed.config,
+        };
+        const json = JSON.stringify(next);
+        await broadcastDataUpdate(STORAGE_KEYS.BACKGROUND_SETTINGS, next, TAURI_EVENTS.BACKGROUND_UPDATED);
+        await persistBackgroundSnapshots({ storageKey: STORAGE_KEYS.BACKGROUND_SETTINGS, json });
+        migratedSettings = true;
+        migratedCount += Number(maximized.migrated) + Number(windowed.migrated);
+      }
     }
-  }
 
-  const history = safeParseJson<BackgroundHistoryItem[]>(readString(STORAGE_KEYS.BACKGROUND_HISTORY));
-  if (history && history.length > 0) {
-    const migratedItems = await Promise.all(
-      history.map(async (item) => {
-        const migrated = await migrateConfig(item.config);
-        return { item: migrated.migrated ? { ...item, config: migrated.config } : item, migrated: migrated.migrated };
-      })
-    );
+    const history = safeParseJson<BackgroundHistoryItem[]>(readString(STORAGE_KEYS.BACKGROUND_HISTORY));
+    if (history && history.length > 0) {
+      const migratedItems = await Promise.all(
+        history.map(async (item) => {
+          const migrated = await migrateConfig(item.config);
+          return {
+            item: migrated.migrated ? { ...item, config: migrated.config } : item,
+            migrated: migrated.migrated,
+          };
+        })
+      );
 
-    const hasChanges = migratedItems.some((entry) => entry.migrated);
-    if (hasChanges) {
-      const next = migratedItems.map((entry) => entry.item);
-      const json = JSON.stringify(next);
-      writeString(STORAGE_KEYS.BACKGROUND_HISTORY, json);
-      await persistBackgroundSnapshots({ storageKey: STORAGE_KEYS.BACKGROUND_HISTORY, json });
-      migratedHistory = true;
-      migratedCount += migratedItems.reduce((sum, entry) => sum + Number(entry.migrated), 0);
+      const hasChanges = migratedItems.some((entry) => entry.migrated);
+      if (hasChanges) {
+        const next = migratedItems.map((entry) => entry.item);
+        const json = JSON.stringify(next);
+        await broadcastDataUpdate(STORAGE_KEYS.BACKGROUND_HISTORY, next, TAURI_EVENTS.BACKGROUND_UPDATED);
+        await persistBackgroundSnapshots({ storageKey: STORAGE_KEYS.BACKGROUND_HISTORY, json });
+        migratedHistory = true;
+        migratedCount += migratedItems.reduce((sum, entry) => sum + Number(entry.migrated), 0);
+      }
     }
+
+    // Keep compatible with legacy flag checks in UI.
+    writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, '1');
+  } catch (error) {
+    console.warn('[background] migration failed:', error);
+    writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, 'failed');
   }
 
   return { migratedSettings, migratedHistory, migratedCount };

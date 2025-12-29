@@ -2,8 +2,8 @@ import React from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
-import { openVstEditorWindow } from '../../utils/vstWindows';
+import { readData, STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
+import { openVstManagerWindow } from '../../utils/vstManagerWindows';
 import './DspRackPage.css';
 
 type EqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
@@ -34,203 +34,6 @@ type DspNode = GainNode | EqNode | LimiterNode | VstNode | (DspNodeBase & Record
 
 type DspGraphConfig = { nodes: DspNode[] };
 
-type BridgeParamDescriptor = {
-  key: string;
-  title: string;
-  min: number;
-  max: number;
-  default: number;
-  step: number;
-  unit?: string | null;
-};
-
-type BridgePluginDescriptor = {
-  id: string;
-  name: string;
-  vendor?: string | null;
-  version?: string | null;
-  path?: string | null;
-  status?: string | null;
-  lastSeenAtMs?: number | null;
-  paramsScannedAtMs?: number | null;
-  parameters: BridgeParamDescriptor[];
-};
-
-type VstScanMode = 'fast' | 'full' | 'params';
-
-type VstScanProgressPayload = {
-  runId: string;
-  mode: VstScanMode;
-  stage: string;
-  total: number;
-  current: number;
-  currentPluginId?: string | null;
-  message?: string | null;
-  status: string;
-  error?: string | null;
-};
-
-type VstScanState = {
-  running: boolean;
-  runId?: string | null;
-  mode?: VstScanMode | null;
-  stage?: string | null;
-  total: number;
-  current: number;
-  currentPluginId?: string | null;
-  lastError?: string | null;
-};
-
-type VstDisabledPlugin = {
-  pluginId: string;
-  nodeId?: string | null;
-  disabledAtMs: number;
-  reason: string;
-  failures?: number | null;
-};
-
-type VstGovernanceState = {
-  version: number;
-  disabledPlugins: VstDisabledPlugin[];
-};
-
-type VstAuditEvent = {
-  atMs: number;
-  kind: string;
-  nodeId?: string | null;
-  pluginId?: string | null;
-  message: string;
-};
-
-type VstAuditLog = {
-  version: number;
-  events: VstAuditEvent[];
-  lastScan?: {
-    atMs: number;
-    plugins: Array<{
-      id: string;
-      name: string;
-      vendor?: string | null;
-      version?: string | null;
-      path?: string | null;
-    }>;
-  } | null;
-};
-
-function mergePlugins(prev: BridgePluginDescriptor[], incoming: BridgePluginDescriptor[]) {
-  const prevById = new Map(prev.map((plugin) => [plugin.id, plugin]));
-  return incoming.map((plugin) => {
-    const existing = prevById.get(plugin.id);
-    if (existing && existing.parameters.length > 0 && plugin.parameters.length === 0) {
-      return { ...plugin, parameters: existing.parameters };
-    }
-    return plugin;
-  });
-}
-
-function isVstScanMode(value: string): value is VstScanMode {
-  return value === 'fast' || value === 'full' || value === 'params';
-}
-
-function ensureLibraryPlugins(value: unknown): BridgePluginDescriptor[] {
-  if (!Array.isArray(value)) return [];
-  const out: BridgePluginDescriptor[] = [];
-  for (const entry of value) {
-    const record = asRecord(entry);
-    if (!record) continue;
-    const id = readStringField(record, 'id');
-    const name = readStringField(record, 'name') ?? id;
-    if (!id || !name) continue;
-
-    out.push({
-      id,
-      name,
-      vendor: typeof record.vendor === 'string' ? record.vendor : null,
-      version: typeof record.version === 'string' ? record.version : null,
-      path: typeof record.path === 'string' ? record.path : null,
-      status: typeof record.status === 'string' ? record.status : null,
-      lastSeenAtMs: typeof record.lastSeenAtMs === 'number' ? record.lastSeenAtMs : null,
-      paramsScannedAtMs:
-        typeof record.paramsScannedAtMs === 'number' ? record.paramsScannedAtMs : null,
-      parameters: [],
-    });
-  }
-  return out;
-}
-
-function ensureLibraryParams(value: unknown): BridgeParamDescriptor[] {
-  if (!Array.isArray(value)) return [];
-  const out: BridgeParamDescriptor[] = [];
-  for (const entry of value) {
-    const record = asRecord(entry);
-    if (!record) continue;
-    const key = readStringField(record, 'key');
-    const title = readStringField(record, 'title') ?? key;
-    if (!key || !title) continue;
-
-    const min = ensureNumber(record.min, Number.NaN);
-    const max = ensureNumber(record.max, Number.NaN);
-    const def = ensureNumber(record.default, Number.NaN);
-    const step = ensureNumber(record.step, Number.NaN);
-    if (![min, max, def, step].every((v) => isFinite(v))) continue;
-
-    out.push({
-      key,
-      title,
-      min,
-      max,
-      default: def,
-      step,
-      unit: typeof record.unit === 'string' ? record.unit : null,
-    });
-  }
-  return out;
-}
-
-function ensureVstScanState(value: unknown): VstScanState | null {
-  const record = asRecord(value);
-  if (!record) return null;
-  const running = typeof record.running === 'boolean' ? record.running : null;
-  if (running === null) return null;
-
-  const mode = typeof record.mode === 'string' && isVstScanMode(record.mode) ? record.mode : null;
-  return {
-    running,
-    runId: typeof record.runId === 'string' ? record.runId : null,
-    mode,
-    stage: typeof record.stage === 'string' ? record.stage : null,
-    total: typeof record.total === 'number' ? record.total : 0,
-    current: typeof record.current === 'number' ? record.current : 0,
-    currentPluginId:
-      typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
-    lastError: typeof record.lastError === 'string' ? record.lastError : null,
-  };
-}
-
-function ensureVstScanProgressPayload(value: unknown): VstScanProgressPayload | null {
-  const record = asRecord(value);
-  if (!record) return null;
-  const runId = readStringField(record, 'runId');
-  const mode = readStringField(record, 'mode');
-  const stage = readStringField(record, 'stage');
-  const status = readStringField(record, 'status');
-  if (!runId || !mode || !stage || !status) return null;
-  if (!isVstScanMode(mode)) return null;
-
-  return {
-    runId,
-    mode,
-    stage,
-    total: typeof record.total === 'number' ? record.total : 0,
-    current: typeof record.current === 'number' ? record.current : 0,
-    currentPluginId:
-      typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
-    message: typeof record.message === 'string' ? record.message : null,
-    status,
-    error: typeof record.error === 'string' ? record.error : null,
-  };
-}
-
 function clamp(value: number, min: number, max: number) {
   if (!isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -253,6 +56,13 @@ function readNumberField(value: unknown, field: string): number | null {
   if (!record) return null;
   const candidate = record[field];
   return typeof candidate === 'number' && isFinite(candidate) ? candidate : null;
+}
+
+function ensureDspGraphConfig(value: unknown): DspGraphConfig {
+  const record = asRecord(value);
+  if (!record) return { nodes: [] };
+  const nodes = record.nodes;
+  return { nodes: Array.isArray(nodes) ? (nodes as DspNode[]) : [] };
 }
 
 function computeTotalGainDb(nodes: DspNode[]) {
@@ -290,21 +100,6 @@ function ensureEqBands(value: unknown): EqBand[] {
   return out;
 }
 
-function ensureVstParamValues(value: unknown): VstParamValue[] {
-  if (!Array.isArray(value)) return [];
-  const out: VstParamValue[] = [];
-  for (const entry of value) {
-    const record = asRecord(entry);
-    if (!record) continue;
-    const key = record.key;
-    if (typeof key !== 'string') continue;
-    const num = ensureNumber(record.value, Number.NaN);
-    if (!isFinite(num)) continue;
-    out.push({ key, value: num });
-  }
-  return out;
-}
-
 function defaultEqBands(): EqBand[] {
   return [
     { kind: 'low-shelf', frequencyHz: 120, q: 1, gainDb: 0 },
@@ -321,44 +116,30 @@ export const DspRackPage: React.FC = () => {
   const { engineType, isNativeAvailable } = useAudioEngine();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const [graph, setGraph] = React.useState<DspGraphConfig | null>(null);
-  const [plugins, setPlugins] = React.useState<BridgePluginDescriptor[]>([]);
-  const [governance, setGovernance] = React.useState<VstGovernanceState | null>(null);
-  const [auditLog, setAuditLog] = React.useState<VstAuditLog | null>(null);
-  const [scanState, setScanState] = React.useState<VstScanState | null>(null);
-  const [scanProgress, setScanProgress] = React.useState<VstScanProgressPayload | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [pluginsBusy, setPluginsBusy] = React.useState(false);
-  const [describing, setDescribing] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const describingRef = React.useRef<Set<string>>(new Set());
-  const describedOkRef = React.useRef<Set<string>>(new Set());
-  const pendingParamsScanPluginIdRef = React.useRef<string | null>(null);
+  const [highlightNodeId, setHighlightNodeId] = React.useState<string | null>(null);
+  const lastLocateRequestIdRef = React.useRef<string | null>(null);
+  const clearHighlightTimerRef = React.useRef<number | null>(null);
 
   const refresh = React.useCallback(async () => {
     if (!isTauri) return;
     setBusy(true);
     setError(null);
     try {
-      const [graphResp, governanceResp, auditResp, libraryResp, scanResp] = await Promise.all([
-        invoke<DspGraphConfig>('native_audio_get_dsp_graph'),
-        invoke<VstGovernanceState>('native_audio_vst_get_governance').catch(() => null),
-        invoke<VstAuditLog>('native_audio_vst_get_audit_log').catch(() => null),
-        invoke<unknown>('native_audio_vst_library_list_plugins').catch(() => []),
-        invoke<unknown>('native_audio_vst_scan_state').catch(() => null),
-      ]);
-      setGraph(graphResp && typeof graphResp === 'object' ? graphResp : { nodes: [] });
-      setGovernance(governanceResp && typeof governanceResp === 'object' ? governanceResp : null);
-      const nextAudit = auditResp && typeof auditResp === 'object' ? auditResp : null;
-      setAuditLog(nextAudit);
-      const libraryPlugins = ensureLibraryPlugins(libraryResp);
-      if (libraryPlugins.length) {
-        setPlugins((prev) => mergePlugins(prev, libraryPlugins));
-      }
-      const nextScanState = ensureVstScanState(scanResp);
-      setScanState(nextScanState);
-      if (nextScanState?.running) {
-        setPluginsBusy(true);
-      }
+      const graphResp = await invoke<DspGraphConfig>('native_audio_get_dsp_graph');
+      const nextGraph = graphResp && typeof graphResp === 'object' ? graphResp : { nodes: [] };
+      setGraph(nextGraph);
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH,
+        nextGraph,
+        TAURI_EVENTS.NATIVE_AUDIO_DSP_GRAPH_UPDATED
+      );
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_GAIN_DB,
+        computeTotalGainDb(nextGraph.nodes),
+        TAURI_EVENTS.NATIVE_AUDIO_GAIN_DB_UPDATED
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -366,118 +147,75 @@ export const DspRackPage: React.FC = () => {
     }
   }, [isTauri]);
 
-  const refreshPluginsFromLibrary = React.useCallback(async () => {
-    if (!isTauri) return;
-    try {
-      const resp = await invoke<unknown>('native_audio_vst_library_list_plugins').catch(() => []);
-      const next = ensureLibraryPlugins(resp);
-      setPlugins((prev) => mergePlugins(prev, next));
-    } catch {
-      // best-effort
-    }
-  }, [isTauri]);
-
-  const scanPlugins = React.useCallback(async () => {
-    if (!isTauri) return;
-    setPluginsBusy(true);
-    setError(null);
-    try {
-      await invoke<string>('native_audio_vst_scan_start', {
-        request: { mode: 'fast', pluginIds: [] },
-      });
-    } catch (err) {
-      setPluginsBusy(false);
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [isTauri]);
-
-  const scanPluginParams = React.useCallback(
-    async (pluginId: string) => {
-      if (!isTauri) return;
-      const trimmed = pluginId.trim();
-      if (!trimmed) return;
-      setPluginsBusy(true);
-      setError(null);
-      pendingParamsScanPluginIdRef.current = trimmed;
-      try {
-        await invoke<string>('native_audio_vst_scan_start', {
-          request: { mode: 'params', pluginIds: [trimmed] },
-        });
-      } catch (err) {
-        pendingParamsScanPluginIdRef.current = null;
-        setPluginsBusy(false);
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [isTauri]
-  );
-
-  const cancelScan = React.useCallback(async () => {
-    if (!isTauri) return;
-    try {
-      await invoke('native_audio_vst_scan_cancel');
-    } catch {
-      // best-effort
-    }
-  }, [isTauri]);
-
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const describePlugin = React.useCallback(
-    async (pluginId: string) => {
-      if (!isTauri) return;
-      if (!pluginId) return;
-      if (describingRef.current.has(pluginId)) return;
-      if (describedOkRef.current.has(pluginId)) return;
-      describingRef.current.add(pluginId);
-
-      setDescribing(pluginId);
-      setError(null);
-      try {
-        const paramsResp = await invoke<unknown>('native_audio_vst_library_get_plugin_params', { pluginId });
-        const params = ensureLibraryParams(paramsResp);
-        setPlugins((prev) =>
-          prev.map((p) => (p.id === pluginId ? { ...p, parameters: params } : p))
-        );
-        if (params.length > 0) {
-          describedOkRef.current.add(pluginId);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        describingRef.current.delete(pluginId);
-        setDescribing((current) => (current === pluginId ? null : current));
+  React.useEffect(() => {
+    if (!isTauri) return;
+    let cleanup: null | (() => void) = null;
+    void setupDualListener(
+      [STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH],
+      [TAURI_EVENTS.NATIVE_AUDIO_DSP_GRAPH_UPDATED],
+      () => {
+        const stored = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH);
+        if (stored === null) return;
+        setGraph(ensureDspGraphConfig(stored));
       }
-    },
-    [isTauri]
-  );
+    ).then((fn) => {
+      cleanup = fn;
+    });
+    return () => cleanup?.();
+  }, [isTauri, refresh]);
 
   React.useEffect(() => {
     if (!isTauri) return;
-    let unlisten: (() => void | Promise<void>) | null = null;
-    void (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      unlisten = await listen('vst-scan-progress', (event) => {
-        const payload = ensureVstScanProgressPayload(event.payload);
-        if (!payload) return;
-        setScanProgress(payload);
-        setPluginsBusy(payload.status === 'running');
-        if (payload.status !== 'running') {
-          void refreshPluginsFromLibrary();
-          const pending = pendingParamsScanPluginIdRef.current;
-          if (pending && payload.mode === 'params' && payload.status === 'ok') {
-            void describePlugin(pending);
-          }
-          pendingParamsScanPluginIdRef.current = null;
+
+    const handleLocate = () => {
+      const payload = readData<unknown>(STORAGE_KEYS.DSP_RACK_LOCATE_NODE);
+      const requestId = readStringField(payload, 'requestId') ?? readStringField(payload, 'id');
+      const nodeId = readStringField(payload, 'nodeId');
+      if (!requestId || !nodeId) return;
+      if (lastLocateRequestIdRef.current === requestId) return;
+      lastLocateRequestIdRef.current = requestId;
+
+      if (clearHighlightTimerRef.current !== null) {
+        window.clearTimeout(clearHighlightTimerRef.current);
+        clearHighlightTimerRef.current = null;
+      }
+
+      setHighlightNodeId(nodeId);
+      clearHighlightTimerRef.current = window.setTimeout(() => {
+        clearHighlightTimerRef.current = null;
+        setHighlightNodeId((prev) => (prev === nodeId ? null : prev));
+      }, 2600);
+
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(`dsp-node-${nodeId}`);
+        if (!el) return;
+        try {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } catch {
+          el.scrollIntoView();
         }
       });
-    })();
-    return () => {
-      if (unlisten) void unlisten();
     };
-  }, [describePlugin, isTauri, refreshPluginsFromLibrary]);
+
+    let cleanup: null | (() => void) = null;
+    handleLocate();
+    void setupDualListener([STORAGE_KEYS.DSP_RACK_LOCATE_NODE], [TAURI_EVENTS.DSP_RACK_LOCATE_NODE], handleLocate).then(
+      (fn) => {
+        cleanup = fn;
+      }
+    );
+    return () => {
+      cleanup?.();
+      if (clearHighlightTimerRef.current !== null) {
+        window.clearTimeout(clearHighlightTimerRef.current);
+        clearHighlightTimerRef.current = null;
+      }
+    };
+  }, [isTauri]);
 
   const applyGraph = React.useCallback(
     async (next: DspGraphConfig) => {
@@ -536,7 +274,7 @@ export const DspRackPage: React.FC = () => {
   );
 
   const addNode = React.useCallback(
-    (type: 'gain' | 'eq' | 'limiter' | 'vst') => {
+    (type: 'gain' | 'eq' | 'limiter') => {
       if (!graph) return;
       const id = uniqueNodeId(type);
       let node: DspNode;
@@ -550,62 +288,17 @@ export const DspRackPage: React.FC = () => {
         case 'limiter':
           node = { id, enabled: true, type: 'limiter', thresholdDb: -6 };
           break;
-        case 'vst': {
-          const fallback = (plugins[0]?.id ?? '').trim();
-          node = {
-            id,
-            enabled: Boolean(fallback),
-            type: 'vst',
-            pluginId: fallback,
-            params: [],
-          };
-          break;
-        }
       }
       void applyGraph({ nodes: [...graph.nodes, node] });
     },
-    [applyGraph, graph, plugins]
+    [applyGraph, graph]
   );
-
-  const enablePlugin = React.useCallback(
-    async (pluginId: string) => {
-      if (!isTauri) return;
-      if (!pluginId) return;
-      setError(null);
-      setBusy(true);
-      try {
-        await invoke('native_audio_vst_enable_plugin', { pluginId });
-        await refresh();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [isTauri, refresh]
-  );
-
-  const clearAuditLog = React.useCallback(async () => {
-    if (!isTauri) return;
-    setError(null);
-    setBusy(true);
-    try {
-      await invoke('native_audio_vst_clear_audit_log');
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [isTauri, refresh]);
 
   if (!isTauri) {
     return (
-        <div className="dsp-rack-page">
-          <h2 className="dsp-rack-title">DSP Rack</h2>
-          <p className="dsp-rack-note">
-          DSP Rack 需要在 Tauri 桌面运行时使用（`pnpm dev`）。
-        </p>
+      <div className="dsp-rack-page">
+        <h2 className="dsp-rack-title">DSP Rack</h2>
+        <p className="dsp-rack-note">DSP Rack / VST3 插件管理器需要在 Tauri 桌面运行（`pnpm dev:tauri`）。</p>
       </div>
     );
   }
@@ -613,8 +306,19 @@ export const DspRackPage: React.FC = () => {
   if (!isNativeAvailable || engineType !== 'native') {
     return (
       <div className="dsp-rack-page">
-        <h2 className="dsp-rack-title">DSP Rack</h2>
-        <p className="dsp-rack-note">请先切换到 Native Audio 引擎后再管理 DSP。</p>
+        <div className="dsp-rack-header">
+          <div>
+            <h2 className="dsp-rack-title">DSP Rack</h2>
+            <p className="dsp-rack-note">当前为 Web Audio 模式；切换到 Native Audio 后才会应用 DSP Graph。</p>
+            <p className="dsp-rack-note">添加 VST：打开「VST3 插件管理器」→ 扫描 → 选中插件 → 添加到 DSP Rack。</p>
+          </div>
+
+          <div className="dsp-rack-actions">
+            <button type="button" onClick={() => void openVstManagerWindow()}>
+              VST3 插件管理器
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -637,11 +341,8 @@ export const DspRackPage: React.FC = () => {
           <button type="button" onClick={() => addNode('limiter')} disabled={!graph || busy}>
             + Limiter
           </button>
-          <button type="button" onClick={() => addNode('vst')} disabled={!graph || busy}>
-            + VST
-          </button>
-          <button type="button" onClick={() => void scanPlugins()} disabled={busy || pluginsBusy}>
-            {pluginsBusy ? '扫描中…' : '扫描插件（fast）'}
+          <button type="button" onClick={() => void openVstManagerWindow()} disabled={busy}>
+            VST3 插件管理器
           </button>
           <button type="button" onClick={() => void refresh()} disabled={busy}>
             刷新
@@ -651,96 +352,18 @@ export const DspRackPage: React.FC = () => {
 
       {error && <div className="dsp-rack-error">{error}</div>}
 
-      {(pluginsBusy || scanState?.running) && (
-        <div className="dsp-rack-note">
-          VST 扫描中：
-          {scanProgress?.message ||
-            scanProgress?.currentPluginId ||
-            scanState?.currentPluginId ||
-            scanProgress?.stage ||
-            scanState?.stage ||
-            'running'}
-          {scanProgress?.total ? ` (${scanProgress.current}/${scanProgress.total})` : ''}{' '}
-          <button type="button" onClick={() => void cancelScan()} disabled={busy}>
-            取消
-          </button>
-        </div>
-      )}
-
       {!graph && <div className="dsp-rack-loading">Loading...</div>}
 
       {graph && (
         <div className="dsp-rack-list">
-          {governance?.disabledPlugins?.length ? (
-            <div className="dsp-node-card">
-              <div className="dsp-node-header">
-                <div className="dsp-node-title">
-                  <span className="dsp-node-type">VST Governance</span>
-                  <span className="dsp-node-id">{governance.disabledPlugins.length} plugin(s) disabled</span>
-                </div>
-
-                <div className="dsp-node-controls">
-                  <button type="button" onClick={() => void clearAuditLog()} disabled={busy}>
-                    Clear Audit
-                  </button>
-                </div>
-              </div>
-
-              <div className="dsp-node-body">
-                {governance.disabledPlugins.map((plugin) => (
-                  <div key={plugin.pluginId} className="dsp-param-row">
-                    <span className="dsp-param-label">{plugin.pluginId}</span>
-                    <span className="dsp-param-label" style={{ opacity: 0.85 }}>
-                      {plugin.reason}
-                      {plugin.failures ? ` (failures=${plugin.failures})` : ''}
-                    </span>
-                    <button type="button" onClick={() => void enablePlugin(plugin.pluginId)} disabled={busy}>
-                      Enable
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {auditLog?.events?.length ? (
-            <div className="dsp-node-card">
-              <div className="dsp-node-header">
-                <div className="dsp-node-title">
-                  <span className="dsp-node-type">VST Audit</span>
-                  <span className="dsp-node-id">
-                    latest {Math.min(20, auditLog.events.length)} event(s)
-                    {auditLog.lastScan ? ` · lastScan=${auditLog.lastScan.plugins.length}` : ''}
-                  </span>
-                </div>
-
-                <div className="dsp-node-controls">
-                  <button type="button" onClick={() => void clearAuditLog()} disabled={busy}>
-                    Clear
-                  </button>
-                </div>
-              </div>
-
-              <div className="dsp-node-body">
-                {auditLog.events
-                  .slice(-20)
-                  .reverse()
-                  .map((event) => (
-                    <div key={`${event.atMs}-${event.kind}-${event.nodeId ?? ''}`} className="dsp-rack-note">
-                      {new Date(event.atMs).toLocaleString()} · {event.kind}
-                      {event.pluginId ? ` · ${event.pluginId}` : ''}
-                      {event.nodeId ? ` · ${event.nodeId}` : ''}
-                      {event.message ? ` · ${event.message}` : ''}
-                    </div>
-                  ))}
-              </div>
-            </div>
-          ) : null}
-
           {graph.nodes.length === 0 && <div className="dsp-rack-empty">当前 DSP Graph 为空。</div>}
 
           {graph.nodes.map((node, index) => (
-            <div key={node.id} className="dsp-node-card">
+            <div
+              key={node.id}
+              id={`dsp-node-${node.id}`}
+              className={`dsp-node-card${node.id === highlightNodeId ? ' dsp-node-card--highlight' : ''}`}
+            >
               <div className="dsp-node-header">
                 <div className="dsp-node-title">
                   <span className="dsp-node-type">{node.type}</span>
@@ -765,21 +388,6 @@ export const DspRackPage: React.FC = () => {
                   {node.type === 'vst' && (
                     <button
                       type="button"
-                      onClick={() =>
-                        void openVstEditorWindow({
-                          nodeId: node.id,
-                          title: `VST Editor (${readStringField(node, 'pluginId') ?? 'vst'})`,
-                        })
-                      }
-                      disabled={busy || !(readStringField(node, 'pluginId') ?? '').trim()}
-                    >
-                      编辑
-                    </button>
-                  )}
-
-                  {node.type === 'vst' && (
-                    <button
-                      type="button"
                       title={node.enabled ? '打开插件原生界面' : '请先勾选“启用”该节点，再打开 Native UI'}
                       onClick={() =>
                         void invoke('native_audio_vst_open_native_editor', {
@@ -790,6 +398,20 @@ export const DspRackPage: React.FC = () => {
                       disabled={busy || !node.enabled || !(readStringField(node, 'pluginId') ?? '').trim()}
                     >
                       Native UI
+                    </button>
+                  )}
+
+                  {node.type === 'vst' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void invoke('native_audio_vst_close_native_editor', { nodeId: node.id }).catch((err) =>
+                          setError(err instanceof Error ? err.message : String(err))
+                        )
+                      }
+                      disabled={busy}
+                    >
+                      关闭 UI
                     </button>
                   )}
 
@@ -889,101 +511,12 @@ export const DspRackPage: React.FC = () => {
 
               {node.type === 'vst' && (
                 <div className="dsp-node-body">
-                  <div className="dsp-param-row">
-                    <span className="dsp-param-label">Plugin</span>
-                    <select
-                      className="dsp-param-select"
-                      value={readStringField(node, 'pluginId') ?? ''}
-                      onChange={(e) =>
-                        updateNode(node.id, (n) => ({
-                          ...n,
-                          pluginId: e.target.value,
-                          params: [],
-                        }))
-                      }
-                    >
-                      <option value="">{plugins.length === 0 ? '暂无插件（请先扫描）' : '请选择插件…'}</option>
-                      {plugins.map((plugin) => (
-                        <option key={plugin.id} value={plugin.id}>
-                          {plugin.name} ({plugin.id})
-                        </option>
-                      ))}
-                    </select>
+                  <div className="dsp-rack-note">
+                    PluginId: <span style={{ opacity: 0.9 }}>{readStringField(node, 'pluginId') ?? '(none)'}</span>
                   </div>
-
-                  {(() => {
-                    const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
-                    if (!pluginId) {
-                      return <div className="dsp-rack-note">请先选择 VST3 插件（如未扫描，请点击“扫描插件”）。</div>;
-                    }
-                    const plugin = plugins.find((p) => p.id === pluginId);
-                    if (!plugin) {
-                      return <div className="dsp-rack-note">未找到插件描述（可能需要刷新）。</div>;
-                    }
-
-                    const currentParams = ensureVstParamValues(asRecord(node)?.params);
-
-                    return (
-                      <>
-                        {plugin.parameters.length === 0 && (
-                          <div className="dsp-rack-note">
-                            {describing === pluginId
-                              ? '读取参数缓存中…'
-                              : plugin.paramsScannedAtMs
-                                ? '参数已扫描但尚未加载到 UI。'
-                                : '参数未缓存（建议先扫描参数）。'}{' '}
-                            <button
-                              type="button"
-                              onClick={() => void describePlugin(pluginId)}
-                              disabled={busy || describing === pluginId}
-                            >
-                              加载缓存
-                            </button>{' '}
-                            <button
-                              type="button"
-                              onClick={() => void scanPluginParams(pluginId)}
-                              disabled={busy || pluginsBusy}
-                            >
-                              扫描参数
-                            </button>
-                          </div>
-                        )}
-                        {plugin.parameters.map((param) => {
-                          const current =
-                            currentParams.find((p) => p.key === param.key)?.value ?? param.default;
-                          return (
-                            <div key={param.key} className="dsp-param-row">
-                              <span className="dsp-param-label">{param.title}</span>
-                              <input
-                                className="dsp-param-range"
-                                type="range"
-                                min={param.min}
-                                max={param.max}
-                                step={param.step}
-                                value={current}
-                                onChange={(e) => {
-                                  const value = clamp(Number(e.target.value), param.min, param.max);
-                                  updateNode(node.id, (n) => {
-                                    const nextParams = [...ensureVstParamValues(asRecord(n)?.params)];
-                                    const idx = nextParams.findIndex((p) => p.key === param.key);
-                                    if (idx >= 0) {
-                                      nextParams[idx] = { ...nextParams[idx], value };
-                                    } else {
-                                      nextParams.push({ key: param.key, value });
-                                    }
-                                    return { ...n, params: nextParams };
-                                  });
-                                }}
-                              />
-                              <span className="dsp-param-value">
-                                {current.toFixed(2)}{param.unit ? ` ${param.unit}` : ''}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </>
-                    );
-                  })()}
+                  <div className="dsp-rack-note">
+                    提示：请在「VST3 插件管理器」中选中插件并点击“添加到 DSP Rack”添加（当前不支持拖拽）。
+                  </div>
                 </div>
               )}
             </div>

@@ -19,6 +19,7 @@ import { PluginVisualizerHost } from '../magnet-system/plugins/PluginVisualizerH
 import type { Track } from '../services/audio';
 import { useAudioService } from '../contexts/AudioEngineContext';
 import { calculateWindowPosition, openEditorWindow, type EditorWindowType } from '../utils/editorWindows';
+import { closeVstManagerWindow, openVstManagerWindow } from '../utils/vstManagerWindows';
 
 export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
   return {
@@ -188,13 +189,28 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
 
       register<PageContribution>({
         kind: 'page',
-        id: 'vst-manager',
-        title: 'VST 管理器',
+        id: 'dsp-rack',
+        title: 'DSP Rack',
         render: () => <DspRackPage />,
         source: 'builtin',
         order: 95,
         group: 'plugin',
         tags: ['audio', 'dsp', 'vst'],
+      });
+
+      register<WindowContribution>({
+        kind: 'window',
+        id: 'vst-manager',
+        title: 'VST3 Plugin Manager',
+        label: 'vst-manager',
+        route: '/#/vst-manager',
+        source: 'builtin',
+        open: async () => {
+          await openVstManagerWindow({ title: 'VST3 Plugin Manager' });
+        },
+        close: async () => {
+          await closeVstManagerWindow();
+        },
       });
 
       register<PageContribution>({
