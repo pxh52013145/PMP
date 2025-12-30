@@ -319,6 +319,7 @@ function formatStatus(value: string | null | undefined): string {
   if (!value) return '-';
   if (value === 'ok') return 'OK';
   if (value === 'bad') return 'Bad';
+  if (value === 'timeout') return 'Timeout';
   return value;
 }
 

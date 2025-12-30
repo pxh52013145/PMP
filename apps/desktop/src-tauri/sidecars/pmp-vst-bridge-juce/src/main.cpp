@@ -1083,6 +1083,12 @@ class PluginEditorWindow : public juce::DocumentWindow {
     toFront(true);
   }
 
+  void setOwnerHwnd(uint64_t ownerHwnd) {
+    if (ownerHwnd == 0) return;
+    ownerHwnd_ = ownerHwnd;
+    applyWin32Style();
+  }
+
  private:
   void applyWin32Style() {
 #if defined(_WIN32)
@@ -1236,6 +1242,10 @@ std::optional<std::string> openEditor(LivePluginHost& host, const OpenEditorRequ
     }
 
     if (host.editorWindow) {
+      const uint64_t ownerHwnd = reqOwnerHwnd.value_or(0);
+      if (ownerHwnd != 0) {
+        host.editorWindow->setOwnerHwnd(ownerHwnd);
+      }
       host.editorWindow->setVisible(true);
       host.editorWindow->toFront(true);
       promise->set_value(std::nullopt);

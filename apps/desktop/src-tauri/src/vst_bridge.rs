@@ -94,6 +94,20 @@ fn bridge_describe_timeout() -> Duration {
     timeout_from_env_ms("PMP_VST_BRIDGE_DESCRIBE_TIMEOUT_MS", 20_000)
 }
 
+static FIRST_BRIDGE_CLI_DESCRIBE: AtomicBool = AtomicBool::new(true);
+
+fn describe_timeout_with_cold_start_boost(base: Duration) -> Duration {
+    if FIRST_BRIDGE_CLI_DESCRIBE.load(Ordering::Relaxed) {
+        base.max(Duration::from_millis(60_000))
+    } else {
+        base
+    }
+}
+
+fn mark_cli_describe_warmed() {
+    FIRST_BRIDGE_CLI_DESCRIBE.store(false, Ordering::Relaxed);
+}
+
 fn bridge_request_timeout() -> Duration {
     timeout_from_env_ms("PMP_VST_BRIDGE_REQUEST_TIMEOUT_MS", 2_500)
 }
@@ -284,13 +298,19 @@ pub fn describe_plugin_with_scan_paths_with_cancel(
         args.push("--include-default-paths".to_string());
     }
     append_scan_paths(&mut args, scan_paths);
-    let output = run_bridge_cli_cancellable_dynamic(args, bridge_describe_timeout(), cancel)?;
+    let output = run_bridge_cli_cancellable_dynamic(
+        args,
+        describe_timeout_with_cold_start_boost(bridge_describe_timeout()),
+        cancel,
+    )?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Bridge describe failed: {stderr}"));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse bridge plugin descriptor: {e}"))
+    let descriptor = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse bridge plugin descriptor: {e}"))?;
+    mark_cli_describe_warmed();
+    Ok(descriptor)
 }
 
 fn append_scan_paths(args: &mut Vec<String>, scan_paths: &[String]) {

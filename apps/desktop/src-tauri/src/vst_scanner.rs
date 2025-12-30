@@ -347,8 +347,14 @@ fn scan_params(
         ) {
             Ok(desc) => desc,
             Err(err) => {
-                vst_library::record_scan_event(run_id, "describe-failed", Some(plugin_id.as_str()), &err);
-                vst_library::mark_plugin_status(plugin_id.as_str(), "bad");
+                let kind = if err.contains("timed out") {
+                    vst_library::mark_plugin_status(plugin_id.as_str(), "timeout");
+                    "describe-timeout"
+                } else {
+                    vst_library::mark_plugin_status(plugin_id.as_str(), "bad");
+                    "describe-failed"
+                };
+                vst_library::record_scan_event(run_id, kind, Some(plugin_id.as_str()), &err);
                 continue;
             }
         };

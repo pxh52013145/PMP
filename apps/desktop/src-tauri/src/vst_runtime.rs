@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -43,6 +43,7 @@ struct VstNodeSession {
 static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
+static FIRST_SESSION_SPAWN: AtomicBool = AtomicBool::new(true);
 
 pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
     let plugins = crate::vst_bridge::list_plugins()?;
@@ -272,7 +273,14 @@ fn ensure_session_internal(
         }
     };
 
-    let deadline = Instant::now() + shm_handshake_timeout();
+    let is_first_spawn = FIRST_SESSION_SPAWN.load(Ordering::Relaxed);
+    let handshake_timeout = if is_first_spawn {
+        shm_handshake_timeout().max(Duration::from_millis(120_000))
+    } else {
+        shm_handshake_timeout()
+    };
+
+    let deadline = Instant::now() + handshake_timeout;
     let mut last_alive_check = Instant::now();
     while Instant::now() < deadline {
         if last_alive_check.elapsed() >= Duration::from_millis(200) {
@@ -303,8 +311,14 @@ fn ensure_session_internal(
         return Err("Bridge shared memory handshake timed out".to_string());
     }
 
+    let ping_timeout = if is_first_spawn {
+        bridge_ping_timeout().max(Duration::from_millis(30_000))
+    } else {
+        bridge_ping_timeout()
+    };
+
     if let Err(err) = client
-        .ping_with_timeout(bridge_ping_timeout())
+        .ping_with_timeout(ping_timeout)
         .map_err(|e| format!("Bridge ping failed: {e}"))
     {
         client.kill();
@@ -315,6 +329,10 @@ fn ensure_session_internal(
             err.clone(),
         );
         return Err(err);
+    }
+
+    if is_first_spawn {
+        FIRST_SESSION_SPAWN.store(false, Ordering::Relaxed);
     }
 
     let desired_generation =
@@ -384,6 +402,27 @@ pub fn ensure_audio_session(
     )
 }
 
+#[cfg(target_os = "windows")]
+fn resolve_editor_owner_hwnd(app: &AppHandle) -> Option<u64> {
+    let deadline = Instant::now() + Duration::from_millis(1_500);
+    while Instant::now() < deadline {
+        let hwnd = app
+            .get_window(crate::windows::MAIN_WINDOW_LABEL)
+            .and_then(|window| window.hwnd().ok())
+            .map(|hwnd| hwnd.0 as u64)
+            .filter(|value| *value != 0);
+        if hwnd.is_some() {
+            return hwnd;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    app.get_window(crate::windows::MAIN_WINDOW_LABEL)
+        .and_then(|window| window.hwnd().ok())
+        .map(|hwnd| hwnd.0 as u64)
+        .filter(|value| *value != 0)
+}
+
 pub fn open_native_editor(
     app: &AppHandle,
     node_id: String,
@@ -405,9 +444,7 @@ pub fn open_native_editor(
     let owner_hwnd = {
         #[cfg(target_os = "windows")]
         {
-            app.get_window(crate::windows::MAIN_WINDOW_LABEL)
-                .and_then(|window| window.hwnd().ok())
-                .map(|hwnd| hwnd.0 as u64)
+            resolve_editor_owner_hwnd(app)
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -420,7 +457,8 @@ pub fn open_native_editor(
         .open_editor_window(title.as_deref(), owner_hwnd, true)
         .map_err(|e| format!("Bridge open editor failed: {e}"));
 
-    if result.is_ok() {
+    let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
+    if should_keep_session {
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -449,7 +487,8 @@ pub fn close_native_editor(node_id: String) -> Result<(), String> {
         .close_editor_window()
         .map_err(|e| format!("Bridge close editor failed: {e}"));
 
-    if result.is_ok() {
+    let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
+    if should_keep_session {
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
