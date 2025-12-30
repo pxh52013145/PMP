@@ -15,6 +15,14 @@ import {
 } from '../utils/magnetEditor';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../utils/windowCommunication';
 
+function areSetsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
 interface EditorContextType {
   editorState: EditorState;
   occupancyMap: Map<string, PixelOccupancy>;
@@ -55,6 +63,25 @@ export function EditorProvider({ children, magnets }: { children: ReactNode; mag
   useEffect(() => {
     setOccupancyMap(calculatePixelOccupancy(magnets));
   }, [magnets]);
+
+  useEffect(() => {
+    setEditorState((prev) => {
+      if (prev.mode !== 'drag' || !prev.selectedMagnetId) return prev;
+
+      const magnetPixels = new Set<string>();
+      occupancyMap.forEach((occupancy, key) => {
+        if (occupancy.isOccupied && occupancy.occupiedBy === prev.selectedMagnetId) {
+          magnetPixels.add(key);
+        }
+      });
+
+      if (areSetsEqual(prev.selectedPixels, magnetPixels)) return prev;
+      return {
+        ...prev,
+        selectedPixels: magnetPixels,
+      };
+    });
+  }, [occupancyMap]);
 
   // 同步 editorState 到其他窗口
   useEffect(() => {

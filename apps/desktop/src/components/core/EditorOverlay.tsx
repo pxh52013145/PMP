@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
 import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
-import { calculateNewAnchors, checkMagnetCollision } from '../../utils/magnetEditor';
+import { calculateNewAnchors, checkMagnetCollision, getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import {
   computePixelGridLayout,
   hitTestPixelGridFromPoint,
@@ -243,6 +243,15 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
     const { x: mouseX, y: mouseY } = pending;
 
     if (draggingMagnetRef.current) {
+      const hoverPixel = getPixelAtPosition(mouseX, mouseY);
+      if (hoverPixel) {
+        const key = `${hoverPixel.x},${hoverPixel.y}`;
+        if (key !== lastHoverKeyRef.current) {
+          lastHoverKeyRef.current = key;
+          setHoverPixel(hoverPixel.x, hoverPixel.y);
+        }
+      }
+
       setDraggingMagnet((prev) => {
         if (!prev) return prev;
 
@@ -389,6 +398,15 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
     const state = editorStateRef.current;
     const occ = occupancyMapRef.current;
 
+    const draggingSelectedPixels = draggingMagnetRef.current
+      ? new Set(
+          getMagnetOccupiedPixels({
+            ...draggingMagnetRef.current.magnet,
+            anchors: draggingMagnetRef.current.previewAnchors,
+          }).map((pixel) => `${pixel.x},${pixel.y}`)
+        )
+      : null;
+
     let dragMinX = 0;
     let dragMaxX = -1;
     let dragMinY = 0;
@@ -410,7 +428,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
         const occupancy = occ.get(key);
 
         const isOccupied = occupancy?.isOccupied === true;
-        const isSelected = state.selectedPixels.has(key);
+        const isSelected = draggingSelectedPixels ? draggingSelectedPixels.has(key) : state.selectedPixels.has(key);
         const isHovered = state.hoverPixel?.x === col && state.hoverPixel?.y === row;
         const isDragSelection = hasDragArea
           ? col >= dragMinX && col <= dragMaxX && row >= dragMinY && row <= dragMaxY
