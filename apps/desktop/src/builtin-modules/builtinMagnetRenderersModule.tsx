@@ -138,10 +138,10 @@ const BUILTIN_DEFINITIONS: MagnetRendererDefinition[] = [
   {
     id: 'btn-matrix-change',
     render: () => <MatrixChangeMagnet />,
-    preview: () => createTextPreview('M1/M2'),
-    description: '切换 Matrix 1 / Matrix 2（Workbench layout）',
-    group: 'layout',
-    tags: ['layout', 'matrix', 'workbench'],
+    preview: () => createTextPreview('SPACE'),
+    description: '管理 Magnet Spaces（点击打开面板）',
+    group: 'space',
+    tags: ['space', 'layout'],
     source: 'builtin',
   },
   {

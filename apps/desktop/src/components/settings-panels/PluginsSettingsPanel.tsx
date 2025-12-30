@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
-import { useMagnetConfig } from '../../modules/magnets';
+import { removeMagnetCatalogMagnet, upsertMagnetCatalogMagnet, useMagnetConfig } from '../../modules/magnets';
 import { usePersistentSetting } from '../../modules/storage';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
@@ -184,8 +184,11 @@ export function PluginsSettingsPanel() {
 
       await installPmpmPluginFromFilePath(filePath);
 
+      const template = createMagnetTemplateFromPlugin(parsed);
+      upsertMagnetCatalogMagnet(template);
+
       if (!magnetLibrary.some((m) => m.id === meta.id)) {
-        setMagnetLibrary((prev) => [...prev, createMagnetTemplateFromPlugin(parsed)]);
+        setMagnetLibrary((prev) => [...prev, template]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -220,6 +223,7 @@ export function PluginsSettingsPanel() {
         governance.restartPmpmPluginRuntime(pluginId, { reason: 'uninstall' });
         clearPmpmAuditLog(pluginId);
 
+        removeMagnetCatalogMagnet(pluginId);
         if (magnetLibrary.some((m) => m.id === pluginId)) {
           setMagnetLibrary((prev) => prev.filter((m) => m.id !== pluginId));
         }

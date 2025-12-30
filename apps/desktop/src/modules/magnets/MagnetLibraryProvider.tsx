@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS } from '../../constants/magnets';
+import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
@@ -17,10 +17,28 @@ import {
   resolveMagnetConfigStorageKey,
   saveMagnetConfig,
   scheduleSaveMagnetConfig,
+  type MagnetConfig,
+  type MagnetStateConfig,
 } from './config';
-import { createInitialMagnetState } from './state';
+import {
+  createDefaultMagnetCatalogState,
+  ensureMagnetCatalogState,
+  sanitizeMagnetCatalogState,
+} from './catalog';
+import {
+  cancelScheduledMagnetSpaceLayoutSave,
+  createDefaultMagnetSpaceLayout,
+  deriveMagnetSpaceLayoutFromLegacyConfig,
+  flushScheduledMagnetSpaceLayoutSave,
+  loadMagnetSpaceLayout,
+  saveMagnetSpaceLayout,
+  scheduleSaveMagnetSpaceLayout,
+  ensureMagnetSpaceLayout,
+} from './layoutStorage';
+import { resolveMagnetLayoutStorageKey, type MagnetSpaceLayout } from './layout';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { usePersistentSetting } from '../storage';
+import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
 
 export interface MagnetLibraryProviderProps {
   children: ReactNode;
@@ -57,27 +75,98 @@ export function MagnetLibraryProvider({
   const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
   const builtInMagnetIds = useMemo(() => new Set(BUILTIN_MAGNET_IDS), []);
   const suppressNextAutoSaveRef = useRef(false);
-  const [workbenchLayoutId] = usePersistentSetting(STORAGE_KEYS.WORKBENCH_LAYOUT_ID, '', {
-    format: 'string',
+  const defaultSpacesState = useMemo(() => createDefaultMagnetSpacesState(), []);
+  const [magnetSpacesRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACES, defaultSpacesState, {
+    format: 'json',
   });
-  const magnetConfigStorageKey = useMemo(
-    () => resolveMagnetConfigStorageKey(workbenchLayoutId),
-    [workbenchLayoutId]
+  const magnetSpaces = useMemo(
+    () => sanitizeMagnetSpacesState(magnetSpacesRaw),
+    [magnetSpacesRaw]
   );
+  const activeSpaceId = magnetSpaces.activeSpaceId;
+  const magnetConfigStorageKey = useMemo(
+    () => resolveMagnetConfigStorageKey(activeSpaceId),
+    [activeSpaceId]
+  );
+  const magnetLayoutStorageKey = useMemo(
+    () => resolveMagnetLayoutStorageKey(activeSpaceId),
+    [activeSpaceId]
+  );
+  // Tracks the storage key for the *currently loaded* magnet state (magnetLibrary/activeMagnetIds).
+  // This must not be updated until the new space config has been loaded, otherwise we may accidentally
+  // persist the previous space state into the next space key (or vice versa).
+  const loadedConfigKeyRef = useRef(magnetConfigStorageKey);
+  const loadedLayoutKeyRef = useRef(magnetLayoutStorageKey);
 
   const resolvedDefaultActiveMagnetIds = useMemo(() => {
-    if (workbenchLayoutId !== 'matrix2') return defaultActiveMagnetIds;
-    const next = new Set(defaultActiveMagnetIds);
-    next.add('dsp-vst');
+    const seed = activeSpaceId === 'space1' ? defaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
+    const next = new Set(seed);
+    for (const id of REQUIRED_MAGNET_IDS) next.add(id);
     return next;
-  }, [defaultActiveMagnetIds, workbenchLayoutId]);
+  }, [activeSpaceId, defaultActiveMagnetIds]);
 
-  const initialRef = useRef<ReturnType<typeof createInitialMagnetState> | null>(null);
+  const defaultCatalogState = useMemo(() => createDefaultMagnetCatalogState(), []);
+  const [catalogRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_CATALOG, defaultCatalogState, {
+    format: 'json',
+  });
+  const customMagnetsCatalog = useMemo(() => {
+    return sanitizeMagnetCatalogState(catalogRaw).magnets;
+  }, [catalogRaw]);
+
+  const initialRef = useRef<{
+    magnetLibrary: Magnet[];
+    activeMagnetIds: Set<string>;
+    layout: MagnetSpaceLayout;
+  } | null>(null);
   if (!initialRef.current) {
-    initialRef.current = createInitialMagnetState(defaultMagnetLibrary, {
-      defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
-      storageKey: magnetConfigStorageKey,
-    });
+    const maybeLayout = loadMagnetSpaceLayout(magnetLayoutStorageKey);
+    const primaryConfig = loadMagnetConfig(magnetConfigStorageKey);
+    const layout =
+      maybeLayout ??
+      (primaryConfig
+        ? deriveMagnetSpaceLayoutFromLegacyConfig(activeSpaceId, primaryConfig, {
+            defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
+          })
+        : createDefaultMagnetSpaceLayout(activeSpaceId, resolvedDefaultActiveMagnetIds));
+
+    const activeFromLayout = new Set(layout.activeMagnetIds);
+    for (const id of REQUIRED_MAGNET_IDS) activeFromLayout.add(id);
+
+    const baseLibrary = [...defaultMagnetLibrary, ...customMagnetsCatalog];
+    const baseConfig: MagnetConfig = primaryConfig
+      ? { ...primaryConfig, customMagnets: customMagnetsCatalog, gridSize }
+      : {
+          version: '1.1.0',
+          gridSize,
+          magnets: {} as Record<string, MagnetStateConfig>,
+          customMagnets: customMagnetsCatalog,
+        };
+
+    const patchedMagnets: Record<string, MagnetStateConfig> = { ...baseConfig.magnets };
+    for (const magnet of baseLibrary) {
+      const existing = patchedMagnets[magnet.id];
+      patchedMagnets[magnet.id] = {
+        ...(existing ?? { anchors: magnet.anchors, isActive: false }),
+        anchors: layout.anchorsByMagnetId[magnet.id] ?? existing?.anchors ?? magnet.anchors,
+        isActive: activeFromLayout.has(magnet.id),
+      };
+    }
+
+    const applied = applyMagnetConfig(
+      { ...baseConfig, gridSize, magnets: patchedMagnets },
+      defaultMagnetLibrary
+    );
+    const ensuredActive = new Set(applied.activeMagnetIds);
+    for (const id of REQUIRED_MAGNET_IDS) ensuredActive.add(id);
+
+    loadedConfigKeyRef.current = magnetConfigStorageKey;
+    loadedLayoutKeyRef.current = magnetLayoutStorageKey;
+
+    initialRef.current = {
+      magnetLibrary: applied.magnetLibrary,
+      activeMagnetIds: ensuredActive,
+      layout,
+    };
   }
 
   const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => initialRef.current!.magnetLibrary);
@@ -87,75 +176,99 @@ export function MagnetLibraryProvider({
     return magnetLibrary.filter((m) => activeMagnetIds.has(m.id));
   }, [magnetLibrary, activeMagnetIds]);
 
+  const buildLayoutSnapshot = useCallback(
+    (library: Magnet[], activeIds: Set<string>): MagnetSpaceLayout => {
+      const active = new Set(activeIds);
+      for (const id of REQUIRED_MAGNET_IDS) active.add(id);
+
+      const anchorsByMagnetId: Record<string, PixelAnchor[]> = {};
+      for (const magnet of library) {
+        if (!Array.isArray(magnet.anchors) || magnet.anchors.length === 0) continue;
+        anchorsByMagnetId[magnet.id] = magnet.anchors;
+      }
+
+      return {
+        version: 1,
+        activeMagnetIds: [...active],
+        anchorsByMagnetId,
+      };
+    },
+    []
+  );
+
   const reloadFromStorage = useCallback(() => {
     suppressNextAutoSaveRef.current = true;
     cancelScheduledMagnetConfigSave();
-    const isMatrix2 = workbenchLayoutId === 'matrix2';
-    const primaryConfig = loadMagnetConfig(magnetConfigStorageKey);
-    const fallbackConfig =
-      magnetConfigStorageKey !== STORAGE_KEYS.CONFIG ? loadMagnetConfig(STORAGE_KEYS.CONFIG) : null;
-    const config = primaryConfig ?? fallbackConfig;
-    if (config) {
-      const applied = applyMagnetConfig(config, defaultMagnetLibrary);
+    cancelScheduledMagnetSpaceLayoutSave();
 
-      const shouldBootstrapMatrix2 =
-        isMatrix2 && (!primaryConfig || !primaryConfig.magnets || !primaryConfig.magnets['dsp-vst']);
+    const spaceIds = magnetSpaces.spaces.map((s) => s.id);
+    const catalogMagnets = ensureMagnetCatalogState(spaceIds).state.magnets;
 
-      if (shouldBootstrapMatrix2) {
-        const nextActiveMagnetIds = new Set(applied.activeMagnetIds);
-        nextActiveMagnetIds.add('dsp-vst');
-        setMagnetLibrary(applied.magnetLibrary);
-        setActiveMagnetIds(nextActiveMagnetIds);
-        try {
-          saveMagnetConfig(
-            applied.magnetLibrary,
-            nextActiveMagnetIds,
-            gridSize,
-            defaultMagnetLibrary,
-            magnetConfigStorageKey
-          );
-        } catch (error) {
-          console.warn('[magnets] Failed to bootstrap matrix2 config', error);
-        }
-        return;
-      }
-
-      setMagnetLibrary(applied.magnetLibrary);
-      setActiveMagnetIds(applied.activeMagnetIds);
-      return;
-    }
-
-    const fallback = createInitialMagnetState(defaultMagnetLibrary, {
+    const layoutResult = ensureMagnetSpaceLayout(activeSpaceId, {
       defaultActiveMagnetIds: resolvedDefaultActiveMagnetIds,
     });
-    setMagnetLibrary(fallback.magnetLibrary);
-    setActiveMagnetIds(fallback.activeMagnetIds);
+    const layout = layoutResult.layout;
+    const activeFromLayout = new Set(layout.activeMagnetIds);
+    for (const id of REQUIRED_MAGNET_IDS) activeFromLayout.add(id);
 
-    if (workbenchLayoutId === 'matrix2') {
-      try {
-        saveMagnetConfig(
-          fallback.magnetLibrary,
-          fallback.activeMagnetIds,
+    const primaryConfig = loadMagnetConfig(magnetConfigStorageKey);
+    const baseConfig: MagnetConfig = primaryConfig
+      ? { ...primaryConfig, customMagnets: catalogMagnets, gridSize }
+      : {
+          version: '1.1.0',
           gridSize,
-          defaultMagnetLibrary,
-          magnetConfigStorageKey
-        );
-      } catch (error) {
-        console.warn('[magnets] Failed to bootstrap matrix2 fallback config', error);
-      }
+          magnets: {} as Record<string, MagnetStateConfig>,
+          customMagnets: catalogMagnets,
+        };
+
+    const baseLibrary = [...defaultMagnetLibrary, ...catalogMagnets];
+    const patchedMagnets: Record<string, MagnetStateConfig> = { ...baseConfig.magnets };
+    for (const magnet of baseLibrary) {
+      const existing = patchedMagnets[magnet.id];
+      patchedMagnets[magnet.id] = {
+        ...(existing ?? { anchors: magnet.anchors, isActive: false }),
+        anchors: layout.anchorsByMagnetId[magnet.id] ?? existing?.anchors ?? magnet.anchors,
+        isActive: activeFromLayout.has(magnet.id),
+      };
     }
+
+    const applied = applyMagnetConfig(
+      { ...baseConfig, gridSize, magnets: patchedMagnets },
+      defaultMagnetLibrary
+    );
+    const ensuredActive = new Set(applied.activeMagnetIds);
+    for (const id of REQUIRED_MAGNET_IDS) ensuredActive.add(id);
+
+    loadedConfigKeyRef.current = magnetConfigStorageKey;
+    loadedLayoutKeyRef.current = layoutResult.storageKey;
+
+    setMagnetLibrary(applied.magnetLibrary);
+    setActiveMagnetIds(ensuredActive);
   }, [
+    activeSpaceId,
     defaultMagnetLibrary,
     gridSize,
     magnetConfigStorageKey,
+    magnetSpaces.spaces,
     resolvedDefaultActiveMagnetIds,
-    workbenchLayoutId,
   ]);
+
+  const didInitialReloadRef = useRef(false);
+  useEffect(() => {
+    if (didInitialReloadRef.current) return;
+    didInitialReloadRef.current = true;
+    reloadFromStorage();
+  }, [reloadFromStorage]);
 
   const saveNow = useCallback(() => {
     cancelScheduledMagnetConfigSave();
-    saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, magnetConfigStorageKey);
-  }, [activeMagnetIds, defaultMagnetLibrary, gridSize, magnetLibrary, magnetConfigStorageKey]);
+    cancelScheduledMagnetSpaceLayoutSave();
+    const configKey = loadedConfigKeyRef.current;
+    const layoutKey = loadedLayoutKeyRef.current;
+    saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, configKey);
+    const layout = buildLayoutSnapshot(magnetLibrary, activeMagnetIds);
+    saveMagnetSpaceLayout(layout, layoutKey);
+  }, [activeMagnetIds, buildLayoutSnapshot, defaultMagnetLibrary, gridSize, magnetLibrary]);
 
   const updateMagnetAnchors = useCallback((magnetId: string, newAnchors: PixelAnchor[]) => {
     setMagnetLibrary((prev) => prev.map((m) => (m.id === magnetId ? { ...m, anchors: newAnchors } : m)));
@@ -170,12 +283,27 @@ export function MagnetLibraryProvider({
   }, []);
 
   const deactivateMagnet = useCallback((magnetId: string) => {
+    if (REQUIRED_MAGNET_IDS.has(magnetId)) return;
     setActiveMagnetIds((prev) => {
       const next = new Set(prev);
       next.delete(magnetId);
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    const missing: string[] = [];
+    for (const id of REQUIRED_MAGNET_IDS) {
+      if (!activeMagnetIds.has(id)) missing.push(id);
+    }
+    if (missing.length === 0) return;
+
+    setActiveMagnetIds((prev) => {
+      const next = new Set(prev);
+      for (const id of missing) next.add(id);
+      return next;
+    });
+  }, [activeMagnetIds]);
 
   useEffect(() => {
     void broadcastDataUpdate(STORAGE_KEYS.BUILTIN_MAGNETS, [...builtInMagnetIds]);
@@ -187,42 +315,53 @@ export function MagnetLibraryProvider({
       return;
     }
 
-    scheduleSaveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, {
+    const layoutKey = loadedLayoutKeyRef.current;
+    const layout = buildLayoutSnapshot(magnetLibrary, activeMagnetIds);
+    scheduleSaveMagnetSpaceLayout(layout, {
       debounceMs: autoSaveDebounceMs,
-      storageKey: magnetConfigStorageKey,
+      storageKey: layoutKey,
       afterSave: () => {
         if (!isTauriRuntime()) return;
         void broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
       },
     });
+
+    const storageKey = loadedConfigKeyRef.current;
+    scheduleSaveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, {
+      debounceMs: autoSaveDebounceMs,
+      storageKey,
+    });
   }, [
     activeMagnetIds,
     autoSaveDebounceMs,
+    buildLayoutSnapshot,
     defaultMagnetLibrary,
     gridSize,
-    magnetConfigStorageKey,
     magnetLibrary,
   ]);
 
-  const lastConfigKeyRef = useRef(magnetConfigStorageKey);
   useEffect(() => {
-    const previousKey = lastConfigKeyRef.current;
-    if (previousKey === magnetConfigStorageKey) return;
-
+    const loadedKey = loadedConfigKeyRef.current;
+    const loadedLayoutKey = loadedLayoutKeyRef.current;
+    if (loadedKey === magnetConfigStorageKey && loadedLayoutKey === magnetLayoutStorageKey) return;
     try {
       flushScheduledMagnetConfigSave();
-      saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, previousKey);
+      flushScheduledMagnetSpaceLayoutSave();
+      saveMagnetConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, loadedKey);
+      const layout = buildLayoutSnapshot(magnetLibrary, activeMagnetIds);
+      saveMagnetSpaceLayout(layout, loadedLayoutKey);
     } catch (error) {
-      console.warn(`[magnets] Failed to persist config before switching key "${previousKey}"`, error);
+      console.warn(`[magnets] Failed to persist config before switching key "${loadedKey}"`, error);
     }
 
-    lastConfigKeyRef.current = magnetConfigStorageKey;
     reloadFromStorage();
   }, [
     activeMagnetIds,
+    buildLayoutSnapshot,
     defaultMagnetLibrary,
     gridSize,
     magnetConfigStorageKey,
+    magnetLayoutStorageKey,
     magnetLibrary,
     reloadFromStorage,
   ]);
@@ -231,25 +370,32 @@ export function MagnetLibraryProvider({
     if (!registerFlushHandler) return;
     return registerFlushHandler(() => {
       flushScheduledMagnetConfigSave();
+      flushScheduledMagnetSpaceLayoutSave();
     });
   }, [registerFlushHandler]);
 
   useEffect(() => {
     return () => {
       flushScheduledMagnetConfigSave();
+      flushScheduledMagnetSpaceLayoutSave();
     };
   }, []);
 
   useEffect(() => {
     const cleanupPromise = setupConfigSync(
-      [magnetConfigStorageKey],
-      [TAURI_EVENTS.MAGNET_LIBRARY_UPDATED, TAURI_EVENTS.MAGNET_ACTIVATED, TAURI_EVENTS.MAGNET_DEACTIVATED],
+      [STORAGE_KEYS.MAGNET_SPACES, STORAGE_KEYS.MAGNET_CATALOG, magnetConfigStorageKey, magnetLayoutStorageKey],
+      [
+        TAURI_EVENTS.MAGNET_LIBRARY_UPDATED,
+        TAURI_EVENTS.MAGNET_ACTIVATED,
+        TAURI_EVENTS.MAGNET_DEACTIVATED,
+        TAURI_EVENTS.MAGNET_SPACES_UPDATED,
+      ],
       reloadFromStorage
     );
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, [magnetConfigStorageKey, reloadFromStorage]);
+  }, [magnetConfigStorageKey, magnetLayoutStorageKey, reloadFromStorage]);
 
   const value: MagnetConfigContextValue = {
     defaultMagnetLibrary,

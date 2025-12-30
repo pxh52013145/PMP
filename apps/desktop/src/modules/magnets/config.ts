@@ -14,6 +14,7 @@ export interface ScheduleSaveMagnetConfigOptions {
   debounceMs?: number;
   afterSave?: () => void | Promise<void>;
   storageKey?: string;
+  includeCustomMagnets?: boolean;
 }
 
 let scheduledSaveTimeout: number | null = null;
@@ -24,6 +25,7 @@ let scheduledSaveArgs:
       gridSize: { columns: number; rows: number };
       defaultMagnetLibrary?: Magnet[];
       storageKey?: string;
+      includeCustomMagnets?: boolean;
     }
   | null = null;
 let scheduledAfterSave: null | (() => void | Promise<void>) = null;
@@ -46,9 +48,13 @@ export function saveMagnetConfig(
   activeMagnetIds: Set<string>,
   gridSize: { columns: number; rows: number },
   defaultMagnetLibrary?: Magnet[],
-  storageKey?: string
+  storageKey?: string,
+  options: { includeCustomMagnets?: boolean } = {}
 ): void {
-  saveConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, storageKey);
+  const includeCustomMagnets = options.includeCustomMagnets ?? false;
+  saveConfig(magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, storageKey, {
+    includeCustomMagnets,
+  });
 }
 
 export function scheduleSaveMagnetConfig(
@@ -60,8 +66,16 @@ export function scheduleSaveMagnetConfig(
 ): void {
   const debounceMs = options.debounceMs ?? 300;
   const storageKey = options.storageKey;
+  const includeCustomMagnets = options.includeCustomMagnets;
 
-  scheduledSaveArgs = { magnetLibrary, activeMagnetIds, gridSize, defaultMagnetLibrary, storageKey };
+  scheduledSaveArgs = {
+    magnetLibrary,
+    activeMagnetIds,
+    gridSize,
+    defaultMagnetLibrary,
+    storageKey,
+    includeCustomMagnets,
+  };
   scheduledAfterSave = options.afterSave ?? null;
 
   if (scheduledSaveTimeout !== null) {
@@ -81,7 +95,8 @@ export function scheduleSaveMagnetConfig(
         args.activeMagnetIds,
         args.gridSize,
         args.defaultMagnetLibrary,
-        args.storageKey
+        args.storageKey,
+        { includeCustomMagnets: args.includeCustomMagnets }
       );
       if (afterSave) {
         Promise.resolve(afterSave()).catch((error) => {
@@ -122,7 +137,8 @@ export function flushScheduledMagnetConfigSave(): void {
       args.activeMagnetIds,
       args.gridSize,
       args.defaultMagnetLibrary,
-      args.storageKey
+      args.storageKey,
+      { includeCustomMagnets: args.includeCustomMagnets }
     );
     if (afterSave) {
       Promise.resolve(afterSave()).catch((error) => {
@@ -144,10 +160,10 @@ export function applyMagnetConfig(
   return applyConfig(config, defaultMagnetLibrary);
 }
 
-export const MATRIX2_MAGNET_CONFIG_STORAGE_KEY = `${STORAGE_KEYS.CONFIG}:matrix2`;
-
 export function resolveMagnetConfigStorageKey(
-  workbenchLayoutId: string | null | undefined
+  activeSpaceId: string | null | undefined
 ): string {
-  return workbenchLayoutId === 'matrix2' ? MATRIX2_MAGNET_CONFIG_STORAGE_KEY : STORAGE_KEYS.CONFIG;
+  const normalized = typeof activeSpaceId === 'string' ? activeSpaceId.trim() : '';
+  if (!normalized || normalized === 'space1') return STORAGE_KEYS.CONFIG;
+  return `${STORAGE_KEYS.CONFIG}:${normalized}`;
 }

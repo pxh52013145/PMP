@@ -120,6 +120,9 @@ export const STORAGE_KEYS = {
   WORKBENCH_PAGE_CONTAINER_ID: 'pixel-matrix-workbench-page-container-id', // Workbench page container contribution id（R4）
 
   // === 运行时数据（辅助/缓存） ===
+  MAGNET_SPACES: 'pixel-matrix-magnet-spaces-v1', // Magnet spaces（active space + list）
+  MAGNET_SPACE_LAYOUT: 'pixel-matrix-magnet-space-layout-v1', // Per-space magnet layout (active ids + anchors)
+  MAGNET_CATALOG: 'pixel-matrix-magnet-catalog-v1', // Global custom magnet catalog (templates only, no per-space layout)
   MAGNET_LIBRARY: 'pixel-matrix-magnet-library', // Magnet 库（兼容旧版）
   ACTIVE_MAGNETS: 'pixel-matrix-active-magnets', // 激活的 Magnet ID
   BUILTIN_MAGNETS: 'pixel-matrix-builtin-magnets', // 内置 Magnet ID
@@ -205,6 +208,7 @@ export const TAURI_EVENTS = {
   MAGNET_LIBRARY_UPDATED: 'magnet-library-updated',
   MAGNET_ACTIVATED: 'magnet-activated',
   MAGNET_DEACTIVATED: 'magnet-deactivated',
+  MAGNET_SPACES_UPDATED: 'magnet-spaces-updated',
 
   // 背景相关
   BACKGROUND_UPDATED: 'background-updated',

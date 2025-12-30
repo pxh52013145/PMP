@@ -43,4 +43,26 @@ describe('configManager baseline', () => {
     const loaded = loadConfig();
     expect(loaded).not.toBeNull();
   });
+
+  it('supports multiple storage keys (space isolation)', () => {
+    const magnetLibrary = [createMockMagnet()];
+
+    const activeA = new Set<string>(['test-magnet']);
+    saveConfig(magnetLibrary, activeA, { columns: 27, rows: 20 }, undefined, 'pixel-matrix-player-config');
+
+    const activeB = new Set<string>();
+    saveConfig(
+      magnetLibrary,
+      activeB,
+      { columns: 27, rows: 20 },
+      undefined,
+      'pixel-matrix-player-config:space2'
+    );
+
+    const loadedA = loadConfig('pixel-matrix-player-config');
+    const loadedB = loadConfig('pixel-matrix-player-config:space2');
+
+    expect(loadedA?.magnets['test-magnet']?.isActive).toBe(true);
+    expect(loadedB?.magnets['test-magnet']?.isActive).toBe(false);
+  });
 });

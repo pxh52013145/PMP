@@ -12,7 +12,36 @@ export { createInitialMagnetState } from './state';
 export type { MagnetStateSnapshot, CreateInitialMagnetStateOptions } from './state';
 export { applyMagnetConfig, loadMagnetConfig, saveMagnetConfig } from './config';
 export type { MagnetConfig, MagnetStateConfig } from './config';
-export { MATRIX2_MAGNET_CONFIG_STORAGE_KEY, resolveMagnetConfigStorageKey } from './config';
+export { resolveMagnetConfigStorageKey } from './config';
+export type { MagnetSpace, MagnetSpacesState } from './spaces';
+export {
+  createDefaultMagnetSpacesState,
+  createNextSpaceId,
+  getNextSpaceId,
+  sanitizeMagnetSpacesState,
+} from './spaces';
+export type { MagnetSpaceLayout, MagnetSpaceLayoutV1 } from './layout';
+export { resolveMagnetLayoutStorageKey, sanitizeMagnetSpaceLayout } from './layout';
+export type { MagnetCatalogState } from './catalog';
+export {
+  createDefaultMagnetCatalogState,
+  ensureMagnetCatalogState,
+  readMagnetCatalogState,
+  removeMagnetCatalogMagnet,
+  sanitizeMagnetCatalogState,
+  upsertMagnetCatalogMagnet,
+  writeMagnetCatalogState,
+} from './catalog';
+export {
+  cancelScheduledMagnetSpaceLayoutSave,
+  createDefaultMagnetSpaceLayout,
+  deriveMagnetSpaceLayoutFromLegacyConfig,
+  ensureMagnetSpaceLayout,
+  flushScheduledMagnetSpaceLayoutSave,
+  loadMagnetSpaceLayout,
+  saveMagnetSpaceLayout,
+  scheduleSaveMagnetSpaceLayout,
+} from './layoutStorage';
 export {
   MagnetLibraryProvider,
   useMagnetConfig,

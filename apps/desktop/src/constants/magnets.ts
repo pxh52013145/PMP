@@ -56,7 +56,8 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-window-pin',
   'btn-matrix-change',
   'btn-editor',
-  'btn-debug', // 调试按钮
+  // DSP / VST
+  'dsp-vst',
   // 导航页面
   'navigation-page',
   'btn-back',
@@ -72,4 +73,19 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-play-queue',
   'btn-playlists',
   'btn-music-library',
+]);
+
+/**
+ * Required magnets (cannot be removed from matrix).
+ *
+ * Used by "Magnet Spaces" to ensure every space can always switch / edit.
+ */
+export const REQUIRED_MAGNET_IDS = new Set<string>([
+  'drag-handle',
+  'btn-minimize',
+  'btn-maximize',
+  'btn-close',
+  'btn-window-pin',
+  'btn-matrix-change',
+  'btn-editor',
 ]);

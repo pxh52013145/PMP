@@ -3,17 +3,17 @@ import { Magnet } from '../../types/pixel';
 export const MATRIX_CHANGE_MAGNET: Magnet = {
   id: 'btn-matrix-change',
   type: 'custom',
-  name: 'Matrix Switch',
+  name: '空间切换',
   renderer: 'btn-matrix-change',
-  previewText: 'M1/M2',
-  description: '切换 Matrix 1 / Matrix 2（Workbench layout）',
-  tags: ['layout', 'workbench', 'matrix'],
+  previewText: 'SPACE',
+  description: '管理 Magnet Spaces（点击打开面板）',
+  tags: ['space', 'layout'],
   anchorType: 'single',
   anchors: [
     {
       id: 'anchor',
-      gridX: 2,
-      gridY: 19,
+      gridX: 0,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -33,4 +33,3 @@ export const MATRIX_CHANGE_MAGNET: Magnet = {
     clickable: false,
   },
 };
-

@@ -39,3 +39,128 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.matrix-change-magnet-panel {
+  position: fixed;
+  width: 220px;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  z-index: 100000;
+}
+
+.matrix-change-magnet-panel-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.matrix-change-magnet-panel-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+.matrix-change-magnet-panel-subtitle {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.matrix-change-magnet-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.matrix-change-magnet-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.matrix-change-magnet-panel-item:hover {
+  border-color: rgba(0, 255, 136, 0.25);
+  background: rgba(0, 255, 136, 0.08);
+}
+
+.matrix-change-magnet-panel-item.active {
+  border-color: rgba(0, 255, 136, 0.45);
+  background: rgba(0, 255, 136, 0.12);
+}
+
+.matrix-change-magnet-panel-item-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.matrix-change-magnet-panel-item-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrix-change-magnet-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.matrix-change-magnet-panel-action {
+  flex: 1 1 calc(50% - 4px);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  transition: all 0.15s ease;
+}
+
+.matrix-change-magnet-panel-action:hover:not(:disabled) {
+  border-color: rgba(0, 255, 136, 0.25);
+  background: rgba(0, 255, 136, 0.08);
+}
+
+.matrix-change-magnet-panel-action.danger:hover:not(:disabled) {
+  border-color: rgba(255, 80, 80, 0.35);
+  background: rgba(255, 80, 80, 0.14);
+}
+
+.matrix-change-magnet-panel-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

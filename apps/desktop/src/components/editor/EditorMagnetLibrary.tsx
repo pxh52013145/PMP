@@ -26,6 +26,7 @@ import {
   uninstallPmpmPlugin,
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
+import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -587,6 +588,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
             displayMagnets.map((magnet) => {
               const isBuiltIn = builtInMagnetIds.has(magnet.id);
               const isActive = activeMagnetIds.has(magnet.id);
+              const isRequired = REQUIRED_MAGNET_IDS.has(magnet.id);
               const pixelCount = estimateMagnetPixelCount(magnet);
 
               const rendererId = magnet.renderer ?? magnet.id;
@@ -635,6 +637,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       <span className="magnet-type">{magnet.type}</span>
                       <span className="magnet-anchor">{magnet.anchorType}</span>
                       <span className="magnet-pixels">{pixelCount} pixels</span>
+                      {isRequired && <span className="magnet-badge builtin">必备</span>}
                       {isBuiltIn && <span className="magnet-badge builtin">内置</span>}
                     </div>
                   </div>
@@ -654,7 +657,8 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       <button
                         className="magnet-action-btn remove"
                         onClick={() => onMagnetDeactivate(magnet.id)}
-                        title="从点阵移除"
+                        disabled={isRequired}
+                        title={isRequired ? '必备磁贴：不能移除' : '从点阵移除'}
                       >
                         －
                       </button>

@@ -41,9 +41,11 @@ export function saveConfig(
   activeMagnetIds: Set<string>,
   gridSize: { columns: number; rows: number },
   defaultMagnetLibrary?: Magnet[], // 可选：默认 Magnet 库，用于对比检测修改
-  storageKey: string = CONFIG_KEY
+  storageKey: string = CONFIG_KEY,
+  options: { includeCustomMagnets?: boolean } = {}
 ): void {
   try {
+    const includeCustomMagnets = options.includeCustomMagnets ?? true;
     const config: MagnetConfig = {
       version: CONFIG_VERSION,
       gridSize,
@@ -100,7 +102,9 @@ export function saveConfig(
     });
 
     // 保存自定义 Magnet 的完整定义
-    config.customMagnets = magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id));
+    config.customMagnets = includeCustomMagnets
+      ? magnetLibrary.filter((m) => !BUILTIN_MAGNET_IDS.has(m.id))
+      : [];
 
     writeString(storageKey, JSON.stringify(config));
   } catch (error) {
