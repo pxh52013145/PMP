@@ -232,6 +232,7 @@ apps/desktop/src-tauri/src/
 - Editor/Music Library 属于高密度工具 UI，可用更复杂布局，但必须：
   - 有明确加载/进度/错误状态
   - 不做同步重任务阻塞渲染
+- 确认/取消（confirm/cancel）交互：禁止使用系统弹窗（避免异步/焦点问题），统一使用应用内自定义 Modal/Window。
 - UI 规范与页面分区请参考：
   - `docs/ui/editor-window.md`
   - `docs/ui/navigation-page.md`
