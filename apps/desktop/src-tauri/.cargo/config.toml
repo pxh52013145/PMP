@@ -6,7 +6,9 @@ jobs = 8
 
 [profile.dev]
 # 开发模式优化
-opt-level = 1        # 轻度优化，加快编译
+#
+# NOTE: rustc 1.90 + Windows/MSVC 下，opt-level=1 会导致链接失败（LNK2001/LNK2019，drop_in_place...llvm.*）。
+opt-level = 0        # 保持默认，确保 tauri dev / cargo build 稳定
 debug = true         # 保留调试信息
 incremental = true   # 增量编译
 
