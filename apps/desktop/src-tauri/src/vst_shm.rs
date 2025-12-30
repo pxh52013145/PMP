@@ -5,6 +5,9 @@ pub const SHM_RING_MAGIC: [u8; 8] = *b"PMP_SHM1";
 
 const FLAG_HOST_READY: u32 = 1 << 0;
 const FLAG_PEER_READY: u32 = 1 << 1;
+const FLAG_PLUGIN_LOADED: u32 = 1 << 2;
+const FLAG_PROCESSING_ACTIVE: u32 = 1 << 3;
+const FLAG_PLUGIN_ERROR: u32 = 1 << 4;
 
 #[repr(C)]
 pub struct ShmRingHeaderV1 {
@@ -44,6 +47,18 @@ impl ShmRingHeaderV1 {
 
     pub fn mark_peer_ready(&self) {
         self.flags.fetch_or(FLAG_PEER_READY, Ordering::AcqRel);
+    }
+
+    pub fn is_plugin_loaded(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & FLAG_PLUGIN_LOADED) != 0
+    }
+
+    pub fn is_processing_active(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & FLAG_PROCESSING_ACTIVE) != 0
+    }
+
+    pub fn is_plugin_error(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & FLAG_PLUGIN_ERROR) != 0
     }
 }
 

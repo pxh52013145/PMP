@@ -34,6 +34,17 @@ type DspNode = GainNode | EqNode | LimiterNode | VstNode | (DspNodeBase & Record
 
 type DspGraphConfig = { nodes: DspNode[] };
 
+type VstSessionStatus = {
+  nodeId: string;
+  pluginId: string;
+  peerReady: boolean;
+  pluginLoaded: boolean;
+  processingActive: boolean;
+  pluginError: boolean;
+  heartbeatIn?: number | null;
+  heartbeatOut?: number | null;
+};
+
 function clamp(value: number, min: number, max: number) {
   if (!isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -116,6 +127,7 @@ export const DspRackPage: React.FC = () => {
   const { engineType, isNativeAvailable } = useAudioEngine();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const [graph, setGraph] = React.useState<DspGraphConfig | null>(null);
+  const [vstStatuses, setVstStatuses] = React.useState<Record<string, VstSessionStatus>>({});
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [highlightNodeId, setHighlightNodeId] = React.useState<string | null>(null);
@@ -130,6 +142,16 @@ export const DspRackPage: React.FC = () => {
       const graphResp = await invoke<DspGraphConfig>('native_audio_get_dsp_graph');
       const nextGraph = graphResp && typeof graphResp === 'object' ? graphResp : { nodes: [] };
       setGraph(nextGraph);
+      try {
+        const statuses = await invoke<VstSessionStatus[]>('native_audio_vst_list_session_statuses');
+        const map: Record<string, VstSessionStatus> = {};
+        for (const status of statuses) {
+          map[status.nodeId] = status;
+        }
+        setVstStatuses(map);
+      } catch {
+        setVstStatuses({});
+      }
       await broadcastDataUpdate(
         STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH,
         nextGraph,
@@ -344,6 +366,17 @@ export const DspRackPage: React.FC = () => {
           <button type="button" onClick={() => void openVstManagerWindow()} disabled={busy}>
             VST3 插件管理器
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              void invoke<number>('native_audio_vst_bring_editors_to_front').catch((err) =>
+                setError(err instanceof Error ? err.message : String(err))
+              )
+            }
+            disabled={busy}
+          >
+            找回插件窗口
+          </button>
           <button type="button" onClick={() => void refresh()} disabled={busy}>
             刷新
           </button>
@@ -368,6 +401,76 @@ export const DspRackPage: React.FC = () => {
                 <div className="dsp-node-title">
                   <span className="dsp-node-type">{node.type}</span>
                   <span className="dsp-node-id">{node.id}</span>
+                  {node.type === 'vst' &&
+                    (() => {
+                      const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
+                      const status = vstStatuses[node.id];
+                      if (!node.enabled) {
+                        return (
+                          <span className="vst-node-status vst-node-status--disabled" title="Node disabled">
+                            <span className="vst-node-status-dot" />
+                            Disabled
+                          </span>
+                        );
+                      }
+                      if (!pluginId) {
+                        return (
+                          <span className="vst-node-status vst-node-status--error" title="Missing pluginId">
+                            <span className="vst-node-status-dot" />
+                            Missing plugin
+                          </span>
+                        );
+                      }
+                      if (!status) {
+                        return (
+                          <span className="vst-node-status vst-node-status--idle" title="Session not spawned">
+                            <span className="vst-node-status-dot" />
+                            Idle
+                          </span>
+                        );
+                      }
+                      if (status.pluginError) {
+                        return (
+                          <span className="vst-node-status vst-node-status--error" title="Sidecar reported error">
+                            <span className="vst-node-status-dot" />
+                            Error
+                          </span>
+                        );
+                      }
+                      if (!status.peerReady) {
+                        return (
+                          <span className="vst-node-status vst-node-status--error" title="Shared memory not ready">
+                            <span className="vst-node-status-dot" />
+                            Disconnected
+                          </span>
+                        );
+                      }
+                      if (status.processingActive) {
+                        return (
+                          <span
+                            className="vst-node-status vst-node-status--active"
+                            title={`Active (hbIn=${status.heartbeatIn ?? '-'} hbOut=${status.heartbeatOut ?? '-'})`}
+                          >
+                            <span className="vst-node-status-dot" />
+                            Active
+                          </span>
+                        );
+                      }
+                      if (status.pluginLoaded) {
+                        return (
+                          <span className="vst-node-status vst-node-status--bypassed" title="Plugin loaded but bypassed">
+                            <span className="vst-node-status-dot" />
+                            Bypassed
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="vst-node-status vst-node-status--loading" title="Plugin loading (dry/bypass)">
+                          <span className="vst-node-status-dot" />
+                          Loading
+                        </span>
+                      );
+                    })()}
                 </div>
 
                 <div className="dsp-node-controls">

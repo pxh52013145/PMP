@@ -27,6 +27,7 @@ import {
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
 import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import { useConfirmDialog } from '../core/ConfirmDialog';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -101,6 +102,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [showPlugins, setShowPlugins] = useState(false);
   const [pluginError, setPluginError] = useState('');
   const [pluginBusy, setPluginBusy] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   // 初始化时清理可能残留的窗口状态
   useEffect(() => {
@@ -350,7 +352,13 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         .filter((line): line is string => typeof line === 'string' && line.length > 0)
         .join('\n');
 
-      if (!window.confirm(confirmText)) return;
+      const ok = await confirm({
+        title: '确认安装插件',
+        message: confirmText,
+        confirmText: '安装',
+        cancelText: '取消',
+      });
+      if (!ok) return;
 
       await installPmpmPluginFromFilePath(filePath);
       reloadPlugins();
@@ -366,7 +374,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     } finally {
       setPluginBusy(false);
     }
-  }, [installedPlugins, magnetLibrary, onMagnetAddToLibrary, pluginBusy, reloadPlugins]);
+  }, [confirm, installedPlugins, magnetLibrary, onMagnetAddToLibrary, pluginBusy, reloadPlugins]);
 
   const handleUninstallPmpmPlugin = useCallback(
     async (id: string) => {
@@ -380,7 +388,14 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
           return;
         }
 
-        if (!window.confirm(`确认卸载插件 "${id}"？`)) return;
+        const ok = await confirm({
+          title: '确认卸载插件',
+          message: `确认卸载插件 "${id}"？`,
+          confirmText: '卸载',
+          cancelText: '取消',
+          danger: true,
+        });
+        if (!ok) return;
 
         uninstallPmpmPlugin(id);
         reloadPlugins();
@@ -394,7 +409,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         setPluginBusy(false);
       }
     },
-    [activeMagnetIds, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins]
+    [activeMagnetIds, confirm, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins]
   );
 
   return (
@@ -739,6 +754,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         </div>
       </div>{' '}
       {/* 关闭 editor-window-content */}
+      {confirmDialog}
     </div>
   );
 });

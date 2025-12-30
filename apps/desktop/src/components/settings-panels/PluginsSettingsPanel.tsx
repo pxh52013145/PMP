@@ -36,6 +36,7 @@ import {
   setPmpmSandboxRuntimeEnabled,
   subscribePmpmSandbox,
 } from '../../magnet-system/plugins/pmpmSandboxConfig';
+import { useConfirmDialog } from '../core/ConfirmDialog';
 
 function formatAuditEvent(event: PmpmAuditEvent): string {
   if (event.type === 'permission-denied') {
@@ -67,6 +68,7 @@ export function PluginsSettingsPanel() {
   const governance = kernel.services.get(GOVERNANCE_SERVICE_TOKEN);
   const { activeMagnetIds, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
   const isTauri = isTauriRuntime();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,7 +182,13 @@ export function PluginsSettingsPanel() {
         .filter((line): line is string => typeof line === 'string' && line.length > 0)
         .join('\n');
 
-      if (!window.confirm(confirmText)) return;
+      const ok = await confirm({
+        title: '确认安装插件',
+        message: confirmText,
+        confirmText: '安装',
+        cancelText: '取消',
+      });
+      if (!ok) return;
 
       await installPmpmPluginFromFilePath(filePath);
 
@@ -198,6 +206,7 @@ export function PluginsSettingsPanel() {
   }, [
     allowUnsignedPlugins,
     busy,
+    confirm,
     installedPlugins,
     isTauri,
     magnetLibrary,
@@ -217,7 +226,14 @@ export function PluginsSettingsPanel() {
           throw new Error(`请先停用 Magnet "${pluginId}"，再卸载插件。`);
         }
 
-        if (!window.confirm(`确认卸载插件 "${pluginId}"？`)) return;
+        const ok = await confirm({
+          title: '确认卸载插件',
+          message: `确认卸载插件 "${pluginId}"？`,
+          confirmText: '卸载',
+          cancelText: '取消',
+          danger: true,
+        });
+        if (!ok) return;
 
         uninstallPmpmPlugin(pluginId);
         governance.restartPmpmPluginRuntime(pluginId, { reason: 'uninstall' });
@@ -233,7 +249,7 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, governance, magnetLibrary, setMagnetLibrary]
+    [activeMagnetIds, busy, confirm, governance, magnetLibrary, setMagnetLibrary]
   );
 
   const handleToggleEnabled = useCallback(
@@ -244,9 +260,13 @@ export function PluginsSettingsPanel() {
 
       try {
         if (!enabled && activeMagnetIds.has(pluginId)) {
-          const ok = window.confirm(
-            `Magnet "${pluginId}" 当前处于激活状态，禁用后将显示为 Disabled 占位。确认禁用？`
-          );
+          const ok = await confirm({
+            title: '确认禁用插件',
+            message: `Magnet "${pluginId}" 当前处于激活状态，禁用后将显示为 Disabled 占位。确认禁用？`,
+            confirmText: '禁用',
+            cancelText: '取消',
+            danger: true,
+          });
           if (!ok) return;
         }
 
@@ -258,7 +278,7 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, governance]
+    [activeMagnetIds, busy, confirm, governance]
   );
 
   return (
@@ -497,6 +517,7 @@ export function PluginsSettingsPanel() {
           })
         )}
       </div>
+      {confirmDialog}
     </div>
   );
 }

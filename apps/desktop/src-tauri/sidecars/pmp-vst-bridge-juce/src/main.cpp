@@ -54,6 +54,9 @@ constexpr uint32_t BRIDGE_PROTOCOL_VERSION = 1;
 constexpr char SHM_RING_MAGIC[8] = {'P', 'M', 'P', '_', 'S', 'H', 'M', '1'};
 constexpr uint32_t SHM_RING_VERSION = 1;
 constexpr uint32_t SHM_FLAG_PEER_READY = 1u << 1;
+constexpr uint32_t SHM_FLAG_PLUGIN_LOADED = 1u << 2;
+constexpr uint32_t SHM_FLAG_PROCESSING_ACTIVE = 1u << 3;
+constexpr uint32_t SHM_FLAG_PLUGIN_ERROR = 1u << 4;
 
 struct ShmRingHeaderV1 {
   char magic[8];
@@ -431,6 +434,22 @@ class AudioShmBypass {
     return true;
   }
 
+  void setPluginState(bool loaded, bool processingActive, bool error) {
+    const uint32_t clearMask = SHM_FLAG_PLUGIN_LOADED | SHM_FLAG_PROCESSING_ACTIVE | SHM_FLAG_PLUGIN_ERROR;
+    uint32_t setMask = 0;
+    if (loaded) setMask |= SHM_FLAG_PLUGIN_LOADED;
+    if (processingActive) setMask |= SHM_FLAG_PROCESSING_ACTIVE;
+    if (error) setMask |= SHM_FLAG_PLUGIN_ERROR;
+
+    auto apply = [&](SharedMemoryView& view) {
+      if (view.header == nullptr) return;
+      view.header->flags.fetch_and(~clearMask, std::memory_order_acq_rel);
+      view.header->flags.fetch_or(setMask, std::memory_order_acq_rel);
+    };
+    apply(inView_);
+    apply(outView_);
+  }
+
   void stopAndJoin() {
     stopFlag_.store(true, std::memory_order_release);
     if (worker_.joinable()) worker_.join();
@@ -512,10 +531,30 @@ class AudioShmVstProcessor {
     const size_t maxByShm = std::max<size_t>(1, std::min<size_t>(512, inView_.capacityFrames));
     const size_t maxByBlock = std::max<size_t>(1, std::min<size_t>(512, static_cast<size_t>(std::max(1, blockSize))));
     maxFramesPerTick_ = std::min(maxByShm, maxByBlock);
+    fadeFramesTotal_ = 256;
+    fadeFramesRemaining_ = fadeFramesTotal_;
+
+    setPluginState(true, true, false);
 
     stopFlag_.store(false, std::memory_order_release);
     worker_ = std::thread([this]() { this->runLoop(); });
     return true;
+  }
+
+  void setPluginState(bool loaded, bool processingActive, bool error) {
+    const uint32_t clearMask = SHM_FLAG_PLUGIN_LOADED | SHM_FLAG_PROCESSING_ACTIVE | SHM_FLAG_PLUGIN_ERROR;
+    uint32_t setMask = 0;
+    if (loaded) setMask |= SHM_FLAG_PLUGIN_LOADED;
+    if (processingActive) setMask |= SHM_FLAG_PROCESSING_ACTIVE;
+    if (error) setMask |= SHM_FLAG_PLUGIN_ERROR;
+
+    auto apply = [&](SharedMemoryView& view) {
+      if (view.header == nullptr) return;
+      view.header->flags.fetch_and(~clearMask, std::memory_order_acq_rel);
+      view.header->flags.fetch_or(setMask, std::memory_order_acq_rel);
+    };
+    apply(inView_);
+    apply(outView_);
   }
 
   void stopAndJoin() {
@@ -527,6 +566,8 @@ class AudioShmVstProcessor {
     paramQueue_ = nullptr;
     channels_ = 0;
     maxFramesPerTick_ = 0;
+    fadeFramesTotal_ = 0;
+    fadeFramesRemaining_ = 0;
   }
 
  private:
@@ -557,6 +598,8 @@ class AudioShmVstProcessor {
 
     std::vector<float> interleaved;
     interleaved.resize(maxFrames * channels);
+    std::vector<float> dryInterleaved;
+    dryInterleaved.resize(maxFrames * channels);
 
     juce::AudioBuffer<float> buffer(static_cast<int>(channels), static_cast<int>(maxFrames));
     juce::MidiBuffer midi;
@@ -570,6 +613,8 @@ class AudioShmVstProcessor {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
+
+      std::memcpy(dryInterleaved.data(), interleaved.data(), framesRead * channels * sizeof(float));
 
       applyQueuedParams();
 
@@ -591,6 +636,21 @@ class AudioShmVstProcessor {
         }
       }
 
+      if (fadeFramesRemaining_ > 0 && fadeFramesTotal_ > 0) {
+        const float total = static_cast<float>(fadeFramesTotal_);
+        for (size_t frame = 0; frame < framesRead; frame++) {
+          if (fadeFramesRemaining_ == 0) break;
+          const float remaining = static_cast<float>(fadeFramesRemaining_);
+          const float wet = 1.0f - (remaining / total);
+          const float dry = 1.0f - wet;
+          for (size_t ch = 0; ch < channels; ch++) {
+            const size_t idx = frame * channels + ch;
+            interleaved[idx] = dryInterleaved[idx] * dry + interleaved[idx] * wet;
+          }
+          fadeFramesRemaining_--;
+        }
+      }
+
       (void)ringTryWrite(outView_, interleaved.data(), framesRead);
     }
   }
@@ -601,6 +661,8 @@ class AudioShmVstProcessor {
   ParamUpdateQueue* paramQueue_ = nullptr;
   size_t channels_ = 0;
   size_t maxFramesPerTick_ = 0;
+  size_t fadeFramesTotal_ = 0;
+  size_t fadeFramesRemaining_ = 0;
   std::atomic<bool> stopFlag_{false};
   std::thread worker_;
 };
@@ -1015,7 +1077,7 @@ std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pl
 class PluginEditorWindow : public juce::DocumentWindow {
  public:
   PluginEditorWindow(const juce::String& title,
-                     std::unique_ptr<juce::AudioProcessorEditor> editor,
+                     std::unique_ptr<juce::Component> content,
                      uint64_t ownerHwnd,
                      bool pinned,
                      std::function<void()> onRequestDestroy)
@@ -1027,7 +1089,7 @@ class PluginEditorWindow : public juce::DocumentWindow {
         onRequestDestroy_(std::move(onRequestDestroy)) {
     setUsingNativeTitleBar(false);
     setResizable(false, false);
-    setContentOwned(editor.release(), true);
+    setContentOwned(content.release(), true);
 
     pinButton_.setButtonText("Pin");
     pinButton_.setClickingTogglesState(true);
@@ -1089,6 +1151,15 @@ class PluginEditorWindow : public juce::DocumentWindow {
     applyWin32Style();
   }
 
+  void replaceContent(std::unique_ptr<juce::Component> content) {
+    if (!content) return;
+    setContentOwned(content.release(), true);
+    const int width = std::max(320, getContentComponent()->getWidth());
+    const int height = std::max(240, getContentComponent()->getHeight());
+    centreWithSize(width, height);
+    resized();
+  }
+
  private:
   void applyWin32Style() {
 #if defined(_WIN32)
@@ -1129,7 +1200,24 @@ class PluginEditorWindow : public juce::DocumentWindow {
   std::function<void()> onRequestDestroy_;
 };
 
+class PlaceholderEditorContent : public juce::Component {
+ public:
+  explicit PlaceholderEditorContent(const juce::String& message) {
+    label_.setText(message, juce::dontSendNotification);
+    label_.setJustificationType(juce::Justification::centred);
+    label_.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(label_);
+    setSize(480, 260);
+  }
+
+  void resized() override { label_.setBounds(getLocalBounds().reduced(16)); }
+
+ private:
+  juce::Label label_;
+};
+
 struct LivePluginHost {
+  std::mutex instanceMutex;
   std::unique_ptr<juce::AudioPluginInstance> instance;
   double sampleRate = 48'000.0;
   int channels = 2;
@@ -1137,10 +1225,20 @@ struct LivePluginHost {
 
   std::mutex editorMutex;
   std::unique_ptr<PluginEditorWindow> editorWindow;
+  bool editorIsPlaceholder = false;
+  std::optional<std::string> lastEditorTitle;
+  std::optional<uint64_t> lastEditorOwnerHwnd;
+  bool lastEditorPinned = true;
+  bool hasEditorRequest = false;
 };
 
 bool applyParamSet(LivePluginHost& host, const std::vector<uint8_t>& payload, ParamUpdateQueue* realtimeQueue) {
-  if (!host.instance) return false;
+  juce::AudioPluginInstance* instance = nullptr;
+  {
+    std::lock_guard<std::mutex> guard(host.instanceMutex);
+    instance = host.instance.get();
+  }
+  if (instance == nullptr) return false;
 
   const auto parsed = decodeJson(payload);
   if (parsed.isVoid()) return false;
@@ -1150,7 +1248,7 @@ bool applyParamSet(LivePluginHost& host, const std::vector<uint8_t>& payload, Pa
   auto* paramsArr = paramsVar.getArray();
   if (paramsArr == nullptr) return true;
 
-  const auto& params = host.instance->getParameters();
+  const auto& params = instance->getParameters();
   for (const auto& entry : *paramsArr) {
     auto* entryObj = entry.getDynamicObject();
     if (entryObj == nullptr) continue;
@@ -1225,48 +1323,81 @@ OpenEditorRequest decodeOpenEditorRequest(const std::vector<uint8_t>& payload) {
   return out;
 }
 
-std::optional<std::string> openEditor(LivePluginHost& host, const OpenEditorRequest& request) {
+std::optional<std::string> openEditor(
+    LivePluginHost& host,
+    const OpenEditorRequest& request,
+    const std::optional<std::string>& placeholderError) {
   auto promise = std::make_shared<std::promise<std::optional<std::string>>>();
   auto future = promise->get_future();
 
   juce::MessageManager::callAsync([&host,
-                                  reqTitle = request.title,
-                                  reqOwnerHwnd = request.ownerHwnd,
-                                  reqPinned = request.pinned,
-                                  promise]() mutable {
+                                   reqTitle = request.title,
+                                   reqOwnerHwnd = request.ownerHwnd,
+                                   reqPinned = request.pinned,
+                                   reqPlaceholderError = placeholderError,
+                                   promise]() mutable {
     std::lock_guard<std::mutex> guard(host.editorMutex);
 
-    if (host.instance == nullptr) {
-      promise->set_value(std::string("Plugin instance is not available"));
-      return;
-    }
+    host.lastEditorTitle = reqTitle;
+    host.lastEditorOwnerHwnd = reqOwnerHwnd;
+    host.lastEditorPinned = reqPinned;
+    host.hasEditorRequest = true;
 
     if (host.editorWindow) {
       const uint64_t ownerHwnd = reqOwnerHwnd.value_or(0);
       if (ownerHwnd != 0) {
         host.editorWindow->setOwnerHwnd(ownerHwnd);
       }
+      host.editorWindow->setPinned(reqPinned);
       host.editorWindow->setVisible(true);
       host.editorWindow->toFront(true);
       promise->set_value(std::nullopt);
       return;
     }
 
-    if (!host.instance->hasEditor()) {
-      promise->set_value(std::string("Plugin does not provide a native editor UI"));
-      return;
-    }
-
-    std::unique_ptr<juce::AudioProcessorEditor> editor(host.instance->createEditorIfNeeded());
-    if (!editor) {
-      promise->set_value(std::string("Failed to create plugin editor UI"));
-      return;
+    juce::AudioPluginInstance* instance = nullptr;
+    {
+      std::lock_guard<std::mutex> instanceGuard(host.instanceMutex);
+      instance = host.instance.get();
     }
 
     const juce::String title =
         reqTitle.has_value() ? juce::String(*reqTitle) : juce::String("VST3 Editor");
     const uint64_t ownerHwnd = reqOwnerHwnd.value_or(0);
     const bool pinned = reqPinned;
+
+    if (instance == nullptr) {
+      const juce::String message = reqPlaceholderError.has_value()
+                                       ? juce::String("Plugin failed to load:\n") +
+                                             juce::String(*reqPlaceholderError)
+                                       : juce::String("Loading plugin...");
+      host.editorWindow = std::make_unique<PluginEditorWindow>(
+          title,
+          std::make_unique<PlaceholderEditorContent>(message),
+          ownerHwnd,
+          pinned,
+          [&host]() {
+            std::lock_guard<std::mutex> guard(host.editorMutex);
+            if (host.editorWindow) {
+              host.editorWindow->setVisible(false);
+              host.editorWindow.reset();
+            }
+          });
+      host.editorIsPlaceholder = true;
+      promise->set_value(std::nullopt);
+      return;
+    }
+
+    if (!instance->hasEditor()) {
+      promise->set_value(std::string("Plugin does not provide a native editor UI"));
+      return;
+    }
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor(instance->createEditorIfNeeded());
+    if (!editor) {
+      promise->set_value(std::string("Failed to create plugin editor UI"));
+      return;
+    }
 
     host.editorWindow = std::make_unique<PluginEditorWindow>(
         title,
@@ -1277,9 +1408,10 @@ std::optional<std::string> openEditor(LivePluginHost& host, const OpenEditorRequ
           std::lock_guard<std::mutex> guard(host.editorMutex);
           if (host.editorWindow) {
             host.editorWindow->setVisible(false);
-            host.editorWindow.reset();
-          }
-        });
+             host.editorWindow.reset();
+           }
+         });
+    host.editorIsPlaceholder = false;
     promise->set_value(std::nullopt);
   });
 
@@ -1297,6 +1429,7 @@ std::optional<std::string> closeEditor(LivePluginHost& host) {
       host.editorWindow->setVisible(false);
       host.editorWindow.reset();
     }
+    host.editorIsPlaceholder = false;
     promise->set_value(std::nullopt);
   });
 
@@ -1307,8 +1440,14 @@ std::optional<std::string> closeEditor(LivePluginHost& host) {
 std::vector<std::pair<std::string, float>> collectCurrentParams(LivePluginHost& host) {
   std::vector<std::pair<std::string, float>> out;
 
-  if (!host.instance) return out;
-  const auto& params = host.instance->getParameters();
+  juce::AudioPluginInstance* instance = nullptr;
+  {
+    std::lock_guard<std::mutex> guard(host.instanceMutex);
+    instance = host.instance.get();
+  }
+  if (instance == nullptr) return out;
+
+  const auto& params = instance->getParameters();
   const int maxParams = std::min<int>(static_cast<int>(params.size()), 256);
   out.reserve(static_cast<size_t>(maxParams));
   for (int idx = 0; idx < maxParams; idx++) {
@@ -1327,27 +1466,72 @@ std::vector<std::pair<std::string, float>> collectCurrentParams(LivePluginHost& 
   return out;
 }
 
-std::optional<std::string> instantiatePlugin(LivePluginHost& host,
-                                             Vst3ScanResult& scan,
-                                             const std::string& pluginId,
-                                             const std::string& pluginPath,
-                                             juce::String& error) {
+struct PluginInstanceLoadResult {
+  std::unique_ptr<juce::AudioPluginInstance> instance;
+  std::optional<std::string> error;
+};
+
+PluginInstanceLoadResult loadPluginInstance(Vst3ScanResult& scan,
+                                            const std::string& pluginId,
+                                            const std::string& pluginPath,
+                                            double sampleRate,
+                                            int blockSize) {
   const auto typeOpt = findVst3PluginInFile(scan, pluginId, pluginPath);
   if (!typeOpt.has_value()) {
-    return std::string("VST3 plugin not found in cached path: ") + pluginPath;
+    return PluginInstanceLoadResult{
+        nullptr,
+        std::string("VST3 plugin not found in cached path: ") + pluginPath,
+    };
   }
   const auto& type = *typeOpt;
   if (type.isInstrument) {
-    return std::string("Unsupported plugin type: Instrument (effects only)");
+    return PluginInstanceLoadResult{
+        nullptr,
+        std::string("Unsupported plugin type: Instrument (effects only)"),
+    };
   }
 
-  host.instance = scan.formatManager.createPluginInstance(type, host.sampleRate, host.blockSize, error);
-  if (!host.instance) {
-    return std::string("Failed to load VST3 plugin: ") + error.toStdString();
+  juce::String error;
+  auto instance = scan.formatManager.createPluginInstance(type, sampleRate, blockSize, error);
+  if (!instance) {
+    return PluginInstanceLoadResult{
+        nullptr,
+        std::string("Failed to load VST3 plugin: ") + error.toStdString(),
+    };
   }
-  host.instance->prepareToPlay(host.sampleRate, host.blockSize);
-  return std::nullopt;
+  instance->prepareToPlay(sampleRate, blockSize);
+  return PluginInstanceLoadResult{std::move(instance), std::nullopt};
 }
+
+enum class SessionLoadState : int {
+  Loading = 0,
+  Ready = 1,
+  Error = 2,
+};
+
+struct ReadyBeforeLoadSession {
+  LivePluginHost host;
+  ParamUpdateQueue realtimeParamQueue;
+
+  std::mutex pendingParamsMutex;
+  std::vector<uint8_t> pendingParamsPayload;
+  bool hasPendingParams = false;
+
+  std::mutex shmMutex;
+  std::unique_ptr<AudioShmBypass> shmBypass;
+  std::unique_ptr<AudioShmVstProcessor> shmVst;
+  std::atomic<bool> shmProcessingActive{false};
+
+  std::atomic<int> loadState{static_cast<int>(SessionLoadState::Loading)};
+  std::mutex loadErrorMutex;
+  std::string loadError;
+
+  std::atomic<bool> disposed{false};
+  std::optional<ShmAudioArgs> shmArgs;
+
+  std::string pluginId;
+  std::string pluginPath;
+};
 
 int runVst3Plugin(const std::string& pluginId,
                   const std::string& pluginPath,
@@ -1357,48 +1541,183 @@ int runVst3Plugin(const std::string& pluginId,
   std::FILE* stdinFile = stdin;
   std::FILE* stdoutFile = stdout;
 
-  Vst3ScanResult scan;
-  juce::String error;
-
   const int safeChannels = std::max(1, channels);
   const int blockSize = std::max(1, 8192 / safeChannels);
-  LivePluginHost host;
-  host.sampleRate = static_cast<double>(sampleRate);
-  host.channels = safeChannels;
-  host.blockSize = blockSize;
+  const double safeSampleRate = static_cast<double>(sampleRate > 0 ? sampleRate : 48'000u);
 
-  std::string currentPluginId = pluginId;
-  if (const auto err = instantiatePlugin(host, scan, currentPluginId, pluginPath, error)) {
-    std::fprintf(stderr,
-                 "Failed to load VST3 plugin: %s\npath=%s\n%s\n",
-                 currentPluginId.c_str(),
-                 pluginPath.c_str(),
-                 getVst3ScanIdHint().toRawUTF8());
-    return 2;
-  }
+  auto session = std::make_shared<ReadyBeforeLoadSession>();
+  session->pluginId = pluginId;
+  session->pluginPath = pluginPath;
+  session->shmArgs = shmArgs;
+  session->host.sampleRate = safeSampleRate;
+  session->host.channels = safeChannels;
+  session->host.blockSize = blockSize;
 
-  ParamUpdateQueue realtimeParamQueue;
-  std::unique_ptr<AudioShmBypass> shmBypass;
-  std::unique_ptr<AudioShmVstProcessor> shmVst;
-  if (shmArgs.has_value()) {
-    if (shmArgs->mode == "bypass") {
-      std::string err;
-      auto bypass = std::make_unique<AudioShmBypass>();
-      if (!bypass->start(*shmArgs, err)) {
-        std::fprintf(stderr, "%s\n", err.c_str());
-        return 2;
-      }
-      shmBypass = std::move(bypass);
-    } else if (shmArgs->mode == "process") {
-      std::string err;
-      auto processor = std::make_unique<AudioShmVstProcessor>();
-      if (!processor->start(*shmArgs, host.instance.get(), safeChannels, blockSize, &realtimeParamQueue, err)) {
-        std::fprintf(stderr, "%s\n", err.c_str());
-        return 2;
-      }
-      shmVst = std::move(processor);
+  if (session->shmArgs.has_value()) {
+    std::string err;
+    auto bypass = std::make_unique<AudioShmBypass>();
+    if (!bypass->start(*session->shmArgs, err)) {
+      std::fprintf(stderr, "%s\n", err.c_str());
+      return 2;
     }
+    std::lock_guard<std::mutex> guard(session->shmMutex);
+    session->shmBypass = std::move(bypass);
   }
+
+  std::thread([session]() {
+    if (session->disposed.load(std::memory_order_acquire)) {
+      return;
+    }
+
+    Vst3ScanResult scan;
+    auto result = loadPluginInstance(
+        scan, session->pluginId, session->pluginPath, session->host.sampleRate, session->host.blockSize);
+
+    if (session->disposed.load(std::memory_order_acquire)) {
+      return;
+    }
+
+    if (result.error.has_value() || !result.instance) {
+      const std::string message = result.error.value_or("Failed to load VST3 plugin");
+      std::fprintf(stderr,
+                   "Failed to load VST3 plugin: %s\npath=%s\n%s\n%s\n",
+                   session->pluginId.c_str(),
+                   session->pluginPath.c_str(),
+                   message.c_str(),
+                   getVst3ScanIdHint().toRawUTF8());
+      {
+        std::lock_guard<std::mutex> guard(session->loadErrorMutex);
+        session->loadError = message;
+      }
+      session->loadState.store(static_cast<int>(SessionLoadState::Error), std::memory_order_release);
+
+      {
+        std::lock_guard<std::mutex> guard(session->shmMutex);
+        if (session->shmBypass) {
+          session->shmBypass->setPluginState(false, false, true);
+        }
+        if (session->shmVst) {
+          session->shmVst->setPluginState(false, false, true);
+        }
+      }
+
+      juce::MessageManager::callAsync([session, message]() mutable {
+        std::lock_guard<std::mutex> guard(session->host.editorMutex);
+        if (!session->host.editorWindow || !session->host.editorIsPlaceholder) return;
+        session->host.editorWindow->replaceContent(std::make_unique<PlaceholderEditorContent>(
+            juce::String("Plugin failed to load:\n") + juce::String(message)));
+        session->host.editorIsPlaceholder = true;
+      });
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> guard(session->host.instanceMutex);
+      session->host.instance = std::move(result.instance);
+    }
+
+    std::vector<uint8_t> pending;
+    bool hasPending = false;
+    {
+      std::lock_guard<std::mutex> guard(session->pendingParamsMutex);
+      hasPending = session->hasPendingParams;
+      if (hasPending) {
+        pending = session->pendingParamsPayload;
+        session->pendingParamsPayload.clear();
+        session->hasPendingParams = false;
+      }
+    }
+    if (hasPending && !session->disposed.load(std::memory_order_acquire)) {
+      (void)applyParamSet(session->host, pending, nullptr);
+    }
+
+    {
+      std::lock_guard<std::mutex> guard(session->shmMutex);
+      if (session->shmBypass) {
+        session->shmBypass->setPluginState(true, false, false);
+      }
+    }
+
+    if (session->shmArgs.has_value() && session->shmArgs->mode == "process" &&
+        !session->disposed.load(std::memory_order_acquire)) {
+      std::unique_ptr<AudioShmBypass> bypassToStop;
+      {
+        std::lock_guard<std::mutex> guard(session->shmMutex);
+        bypassToStop = std::move(session->shmBypass);
+      }
+      if (bypassToStop) {
+        bypassToStop->stopAndJoin();
+      }
+
+      juce::AudioPluginInstance* instance = nullptr;
+      {
+        std::lock_guard<std::mutex> guard(session->host.instanceMutex);
+        instance = session->host.instance.get();
+      }
+
+      if (instance != nullptr) {
+        std::string err;
+        auto processor = std::make_unique<AudioShmVstProcessor>();
+        if (processor->start(*session->shmArgs,
+                             instance,
+                             session->host.channels,
+                             session->host.blockSize,
+                             &session->realtimeParamQueue,
+                             err)) {
+          std::lock_guard<std::mutex> guard(session->shmMutex);
+          session->shmVst = std::move(processor);
+          session->shmProcessingActive.store(true, std::memory_order_release);
+        } else {
+          std::fprintf(stderr, "%s\n", err.c_str());
+          session->shmProcessingActive.store(false, std::memory_order_release);
+
+          if (!session->disposed.load(std::memory_order_acquire)) {
+            std::string bypassErr;
+            auto fallbackBypass = std::make_unique<AudioShmBypass>();
+            if (fallbackBypass->start(*session->shmArgs, bypassErr)) {
+              fallbackBypass->setPluginState(true, false, false);
+              std::lock_guard<std::mutex> guard(session->shmMutex);
+              session->shmBypass = std::move(fallbackBypass);
+            } else {
+              std::fprintf(stderr, "%s\n", bypassErr.c_str());
+            }
+          }
+        }
+      }
+    }
+
+    session->loadState.store(static_cast<int>(SessionLoadState::Ready), std::memory_order_release);
+
+    juce::MessageManager::callAsync([session]() mutable {
+      std::lock_guard<std::mutex> guard(session->host.editorMutex);
+      if (!session->host.editorWindow || !session->host.editorIsPlaceholder) return;
+
+      juce::AudioPluginInstance* instance = nullptr;
+      {
+        std::lock_guard<std::mutex> instanceGuard(session->host.instanceMutex);
+        instance = session->host.instance.get();
+      }
+      if (instance == nullptr) return;
+
+      if (!instance->hasEditor()) {
+        session->host.editorWindow->replaceContent(
+            std::make_unique<PlaceholderEditorContent>("Plugin does not provide a native editor UI"));
+        session->host.editorIsPlaceholder = true;
+        return;
+      }
+
+      std::unique_ptr<juce::AudioProcessorEditor> editor(instance->createEditorIfNeeded());
+      if (!editor) {
+        session->host.editorWindow->replaceContent(
+            std::make_unique<PlaceholderEditorContent>("Failed to create plugin editor UI"));
+        session->host.editorIsPlaceholder = true;
+        return;
+      }
+
+      session->host.editorWindow->replaceContent(std::move(editor));
+      session->host.editorIsPlaceholder = false;
+    });
+  }).detach();
 
   std::vector<uint8_t> payload;
   std::vector<float> interleaved;
@@ -1411,11 +1730,26 @@ int runVst3Plugin(const std::string& pluginId,
 
     switch (typeByte) {
       case MSG_SET_PARAMS: {
-        if (!applyParamSet(host, payload, shmVst ? &realtimeParamQueue : nullptr)) {
-          writeError(stdoutFile, "Bad params payload");
+        bool hasInstance = false;
+        {
+          std::lock_guard<std::mutex> guard(session->host.instanceMutex);
+          hasInstance = session->host.instance != nullptr;
+        }
+        if (!hasInstance) {
+          std::lock_guard<std::mutex> guard(session->pendingParamsMutex);
+          session->pendingParamsPayload = payload;
+          session->hasPendingParams = true;
+          writeMessage(stdoutFile, MSG_SET_PARAMS, {});
           break;
         }
-        writeMessage(stdoutFile, MSG_SET_PARAMS, {});
+
+        ParamUpdateQueue* queue =
+            session->shmProcessingActive.load(std::memory_order_acquire) ? &session->realtimeParamQueue : nullptr;
+        if (!applyParamSet(session->host, payload, queue)) {
+          writeError(stdoutFile, "Bad params payload");
+        } else {
+          writeMessage(stdoutFile, MSG_SET_PARAMS, {});
+        }
         break;
       }
       case MSG_PROCESS_AUDIO: {
@@ -1423,9 +1757,10 @@ int runVst3Plugin(const std::string& pluginId,
           writeError(stdoutFile, "Bad audio payload");
           return 2;
         }
-        if (!host.instance) {
-          writeError(stdoutFile, "Plugin instance is not available");
-          return 2;
+        juce::AudioPluginInstance* instance = nullptr;
+        {
+          std::lock_guard<std::mutex> guard(session->host.instanceMutex);
+          instance = session->host.instance.get();
         }
         const int totalSamples = static_cast<int>(interleaved.size());
         if (totalSamples % safeChannels != 0) {
@@ -1447,7 +1782,9 @@ int runVst3Plugin(const std::string& pluginId,
         }
 
         midi.clear();
-        host.instance->processBlock(buffer, midi);
+        if (instance != nullptr) {
+          instance->processBlock(buffer, midi);
+        }
 
         for (int frame = 0; frame < frames; frame++) {
           const int base = frame * safeChannels;
@@ -1462,7 +1799,16 @@ int runVst3Plugin(const std::string& pluginId,
       }
       case MSG_OPEN_EDITOR: {
         const auto request = decodeOpenEditorRequest(payload);
-        const auto err = openEditor(host, request);
+        std::optional<std::string> placeholderError;
+        if (session->loadState.load(std::memory_order_acquire) == static_cast<int>(SessionLoadState::Error)) {
+          std::lock_guard<std::mutex> guard(session->loadErrorMutex);
+          if (!session->loadError.empty()) {
+            placeholderError = session->loadError;
+          } else {
+            placeholderError = std::string("Failed to load plugin");
+          }
+        }
+        const auto err = openEditor(session->host, request, placeholderError);
         if (err.has_value()) {
           writeError(stdoutFile, *err);
         } else {
@@ -1471,7 +1817,7 @@ int runVst3Plugin(const std::string& pluginId,
         break;
       }
       case MSG_CLOSE_EDITOR: {
-        const auto err = closeEditor(host);
+        const auto err = closeEditor(session->host);
         if (err.has_value()) {
           writeError(stdoutFile, *err);
         } else {
@@ -1480,7 +1826,7 @@ int runVst3Plugin(const std::string& pluginId,
         break;
       }
       case MSG_PING: {
-        writeMessage(stdoutFile, MSG_PING, encodePingPayload(currentPluginId));
+        writeMessage(stdoutFile, MSG_PING, encodePingPayload(session->pluginId));
         break;
       }
       case MSG_SCAN_PLUGINS: {
@@ -1502,7 +1848,7 @@ int runVst3Plugin(const std::string& pluginId,
         break;
       }
       case MSG_GET_PARAMS: {
-        const auto params = collectCurrentParams(host);
+        const auto params = collectCurrentParams(session->host);
         writeMessage(stdoutFile, MSG_GET_PARAMS, encodeParamValuesPayload(params));
         break;
       }
@@ -1513,20 +1859,31 @@ int runVst3Plugin(const std::string& pluginId,
           break;
         }
 
-        if (*requested != currentPluginId) {
+        if (*requested != session->pluginId) {
           writeError(stdoutFile, "Plugin replace is not supported: restart bridge required");
           break;
         }
 
-        writeMessage(stdoutFile, MSG_INSTANTIATE, encodePingPayload(currentPluginId));
+        writeMessage(stdoutFile, MSG_INSTANTIATE, encodePingPayload(session->pluginId));
         break;
       }
       case MSG_DISPOSE: {
-        closeEditor(host);
-        if (shmVst) shmVst->stopAndJoin();
-        realtimeParamQueue.clear();
-        if (host.instance) host.instance->releaseResources();
-        host.instance.reset();
+        session->disposed.store(true, std::memory_order_release);
+        closeEditor(session->host);
+        {
+          std::lock_guard<std::mutex> guard(session->shmMutex);
+          session->shmProcessingActive.store(false, std::memory_order_release);
+          if (session->shmVst) session->shmVst->stopAndJoin();
+          session->shmVst.reset();
+          if (session->shmBypass) session->shmBypass->stopAndJoin();
+          session->shmBypass.reset();
+        }
+        session->realtimeParamQueue.clear();
+        {
+          std::lock_guard<std::mutex> guard(session->host.instanceMutex);
+          if (session->host.instance) session->host.instance->releaseResources();
+          session->host.instance.reset();
+        }
         writeMessage(stdoutFile, MSG_DISPOSE, {});
         return 0;
       }
@@ -1536,11 +1893,22 @@ int runVst3Plugin(const std::string& pluginId,
     }
   }
 
-  closeEditor(host);
-  if (shmVst) shmVst->stopAndJoin();
-  realtimeParamQueue.clear();
-  if (host.instance) host.instance->releaseResources();
-  host.instance.reset();
+  session->disposed.store(true, std::memory_order_release);
+  closeEditor(session->host);
+  {
+    std::lock_guard<std::mutex> guard(session->shmMutex);
+    session->shmProcessingActive.store(false, std::memory_order_release);
+    if (session->shmVst) session->shmVst->stopAndJoin();
+    session->shmVst.reset();
+    if (session->shmBypass) session->shmBypass->stopAndJoin();
+    session->shmBypass.reset();
+  }
+  session->realtimeParamQueue.clear();
+  {
+    std::lock_guard<std::mutex> guard(session->host.instanceMutex);
+    if (session->host.instance) session->host.instance->releaseResources();
+    session->host.instance.reset();
+  }
 
   return 0;
 }

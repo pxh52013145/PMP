@@ -224,6 +224,13 @@ async fn native_audio_vst_scan_state() -> Result<vst_scanner::VstScanState, Stri
     vst_scanner::get_state()
 }
 
+#[tauri::command]
+async fn native_audio_vst_list_session_statuses() -> Result<Vec<vst_runtime::VstSessionStatus>, String> {
+    Ok(tauri::async_runtime::spawn_blocking(|| vst_runtime::list_session_statuses())
+        .await
+        .map_err(|e| format!("VST list session statuses task failed: {e}"))?)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_open_native_editor(
     app: tauri::AppHandle,
@@ -242,6 +249,13 @@ async fn native_audio_vst_close_native_editor(node_id: String) -> Result<(), Str
     tauri::async_runtime::spawn_blocking(move || vst_runtime::close_native_editor(node_id))
         .await
         .map_err(|e| format!("VST close editor task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_bring_editors_to_front(app: tauri::AppHandle) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_runtime::bring_all_editors_to_front(&app))
+        .await
+        .map_err(|e| format!("VST bring editors task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -631,8 +645,10 @@ fn main() {
             native_audio_vst_scan_start,
             native_audio_vst_scan_cancel,
             native_audio_vst_scan_state,
+            native_audio_vst_list_session_statuses,
             native_audio_vst_open_native_editor,
             native_audio_vst_close_native_editor,
+            native_audio_vst_bring_editors_to_front,
             native_audio_vst_set_params,
             native_audio_vst_get_params,
             native_audio_vst_dispose_session,

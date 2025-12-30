@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -29,6 +30,19 @@ pub struct VstAudioSessionInfo {
     pub capacity_frames: u32,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VstSessionStatus {
+    pub node_id: String,
+    pub plugin_id: String,
+    pub peer_ready: bool,
+    pub plugin_loaded: bool,
+    pub processing_active: bool,
+    pub plugin_error: bool,
+    pub heartbeat_in: Option<u32>,
+    pub heartbeat_out: Option<u32>,
+}
+
 struct VstNodeSession {
     plugin_id: String,
     applied_generation: u64,
@@ -42,6 +56,7 @@ struct VstNodeSession {
 
 static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static OPEN_EDITORS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 static FIRST_SESSION_SPAWN: AtomicBool = AtomicBool::new(true);
 
@@ -428,6 +443,7 @@ pub fn open_native_editor(
     node_id: String,
     title: Option<String>,
 ) -> Result<(), String> {
+    let node_id_key = node_id.clone();
     let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
 
     ensure_control_session(node_id.as_str(), plugin_id.as_str())?;
@@ -466,10 +482,27 @@ pub fn open_native_editor(
         map.insert(node_id, session);
     }
 
+    if result.is_ok() {
+        let mut set = match OPEN_EDITORS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.insert(node_id_key);
+    }
+
     result
 }
 
 pub fn close_native_editor(node_id: String) -> Result<(), String> {
+    let node_id_key = node_id.clone();
+    {
+        let mut set = match OPEN_EDITORS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.remove(node_id_key.as_str());
+    }
+
     let session = {
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
@@ -497,6 +530,79 @@ pub fn close_native_editor(node_id: String) -> Result<(), String> {
     }
 
     result
+}
+
+pub fn bring_all_editors_to_front(app: &AppHandle) -> Result<u32, String> {
+    let node_ids = {
+        let set = match OPEN_EDITORS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.iter().cloned().collect::<Vec<_>>()
+    };
+
+    let mut brought = 0u32;
+    for node_id in node_ids {
+        if open_native_editor(app, node_id, None).is_ok() {
+            brought = brought.saturating_add(1);
+        }
+    }
+    Ok(brought)
+}
+
+pub fn list_session_statuses() -> Vec<VstSessionStatus> {
+    let sessions = {
+        let map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.iter()
+            .map(|(node_id, session)| {
+                (
+                    node_id.clone(),
+                    session.plugin_id.clone(),
+                    session.shm_in_name.clone(),
+                    session.shm_out_name.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut out = Vec::with_capacity(sessions.len());
+    for (node_id, plugin_id, shm_in_name, shm_out_name) in sessions {
+        let in_ring = ShmRing::open(shm_in_name.as_str()).ok();
+        let out_ring = ShmRing::open(shm_out_name.as_str()).ok();
+
+        let (peer_ready, plugin_loaded, processing_active, plugin_error, heartbeat_in, heartbeat_out) =
+            match (in_ring.as_ref(), out_ring.as_ref()) {
+                (Some(in_ring), Some(out_ring)) => {
+                    let header_in = in_ring.header();
+                    let header_out = out_ring.header();
+                    (
+                        header_in.is_peer_ready() && header_out.is_peer_ready(),
+                        header_in.is_plugin_loaded(),
+                        header_in.is_processing_active(),
+                        header_in.is_plugin_error(),
+                        Some(header_in.heartbeat.load(Ordering::Relaxed)),
+                        Some(header_out.heartbeat.load(Ordering::Relaxed)),
+                    )
+                }
+                _ => (false, false, false, false, None, None),
+            };
+
+        out.push(VstSessionStatus {
+            node_id,
+            plugin_id,
+            peer_ready,
+            plugin_loaded,
+            processing_active,
+            plugin_error,
+            heartbeat_in,
+            heartbeat_out,
+        });
+    }
+
+    out
 }
 
 pub fn set_params(
@@ -578,6 +684,14 @@ pub fn get_params(app: &AppHandle, node_id: String) -> Result<Vec<VstParamValue>
 }
 
 pub fn dispose_session(node_id: String) -> Result<(), String> {
+    {
+        let mut set = match OPEN_EDITORS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.remove(node_id.as_str());
+    }
+
     let mut session = {
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
