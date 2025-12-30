@@ -21,7 +21,7 @@ export const PREVIOUS_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 9,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -68,7 +68,7 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 11,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -116,7 +116,7 @@ export const NEXT_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 13,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -163,7 +163,7 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 15,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -210,7 +210,7 @@ export const VOLUME_BUTTON: Magnet = {
     {
       id: 'anchor',
       gridX: 17,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -257,14 +257,14 @@ export const PROGRESS_BAR: Magnet = {
   anchors: [
     {
       id: 'left',
-      gridX: 6, // 左端点
-      gridY: 18,
+      gridX: 0, // 左端点
+      gridY: 19,
       role: 'anchor',
     },
     {
       id: 'right',
       gridX: 26, // 右端点
-      gridY: 18,
+      gridY: 19,
       role: 'boundary',
     },
   ],

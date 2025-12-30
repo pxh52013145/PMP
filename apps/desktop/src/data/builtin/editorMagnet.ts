@@ -13,7 +13,7 @@ export const EDITOR_BUTTON_MAGNET: Magnet = {
     {
       id: 'anchor',
       gridX: 19,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],

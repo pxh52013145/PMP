@@ -12,8 +12,8 @@ export const BACK_BUTTON_MAGNET: Magnet = {
   anchors: [
     {
       id: 'anchor',
-      gridX: 1,
-      gridY: 19,
+      gridX: 0,
+      gridY: 0,
       role: 'anchor',
     },
   ],

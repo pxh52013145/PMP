@@ -20,8 +20,8 @@ export const PLAY_QUEUE_MAGNET: Magnet = {
   anchors: [
     {
       id: 'anchor',
-      gridX: 23,
-      gridY: 19,
+      gridX: 21,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -69,7 +69,7 @@ export const PLAYLISTS_MAGNET: Magnet = {
     {
       id: 'anchor',
       gridX: 23,
-      gridY: 19,
+      gridY: 18,
       role: 'anchor',
     },
   ],
@@ -116,8 +116,8 @@ export const MUSIC_LIBRARY_MAGNET: Magnet = {
   anchors: [
     {
       id: 'anchor',
-      gridX: 23,
-      gridY: 19,
+      gridX: 25,
+      gridY: 18,
       role: 'anchor',
     },
   ],
