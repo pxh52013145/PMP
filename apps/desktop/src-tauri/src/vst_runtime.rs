@@ -43,6 +43,29 @@ pub struct VstSessionStatus {
     pub heartbeat_out: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VstSessionStatusCore {
+    node_id: String,
+    plugin_id: String,
+    peer_ready: bool,
+    plugin_loaded: bool,
+    processing_active: bool,
+    plugin_error: bool,
+}
+
+impl VstSessionStatusCore {
+    fn from_status(status: &VstSessionStatus) -> Self {
+        Self {
+            node_id: status.node_id.clone(),
+            plugin_id: status.plugin_id.clone(),
+            peer_ready: status.peer_ready,
+            plugin_loaded: status.plugin_loaded,
+            processing_active: status.processing_active,
+            plugin_error: status.plugin_error,
+        }
+    }
+}
+
 struct VstNodeSession {
     plugin_id: String,
     applied_generation: u64,
@@ -59,6 +82,10 @@ static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
 static OPEN_EDITORS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 static FIRST_SESSION_SPAWN: AtomicBool = AtomicBool::new(true);
+static SESSION_STATUS_BROADCAST_STARTED: AtomicBool = AtomicBool::new(false);
+static SESSION_STATUS_BROADCAST_APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+
+const EVENT_VST_SESSION_STATUSES: &str = "vst-session-statuses";
 
 pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
     let plugins = crate::vst_bridge::list_plugins()?;
@@ -415,6 +442,60 @@ pub fn ensure_audio_session(
         capacity_frames,
         true,
     )
+}
+
+pub fn init_session_status_broadcaster(app: &AppHandle) {
+    {
+        let mut guard = match SESSION_STATUS_BROADCAST_APP.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = Some(app.clone());
+    }
+
+    if SESSION_STATUS_BROADCAST_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        let mut last_core: Vec<VstSessionStatusCore> = Vec::new();
+        loop {
+            let app = {
+                let guard = match SESSION_STATUS_BROADCAST_APP.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                guard.clone()
+            };
+
+            let Some(app) = app else {
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            };
+
+            let mut statuses = list_session_statuses();
+            statuses.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+            let mut current_core = statuses
+                .iter()
+                .map(VstSessionStatusCore::from_status)
+                .collect::<Vec<_>>();
+            current_core.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+            if current_core != last_core {
+                if let Err(err) = app.emit_all(EVENT_VST_SESSION_STATUSES, statuses.clone()) {
+                    eprintln!("[VST] Failed to emit session statuses: {err}");
+                }
+                last_core = current_core;
+            }
+
+            if last_core.is_empty() {
+                std::thread::sleep(Duration::from_millis(900));
+            } else {
+                std::thread::sleep(Duration::from_millis(240));
+            }
+        }
+    });
 }
 
 #[cfg(target_os = "windows")]

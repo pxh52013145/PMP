@@ -45,6 +45,8 @@ type VstSessionStatus = {
   heartbeatOut?: number | null;
 };
 
+const EVENT_VST_SESSION_STATUSES = 'vst-session-statuses';
+
 function clamp(value: number, min: number, max: number) {
   if (!isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -69,11 +71,41 @@ function readNumberField(value: unknown, field: string): number | null {
   return typeof candidate === 'number' && isFinite(candidate) ? candidate : null;
 }
 
+function readBooleanField(value: unknown, field: string): boolean | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const candidate = record[field];
+  return typeof candidate === 'boolean' ? candidate : null;
+}
+
 function ensureDspGraphConfig(value: unknown): DspGraphConfig {
   const record = asRecord(value);
   if (!record) return { nodes: [] };
   const nodes = record.nodes;
   return { nodes: Array.isArray(nodes) ? (nodes as DspNode[]) : [] };
+}
+
+function ensureVstSessionStatusMap(value: unknown): Record<string, VstSessionStatus> {
+  if (!Array.isArray(value)) return {};
+  const map: Record<string, VstSessionStatus> = {};
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const nodeId = readStringField(entry, 'nodeId');
+    const pluginId = readStringField(entry, 'pluginId') ?? '';
+    if (!nodeId) continue;
+    map[nodeId] = {
+      nodeId,
+      pluginId,
+      peerReady: readBooleanField(record, 'peerReady') ?? false,
+      pluginLoaded: readBooleanField(record, 'pluginLoaded') ?? false,
+      processingActive: readBooleanField(record, 'processingActive') ?? false,
+      pluginError: readBooleanField(record, 'pluginError') ?? false,
+      heartbeatIn: readNumberField(entry, 'heartbeatIn'),
+      heartbeatOut: readNumberField(entry, 'heartbeatOut'),
+    };
+  }
+  return map;
 }
 
 function computeTotalGainDb(nodes: DspNode[]) {
@@ -172,6 +204,22 @@ export const DspRackPage: React.FC = () => {
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  React.useEffect(() => {
+    if (!isTauri) return;
+    let cleanup: null | (() => void) = null;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<unknown>(EVENT_VST_SESSION_STATUSES, (event) => {
+          setVstStatuses(ensureVstSessionStatusMap(event.payload));
+        })
+      )
+      .then((fn) => {
+        cleanup = fn;
+      })
+      .catch(() => {});
+    return () => cleanup?.();
+  }, [isTauri]);
 
   React.useEffect(() => {
     if (!isTauri) return;

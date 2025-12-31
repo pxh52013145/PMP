@@ -605,6 +605,7 @@ fn main() {
             if let Err(error) = vst_library::init(&app.handle()) {
                 eprintln!("[VST] Failed to init library: {error}");
             }
+            vst_runtime::init_session_status_broadcaster(&app.handle());
 
             Ok(())
         })

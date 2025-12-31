@@ -62,6 +62,7 @@ export class NativeAudioService implements IAudioService {
   private errorListener?: UnlistenFn;
   private spectrumData: Uint8Array | null = null;
   private restoredOutputDevice = false;
+  private restoredDspGraph = false;
   private restoredDspChain = false;
   private restoredDspChainApplied = false;
   private restoredGainDb = false;
@@ -99,9 +100,37 @@ export class NativeAudioService implements IAudioService {
     };
 
     this.setupNativeListeners();
-    this.restoreOutputDeviceFromStorage();
-    this.restoreDspChainFromStorage();
-    this.restoreGainDbFromStorage();
+    void this.restoreFromStorage().catch(() => {});
+  }
+
+  private async restoreFromStorage(): Promise<void> {
+    await this.restoreOutputDeviceFromStorage();
+
+    const restoredGraph = await this.restoreDspGraphFromBackend();
+    if (!restoredGraph) {
+      await this.restoreDspChainFromStorage();
+    }
+
+    await this.restoreGainDbFromStorage();
+  }
+
+  private async restoreDspGraphFromBackend(): Promise<boolean> {
+    if (this.restoredDspGraph) return false;
+    this.restoredDspGraph = true;
+
+    try {
+      const graph = await invoke<unknown>('native_audio_get_dsp_graph').catch(() => null);
+      if (!graph || typeof graph !== 'object') return false;
+      const record = graph as Record<string, unknown>;
+      const nodes = record.nodes;
+      if (!Array.isArray(nodes) || nodes.length === 0) return false;
+
+      await invoke('native_audio_set_dsp_graph', { graph: record });
+      this.restoredDspChainApplied = true;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private readCrossfadeSettings(): CrossfadeSettings {
@@ -356,7 +385,9 @@ export class NativeAudioService implements IAudioService {
       const parsed = JSON.parse(raw) as unknown;
       const deviceName = typeof parsed === 'string' ? parsed : null;
       if (!deviceName) return;
-      void invoke('native_audio_select_device', { deviceName }).catch(() => {});
+      return invoke('native_audio_select_device', { deviceName })
+        .then(() => {})
+        .catch(() => {});
     } catch {
       // ignore
     }
@@ -373,7 +404,9 @@ export class NativeAudioService implements IAudioService {
       const parsed = JSON.parse(raw) as unknown;
       const db = typeof parsed === 'number' ? parsed : null;
       if (db === null) return;
-      void invoke('native_audio_set_gain', { db }).catch(() => {});
+      return invoke('native_audio_set_gain', { db })
+        .then(() => {})
+        .catch(() => {});
     } catch {
       // ignore
     }
@@ -388,8 +421,11 @@ export class NativeAudioService implements IAudioService {
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) return;
-      this.restoredDspChainApplied = true;
-      void invoke('native_audio_set_dsp_chain', { chain: parsed }).catch(() => {});
+      return invoke('native_audio_set_dsp_chain', { chain: parsed })
+        .then(() => {
+          this.restoredDspChainApplied = true;
+        })
+        .catch(() => {});
     } catch {
       // ignore
     }
