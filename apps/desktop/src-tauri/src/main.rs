@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::time::Duration;
 
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
@@ -586,14 +587,22 @@ fn main() {
 
             let app_handle = app.handle();
             let exit_flag = app.state::<ExitFlag>().0.clone();
-            window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { .. } = event {
+            window.on_window_event(move |event| match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
                     exit_flag.store(true, Ordering::SeqCst);
                     windows::editor::close_all_editor_windows(&app_handle);
                     windows::plugin::close_all_plugin_windows(&app_handle);
                     windows::vst_manager::close_all_vst_manager_windows(&app_handle);
                     vst_runtime::close_all();
                 }
+                tauri::WindowEvent::Focused(true) => {
+                    let app_handle = app_handle.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        std::thread::sleep(Duration::from_millis(80));
+                        let _ = vst_runtime::raise_visible_editors_above_main(&app_handle);
+                    });
+                }
+                _ => {}
             });
 
             if let Err(error) = vst_audit::init(&app.handle()) {

@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::dsp_graph::VstParamValue;
 use crate::vst_audit::{self, VstAuditEventKind};
-use crate::vst_bridge::{BridgeClient, BridgeParamValue, BridgePluginDescriptor};
+use crate::vst_bridge::{BridgeClient, BridgeOpenEditorOptions, BridgeParamValue, BridgePluginDescriptor};
 use crate::vst_governance;
 use crate::vst_shm::ShmRing;
 
@@ -39,6 +39,7 @@ pub struct VstSessionStatus {
     pub plugin_loaded: bool,
     pub processing_active: bool,
     pub plugin_error: bool,
+    pub native_editor_open: bool,
     pub heartbeat_in: Option<u32>,
     pub heartbeat_out: Option<u32>,
 }
@@ -51,6 +52,7 @@ struct VstSessionStatusCore {
     plugin_loaded: bool,
     processing_active: bool,
     plugin_error: bool,
+    native_editor_open: bool,
 }
 
 impl VstSessionStatusCore {
@@ -62,6 +64,7 @@ impl VstSessionStatusCore {
             plugin_loaded: status.plugin_loaded,
             processing_active: status.processing_active,
             plugin_error: status.plugin_error,
+            native_editor_open: status.native_editor_open,
         }
     }
 }
@@ -79,13 +82,108 @@ struct VstNodeSession {
 
 static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static OPEN_EDITORS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 static FIRST_SESSION_SPAWN: AtomicBool = AtomicBool::new(true);
 static SESSION_STATUS_BROADCAST_STARTED: AtomicBool = AtomicBool::new(false);
 static SESSION_STATUS_BROADCAST_APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 
+#[derive(Clone, Copy, Debug)]
+struct EditorOpenCacheEntry {
+    value: bool,
+    checked_at: Instant,
+}
+
+static EDITOR_OPEN_CACHE: Lazy<Mutex<HashMap<String, EditorOpenCacheEntry>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 const EVENT_VST_SESSION_STATUSES: &str = "vst-session-statuses";
+
+fn editor_open_cache_ttl() -> Duration {
+    Duration::from_millis(900)
+}
+
+fn cache_editor_open(node_id: &str, value: bool) {
+    let mut cache = match EDITOR_OPEN_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    cache.insert(
+        node_id.to_string(),
+        EditorOpenCacheEntry {
+            value,
+            checked_at: Instant::now(),
+        },
+    );
+}
+
+fn query_editor_open(node_id: &str) -> Option<bool> {
+    let session = {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.remove(node_id)
+    };
+
+    let Some(mut session) = session else {
+        return None;
+    };
+
+    let ping_result = session
+        .client
+        .ping_with_timeout(Duration::from_millis(1_500));
+    let ping_ok = ping_result.is_ok();
+    let editor_open = ping_result.ok().and_then(|resp| resp.editor_open);
+
+    let should_keep_session = ping_ok || session.client.check_alive().is_ok();
+    if should_keep_session {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.insert(node_id.to_string(), session);
+    }
+
+    editor_open
+}
+
+fn is_editor_open_cached(node_id: &str) -> bool {
+    let ttl = editor_open_cache_ttl();
+    let now = Instant::now();
+
+    let mut cached_value = false;
+    let mut is_fresh = false;
+    {
+        let cache = match EDITOR_OPEN_CACHE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(entry) = cache.get(node_id) {
+            cached_value = entry.value;
+            is_fresh = now.duration_since(entry.checked_at) < ttl;
+        }
+    }
+
+    if is_fresh {
+        return cached_value;
+    }
+
+    if !cached_value {
+        cache_editor_open(node_id, false);
+        return false;
+    }
+
+    match query_editor_open(node_id) {
+        Some(value) => {
+            cache_editor_open(node_id, value);
+            value
+        }
+        None => {
+            cache_editor_open(node_id, cached_value);
+            cached_value
+        }
+    }
+}
 
 pub fn list_plugins() -> Result<Vec<BridgePluginDescriptor>, String> {
     let plugins = crate::vst_bridge::list_plugins()?;
@@ -551,7 +649,16 @@ pub fn open_native_editor(
 
     let result = session
         .client
-        .open_editor_window(title.as_deref(), owner_hwnd, true)
+        .open_editor_window(
+            title.as_deref(),
+            owner_hwnd,
+            BridgeOpenEditorOptions {
+                pinned: true,
+                bring_only: false,
+                show: true,
+                activate: true,
+            },
+        )
         .map_err(|e| format!("Bridge open editor failed: {e}"));
 
     let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
@@ -564,11 +671,7 @@ pub fn open_native_editor(
     }
 
     if result.is_ok() {
-        let mut set = match OPEN_EDITORS.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        set.insert(node_id_key);
+        cache_editor_open(node_id_key.as_str(), true);
     }
 
     result
@@ -576,13 +679,6 @@ pub fn open_native_editor(
 
 pub fn close_native_editor(node_id: String) -> Result<(), String> {
     let node_id_key = node_id.clone();
-    {
-        let mut set = match OPEN_EDITORS.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        set.remove(node_id_key.as_str());
-    }
 
     let session = {
         let mut map = match SESSIONS.lock() {
@@ -610,25 +706,88 @@ pub fn close_native_editor(node_id: String) -> Result<(), String> {
         map.insert(node_id, session);
     }
 
+    if result.is_ok() {
+        cache_editor_open(node_id_key.as_str(), false);
+    }
+
     result
 }
 
-pub fn bring_all_editors_to_front(app: &AppHandle) -> Result<u32, String> {
+fn bring_editors(
+    app: &AppHandle,
+    show: bool,
+    activate: bool,
+) -> Result<u32, String> {
+    let owner_hwnd = {
+        #[cfg(target_os = "windows")]
+        {
+            resolve_editor_owner_hwnd(app)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    };
+
     let node_ids = {
-        let set = match OPEN_EDITORS.lock() {
+        let map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        set.iter().cloned().collect::<Vec<_>>()
+        map.keys().cloned().collect::<Vec<_>>()
     };
 
     let mut brought = 0u32;
     for node_id in node_ids {
-        if open_native_editor(app, node_id, None).is_ok() {
+        let session = {
+            let mut map = match SESSIONS.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            map.remove(node_id.as_str())
+        };
+
+        let Some(mut session) = session else {
+            continue;
+        };
+
+        let result = session
+            .client
+            .open_editor_window(
+                None,
+                owner_hwnd,
+                BridgeOpenEditorOptions {
+                    pinned: true,
+                    bring_only: true,
+                    show,
+                    activate,
+                },
+            )
+            .map_err(|e| format!("Bridge bring editor failed: {e}"));
+
+        let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
+        if should_keep_session {
+            let mut map = match SESSIONS.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            map.insert(node_id, session);
+        }
+
+        if result.is_ok() {
             brought = brought.saturating_add(1);
         }
     }
+
     Ok(brought)
+}
+
+pub fn bring_all_editors_to_front(app: &AppHandle) -> Result<u32, String> {
+    bring_editors(app, true, true)
+}
+
+pub fn raise_visible_editors_above_main(app: &AppHandle) -> Result<u32, String> {
+    bring_editors(app, false, false)
 }
 
 pub fn list_session_statuses() -> Vec<VstSessionStatus> {
@@ -672,6 +831,7 @@ pub fn list_session_statuses() -> Vec<VstSessionStatus> {
             };
 
         out.push(VstSessionStatus {
+            native_editor_open: is_editor_open_cached(node_id.as_str()),
             node_id,
             plugin_id,
             peer_ready,
@@ -765,13 +925,7 @@ pub fn get_params(app: &AppHandle, node_id: String) -> Result<Vec<VstParamValue>
 }
 
 pub fn dispose_session(node_id: String) -> Result<(), String> {
-    {
-        let mut set = match OPEN_EDITORS.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        set.remove(node_id.as_str());
-    }
+    cache_editor_open(node_id.as_str(), false);
 
     let mut session = {
         let mut map = match SESSIONS.lock() {

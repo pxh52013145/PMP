@@ -41,6 +41,7 @@ type VstSessionStatus = {
   pluginLoaded: boolean;
   processingActive: boolean;
   pluginError: boolean;
+  nativeEditorOpen?: boolean;
   heartbeatIn?: number | null;
   heartbeatOut?: number | null;
 };
@@ -101,6 +102,7 @@ function ensureVstSessionStatusMap(value: unknown): Record<string, VstSessionSta
       pluginLoaded: readBooleanField(record, 'pluginLoaded') ?? false,
       processingActive: readBooleanField(record, 'processingActive') ?? false,
       pluginError: readBooleanField(record, 'pluginError') ?? false,
+      nativeEditorOpen: readBooleanField(record, 'nativeEditorOpen') ?? false,
       heartbeatIn: readNumberField(entry, 'heartbeatIn'),
       heartbeatOut: readNumberField(entry, 'heartbeatOut'),
     };
@@ -453,70 +455,39 @@ export const DspRackPage: React.FC = () => {
                     (() => {
                       const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
                       const status = vstStatuses[node.id];
-                      if (!node.enabled) {
-                        return (
-                          <span className="vst-node-status vst-node-status--disabled" title="Node disabled">
-                            <span className="vst-node-status-dot" />
-                            Disabled
-                          </span>
-                        );
-                      }
-                      if (!pluginId) {
-                        return (
-                          <span className="vst-node-status vst-node-status--error" title="Missing pluginId">
-                            <span className="vst-node-status-dot" />
-                            Missing plugin
-                          </span>
-                        );
-                      }
-                      if (!status) {
-                        return (
-                          <span className="vst-node-status vst-node-status--idle" title="Session not spawned">
-                            <span className="vst-node-status-dot" />
-                            Idle
-                          </span>
-                        );
-                      }
-                      if (status.pluginError) {
-                        return (
-                          <span className="vst-node-status vst-node-status--error" title="Sidecar reported error">
-                            <span className="vst-node-status-dot" />
-                            Error
-                          </span>
-                        );
-                      }
-                      if (!status.peerReady) {
-                        return (
-                          <span className="vst-node-status vst-node-status--error" title="Shared memory not ready">
-                            <span className="vst-node-status-dot" />
-                            Disconnected
-                          </span>
-                        );
-                      }
-                      if (status.processingActive) {
-                        return (
-                          <span
-                            className="vst-node-status vst-node-status--active"
-                            title={`Active (hbIn=${status.heartbeatIn ?? '-'} hbOut=${status.heartbeatOut ?? '-'})`}
-                          >
-                            <span className="vst-node-status-dot" />
-                            Active
-                          </span>
-                        );
-                      }
-                      if (status.pluginLoaded) {
-                        return (
-                          <span className="vst-node-status vst-node-status--bypassed" title="Plugin loaded but bypassed">
-                            <span className="vst-node-status-dot" />
-                            Bypassed
-                          </span>
-                        );
-                      }
+                      const statusOk = !!node.enabled && !!pluginId && !!status && !!status.peerReady && !status.pluginError;
+                      const statusTitle = (() => {
+                        if (!node.enabled) return 'Node disabled';
+                        if (!pluginId) return 'Missing plugin';
+                        if (!status) return 'Session not spawned';
+                        if (status.pluginError) return 'Sidecar reported error';
+                        if (!status.peerReady) return 'Shared memory not ready';
+                        if (status.processingActive) {
+                          return `Active (hbIn=${status.heartbeatIn ?? '-'} hbOut=${status.heartbeatOut ?? '-'})`;
+                        }
+                        if (status.pluginLoaded) return 'Plugin loaded';
+                        return 'Plugin loading';
+                      })();
+
+                      const nativeEditorOpen = !!status?.nativeEditorOpen;
+
                       return (
-                        <span className="vst-node-status vst-node-status--loading" title="Plugin loading (dry/bypass)">
-                          <span className="vst-node-status-dot" />
-                          Loading
-                        </span>
+                        <div className="vst-node-indicators">
+                          <span
+                            className={`vst-indicator ${statusOk ? 'vst-indicator--ok' : 'vst-indicator--bad'}`}
+                            title={statusTitle}
+                          >
+                            <span className="vst-indicator-dot" />
+                            STATUS
+                          </span>
+                          <span
+                            className={`vst-indicator ${nativeEditorOpen ? 'vst-indicator--ok' : 'vst-indicator--bad'}`}
+                            title={nativeEditorOpen ? 'Native editor window is open' : 'Native editor window is closed'}
+                          >
+                            <span className="vst-indicator-dot" />
+                            UI
+                          </span>
+                        </div>
                       );
                     })()}
                 </div>
@@ -560,7 +531,7 @@ export const DspRackPage: React.FC = () => {
                           setError(err instanceof Error ? err.message : String(err))
                         )
                       }
-                      disabled={busy}
+                      disabled={busy || !(vstStatuses[node.id]?.nativeEditorOpen ?? false)}
                     >
                       关闭 UI
                     </button>

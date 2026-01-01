@@ -115,11 +115,18 @@
   opacity: 0.9;
 }
 
-.vst-node-status {
+.vst-node-indicators {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.vst-indicator {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-top: 4px;
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -129,31 +136,18 @@
   opacity: 0.9;
 }
 
-.vst-node-status-dot {
+.vst-indicator-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.35);
 }
 
-.vst-node-status--active .vst-node-status-dot {
+.vst-indicator--ok .vst-indicator-dot {
   background: rgba(0, 255, 136, 0.9);
 }
 
-.vst-node-status--loading .vst-node-status-dot {
-  background: rgba(255, 204, 0, 0.9);
-}
-
-.vst-node-status--bypassed .vst-node-status-dot {
-  background: rgba(80, 180, 255, 0.9);
-}
-
-.vst-node-status--idle .vst-node-status-dot,
-.vst-node-status--disabled .vst-node-status-dot {
-  background: rgba(180, 180, 180, 0.8);
-}
-
-.vst-node-status--error .vst-node-status-dot {
+.vst-indicator--bad .vst-indicator-dot {
   background: rgba(255, 80, 80, 0.9);
 }
 

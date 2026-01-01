@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
 pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
 
 pub const MSG_SET_PARAMS: u8 = 1;
@@ -63,6 +66,8 @@ pub struct BridgeParamValue {
 pub struct BridgePingResponse {
     pub protocol_version: u32,
     pub plugin_id: Option<String>,
+    #[serde(default)]
+    pub editor_open: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -114,6 +119,25 @@ fn bridge_request_timeout() -> Duration {
 
 fn bridge_editor_timeout() -> Duration {
     timeout_from_env_ms("PMP_VST_BRIDGE_EDITOR_TIMEOUT_MS", 30_000)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeOpenEditorOptions {
+    pub pinned: bool,
+    pub bring_only: bool,
+    pub show: bool,
+    pub activate: bool,
+}
+
+impl Default for BridgeOpenEditorOptions {
+    fn default() -> Self {
+        Self {
+            pinned: true,
+            bring_only: false,
+            show: true,
+            activate: true,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -429,6 +453,19 @@ impl BridgeClient {
         self.ensure_running()
     }
 
+    #[cfg(target_os = "windows")]
+    fn allow_set_foreground_window(&self) {
+        let pid = self.child.id();
+        unsafe {
+            // Allows the sidecar process to call SetForegroundWindow when opening the editor UI.
+            // This is best-effort; failures should not abort the request.
+            let _ = AllowSetForegroundWindow(pid);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn allow_set_foreground_window(&self) {}
+
     fn request_raw(
         &mut self,
         ty: u8,
@@ -488,6 +525,7 @@ impl BridgeClient {
             return Ok(BridgePingResponse {
                 protocol_version: BRIDGE_PROTOCOL_VERSION,
                 plugin_id: None,
+                editor_open: None,
             });
         }
 
@@ -579,13 +617,18 @@ impl BridgeClient {
         &mut self,
         title: Option<&str>,
         owner_hwnd: Option<u64>,
-        pinned: bool,
+        options: BridgeOpenEditorOptions,
     ) -> Result<(), String> {
+        self.allow_set_foreground_window();
+
         let payload = serde_json::to_vec(&serde_json::json!({
             "protocolVersion": BRIDGE_PROTOCOL_VERSION,
             "title": title,
             "ownerHwnd": owner_hwnd,
-            "pinned": pinned,
+            "pinned": options.pinned,
+            "bringOnly": options.bring_only,
+            "show": options.show,
+            "activate": options.activate,
         }))
         .map_err(|e| e.to_string())?;
 

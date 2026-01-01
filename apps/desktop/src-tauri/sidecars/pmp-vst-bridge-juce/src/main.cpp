@@ -220,10 +220,11 @@ std::vector<uint8_t> encodeErrorPayload(const std::string& message) {
   return encodeJsonPayload(juce::var(obj));
 }
 
-std::vector<uint8_t> encodePingPayload(const std::string& pluginId) {
+std::vector<uint8_t> encodePingPayload(const std::string& pluginId, bool editorOpen) {
   auto* obj = new juce::DynamicObject();
   obj->setProperty("protocolVersion", static_cast<int>(BRIDGE_PROTOCOL_VERSION));
   obj->setProperty("pluginId", juce::String(pluginId));
+  obj->setProperty("editorOpen", editorOpen);
   return encodeJsonPayload(juce::var(obj));
 }
 
@@ -1142,13 +1143,38 @@ class PluginEditorWindow : public juce::DocumentWindow {
   void setPinned(bool pinned) {
     pinned_ = pinned;
     applyWin32Style();
-    toFront(true);
+    bringToFront(false);
   }
 
   void setOwnerHwnd(uint64_t ownerHwnd) {
     if (ownerHwnd == 0) return;
     ownerHwnd_ = ownerHwnd;
     applyWin32Style();
+  }
+
+  void bringToFront(bool activate) {
+#if defined(_WIN32)
+    if (auto* peer = getPeer()) {
+      HWND hwnd = (HWND)peer->getNativeHandle();
+      if (hwnd != nullptr) {
+        const UINT baseFlags = SWP_NOMOVE | SWP_NOSIZE;
+        if (activate) {
+          SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, baseFlags);
+          SetForegroundWindow(hwnd);
+          SetActiveWindow(hwnd);
+        } else {
+          const UINT noActivateFlags = baseFlags | SWP_NOACTIVATE;
+          SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, noActivateFlags);
+          // Topmost toggle trick: ensures the window is raised above other normal windows
+          // without permanently becoming "always on top".
+          SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, noActivateFlags);
+          SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, noActivateFlags);
+        }
+      }
+    }
+#endif
+
+    toFront(activate);
   }
 
   void replaceContent(std::unique_ptr<juce::Component> content) {
@@ -1288,6 +1314,9 @@ struct OpenEditorRequest {
   std::optional<std::string> title;
   std::optional<uint64_t> ownerHwnd;
   bool pinned = true;
+  bool bringOnly = false;
+  bool show = true;
+  bool activate = true;
 };
 
 OpenEditorRequest decodeOpenEditorRequest(const std::vector<uint8_t>& payload) {
@@ -1320,6 +1349,21 @@ OpenEditorRequest decodeOpenEditorRequest(const std::vector<uint8_t>& payload) {
   if (pinnedVar.isBool()) {
     out.pinned = static_cast<bool>(pinnedVar);
   }
+
+  const auto bringOnlyVar = obj->getProperty("bringOnly");
+  if (bringOnlyVar.isBool()) {
+    out.bringOnly = static_cast<bool>(bringOnlyVar);
+  }
+
+  const auto showVar = obj->getProperty("show");
+  if (showVar.isBool()) {
+    out.show = static_cast<bool>(showVar);
+  }
+
+  const auto activateVar = obj->getProperty("activate");
+  if (activateVar.isBool()) {
+    out.activate = static_cast<bool>(activateVar);
+  }
   return out;
 }
 
@@ -1334,6 +1378,9 @@ std::optional<std::string> openEditor(
                                    reqTitle = request.title,
                                    reqOwnerHwnd = request.ownerHwnd,
                                    reqPinned = request.pinned,
+                                   reqBringOnly = request.bringOnly,
+                                   reqShow = request.show,
+                                   reqActivate = request.activate,
                                    reqPlaceholderError = placeholderError,
                                    promise]() mutable {
     std::lock_guard<std::mutex> guard(host.editorMutex);
@@ -1349,8 +1396,17 @@ std::optional<std::string> openEditor(
         host.editorWindow->setOwnerHwnd(ownerHwnd);
       }
       host.editorWindow->setPinned(reqPinned);
-      host.editorWindow->setVisible(true);
-      host.editorWindow->toFront(true);
+      if (reqShow) {
+        host.editorWindow->setVisible(true);
+      }
+      if (host.editorWindow->isVisible()) {
+        host.editorWindow->bringToFront(reqActivate);
+      }
+      promise->set_value(std::nullopt);
+      return;
+    }
+
+    if (reqBringOnly) {
       promise->set_value(std::nullopt);
       return;
     }
@@ -1384,6 +1440,7 @@ std::optional<std::string> openEditor(
             }
           });
       host.editorIsPlaceholder = true;
+      host.editorWindow->bringToFront(reqActivate);
       promise->set_value(std::nullopt);
       return;
     }
@@ -1412,6 +1469,7 @@ std::optional<std::string> openEditor(
            }
          });
     host.editorIsPlaceholder = false;
+    host.editorWindow->bringToFront(reqActivate);
     promise->set_value(std::nullopt);
   });
 
@@ -1826,7 +1884,12 @@ int runVst3Plugin(const std::string& pluginId,
         break;
       }
       case MSG_PING: {
-        writeMessage(stdoutFile, MSG_PING, encodePingPayload(session->pluginId));
+        bool editorOpen = false;
+        {
+          std::lock_guard<std::mutex> guard(session->host.editorMutex);
+          editorOpen = session->host.editorWindow != nullptr;
+        }
+        writeMessage(stdoutFile, MSG_PING, encodePingPayload(session->pluginId, editorOpen));
         break;
       }
       case MSG_SCAN_PLUGINS: {
@@ -1864,7 +1927,12 @@ int runVst3Plugin(const std::string& pluginId,
           break;
         }
 
-        writeMessage(stdoutFile, MSG_INSTANTIATE, encodePingPayload(session->pluginId));
+        bool editorOpen = false;
+        {
+          std::lock_guard<std::mutex> guard(session->host.editorMutex);
+          editorOpen = session->host.editorWindow != nullptr;
+        }
+        writeMessage(stdoutFile, MSG_INSTANTIATE, encodePingPayload(session->pluginId, editorOpen));
         break;
       }
       case MSG_DISPOSE: {
