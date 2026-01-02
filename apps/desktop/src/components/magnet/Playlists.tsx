@@ -5,6 +5,7 @@ import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InputDialog } from './InputDialog';
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import { useT } from '../../i18n';
 import './Playlists.css';
 
 interface PlaylistsProps {
@@ -12,7 +13,10 @@ interface PlaylistsProps {
   onClose: () => void;
 }
 
+const MAX_TRACKS = 200;
+
 export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
+  const t = useT();
   const audioService = useAudioService();
   const [audioState, setAudioState] = useState<AudioState>(audioService.getState());
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
@@ -50,8 +54,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       setIsLoadingTracks(true);
       const q = query.trim();
       const tracks = q
-        ? await musicLibraryService.searchTracks(q, 200)
-        : await musicLibraryService.getAllTracks(200);
+        ? await musicLibraryService.searchTracks(q, MAX_TRACKS)
+        : await musicLibraryService.getAllTracks(MAX_TRACKS);
       setAvailableTracks(tracks);
     } catch (error) {
       console.error('Failed to load tracks:', error);
@@ -128,7 +132,8 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     const safeSeconds = seconds ?? 0;
     const hours = Math.floor(safeSeconds / 3600);
     const minutes = Math.floor((safeSeconds % 3600) / 60);
-    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    if (hours > 0) return t('pages.music-library.duration.hoursMinutes', { hours, minutes });
+    return t('pages.music-library.duration.minutes', { minutes });
   };
 
   const getFilteredTracks = () => {
@@ -143,7 +148,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         {/* 左侧：歌单列表 */}
         <div className="playlists-sidebar">
           <div className="playlists-sidebar-header">
-            <h3 className="playlists-sidebar-title">♬ 我的歌单</h3>
+            <h3 className="playlists-sidebar-title">♬ {t('pages.playlists.sidebar.title')}</h3>
             <button className="playlists-create-btn" onClick={() => setShowCreateDialog(true)}>
               ➕
             </button>
@@ -153,9 +158,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             {audioState.playlists.length === 0 ? (
               <div className="playlists-empty">
                 <div className="playlists-empty-icon">♬</div>
-                <div className="playlists-empty-text">暂无歌单</div>
+                <div className="playlists-empty-text">{t('pages.playlists.empty.title')}</div>
                 <button className="playlists-empty-btn" onClick={() => setShowCreateDialog(true)}>
-                  创建第一个歌单
+                  {t('pages.playlists.empty.action.createFirst')}
                 </button>
               </div>
             ) : (
@@ -168,7 +173,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                   <div className="playlists-item-icon">♪</div>
                   <div className="playlists-item-info">
                     <div className="playlists-item-name">{playlist.name}</div>
-                    <div className="playlists-item-count">{playlist.trackCount} 首歌曲</div>
+                    <div className="playlists-item-count">{t('pages.playlists.trackCount', { count: playlist.trackCount })}</div>
                   </div>
                 </div>
               ))
@@ -180,7 +185,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         <div className="playlists-detail">
           <div className="playlists-detail-header">
             <h2 className="playlists-detail-title">
-              {selectedPlaylist ? selectedPlaylist.name : '歌单管理'}
+              {selectedPlaylist ? selectedPlaylist.name : t('pages.playlists.detail.title')}
             </h2>
             <button className="playlists-close-btn" onClick={onClose}>
               ✕
@@ -192,7 +197,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               <div className="playlists-detail-toolbar">
                 <div className="playlists-detail-info">
                   <span className="playlists-detail-stat">
-                    <strong>{selectedPlaylist.trackCount}</strong> 首歌曲
+                    <strong>{selectedPlaylist.trackCount}</strong> {t('pages.playlists.trackCount.unit')}
                   </span>
                   <span className="playlists-detail-stat">
                     <strong>{formatTotalDuration(selectedPlaylist.totalDuration)}</strong>
@@ -205,20 +210,20 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                     onClick={() => handlePlayPlaylist(selectedPlaylist.id)}
                     disabled={selectedPlaylist.trackCount === 0}
                   >
-                    ▶ 播放
+                    ▶ {t('common.action.play')}
                   </button>
                   <button
                     className="playlists-detail-btn"
                     onClick={() => handleAddPlaylistToQueue(selectedPlaylist.id)}
                     disabled={selectedPlaylist.trackCount === 0}
                   >
-                    ➕ 添加到队列
+                    ➕ {t('common.action.addToQueue')}
                   </button>
                   <button
                     className="playlists-detail-btn"
                     onClick={() => setShowAddTrackModal(true)}
                   >
-                    ➕ 添加歌曲
+                    ➕ {t('pages.playlists.action.addTrack')}
                   </button>
                   <button
                     className="playlists-detail-btn"
@@ -227,7 +232,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       setShowRenameDialog(true);
                     }}
                   >
-                    ✏️ 重命名
+                    ✏️ {t('common.action.rename')}
                   </button>
                   <button
                     className="playlists-detail-btn"
@@ -237,7 +242,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                     }}
                     disabled={selectedPlaylist.trackCount === 0}
                   >
-                    × 清空
+                    × {t('common.action.clear')}
                   </button>
                   <button
                     className="playlists-detail-btn playlists-delete-btn"
@@ -246,7 +251,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       setShowDeleteConfirm(true);
                     }}
                   >
-                    × 删除歌单
+                    × {t('pages.playlists.action.deletePlaylist')}
                   </button>
                 </div>
               </div>
@@ -255,23 +260,23 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                 {selectedPlaylist.trackCount === 0 ? (
                   <div className="playlists-tracks-empty">
                     <div className="playlists-tracks-empty-icon">♪</div>
-                    <div className="playlists-tracks-empty-text">歌单为空</div>
+                    <div className="playlists-tracks-empty-text">{t('pages.playlists.tracks.empty.title')}</div>
                     <button
                       className="playlists-tracks-empty-btn"
                       onClick={() => setShowAddTrackModal(true)}
                     >
-                      添加歌曲到歌单
+                      {t('pages.playlists.tracks.empty.action.addTracks')}
                     </button>
                   </div>
                 ) : (
                   <>
                     <div className="playlists-tracks-header">
                       <div>#</div>
-                      <div>标题</div>
-                      <div>艺术家</div>
-                      <div>专辑</div>
-                      <div>时长</div>
-                      <div>操作</div>
+                      <div>{t('pages.playlists.tracks.header.title')}</div>
+                      <div>{t('pages.playlists.tracks.header.artist')}</div>
+                      <div>{t('pages.playlists.tracks.header.album')}</div>
+                      <div>{t('pages.playlists.tracks.header.duration')}</div>
+                      <div>{t('pages.playlists.tracks.header.actions')}</div>
                     </div>
                     {selectedPlaylist.tracks.map((track, index) => (
                       <div key={index} className="playlists-track">
@@ -291,7 +296,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                               e.stopPropagation();
                               handlePlayTrackFromPlaylist(selectedPlaylist, index);
                             }}
-                            title="播放"
+                            title={t('common.action.play')}
                           >
                             ▶
                           </button>
@@ -301,7 +306,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                               e.stopPropagation();
                               handleRemoveTrackFromPlaylist(selectedPlaylist.id, index);
                             }}
-                            title="从歌单移除"
+                            title={t('pages.playlists.tracks.action.removeFromPlaylist.title')}
                           >
                             ✕
                           </button>
@@ -316,7 +321,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             <div className="playlists-no-selection">
               <div className="playlists-no-selection-icon">♬</div>
               <div className="playlists-no-selection-text">
-                {audioState.playlists.length === 0 ? '创建你的第一个歌单' : '选择一个歌单查看详情'}
+                {audioState.playlists.length === 0
+                  ? t('pages.playlists.noSelection.noPlaylists')
+                  : t('pages.playlists.noSelection.selectPlaylist')}
               </div>
             </div>
           )}
@@ -327,14 +334,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           <div className="playlists-add-modal-overlay" onClick={() => setShowAddTrackModal(false)}>
             <div className="playlists-add-modal" onClick={(e) => e.stopPropagation()}>
               <div className="playlists-add-modal-header">
-                <h3>添加歌曲到「{selectedPlaylist.name}」</h3>
+                <h3>{t('pages.playlists.addTrackModal.title', { name: selectedPlaylist.name })}</h3>
                 <button onClick={() => setShowAddTrackModal(false)}>✕</button>
               </div>
 
               <div className="playlists-add-modal-search">
                 <input
                   type="text"
-                  placeholder="搜索歌曲..."
+                  placeholder={t('pages.playlists.addTrackModal.search.placeholder')}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -343,12 +350,12 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
               <div className="playlists-add-modal-tracks">
                 {isLoadingTracks ? (
                   <div className="playlists-add-modal-empty">
-                    <div>加载中...</div>
+                    <div>{t('common.state.loading')}</div>
                   </div>
                 ) : availableTracks.length === 0 ? (
                   <div className="playlists-add-modal-empty">
-                    <div>音乐库为空</div>
-                    <div>请先在音乐库中添加音乐文件</div>
+                    <div>{t('pages.playlists.addTrackModal.empty.libraryTitle')}</div>
+                    <div>{t('pages.playlists.addTrackModal.empty.libraryHint')}</div>
                   </div>
                 ) : (
                   getFilteredTracks().map((track) => (
@@ -356,7 +363,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       <div className="playlists-add-modal-track-info">
                         <div className="playlists-add-modal-track-title">{track.title}</div>
                         <div className="playlists-add-modal-track-artist">
-                          {track.artist || '未知艺术家'}
+                          {track.artist || t('common.unknown.artist')}
                         </div>
                       </div>
                       <button
@@ -367,14 +374,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                           setSearchQuery('');
                         }}
                       >
-                        ➕ 添加
+                        ➕ {t('common.action.add')}
                       </button>
                     </div>
                   ))
                 )}
               </div>
               <div className="playlists-add-modal-footer">
-                <span>最多显示 200 首（建议用搜索）</span>
+                <span>{t('pages.playlists.addTrackModal.footerHint', { count: MAX_TRACKS })}</span>
               </div>
             </div>
           </div>
@@ -383,19 +390,19 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         {/* 对话框 */}
         <InputDialog
           isOpen={showCreateDialog}
-          title="创建歌单"
-          placeholder="请输入歌单名称"
-          confirmText="创建"
+          title={t('pages.playlists.dialog.create.title')}
+          placeholder={t('pages.playlists.dialog.create.placeholder')}
+          confirmText={t('common.action.create')}
           onConfirm={handleCreatePlaylist}
           onCancel={() => setShowCreateDialog(false)}
         />
 
         <InputDialog
           isOpen={showRenameDialog}
-          title="重命名歌单"
+          title={t('pages.playlists.dialog.rename.title')}
           defaultValue={playlistToRename?.name || ''}
-          placeholder="请输入新的歌单名称"
-          confirmText="确定"
+          placeholder={t('pages.playlists.dialog.rename.placeholder')}
+          confirmText={t('common.action.ok')}
           onConfirm={handleRenamePlaylist}
           onCancel={() => {
             setShowRenameDialog(false);
@@ -405,10 +412,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
         <ConfirmDialog
           isOpen={showDeleteConfirm}
-          title="删除歌单"
-          message={`确定要删除歌单吗？此操作无法撤销。`}
-          confirmText="删除"
-          cancelText="取消"
+          title={t('pages.playlists.dialog.delete.title')}
+          message={t('pages.playlists.dialog.delete.message')}
+          confirmText={t('common.action.delete')}
+          cancelText={t('common.action.cancel')}
           confirmButtonStyle="danger"
           onConfirm={handleDeletePlaylist}
           onCancel={() => {
@@ -419,10 +426,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
         <ConfirmDialog
           isOpen={showClearConfirm}
-          title="清空歌单"
-          message="确定要清空此歌单的所有歌曲吗？此操作无法撤销。"
-          confirmText="清空"
-          cancelText="取消"
+          title={t('pages.playlists.dialog.clear.title')}
+          message={t('pages.playlists.dialog.clear.message')}
+          confirmText={t('common.action.clear')}
+          cancelText={t('common.action.cancel')}
           confirmButtonStyle="danger"
           onConfirm={handleClearPlaylist}
           onCancel={() => {

@@ -5,6 +5,7 @@ import type {
   WorkbenchPageContainerContribution,
 } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
+import { useT } from '../../i18n/react';
 import { usePersistentSetting } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { resolveActiveContributionId, sortByOrderThenTitle } from '../workbenchSelection';
@@ -20,6 +21,7 @@ function Placeholder({ title, note }: { title: string; note: string }) {
 
 export function ComposedWorkbench() {
   const kernel = useKernel();
+  const t = useT();
   const [revision, setRevision] = useState(0);
 
   const [selectedLayoutId, setSelectedLayoutId] = usePersistentSetting(
@@ -112,8 +114,8 @@ export function ComposedWorkbench() {
   if (!layout) {
     return (
       <Placeholder
-        title="No Workbench Layout Registered"
-        note="请确认内置模块已注册 workbench-layout contribution。"
+        title={t('workbench.composed.noLayout.title')}
+        note={t('workbench.composed.noLayout.note')}
       />
     );
   }
@@ -121,8 +123,8 @@ export function ComposedWorkbench() {
   if (!pageContainer) {
     return (
       <Placeholder
-        title="No Workbench Page Container Registered"
-        note="请确认内置模块已注册 workbench-page-container contribution。"
+        title={t('workbench.composed.noPageContainer.title')}
+        note={t('workbench.composed.noPageContainer.note')}
       />
     );
   }
@@ -132,4 +134,3 @@ export function ComposedWorkbench() {
 
   return layout.render({ navigation: navigationNode, content: contentNode }) as React.ReactNode;
 }
-

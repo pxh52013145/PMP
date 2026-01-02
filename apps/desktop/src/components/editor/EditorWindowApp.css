@@ -509,10 +509,12 @@
 
 .control-button-group .exit-cyber-btn {
   flex: 3;
+  /* i18n 后保持比例稳定（submit → done/完成） */
+  min-width: 6.5em;
 }
 
 .control-button-group .pin-btn {
-  flex: 1;
+  flex: 0.0207;
   min-width: 0;
   padding: 0.5em;
   transition:

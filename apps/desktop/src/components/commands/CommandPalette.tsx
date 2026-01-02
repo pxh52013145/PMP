@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommandContribution } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
 import { COMMANDS_SERVICE_TOKEN } from '../../services/commands';
+import { useT } from '../../i18n/react';
 import './CommandPalette.css';
 
 type CommandPaletteProps = {
@@ -24,6 +25,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const kernel = useKernel();
   const commands = kernel.services.get(COMMANDS_SERVICE_TOKEN);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const t = useT();
 
   const [registryRevision, setRegistryRevision] = useState(0);
   const [query, setQuery] = useState('');
@@ -62,7 +64,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     try {
       return JSON.parse(raw) as unknown;
     } catch (err) {
-      throw new Error(`Args JSON 解析失败: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        t('commands.palette.argsJsonParseFailed', {
+          message: err instanceof Error ? err.message : String(err),
+        })
+      );
     }
   };
 
@@ -94,7 +100,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           <input
             ref={inputRef}
             value={query}
-            placeholder="Search commands…"
+            placeholder={t('commands.palette.searchPlaceholder')}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -119,7 +125,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         <div className="command-palette-args">
           <textarea
             value={argsText}
-            placeholder="Args JSON (optional)"
+            placeholder={t('commands.palette.argsPlaceholder')}
             onChange={(e) => setArgsText(e.target.value)}
           />
         </div>
@@ -128,7 +134,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
         <div className="command-palette-list">
           {filtered.length === 0 ? (
-            <div className="command-palette-empty">No commands registered.</div>
+            <div className="command-palette-empty">{t('commands.palette.empty')}</div>
           ) : (
             <ul>
               {filtered.map((cmd) => (
@@ -155,4 +161,3 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     </div>
   );
 }
-

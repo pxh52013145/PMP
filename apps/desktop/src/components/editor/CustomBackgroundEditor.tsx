@@ -3,6 +3,7 @@ import { BackgroundConfig } from '../../types/background';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { readJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { useT } from '../../i18n';
 import './CustomBackgroundEditor.css';
 
 interface CustomBackgroundEditorProps {
@@ -18,6 +19,8 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   initialConfig,
   onSave,
 }: CustomBackgroundEditorProps) {
+  const t = useT();
+
   const { isActive } = useWindowActivity();
   const [customType, setCustomType] = useState<CustomType>(
     initialConfig?.type === 'image' ||
@@ -321,11 +324,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       const filterConfig =
         type === 'image'
           ? {
-              name: '图片文件',
+              name: t('editor.custom-background-editor.fileFilter.image'),
               extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'],
             }
           : {
-              name: '视频文件',
+              name: t('editor.custom-background-editor.fileFilter.video'),
               extensions: ['mp4', 'webm', 'ogg', 'mov'],
             };
 
@@ -362,14 +365,10 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           }
         } catch (readError) {
           console.error('[CustomBackgroundEditor] File import failed:', readError);
+          const details = readError instanceof Error ? readError.message : String(readError);
           setErrorMessage(
             `<FILE_IMPORT_ERROR>\n` +
-              `文件导入失败\n\n` +
-              `[错误详情]\n` +
-              `${readError instanceof Error ? readError.message : String(readError)}\n\n` +
-              `[建议操作]\n` +
-              `> 确认文件格式与大小限制（图片≤5MB，视频≤20MB）\n` +
-              `> 尝试复制文件到本地磁盘后重试`
+              t('editor.custom-background-editor.error.fileImportFailed', { details })
           );
           return;
         }
@@ -377,14 +376,13 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     } catch (error) {
       console.error('文件选择错误详情:', error);
       console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+      const details = error instanceof Error ? error.message : String(error);
       setErrorMessage(
         `<FILE_SELECT_ERROR>\n` +
-          `文件选择失败\n\n` +
-          `[错误详情]\n` +
-          `${error instanceof Error ? error.message : String(error)}`
+          t('editor.custom-background-editor.error.fileSelectFailed', { details })
       );
     }
-  }, []);
+  }, [t]);
 
   // 取消并关闭窗口
   const handleCancel = useCallback(async () => {
@@ -549,24 +547,24 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       {/* 内容区域 */}
       <div className="editor-window-content">
         {/* 效果可视化区域 */}
-        <div className="preview-section">
-          <div className="section-title">
-            效果预览
-            {cropEnabled && (
-              <span
+          <div className="preview-section">
+            <div className="section-title">
+              {t('editor.custom-background-editor.section.preview')}
+              {cropEnabled && (
+                <span
                 style={{
                   marginLeft: '12px',
                   fontSize: '11px',
                   color: 'rgba(0, 255, 255, 0.8)',
                   fontWeight: 'normal',
                 }}
-              >
-                {!selectionApplied
-                  ? '框选容器内任意区域（包含背景） → 点击"确认"将该区域填满容器'
-                  : '✓ 已确认 (选取的容器区域已放大填满)'}
-              </span>
-            )}
-          </div>
+                >
+                  {!selectionApplied
+                    ? t('editor.custom-background-editor.preview.selectionHint')
+                    : t('editor.custom-background-editor.preview.selectionConfirmed')}
+                </span>
+              )}
+            </div>
           <div className="preview-container" style={getPreviewStyle()}>
             {/* 图片选取预览 - 精确复制选取区域 */}
             {customType === 'image' &&
@@ -661,8 +659,10 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
             {!imageUrl && !videoUrl && !htmlContent && (
               <div className="preview-placeholder">
-                <span>预览区域</span>
-                <span className="placeholder-hint">请选择或输入内容</span>
+                <span>{t('editor.custom-background-editor.preview.placeholder.title')}</span>
+                <span className="placeholder-hint">
+                  {t('editor.custom-background-editor.preview.placeholder.hint')}
+                </span>
               </div>
             )}
 
@@ -736,24 +736,26 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     onClick={handleConfirmSelection}
                     disabled={selectionApplied}
                   >
-                    {selectionApplied ? '✓ 已确认' : '确认'}
+                    {selectionApplied
+                      ? t('editor.custom-background-editor.selection.confirmed')
+                      : t('editor.custom-background-editor.selection.confirm')}
                   </button>
                   <button className="selection-btn selection-reset-btn" onClick={handleReset}>
-                    重置
+                    {t('common.action.reset')}
                   </button>
                   <button
                     className="selection-btn selection-undo-btn"
                     onClick={handleUndo}
                     disabled={historyIndex <= 0}
                   >
-                    撤销
+                    {t('common.action.undo')}
                   </button>
                   <button
                     className="selection-btn selection-redo-btn"
                     onClick={handleRedo}
                     disabled={historyIndex >= selectionHistory.length - 1}
                   >
-                    恢复
+                    {t('common.action.redo')}
                   </button>
                 </div>
                 <div
@@ -765,7 +767,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     lineHeight: '1.4',
                   }}
                 >
-                  💡 选取框基于容器坐标，可框选包含背景的任意区域并放大填满
+                  💡 {t('editor.custom-background-editor.preview.selectionHint2')}
                 </div>
               </>
             )}
@@ -776,7 +778,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           <div className="config-section">
             <div className="section-title">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>显示模式</span>
+                <span>{t('editor.custom-background-editor.section.displayMode')}</span>
                 <span
                   style={{
                     fontSize: '10px',
@@ -787,24 +789,24 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                   {customType === 'image' &&
                     !cropEnabled &&
                     imageFit === 'contain' &&
-                    '（完整显示，保持比例）'}
+                    t('editor.custom-background-editor.displayMode.containHint')}
                   {customType === 'image' &&
                     !cropEnabled &&
                     imageFit === 'cover' &&
-                    '（填满区域，可能裁边）'}
+                    t('editor.custom-background-editor.displayMode.coverHint')}
                   {customType === 'image' &&
                     !cropEnabled &&
                     imageFit === 'fill' &&
-                    '（强制填满，变形拉伸）'}
+                    t('editor.custom-background-editor.displayMode.fillHint')}
                   {customType === 'video' &&
                     !cropEnabled &&
                     videoFit === 'contain' &&
-                    '（完整显示，保持比例）'}
+                    t('editor.custom-background-editor.displayMode.containHint')}
                   {customType === 'video' &&
                     !cropEnabled &&
                     videoFit === 'cover' &&
-                    '（填满区域，可能裁边）'}
-                  {cropEnabled && '（手动选取显示区域）'}
+                    t('editor.custom-background-editor.displayMode.coverHint')}
+                  {cropEnabled && t('editor.custom-background-editor.displayMode.cropHint')}
                 </span>
               </div>
             </div>
@@ -816,9 +818,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     setImageFit('contain');
                     setCropEnabled(false);
                   }}
-                  title="包含 - 完整显示图片（推荐）"
+                  title={t('editor.custom-background-editor.fit.title.image.contain')}
                 >
-                  完整
+                  {t('editor.custom-background-editor.fit.option.contain')}
                 </button>
                 <button
                   className={`fit-btn ${!cropEnabled && imageFit === 'cover' ? 'active' : ''}`}
@@ -826,9 +828,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     setImageFit('cover');
                     setCropEnabled(false);
                   }}
-                  title="覆盖 - 填充区域，可能裁剪边缘"
+                  title={t('editor.custom-background-editor.fit.title.image.cover')}
                 >
-                  填充
+                  {t('editor.custom-background-editor.fit.option.cover')}
                 </button>
                 <button
                   className={`fit-btn ${!cropEnabled && imageFit === 'fill' ? 'active' : ''}`}
@@ -836,16 +838,16 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     setImageFit('fill');
                     setCropEnabled(false);
                   }}
-                  title="拉伸 - 强制填满区域"
+                  title={t('editor.custom-background-editor.fit.title.image.fill')}
                 >
-                  拉伸
+                  {t('editor.custom-background-editor.fit.option.fill')}
                 </button>
                 <button
                   className={`fit-btn ${cropEnabled ? 'active' : ''}`}
                   onClick={() => setCropEnabled(true)}
-                  title="选取 - 选择图片特定区域作为背景"
+                  title={t('editor.custom-background-editor.fit.title.image.crop')}
                 >
-                  选取
+                  {t('editor.custom-background-editor.fit.option.crop')}
                 </button>
               </div>
             )}
@@ -857,9 +859,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     setVideoFit('contain');
                     setCropEnabled(false);
                   }}
-                  title="包含 - 完整显示视频（推荐）"
+                  title={t('editor.custom-background-editor.fit.title.video.contain')}
                 >
-                  完整
+                  {t('editor.custom-background-editor.fit.option.contain')}
                 </button>
                 <button
                   className={`fit-btn ${!cropEnabled && videoFit === 'cover' ? 'active' : ''}`}
@@ -867,16 +869,16 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     setVideoFit('cover');
                     setCropEnabled(false);
                   }}
-                  title="覆盖 - 填充区域，可能裁剪边缘"
+                  title={t('editor.custom-background-editor.fit.title.video.cover')}
                 >
-                  填充
+                  {t('editor.custom-background-editor.fit.option.cover')}
                 </button>
                 <button
                   className={`fit-btn ${cropEnabled ? 'active' : ''}`}
                   onClick={() => setCropEnabled(true)}
-                  title="选取 - 选择视频特定区域作为背景"
+                  title={t('editor.custom-background-editor.fit.title.video.crop')}
                 >
-                  选取
+                  {t('editor.custom-background-editor.fit.option.crop')}
                 </button>
               </div>
             )}
@@ -885,25 +887,25 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
         {/* 类型选择 */}
         <div className="config-section">
-          <div className="section-title">类型选择</div>
+          <div className="section-title">{t('editor.custom-background-editor.section.type')}</div>
           <div className="type-buttons">
             <button
               className={`type-btn ${customType === 'image' ? 'active' : ''}`}
               onClick={() => setCustomType('image')}
             >
-              图片
+              {t('editor.custom-background-editor.type.image')}
             </button>
             <button
               className={`type-btn ${customType === 'video' ? 'active' : ''}`}
               onClick={() => setCustomType('video')}
             >
-              视频
+              {t('editor.custom-background-editor.type.video')}
             </button>
             <button
               className={`type-btn ${customType === 'html' ? 'active' : ''}`}
               onClick={() => setCustomType('html')}
             >
-              HTML
+              {t('editor.custom-background-editor.type.html')}
             </button>
           </div>
         </div>
@@ -911,15 +913,17 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         {/* 操作区域 - 图片 */}
         {customType === 'image' && (
           <div className="config-section">
-            <div className="section-title">图片配置</div>
+            <div className="section-title">{t('editor.custom-background-editor.section.imageConfig')}</div>
             <button className="file-select-btn" onClick={() => handleFileSelect('image')}>
-              选择图片文件
-              <span className="file-size-limit">（限制 5MB）</span>
+              {t('editor.custom-background-editor.action.selectImageFile')}
+              <span className="file-size-limit">
+                {t('editor.custom-background-editor.fileSizeLimit.image')}
+              </span>
             </button>
             <input
               type="text"
               className="url-input"
-              placeholder="或输入图片 URL"
+              placeholder={t('editor.custom-background-editor.placeholder.imageUrl')}
               value={imageUrl}
               onChange={(e) => {
                 setImageUrl(e.target.value);
@@ -933,15 +937,17 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         {/* 操作区域 - 视频 */}
         {customType === 'video' && (
           <div className="config-section">
-            <div className="section-title">视频配置</div>
+            <div className="section-title">{t('editor.custom-background-editor.section.videoConfig')}</div>
             <button className="file-select-btn" onClick={() => handleFileSelect('video')}>
-              选择视频文件
-              <span className="file-size-limit">（限制 20MB）</span>
+              {t('editor.custom-background-editor.action.selectVideoFile')}
+              <span className="file-size-limit">
+                {t('editor.custom-background-editor.fileSizeLimit.video')}
+              </span>
             </button>
             <input
               type="text"
               className="url-input"
-              placeholder="或输入视频 URL"
+              placeholder={t('editor.custom-background-editor.placeholder.videoUrl')}
               value={videoUrl}
               onChange={(e) => {
                 setVideoUrl(e.target.value);
@@ -955,25 +961,25 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         {/* 操作区域 - HTML */}
         {customType === 'html' && (
           <div className="config-section">
-            <div className="section-title">HTML 内容</div>
+            <div className="section-title">{t('editor.custom-background-editor.section.htmlContent')}</div>
             <textarea
               className="html-textarea"
-              placeholder="输入自定义 HTML 代码..."
+              placeholder={t('editor.custom-background-editor.placeholder.html')}
               value={htmlContent}
               onChange={(e) => setHtmlContent(e.target.value)}
               rows={10}
             />
-            <div className="html-hint">提示：支持完整的 HTML/CSS/JavaScript 代码</div>
+            <div className="html-hint">{t('editor.custom-background-editor.htmlHint')}</div>
           </div>
         )}
 
         {/* 按钮区域 */}
         <div className="action-section">
           <button className="cancel-btn" onClick={handleCancel}>
-            取消
+            {t('common.action.cancel')}
           </button>
           <button className="save-btn" onClick={handleSave}>
-            保存并应用
+            {t('editor.custom-background-editor.action.saveAndApply')}
           </button>
         </div>
       </div>
@@ -984,14 +990,14 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           <div className="cyber-error-modal" onClick={(e) => e.stopPropagation()}>
             <div className="cyber-error-header">
               <span className="error-icon">▲</span>
-              <span className="error-title">SYSTEM ERROR</span>
+              <span className="error-title">{t('editor.custom-background-editor.errorModal.title')}</span>
             </div>
             <div className="cyber-error-body">
               <pre className="error-content">{errorMessage}</pre>
             </div>
             <div className="cyber-error-footer">
               <button className="error-btn" onClick={() => setErrorMessage(null)}>
-                [确认] CONFIRM
+                {t('editor.custom-background-editor.errorModal.confirmButton')}
               </button>
             </div>
           </div>

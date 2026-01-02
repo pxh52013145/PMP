@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
+import { useT } from '../../i18n';
 
 function normalizeText(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
@@ -15,6 +16,7 @@ function sortVisualizers(a: VisualizerContribution, b: VisualizerContribution): 
 
 export function VisualizersSettingsPanel() {
   const kernel = useKernel();
+  const t = useT();
   const [revision, setRevision] = useState(0);
   const [query, setQuery] = useState('');
 
@@ -37,8 +39,8 @@ export function VisualizersSettingsPanel() {
     <div className="settings-card">
       <div className="settings-card-header">
         <div>
-          <p className="settings-card-label">可视化</p>
-          <p className="settings-card-desc">来自内置与插件的 Visualizer 入口。</p>
+          <p className="settings-card-label">{t('settings.panels.visualizers.title')}</p>
+          <p className="settings-card-desc">{t('settings.visualizers.desc')}</p>
         </div>
         <span className="settings-card-badge">{visualizers.length}</span>
       </div>
@@ -46,13 +48,13 @@ export function VisualizersSettingsPanel() {
       <div className="settings-visualizer-search">
         <input
           value={query}
-          placeholder="Search visualizers…"
+          placeholder={t('settings.visualizers.searchPlaceholder')}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
 
       {visualizers.length === 0 ? (
-        <div className="settings-card-note">暂无可视化入口</div>
+        <div className="settings-card-note">{t('settings.visualizers.empty')}</div>
       ) : (
         <div className="settings-visualizer-list">
           {visualizers.map((item) => (
@@ -61,7 +63,9 @@ export function VisualizersSettingsPanel() {
                 <div className="settings-visualizer-title">{item.title}</div>
                 <div className="settings-visualizer-id">{item.id}</div>
                 {item.inputs && item.inputs.length > 0 && (
-                  <div className="settings-visualizer-inputs">inputs: {item.inputs.join(', ')}</div>
+                  <div className="settings-visualizer-inputs">
+                    {t('settings.visualizers.inputsLabel')}: {item.inputs.join(', ')}
+                  </div>
                 )}
               </div>
 
@@ -71,7 +75,7 @@ export function VisualizersSettingsPanel() {
                 onClick={() => void item.open()}
                 title={item.id}
               >
-                打开
+                {t('common.action.open')}
               </button>
             </div>
           ))}

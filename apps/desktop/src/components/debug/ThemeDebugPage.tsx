@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
+import { useT } from '../../i18n';
 import { TrackInfo } from '../magnet/trackInfo/TrackInfo';
 import { ProgressBar } from '../magnet/progressBar/ProgressBar';
 import { PlayPauseButton, PreviousButton, NextButton } from '../magnet/PlaybackControls';
@@ -45,6 +46,7 @@ function resolveVariantFromTheme(themeValue: unknown, componentId: string, fallb
  * 用于测试和开发主题、着色器系统
  */
 export const ThemeDebugPage: React.FC = () => {
+  const t = useT();
   const { theme, applyTheme, updateComponentTheme, getComponentTheme } = useTheme();
   const [selectedTheme] = useState<string>('default');
   const [selectedMagnet, setSelectedMagnet] = useState<string>('track-info');
@@ -89,7 +91,7 @@ export const ThemeDebugPage: React.FC = () => {
       const parsed = JSON.parse(themeJson);
       applyTheme(parsed);
     } catch (error) {
-      alert('主题 JSON 解析失败，请检查格式');
+      alert(t('editor.theme-debug.alert.invalidThemeJson'));
       console.error('[ThemeDebug] Failed to parse theme json', error);
     }
   };
@@ -102,11 +104,25 @@ export const ThemeDebugPage: React.FC = () => {
       const parsed = JSON.parse(text);
       await applyTheme(parsed);
       setThemeJson(JSON.stringify(parsed, null, 2));
-      alert(`已加载主题文件：${file.name}`);
+      alert(t('editor.theme-debug.alert.themeFileLoaded', { name: file.name }));
     } catch (error) {
-      alert('读取主题文件失败，请确认 JSON 格式');
+      alert(t('editor.theme-debug.alert.themeFileLoadFailed'));
       console.error('[ThemeDebug] Failed to load theme file', error);
     }
+  };
+
+  const formatRendererSource = (value: string | null | undefined) => {
+    if (value === 'builtin') return t('common.source.builtin');
+    if (value === 'plugin') return t('common.source.plugin');
+    if (value === 'runtime') return t('common.source.runtime');
+    return value || t('common.source.builtin');
+  };
+
+  const formatRendererGroup = (value: string | null | undefined) => {
+    if (!value) return t('editor.theme-debug.renderers.defaultGroup');
+    const key = `magnet.groups.${value}`;
+    const translated = t(key);
+    return translated === key ? value : translated;
   };
 
   return (
@@ -119,27 +135,27 @@ export const ThemeDebugPage: React.FC = () => {
 
       <div className="editor-window-content editor-debug-content">
         <div className="debug-title">
-          <h2>主题系统调试</h2>
-          <p className="debug-subtitle">Theme & Shader System Development Panel</p>
+          <h2>{t('editor.theme-debug.title')}</h2>
+          <p className="debug-subtitle">{t('editor.theme-debug.subtitle')}</p>
         </div>
 
         <div className="debug-main">
         {/* 左侧：控制面板 */}
         <div className="debug-control-panel">
           <div className="control-section">
-            <h2>配置模式</h2>
+            <h2>{t('editor.theme-debug.mode.title')}</h2>
             <div className="mode-selector">
               <button
                 className={`mode-btn ${configMode === 'global' ? 'active' : ''}`}
                 onClick={() => setConfigMode('global')}
               >
-                全局主题
+                {t('editor.theme-debug.mode.global')}
               </button>
               <button
                 className={`mode-btn ${configMode === 'component' ? 'active' : ''}`}
                 onClick={() => setConfigMode('component')}
               >
-                单独配置
+                {t('editor.theme-debug.mode.component')}
               </button>
             </div>
           </div>
@@ -147,7 +163,7 @@ export const ThemeDebugPage: React.FC = () => {
           {/* 全局主题配置 */}
           {configMode === 'global' && (
             <div className="control-section">
-              <h2>主题 JSON</h2>
+              <h2>{t('editor.theme-debug.global.title')}</h2>
               <textarea
                 className="theme-json-editor"
                 value={themeJson}
@@ -156,11 +172,11 @@ export const ThemeDebugPage: React.FC = () => {
               ></textarea>
               <div className="theme-json-actions">
                 <label className="theme-file-upload">
-                  导入文件
+                  {t('editor.theme-debug.global.importFile')}
                   <input type="file" accept="application/json" onChange={handleThemeFileUpload} />
                 </label>
-                <button onClick={() => navigator.clipboard.writeText(themeJson)}>复制 JSON</button>
-                <button onClick={handleApplyThemeJson}>应用 JSON</button>
+                <button onClick={() => navigator.clipboard.writeText(themeJson)}>{t('editor.theme-debug.global.copyJson')}</button>
+                <button onClick={handleApplyThemeJson}>{t('editor.theme-debug.global.applyJson')}</button>
               </div>
             </div>
           )}
@@ -169,40 +185,40 @@ export const ThemeDebugPage: React.FC = () => {
           {configMode === 'component' && (
             <>
               <div className="control-section">
-                <h2>选择组件</h2>
+                <h2>{t('editor.theme-debug.component.selectTitle')}</h2>
                 <select
                   className="magnet-selector"
                   value={selectedMagnet}
                   onChange={(e) => setSelectedMagnet(e.target.value)}
                 >
-                  <optgroup label="核心组件">
-                    <option value="track-info">TrackInfo - 歌曲信息</option>
-                    <option value="progress-bar">ProgressBar - 进度条</option>
+                  <optgroup label={t('editor.theme-debug.component.group.core')}>
+                    <option value="track-info">{t('editor.theme-debug.component.option.track-info')}</option>
+                    <option value="progress-bar">{t('editor.theme-debug.component.option.progress-bar')}</option>
                   </optgroup>
-                  <optgroup label="播放控制">
-                    <option value="btn-play-pause">PlayPause - 播放/暂停</option>
-                    <option value="btn-previous">Previous - 上一首</option>
-                    <option value="btn-next">Next - 下一首</option>
-                    <option value="btn-mode">PlayMode - 播放模式</option>
-                    <option value="btn-volume">Volume - 音量控制</option>
+                  <optgroup label={t('editor.theme-debug.component.group.playback')}>
+                    <option value="btn-play-pause">{t('editor.theme-debug.component.option.btn-play-pause')}</option>
+                    <option value="btn-previous">{t('editor.theme-debug.component.option.btn-previous')}</option>
+                    <option value="btn-next">{t('editor.theme-debug.component.option.btn-next')}</option>
+                    <option value="btn-mode">{t('editor.theme-debug.component.option.btn-mode')}</option>
+                    <option value="btn-volume">{t('editor.theme-debug.component.option.btn-volume')}</option>
                   </optgroup>
-                  <optgroup label="音乐库">
-                    <option value="btn-music-library">MusicLibrary - 音乐库</option>
-                    <option value="btn-playlists">Playlists - 歌单</option>
-                    <option value="btn-play-queue">PlayQueue - 播放列表</option>
+                  <optgroup label={t('editor.theme-debug.component.group.library')}>
+                    <option value="btn-music-library">{t('editor.theme-debug.component.option.btn-music-library')}</option>
+                    <option value="btn-playlists">{t('editor.theme-debug.component.option.btn-playlists')}</option>
+                    <option value="btn-play-queue">{t('editor.theme-debug.component.option.btn-play-queue')}</option>
                   </optgroup>
-                  <optgroup label="导航">
-                    <option value="btn-back">Back - 返回按钮</option>
+                  <optgroup label={t('editor.theme-debug.component.group.navigation')}>
+                    <option value="btn-back">{t('editor.theme-debug.component.option.btn-back')}</option>
                   </optgroup>
-                  <optgroup label="系统">
-                    <option value="btn-window-pin">WindowPin - 窗口置顶</option>
-                    <option value="btn-debug">Debug - 调试按钮</option>
+                  <optgroup label={t('editor.theme-debug.component.group.system')}>
+                    <option value="btn-window-pin">{t('editor.theme-debug.component.option.btn-window-pin')}</option>
+                    <option value="btn-debug">{t('editor.theme-debug.component.option.btn-debug')}</option>
                   </optgroup>
                 </select>
               </div>
 
               <div className="control-section">
-                <h2>组件配置</h2>
+                <h2>{t('editor.theme-debug.component.configTitle')}</h2>
                 <ComponentConfigPanel
                   selectedMagnet={selectedMagnet}
                   trackInfoVariant={trackInfoVariant}
@@ -277,7 +293,7 @@ export const ThemeDebugPage: React.FC = () => {
           {/* 操作按钮 - 只保留有效功能 */}
           {configMode === 'component' && (
             <div className="control-section">
-              <h2>操作</h2>
+              <h2>{t('editor.theme-debug.actions.title')}</h2>
               <div className="action-buttons">
                 <button
                   className="action-btn primary"
@@ -296,7 +312,7 @@ export const ThemeDebugPage: React.FC = () => {
 	                        const [fileHandle] = await showOpenFilePicker({
 	                          types: [
 	                            {
-	                              description: 'Theme Files',
+	                              description: t('editor.theme-debug.actions.filePicker.themeFiles'),
 	                              accept: { 'application/json': ['.pmpt', '.json'] },
 	                            },
 	                          ],
@@ -318,7 +334,7 @@ export const ThemeDebugPage: React.FC = () => {
                         const { open } = await import('@tauri-apps/api/dialog');
                         const selected = await open({
                           multiple: false,
-                          filters: [{ name: 'Theme Files', extensions: ['pmpt', 'json'] }],
+                          filters: [{ name: t('editor.theme-debug.actions.filePicker.themeFiles'), extensions: ['pmpt', 'json'] }],
                         });
                         if (selected && typeof selected === 'string') {
                            const { readTextFile } = await import('@tauri-apps/api/fs');
@@ -340,7 +356,7 @@ export const ThemeDebugPage: React.FC = () => {
                     }
                   }}
                 >
-                  📂 导入主题
+                  {t('editor.theme-debug.actions.importTheme')}
                 </button>
                 <button
                   className="action-btn"
@@ -355,7 +371,7 @@ export const ThemeDebugPage: React.FC = () => {
                     URL.revokeObjectURL(url);
                   }}
                 >
-                  📥 导出主题
+                  {t('editor.theme-debug.actions.exportTheme')}
                 </button>
                 <button
                   className="action-btn"
@@ -378,30 +394,30 @@ export const ThemeDebugPage: React.FC = () => {
                     }
                   }}
                 >
-                  🔄 重置
+                  {t('editor.theme-debug.actions.resetSelected')}
                 </button>
               </div>
             </div>
           )}
 
           <div className="control-section">
-            <h2>Renderer 列表</h2>
+            <h2>{t('editor.theme-debug.renderers.title')}</h2>
             <button className="refresh-btn" onClick={refreshRenderers}>
-              刷新
+              {t('common.action.refresh')}
             </button>
             <div className="renderer-list">
               {rendererList.map((renderer) => (
                 <div key={renderer.id} className="renderer-item">
                   <div className="renderer-id">{renderer.id}</div>
                   <div className="renderer-meta">
-                    <span>{renderer.group || 'general'}</span>
-                    <span>{renderer.source || 'builtin'}</span>
+                    <span>{formatRendererGroup(renderer.group)}</span>
+                    <span>{formatRendererSource(renderer.source)}</span>
                   </div>
                   <div className="renderer-desc">{renderer.description}</div>
                 </div>
               ))}
               {rendererList.length === 0 && (
-                <div className="renderer-empty">暂无注册 renderer</div>
+                <div className="renderer-empty">{t('editor.theme-debug.renderers.empty')}</div>
               )}
             </div>
           </div>
@@ -410,9 +426,11 @@ export const ThemeDebugPage: React.FC = () => {
         {/* 右侧：预览区域 */}
         <div className="debug-preview-panel">
           <div className="preview-header">
-            <h2>实时预览</h2>
+            <h2>{t('editor.theme-debug.preview.title')}</h2>
             <span className="preview-subtitle">
-              {configMode === 'global' ? `主题: ${selectedTheme}` : `组件: ${selectedMagnet}`}
+              {configMode === 'global'
+                ? t('editor.theme-debug.preview.subtitle.theme', { name: selectedTheme })
+                : t('editor.theme-debug.preview.subtitle.component', { id: selectedMagnet })}
             </span>
           </div>
 
@@ -422,7 +440,7 @@ export const ThemeDebugPage: React.FC = () => {
 
           {/* 预览信息 */}
           <div className="preview-info">
-            <h3>当前配置</h3>
+            <h3>{t('editor.theme-debug.preview.currentConfig')}</h3>
             <div className="config-display">
               <pre>
                 {JSON.stringify({ theme: selectedTheme, component: selectedMagnet }, null, 2)}
@@ -474,12 +492,14 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
   onBackButtonVariantChange,
   onVolumeVariantChange,
 }) => {
+  const t = useT();
+
   // TrackInfo 专用配置
   if (selectedMagnet === 'track-info') {
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={trackInfoVariant}
@@ -494,8 +514,8 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text disabled">🔧 更多配置选项开发中...</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text disabled">{t('editor.theme-debug.config.info.moreOptionsTodo')}</p>
         </div>
       </div>
     );
@@ -506,7 +526,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={progressBarVariant}
@@ -521,8 +541,8 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text disabled">🔧 更多配置选项开发中...</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text disabled">{t('editor.theme-debug.config.info.moreOptionsTodo')}</p>
         </div>
       </div>
     );
@@ -533,7 +553,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={playPauseVariant}
@@ -548,9 +568,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text">🎯 Standard: 方形，简洁高效</p>
-          <p className="info-text">🎯 Rounded: 霓虹圆形，旋转光晕</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.playPause.standard')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.playPause.rounded')}</p>
         </div>
       </div>
     );
@@ -561,7 +581,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={previousVariant}
@@ -576,9 +596,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text">🎯 Standard: 方形，简洁高效</p>
-          <p className="info-text">🎯 Rounded: 青色霓虹，360°旋转</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.previous.standard')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.previous.rounded')}</p>
         </div>
       </div>
     );
@@ -589,7 +609,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={nextVariant}
@@ -604,9 +624,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text">🎯 Standard: 方形，简洁高效</p>
-          <p className="info-text">🎯 Rounded: 青色霓虹，360°旋转</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.next.standard')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.next.rounded')}</p>
         </div>
       </div>
     );
@@ -617,7 +637,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={playModeVariant}
@@ -632,9 +652,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text">🎯 Standard: 方形，简洁背景</p>
-          <p className="info-text">🎯 Minimal: 彩虹光环，脉冲波纹</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.playMode.standard')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.playMode.minimal')}</p>
         </div>
       </div>
     );
@@ -645,7 +665,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={backButtonVariant}
@@ -660,9 +680,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text">🎯 Standard: 方形，简单平移</p>
-          <p className="info-text">🎯 Rounded: 时空漩涡，残影轨迹</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.back.standard')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.back.rounded')}</p>
         </div>
       </div>
     );
@@ -673,7 +693,7 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
     return (
       <div className="component-config">
         <div className="config-group">
-          <label>变体选择</label>
+          <label>{t('editor.theme-debug.variant.label')}</label>
           <select
             className="config-select"
             value={volumeVariant}
@@ -688,9 +708,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
         </div>
 
         <div className="config-info">
-          <p className="info-text">✅ 变体切换功能已实现</p>
-          <p className="info-text">🎯 Standard: 简洁弹窗滑块</p>
-          <p className="info-text">🎯 Cyber: 能量条+赛博数字显示</p>
+          <p className="info-text">{t('editor.theme-debug.config.info.variantImplemented')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.volume.standard')}</p>
+          <p className="info-text">{t('editor.theme-debug.desc.volume.cyber')}</p>
         </div>
       </div>
     );
@@ -699,7 +719,9 @@ const ComponentConfigPanel: React.FC<ComponentConfigPanelProps> = ({
   // 其他组件的通用配置
   return (
     <div className="component-config">
-      <p className="config-placeholder">选择 {selectedMagnet} 的配置选项（待实现）</p>
+      <p className="config-placeholder">
+        {t('editor.theme-debug.config.placeholder', { id: selectedMagnet })}
+      </p>
     </div>
   );
 };
@@ -712,6 +734,8 @@ interface ComponentPreviewAreaProps {
 }
 
 const ComponentPreviewArea: React.FC<ComponentPreviewAreaProps> = ({ selectedMagnet }) => {
+  const t = useT();
+
   return (
     <div className="preview-container">
       <div className="preview-stage">
@@ -885,7 +909,7 @@ const ComponentPreviewArea: React.FC<ComponentPreviewAreaProps> = ({ selectedMag
 
       {/* 材质通道信息 */}
       <div className="preview-channels">
-        <h4>材质通道映射</h4>
+        <h4>{t('editor.theme-debug.materialMapping.title')}</h4>
         <MaterialChannelDisplay selectedMagnet={selectedMagnet} />
       </div>
     </div>

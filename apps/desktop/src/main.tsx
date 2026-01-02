@@ -5,8 +5,11 @@ import { EditorWindowApp } from './EditorWindowApp';
 import { PluginWindowApp } from './PluginWindowApp';
 import { VstManagerWindowApp } from './VstManagerWindowApp';
 import { KernelProvider } from './contexts/KernelContext';
+import { I18nSync, readPersistedLocale, setLocale } from './i18n';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import './index.css';
+
+setLocale(readPersistedLocale());
 
 function runAfterNextPaint(task: () => void): void {
   window.requestAnimationFrame(() => {
@@ -88,6 +91,7 @@ const RootApp = isEditorWindow
 async function bootstrap(): Promise<void> {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
+      <I18nSync />
       <KernelProvider>
         <StartupReadyGate>
           <RootApp />

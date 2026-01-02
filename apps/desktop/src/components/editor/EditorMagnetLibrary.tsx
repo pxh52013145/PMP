@@ -28,6 +28,7 @@ import {
 } from '../../magnet-system/plugins/pmpm';
 import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
 import { useConfirmDialog } from '../core/ConfirmDialog';
+import { useT } from '../../i18n';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -87,6 +88,16 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   onMagnetDeleteFromLibrary,
 }: EditorMagnetLibraryProps) {
   const { importMagnet: validateAndImportMagnet } = useEditor();
+  const t = useT();
+
+  const formatRendererGroup = useCallback(
+    (group: string) => {
+      const key = `magnet.groups.${group}`;
+      const translated = t(key);
+      return translated === key ? group : translated;
+    },
+    [t]
+  );
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -271,7 +282,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       // 检查 ID 冲突（在调用 validateAndImportMagnet 前检查，因为它不检查 library 冲突）
       if (magnetLibrary.some((m) => m.id === parsed.id)) {
-        throw new Error(`Magnet ID "${parsed.id}" 已存在，请使用不同的 ID`);
+        throw new Error(t('editor.magnet-library.import.error.idExists', { id: parsed.id }));
       }
 
       // 使用 EditorContext 的完整验证逻辑
@@ -285,7 +296,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       }
 
       if (!result.magnet) {
-        setImportError('验证通过但 Magnet 数据为空');
+        setImportError(t('editor.magnet-library.import.error.emptyMagnet'));
         return;
       }
 
@@ -296,18 +307,25 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       // 如果有警告信息（例如自动移动位置），显示给用户
       if (result.warnings.length > 0) {
-        alert(`成功导入 Magnet: ${result.magnet.id}\n\n提示：\n${result.warnings.join('\n')}`);
+        alert(
+          t('editor.magnet-library.import.successWithWarnings', {
+            id: result.magnet.id,
+            warnings: result.warnings.join('\n'),
+          })
+        );
       } else {
-        alert(`成功导入 Magnet: ${result.magnet.id}`);
+        alert(t('editor.magnet-library.import.success', { id: result.magnet.id }));
       }
     } catch (error) {
       if (error instanceof SyntaxError) {
-        setImportError('JSON 格式错误，请检查格式');
+        setImportError(t('editor.magnet-library.import.error.invalidJson'));
       } else {
-        setImportError(error instanceof Error ? error.message : '导入失败');
+        setImportError(
+          error instanceof Error ? error.message : t('editor.magnet-library.import.error.failed')
+        );
       }
     }
-  }, [importData, magnetLibrary, onMagnetAddToLibrary, validateAndImportMagnet]);
+  }, [importData, magnetLibrary, onMagnetAddToLibrary, t, validateAndImportMagnet]);
 
   const handleImportPmpmPlugin = useCallback(async () => {
     if (pluginBusy) return;
@@ -318,13 +336,13 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       const dialog = await import('@tauri-apps/api/dialog');
       const selected = await dialog.open({
         multiple: false,
-        filters: [{ name: '.pmpm plugin', extensions: ['pmpm'] }],
+        filters: [{ name: t('editor.magnet-library.plugins.fileFilter.pmpm'), extensions: ['pmpm'] }],
       });
 
       if (!selected) return;
       const filePath = Array.isArray(selected) ? selected[0] : selected;
       if (typeof filePath !== 'string') {
-        throw new Error('无法解析选中的 .pmpm 文件路径');
+        throw new Error(t('editor.magnet-library.plugins.import.invalidFilePath'));
       }
 
       const plugin = await parsePmpmPluginFromFilePath(filePath);
@@ -333,30 +351,34 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       const isUpdate = installedPlugins.some((p) => p.manifest.metadata.id === meta.id);
 
       if (!isUpdate && magnetLibrary.some((m) => m.id === meta.id)) {
-        throw new Error(`Magnet ID "${meta.id}" 已存在，无法安装同名插件（请先删除/重命名该 Magnet）`);
+        throw new Error(t('editor.magnet-library.plugins.import.idExists', { id: meta.id }));
       }
 
       const confirmText = [
-        `安装 .pmpm 插件：${meta.name}`,
+        t('editor.magnet-library.plugins.install.summaryTitle', { name: meta.name }),
         `${meta.id}@${meta.version}`,
-        meta.author ? `作者：${meta.author}` : null,
-        meta.description ? `说明：${meta.description}` : null,
+        meta.author ? t('editor.magnet-library.plugins.install.author', { author: meta.author }) : null,
+        meta.description
+          ? t('editor.magnet-library.plugins.install.description', { description: meta.description })
+          : null,
         '',
-        '权限声明：',
-        permissions.length > 0 ? permissions.map((p) => `- ${p}`).join('\n') : '(无)',
+        t('editor.magnet-library.plugins.install.permissionsTitle'),
+        permissions.length > 0
+          ? permissions.map((p) => `- ${p}`).join('\n')
+          : t('editor.magnet-library.plugins.install.permissionsNone'),
         '',
         plugin.entrySha256 ? `entrySha256: ${plugin.entrySha256}` : null,
         '',
-        '确认安装？',
+        t('editor.magnet-library.plugins.install.confirmQuestion'),
       ]
         .filter((line): line is string => typeof line === 'string' && line.length > 0)
         .join('\n');
 
       const ok = await confirm({
-        title: '确认安装插件',
+        title: t('editor.magnet-library.plugins.install.confirmTitle'),
         message: confirmText,
-        confirmText: '安装',
-        cancelText: '取消',
+        confirmText: t('common.action.install'),
+        cancelText: t('common.action.cancel'),
       });
       if (!ok) return;
 
@@ -368,13 +390,13 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       }
 
       setShowPlugins(true);
-      alert(`插件已安装：${meta.id}`);
+      alert(t('editor.magnet-library.plugins.install.installed', { id: meta.id }));
     } catch (error) {
       setPluginError(error instanceof Error ? error.message : String(error));
     } finally {
       setPluginBusy(false);
     }
-  }, [confirm, installedPlugins, magnetLibrary, onMagnetAddToLibrary, pluginBusy, reloadPlugins]);
+  }, [confirm, installedPlugins, magnetLibrary, onMagnetAddToLibrary, pluginBusy, reloadPlugins, t]);
 
   const handleUninstallPmpmPlugin = useCallback(
     async (id: string) => {
@@ -384,15 +406,15 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
       try {
         if (activeMagnetIds.has(id)) {
-          alert(`请先停用 Magnet "${id}"，再卸载插件。`);
+          alert(t('editor.magnet-library.plugins.uninstall.mustDeactivate', { id }));
           return;
         }
 
         const ok = await confirm({
-          title: '确认卸载插件',
-          message: `确认卸载插件 "${id}"？`,
-          confirmText: '卸载',
-          cancelText: '取消',
+          title: t('editor.magnet-library.plugins.uninstall.confirmTitle'),
+          message: t('editor.magnet-library.plugins.uninstall.confirmMessage', { id }),
+          confirmText: t('common.action.uninstall'),
+          cancelText: t('common.action.cancel'),
           danger: true,
         });
         if (!ok) return;
@@ -409,7 +431,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         setPluginBusy(false);
       }
     },
-    [activeMagnetIds, confirm, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins]
+    [activeMagnetIds, confirm, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins, t]
   );
 
   return (
@@ -430,13 +452,13 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               className={`view-btn ${viewMode === 'active' ? 'active' : ''}`}
               onClick={() => setViewMode('active')}
             >
-              ✓ 已使用 ({counts.active.all})
+              {t('editor.magnet-library.view.active', { count: counts.active.all })}
             </button>
             <button
               className={`view-btn ${viewMode === 'inactive' ? 'active' : ''}`}
               onClick={() => setViewMode('inactive')}
             >
-              ○ 未使用 ({counts.inactive.all})
+              {t('editor.magnet-library.view.inactive', { count: counts.inactive.all })}
             </button>
           </div>
 
@@ -446,19 +468,19 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               className={`filter-btn ${filterMode === 'all' ? 'active' : ''}`}
               onClick={() => setFilterMode('all')}
             >
-              全部 ({counts[viewMode].all})
+              {t('editor.magnet-library.filter.all', { count: counts[viewMode].all })}
             </button>
             <button
               className={`filter-btn ${filterMode === 'builtin' ? 'active' : ''}`}
               onClick={() => setFilterMode('builtin')}
             >
-              内置 ({counts[viewMode].builtin})
+              {t('editor.magnet-library.filter.builtin', { count: counts[viewMode].builtin })}
             </button>
             <button
               className={`filter-btn ${filterMode === 'custom' ? 'active' : ''}`}
               onClick={() => setFilterMode('custom')}
             >
-              自定义 ({counts[viewMode].custom})
+              {t('editor.magnet-library.filter.custom', { count: counts[viewMode].custom })}
             </button>
           </div>
 
@@ -468,18 +490,18 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               className="library-search-input"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索 id / 名称 / 描述 / tag"
+              placeholder={t('editor.magnet-library.search.placeholder')}
             />
             {searchQuery.trim().length > 0 && (
-              <button
-                className="library-search-clear-btn"
-                onClick={() => setSearchQuery('')}
-                title="清空搜索"
-              >
-                ×
-              </button>
-            )}
-            <div className="library-search-count" title="搜索结果数量">
+                <button
+                  className="library-search-clear-btn"
+                  onClick={() => setSearchQuery('')}
+                  title={t('editor.magnet-library.search.clearTitle')}
+                >
+                  ×
+                </button>
+              )}
+            <div className="library-search-count" title={t('editor.magnet-library.search.countTitle')}>
               {displayMagnets.length}
             </div>
           </div>
@@ -488,30 +510,19 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         {/* 导入区域 */}
         {showImport && (
           <div className="import-section">
-            <div className="import-label">粘贴 Magnet JSON 数据：</div>
+            <div className="import-label">{t('editor.magnet-library.import.label')}</div>
             <textarea
               className="import-textarea"
               value={importData}
               onChange={(e) => setImportData(e.target.value)}
-              placeholder={`{
-  "id": "my-button",
-  "content": "按钮",
-  "anchorType": "single",
-  "anchors": [{ "id": "anchor", "gridX": 10, "gridY": 10, "role": "anchor" }],
-  "style": {
-    "width": "80px",
-    "height": "32px",
-    "backgroundColor": "rgba(0, 122, 255, 0.8)",
-    ...
-  }
-}`}
+              placeholder={t('editor.magnet-library.import.placeholder')}
             />
             {importError && <div className="import-error">❌ {importError}</div>}
             <div className="import-actions">
               <button className="import-submit-btn" onClick={handleImport}>
-                导入到库
+                {t('editor.magnet-library.import.action.importToLibrary')}
               </button>
-              <div className="import-hint">💡 导入后需要手动添加到点阵</div>
+              <div className="import-hint">{t('editor.magnet-library.import.hint')}</div>
             </div>
           </div>
         )}
@@ -519,7 +530,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         {/* Magnet 列表 */}
         <div className="magnet-list">
           <div className="import-section" style={{ marginBottom: 6 }}>
-            <div className="import-label">.pmpm 插件</div>
+            <div className="import-label">{t('editor.magnet-library.plugins.title')}</div>
             {pluginError && <div className="import-error">⚠ {pluginError}</div>}
             <div className="import-actions">
               <button
@@ -527,21 +538,27 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                 onClick={() => void handleImportPmpmPlugin()}
                 disabled={pluginBusy}
               >
-                导入 .pmpm
+                {t('editor.magnet-library.plugins.action.import')}
               </button>
               <button
                 className="import-submit-btn"
                 style={{ background: 'rgba(255, 255, 255, 0.12)' }}
                 onClick={() => setShowPlugins((prev) => !prev)}
               >
-                {showPlugins ? '隐藏' : '查看'}已安装 ({installedPlugins.length})
+                {showPlugins
+                  ? t('editor.magnet-library.plugins.action.hideInstalledWithCount', {
+                      count: installedPlugins.length,
+                    })
+                  : t('editor.magnet-library.plugins.action.showInstalledWithCount', {
+                      count: installedPlugins.length,
+                    })}
               </button>
             </div>
 
             {showPlugins && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {installedPlugins.length === 0 ? (
-                  <div className="import-hint">暂无已安装插件</div>
+                  <div className="import-hint">{t('editor.magnet-library.plugins.empty')}</div>
                 ) : (
                   installedPlugins.map((plugin) => {
                     const { id, name, version } = plugin.manifest.metadata;
@@ -566,7 +583,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                             {name} <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)' }}>({id}@{version})</span>
                           </div>
                           <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
-                            权限：{permissions.length > 0 ? permissions.join(', ') : '(无)'}
+                            {permissions.length > 0
+                              ? t('editor.magnet-library.plugins.permissions', {
+                                  permissions: permissions.join(', '),
+                                })
+                              : t('editor.magnet-library.plugins.permissionsEmpty')}
                           </div>
                           {plugin.entrySha256 && (
                             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
@@ -582,9 +603,13 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                           }}
                           disabled={pluginBusy || isActive}
                           onClick={() => void handleUninstallPmpmPlugin(id)}
-                          title={isActive ? '请先从点阵停用该 Magnet' : '卸载插件'}
+                          title={
+                            isActive
+                              ? t('editor.magnet-library.plugins.tooltip.uninstall.disabled')
+                              : t('editor.magnet-library.plugins.tooltip.uninstall')
+                          }
                         >
-                          卸载
+                          {t('common.action.uninstall')}
                         </button>
                       </div>
                     );
@@ -596,8 +621,12 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
           {displayMagnets.length === 0 ? (
             <div className="empty-state">
-              {viewMode === 'active' ? '没有已使用的 Magnet' : '没有未使用的 Magnet'}
-              {filterMode !== 'all' && <div className="empty-hint">尝试切换到“全部”查看</div>}
+              {viewMode === 'active'
+                ? t('editor.magnet-library.empty.active')
+                : t('editor.magnet-library.empty.inactive')}
+              {filterMode !== 'all' && (
+                <div className="empty-hint">{t('editor.magnet-library.empty.hint')}</div>
+              )}
             </div>
           ) : (
             displayMagnets.map((magnet) => {
@@ -648,12 +677,22 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       <div className="magnet-description">{rendererDescription}</div>
                     )}
                     <div className="magnet-meta">
-                      {rendererGroup && <span className="magnet-group">{rendererGroup}</span>}
+                      {rendererGroup && <span className="magnet-group">{formatRendererGroup(rendererGroup)}</span>}
                       <span className="magnet-type">{magnet.type}</span>
                       <span className="magnet-anchor">{magnet.anchorType}</span>
-                      <span className="magnet-pixels">{pixelCount} pixels</span>
-                      {isRequired && <span className="magnet-badge builtin">必备</span>}
-                      {isBuiltIn && <span className="magnet-badge builtin">内置</span>}
+                      <span className="magnet-pixels">
+                        {t('editor.magnet-library.magnet.pixels', { count: pixelCount })}
+                      </span>
+                      {isRequired && (
+                        <span className="magnet-badge builtin">
+                          {t('editor.magnet-library.badge.required')}
+                        </span>
+                      )}
+                      {isBuiltIn && (
+                        <span className="magnet-badge builtin">
+                          {t('editor.magnet-library.badge.builtin')}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="magnet-actions">
@@ -661,7 +700,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                     <button
                       className={`magnet-action-btn edit ${creatorWindowOpen ? 'disabled' : ''} ${glitchingButton === magnet.id ? 'glitch' : ''}`}
                       onClick={() => handleEdit(magnet)}
-                      title={creatorWindowOpen ? 'Creator 窗口已打开' : '编辑磁贴'}
+                      title={
+                        creatorWindowOpen
+                          ? t('editor.magnet-library.magnet.tooltip.creatorWindowOpen')
+                          : t('editor.magnet-library.magnet.tooltip.edit')
+                      }
                       data-text="◈"
                     >
                       ◈
@@ -673,7 +716,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         className="magnet-action-btn remove"
                         onClick={() => onMagnetDeactivate(magnet.id)}
                         disabled={isRequired}
-                        title={isRequired ? '必备磁贴：不能移除' : '从点阵移除'}
+                        title={
+                          isRequired
+                            ? t('editor.magnet-library.magnet.tooltip.cannotRemoveRequired')
+                            : t('editor.magnet-library.magnet.tooltip.removeFromMatrix')
+                        }
                       >
                         －
                       </button>
@@ -681,7 +728,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       <button
                         className="magnet-action-btn add"
                         onClick={() => onMagnetActivate(magnet.id)}
-                        title="添加到点阵"
+                        title={t('editor.magnet-library.magnet.tooltip.addToMatrix')}
                       >
                         ＋
                       </button>
@@ -692,7 +739,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       <button
                         className="magnet-action-btn delete"
                         onClick={() => onMagnetDeleteFromLibrary(magnet.id)}
-                        title="从库中删除"
+                        title={t('editor.magnet-library.magnet.tooltip.deleteFromLibrary')}
                       >
                         ╳
                       </button>
@@ -749,7 +796,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               }
             }}
           >
-            ✨ 创建/导入
+            {t('editor.magnet-library.action.createOrImport')}
           </button>
         </div>
       </div>{' '}

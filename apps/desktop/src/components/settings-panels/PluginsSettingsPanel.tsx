@@ -5,6 +5,7 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useKernel } from '../../contexts/KernelContext';
 import { GOVERNANCE_SERVICE_TOKEN } from '../../services/governance';
+import { useT } from '../../i18n';
 import {
   createMagnetTemplateFromPlugin,
   getPmpmPluginsRevision,
@@ -65,6 +66,7 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
 
 export function PluginsSettingsPanel() {
   const kernel = useKernel();
+  const t = useT();
   const governance = kernel.services.get(GOVERNANCE_SERVICE_TOKEN);
   const { activeMagnetIds, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
   const isTauri = isTauriRuntime();
@@ -129,7 +131,7 @@ export function PluginsSettingsPanel() {
 
   const handleInstall = useCallback(async () => {
     if (!isTauri) {
-      setError('安装 .pmpm 需要 Tauri 运行时（使用 `pnpm dev:tauri`）。');
+      setError(t('settings.plugins.install.requireTauri'));
       return;
     }
     if (busy) return;
@@ -141,12 +143,12 @@ export function PluginsSettingsPanel() {
       const dialog = await import('@tauri-apps/api/dialog');
       const selected = await dialog.open({
         multiple: false,
-        filters: [{ name: '.pmpm plugin', extensions: ['pmpm'] }],
+        filters: [{ name: t('settings.plugins.install.filePickerFilter'), extensions: ['pmpm'] }],
       });
       if (!selected) return;
       const filePath = Array.isArray(selected) ? selected[0] : selected;
       if (typeof filePath !== 'string') {
-        throw new Error('无法解析选中的 .pmpm 文件路径');
+        throw new Error(t('settings.plugins.install.error.invalidFilePath'));
       }
 
       const parsed = await parsePmpmPluginFromFilePath(filePath);
@@ -155,38 +157,57 @@ export function PluginsSettingsPanel() {
       const isUpdate = installedPlugins.some((p) => p.manifest.metadata.id === meta.id);
 
       if (!isUpdate && magnetLibrary.some((m) => m.id === meta.id)) {
-        throw new Error(`Magnet ID "${meta.id}" 已存在，无法安装同名插件（请先删除/重命名该 Magnet）`);
+        throw new Error(t('settings.plugins.install.error.magnetIdExists', { id: meta.id }));
       }
 
+      const signatureLine = (() => {
+        if (parsed.signature) {
+          const keyId = parsed.signature.keyId.slice(0, 12);
+          return trustedKeySet.has(parsed.signature.keyId)
+            ? t('settings.plugins.install.signature.okTrusted', { keyId })
+            : t('settings.plugins.install.signature.okUntrusted', { keyId });
+        }
+
+        if (requireTrustedSignatures) {
+          return t('settings.plugins.install.signature.requiredTrusted');
+        }
+
+        if (allowUnsignedPlugins) {
+          return t('settings.plugins.install.signature.none');
+        }
+
+        return t('settings.plugins.install.signature.required');
+      })();
+
       const confirmText = [
-        `安装 .pmpm 插件：${meta.name}`,
-        `${meta.id}@${meta.version}`,
-        meta.author ? `作者：${meta.author}` : null,
-        meta.description ? `说明：${meta.description}` : null,
+        t('settings.plugins.install.confirm.plugin', { name: meta.name }),
+        t('settings.plugins.install.confirm.idVersion', { id: meta.id, version: meta.version }),
+        meta.author ? t('settings.plugins.install.confirm.author', { author: meta.author }) : null,
+        meta.description
+          ? t('settings.plugins.install.confirm.description', { description: meta.description })
+          : null,
         '',
-        parsed.signature
-          ? `Signature: OK (${trustedKeySet.has(parsed.signature.keyId) ? 'trusted' : 'untrusted'}) (keyId=${parsed.signature.keyId.slice(0, 12)}…)`
-          : requireTrustedSignatures
-            ? 'Signature: required (trusted signatures enabled)'
-            : allowUnsignedPlugins
-              ? 'Signature: (none)'
-              : 'Signature: required (unsigned not allowed)',
+        signatureLine,
         '',
-        '权限声明：',
-        permissions.length > 0 ? permissions.map((p) => `- ${p}`).join('\n') : '(无)',
+        t('settings.plugins.install.confirm.permissionsTitle'),
+        permissions.length > 0
+          ? permissions.map((p) => `- ${p}`).join('\n')
+          : t('settings.plugins.install.confirm.permissionsNone'),
         '',
-        parsed.entrySha256 ? `entrySha256: ${parsed.entrySha256}` : null,
+        parsed.entrySha256
+          ? t('settings.plugins.install.confirm.entrySha256', { sha256: parsed.entrySha256 })
+          : null,
         '',
-        '确认安装？',
+        t('settings.plugins.install.confirm.prompt'),
       ]
-        .filter((line): line is string => typeof line === 'string' && line.length > 0)
+        .filter((line): line is string => typeof line === 'string')
         .join('\n');
 
       const ok = await confirm({
-        title: '确认安装插件',
+        title: t('settings.plugins.install.confirm.title'),
         message: confirmText,
-        confirmText: '安装',
-        cancelText: '取消',
+        confirmText: t('common.action.install'),
+        cancelText: t('common.action.cancel'),
       });
       if (!ok) return;
 
@@ -212,6 +233,7 @@ export function PluginsSettingsPanel() {
     magnetLibrary,
     requireTrustedSignatures,
     setMagnetLibrary,
+    t,
     trustedKeySet,
   ]);
 
@@ -223,14 +245,14 @@ export function PluginsSettingsPanel() {
 
       try {
         if (activeMagnetIds.has(pluginId)) {
-          throw new Error(`请先停用 Magnet "${pluginId}"，再卸载插件。`);
+          throw new Error(t('settings.plugins.uninstall.error.activeMagnet', { id: pluginId }));
         }
 
         const ok = await confirm({
-          title: '确认卸载插件',
-          message: `确认卸载插件 "${pluginId}"？`,
-          confirmText: '卸载',
-          cancelText: '取消',
+          title: t('settings.plugins.uninstall.confirm.title'),
+          message: t('settings.plugins.uninstall.confirm.message', { id: pluginId }),
+          confirmText: t('common.action.uninstall'),
+          cancelText: t('common.action.cancel'),
           danger: true,
         });
         if (!ok) return;
@@ -249,7 +271,7 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, confirm, governance, magnetLibrary, setMagnetLibrary]
+    [activeMagnetIds, busy, confirm, governance, magnetLibrary, setMagnetLibrary, t]
   );
 
   const handleToggleEnabled = useCallback(
@@ -261,10 +283,10 @@ export function PluginsSettingsPanel() {
       try {
         if (!enabled && activeMagnetIds.has(pluginId)) {
           const ok = await confirm({
-            title: '确认禁用插件',
-            message: `Magnet "${pluginId}" 当前处于激活状态，禁用后将显示为 Disabled 占位。确认禁用？`,
-            confirmText: '禁用',
-            cancelText: '取消',
+            title: t('settings.plugins.disable.confirm.title'),
+            message: t('settings.plugins.disable.confirm.message', { id: pluginId }),
+            confirmText: t('common.action.disable'),
+            cancelText: t('common.action.cancel'),
             danger: true,
           });
           if (!ok) return;
@@ -278,21 +300,19 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, confirm, governance]
+    [activeMagnetIds, busy, confirm, governance, t]
   );
 
   return (
     <div className="settings-card">
       <div className="settings-card-header">
         <div>
-          <p className="settings-card-label">.pmpm 插件</p>
-          <p className="settings-card-desc">
-            安装/卸载 Magnet 插件，并查看它们声明的贡献点（R5：默认启用隔离运行时）。
-          </p>
+          <p className="settings-card-label">{t('settings.plugins.pmpm.label')}</p>
+          <p className="settings-card-desc">{t('settings.plugins.pmpm.desc')}</p>
         </div>
 
         <button type="button" className="settings-action-btn" onClick={() => void handleInstall()} disabled={busy}>
-          安装…
+          {t('common.action.installEllipsis')}
         </button>
       </div>
 
@@ -305,7 +325,7 @@ export function PluginsSettingsPanel() {
             checked={sandboxEnabled}
             onChange={(e) => setPmpmSandboxRuntimeEnabled(Boolean(e.target.checked))}
           />
-          <span>Enable isolated runtime (sandbox iframe, recommended)</span>
+          <span>{t('settings.plugins.runtimeSandbox.label')}</span>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
           <input
@@ -317,7 +337,7 @@ export function PluginsSettingsPanel() {
               if (next) setAllowUnsignedPlugins(false);
             }}
           />
-          <span>Require trusted signatures (security)</span>
+          <span>{t('settings.plugins.requireTrustedSignatures.label')}</span>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
           <input
@@ -326,13 +346,13 @@ export function PluginsSettingsPanel() {
             disabled={requireTrustedSignatures}
             onChange={(e) => setAllowUnsignedPlugins(Boolean(e.target.checked))}
           />
-          <span>Allow unsigned .pmpm plugins (security)</span>
+          <span>{t('settings.plugins.allowUnsignedPlugins.label')}</span>
         </label>
       </div>
 
       <div className="settings-plugin-list">
         {installedPlugins.length === 0 ? (
-          <div className="settings-card-note">暂无已安装插件</div>
+          <div className="settings-card-note">{t('settings.plugins.empty')}</div>
         ) : (
           installedPlugins.map((plugin) => {
             const meta = plugin.manifest.metadata;
@@ -366,25 +386,47 @@ export function PluginsSettingsPanel() {
                   {meta.description && <div className="settings-plugin-desc">{meta.description}</div>}
 
                   <div className="settings-plugin-tags">
-                    <span className="settings-plugin-tag">{enabled ? 'enabled' : 'disabled'}</span>
+                    <span className="settings-plugin-tag">
+                      {enabled ? t('settings.plugins.tag.enabled') : t('settings.plugins.tag.disabled')}
+                    </span>
                     <span className="settings-plugin-tag" title={signatureKeyId ?? undefined}>
                       {signatureKeyId
                         ? signatureTrusted
-                          ? 'signed:trusted'
-                          : 'signed:untrusted'
-                        : 'unsigned'}
+                          ? t('settings.plugins.tag.signedTrusted')
+                          : t('settings.plugins.tag.signedUntrusted')
+                        : t('settings.plugins.tag.unsigned')}
                     </span>
-                    {panels > 0 && <span className="settings-plugin-tag">settings: {panels}</span>}
-                    {pages > 0 && <span className="settings-plugin-tag">pages: {pages}</span>}
-                    {windows > 0 && <span className="settings-plugin-tag">windows: {windows}</span>}
-                    {visualizers > 0 && <span className="settings-plugin-tag">visualizers: {visualizers}</span>}
-                    {commands > 0 && <span className="settings-plugin-tag">commands: {commands}</span>}
+                    {panels > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.settingsPanelsCount', { count: panels })}
+                      </span>
+                    )}
+                    {pages > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.pagesCount', { count: pages })}
+                      </span>
+                    )}
+                    {windows > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.windowsCount', { count: windows })}
+                      </span>
+                    )}
+                    {visualizers > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.visualizersCount', { count: visualizers })}
+                      </span>
+                    )}
+                    {commands > 0 && (
+                      <span className="settings-plugin-tag">
+                        {t('settings.plugins.tag.commandsCount', { count: commands })}
+                      </span>
+                    )}
                   </div>
 
                   <div className="settings-plugin-permissions">
-                    <div>权限：</div>
+                    <div>{t('settings.plugins.permissions.label')}</div>
                     {permissions.length === 0 ? (
-                      <div style={{ opacity: 0.8 }}>(无)</div>
+                      <div style={{ opacity: 0.8 }}>{t('settings.plugins.permissions.none')}</div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                         {permissions.map((perm) => {
@@ -433,7 +475,7 @@ export function PluginsSettingsPanel() {
                   {pluginAudit.length > 0 && (
                     <details style={{ marginTop: 8 }}>
                       <summary style={{ cursor: 'pointer', fontSize: 12, opacity: 0.85 }}>
-                        Audit ({pluginAudit.length})
+                        {t('settings.plugins.audit.summary', { count: pluginAudit.length })}
                       </summary>
                       <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75, whiteSpace: 'pre-wrap' }}>
                         {pluginAudit.map((event, idx) => (
@@ -447,7 +489,7 @@ export function PluginsSettingsPanel() {
                         onClick={() => clearPmpmAuditLog(meta.id)}
                         disabled={busy}
                       >
-                        Clear Audit
+                        {t('common.action.clear')}
                       </button>
                     </details>
                   )}
@@ -459,9 +501,13 @@ export function PluginsSettingsPanel() {
                     className="settings-action-btn"
                     disabled={busy}
                     onClick={() => void handleToggleEnabled(meta.id, !enabled)}
-                    title={enabled ? '禁用该插件（会移除插件贡献点）' : '启用该插件'}
+                    title={
+                      enabled
+                        ? t('settings.plugins.action.disable.title')
+                        : t('settings.plugins.action.enable.title')
+                    }
                   >
-                    {enabled ? '禁用' : '启用'}
+                    {enabled ? t('common.action.disable') : t('common.action.enable')}
                   </button>
 
                   <button
@@ -469,9 +515,9 @@ export function PluginsSettingsPanel() {
                     className="settings-action-btn"
                     disabled={busy}
                     onClick={() => governance.restartPmpmPluginRuntime(meta.id, { reason: 'manual' })}
-                    title="Restart plugin runtime (best-effort)."
+                    title={t('settings.plugins.action.restart.title')}
                   >
-                    Restart
+                    {t('common.action.restart')}
                   </button>
 
                   {signatureKeyId && (
@@ -496,9 +542,15 @@ export function PluginsSettingsPanel() {
                           setError(err instanceof Error ? err.message : String(err));
                         }
                       }}
-                      title={signatureTrusted ? 'Untrust this signing key' : 'Trust this signing key'}
+                      title={
+                        signatureTrusted
+                          ? t('settings.plugins.action.untrustKey.title')
+                          : t('settings.plugins.action.trustKey.title')
+                      }
                     >
-                      {signatureTrusted ? 'Untrust Key' : 'Trust Key'}
+                      {signatureTrusted
+                        ? t('settings.plugins.action.untrustKey.label')
+                        : t('settings.plugins.action.trustKey.label')}
                     </button>
                   )}
 
@@ -507,9 +559,13 @@ export function PluginsSettingsPanel() {
                     className="settings-danger-btn"
                     disabled={busy || isActive}
                     onClick={() => void handleUninstall(meta.id)}
-                    title={isActive ? '请先从点阵停用该 Magnet' : '卸载插件'}
+                    title={
+                      isActive
+                        ? t('settings.plugins.action.uninstall.title.magnetActive')
+                        : t('settings.plugins.action.uninstall.title')
+                    }
                   >
-                    卸载
+                    {t('common.action.uninstall')}
                   </button>
                 </div>
               </div>

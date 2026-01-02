@@ -224,6 +224,16 @@ apps/desktop/src-tauri/src/
 - 禁止在核心路径滥用 `any`；优先 `unknown` + 断言/校验。
 - 事件/契约/存储结构变更必须补测试或脚本化验证（见 `docs/qa/`）。
 
+## 7.1 i18n（文案）规范（必须遵守）
+
+- **新增用户可见文案禁止硬编码**：必须使用 `t()` / `useT()`，并在 `apps/desktop/src/i18n/locales/zh-CN.json` 添加稳定 key。
+- **Key 是稳定 API**：禁止复用同一个 key 表达不同含义；建议使用 `common.*` / `settings.*` / `pages.*` / `windows.*` 等域划分。
+- **禁止拼接翻译碎片**：统一使用插值参数 `t('key', { name })`，避免 `t('a') + name + t('b')`。
+- **不要持久化翻译结果**：存储/协议只存 ID/枚举值，渲染时再 `t()`；禁止把中文/英文文案写进 storage 或 IPC payload。
+- **Contribution 标题/描述要支持切换刷新**：注册时使用 `t()` 生成快照，并用 `subscribeLocale(() => sync())` + `register(..., { replace: true })` 重新注册（参考 `apps/desktop/src/builtin-modules/builtinWorkbenchesModule.tsx`）。
+- **插件字段不由宿主翻译**：插件 manifest 的 title/description 等按原样展示；宿主的 UI 标签/按钮/空状态等仍必须 i18n。
+- 进度跟踪与开发指南：`docs/guides/i18n.md`
+
 ---
 
 # 8. 样式与 UI 规范（必须遵守）

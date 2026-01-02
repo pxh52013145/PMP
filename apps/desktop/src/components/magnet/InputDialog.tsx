@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useT } from '../../i18n';
 import './InputDialog.css';
 
 interface InputDialogProps {
@@ -20,13 +21,16 @@ export const InputDialog: React.FC<InputDialogProps> = ({
   message,
   placeholder = '',
   defaultValue = '',
-  confirmText = '确认',
-  cancelText = '取消',
+  confirmText,
+  cancelText,
   onConfirm,
   onCancel,
 }) => {
+  const t = useT();
   const [value, setValue] = useState(defaultValue);
   const inputRef = useRef<HTMLInputElement>(null);
+  const resolvedConfirmText = confirmText === undefined ? t('common.action.confirm') : confirmText;
+  const resolvedCancelText = cancelText === undefined ? t('common.action.cancel') : cancelText;
 
   useEffect(() => {
     if (isOpen) {
@@ -83,14 +87,14 @@ export const InputDialog: React.FC<InputDialogProps> = ({
         </div>
         <div className="input-dialog-footer">
           <button className="input-dialog-btn input-dialog-btn-cancel" onClick={handleCancel}>
-            {cancelText}
+            {resolvedCancelText}
           </button>
           <button
             className="input-dialog-btn input-dialog-btn-confirm"
             onClick={handleConfirm}
             disabled={!value.trim()}
           >
-            {confirmText}
+            {resolvedConfirmText}
           </button>
         </div>
       </div>

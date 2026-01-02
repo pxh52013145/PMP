@@ -3,6 +3,7 @@ import { Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
+import { useT } from '../../i18n';
 import './AlbumDetailPage.css';
 
 interface AlbumDetailPageProps {
@@ -16,6 +17,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   artist,
   tracks: initialTracks,
 }) => {
+  const t = useT();
   const audioService = useAudioService();
   const [tracks, setTracks] = useState<Track[]>(initialTracks || []);
   const [albumCover, setAlbumCover] = useState<string | undefined>();
@@ -101,23 +103,23 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
 
     const menuItems: ContextMenuItem[] = [
       {
-        label: '播放此歌曲',
+        label: t('pages.album.context.playTrack'),
         icon: '▶',
         onClick: () => handlePlaySingleTrack(track, e),
       },
       {
-        label: '添加此歌曲到队列',
+        label: t('pages.album.context.addTrackToQueue'),
         icon: '+',
         onClick: () => handleAddTrackToQueue(track, e),
       },
       { divider: true } as ContextMenuItem,
       {
-        label: '播放整张专辑（从此开始）',
+        label: t('pages.album.context.playAlbumFromHere'),
         icon: '🎵',
         onClick: () => handlePlayTrack(track, index),
       },
       {
-        label: '播放整张专辑',
+        label: t('pages.album.context.playAlbum'),
         icon: '💿',
         onClick: () => handlePlayAll(),
       },
@@ -143,7 +145,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
     return (
       <div className="album-detail-page empty">
         <div className="empty-icon">◉</div>
-        <div className="empty-text">未选择专辑</div>
+        <div className="empty-text">{t('pages.album.empty.noSelection')}</div>
       </div>
     );
   }
@@ -160,16 +162,16 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
             <h1 className="album-title">{albumName}</h1>
             {artist && <h2 className="album-artist">{artist}</h2>}
             <div className="album-stats">
-              <span>{tracks.length} 首歌曲</span>
+              <span>{t('pages.album.stats.trackCount', { count: tracks.length })}</span>
               <span>•</span>
               <span>{formatDuration(totalDuration)}</span>
             </div>
             <div className="album-actions">
               <button className="album-action-btn primary" onClick={handlePlayAll}>
-                ▶ 播放全部
+                ▶ {t('pages.album.action.playAll')}
               </button>
               <button className="album-action-btn" onClick={handleAddAllToQueue}>
-                + 添加到队列
+                + {t('common.action.addToQueue')}
               </button>
             </div>
           </div>
@@ -179,9 +181,9 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
         <div className="album-tracks">
           <div className="album-tracks-header">
             <div className="track-number">#</div>
-            <div className="track-title">标题</div>
-            <div className="track-duration">时长</div>
-            <div className="track-actions">操作</div>
+            <div className="track-title">{t('pages.album.table.title')}</div>
+            <div className="track-duration">{t('pages.album.table.duration')}</div>
+            <div className="track-actions">{t('pages.album.table.actions')}</div>
           </div>
           <div className="album-tracks-list">
             {tracks.map((track, index) => (
@@ -190,7 +192,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
                 className="album-track-item"
                 onDoubleClick={() => handlePlayTrack(track, index)}
                 onContextMenu={(e) => handleTrackContextMenu(track, index, e)}
-                title="双击播放整个专辑（从此歌曲开始） / 右键菜单"
+                title={t('pages.album.trackItem.titleHint')}
               >
                 <div className="track-number">{index + 1}</div>
                 <div className="track-title">{track.title}</div>
@@ -199,14 +201,14 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
                   <button
                     className="track-action-btn"
                     onClick={(e) => handlePlaySingleTrack(track, e)}
-                    title="只播放此歌曲"
+                    title={t('pages.album.trackItem.tooltip.playTrack')}
                   >
                     ▶
                   </button>
                   <button
                     className="track-action-btn"
                     onClick={(e) => handleAddTrackToQueue(track, e)}
-                    title="只添加此歌曲到队列"
+                    title={t('pages.album.trackItem.tooltip.addTrackToQueue')}
                   >
                     +
                   </button>

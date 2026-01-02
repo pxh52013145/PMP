@@ -2,6 +2,7 @@ import './SettingsPage.css';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
+import { useT } from '../../i18n';
 
 function sortPanels(a: SettingsPanelContribution, b: SettingsPanelContribution): number {
   const orderA = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
@@ -17,20 +18,9 @@ type SettingsSection = {
   panels: SettingsPanelContribution[];
 };
 
-function resolveSection(panel: SettingsPanelContribution): Omit<SettingsSection, 'panels'> {
-  if (panel.id === 'plugins' || panel.source === 'plugin' || panel.id.startsWith('pmpm:')) {
-    return { id: 'plugins', title: '插件', order: 20 };
-  }
-
-  if (panel.id === 'visualizers') {
-    return { id: 'visualizers', title: '可视化', order: 30 };
-  }
-
-  return { id: 'system', title: '系统', order: 10 };
-}
-
 export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
+  const t = useT();
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
 
@@ -44,6 +34,20 @@ export const SettingsPage: React.FC = () => {
   }, [kernel.contributions, revision]);
 
   const sections = useMemo(() => {
+    const resolveSection = (
+      panel: SettingsPanelContribution
+    ): Omit<SettingsSection, 'panels'> => {
+      if (panel.id === 'plugins' || panel.source === 'plugin' || panel.id.startsWith('pmpm:')) {
+        return { id: 'plugins', title: t('settings.sections.plugins'), order: 20 };
+      }
+
+      if (panel.id === 'visualizers') {
+        return { id: 'visualizers', title: t('settings.sections.visualizers'), order: 30 };
+      }
+
+      return { id: 'system', title: t('settings.sections.system'), order: 10 };
+    };
+
     const buckets = new Map<string, SettingsSection>();
     for (const panel of panels) {
       const sectionDef = resolveSection(panel);
@@ -65,7 +69,7 @@ export const SettingsPage: React.FC = () => {
     }
 
     return sorted;
-  }, [panels]);
+  }, [panels, t]);
 
   useEffect(() => {
     if (panels.length === 0) {
@@ -86,13 +90,13 @@ export const SettingsPage: React.FC = () => {
     <div className="page-settings">
       <div className="settings-header">
         <div>
-          <h1 className="settings-title">设置</h1>
-          <p className="settings-subtitle">在这里管理全局配置、插件与可视化入口</p>
+          <h1 className="settings-title">{t('pages.settings.title')}</h1>
+          <p className="settings-subtitle">{t('pages.settings.subtitle')}</p>
         </div>
       </div>
 
       {panels.length === 0 ? (
-        <div className="settings-card-note">No settings panels registered.</div>
+        <div className="settings-card-note">{t('pages.settings.empty')}</div>
       ) : (
         <div className="settings-layout">
           <aside className="settings-sidebar">
@@ -110,7 +114,7 @@ export const SettingsPage: React.FC = () => {
                     >
                       <span className="settings-sidebar-item-title">{panel.title}</span>
                       {panel.source === 'plugin' && (
-                        <span className="settings-sidebar-item-tag">plugin</span>
+                        <span className="settings-sidebar-item-tag">{t('common.source.plugin')}</span>
                       )}
                     </button>
                   ))}
@@ -131,7 +135,7 @@ export const SettingsPage: React.FC = () => {
                 <div className="settings-content-body">{activePanel.render() as React.ReactNode}</div>
               </section>
             ) : (
-              <div className="settings-card-note">No settings panels registered.</div>
+              <div className="settings-card-note">{t('pages.settings.empty')}</div>
             )}
           </main>
         </div>

@@ -3,15 +3,16 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
+import { useLocale, useT } from '../../i18n';
 import { Track } from '../../services/audio';
 import { AudioVisualizer } from '../magnet/AudioVisualizer';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 
-function getFileName(filePath: string): string {
+function getFileName(filePath: string, fallback: string): string {
   const normalized = filePath.replace(/\\/g, '/');
   const segments = normalized.split('/');
   const last = segments[segments.length - 1];
-  return last || '未知音频文件';
+  return last || fallback;
 }
 
 const SUPPORTED_EXTENSIONS = ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'];
@@ -64,6 +65,8 @@ const DEFAULT_EQ_BANDS: NativeDspEqBand[] = [
 
 export const NativeDebugPage: React.FC = () => {
   const audioService = useAudioService();
+  const t = useT();
+  const locale = useLocale();
   const { engineType, setEngineType } = useAudioEngine();
   const [state, setState] = useState(() => audioService.getState());
   const [logs, setLogs] = useState<string[]>([]);
@@ -96,11 +99,11 @@ export const NativeDebugPage: React.FC = () => {
 
   const appendLog = useCallback((message: string) => {
     setLogs((prev) => {
-      const timestamp = new Date().toLocaleTimeString();
+      const timestamp = new Date().toLocaleTimeString(locale);
       const next = [`[${timestamp}] ${message}`, ...prev];
       return next.slice(0, 50);
     });
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     setState(audioService.getState());
@@ -108,13 +111,13 @@ export const NativeDebugPage: React.FC = () => {
     const unsubscribeError = audioService.onError((error) => {
       const message = error?.message ?? String(error);
       setLastError(message);
-      appendLog(`错误: ${message}`);
+      appendLog(t('pages.native-debug.log.error', { message }));
     });
     return () => {
       unsubscribeState();
       unsubscribeError();
     };
-  }, [audioService, appendLog]);
+  }, [audioService, appendLog, t]);
 
   const isNativeEngine = engineType === 'native';
 
@@ -240,21 +243,21 @@ export const NativeDebugPage: React.FC = () => {
   }, [isNativeEngine]);
 
   const currentTrackLabel = useMemo(() => {
-    if (!state.currentTrack) return '未加载音频';
+    if (!state.currentTrack) return t('pages.native-debug.currentTrack.none');
     const { title, artist } = state.currentTrack;
     return artist ? `${title} – ${artist}` : title;
-  }, [state.currentTrack]);
+  }, [state.currentTrack, t]);
 
   const handleRefreshDevices = useCallback(async () => {
     try {
       const devices = await invoke<string[]>('native_audio_list_devices');
       setOutputDevices(devices);
-      appendLog(`已获取输出设备：${devices.length} 个`);
+      appendLog(t('pages.native-debug.log.outputDevicesFetched', { count: devices.length }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      appendLog(`获取输出设备失败：${message}`);
+      appendLog(t('pages.native-debug.log.outputDevicesFetchFailed', { message }));
     }
-  }, [appendLog]);
+  }, [appendLog, t]);
 
   const handleApplyDevice = useCallback(async () => {
     try {
@@ -266,12 +269,16 @@ export const NativeDebugPage: React.FC = () => {
       await invoke('native_audio_select_device', {
         deviceName: selectedDevice.length > 0 ? selectedDevice : null,
       });
-      appendLog(`切换输出设备：${selectedDevice || '默认设备'}`);
+      appendLog(
+        t('pages.native-debug.log.outputDeviceSwitched', {
+          device: selectedDevice || t('pages.native-debug.outputDevice.default'),
+        })
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      appendLog(`切换输出设备失败：${message}`);
+      appendLog(t('pages.native-debug.log.outputDeviceSwitchFailed', { message }));
     }
-  }, [appendLog, selectedDevice]);
+  }, [appendLog, selectedDevice, t]);
 
   const applyDspChain = useCallback(
     async (
@@ -304,49 +311,70 @@ export const NativeDebugPage: React.FC = () => {
         appendLog(logLine);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        appendLog(`设置 DSP 失败：${message}`);
+        appendLog(t('pages.native-debug.log.dspApplyFailed', { message }));
       }
     },
-    [appendLog, limiterEnabled, limiterThresholdDb]
+    [appendLog, limiterEnabled, limiterThresholdDb, t]
   );
 
   const handleGainChange = useCallback(
     async (db: number) => {
       setDspGainDb(db);
-      await applyDspChain(db, eqBands, `设置 DSP Chain：Gain ${db.toFixed(1)} dB`);
+      await applyDspChain(db, eqBands, t('pages.native-debug.log.dspGainSet', { db: db.toFixed(1) }));
     },
-    [applyDspChain, eqBands]
+    [applyDspChain, eqBands, t]
   );
 
   const handleEqBandGainChange = useCallback(
     async (index: number, gainDb: number) => {
       const next = eqBands.map((band, i) => (i === index ? { ...band, gainDb } : band));
       setEqBands(next);
-      await applyDspChain(dspGainDb, next, `设置 EQ：Band ${index + 1} ${gainDb.toFixed(1)} dB`);
+      await applyDspChain(
+        dspGainDb,
+        next,
+        t('pages.native-debug.log.eqBandSet', {
+          index: index + 1,
+          gainDb: gainDb.toFixed(1),
+        })
+      );
     },
-    [applyDspChain, dspGainDb, eqBands]
+    [applyDspChain, dspGainDb, eqBands, t]
   );
 
   const handleEqReset = useCallback(async () => {
     const next = eqBands.map((band) => ({ ...band, gainDb: 0 }));
     setEqBands(next);
-    await applyDspChain(dspGainDb, next, '重置 EQ：全部归零');
-  }, [applyDspChain, dspGainDb, eqBands]);
+    await applyDspChain(dspGainDb, next, t('pages.native-debug.log.eqReset'));
+  }, [applyDspChain, dspGainDb, eqBands, t]);
 
   const handleLimiterToggle = useCallback(
     async (enabled: boolean) => {
       setLimiterEnabled(enabled);
-      await applyDspChain(dspGainDb, eqBands, `Limiter: ${enabled ? 'on' : 'off'}`, enabled, limiterThresholdDb);
+      await applyDspChain(
+        dspGainDb,
+        eqBands,
+        t('pages.native-debug.log.limiterToggle', {
+          state: enabled ? t('common.state.on') : t('common.state.off'),
+        }),
+        enabled,
+        limiterThresholdDb
+      );
     },
-    [applyDspChain, dspGainDb, eqBands, limiterThresholdDb]
+    [applyDspChain, dspGainDb, eqBands, limiterThresholdDb, t]
   );
 
   const handleLimiterThresholdChange = useCallback(
     async (db: number) => {
       setLimiterThresholdDb(db);
-      await applyDspChain(dspGainDb, eqBands, `Limiter threshold: ${db.toFixed(1)} dB`, limiterEnabled, db);
+      await applyDspChain(
+        dspGainDb,
+        eqBands,
+        t('pages.native-debug.log.limiterThreshold', { db: db.toFixed(1) }),
+        limiterEnabled,
+        db
+      );
     },
-    [applyDspChain, dspGainDb, eqBands, limiterEnabled]
+    [applyDspChain, dspGainDb, eqBands, limiterEnabled, t]
   );
 
   const handleApplyCrossfadeSettings = useCallback(async () => {
@@ -357,13 +385,16 @@ export const NativeDebugPage: React.FC = () => {
         TAURI_EVENTS.NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED
       );
       appendLog(
-        `Crossfade: ${crossfadeSettings.enabled ? 'on' : 'off'} · ${Math.round(crossfadeSettings.durationMs)}ms`
+        t('pages.native-debug.log.crossfadeUpdated', {
+          state: crossfadeSettings.enabled ? t('common.state.on') : t('common.state.off'),
+          durationMs: Math.round(crossfadeSettings.durationMs),
+        })
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      appendLog(`Crossfade update failed: ${message}`);
+      appendLog(t('pages.native-debug.log.crossfadeUpdateFailed', { message }));
     }
-  }, [appendLog, crossfadeSettings]);
+  }, [appendLog, crossfadeSettings, t]);
 
   const handleApplyReplayGainSettings = useCallback(async () => {
     try {
@@ -387,15 +418,17 @@ export const NativeDebugPage: React.FC = () => {
       });
 
       appendLog(
-        `ReplayGain：${replayGainSettings.enabled ? '启用' : '关闭'} · mode=${replayGainSettings.mode} · preamp=${replayGainSettings.preampDb.toFixed(
-          1
-        )}dB`
+        t('pages.native-debug.log.replayGainUpdated', {
+          state: replayGainSettings.enabled ? t('common.state.on') : t('common.state.off'),
+          mode: replayGainSettings.mode,
+          preampDb: replayGainSettings.preampDb.toFixed(1),
+        })
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      appendLog(`设置 ReplayGain 失败：${message}`);
+      appendLog(t('pages.native-debug.log.replayGainUpdateFailed', { message }));
     }
-  }, [appendLog, audioService, replayGainSettings]);
+  }, [appendLog, audioService, replayGainSettings, t]);
 
   const handleSelectTrack = useCallback(async () => {
     setIsSelectingFile(true);
@@ -404,23 +437,23 @@ export const NativeDebugPage: React.FC = () => {
       const dialog = await import('@tauri-apps/api/dialog');
       const selected = await dialog.open({
         multiple: false,
-        filters: [{ name: '音频文件', extensions: SUPPORTED_EXTENSIONS }],
+        filters: [{ name: t('pages.native-debug.filePicker.filter.audioFiles'), extensions: SUPPORTED_EXTENSIONS }],
       });
 
       if (!selected) {
-        appendLog('已取消选择音频文件');
+        appendLog(t('pages.native-debug.log.filePicker.cancelled'));
         return;
       }
 
       const filePath = Array.isArray(selected) ? selected[0] : selected;
       if (typeof filePath !== 'string') {
-        appendLog('无法解析选中的音频文件');
+        appendLog(t('pages.native-debug.log.filePicker.invalidSelection'));
         return;
       }
 
       const track: Track = {
         id: `native-${Date.now()}`,
-        title: getFileName(filePath),
+        title: getFileName(filePath, t('common.unknown.audioFile')),
         filePath,
         path: filePath,
         originalPath: filePath,
@@ -428,99 +461,99 @@ export const NativeDebugPage: React.FC = () => {
 
       audioService.clearQueue();
       audioService.addToQueue(track);
-      appendLog(`加载文件：${track.title}`);
+      appendLog(t('pages.native-debug.log.fileLoaded', { title: track.title }));
       await audioService.playTrackAtIndex(0);
-      appendLog('播放命令已发送');
+      appendLog(t('pages.native-debug.log.playCommandSent'));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLastError(message);
-      appendLog(`加载失败：${message}`);
+      appendLog(t('pages.native-debug.log.fileLoadFailed', { message }));
     } finally {
       setIsSelectingFile(false);
     }
-  }, [appendLog, audioService]);
+  }, [appendLog, audioService, t]);
 
   const handlePlay = useCallback(async () => {
     if (state.playbackState === 'paused' && state.currentTrack) {
       await audioService.play();
-      appendLog('继续播放');
+      appendLog(t('pages.native-debug.log.play.resumed'));
       return;
     }
 
     if (!state.currentTrack && state.queue.length > 0) {
       const index = state.currentIndex >= 0 ? state.currentIndex : 0;
       await audioService.playTrackAtIndex(index);
-      appendLog(`从队列索引 ${index} 播放`);
+      appendLog(t('pages.native-debug.log.play.fromQueueIndex', { index }));
       return;
     }
 
     if (state.currentTrack) {
       await audioService.play();
-      appendLog('开始播放当前曲目');
+      appendLog(t('pages.native-debug.log.play.currentTrack'));
       return;
     }
 
-    appendLog('没有可播放的歌曲，请先选择音频文件');
-  }, [audioService, appendLog, state.currentIndex, state.currentTrack, state.playbackState, state.queue.length]);
+    appendLog(t('pages.native-debug.log.play.noTracks'));
+  }, [audioService, appendLog, state.currentIndex, state.currentTrack, state.playbackState, state.queue.length, t]);
 
   const handleStop = useCallback(() => {
     audioService.stop();
-    appendLog('触发停止');
-  }, [audioService, appendLog]);
+    appendLog(t('pages.native-debug.log.stop'));
+  }, [audioService, appendLog, t]);
 
   const handleNext = useCallback(async () => {
     await audioService.playNext();
-    appendLog('播放下一首');
-  }, [audioService, appendLog]);
+    appendLog(t('pages.native-debug.log.play.next'));
+  }, [audioService, appendLog, t]);
 
   const handlePrev = useCallback(async () => {
     await audioService.playPrevious();
-    appendLog('播放上一首');
-  }, [audioService, appendLog]);
+    appendLog(t('pages.native-debug.log.play.prev'));
+  }, [audioService, appendLog, t]);
 
   const handleVolumeChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
       const value = Number(event.target.value);
       audioService.setVolume(value);
-      appendLog(`调整音量：${value.toFixed(2)}`);
+      appendLog(t('pages.native-debug.log.volumeChanged', { value: value.toFixed(2) }));
     },
-    [audioService, appendLog]
+    [audioService, appendLog, t]
   );
 
   const handleToggleMute = useCallback(() => {
     audioService.toggleMute();
-    appendLog('切换静音');
-  }, [audioService, appendLog]);
+    appendLog(t('pages.native-debug.log.muteToggled'));
+  }, [audioService, appendLog, t]);
 
   const handleTogglePlayPause = useCallback(async () => {
     if (state.playbackState === 'playing') {
       await audioService.pause();
-      appendLog('触发暂停');
+      appendLog(t('pages.native-debug.log.pause'));
       return;
     }
     await handlePlay();
-  }, [appendLog, handlePlay, audioService, state.playbackState]);
+  }, [appendLog, handlePlay, audioService, state.playbackState, t]);
 
   const handleQueuePlay = useCallback(
     async (index: number) => {
       await audioService.playTrackAtIndex(index);
-      appendLog(`从队列播放索引 ${index}`);
+      appendLog(t('pages.native-debug.log.queue.playIndex', { index }));
     },
-    [audioService, appendLog]
+    [audioService, appendLog, t]
   );
 
   const handleQueueRemove = useCallback(
     (index: number) => {
       audioService.removeFromQueue(index);
-      appendLog(`从队列移除索引 ${index}`);
+      appendLog(t('pages.native-debug.log.queue.removeIndex', { index }));
     },
-    [audioService, appendLog]
+    [audioService, appendLog, t]
   );
 
   const handleClearQueue = useCallback(() => {
     audioService.clearQueue();
-    appendLog('清空队列');
-  }, [audioService, appendLog]);
+    appendLog(t('pages.native-debug.log.queue.cleared'));
+  }, [audioService, appendLog, t]);
 
   const displayedState = useMemo(() => JSON.stringify(state, null, 2), [state]);
 
@@ -528,15 +561,21 @@ export const NativeDebugPage: React.FC = () => {
     return (
       <div className="native-debug-page">
         <div className="native-debug-card native-debug-warning">
-          <h2>原生音频引擎未启用</h2>
-          <p>本页面仅用于调试原生音频服务。请先在首页切换到“Native Audio”。</p>
+          <h2>{t('pages.native-debug.notNative.title')}</h2>
+          <p>{t('pages.native-debug.notNative.desc')}</p>
           <button className="native-debug-primary" type="button" onClick={() => setEngineType('native')}>
-            立即切换
+            {t('pages.native-debug.notNative.action.switchNow')}
           </button>
         </div>
       </div>
     );
   }
+
+  const eqBandKindLabel = (kind: NativeDspEqBandKind) => {
+    if (kind === 'low-shelf') return t('pages.native-debug.eq.kind.lowShelf');
+    if (kind === 'high-shelf') return t('pages.native-debug.eq.kind.highShelf');
+    return t('pages.native-debug.eq.kind.peaking');
+  };
 
   return (
     <div className="native-debug-page">
@@ -544,8 +583,8 @@ export const NativeDebugPage: React.FC = () => {
         <section className="native-debug-card native-debug-controls">
           <header>
             <div>
-              <p className="section-label">控制面板</p>
-              <h2>原生引擎调试</h2>
+              <p className="section-label">{t('pages.native-debug.section.controls')}</p>
+              <h2>{t('pages.native-debug.title')}</h2>
             </div>
             <span className={`state-pill state-${state.playbackState}`}>{state.playbackState}</span>
           </header>
@@ -559,7 +598,7 @@ export const NativeDebugPage: React.FC = () => {
 
           <div className="control-row">
             <button type="button" onClick={handleSelectTrack} disabled={isSelectingFile}>
-              {isSelectingFile ? '加载中…' : '选择音频文件'}
+              {isSelectingFile ? t('common.state.loading') : t('pages.native-debug.action.selectAudioFile')}
             </button>
             <div className="transport-buttons">
               <button type="button" onClick={handlePrev} disabled={!state.queue.length}>
@@ -578,7 +617,9 @@ export const NativeDebugPage: React.FC = () => {
           </div>
 
           <div className="volume-row">
-            <label htmlFor="native-debug-volume">音量：{Math.round(state.volume * 100)}%</label>
+            <label htmlFor="native-debug-volume">
+              {t('pages.native-debug.volume.label', { percent: Math.round(state.volume * 100) })}
+            </label>
             <input
               id="native-debug-volume"
               type="range"
@@ -589,14 +630,12 @@ export const NativeDebugPage: React.FC = () => {
               onChange={handleVolumeChange}
             />
             <button type="button" onClick={handleToggleMute}>
-              {state.muted ? '取消静音' : '静音'}
+              {state.muted ? t('common.action.unmute') : t('common.action.mute')}
             </button>
           </div>
 
           <div className="volume-row">
-            <label htmlFor="native-debug-gain">
-              Gain：{dspGainDb.toFixed(1)} dB
-            </label>
+            <label htmlFor="native-debug-gain">{t('pages.native-debug.gain.label', { db: dspGainDb.toFixed(1) })}</label>
             <input
               id="native-debug-gain"
               type="range"
@@ -607,14 +646,14 @@ export const NativeDebugPage: React.FC = () => {
               onChange={(e) => void handleGainChange(Number(e.target.value))}
             />
             <button type="button" onClick={() => void handleGainChange(0)}>
-              复位
+              {t('pages.native-debug.gain.action.reset')}
             </button>
           </div>
 
           <div className="device-row">
             <div className="device-meta">
-              <p className="device-label">Crossfade</p>
-              <p className="device-hint">Applies when switching tracks while playing (native)</p>
+              <p className="device-label">{t('pages.native-debug.crossfade.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.crossfade.desc')}</p>
             </div>
             <div className="device-controls" style={{ gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -625,10 +664,10 @@ export const NativeDebugPage: React.FC = () => {
                     setCrossfadeSettings((prev) => ({ ...prev, enabled: e.target.checked }))
                   }
                 />
-                Enabled
+                {t('common.action.enable')}
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>Duration</span>
+                <span>{t('pages.native-debug.crossfade.duration')}</span>
                 <input
                   type="number"
                   min={0}
@@ -642,26 +681,34 @@ export const NativeDebugPage: React.FC = () => {
                 <span>ms</span>
               </label>
               <button type="button" onClick={() => void handleApplyCrossfadeSettings()}>
-                Apply
+                {t('common.action.apply')}
               </button>
             </div>
           </div>
 
           <div className="device-row">
             <div className="device-meta">
-              <p className="device-label">ReplayGain</p>
+              <p className="device-label">{t('pages.native-debug.replayGain.title')}</p>
               <p className="device-value">
-                applied：{nativeMeta.replayGainDb === null ? '—' : `${nativeMeta.replayGainDb.toFixed(1)} dB`}
+                {t('pages.native-debug.replayGain.applied', {
+                  value:
+                    nativeMeta.replayGainDb === null ? '—' : `${nativeMeta.replayGainDb.toFixed(1)} dB`,
+                })}
               </p>
               <p className="device-hint">
-                track tag：
-                {typeof state.currentTrack?.replayGainTrackGainDb === 'number'
-                  ? `${state.currentTrack.replayGainTrackGainDb.toFixed(1)} dB`
-                  : '—'}{' '}
-                · album tag：
-                {typeof state.currentTrack?.replayGainAlbumGainDb === 'number'
-                  ? `${state.currentTrack.replayGainAlbumGainDb.toFixed(1)} dB`
-                  : '—'}
+                {t('pages.native-debug.replayGain.trackTag', {
+                  value:
+                    typeof state.currentTrack?.replayGainTrackGainDb === 'number'
+                      ? `${state.currentTrack.replayGainTrackGainDb.toFixed(1)} dB`
+                      : '—',
+                })}{' '}
+                ·{' '}
+                {t('pages.native-debug.replayGain.albumTag', {
+                  value:
+                    typeof state.currentTrack?.replayGainAlbumGainDb === 'number'
+                      ? `${state.currentTrack.replayGainAlbumGainDb.toFixed(1)} dB`
+                      : '—',
+                })}
               </p>
             </div>
             <div className="device-controls" style={{ gap: 10 }}>
@@ -673,7 +720,7 @@ export const NativeDebugPage: React.FC = () => {
                     setReplayGainSettings((prev) => ({ ...prev, enabled: e.target.checked }))
                   }
                 />
-                启用
+                {t('common.action.enable')}
               </label>
               <select
                 value={replayGainSettings.mode}
@@ -683,13 +730,13 @@ export const NativeDebugPage: React.FC = () => {
                     mode: (e.target.value === 'album' ? 'album' : 'track') as ReplayGainMode,
                   }))
                 }
-                aria-label="ReplayGain 模式"
+                aria-label={t('pages.native-debug.replayGain.mode.ariaLabel')}
               >
-                <option value="track">Track</option>
-                <option value="album">Album</option>
+                <option value="track">{t('pages.native-debug.replayGain.mode.track')}</option>
+                <option value="album">{t('pages.native-debug.replayGain.mode.album')}</option>
               </select>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>Preamp</span>
+                <span>{t('pages.native-debug.replayGain.preamp')}</span>
                 <input
                   type="number"
                   step={0.5}
@@ -702,19 +749,19 @@ export const NativeDebugPage: React.FC = () => {
                 <span>dB</span>
               </label>
               <button type="button" onClick={() => void handleApplyReplayGainSettings()}>
-                应用
+                {t('common.action.apply')}
               </button>
             </div>
           </div>
 
           <div className="device-row">
             <div className="device-meta">
-              <p className="device-label">EQ（3-band）</p>
-              <p className="device-hint">Low shelf 120Hz · Peak 1kHz · High shelf 8kHz</p>
+              <p className="device-label">{t('pages.native-debug.eq.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.eq.desc')}</p>
             </div>
             <div className="device-controls" style={{ gap: 10 }}>
               <button type="button" onClick={() => void handleEqReset()}>
-                EQ 归零
+                {t('pages.native-debug.eq.action.zeroAll')}
               </button>
             </div>
           </div>
@@ -722,7 +769,11 @@ export const NativeDebugPage: React.FC = () => {
           {eqBands.map((band, index) => (
             <div key={`${band.kind}-${band.frequencyHz}`} className="volume-row">
               <label htmlFor={`native-debug-eq-${index}`}>
-                {band.kind} {Math.round(band.frequencyHz)}Hz：{band.gainDb.toFixed(1)} dB
+                {t('pages.native-debug.eq.bandLabel', {
+                  kind: eqBandKindLabel(band.kind),
+                  frequencyHz: Math.round(band.frequencyHz),
+                  gainDb: band.gainDb.toFixed(1),
+                })}
               </label>
               <input
                 id={`native-debug-eq-${index}`}
@@ -734,15 +785,15 @@ export const NativeDebugPage: React.FC = () => {
                 onChange={(e) => void handleEqBandGainChange(index, Number(e.target.value))}
               />
               <button type="button" onClick={() => void handleEqBandGainChange(index, 0)}>
-                归零
+                {t('pages.native-debug.eq.action.zero')}
               </button>
             </div>
           ))}
 
           <div className="device-row">
             <div className="device-meta">
-              <p className="device-label">Limiter</p>
-              <p className="device-hint">Peak limiter (post EQ)</p>
+              <p className="device-label">{t('pages.native-debug.limiter.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.limiter.desc')}</p>
             </div>
             <div className="device-controls" style={{ gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -751,21 +802,21 @@ export const NativeDebugPage: React.FC = () => {
                   checked={limiterEnabled}
                   onChange={(e) => void handleLimiterToggle(e.target.checked)}
                 />
-                Enabled
+                {t('common.action.enable')}
               </label>
               <button
                 type="button"
                 onClick={() => void handleLimiterThresholdChange(-1)}
                 disabled={!limiterEnabled}
               >
-                Default (-1dB)
+                {t('pages.native-debug.limiter.action.defaultThreshold')}
               </button>
             </div>
           </div>
 
           <div className="volume-row">
             <label htmlFor="native-debug-limiter-threshold">
-              Threshold: {limiterThresholdDb.toFixed(1)} dB
+              {t('pages.native-debug.limiter.thresholdLabel', { db: limiterThresholdDb.toFixed(1) })}
             </label>
             <input
               id="native-debug-limiter-threshold"
@@ -781,8 +832,8 @@ export const NativeDebugPage: React.FC = () => {
 
           <div className="device-row">
             <div className="device-meta">
-              <p className="device-label">输出设备</p>
-              <p className="device-value">{nativeMeta.device ?? '默认设备'}</p>
+              <p className="device-label">{t('pages.native-debug.outputDevice.title')}</p>
+              <p className="device-value">{nativeMeta.device ?? t('pages.native-debug.outputDevice.default')}</p>
               <p className="device-hint">
                 {nativeMeta.sampleRate ? `${nativeMeta.sampleRate} Hz` : '—'} ·{' '}
                 {nativeMeta.bitDepth ? `${nativeMeta.bitDepth} bit` : '—'}
@@ -792,9 +843,9 @@ export const NativeDebugPage: React.FC = () => {
               <select
                 value={selectedDevice}
                 onChange={(e) => setSelectedDevice(e.target.value)}
-                aria-label="选择输出设备"
+                aria-label={t('pages.native-debug.outputDevice.select.ariaLabel')}
               >
-                <option value="">默认设备</option>
+                <option value="">{t('pages.native-debug.outputDevice.default')}</option>
                 {outputDevices.map((name) => (
                   <option key={name} value={name}>
                     {name}
@@ -802,10 +853,10 @@ export const NativeDebugPage: React.FC = () => {
                 ))}
               </select>
               <button type="button" onClick={() => void handleRefreshDevices()}>
-                刷新
+                {t('common.action.refresh')}
               </button>
               <button type="button" onClick={() => void handleApplyDevice()}>
-                应用
+                {t('common.action.apply')}
               </button>
             </div>
           </div>
@@ -817,16 +868,16 @@ export const NativeDebugPage: React.FC = () => {
 
           <div className="queue-actions">
             <div>
-              <p className="section-label">队列</p>
-              <h3>{state.queue.length} 首歌曲</h3>
+              <p className="section-label">{t('pages.native-debug.queue.title')}</p>
+              <h3>{t('pages.native-debug.queue.count', { count: state.queue.length })}</h3>
             </div>
             <button type="button" onClick={handleClearQueue} disabled={!state.queue.length}>
-              清空
+              {t('common.action.clear')}
             </button>
           </div>
 
           <ul className="debug-queue">
-            {state.queue.length === 0 && <li className="queue-empty">暂无队列，请先加载音频</li>}
+            {state.queue.length === 0 && <li className="queue-empty">{t('pages.native-debug.queue.empty')}</li>}
             {state.queue.map((track, index) => (
               <li key={track.id} data-active={index === state.currentIndex}>
                 <div>
@@ -835,29 +886,31 @@ export const NativeDebugPage: React.FC = () => {
                 </div>
                 <div className="queue-buttons">
                   <button type="button" onClick={() => handleQueuePlay(index)}>
-                    播放
+                    {t('common.action.play')}
                   </button>
                   <button type="button" onClick={() => handleQueueRemove(index)}>
-                    移除
+                    {t('common.action.remove')}
                   </button>
                 </div>
               </li>
             ))}
           </ul>
 
-          {lastError && <p className="error-banner">最后一次错误：{lastError}</p>}
+          {lastError && (
+            <p className="error-banner">{t('pages.native-debug.lastError', { message: lastError })}</p>
+          )}
         </section>
 
         <section className="native-debug-card native-debug-state-panel">
           <header>
-            <p className="section-label">实时状态</p>
-            <h3>NativeAudioService Snapshot</h3>
+            <p className="section-label">{t('pages.native-debug.section.state')}</p>
+            <h3>{t('pages.native-debug.state.snapshotTitle')}</h3>
           </header>
           <pre className="native-debug-state">{displayedState}</pre>
           <div className="native-debug-logs">
-            <p className="section-label">操作日志</p>
+            <p className="section-label">{t('pages.native-debug.section.logs')}</p>
             <ul>
-              {logs.length === 0 && <li className="log-empty">暂无日志</li>}
+              {logs.length === 0 && <li className="log-empty">{t('pages.native-debug.logs.empty')}</li>}
               {logs.map((log, idx) => (
                 <li key={`${log}-${idx}`}>{log}</li>
               ))}

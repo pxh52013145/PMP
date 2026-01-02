@@ -2,8 +2,10 @@ import React from 'react';
 import { usePersistentSetting } from '../../modules/storage';
 import { applyEditorLowPerformanceMode } from '../../utils/editorWindowEffects';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { useT } from '../../i18n';
 
 export function PerformanceSettingsPanel() {
+  const t = useT();
   const [lowPerformanceMode, setLowPerformanceMode] = usePersistentSetting<boolean>(
     STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
     false
@@ -22,38 +24,40 @@ export function PerformanceSettingsPanel() {
       <div className="settings-card">
         <div className="settings-card-header">
           <div>
-            <p className="settings-card-label">低性能模式</p>
-            <p className="settings-card-desc">多开 Editor 窗口时推荐开启，减少滚动卡顿。</p>
+            <p className="settings-card-label">{t('settings.performance.lowPerformance.label')}</p>
+            <p className="settings-card-desc">{t('settings.performance.lowPerformance.desc')}</p>
           </div>
-          <span className="settings-card-badge">{lowPerformanceMode ? 'ON' : 'OFF'}</span>
+          <span className="settings-card-badge">
+            {lowPerformanceMode ? t('common.state.on') : t('common.state.off')}
+          </span>
         </div>
 
         <div className="settings-toggle">
           <button type="button" data-active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
-            标准
+            {t('settings.performance.lowPerformance.option.standard')}
           </button>
           <button type="button" data-active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
-            低性能
+            {t('settings.performance.lowPerformance.option.low')}
           </button>
         </div>
 
-        <p className="settings-card-note">禁用 Editor 窗口的高开销效果（如 Blur Behind）。</p>
+        <p className="settings-card-note">{t('settings.performance.lowPerformance.note')}</p>
       </div>
 
       <div className="settings-card" style={{ marginTop: 16 }}>
         <div className="settings-card-header">
           <div>
-            <p className="settings-card-label">GIF 导入帧率限制</p>
-            <p className="settings-card-desc">降低导入 GIF 的帧率，减少多窗口时的掉帧与透明闪烁风险。</p>
+            <p className="settings-card-label">{t('settings.performance.gifImportFps.label')}</p>
+            <p className="settings-card-desc">{t('settings.performance.gifImportFps.desc')}</p>
           </div>
           <span className="settings-card-badge">
-            {gifImportMaxFps <= 0 ? 'OFF' : `${gifImportMaxFps}fps`}
+            {gifImportMaxFps <= 0 ? t('common.state.off') : `${gifImportMaxFps}fps`}
           </span>
         </div>
 
         <div className="settings-toggle">
           <button type="button" data-active={gifImportMaxFps <= 0} onClick={() => setGifImportMaxFps(0)}>
-            原始
+            {t('settings.performance.gifImportFps.option.original')}
           </button>
           <button type="button" data-active={gifImportMaxFps === 30} onClick={() => setGifImportMaxFps(30)}>
             30fps
@@ -66,7 +70,7 @@ export function PerformanceSettingsPanel() {
           </button>
         </div>
 
-        <p className="settings-card-note">仅对新导入的 GIF 生效；已导入的 GIF 需要重新导入。</p>
+        <p className="settings-card-note">{t('settings.performance.gifImportFps.note')}</p>
       </div>
     </>
   );

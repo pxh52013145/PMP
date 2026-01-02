@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useT } from './i18n';
 import { EditorProvider } from './contexts/EditorContext';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
@@ -71,6 +72,7 @@ interface EditorControlPanelProps {
 }
 
 function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
+  const t = useT();
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
@@ -345,12 +347,16 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       {/* 完成编辑按钮和置顶按钮 */}
       <div className="control-button-group">
         <button className="cyber-btn exit-cyber-btn" onClick={onExitEditMode}>
-          <span className="btn-text">submit</span>
+          <span className="btn-text">{t('common.action.done')}</span>
         </button>
         <button
           className={`cyber-btn pin-btn ${isAlwaysOnTop ? 'active' : ''}`}
           onClick={handleToggleAlwaysOnTop}
-          title={isAlwaysOnTop ? '取消置顶' : '窗口置顶'}
+          title={
+            isAlwaysOnTop
+              ? t('editor.control-panel.pin.title.unpin')
+              : t('editor.control-panel.pin.title.pin')
+          }
         >
           <span className="btn-text"></span>
         </button>
@@ -364,7 +370,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">info</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.statistics.label')}</span>
       </div>
 
       {/* Magnet 库开关 */}
@@ -375,7 +381,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">LIB</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.library.label')}</span>
       </div>
 
       {/* 风格设置开关 */}
@@ -386,7 +392,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">style</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.style.label')}</span>
       </div>
 
       {/* 背景管理开关 */}
@@ -397,7 +403,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">BG</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.background.label')}</span>
       </div>
 
       {/* Debug 开关 */}
@@ -408,7 +414,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">debug</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.debug.label')}</span>
       </div>
     </div>
   );

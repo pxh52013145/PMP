@@ -2,6 +2,7 @@ import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
 import { BackgroundConfig, BackgroundSettings, PRESET_BACKGROUNDS } from '../../types/background';
 import { setupStorageListener, STORAGE_KEYS } from '../../utils/windowCommunication';
 import { readJson, readString, tryWriteJson, writeString } from '../../modules/storage';
+import { useT } from '../../i18n';
 import './BackgroundManager.css';
 
 function isTauriLocalhostHttpUrl(url: string): boolean {
@@ -39,6 +40,8 @@ export const BackgroundManager = memo(function BackgroundManager({
   onSettingsChange,
   currentWindowMode,
 }: BackgroundManagerProps) {
+  const t = useT();
+
   const [mode, setMode] = useState<BackgroundMode>(currentWindowMode);
   const [glitchEffect, setGlitchEffect] = useState(false);
   const [glitchPreset, setGlitchPreset] = useState<string | null>(null);
@@ -83,7 +86,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       return;
     }
 
-    setHistoryPersistError('历史记录保存失败（可能是存储空间不足）。当前会话可用，但重启后可能丢失。');
+    setHistoryPersistError('editor.background-manager.error.historyPersistFailed');
   }, [history]);
 
   const currentConfig = settings[mode];
@@ -412,9 +415,9 @@ export const BackgroundManager = memo(function BackgroundManager({
       console.log('Custom background window opened successfully');
     } catch (error) {
       console.error('Failed to open custom background window:', error);
-      alert('打开自定义背景窗口失败：' + error);
+      alert(t('editor.background-manager.error.openCustomEditorFailed', { message: String(error) }));
     }
-  }, []);
+  }, [t]);
 
   // 处理禁用模式按钮点击（触发故障效果）
   const handleDisabledModeClick = useCallback(() => {
@@ -590,7 +593,7 @@ export const BackgroundManager = memo(function BackgroundManager({
     if (maintenanceBusy || migrationRunningRef.current) return;
     migrationRunningRef.current = true;
     setMaintenanceBusy(true);
-    setMaintenanceMessage('正在迁移旧版背景数据…');
+    setMaintenanceMessage(t('editor.background-manager.maintenance.migratingLegacy'));
 
     try {
       let changedSettings = false;
@@ -637,21 +640,23 @@ export const BackgroundManager = memo(function BackgroundManager({
       setHistory(nextHistory);
       writeString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1, '1');
       setMaintenanceMessage(
-        dropped > 0 ? `迁移完成（已移除 ${dropped} 条无法迁移的旧记录）` : '迁移完成'
+        dropped > 0
+          ? t('editor.background-manager.maintenance.migrateDoneWithDropped', { dropped })
+          : t('editor.background-manager.maintenance.migrateDone')
       );
     } catch (error) {
       console.error('[BackgroundManager] Legacy migration failed:', error);
-      setMaintenanceMessage('迁移失败：请重试或重新选择背景文件');
+      setMaintenanceMessage(t('editor.background-manager.maintenance.migrateFailed'));
     } finally {
       migrationRunningRef.current = false;
       setMaintenanceBusy(false);
     }
-  }, [history, maintenanceBusy, migrateConfigIfNeeded, onSettingsChange]);
+  }, [history, maintenanceBusy, migrateConfigIfNeeded, onSettingsChange, t]);
 
   const runMediaGc = useCallback(async () => {
     if (maintenanceBusy) return;
     setMaintenanceBusy(true);
-    setMaintenanceMessage('正在清理未使用的背景文件…');
+    setMaintenanceMessage(t('editor.background-manager.maintenance.gcRunning'));
 
     try {
       const fs = await import('@tauri-apps/api/fs');
@@ -693,14 +698,16 @@ export const BackgroundManager = memo(function BackgroundManager({
         }
       }
 
-      setMaintenanceMessage(`清理完成：扫描 ${scanned} 个文件，删除 ${removed} 个未使用文件`);
+      setMaintenanceMessage(
+        t('editor.background-manager.maintenance.gcDone', { scanned, removed })
+      );
     } catch (error) {
       console.error('[BackgroundManager] Media GC failed:', error);
-      setMaintenanceMessage('清理失败：请重试');
+      setMaintenanceMessage(t('editor.background-manager.maintenance.gcFailed'));
     } finally {
       setMaintenanceBusy(false);
     }
-  }, [getConfigMediaRelPath, history, maintenanceBusy]);
+  }, [getConfigMediaRelPath, history, maintenanceBusy, t]);
 
   useEffect(() => {
     const migrated = readString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1) === '1';
@@ -776,19 +783,21 @@ export const BackgroundManager = memo(function BackgroundManager({
   const getHistoryTypeLabel = useCallback((config: BackgroundConfig): string => {
     switch (config.type) {
       case 'color':
-        return '纯色';
+        return t('editor.background-manager.history.type.color');
       case 'gradient':
-        return config.gradient?.type === 'linear' ? '线性渐变' : '径向渐变';
+        return config.gradient?.type === 'linear'
+          ? t('editor.background-manager.history.type.gradientLinear')
+          : t('editor.background-manager.history.type.gradientRadial');
       case 'image':
-        return '图片';
+        return t('editor.background-manager.history.type.image');
       case 'video':
-        return '视频';
+        return t('editor.background-manager.history.type.video');
       case 'html':
-        return 'HTML';
+        return t('editor.background-manager.history.type.html');
       default:
-        return '未知';
+        return t('editor.background-manager.history.type.unknown');
     }
-  }, []);
+  }, [t]);
 
   const confirmDialogContent = useMemo(() => {
     if (!confirmDialog) return null;
@@ -796,31 +805,30 @@ export const BackgroundManager = memo(function BackgroundManager({
     switch (confirmDialog.type) {
       case 'delete-history':
         return {
-          title: '删除历史记录',
-          message: '确定要删除这条历史记录吗？（文件会在下次启动时自动清理，或手动点“清理未使用文件”。）',
-          confirmText: '[删除] DELETE',
+          title: t('editor.background-manager.confirm.deleteHistory.title'),
+          message: t('editor.background-manager.confirm.deleteHistory.message'),
+          confirmText: t('editor.background-manager.confirm.deleteHistory.confirmText'),
         };
       case 'clear-history':
         return {
-          title: '清空历史记录',
-          message: '确定要清空所有历史记录吗？（文件会在下次启动时自动清理，或手动点“清理未使用文件”。）',
-          confirmText: '[清空] CLEAR',
+          title: t('editor.background-manager.confirm.clearHistory.title'),
+          message: t('editor.background-manager.confirm.clearHistory.message'),
+          confirmText: t('editor.background-manager.confirm.clearHistory.confirmText'),
         };
       case 'gc-media':
         return {
-          title: '清理未使用文件',
-          message: '将扫描本地 background-media 目录并删除未被历史记录或当前背景引用的文件，确定继续吗？',
-          confirmText: '[清理] GC',
+          title: t('editor.background-manager.confirm.gcMedia.title'),
+          message: t('editor.background-manager.confirm.gcMedia.message'),
+          confirmText: t('editor.background-manager.confirm.gcMedia.confirmText'),
         };
       case 'migrate-legacy':
         return {
-          title: '迁移旧数据',
-          message:
-            '将把旧版 data:base64 背景数据迁移为本地文件存储，并自动清理无法迁移的旧记录，确定继续吗？',
-          confirmText: '[迁移] MIGRATE',
+          title: t('editor.background-manager.confirm.migrateLegacy.title'),
+          message: t('editor.background-manager.confirm.migrateLegacy.message'),
+          confirmText: t('editor.background-manager.confirm.migrateLegacy.confirmText'),
         };
     }
-  }, [confirmDialog]);
+  }, [confirmDialog, t]);
 
   const handleConfirmDialogConfirm = useCallback(() => {
     if (!confirmDialog) return;
@@ -860,7 +868,7 @@ export const BackgroundManager = memo(function BackgroundManager({
           <div className="bg-mode-selector">
             <button
               className={`mode-btn ${mode === 'maximized' ? 'active' : ''} ${currentWindowMode !== 'maximized' ? 'disabled' : ''} ${glitchEffect && currentWindowMode !== 'maximized' ? 'glitch' : ''}`}
-              data-text="最大化背景"
+              data-text={t('editor.background-manager.mode.maximized')}
               onClick={() => {
                 if (currentWindowMode === 'maximized') {
                   setMode('maximized');
@@ -869,11 +877,11 @@ export const BackgroundManager = memo(function BackgroundManager({
                 }
               }}
             >
-              最大化背景
+              {t('editor.background-manager.mode.maximized')}
             </button>
             <button
               className={`mode-btn ${mode === 'windowed' ? 'active' : ''} ${currentWindowMode !== 'windowed' ? 'disabled' : ''} ${glitchEffect && currentWindowMode !== 'windowed' ? 'glitch' : ''}`}
-              data-text="窗口背景"
+              data-text={t('editor.background-manager.mode.windowed')}
               onClick={() => {
                 if (currentWindowMode === 'windowed') {
                   setMode('windowed');
@@ -882,7 +890,7 @@ export const BackgroundManager = memo(function BackgroundManager({
                 }
               }}
             >
-              窗口背景
+              {t('editor.background-manager.mode.windowed')}
             </button>
           </div>
         </div>
@@ -891,32 +899,32 @@ export const BackgroundManager = memo(function BackgroundManager({
         <div className="bg-content-scroll">
           {/* 背景类型选择 */}
           <div className="bg-section">
-            <div className="section-title">背景类型</div>
+            <div className="section-title">{t('editor.background-manager.section.backgroundType')}</div>
             <div className="type-buttons">
               <button
                 className={`type-btn ${currentConfig.type === 'color' ? 'active' : ''}`}
                 onClick={() => handleTypeChange('color')}
               >
-                纯色
+                {t('editor.background-manager.type.color')}
               </button>
               <button
                 className={`type-btn ${currentConfig.type === 'gradient' ? 'active' : ''}`}
                 onClick={() => handleTypeChange('gradient')}
               >
-                渐变
+                {t('editor.background-manager.type.gradient')}
               </button>
               <button
                 className={`type-btn ${isCustomMode ? 'active' : ''}`}
                 onClick={handleCustomTypeClick}
               >
-                自定义
+                {t('editor.background-manager.type.custom')}
               </button>
             </div>
           </div>
 
           {/* 透明度控制 */}
           <div className="bg-section">
-            <div className="section-title">透明度</div>
+            <div className="section-title">{t('editor.background-manager.section.opacity')}</div>
             <div className="slider-container">
               <input
                 type="range"
@@ -932,7 +940,7 @@ export const BackgroundManager = memo(function BackgroundManager({
 
           {/* 模糊效果 */}
           <div className="bg-section">
-            <div className="section-title">模糊效果</div>
+            <div className="section-title">{t('editor.background-manager.section.blur')}</div>
             <div className="slider-container">
               <input
                 type="range"
@@ -949,9 +957,9 @@ export const BackgroundManager = memo(function BackgroundManager({
           {/* 只在自定义模式下显示打开编辑器按钮 */}
           {isCustomMode && (
             <div className="bg-section">
-              <div className="section-title">自定义编辑</div>
+              <div className="section-title">{t('editor.background-manager.section.customEdit')}</div>
               <button className="open-custom-editor-btn" onClick={handleOpenCustomEditor}>
-                打开自定义窗口
+                {t('editor.background-manager.action.openCustomEditor')}
               </button>
             </div>
           )}
@@ -959,7 +967,7 @@ export const BackgroundManager = memo(function BackgroundManager({
           {/* 只在非自定义模式下显示预设背景 */}
           {!isCustomMode && (
             <div className="bg-section">
-              <div className="section-title">预设背景</div>
+              <div className="section-title">{t('editor.background-manager.section.presets')}</div>
               <div className="preset-grid">
                 {Object.keys(PRESET_BACKGROUNDS).map((key) => {
                   const preset = PRESET_BACKGROUNDS[key];
@@ -984,7 +992,7 @@ export const BackgroundManager = memo(function BackgroundManager({
           {/* 只在非自定义模式下显示颜色设置 */}
           {!isCustomMode && currentConfig.type === 'color' && (
             <div className="bg-section">
-              <div className="section-title">颜色设置</div>
+              <div className="section-title">{t('editor.background-manager.section.color')}</div>
               <div className="color-input-container">
                 <input
                   type="color"
@@ -1007,28 +1015,30 @@ export const BackgroundManager = memo(function BackgroundManager({
           {!isCustomMode && currentConfig.type === 'gradient' && (
             <>
               <div className="bg-section">
-                <div className="section-title">渐变类型</div>
+                <div className="section-title">{t('editor.background-manager.section.gradientType')}</div>
                 <div className="type-buttons">
                   <button
                     className={`type-btn ${currentConfig.gradient?.type === 'linear' ? 'active' : ''}`}
                     onClick={() => handleGradientTypeChange('linear')}
                   >
-                    线性
+                    {t('editor.background-manager.gradient.type.linear')}
                   </button>
                   <button
                     className={`type-btn ${currentConfig.gradient?.type === 'radial' ? 'active' : ''}`}
                     onClick={() => handleGradientTypeChange('radial')}
                   >
-                    径向
+                    {t('editor.background-manager.gradient.type.radial')}
                   </button>
                 </div>
               </div>
 
               <div className="bg-section">
-                <div className="section-title">渐变颜色</div>
+                <div className="section-title">{t('editor.background-manager.section.gradientColors')}</div>
                 {currentConfig.gradient?.colors.map((color, index) => (
                   <div key={index} className="gradient-color-row">
-                    <span className="color-label">色块 {index + 1}</span>
+                    <span className="color-label">
+                      {t('editor.background-manager.gradient.colorSwatch', { index: index + 1 })}
+                    </span>
                     <div className="color-input-container">
                       <input
                         type="color"
@@ -1047,7 +1057,7 @@ export const BackgroundManager = memo(function BackgroundManager({
                         <button
                           className="remove-color-btn"
                           onClick={() => handleRemoveGradientColor(index)}
-                          title="删除颜色"
+                          title={t('editor.background-manager.gradient.removeColorTitle')}
                         >
                           ○
                         </button>
@@ -1057,14 +1067,14 @@ export const BackgroundManager = memo(function BackgroundManager({
                 ))}
                 {(currentConfig.gradient?.colors.length ?? 0) < 5 && (
                   <button className="add-color-btn" onClick={handleAddGradientColor}>
-                    + 添加颜色
+                    {t('editor.background-manager.gradient.addColor')}
                   </button>
                 )}
               </div>
 
               {currentConfig.gradient?.type === 'linear' && (
                 <div className="bg-section">
-                  <div className="section-title">渐变角度</div>
+                  <div className="section-title">{t('editor.background-manager.section.gradientAngle')}</div>
                   <div className="slider-container">
                     <input
                       type="range"
@@ -1083,9 +1093,9 @@ export const BackgroundManager = memo(function BackgroundManager({
 
           {/* 保存到历史记录 */}
           <div className="bg-section">
-            <div className="section-title">保存配置</div>
+            <div className="section-title">{t('editor.background-manager.section.saveConfig')}</div>
             <button className="save-history-btn" onClick={handleSaveToHistory}>
-              保存当前背景
+              {t('editor.background-manager.action.saveCurrent')}
             </button>
           </div>
 
@@ -1093,9 +1103,9 @@ export const BackgroundManager = memo(function BackgroundManager({
           {history.length > 0 && (
             <div className="bg-section">
               <div className="section-title-with-actions">
-                <span>历史记录</span>
+                <span>{t('editor.background-manager.section.history')}</span>
                 <button className="clear-history-btn" onClick={handleClearHistory}>
-                  清空
+                  {t('common.action.clear')}
                 </button>
               </div>
               <div className="history-list">
@@ -1105,7 +1115,7 @@ export const BackgroundManager = memo(function BackgroundManager({
                       className="history-preview"
                       style={getHistoryItemStyle(item.config)}
                       onClick={() => handleRestoreFromHistory(item)}
-                      title="点击恢复此配置"
+                      title={t('editor.background-manager.history.restoreTitle')}
                     >
                       {item.config.type === 'image' && item.config.image?.url && (
                         <img
@@ -1140,7 +1150,7 @@ export const BackgroundManager = memo(function BackgroundManager({
                     <button
                       className="history-delete-btn"
                       onClick={() => handleDeleteHistory(item.id)}
-                      title="删除"
+                      title={t('common.action.delete')}
                     >
                       <span className="history-delete-btn-symbol">X</span>
                     </button>
@@ -1151,29 +1161,33 @@ export const BackgroundManager = memo(function BackgroundManager({
           )}
 
           <div className="bg-section">
-            <div className="section-title">存储维护</div>
+            <div className="section-title">{t('editor.background-manager.section.maintenance')}</div>
             <div className="maintenance-actions">
               <button
                 className="maintenance-btn"
                 disabled={!hasLegacyDataUrls || maintenanceBusy}
                 onClick={() => setConfirmDialog({ type: 'migrate-legacy' })}
-                title={hasLegacyDataUrls ? '迁移旧版 base64 背景数据' : '未检测到旧版数据'}
+                title={
+                  hasLegacyDataUrls
+                    ? t('editor.background-manager.maintenance.migrateLegacyTitle')
+                    : t('editor.background-manager.maintenance.noLegacyDataTitle')
+                }
               >
-                迁移旧数据
+                {t('editor.background-manager.maintenance.migrateLegacy')}
               </button>
               <button
                 className="maintenance-btn maintenance-btn-danger"
                 disabled={maintenanceBusy}
                 onClick={() => setConfirmDialog({ type: 'gc-media' })}
-                title="清理未被引用的 background-media 文件"
+                title={t('editor.background-manager.maintenance.gcTitle')}
               >
-                清理未使用文件
+                {t('editor.background-manager.maintenance.gc')}
               </button>
             </div>
             {maintenanceMessage && <div className="maintenance-message">{maintenanceMessage}</div>}
           </div>
 
-          {historyPersistError && <div className="history-persist-error">{historyPersistError}</div>}
+          {historyPersistError && <div className="history-persist-error">{t(historyPersistError)}</div>}
         </div>
       </div>
 
@@ -1189,7 +1203,7 @@ export const BackgroundManager = memo(function BackgroundManager({
             </div>
             <div className="cyber-confirm-footer">
               <button className="confirm-btn confirm-cancel" onClick={() => setConfirmDialog(null)}>
-                [取消] CANCEL
+                {t('editor.background-manager.confirm.cancelButton')}
               </button>
               <button
                 className="confirm-btn confirm-ok"

@@ -1,5 +1,6 @@
 import React from 'react';
 import './ConfirmDialog.css';
+import { useT } from '../../i18n';
 
 export type ConfirmOptions = {
   title: string;
@@ -19,12 +20,16 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   open,
   title,
   message,
-  confirmText = '确认',
-  cancelText = '取消',
+  confirmText,
+  cancelText,
   danger = false,
   onConfirm,
   onCancel,
 }) => {
+  const t = useT();
+  const resolvedConfirmText = confirmText === undefined ? t('common.action.confirm') : confirmText;
+  const resolvedCancelText = cancelText === undefined ? t('common.action.cancel') : cancelText;
+
   React.useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -47,14 +52,14 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         </div>
         <div className="pmp-confirm-footer">
           <button type="button" className="pmp-confirm-btn" onClick={onCancel}>
-            {cancelText}
+            {resolvedCancelText}
           </button>
           <button
             type="button"
             className={`pmp-confirm-btn ${danger ? 'pmp-confirm-btn--danger' : 'pmp-confirm-btn--primary'}`}
             onClick={onConfirm}
           >
-            {confirmText}
+            {resolvedConfirmText}
           </button>
         </div>
       </div>
@@ -95,4 +100,3 @@ export function useConfirmDialog() {
 
   return { confirm, dialog, isOpen: options !== null };
 }
-

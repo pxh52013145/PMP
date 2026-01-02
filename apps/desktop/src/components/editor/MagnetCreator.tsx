@@ -5,6 +5,7 @@ import { readTextFile } from '@tauri-apps/api/fs';
 import { useEditor } from '../../contexts/EditorContext';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import { readJson, writeJson } from '../../modules/storage';
+import { useLocale, useT } from '../../i18n';
 import './MagnetCreator.css';
 
 interface MagnetCreatorProps {
@@ -43,7 +44,10 @@ const saveHistory = (magnetId: string, history: MagnetHistory[]) => {
   }
 };
 
-const addHistoryItem = (magnet: Magnet, description: string = '手动保存') => {
+const addHistoryItem = (
+  magnet: Magnet,
+  description: string = 'editor.magnet-creator.history.manualSave'
+) => {
   const history = loadHistory(magnet.id);
   const newItem: MagnetHistory = {
     id: `${magnet.id}-${Date.now()}`,
@@ -67,6 +71,9 @@ export function MagnetCreator({
   onSave,
   onCancel,
 }: MagnetCreatorProps) {
+  const t = useT();
+  const locale = useLocale();
+
   // 获取编辑器上下文（用于冲突检测）
   const { occupancyMap } = useEditor();
 
@@ -132,7 +139,7 @@ export function MagnetCreator({
       setStyleError('');
       return parsed;
     } catch (error) {
-      setStyleError('JSON 格式错误');
+      setStyleError('common.error.jsonFormat');
       return {};
     }
   }, [styleJson]);
@@ -144,7 +151,7 @@ export function MagnetCreator({
       setAnimationError('');
       return parsed;
     } catch (error) {
-      setAnimationError('JSON 格式错误');
+      setAnimationError('common.error.jsonFormat');
       return undefined;
     }
   }, [animationJson]);
@@ -290,10 +297,20 @@ export function MagnetCreator({
     // 验证锚点坐标
     anchorsToValidate.forEach((anchor) => {
       if (anchor.gridX < 0 || anchor.gridX > maxX) {
-        errors.push(`锚点 "${anchor.id}" 的 X 坐标超出范围 (${anchor.gridX})`);
+        errors.push(
+          t('editor.magnet-creator.validation.anchorOutOfRangeX', {
+            id: anchor.id,
+            value: anchor.gridX,
+          })
+        );
       }
       if (anchor.gridY < 0 || anchor.gridY > maxY) {
-        errors.push(`锚点 "${anchor.id}" 的 Y 坐标超出范围 (${anchor.gridY})`);
+        errors.push(
+          t('editor.magnet-creator.validation.anchorOutOfRangeY', {
+            id: anchor.id,
+            value: anchor.gridY,
+          })
+        );
       }
     });
 
@@ -334,7 +351,10 @@ export function MagnetCreator({
         // 统计冲突的 magnet
         const conflictingMagnets = new Set(conflictingPixels.map((p) => p.occupiedBy));
         errors.push(
-          `调整后会与 ${conflictingMagnets.size} 个 Magnet 冲突 (${conflictingPixels.length} 个 pixel 重叠)`
+          t('editor.magnet-creator.validation.conflict', {
+            magnets: conflictingMagnets.size,
+            pixels: conflictingPixels.length,
+          })
         );
       }
     }
@@ -342,14 +362,14 @@ export function MagnetCreator({
     // 创建模式下的预览位置提示
     if (mode === 'create') {
       if (anchorType === 'horizontal' && horizontalPixels > 17) {
-        warnings.push('宽度较大，实际使用时可能需要调整位置');
+        warnings.push(t('editor.magnet-creator.validation.largeWidthWarning'));
       }
       if (anchorType === 'vertical' && verticalPixels > 10) {
-        warnings.push('高度较大，实际使用时可能需要调整位置');
+        warnings.push(t('editor.magnet-creator.validation.largeHeightWarning'));
       }
       if (anchorType === 'rectangular') {
-        if (rectWidth > 17) warnings.push('宽度较大，实际使用时可能需要调整位置');
-        if (rectHeight > 10) warnings.push('高度较大，实际使用时可能需要调整位置');
+        if (rectWidth > 17) warnings.push(t('editor.magnet-creator.validation.largeWidthWarning'));
+        if (rectHeight > 10) warnings.push(t('editor.magnet-creator.validation.largeHeightWarning'));
       }
     }
 
@@ -364,6 +384,7 @@ export function MagnetCreator({
     rectWidth,
     rectHeight,
     occupancyMap,
+    t,
   ]);
 
   // 动态生成预览用的 pixelPositions（使用较小的间距以适应预览区域）
@@ -525,7 +546,12 @@ export function MagnetCreator({
 
     // 只有在有修改或创建新 Magnet 时才添加历史记录
     if (hasChanges) {
-      addHistoryItem(magnetToSave, mode === 'create' ? '创建' : '编辑保存');
+      addHistoryItem(
+        magnetToSave,
+        mode === 'create'
+          ? 'editor.magnet-creator.history.created'
+          : 'editor.magnet-creator.history.editedSave'
+      );
     }
 
     onSave(magnetToSave);
@@ -538,7 +564,7 @@ export function MagnetCreator({
   const handleRestore = () => {
     if (!defaultMagnet) return;
     loadMagnetConfig(defaultMagnet);
-    addHistoryItem(defaultMagnet, '还原默认配置');
+    addHistoryItem(defaultMagnet, 'editor.magnet-creator.history.restoreDefault');
   };
 
   // 应用历史记录
@@ -553,10 +579,10 @@ export function MagnetCreator({
       const data = JSON.parse(importJson);
 
       // 验证必填字段
-      if (!data.id) throw new Error('缺少必填字段: id');
-      if (!data.name) throw new Error('缺少必填字段: name');
-      if (!data.anchorType) throw new Error('缺少必填字段: anchorType');
-      if (!data.style) throw new Error('缺少必填字段: style');
+      if (!data.id) throw new Error(t('editor.magnet-creator.import.missingField.id'));
+      if (!data.name) throw new Error(t('editor.magnet-creator.import.missingField.name'));
+      if (!data.anchorType) throw new Error(t('editor.magnet-creator.import.missingField.anchorType'));
+      if (!data.style) throw new Error(t('editor.magnet-creator.import.missingField.style'));
 
       // 加载配置
       loadMagnetConfig(data as Magnet);
@@ -564,7 +590,7 @@ export function MagnetCreator({
       setImportJson('');
       setImportError('');
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : '导入失败');
+      setImportError(error instanceof Error ? error.message : 'editor.magnet-creator.import.failed');
     }
   };
 
@@ -579,7 +605,7 @@ export function MagnetCreator({
             extensions: ['json'],
           },
         ],
-        title: '选择 Magnet 配置文件',
+        title: t('editor.magnet-creator.import.dialogTitle'),
       });
 
       if (selected && typeof selected === 'string') {
@@ -589,7 +615,9 @@ export function MagnetCreator({
       }
     } catch (error) {
       console.error('File import error:', error);
-      setImportError(error instanceof Error ? error.message : '读取文件失败');
+      setImportError(
+        error instanceof Error ? error.message : 'editor.magnet-creator.import.readFileFailed'
+      );
     }
   };
 
@@ -617,10 +645,10 @@ export function MagnetCreator({
     navigator.clipboard
       .writeText(jsonStr)
       .then(() => {
-        alert('配置已复制到剪贴板！');
+        alert(t('editor.magnet-creator.export.copySuccess'));
       })
       .catch(() => {
-        alert('复制失败，请手动复制');
+        alert(t('editor.magnet-creator.export.copyFailed'));
         console.log(jsonStr);
       });
   };
@@ -765,7 +793,7 @@ export function MagnetCreator({
 
       {/* 固定预览区域 */}
       <div className="creator-preview-fixed">
-        <div className="creator-section-title">实时预览</div>
+        <div className="creator-section-title">{t('editor.magnet-creator.preview.title')}</div>
         {previewMagnet ? (
           <>
             <div className="creator-preview">
@@ -780,37 +808,43 @@ export function MagnetCreator({
               </div>
             </div>
             <div className="creator-preview-hint">
-              💡 移动鼠标查看 hover 效果
+              {t('editor.magnet-creator.preview.hintHover')}
               <br />
-              点击查看 active 效果
+              {t('editor.magnet-creator.preview.hintActive')}
               {previewScale < 1 && (
                 <>
                   <br />
                   <span style={{ color: 'rgba(255, 204, 0, 0.9)' }}>
-                    ⚡ 预览已缩放至 {Math.round(previewScale * 100)}%
+                    {t('editor.magnet-creator.preview.scaled', {
+                      percent: Math.round(previewScale * 100),
+                    })}
                   </span>
                 </>
               )}
             </div>
           </>
         ) : (
-          <div className="creator-preview-empty">填写必填字段后显示预览</div>
+          <div className="creator-preview-empty">{t('editor.magnet-creator.preview.empty')}</div>
         )}
       </div>
 
       {/* 内容区域 */}
       <div className="editor-window-content">
         {/* 模式标题 */}
-        <div className="creator-mode-title">{mode === 'edit' ? '编辑 Magnet' : '创建 Magnet'}</div>
+        <div className="creator-mode-title">
+          {mode === 'edit'
+            ? t('editor.magnet-creator.mode.edit')
+            : t('editor.magnet-creator.mode.create')}
+        </div>
 
         {/* 必填字段 */}
         <div className="creator-section">
-          <div className="creator-section-title">基础配置</div>
+          <div className="creator-section-title">{t('editor.magnet-creator.section.basic')}</div>
           <div className="creator-form">
             {/* ID */}
             <div className="creator-form-row">
               <label className="creator-label">
-                ID <span className="creator-required">*</span>
+                {t('editor.magnet-creator.field.id')} <span className="creator-required">*</span>
               </label>
               <input
                 type="text"
@@ -825,43 +859,46 @@ export function MagnetCreator({
             {/* Name */}
             <div className="creator-form-row">
               <label className="creator-label">
-                名称 <span className="creator-required">*</span>
+                {t('editor.magnet-creator.field.name')} <span className="creator-required">*</span>
               </label>
               <input
                 type="text"
                 className="creator-input"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="我的 Magnet"
+                placeholder={t('editor.magnet-creator.field.name.placeholder')}
               />
             </div>
 
             {/* Content */}
             <div className="creator-form-row">
-              <label className="creator-label">内容</label>
+              <label className="creator-label">{t('editor.magnet-creator.field.content')}</label>
               <input
                 type="text"
                 className="creator-input"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="按钮文字或内容"
+                placeholder={t('editor.magnet-creator.field.content.placeholder')}
               />
             </div>
 
             {/* Anchor Type */}
             <div className="creator-form-row">
               <label className="creator-label">
-                锚点类型 <span className="creator-required">*</span>
+                {t('editor.magnet-creator.field.anchorType')}{' '}
+                <span className="creator-required">*</span>
               </label>
               <select
                 className="creator-select"
                 value={anchorType}
                 onChange={(e) => setAnchorType(e.target.value as AnchorType)}
               >
-                <option value="single">Single (固定位置)</option>
-                <option value="horizontal">Horizontal (水平拉伸)</option>
-                <option value="vertical">Vertical (垂直拉伸)</option>
-                <option value="rectangular">Rectangular (矩形区域)</option>
+                <option value="single">{t('editor.magnet-creator.anchorType.single')}</option>
+                <option value="horizontal">{t('editor.magnet-creator.anchorType.horizontal')}</option>
+                <option value="vertical">{t('editor.magnet-creator.anchorType.vertical')}</option>
+                <option value="rectangular">
+                  {t('editor.magnet-creator.anchorType.rectangular')}
+                </option>
               </select>
             </div>
 
@@ -869,7 +906,9 @@ export function MagnetCreator({
             {anchorType === 'horizontal' && (
               <>
                 <div className="creator-form-row">
-                  <label className="creator-label">水平 Pixel 数</label>
+                  <label className="creator-label">
+                    {t('editor.magnet-creator.field.horizontalPixels')}
+                  </label>
                   <div className="creator-slider-group">
                     <input
                       type="range"
@@ -896,7 +935,7 @@ export function MagnetCreator({
                 {/* 验证提示 - 水平 */}
                 {anchorsValidation.hasErrors && (
                   <div className="creator-validation-error">
-                    ⚠️ 尺寸超出网格范围！
+                    ⚠️ {t('editor.magnet-creator.validation.outOfBounds')}
                     {anchorsValidation.errors.map((err, i) => (
                       <div key={i}>{err}</div>
                     ))}
@@ -904,7 +943,7 @@ export function MagnetCreator({
                 )}
                 {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
                   <div className="creator-validation-warning">
-                    ⚡ 提示：
+                    ⚡ {t('editor.magnet-creator.validation.hintTitle')}
                     {anchorsValidation.warnings.map((warn, i) => (
                       <div key={i}>{warn}</div>
                     ))}
@@ -917,7 +956,9 @@ export function MagnetCreator({
             {anchorType === 'vertical' && (
               <>
                 <div className="creator-form-row">
-                  <label className="creator-label">垂直 Pixel 数</label>
+                  <label className="creator-label">
+                    {t('editor.magnet-creator.field.verticalPixels')}
+                  </label>
                   <div className="creator-slider-group">
                     <input
                       type="range"
@@ -944,7 +985,7 @@ export function MagnetCreator({
                 {/* 验证提示 - 垂直 */}
                 {anchorsValidation.hasErrors && (
                   <div className="creator-validation-error">
-                    ⚠️ 尺寸超出网格范围！
+                    ⚠️ {t('editor.magnet-creator.validation.outOfBounds')}
                     {anchorsValidation.errors.map((err, i) => (
                       <div key={i}>{err}</div>
                     ))}
@@ -952,7 +993,7 @@ export function MagnetCreator({
                 )}
                 {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
                   <div className="creator-validation-warning">
-                    ⚡ 提示：
+                    ⚡ {t('editor.magnet-creator.validation.hintTitle')}
                     {anchorsValidation.warnings.map((warn, i) => (
                       <div key={i}>{warn}</div>
                     ))}
@@ -965,7 +1006,7 @@ export function MagnetCreator({
             {anchorType === 'rectangular' && (
               <>
                 <div className="creator-form-row">
-                  <label className="creator-label">矩形宽度 (Pixel)</label>
+                  <label className="creator-label">{t('editor.magnet-creator.field.rectWidth')}</label>
                   <div className="creator-slider-group">
                     <input
                       type="range"
@@ -990,7 +1031,9 @@ export function MagnetCreator({
                   </div>
                 </div>
                 <div className="creator-form-row">
-                  <label className="creator-label">矩形高度 (Pixel)</label>
+                  <label className="creator-label">
+                    {t('editor.magnet-creator.field.rectHeight')}
+                  </label>
                   <div className="creator-slider-group">
                     <input
                       type="range"
@@ -1017,7 +1060,7 @@ export function MagnetCreator({
                 {/* 验证提示 - 矩形 */}
                 {anchorsValidation.hasErrors && (
                   <div className="creator-validation-error">
-                    ⚠️ 尺寸超出网格范围！
+                    ⚠️ {t('editor.magnet-creator.validation.outOfBounds')}
                     {anchorsValidation.errors.map((err, i) => (
                       <div key={i}>{err}</div>
                     ))}
@@ -1025,7 +1068,7 @@ export function MagnetCreator({
                 )}
                 {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
                   <div className="creator-validation-warning">
-                    ⚡ 提示：
+                    ⚡ {t('editor.magnet-creator.validation.hintTitle')}
                     {anchorsValidation.warnings.map((warn, i) => (
                       <div key={i}>{warn}</div>
                     ))}
@@ -1038,11 +1081,11 @@ export function MagnetCreator({
 
         {/* 样式配置 */}
         <div className="creator-section">
-          <div className="creator-section-title">样式配置（JSON）</div>
+          <div className="creator-section-title">{t('editor.magnet-creator.section.styleJson')}</div>
           <div className="creator-form">
             <div className="creator-form-column">
               <label className="creator-label">
-                Style JSON <span className="creator-required">*</span>
+                {t('editor.magnet-creator.styleJson.label')} <span className="creator-required">*</span>
               </label>
               <textarea
                 className="creator-textarea"
@@ -1051,10 +1094,9 @@ export function MagnetCreator({
                 placeholder='{"width": "36px", "height": "36px", ...}'
                 rows={10}
               />
-              {styleError && <div className="creator-error">{styleError}</div>}
+              {styleError && <div className="creator-error">{t(styleError)}</div>}
               <div className="creator-hint">
-                常用样式：width, height, backgroundColor, borderRadius, border, boxShadow, color,
-                fontSize
+                {t('editor.magnet-creator.styleJson.commonStyles')}
               </div>
             </div>
           </div>
@@ -1062,10 +1104,12 @@ export function MagnetCreator({
 
         {/* 动画配置 */}
         <div className="creator-section">
-          <div className="creator-section-title">动画配置（JSON）</div>
+          <div className="creator-section-title">
+            {t('editor.magnet-creator.section.animationJson')}
+          </div>
           <div className="creator-form">
             <div className="creator-form-column">
-              <label className="creator-label">Animation JSON</label>
+              <label className="creator-label">{t('editor.magnet-creator.animationJson.label')}</label>
               <textarea
                 className="creator-textarea"
                 value={animationJson}
@@ -1073,16 +1117,17 @@ export function MagnetCreator({
                 placeholder='{"transition": "all 0.2s ease", "hoverStyle": {...}, "activeStyle": {...}}'
                 rows={12}
               />
-              {animationError && <div className="creator-error">{animationError}</div>}
+              {animationError && <div className="creator-error">{t(animationError)}</div>}
               <div className="creator-hint">
-                💡 动画配置说明：
-                <br />• <strong>transition</strong>: 过渡动画，如 “all 0.2s ease”
-                <br />• <strong>hoverStyle</strong>: 鼠标悬停时的样式（可包含任何 CSS 属性）
-                <br />• <strong>activeStyle</strong>: 点击/按下时的样式（可包含任何 CSS 属性）
+                💡 {t('editor.magnet-creator.animation.hint.title')}
+                <br />• <strong>transition</strong>: {t('editor.magnet-creator.animation.hint.transition')}
+                <br />• <strong>hoverStyle</strong>:{' '}
+                {t('editor.magnet-creator.animation.hint.hoverStyle')}
+                <br />• <strong>activeStyle</strong>:{' '}
+                {t('editor.magnet-creator.animation.hint.activeStyle')}
                 <br />
                 <br />
-                常用动画属性：transform (scale, translate), filter (brightness, blur), boxShadow,
-                opacity
+                {t('editor.magnet-creator.animation.hint.commonProps')}
               </div>
             </div>
           </div>
@@ -1092,11 +1137,11 @@ export function MagnetCreator({
       {/* 底部固定按钮 */}
       <div className="creator-footer-fixed">
         <button className="creator-btn creator-btn-cancel" onClick={onCancel}>
-          取消
+          {t('common.action.cancel')}
         </button>
         {isBuiltinMagnet && (
           <button className="creator-btn creator-btn-restore" onClick={handleRestore}>
-            还原默认
+            {t('editor.magnet-creator.action.restoreDefault')}
           </button>
         )}
         {mode === 'edit' && (
@@ -1104,7 +1149,9 @@ export function MagnetCreator({
             className="creator-btn creator-btn-history"
             onClick={() => setShowHistory(!showHistory)}
           >
-            历史记录 {history.length > 0 && `(${history.length})`}
+            {history.length > 0
+              ? t('editor.magnet-creator.action.historyWithCount', { count: history.length })
+              : t('editor.magnet-creator.action.history')}
           </button>
         )}
         {/* 创建模式：显示导入按钮 */}
@@ -1113,7 +1160,7 @@ export function MagnetCreator({
             className="creator-btn creator-btn-import"
             onClick={() => setShowImport(!showImport)}
           >
-            导入配置
+            {t('editor.magnet-creator.action.importConfig')}
           </button>
         )}
         {/* 编辑模式：显示导出按钮 */}
@@ -1123,11 +1170,11 @@ export function MagnetCreator({
             onClick={handleExport}
             disabled={!previewMagnet}
           >
-            导出配置
+            {t('editor.magnet-creator.action.exportConfig')}
           </button>
         )}
         <button className="creator-btn creator-btn-save" onClick={handleSave} disabled={!isValid}>
-          {mode === 'edit' ? '完成' : '创建'}
+          {mode === 'edit' ? t('common.action.done') : t('common.action.create')}
         </button>
       </div>
 
@@ -1135,18 +1182,18 @@ export function MagnetCreator({
       {showHistory && mode === 'edit' && (
         <div className="creator-history-panel">
           <div className="creator-history-header">
-            <h3>历史记录</h3>
+            <h3>{t('editor.magnet-creator.history.title')}</h3>
           </div>
           <div className="creator-history-list">
             {history.length === 0 ? (
-              <div className="creator-history-empty">暂无历史记录</div>
+              <div className="creator-history-empty">{t('editor.magnet-creator.history.empty')}</div>
             ) : (
               history.map((item) => (
                 <div key={item.id} className="creator-history-item">
                   <div className="creator-history-item-info">
-                    <div className="creator-history-item-desc">{item.description}</div>
+                    <div className="creator-history-item-desc">{t(item.description)}</div>
                     <div className="creator-history-item-time">
-                      {new Date(item.timestamp).toLocaleString('zh-CN', {
+                      {new Date(item.timestamp).toLocaleString(locale, {
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',
@@ -1158,14 +1205,14 @@ export function MagnetCreator({
                     <button
                       className="creator-history-btn creator-history-btn-apply"
                       onClick={() => handleApplyHistory(item)}
-                      title="应用此配置"
+                      title={t('editor.magnet-creator.history.action.applyTitle')}
                     >
-                      应用
+                      {t('common.action.apply')}
                     </button>
                     <button
                       className="creator-history-btn creator-history-btn-delete"
                       onClick={() => handleDeleteHistory(item.id)}
-                      title="删除此记录"
+                      title={t('editor.magnet-creator.history.action.deleteTitle')}
                     >
                       ✕
                     </button>
@@ -1181,7 +1228,7 @@ export function MagnetCreator({
       {showImport && mode === 'create' && (
         <div className="creator-import-panel">
           <div className="creator-import-header">
-            <h3>导入 Magnet 配置</h3>
+            <h3>{t('editor.magnet-creator.import.title')}</h3>
             <button
               className="creator-import-close"
               onClick={() => {
@@ -1196,34 +1243,36 @@ export function MagnetCreator({
           <div className="creator-import-content">
             <div className="creator-import-file-select">
               <button className="creator-btn creator-btn-import" onClick={handleImportFromFile}>
-                📁 选择文件
+                {t('editor.magnet-creator.import.action.chooseFile')}
               </button>
-              <span className="creator-import-or">或手动粘贴配置</span>
+              <span className="creator-import-or">{t('editor.magnet-creator.import.orPaste')}</span>
             </div>
             <textarea
               className="creator-import-textarea"
               value={importJson}
               onChange={(e) => setImportJson(e.target.value)}
-              placeholder="粘贴 Magnet JSON 配置，或点击上方按钮选择 .json 文件..."
+              placeholder={t('editor.magnet-creator.import.placeholder')}
               rows={15}
             />
-            {importError && <div className="creator-import-error">{importError}</div>}
+            {importError && <div className="creator-import-error">{t(importError)}</div>}
             <div className="creator-import-hint">
-              💡 使用说明：
-              <br />• 点击“选择文件”按钮，选择 .json 配置文件
-              <br />• 或手动粘贴从其他 Magnet 导出的 JSON 配置
-              <br />• 配置必须包含 id, name, anchorType, style 等字段
+              💡 {t('editor.magnet-creator.import.hint.usageTitle')}
+              <br />• {t('editor.magnet-creator.import.hint.usage1')}
+              <br />• {t('editor.magnet-creator.import.hint.usage2')}
+              <br />• {t('editor.magnet-creator.import.hint.usage3')}
               <br />
               <br />
-              ⚠️ 重要限制：
-              <br />• 仅导入样式和动画配置
-              <br />• 功能代码（onClick、onHover等）无法通过JSON导入
-              <br />• 如需添加功能，请导入后在代码中手动添加（见文档）
+              ⚠️ {t('editor.magnet-creator.import.hint.limitsTitle')}
+              <br />• {t('editor.magnet-creator.import.hint.limit1')}
+              <br />• {t('editor.magnet-creator.import.hint.limit2')}
+              <br />• {t('editor.magnet-creator.import.hint.limit3')}
               <br />
               <br />
-              📖 如何添加功能代码？
-              <br />• 查看：<code>apps/desktop/src/data/custom/exampleCustomMagnet.ts</code>
-              <br />• 文档：<code>mannual/Magnet/how-to-add-magnets.md</code>
+              📖 {t('editor.magnet-creator.import.hint.howToTitle')}
+              <br />• {t('editor.magnet-creator.import.hint.howToSee')}{' '}
+              <code>apps/desktop/src/data/custom/exampleCustomMagnet.ts</code>
+              <br />• {t('editor.magnet-creator.import.hint.howToDoc')}{' '}
+              <code>mannual/Magnet/how-to-add-magnets.md</code>
             </div>
           </div>
           <div className="creator-import-actions">
@@ -1235,14 +1284,14 @@ export function MagnetCreator({
                 setImportError('');
               }}
             >
-              取消
+              {t('common.action.cancel')}
             </button>
             <button
               className="creator-btn creator-btn-save"
               onClick={handleImport}
               disabled={!importJson.trim()}
             >
-              导入并编辑
+              {t('editor.magnet-creator.import.action.importAndEdit')}
             </button>
           </div>
         </div>

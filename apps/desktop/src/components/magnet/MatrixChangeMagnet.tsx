@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { readString, removeKey, usePersistentSetting, writeString } from '../../modules/storage';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
+import { useT } from '../../i18n';
 import {
   createDefaultMagnetSpacesState,
   createNextSpaceId,
@@ -47,6 +48,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 export function MatrixChangeMagnet() {
+  const t = useT();
   const { defaultMagnetLibrary, magnetLibrary, setActiveMagnetIds, setMagnetLibrary, reloadFromStorage } =
     useMagnetConfig();
   const defaultSpacesState = useMemo(() => createDefaultMagnetSpacesState(), []);
@@ -171,22 +173,22 @@ export function MatrixChangeMagnet() {
     const nextOrder =
       Math.max(0, ...spacesState.spaces.map((s) => (Number.isFinite(s.order) ? s.order : 0))) + 1;
     const match = newId.match(/^space(\d+)$/);
-    const defaultName = match ? `空间${match[1]}` : `空间${nextOrder}`;
+    const defaultName = t('magnet.matrix-change.space.defaultName', { order: match?.[1] ?? nextOrder });
 
     setDialog({ kind: 'create', newId, nextOrder, defaultName });
     closePanel();
-  }, [closePanel, spacesState]);
+  }, [closePanel, spacesState, t]);
 
   const openCloneDialog = useCallback(() => {
     if (!activeSpace) return;
     const newId = createNextSpaceId(spacesState);
     const nextOrder =
       Math.max(0, ...spacesState.spaces.map((s) => (Number.isFinite(s.order) ? s.order : 0))) + 1;
-    const defaultName = `${activeSpace.name} 副本`;
+    const defaultName = t('magnet.matrix-change.space.cloneName', { name: activeSpace.name });
 
     setDialog({ kind: 'clone', sourceSpaceId: activeSpace.id, newId, nextOrder, defaultName });
     closePanel();
-  }, [activeSpace, closePanel, spacesState]);
+  }, [activeSpace, closePanel, spacesState, t]);
 
   const openRenameDialog = useCallback(() => {
     if (!activeSpace) return;
@@ -282,10 +284,15 @@ export function MatrixChangeMagnet() {
         className="matrix-change-magnet"
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={`空间切换：点击打开面板\n当前：${activeSpace?.name ?? activeSpaceId} (${badge})`}
+        title={
+          t('magnet.matrix-change.tooltip', {
+            name: activeSpace?.name ?? activeSpaceId,
+            badge,
+          })
+        }
       >
         <span className="matrix-change-magnet-badge">{badge}</span>
-        <span>SPACE</span>
+        <span>{t('magnet.matrix-change.button')}</span>
       </button>
 
       {panel.open && (
@@ -299,9 +306,9 @@ export function MatrixChangeMagnet() {
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 <div className="matrix-change-magnet-panel-header">
-                  <div className="matrix-change-magnet-panel-title">Magnet Spaces</div>
+                  <div className="matrix-change-magnet-panel-title">{t('magnet.matrix-change.panel.title')}</div>
                   <div className="matrix-change-magnet-panel-subtitle">
-                    当前：{activeSpace?.name ?? activeSpaceId}
+                    {t('magnet.matrix-change.panel.current', { name: activeSpace?.name ?? activeSpaceId })}
                   </div>
                 </div>
 
@@ -331,7 +338,7 @@ export function MatrixChangeMagnet() {
                     className="matrix-change-magnet-panel-action"
                     onClick={openCreateDialog}
                   >
-                    + 新建
+                    + {t('magnet.matrix-change.action.create')}
                   </button>
                   <button
                     type="button"
@@ -339,21 +346,21 @@ export function MatrixChangeMagnet() {
                     onClick={openCloneDialog}
                     disabled={!activeSpace}
                   >
-                    克隆
+                    {t('magnet.matrix-change.action.clone')}
                   </button>
                   <button
                     type="button"
                     className="matrix-change-magnet-panel-action"
                     onClick={openClearDialog}
                   >
-                    清空
+                    {t('common.action.clear')}
                   </button>
                   <button
                     type="button"
                     className="matrix-change-magnet-panel-action"
                     onClick={openResetDialog}
                   >
-                    重置
+                    {t('common.action.reset')}
                   </button>
                   <button
                     type="button"
@@ -361,7 +368,7 @@ export function MatrixChangeMagnet() {
                     onClick={openRenameDialog}
                     disabled={!activeSpace}
                   >
-                    重命名
+                    {t('common.action.rename')}
                   </button>
                   <button
                     type="button"
@@ -369,7 +376,7 @@ export function MatrixChangeMagnet() {
                     onClick={openDeleteDialog}
                     disabled={!activeSpace || activeSpaceId === 'space1' || spacesState.spaces.length <= 1}
                   >
-                    删除
+                    {t('common.action.delete')}
                   </button>
                 </div>
               </div>,
@@ -379,11 +386,11 @@ export function MatrixChangeMagnet() {
 
       <InputDialog
         isOpen={dialog?.kind === 'create'}
-        title="新建空间"
-        message="请输入空间名称（可稍后重命名）"
+        title={t('magnet.matrix-change.dialog.create.title')}
+        message={t('magnet.matrix-change.dialog.create.message')}
         defaultValue={dialog?.kind === 'create' ? dialog.defaultName : ''}
-        confirmText="创建并切换"
-        cancelText="取消"
+        confirmText={t('magnet.matrix-change.dialog.create.confirm')}
+        cancelText={t('common.action.cancel')}
         onConfirm={(value) => {
           if (!dialog || dialog.kind !== 'create') return;
           const name = value.trim() || dialog.defaultName;
@@ -407,11 +414,11 @@ export function MatrixChangeMagnet() {
 
       <InputDialog
         isOpen={dialog?.kind === 'clone'}
-        title="克隆空间"
-        message="请输入新空间名称（将复制当前空间的布局 + 配置）"
+        title={t('magnet.matrix-change.dialog.clone.title')}
+        message={t('magnet.matrix-change.dialog.clone.message')}
         defaultValue={dialog?.kind === 'clone' ? dialog.defaultName : ''}
-        confirmText="克隆并切换"
-        cancelText="取消"
+        confirmText={t('magnet.matrix-change.dialog.clone.confirm')}
+        cancelText={t('common.action.cancel')}
         onConfirm={(value) => {
           if (!dialog || dialog.kind !== 'clone') return;
           const name = value.trim() || dialog.defaultName;
@@ -440,11 +447,11 @@ export function MatrixChangeMagnet() {
 
       <InputDialog
         isOpen={dialog?.kind === 'rename'}
-        title="重命名空间"
-        message="请输入新的空间名称"
+        title={t('magnet.matrix-change.dialog.rename.title')}
+        message={t('magnet.matrix-change.dialog.rename.message')}
         defaultValue={dialog?.kind === 'rename' ? dialog.currentName : ''}
-        confirmText="保存"
-        cancelText="取消"
+        confirmText={t('common.action.save')}
+        cancelText={t('common.action.cancel')}
         onConfirm={(value) => {
           if (!dialog || dialog.kind !== 'rename') return;
           const nextName = value.trim();
@@ -470,14 +477,14 @@ export function MatrixChangeMagnet() {
 
       <ConfirmDialog
         isOpen={dialog?.kind === 'delete'}
-        title="删除空间"
+        title={t('magnet.matrix-change.dialog.delete.title')}
         message={
           dialog?.kind === 'delete'
-            ? `确认删除空间 "${dialog.spaceName}"？（不会清除该空间保存的布局/配置数据）`
+            ? t('magnet.matrix-change.dialog.delete.message', { name: dialog.spaceName })
             : ''
         }
-        confirmText="删除"
-        cancelText="取消"
+        confirmText={t('common.action.delete')}
+        cancelText={t('common.action.cancel')}
         confirmButtonStyle="danger"
         onConfirm={() => {
           if (!dialog || dialog.kind !== 'delete') return;
@@ -504,14 +511,14 @@ export function MatrixChangeMagnet() {
 
       <ConfirmDialog
         isOpen={dialog?.kind === 'clear'}
-        title="清空空间"
+        title={t('magnet.matrix-change.dialog.clear.title')}
         message={
           dialog?.kind === 'clear'
-            ? `清空空间 "${dialog.spaceName}"？（仅保留必备磁贴：窗控 + switch + edit）`
+            ? t('magnet.matrix-change.dialog.clear.message', { name: dialog.spaceName })
             : ''
         }
-        confirmText="清空"
-        cancelText="取消"
+        confirmText={t('common.action.clear')}
+        cancelText={t('common.action.cancel')}
         confirmButtonStyle="danger"
         onConfirm={() => {
           if (!dialog || dialog.kind !== 'clear') return;
@@ -540,14 +547,14 @@ export function MatrixChangeMagnet() {
 
       <ConfirmDialog
         isOpen={dialog?.kind === 'reset'}
-        title="重置空间"
+        title={t('magnet.matrix-change.dialog.reset.title')}
         message={
           dialog?.kind === 'reset'
-            ? `重置空间 "${dialog.spaceName}"？（将删除该空间保存的布局/配置并回到默认）`
+            ? t('magnet.matrix-change.dialog.reset.message', { name: dialog.spaceName })
             : ''
         }
-        confirmText="重置"
-        cancelText="取消"
+        confirmText={t('common.action.reset')}
+        cancelText={t('common.action.cancel')}
         confirmButtonStyle="danger"
         onConfirm={() => {
           if (!dialog || dialog.kind !== 'reset') return;

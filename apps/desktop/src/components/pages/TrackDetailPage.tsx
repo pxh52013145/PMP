@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
+import { useT } from '../../i18n';
 import './TrackDetailPage.css';
 
 interface TrackDetailPageProps {
@@ -13,6 +14,7 @@ interface TrackDetailPageProps {
  * 显示当前播放歌曲的详细信息、歌词等
  */
 export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }) => {
+  const t = useT();
   const audioService = useAudioService();
   const [currentTrack, setCurrentTrack] = useState<Track | null>(initialTrack || null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -157,7 +159,7 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
       <div className="track-detail-page">
         <div className="track-detail-empty">
           <div className="track-detail-empty-icon">♪</div>
-          <div className="track-detail-empty-text">暂无歌曲播放</div>
+          <div className="track-detail-empty-text">{t('pages.track.empty.noTrack')}</div>
         </div>
       </div>
     );
@@ -180,7 +182,7 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
       <div className="track-detail-cover-section">
         <div className={`track-detail-cover ${isPlaying ? 'playing' : ''}`}>
           {currentTrack.coverUrl ? (
-            <img src={currentTrack.coverUrl} alt="Album Cover" />
+            <img src={currentTrack.coverUrl} alt={t('pages.track.cover.alt')} />
           ) : (
             <div className="track-detail-cover-placeholder">♪</div>
           )}
@@ -190,44 +192,44 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
       {/* 信息区域 */}
       <div className="track-detail-info-section">
         <h1 className="track-detail-title">{currentTrack.title}</h1>
-        <p className="track-detail-artist">{currentTrack.artist || '未知艺术家'}</p>
-        <p className="track-detail-album">{currentTrack.album || '未知专辑'}</p>
+        <p className="track-detail-artist">{currentTrack.artist || t('common.unknown.artist')}</p>
+        <p className="track-detail-album">{currentTrack.album || t('common.unknown.album')}</p>
 
         {/* 详细信息 */}
         <div className="track-detail-metadata">
           {currentTrack.year && (
             <div className="track-detail-meta-item">
-              <span className="meta-label">年份</span>
+              <span className="meta-label">{t('pages.track.meta.year')}</span>
               <span className="meta-value">{currentTrack.year}</span>
             </div>
           )}
           {currentTrack.genre && (
             <div className="track-detail-meta-item">
-              <span className="meta-label">流派</span>
+              <span className="meta-label">{t('pages.track.meta.genre')}</span>
               <span className="meta-value">{currentTrack.genre}</span>
             </div>
           )}
           {currentTrack.duration && (
             <div className="track-detail-meta-item">
-              <span className="meta-label">时长</span>
+              <span className="meta-label">{t('pages.track.meta.duration')}</span>
               <span className="meta-value">{formatDuration(currentTrack.duration)}</span>
             </div>
           )}
           {currentTrack.bitrate && (
             <div className="track-detail-meta-item">
-              <span className="meta-label">比特率</span>
+              <span className="meta-label">{t('pages.track.meta.bitrate')}</span>
               <span className="meta-value">{currentTrack.bitrate} kbps</span>
             </div>
           )}
           {currentTrack.sampleRate && (
             <div className="track-detail-meta-item">
-              <span className="meta-label">采样率</span>
+              <span className="meta-label">{t('pages.track.meta.sampleRate')}</span>
               <span className="meta-value">{(currentTrack.sampleRate / 1000).toFixed(1)} kHz</span>
             </div>
           )}
           {currentTrack.format && (
             <div className="track-detail-meta-item">
-              <span className="meta-label">格式</span>
+              <span className="meta-label">{t('pages.track.meta.format')}</span>
               <span className="meta-value">{currentTrack.format.toUpperCase()}</span>
             </div>
           )}
@@ -236,7 +238,7 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
         {/* 歌词区域（占位） */}
         <div className="track-detail-lyrics">
           <div className="lyrics-placeholder">
-            <span>暂无歌词</span>
+            <span>{t('pages.track.lyrics.placeholder')}</span>
           </div>
         </div>
       </div>

@@ -114,6 +114,7 @@ function broadcastChannelMessage(message: WindowCommMessage): void {
 export const STORAGE_KEYS = {
   // === 配置数据（主要数据源） ===
   CONFIG: 'pixel-matrix-player-config', // 主配置文件（包含 magnet、grid、styleOverride）
+  LOCALE: 'pixel-matrix-locale', // UI locale（i18n）
   WORKBENCH_ID: 'pixel-matrix-workbench-id', // 当前 Workbench id（R4）
   WORKBENCH_LAYOUT_ID: 'pixel-matrix-workbench-layout-id', // Workbench layout contribution id（R4）
   WORKBENCH_NAVIGATION_ID: 'pixel-matrix-workbench-navigation-id', // Workbench navigation contribution id（R4）
@@ -256,6 +257,9 @@ export const TAURI_EVENTS = {
 
   // Theme
   THEME_UPDATED: 'theme-config-updated',
+
+  // i18n
+  LOCALE_UPDATED: 'locale-updated',
 
   // Plugins (.pmpm)
   PMPM_PLUGINS_UPDATED: 'pmpm-plugins-updated',

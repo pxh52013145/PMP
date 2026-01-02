@@ -10,6 +10,7 @@ import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
 import { NativeDebugPage } from '../components/pages/NativeDebugPage';
 import { DspRackPage } from '../components/pages/DspRackPage';
 import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
+import { LanguageSettingsPanel } from '../components/settings-panels/LanguageSettingsPanel';
 import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
 import { PerformanceSettingsPanel } from '../components/settings-panels/PerformanceSettingsPanel';
 import { PluginsSettingsPanel } from '../components/settings-panels/PluginsSettingsPanel';
@@ -20,232 +21,20 @@ import type { Track } from '../services/audio';
 import { useAudioService } from '../contexts/AudioEngineContext';
 import { calculateWindowPosition, openEditorWindow, type EditorWindowType } from '../utils/editorWindows';
 import { closeVstManagerWindow, openVstManagerWindow } from '../utils/vstManagerWindows';
+import { subscribeLocale, t } from '../i18n/core';
 
 export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
   return {
     id: 'builtin-contributions',
     activate: ({ contributions }) => {
-      const unregisters: Array<() => void> = [];
+      const unregisters = new Map<string, () => void>();
 
       const register = <T extends { kind: string; id: string }>(contribution: T) => {
-        unregisters.push(contributions.register(contribution));
+        const key = `${contribution.kind}/${contribution.id}`;
+        const unregister = contributions.register(contribution, { replace: true });
+        unregisters.set(key, unregister);
       };
 
-      // Pages
-      register<PageContribution>({
-        kind: 'page',
-        id: 'home',
-        title: '首页',
-        render: () => <HomePage />,
-        source: 'builtin',
-        order: 10,
-        group: 'core',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'settings',
-        title: '设置',
-        render: () => <SettingsPage />,
-        source: 'builtin',
-        order: 20,
-        group: 'core',
-      });
-
-      // Settings panels (rendered inside SettingsPage)
-      register<SettingsPanelContribution>({
-        kind: 'settings-panel',
-        id: 'workbench',
-        title: 'Workbench',
-        render: () => <WorkbenchSettingsPanel />,
-        source: 'builtin',
-        order: 5,
-        group: 'core',
-      });
-
-      register<SettingsPanelContribution>({
-        kind: 'settings-panel',
-        id: 'performance',
-        title: '性能',
-        render: () => <PerformanceSettingsPanel />,
-        source: 'builtin',
-        order: 10,
-        group: 'core',
-      });
-
-      register<SettingsPanelContribution>({
-        kind: 'settings-panel',
-        id: 'audio',
-        title: '音频',
-        render: () => <AudioSettingsPanel />,
-        source: 'builtin',
-        order: 20,
-        group: 'core',
-      });
-
-      register<SettingsPanelContribution>({
-        kind: 'settings-panel',
-        id: 'plugins',
-        title: '插件',
-        render: () => <PluginsSettingsPanel />,
-        source: 'builtin',
-        order: 30,
-        group: 'plugin',
-      });
-
-      register<SettingsPanelContribution>({
-        kind: 'settings-panel',
-        id: 'visualizers',
-        title: '可视化',
-        render: () => <VisualizersSettingsPanel />,
-        source: 'builtin',
-        order: 40,
-        group: 'visualizer',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'music-library',
-        title: '音乐库',
-        render: () => <BuiltinMusicLibraryPage />,
-        source: 'builtin',
-        order: 30,
-        group: 'core',
-        tags: ['music', 'library'],
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'track',
-        title: '歌曲详情',
-        render: (page) => {
-          const params = parseNavigationParams('track', page.params);
-          return <TrackDetailPage initialTrack={params?.track} />;
-        },
-        source: 'builtin',
-        order: 40,
-        group: 'details',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'album',
-        title: '专辑',
-        render: (page) => {
-          const params = parseNavigationParams('album', page.params);
-          return (
-            <AlbumDetailPage
-              albumName={params?.albumName}
-              artist={params?.artist}
-              tracks={params?.tracks}
-            />
-          );
-        },
-        source: 'builtin',
-        order: 50,
-        group: 'details',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'playlists',
-        title: '歌单',
-        render: () => <PlaceholderPage icon="?" text="歌单页面" cssClass="page-playlists" />,
-        source: 'builtin',
-        order: 60,
-        group: 'core',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'play-queue',
-        title: '播放队列',
-        render: () => <PlaceholderPage icon="?" text="播放列表页面" cssClass="page-play-queue" />,
-        source: 'builtin',
-        order: 70,
-        group: 'core',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'artist',
-        title: '艺术家',
-        render: () => <PlaceholderPage icon="?" text="艺术家页面" cssClass="page-artist" />,
-        source: 'builtin',
-        order: 80,
-        group: 'details',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'native-debug',
-        title: '原生引擎调试',
-        render: () => <NativeDebugPage />,
-        source: 'builtin',
-        order: 90,
-        group: 'debug',
-        tags: ['debug', 'native'],
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'dsp-rack',
-        title: 'DSP Rack',
-        render: () => <DspRackPage />,
-        source: 'builtin',
-        order: 95,
-        group: 'plugin',
-        tags: ['audio', 'dsp', 'vst'],
-      });
-
-      register<WindowContribution>({
-        kind: 'window',
-        id: 'vst-manager',
-        title: 'VST3 Plugin Manager',
-        label: 'vst-manager',
-        route: '/#/vst-manager',
-        source: 'builtin',
-        open: async () => {
-          await openVstManagerWindow({ title: 'VST3 Plugin Manager' });
-        },
-        close: async () => {
-          await closeVstManagerWindow();
-        },
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'plugin-page',
-        title: '插件页面',
-        render: (page) => {
-          const params = parseNavigationParams('plugin-page', page.params);
-          if (!params) {
-            return <PlaceholderPage icon="?" text="插件页面：参数无效" cssClass="page-plugin" />;
-          }
-          return <PluginPageHost pluginId={params.pluginId} pageId={params.pageId} />;
-        },
-        source: 'builtin',
-        order: 100,
-        group: 'plugin',
-      });
-
-      register<PageContribution>({
-        kind: 'page',
-        id: 'plugin-visualizer',
-        title: '插件可视化',
-        render: (page) => {
-          const params = parseNavigationParams('plugin-visualizer', page.params);
-          if (!params) {
-            return <PlaceholderPage icon="?" text="插件可视化：参数无效" cssClass="page-plugin-visualizer" />;
-          }
-          return <PluginVisualizerHost pluginId={params.pluginId} visualizerId={params.visualizerId} />;
-        },
-        source: 'builtin',
-        order: 110,
-        group: 'plugin',
-      });
-
-      // Windows (Editor)
       const registerEditorWindow = (type: EditorWindowType, title: string) => {
         register<WindowContribution>({
           kind: 'window',
@@ -261,23 +50,280 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         });
       };
 
-      registerEditorWindow('control', 'Control');
-      registerEditorWindow('statistics', 'Statistics');
-      registerEditorWindow('library', 'Library');
-      registerEditorWindow('style', 'Style');
-      registerEditorWindow('creator', 'Creator');
-      registerEditorWindow('background', 'Background');
-      registerEditorWindow('custom-background', 'Custom Background');
-      registerEditorWindow('debug', 'Debug');
+      const sync = () => {
+        // Pages
+        register<PageContribution>({
+          kind: 'page',
+          id: 'home',
+          title: t('pages.home.title'),
+          render: () => <HomePage />,
+          source: 'builtin',
+          order: 10,
+          group: 'core',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'settings',
+          title: t('pages.settings.title'),
+          render: () => <SettingsPage />,
+          source: 'builtin',
+          order: 20,
+          group: 'core',
+        });
+
+        // Settings panels (rendered inside SettingsPage)
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'language',
+          title: t('settings.panels.language.title'),
+          render: () => <LanguageSettingsPanel />,
+          source: 'builtin',
+          order: 1,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'workbench',
+          title: t('settings.panels.workbench.title'),
+          render: () => <WorkbenchSettingsPanel />,
+          source: 'builtin',
+          order: 5,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'performance',
+          title: t('settings.panels.performance.title'),
+          render: () => <PerformanceSettingsPanel />,
+          source: 'builtin',
+          order: 10,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'audio',
+          title: t('settings.panels.audio.title'),
+          render: () => <AudioSettingsPanel />,
+          source: 'builtin',
+          order: 20,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'plugins',
+          title: t('settings.panels.plugins.title'),
+          render: () => <PluginsSettingsPanel />,
+          source: 'builtin',
+          order: 30,
+          group: 'plugin',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'visualizers',
+          title: t('settings.panels.visualizers.title'),
+          render: () => <VisualizersSettingsPanel />,
+          source: 'builtin',
+          order: 40,
+          group: 'visualizer',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'music-library',
+          title: t('pages.music-library.title'),
+          render: () => <BuiltinMusicLibraryPage />,
+          source: 'builtin',
+          order: 30,
+          group: 'core',
+          tags: ['music', 'library'],
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'track',
+          title: t('pages.track.title'),
+          render: (page) => {
+            const params = parseNavigationParams('track', page.params);
+            return <TrackDetailPage initialTrack={params?.track} />;
+          },
+          source: 'builtin',
+          order: 40,
+          group: 'details',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'album',
+          title: t('pages.album.title'),
+          render: (page) => {
+            const params = parseNavigationParams('album', page.params);
+            return (
+              <AlbumDetailPage
+                albumName={params?.albumName}
+                artist={params?.artist}
+                tracks={params?.tracks}
+              />
+            );
+          },
+          source: 'builtin',
+          order: 50,
+          group: 'details',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'playlists',
+          title: t('pages.playlists.title'),
+          render: () => (
+            <PlaceholderPage
+              icon="?"
+              text={t('pages.playlists.placeholder')}
+              cssClass="page-playlists"
+            />
+          ),
+          source: 'builtin',
+          order: 60,
+          group: 'core',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'play-queue',
+          title: t('pages.play-queue.title'),
+          render: () => (
+            <PlaceholderPage
+              icon="?"
+              text={t('pages.play-queue.placeholder')}
+              cssClass="page-play-queue"
+            />
+          ),
+          source: 'builtin',
+          order: 70,
+          group: 'core',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'artist',
+          title: t('pages.artist.title'),
+          render: () => <PlaceholderPage icon="?" text={t('pages.artist.placeholder')} cssClass="page-artist" />,
+          source: 'builtin',
+          order: 80,
+          group: 'details',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'native-debug',
+          title: t('pages.native-debug.title'),
+          render: () => <NativeDebugPage />,
+          source: 'builtin',
+          order: 90,
+          group: 'debug',
+          tags: ['debug', 'native'],
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'dsp-rack',
+          title: t('pages.dsp-rack.title'),
+          render: () => <DspRackPage />,
+          source: 'builtin',
+          order: 95,
+          group: 'plugin',
+          tags: ['audio', 'dsp', 'vst'],
+        });
+
+        register<WindowContribution>({
+          kind: 'window',
+          id: 'vst-manager',
+          title: t('windows.vst-manager.title'),
+          label: 'vst-manager',
+          route: '/#/vst-manager',
+          source: 'builtin',
+          open: async () => {
+            await openVstManagerWindow({ title: t('windows.vst-manager.title') });
+          },
+          close: async () => {
+            await closeVstManagerWindow();
+          },
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'plugin-page',
+          title: t('pages.plugin-page.title'),
+          render: (page) => {
+            const params = parseNavigationParams('plugin-page', page.params);
+            if (!params) {
+              return (
+                <PlaceholderPage icon="?" text={t('pages.plugin-page.invalidParams')} cssClass="page-plugin" />
+              );
+            }
+            return <PluginPageHost pluginId={params.pluginId} pageId={params.pageId} />;
+          },
+          source: 'builtin',
+          order: 100,
+          group: 'plugin',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'plugin-visualizer',
+          title: t('pages.plugin-visualizer.title'),
+          render: (page) => {
+            const params = parseNavigationParams('plugin-visualizer', page.params);
+            if (!params) {
+              return (
+                <PlaceholderPage
+                  icon="?"
+                  text={t('pages.plugin-visualizer.invalidParams')}
+                  cssClass="page-plugin-visualizer"
+                />
+              );
+            }
+            return <PluginVisualizerHost pluginId={params.pluginId} visualizerId={params.visualizerId} />;
+          },
+          source: 'builtin',
+          order: 110,
+          group: 'plugin',
+        });
+
+        // Windows (Editor)
+        registerEditorWindow('control', t('windows.editor.control.title'));
+        registerEditorWindow('statistics', t('windows.editor.statistics.title'));
+        registerEditorWindow('library', t('windows.editor.library.title'));
+        registerEditorWindow('style', t('windows.editor.style.title'));
+        registerEditorWindow('creator', t('windows.editor.creator.title'));
+        registerEditorWindow('background', t('windows.editor.background.title'));
+        registerEditorWindow('custom-background', t('windows.editor.custom-background.title'));
+        registerEditorWindow('debug', t('windows.editor.debug.title'));
+      };
+
+      sync();
+      const unsubscribeLocale = subscribeLocale(() => sync());
 
       return () => {
-        for (const unregister of unregisters.splice(0)) {
+        try {
+          unsubscribeLocale();
+        } catch (error) {
+          console.warn('[builtin-contributions] locale subscription cleanup failed', error);
+        }
+
+        for (const unregister of unregisters.values()) {
           try {
             unregister();
           } catch (error) {
             console.warn('[builtin-contributions] unregister failed', error);
           }
         }
+        unregisters.clear();
       };
     },
   };

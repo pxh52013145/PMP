@@ -6,6 +6,7 @@ import type {
   WorkbenchPageContainerContribution,
 } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
+import { useT } from '../../i18n/react';
 import { usePersistentSetting } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
@@ -15,8 +16,28 @@ import {
   sortWorkbenches,
 } from '../../workbenches/workbenchSelection';
 
+type TFunction = (key: string, params?: Record<string, unknown>) => string;
+
+function readMetadataString(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): string | null {
+  const value = metadata?.[key];
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function formatSourceLabel(source: string, t: TFunction): string {
+  if (source === 'builtin') return t('common.source.builtin');
+  if (source === 'plugin') return t('common.source.plugin');
+  if (source === 'runtime') return t('common.source.runtime');
+  return source;
+}
+
 export function WorkbenchSettingsPanel() {
   const kernel = useKernel();
+  const t = useT();
   const [revision, setRevision] = useState(0);
 
   const [selectedWorkbenchId, setSelectedWorkbenchId] = usePersistentSetting(
@@ -91,31 +112,38 @@ export function WorkbenchSettingsPanel() {
       <div className="settings-card">
         <div className="settings-card-header">
           <div>
-            <p className="settings-card-label">Workbench</p>
-            <p className="settings-card-desc">Select the main window UI Workbench (R4).</p>
+            <p className="settings-card-label">{t('settings.workbench.workbench.label')}</p>
+            <p className="settings-card-desc">{t('settings.workbench.workbench.desc')}</p>
           </div>
           <span className="settings-card-badge">{workbenches.length}</span>
         </div>
 
         {workbenches.length === 0 ? (
-          <div className="settings-card-note">No workbenches registered.</div>
+          <div className="settings-card-note">{t('settings.workbench.workbench.empty')}</div>
         ) : (
           <div className="settings-plugin-list">
             {workbenches.map((wb) => {
               const isActive = wb.id === activeWorkbenchId;
-              const experimental = Boolean(
-                (wb.metadata as Record<string, unknown> | undefined)?.experimental
-              );
+              const metadata = wb.metadata as Record<string, unknown> | undefined;
+              const experimental = Boolean(metadata?.experimental);
+              const description = readMetadataString(metadata, 'description');
               return (
                 <label key={wb.id} className="settings-plugin-item" style={{ cursor: 'pointer' }}>
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {wb.title} <span className="settings-plugin-subtitle">({wb.id})</span>
                     </div>
+                    {description ? <div className="settings-plugin-desc">{description}</div> : null}
                     <div className="settings-plugin-tags">
-                      {isActive && <span className="settings-plugin-tag">active</span>}
-                      {wb.source && <span className="settings-plugin-tag">{wb.source}</span>}
-                      {experimental && <span className="settings-plugin-tag">experimental</span>}
+                      {isActive && <span className="settings-plugin-tag">{t('common.tag.current')}</span>}
+                      {wb.source && (
+                        <span className="settings-plugin-tag">
+                          {formatSourceLabel(wb.source, t)}
+                        </span>
+                      )}
+                      {experimental && (
+                        <span className="settings-plugin-tag">{t('common.tag.experimental')}</span>
+                      )}
                     </div>
                   </div>
 
@@ -137,31 +165,38 @@ export function WorkbenchSettingsPanel() {
       <div className="settings-card">
         <div className="settings-card-header">
           <div>
-            <p className="settings-card-label">Workbench Layout</p>
-            <p className="settings-card-desc">Workbench 子贡献点：布局（R4）。</p>
+            <p className="settings-card-label">{t('settings.workbench.layout.label')}</p>
+            <p className="settings-card-desc">{t('settings.workbench.layout.desc')}</p>
           </div>
           <span className="settings-card-badge">{layouts.length}</span>
         </div>
 
         {layouts.length === 0 ? (
-          <div className="settings-card-note">No layouts registered.</div>
+          <div className="settings-card-note">{t('settings.workbench.layout.empty')}</div>
         ) : (
           <div className="settings-plugin-list">
             {layouts.map((layout) => {
               const isActive = layout.id === activeLayoutId;
-              const experimental = Boolean(
-                (layout.metadata as Record<string, unknown> | undefined)?.experimental
-              );
+              const metadata = layout.metadata as Record<string, unknown> | undefined;
+              const experimental = Boolean(metadata?.experimental);
+              const description = readMetadataString(metadata, 'description');
               return (
                 <label key={layout.id} className="settings-plugin-item" style={{ cursor: 'pointer' }}>
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {layout.title} <span className="settings-plugin-subtitle">({layout.id})</span>
                     </div>
+                    {description ? <div className="settings-plugin-desc">{description}</div> : null}
                     <div className="settings-plugin-tags">
-                      {isActive && <span className="settings-plugin-tag">active</span>}
-                      {layout.source && <span className="settings-plugin-tag">{layout.source}</span>}
-                      {experimental && <span className="settings-plugin-tag">experimental</span>}
+                      {isActive && <span className="settings-plugin-tag">{t('common.tag.current')}</span>}
+                      {layout.source && (
+                        <span className="settings-plugin-tag">
+                          {formatSourceLabel(layout.source, t)}
+                        </span>
+                      )}
+                      {experimental && (
+                        <span className="settings-plugin-tag">{t('common.tag.experimental')}</span>
+                      )}
                     </div>
                   </div>
 
@@ -183,31 +218,38 @@ export function WorkbenchSettingsPanel() {
       <div className="settings-card">
         <div className="settings-card-header">
           <div>
-            <p className="settings-card-label">Workbench Navigation</p>
-            <p className="settings-card-desc">Workbench 子贡献点：导航（R4）。</p>
+            <p className="settings-card-label">{t('settings.workbench.navigation.label')}</p>
+            <p className="settings-card-desc">{t('settings.workbench.navigation.desc')}</p>
           </div>
           <span className="settings-card-badge">{navigations.length}</span>
         </div>
 
         {navigations.length === 0 ? (
-          <div className="settings-card-note">No navigation contributions registered.</div>
+          <div className="settings-card-note">{t('settings.workbench.navigation.empty')}</div>
         ) : (
           <div className="settings-plugin-list">
             {navigations.map((nav) => {
               const isActive = nav.id === activeNavigationId;
-              const experimental = Boolean(
-                (nav.metadata as Record<string, unknown> | undefined)?.experimental
-              );
+              const metadata = nav.metadata as Record<string, unknown> | undefined;
+              const experimental = Boolean(metadata?.experimental);
+              const description = readMetadataString(metadata, 'description');
               return (
                 <label key={nav.id} className="settings-plugin-item" style={{ cursor: 'pointer' }}>
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {nav.title} <span className="settings-plugin-subtitle">({nav.id})</span>
                     </div>
+                    {description ? <div className="settings-plugin-desc">{description}</div> : null}
                     <div className="settings-plugin-tags">
-                      {isActive && <span className="settings-plugin-tag">active</span>}
-                      {nav.source && <span className="settings-plugin-tag">{nav.source}</span>}
-                      {experimental && <span className="settings-plugin-tag">experimental</span>}
+                      {isActive && <span className="settings-plugin-tag">{t('common.tag.current')}</span>}
+                      {nav.source && (
+                        <span className="settings-plugin-tag">
+                          {formatSourceLabel(nav.source, t)}
+                        </span>
+                      )}
+                      {experimental && (
+                        <span className="settings-plugin-tag">{t('common.tag.experimental')}</span>
+                      )}
                     </div>
                   </div>
 
@@ -229,21 +271,21 @@ export function WorkbenchSettingsPanel() {
       <div className="settings-card">
         <div className="settings-card-header">
           <div>
-            <p className="settings-card-label">Workbench Content</p>
-            <p className="settings-card-desc">Workbench 子贡献点：页面容器（R4）。</p>
+            <p className="settings-card-label">{t('settings.workbench.content.label')}</p>
+            <p className="settings-card-desc">{t('settings.workbench.content.desc')}</p>
           </div>
           <span className="settings-card-badge">{pageContainers.length}</span>
         </div>
 
         {pageContainers.length === 0 ? (
-          <div className="settings-card-note">No page containers registered.</div>
+          <div className="settings-card-note">{t('settings.workbench.content.empty')}</div>
         ) : (
           <div className="settings-plugin-list">
             {pageContainers.map((container) => {
               const isActive = container.id === activePageContainerId;
-              const experimental = Boolean(
-                (container.metadata as Record<string, unknown> | undefined)?.experimental
-              );
+              const metadata = container.metadata as Record<string, unknown> | undefined;
+              const experimental = Boolean(metadata?.experimental);
+              const description = readMetadataString(metadata, 'description');
               return (
                 <label
                   key={container.id}
@@ -255,10 +297,17 @@ export function WorkbenchSettingsPanel() {
                       {container.title}{' '}
                       <span className="settings-plugin-subtitle">({container.id})</span>
                     </div>
+                    {description ? <div className="settings-plugin-desc">{description}</div> : null}
                     <div className="settings-plugin-tags">
-                      {isActive && <span className="settings-plugin-tag">active</span>}
-                      {container.source && <span className="settings-plugin-tag">{container.source}</span>}
-                      {experimental && <span className="settings-plugin-tag">experimental</span>}
+                      {isActive && <span className="settings-plugin-tag">{t('common.tag.current')}</span>}
+                      {container.source && (
+                        <span className="settings-plugin-tag">
+                          {formatSourceLabel(container.source, t)}
+                        </span>
+                      )}
+                      {experimental && (
+                        <span className="settings-plugin-tag">{t('common.tag.experimental')}</span>
+                      )}
                     </div>
                   </div>
 

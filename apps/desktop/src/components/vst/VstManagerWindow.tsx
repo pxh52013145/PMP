@@ -1,6 +1,7 @@
 import React from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { readJson, writeJson } from '../../modules/storage';
+import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readData, STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
 import './VstManagerWindow.css';
@@ -315,11 +316,14 @@ function ensureScanSettings(value: unknown): VstScanSettingsV1 {
   return { version: 1, includeDefaultPaths, scanPaths };
 }
 
-function formatStatus(value: string | null | undefined): string {
+function formatStatus(
+  value: string | null | undefined,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
   if (!value) return '-';
-  if (value === 'ok') return 'OK';
-  if (value === 'bad') return 'Bad';
-  if (value === 'timeout') return 'Timeout';
+  if (value === 'ok') return t('windows.vst-manager.status.ok');
+  if (value === 'bad') return t('windows.vst-manager.status.bad');
+  if (value === 'timeout') return t('windows.vst-manager.status.timeout');
   return value;
 }
 
@@ -334,6 +338,8 @@ function matchesQuery(candidate: string, query: string): boolean {
 }
 
 export function VstManagerWindow() {
+  const t = useT();
+  const locale = useLocale();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const usedLegacyScanPathsRef = React.useRef(false);
   const [plugins, setPlugins] = React.useState<LibraryPluginDescriptor[]>([]);
@@ -776,20 +782,22 @@ export function VstManagerWindow() {
     return (
       <div className="vst-manager">
         <div className="vst-manager-empty">
-          VST3 插件管理器需要在 Tauri 桌面运行（`pnpm dev:tauri`）。
+          {t('windows.vst-manager.requiresTauri')}
         </div>
       </div>
     );
   }
 
+  const progressTotal = scanProgress?.total ?? scanState?.total ?? 0;
+  const progressCurrent = scanProgress?.current ?? scanState?.current ?? 0;
   const progressText = scanRunning
     ? scanProgress?.message ||
       scanProgress?.currentPluginId ||
       scanState?.currentPluginId ||
       scanProgress?.stage ||
       scanState?.stage ||
-      'running'
-    : 'idle';
+      t('windows.vst-manager.progress.running')
+    : t('windows.vst-manager.progress.idle');
 
   const selectedUsage = selectedPlugin ? rackUsage[selectedPlugin.id] : null;
   const selectedScanRun = selectedScanRunId
@@ -800,13 +808,17 @@ export function VstManagerWindow() {
     <div className="vst-manager">
       <div className="vst-manager-topbar">
         <div className="vst-manager-title">
-          <div className="vst-manager-title-main">VST3 Plugin Manager</div>
+          <div className="vst-manager-title-main">{t('windows.vst-manager.title')}</div>
           <div className="vst-manager-title-sub">
             {scanRunning
-              ? `扫描中：${progressText}${
-                  scanProgress?.total ? ` (${scanProgress.current}/${scanProgress.total})` : ''
-                }`
-              : `插件：${plugins.length}`}
+              ? progressTotal > 0
+                ? t('windows.vst-manager.topbar.scanningWithTotal', {
+                    progress: progressText,
+                    current: progressCurrent,
+                    total: progressTotal,
+                  })
+                : t('windows.vst-manager.topbar.scanning', { progress: progressText })
+              : t('windows.vst-manager.topbar.pluginsCount', { count: plugins.length })}
           </div>
         </div>
 
@@ -815,20 +827,22 @@ export function VstManagerWindow() {
             className="vst-manager-search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索插件..."
-            aria-label="搜索插件"
+            placeholder={t('windows.vst-manager.search.placeholder')}
+            aria-label={t('windows.vst-manager.search.ariaLabel')}
           />
           <button type="button" onClick={() => void openDspRack()}>
-            打开 DSP Rack
+            {t('windows.vst-manager.action.openDspRack')}
           </button>
           <button type="button" onClick={() => void refresh()} disabled={scanRunning}>
-            刷新
+            {t('common.action.refresh')}
           </button>
           <button type="button" onClick={() => void startScan()} disabled={scanRunning}>
-            {verifyOnScan ? '扫描 + 验证' : '扫描'}
+            {verifyOnScan
+              ? t('windows.vst-manager.action.scanVerify')
+              : t('windows.vst-manager.action.scan')}
           </button>
           <button type="button" onClick={() => void cancelScan()} disabled={!scanRunning}>
-            取消
+            {t('common.action.cancel')}
           </button>
         </div>
       </div>
@@ -838,7 +852,7 @@ export function VstManagerWindow() {
       <div className="vst-manager-content">
         <div className="vst-manager-sidebar">
           <div className="vst-manager-panel">
-            <div className="vst-manager-panel-title">选项</div>
+            <div className="vst-manager-panel-title">{t('windows.vst-manager.options.title')}</div>
             <label className="vst-manager-checkbox">
               <input
                 type="checkbox"
@@ -846,7 +860,7 @@ export function VstManagerWindow() {
                 onChange={(e) => setVerifyOnScan(e.target.checked)}
                 disabled={scanRunning}
               />
-              验证插件（扫描参数）
+              {t('windows.vst-manager.options.verifyOnScan')}
             </label>
             <label className="vst-manager-checkbox">
               <input
@@ -857,19 +871,18 @@ export function VstManagerWindow() {
                 }
                 disabled={scanRunning}
               />
-              包含系统默认 VST3 搜索路径
+              {t('windows.vst-manager.options.includeDefaultPaths')}
             </label>
             <div className="vst-manager-panel-note">
-              扫描会使用已启用的自定义路径；当“包含系统默认路径”开启时，会将系统默认路径与自定义路径合并扫描。
-              若最终没有任何有效自定义路径，bridge 会自动回退到系统默认 VST3 路径。
+              {t('windows.vst-manager.options.note')}
             </div>
           </div>
 
           <div className="vst-manager-panel">
-            <div className="vst-manager-panel-title">扫描路径</div>
+            <div className="vst-manager-panel-title">{t('windows.vst-manager.paths.title')}</div>
             <div className="vst-manager-paths">
               {paths.length === 0 ? (
-                <div className="vst-manager-panel-note">未配置自定义路径。</div>
+                <div className="vst-manager-panel-note">{t('windows.vst-manager.paths.empty')}</div>
               ) : (
                 paths.map((entry) => {
                   const exists = scanPathExists[entry.path];
@@ -891,7 +904,9 @@ export function VstManagerWindow() {
                               exists ? '' : ' vst-manager-path-status--missing'
                             }`}
                           >
-                            {exists ? 'OK' : 'Missing'}
+                            {exists
+                              ? t('windows.vst-manager.paths.status.ok')
+                              : t('windows.vst-manager.paths.status.missing')}
                           </span>
                         )}
                       </label>
@@ -900,9 +915,9 @@ export function VstManagerWindow() {
                         className="vst-manager-path-remove"
                         onClick={() => removePath(entry.path)}
                         disabled={scanRunning}
-                        aria-label={`移除路径 ${entry.path}`}
+                        aria-label={t('windows.vst-manager.paths.removeAriaLabel', { path: entry.path })}
                       >
-                        移除
+                        {t('common.action.remove')}
                       </button>
                     </div>
                   );
@@ -911,24 +926,23 @@ export function VstManagerWindow() {
             </div>
             <div className="vst-manager-panel-actions">
               <button type="button" onClick={() => void addPath()} disabled={scanRunning}>
-                添加路径...
+                {t('windows.vst-manager.paths.addButton')}
               </button>
             </div>
           </div>
 
           <div className="vst-manager-panel">
-            <div className="vst-manager-panel-title">诊断</div>
+            <div className="vst-manager-panel-title">{t('windows.vst-manager.diagnostics.title')}</div>
             <div className="vst-manager-panel-note">
-              当前仅列出 VST3 Effect（不含 VSTi）。如果插件“扫描不到”，优先检查：是否为 VST3、是否为
-              Effect、扫描路径是否存在、以及是否启用了“系统默认路径”。
+              {t('windows.vst-manager.diagnostics.note')}
             </div>
 
             {scanRuns.length === 0 ? (
-              <div className="vst-manager-panel-note">暂无扫描记录。</div>
+              <div className="vst-manager-panel-note">{t('windows.vst-manager.diagnostics.noScanRuns')}</div>
             ) : (
               <>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">最近扫描</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.recentScan')}</div>
                   <div className="vst-manager-v">
                     <select
                       className="vst-manager-select"
@@ -938,7 +952,7 @@ export function VstManagerWindow() {
                     >
                       {scanRuns.map((run) => (
                         <option key={run.runId} value={run.runId}>
-                          {new Date(run.startedAtMs).toLocaleString()} · {run.status}
+                          {new Date(run.startedAtMs).toLocaleString(locale)} · {run.status}
                         </option>
                       ))}
                     </select>
@@ -949,39 +963,49 @@ export function VstManagerWindow() {
                   <>
                     {selectedScanRun ? (
                       <div className="vst-manager-kv">
-                        <div className="vst-manager-k">状态</div>
+                        <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.status')}</div>
                         <div className="vst-manager-v">{selectedScanRun.status}</div>
                       </div>
                     ) : null}
                     <div className="vst-manager-kv">
-                      <div className="vst-manager-k">RunId</div>
+                      <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.runId')}</div>
                       <div className="vst-manager-v" title={selectedScanRunId}>
                         {selectedScanRunId}
                       </div>
                     </div>
                     <div className="vst-manager-kv">
-                      <div className="vst-manager-k">事件</div>
+                      <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.events')}</div>
                       <div className="vst-manager-v">{scanEvents.length || 0}</div>
                     </div>
                     {selectedScanRun?.error ? (
                       <div className="vst-manager-panel-note vst-manager-panel-note--error">
-                        扫描错误：{selectedScanRun.error}
+                        {t('windows.vst-manager.diagnostics.scanError', {
+                          message: selectedScanRun.error,
+                        })}
                       </div>
                     ) : null}
                     {scanState?.lastError ? (
                       <div className="vst-manager-panel-note vst-manager-panel-note--error">
-                        最后错误：{scanState.lastError}
+                        {t('windows.vst-manager.diagnostics.lastError', {
+                          message: scanState.lastError,
+                        })}
                       </div>
                     ) : null}
 
-                    <div className="vst-manager-log" role="log" aria-label="扫描日志">
+                    <div
+                      className="vst-manager-log"
+                      role="log"
+                      aria-label={t('windows.vst-manager.diagnostics.logAriaLabel')}
+                    >
                       {scanEvents.length === 0 ? (
-                        <div className="vst-manager-panel-note">暂无日志。</div>
+                        <div className="vst-manager-panel-note">
+                          {t('windows.vst-manager.diagnostics.noLogs')}
+                        </div>
                       ) : (
                         scanEvents.map((entry) => (
                           <div key={`${entry.atMs}-${entry.kind}-${entry.message}`} className="vst-manager-log-line">
                             <span className="vst-manager-log-time">
-                              {new Date(entry.atMs).toLocaleTimeString()}
+                              {new Date(entry.atMs).toLocaleTimeString(locale)}
                             </span>
                             <span className="vst-manager-log-kind">{entry.kind}</span>
                             <span className="vst-manager-log-message">{entry.message}</span>
@@ -996,7 +1020,7 @@ export function VstManagerWindow() {
                         onClick={() => void refreshScanEvents(selectedScanRunId)}
                         disabled={!selectedScanRunId}
                       >
-                        刷新日志
+                        {t('windows.vst-manager.diagnostics.refreshLogs')}
                       </button>
                     </div>
                   </>
@@ -1006,56 +1030,67 @@ export function VstManagerWindow() {
           </div>
 
           <div className="vst-manager-panel">
-            <div className="vst-manager-panel-title">已选插件</div>
+            <div className="vst-manager-panel-title">{t('windows.vst-manager.selected.title')}</div>
             {selectedPlugin ? (
               <>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">名称</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.name')}</div>
                   <div className="vst-manager-v">{selectedPlugin.name}</div>
                 </div>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">厂商</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.vendor')}</div>
                   <div className="vst-manager-v">{selectedPlugin.vendor ?? '-'}</div>
                 </div>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">状态</div>
-                  <div className="vst-manager-v">{formatStatus(selectedPlugin.status)}</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.status')}</div>
+                  <div className="vst-manager-v">{formatStatus(selectedPlugin.status, t)}</div>
                 </div>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">DSP Rack 引用</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.rackUsage')}</div>
                   <div className="vst-manager-v">
-                    {selectedUsage ? `${selectedUsage.enabled}/${selectedUsage.total} 启用` : '未引用'}
+                    {selectedUsage
+                      ? t('windows.vst-manager.selected.rackUsageEnabled', {
+                          enabled: selectedUsage.enabled,
+                          total: selectedUsage.total,
+                        })
+                      : t('windows.vst-manager.selected.rackUsageNone')}
                   </div>
                 </div>
                 {selectedUsage && selectedUsage.nodeIds.length > 0 && (
                   <div className="vst-manager-panel-note">
-                    NodeId：{selectedUsage.nodeIds.slice(0, 8).join(', ')}
-                    {selectedUsage.nodeIds.length > 8 ? '…' : ''}
+                    {t('windows.vst-manager.selected.nodeIds', {
+                      nodeIds: selectedUsage.nodeIds.slice(0, 8).join(', '),
+                      more: selectedUsage.nodeIds.length > 8 ? '…' : '',
+                    })}
                   </div>
                 )}
                 {selectedUsage && selectedUsage.nodeIds.length > 0 && (
                   <div className="vst-manager-node-list">
-                    <div className="vst-manager-node-list-title">引用节点</div>
+                    <div className="vst-manager-node-list-title">
+                      {t('windows.vst-manager.selected.nodeListTitle')}
+                    </div>
                     {selectedUsage.nodeIds.slice(0, 6).map((nodeId) => (
                       <div key={nodeId} className="vst-manager-node-row">
                         <div className="vst-manager-node-id" title={nodeId}>
                           {nodeId}
                         </div>
                         <button type="button" onClick={() => void locateDspRackNode(nodeId)}>
-                          定位
+                          {t('windows.vst-manager.selected.action.locate')}
                         </button>
                         <button
                           type="button"
                           onClick={() => void removeRackNodes([nodeId])}
                           disabled={scanRunning || applyBusy}
                         >
-                          移除
+                          {t('common.action.remove')}
                         </button>
                       </div>
                     ))}
                     {selectedUsage.nodeIds.length > 6 && (
                       <div className="vst-manager-panel-note">
-                        仅显示前 6 个引用节点（共 {selectedUsage.nodeIds.length} 个）。
+                        {t('windows.vst-manager.selected.nodeListLimited', {
+                          count: selectedUsage.nodeIds.length,
+                        })}
                       </div>
                     )}
                   </div>
@@ -1067,43 +1102,43 @@ export function VstManagerWindow() {
                       onClick={() => void removeSelectedPluginFromRack()}
                       disabled={scanRunning || applyBusy}
                     >
-                      移除全部引用
+                      {t('windows.vst-manager.selected.action.removeAllRefs')}
                     </button>
                   </div>
                 )}
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">格式</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.format')}</div>
                   <div className="vst-manager-v">VST3</div>
                 </div>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">位数</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.bits')}</div>
                   <div className="vst-manager-v">64</div>
                 </div>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">文件</div>
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.file')}</div>
                   <div className="vst-manager-v">{selectedPlugin.path ? basename(selectedPlugin.path) : '-'}</div>
                 </div>
                 <div className="vst-manager-panel-actions">
                   <button type="button" onClick={() => void scanParams()} disabled={scanRunning}>
-                    扫描参数
+                    {t('windows.vst-manager.selected.action.scanParams')}
                   </button>
                   <button type="button" onClick={() => void addToDspRack()} disabled={scanRunning || applyBusy}>
-                    添加到 DSP Rack
+                    {t('windows.vst-manager.selected.action.addToRack')}
                   </button>
                 </div>
               </>
             ) : (
-              <div className="vst-manager-panel-note">请从列表中选择一个插件。</div>
+              <div className="vst-manager-panel-note">{t('windows.vst-manager.selected.empty')}</div>
             )}
           </div>
         </div>
 
         <div className="vst-manager-main">
           <div className="vst-manager-table-meta">
-            <div>{filteredPlugins.length} 个插件 · 选中插件后点击“添加到 DSP Rack”。</div>
+            <div>{t('windows.vst-manager.table.meta', { count: filteredPlugins.length })}</div>
             <div className="vst-manager-table-meta-right">
-              <span className="vst-manager-pill">格式：VST3</span>
-              <span className="vst-manager-pill">类型：效果器</span>
+              <span className="vst-manager-pill">{t('windows.vst-manager.table.pill.format')}</span>
+              <span className="vst-manager-pill">{t('windows.vst-manager.table.pill.type')}</span>
             </div>
           </div>
 
@@ -1111,14 +1146,16 @@ export function VstManagerWindow() {
             <table className="vst-manager-table">
               <thead>
                 <tr>
-                  <th>名称</th>
-                  <th title="DSP Rack 引用（启用/总数）">引用</th>
-                  <th>状态</th>
-                  <th>格式</th>
-                  <th>位数</th>
-                  <th>类型</th>
-                  <th>厂商</th>
-                  <th>文件名</th>
+                  <th>{t('windows.vst-manager.table.header.name')}</th>
+                  <th title={t('windows.vst-manager.table.header.usageTitle')}>
+                    {t('windows.vst-manager.table.header.usage')}
+                  </th>
+                  <th>{t('windows.vst-manager.table.header.status')}</th>
+                  <th>{t('windows.vst-manager.table.header.format')}</th>
+                  <th>{t('windows.vst-manager.table.header.bits')}</th>
+                  <th>{t('windows.vst-manager.table.header.type')}</th>
+                  <th>{t('windows.vst-manager.table.header.vendor')}</th>
+                  <th>{t('windows.vst-manager.table.header.filename')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1137,10 +1174,10 @@ export function VstManagerWindow() {
                         <div className="vst-manager-id">{plugin.id}</div>
                       </td>
                       <td title={usage ? usage.nodeIds.join(', ') : undefined}>{usageText}</td>
-                      <td>{formatStatus(plugin.status)}</td>
+                      <td>{formatStatus(plugin.status, t)}</td>
                       <td>VST3</td>
                       <td>64</td>
-                      <td>Effect</td>
+                      <td>{t('windows.vst-manager.pluginType.effect')}</td>
                       <td title={plugin.vendor ?? ''}>{plugin.vendor ?? '-'}</td>
                       <td title={plugin.path ?? ''}>{plugin.path ? basename(plugin.path) : '-'}</td>
                     </tr>

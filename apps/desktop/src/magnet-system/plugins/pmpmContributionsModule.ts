@@ -119,6 +119,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 pluginName: plugin.manifest.metadata.name,
                 workbenchId: workbench.id,
                 ...(workbench.metadata ?? {}),
+                ...(workbench.description ? { description: workbench.description } : {}),
               },
             };
 

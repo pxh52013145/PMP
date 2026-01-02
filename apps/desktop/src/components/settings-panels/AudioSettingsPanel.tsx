@@ -1,10 +1,12 @@
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import type { AudioEngineType } from '../../contexts/AudioEngineContext';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useT } from '../../i18n';
 import { openVstManagerWindow } from '../../utils/vstManagerWindows';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 export function AudioSettingsPanel() {
+  const t = useT();
   const { engineType, isNativeAvailable, setEngineType } = useAudioEngine();
   const { navigateTo } = useNavigation();
   const isTauri = isTauriRuntime();
@@ -18,48 +20,52 @@ export function AudioSettingsPanel() {
     <div className="audio-engine-card">
       <div className="audio-engine-card-header">
         <div>
-          <p className="audio-engine-label">音频引擎</p>
-          <p className="audio-engine-desc">选择底层播放实现，统一接入 Magnet 控件。</p>
+          <p className="audio-engine-label">{t('settings.audio.engine.label')}</p>
+          <p className="audio-engine-desc">{t('settings.audio.engine.desc')}</p>
         </div>
-        <span className="audio-engine-badge">{engineType === 'web' ? 'Web Audio' : 'Native Audio'}</span>
+        <span className="audio-engine-badge">
+          {engineType === 'web'
+            ? t('settings.audio.engine.badge.web')
+            : t('settings.audio.engine.badge.native')}
+        </span>
       </div>
 
       <div className="audio-engine-toggle">
         <button type="button" data-active={engineType === 'web'} onClick={() => handleEngineChange('web')}>
-          Web Audio（兼容/调试）
+          {t('settings.audio.engine.option.web')}
         </button>
         <button
           type="button"
           data-active={engineType === 'native'}
           disabled={!isNativeAvailable}
           onClick={() => handleEngineChange('native')}
-          title={isNativeAvailable ? undefined : '原生音频引擎开发中'}
+          title={isNativeAvailable ? undefined : t('settings.audio.engine.option.native.unavailable')}
         >
-          Native Audio（默认）
+          {t('settings.audio.engine.option.native')}
         </button>
       </div>
 
-      {!isNativeAvailable && <p className="audio-engine-note">原生音频引擎正在开发中，完成后即可在此切换。</p>}
+      {!isNativeAvailable && <p className="audio-engine-note">{t('settings.audio.engine.note.nativeUnavailable')}</p>}
 
       <button className="native-debug-link" onClick={() => navigateTo('native-debug')} disabled={!isNativeAvailable}>
-        原生引擎调试
+        {t('settings.audio.debug.native')}
       </button>
 
       <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <button className="native-debug-link" onClick={() => navigateTo('dsp-rack')} disabled={!isNativeAvailable}>
-          打开 DSP Rack
+          {t('settings.audio.openDspRack')}
         </button>
         <button
           className="native-debug-link"
           onClick={() =>
-            void openVstManagerWindow({ title: 'VST3 Plugin Manager' }).catch((error) => {
+            void openVstManagerWindow({ title: t('windows.vst-manager.title') }).catch((error) => {
               console.warn('[AudioSettingsPanel] Failed to open VST3 plugin manager window', error);
             })
           }
           disabled={!isNativeAvailable || !isTauri}
-          title={isTauri ? undefined : '需要在 Tauri 桌面环境运行（pnpm dev:tauri）'}
+          title={isTauri ? undefined : t('settings.audio.openVstManager.requireTauri')}
         >
-          打开 VST3 插件管理器
+          {t('settings.audio.openVstManager')}
         </button>
       </div>
     </div>

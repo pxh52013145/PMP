@@ -15,154 +15,162 @@ import { DebugButton } from '../components/magnet/DebugButton';
 import { AudioVisualizerMagnet } from '../components/magnet/AudioVisualizerMagnet';
 import { MatrixChangeMagnet } from '../components/magnet/MatrixChangeMagnet';
 import { DspVstMagnet } from '../components/magnet/DspVstMagnet';
-import { registerMagnetRenderer, unregisterMagnetRenderer, type MagnetRendererDefinition } from '../magnet-system/registry';
-import { clearMagnetVariants, registerMagnetVariant } from '../magnet-system/variantRegistry';
+import {
+  getMagnetRenderer,
+  registerMagnetRenderer,
+  unregisterMagnetRenderer,
+  type MagnetRendererDefinition,
+} from '../magnet-system/registry';
+import { clearMagnetVariants, listMagnetVariants, registerMagnetVariant } from '../magnet-system/variantRegistry';
+import { subscribeLocale, t } from '../i18n/core';
 
 const createTextPreview = (label: string) => (
   <span className="magnet-preview-label">{label}</span>
 );
 
-const BUILTIN_DEFINITIONS: MagnetRendererDefinition[] = [
-  {
-    id: 'navigation-page',
-    render: () => <NavigationPage />,
-    preview: () => createTextPreview('Navigation'),
-    description: '主内容导航区域',
-    group: 'layout',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-window-pin',
-    render: () => <WindowPinButton />,
-    preview: () => createTextPreview('PIN'),
-    description: '窗口置顶',
-    group: 'window',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-play-pause',
-    render: () => <PlayPauseButton />,
-    preview: () => createTextPreview('\u25b6 / \u23f8'),
-    description: '播放/暂停控制',
-    group: 'playback',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-previous',
-    render: () => <PreviousButton />,
-    preview: () => createTextPreview('Prev'),
-    description: '上一首',
-    group: 'playback',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-next',
-    render: () => <NextButton />,
-    preview: () => createTextPreview('Next'),
-    description: '下一首',
-    group: 'playback',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-mode',
-    render: () => <PlayModeButton />,
-    preview: () => createTextPreview('Mode'),
-    description: '播放模式',
-    group: 'playback',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-volume',
-    render: () => <VolumeControl />,
-    preview: () => createTextPreview('Vol'),
-    description: '音量控制',
-    group: 'playback',
-    source: 'builtin',
-  },
-  {
-    id: 'track-info',
-    render: () => <TrackInfo />,
-    preview: () => createTextPreview('Track Info'),
-    description: '当前歌曲信息',
-    group: 'information',
-    source: 'builtin',
-  },
-  {
-    id: 'progress-bar',
-    render: () => <ProgressBar />,
-    preview: () => createTextPreview('Progress'),
-    description: '播放进度',
-    group: 'playback',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-play-queue',
-    render: () => <PlayQueueButton />,
-    preview: () => createTextPreview('Queue'),
-    description: '播放队列',
-    group: 'navigation',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-playlists',
-    render: () => <PlaylistsButton />,
-    preview: () => createTextPreview('Playlists'),
-    description: '歌单列表',
-    group: 'navigation',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-music-library',
-    render: () => <MusicLibraryButton />,
-    preview: () => createTextPreview('Library'),
-    description: '音乐媒体库',
-    group: 'navigation',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-back',
-    render: () => <BackButton />,
-    preview: () => createTextPreview('Back'),
-    description: '返回按钮',
-    group: 'navigation',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-debug',
-    render: () => <DebugButton />,
-    preview: () => createTextPreview('Settings'),
-    description: '设置按钮（历史 id: btn-debug）',
-    group: 'utility',
-    source: 'builtin',
-  },
-  {
-    id: 'btn-matrix-change',
-    render: () => <MatrixChangeMagnet />,
-    preview: () => createTextPreview('SPACE'),
-    description: '管理 Magnet Spaces（点击打开面板）',
-    group: 'space',
-    tags: ['space', 'layout'],
-    source: 'builtin',
-  },
-  {
-    id: 'dsp-vst',
-    render: () => <DspVstMagnet />,
-    preview: () => createTextPreview('VST'),
-    description: 'VST 管理入口（打开 DSP Rack）',
-    group: 'navigation',
-    tags: ['audio', 'dsp', 'vst', 'native'],
-    source: 'builtin',
-  },
-  {
-    id: 'audio-visualizer',
-    render: () => <AudioVisualizerMagnet />,
-    preview: () => createTextPreview('Visualizer'),
-    description: '音频频谱可视化（FFT）',
-    group: 'visualizer',
-    tags: ['audio', 'fft', 'spectrum', 'visualizer', 'native'],
-    source: 'builtin',
-  },
-];
+function getBuiltinDefinitions(): MagnetRendererDefinition[] {
+  return [
+    {
+      id: 'navigation-page',
+      render: () => <NavigationPage />,
+      preview: () => createTextPreview(t('magnet.renderers.navigation-page.preview')),
+      description: t('magnet.renderers.navigation-page.description'),
+      group: 'layout',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-window-pin',
+      render: () => <WindowPinButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-window-pin.preview')),
+      description: t('magnet.renderers.btn-window-pin.description'),
+      group: 'window',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-play-pause',
+      render: () => <PlayPauseButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-play-pause.preview')),
+      description: t('magnet.renderers.btn-play-pause.description'),
+      group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-previous',
+      render: () => <PreviousButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-previous.preview')),
+      description: t('magnet.renderers.btn-previous.description'),
+      group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-next',
+      render: () => <NextButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-next.preview')),
+      description: t('magnet.renderers.btn-next.description'),
+      group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-mode',
+      render: () => <PlayModeButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-mode.preview')),
+      description: t('magnet.renderers.btn-mode.description'),
+      group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-volume',
+      render: () => <VolumeControl />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-volume.preview')),
+      description: t('magnet.renderers.btn-volume.description'),
+      group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'track-info',
+      render: () => <TrackInfo />,
+      preview: () => createTextPreview(t('magnet.renderers.track-info.preview')),
+      description: t('magnet.renderers.track-info.description'),
+      group: 'information',
+      source: 'builtin',
+    },
+    {
+      id: 'progress-bar',
+      render: () => <ProgressBar />,
+      preview: () => createTextPreview(t('magnet.renderers.progress-bar.preview')),
+      description: t('magnet.renderers.progress-bar.description'),
+      group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-play-queue',
+      render: () => <PlayQueueButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-play-queue.preview')),
+      description: t('magnet.renderers.btn-play-queue.description'),
+      group: 'navigation',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-playlists',
+      render: () => <PlaylistsButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-playlists.preview')),
+      description: t('magnet.renderers.btn-playlists.description'),
+      group: 'navigation',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-music-library',
+      render: () => <MusicLibraryButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-music-library.preview')),
+      description: t('magnet.renderers.btn-music-library.description'),
+      group: 'navigation',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-back',
+      render: () => <BackButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-back.preview')),
+      description: t('magnet.renderers.btn-back.description'),
+      group: 'navigation',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-debug',
+      render: () => <DebugButton />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-debug.preview')),
+      description: t('magnet.renderers.btn-debug.description'),
+      group: 'utility',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-matrix-change',
+      render: () => <MatrixChangeMagnet />,
+      preview: () => createTextPreview(t('magnet.renderers.btn-matrix-change.preview')),
+      description: t('magnet.renderers.btn-matrix-change.description'),
+      group: 'space',
+      tags: ['space', 'layout'],
+      source: 'builtin',
+    },
+    {
+      id: 'dsp-vst',
+      render: () => <DspVstMagnet />,
+      preview: () => createTextPreview(t('magnet.renderers.dsp-vst.preview')),
+      description: t('magnet.renderers.dsp-vst.description'),
+      group: 'navigation',
+      tags: ['audio', 'dsp', 'vst', 'native'],
+      source: 'builtin',
+    },
+    {
+      id: 'audio-visualizer',
+      render: () => <AudioVisualizerMagnet />,
+      preview: () => createTextPreview(t('magnet.renderers.audio-visualizer.preview')),
+      description: t('magnet.renderers.audio-visualizer.description'),
+      group: 'visualizer',
+      tags: ['audio', 'fft', 'spectrum', 'visualizer', 'native'],
+      source: 'builtin',
+    },
+  ];
+}
 
 const BUILTIN_VARIANT_RENDERERS = new Set<string>([
   'track-info',
@@ -183,6 +191,11 @@ const BUILTIN_VARIANT_RENDERERS = new Set<string>([
 
 function registerBuiltinVariants(): void {
   const register = (rendererId: string, id: string, label: string, description?: string) => {
+    const existing = listMagnetVariants(rendererId).find((variant) => variant.id === id) ?? null;
+    if (existing && existing.source !== 'builtin') {
+      return;
+    }
+
     registerMagnetVariant(
       rendererId,
       {
@@ -191,73 +204,105 @@ function registerBuiltinVariants(): void {
         description,
         source: 'builtin',
       },
-      { overwrite: false }
+      { overwrite: true }
     );
   };
 
-  register('track-info', 'default', 'Default', 'Track info default variant');
-  register('track-info', 'spinning-vinyl', 'Spinning Vinyl');
-  register('track-info', 'minimal', 'Minimal');
-  register('track-info', 'card', 'Card');
+  const labelDefault = t('magnet.variant.default');
+  const labelStandard = t('magnet.variant.standard');
+  const labelMinimal = t('magnet.variant.minimal');
+  const labelRounded = t('magnet.variant.rounded');
+  const labelCyber = t('magnet.variant.cyber');
+  const labelCard = t('magnet.variant.card');
+  const labelSpinningVinyl = t('magnet.variant.spinningVinyl');
 
-  register('progress-bar', 'default', 'Default');
-  register('progress-bar', 'standard', 'Standard');
-  register('progress-bar', 'minimal', 'Minimal');
+  register(
+    'track-info',
+    'default',
+    labelDefault,
+    t('magnet.variant.track-info.default.description')
+  );
+  register('track-info', 'spinning-vinyl', labelSpinningVinyl);
+  register('track-info', 'minimal', labelMinimal);
+  register('track-info', 'card', labelCard);
 
-  register('btn-play-pause', 'default', 'Default');
-  register('btn-play-pause', 'standard', 'Standard');
-  register('btn-play-pause', 'rounded', 'Rounded');
+  register('progress-bar', 'default', labelDefault);
+  register('progress-bar', 'standard', labelStandard);
+  register('progress-bar', 'minimal', labelMinimal);
 
-  register('btn-previous', 'default', 'Default');
-  register('btn-previous', 'standard', 'Standard');
-  register('btn-previous', 'rounded', 'Rounded');
+  register('btn-play-pause', 'default', labelDefault);
+  register('btn-play-pause', 'standard', labelStandard);
+  register('btn-play-pause', 'rounded', labelRounded);
 
-  register('btn-next', 'default', 'Default');
-  register('btn-next', 'standard', 'Standard');
-  register('btn-next', 'rounded', 'Rounded');
+  register('btn-previous', 'default', labelDefault);
+  register('btn-previous', 'standard', labelStandard);
+  register('btn-previous', 'rounded', labelRounded);
 
-  register('btn-mode', 'default', 'Default');
-  register('btn-mode', 'standard', 'Standard');
-  register('btn-mode', 'minimal', 'Minimal');
+  register('btn-next', 'default', labelDefault);
+  register('btn-next', 'standard', labelStandard);
+  register('btn-next', 'rounded', labelRounded);
 
-  register('btn-back', 'default', 'Default');
-  register('btn-back', 'standard', 'Standard');
-  register('btn-back', 'rounded', 'Rounded');
+  register('btn-mode', 'default', labelDefault);
+  register('btn-mode', 'standard', labelStandard);
+  register('btn-mode', 'minimal', labelMinimal);
 
-  register('btn-volume', 'default', 'Default');
-  register('btn-volume', 'standard', 'Standard');
-  register('btn-volume', 'cyber', 'Cyber');
+  register('btn-back', 'default', labelDefault);
+  register('btn-back', 'standard', labelStandard);
+  register('btn-back', 'rounded', labelRounded);
 
-  register('btn-window-pin', 'default', 'Default');
-  register('btn-window-pin', 'standard', 'Standard');
+  register('btn-volume', 'default', labelDefault);
+  register('btn-volume', 'standard', labelStandard);
+  register('btn-volume', 'cyber', labelCyber);
 
-  register('navigation-page', 'default', 'Default');
-  register('navigation-page', 'standard', 'Standard');
+  register('btn-window-pin', 'default', labelDefault);
+  register('btn-window-pin', 'standard', labelStandard);
 
-  register('btn-debug', 'default', 'Default');
-  register('btn-debug', 'standard', 'Standard');
+  register('navigation-page', 'default', labelDefault);
+  register('navigation-page', 'standard', labelStandard);
 
-  register('btn-play-queue', 'default', 'Default');
-  register('btn-play-queue', 'standard', 'Standard');
+  register('btn-debug', 'default', labelDefault);
+  register('btn-debug', 'standard', labelStandard);
 
-  register('btn-playlists', 'default', 'Default');
-  register('btn-playlists', 'standard', 'Standard');
+  register('btn-play-queue', 'default', labelDefault);
+  register('btn-play-queue', 'standard', labelStandard);
 
-  register('btn-music-library', 'default', 'Default');
-  register('btn-music-library', 'standard', 'Standard');
+  register('btn-playlists', 'default', labelDefault);
+  register('btn-playlists', 'standard', labelStandard);
+
+  register('btn-music-library', 'default', labelDefault);
+  register('btn-music-library', 'standard', labelStandard);
 }
 
 export function createBuiltinMagnetRenderersModule(): KernelModule<AppEvents> {
   return {
     id: 'builtin-magnet-renderers',
     activate: () => {
-      for (const definition of BUILTIN_DEFINITIONS) {
-        registerMagnetRenderer(definition, { overwrite: false });
-      }
-      registerBuiltinVariants();
+      const sync = () => {
+        for (const definition of getBuiltinDefinitions()) {
+          const existing = getMagnetRenderer(definition.id);
+          if (existing && existing.source !== 'builtin') {
+            continue;
+          }
+          registerMagnetRenderer(definition, { overwrite: true });
+        }
+        registerBuiltinVariants();
+      };
+
+      sync();
+      const unsubscribeLocale = subscribeLocale(() => sync());
 
       return () => {
-        for (const definition of BUILTIN_DEFINITIONS) {
+        try {
+          unsubscribeLocale();
+        } catch (error) {
+          console.warn('[builtin-magnet-renderers] locale subscription cleanup failed', error);
+        }
+
+        for (const definition of getBuiltinDefinitions()) {
+          const existing = getMagnetRenderer(definition.id);
+          if (existing && existing.source !== 'builtin') {
+            continue;
+          }
           unregisterMagnetRenderer(definition.id);
         }
         for (const rendererId of BUILTIN_VARIANT_RENDERERS) {

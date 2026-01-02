@@ -2,47 +2,48 @@ import { memo, useState, useCallback, useEffect } from 'react';
 import './StyleEditor.css';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
 import { readJson, readString, writeJson, writeString } from '../../modules/storage';
+import { useT } from '../../i18n';
 
 /**
  * Pixel 形状预设
  */
 interface PixelShapePreset {
   id: string;
-  name: string;
+  nameKey: string;
   shape: 'circle' | 'square' | 'rounded-square' | 'diamond' | 'hexagon';
-  description: string;
+  descriptionKey: string;
 }
 
 const PIXEL_SHAPE_PRESETS: PixelShapePreset[] = [
   {
     id: 'circle',
-    name: '圆形 (默认)',
+    nameKey: 'editor.style-editor.pixelShape.circle.name',
     shape: 'circle',
-    description: '经典的圆形像素点',
+    descriptionKey: 'editor.style-editor.pixelShape.circle.desc',
   },
   {
     id: 'square',
-    name: '方形',
+    nameKey: 'editor.style-editor.pixelShape.square.name',
     shape: 'square',
-    description: '像素艺术风格的方块',
+    descriptionKey: 'editor.style-editor.pixelShape.square.desc',
   },
   {
     id: 'rounded-square',
-    name: '圆角方形',
+    nameKey: 'editor.style-editor.pixelShape.rounded-square.name',
     shape: 'rounded-square',
-    description: '现代感的圆角矩形',
+    descriptionKey: 'editor.style-editor.pixelShape.rounded-square.desc',
   },
   {
     id: 'diamond',
-    name: '菱形',
+    nameKey: 'editor.style-editor.pixelShape.diamond.name',
     shape: 'diamond',
-    description: '旋转45度的菱形',
+    descriptionKey: 'editor.style-editor.pixelShape.diamond.desc',
   },
   {
     id: 'hexagon',
-    name: '六边形',
+    nameKey: 'editor.style-editor.pixelShape.hexagon.name',
     shape: 'hexagon',
-    description: '蜂窝状的六边形',
+    descriptionKey: 'editor.style-editor.pixelShape.hexagon.desc',
   },
 ];
 
@@ -51,35 +52,35 @@ const PIXEL_SHAPE_PRESETS: PixelShapePreset[] = [
  */
 interface BackgroundEffectPreset {
   id: string;
-  name: string;
-  description: string;
+  nameKey: string;
+  descriptionKey: string;
 }
 
 const BACKGROUND_EFFECT_PRESETS: BackgroundEffectPreset[] = [
   {
     id: 'glow-pulse',
-    name: '光晕脉冲',
-    description: '窗口整体呼吸灯效果',
+    nameKey: 'editor.style-editor.backgroundEffect.glow-pulse.name',
+    descriptionKey: 'editor.style-editor.backgroundEffect.glow-pulse.desc',
   },
   {
     id: 'scan-line',
-    name: '扫描线',
-    description: '科幻扫描线效果',
+    nameKey: 'editor.style-editor.backgroundEffect.scan-line.name',
+    descriptionKey: 'editor.style-editor.backgroundEffect.scan-line.desc',
   },
   {
     id: 'matrix-rain',
-    name: '字符雨',
-    description: '黑客帝国数字雨',
+    nameKey: 'editor.style-editor.backgroundEffect.matrix-rain.name',
+    descriptionKey: 'editor.style-editor.backgroundEffect.matrix-rain.desc',
   },
   {
     id: 'particles',
-    name: '粒子星空',
-    description: '密集浮动光点',
+    nameKey: 'editor.style-editor.backgroundEffect.particles.name',
+    descriptionKey: 'editor.style-editor.backgroundEffect.particles.desc',
   },
   {
     id: 'none',
-    name: '无效果',
-    description: '关闭背景效果',
+    nameKey: 'editor.style-editor.backgroundEffect.none.name',
+    descriptionKey: 'editor.style-editor.backgroundEffect.none.desc',
   },
 ];
 
@@ -88,30 +89,30 @@ const BACKGROUND_EFFECT_PRESETS: BackgroundEffectPreset[] = [
  */
 interface BorderEffectPreset {
   id: string;
-  name: string;
-  description: string;
+  nameKey: string;
+  descriptionKey: string;
 }
 
 const BORDER_EFFECT_PRESETS: BorderEffectPreset[] = [
   {
     id: 'standard',
-    name: '标准',
-    description: '应用主题颜色',
+    nameKey: 'editor.style-editor.borderEffect.standard.name',
+    descriptionKey: 'editor.style-editor.borderEffect.standard.desc',
   },
   {
     id: 'pulse',
-    name: '脉冲',
-    description: '呼吸灯效果',
+    nameKey: 'editor.style-editor.borderEffect.pulse.name',
+    descriptionKey: 'editor.style-editor.borderEffect.pulse.desc',
   },
   {
     id: 'glitch',
-    name: '故障',
-    description: '赛博朋克闪烁',
+    nameKey: 'editor.style-editor.borderEffect.glitch.name',
+    descriptionKey: 'editor.style-editor.borderEffect.glitch.desc',
   },
   {
     id: 'none',
-    name: '无效果',
-    description: '关闭边框效果',
+    nameKey: 'editor.style-editor.borderEffect.none.name',
+    descriptionKey: 'editor.style-editor.borderEffect.none.desc',
   },
 ];
 
@@ -120,20 +121,22 @@ const BORDER_EFFECT_PRESETS: BorderEffectPreset[] = [
  */
 interface ColorThemePreset {
   id: string;
-  name: string;
+  nameKey: string;
   rgb: [number, number, number];
 }
 
 const COLOR_THEME_PRESETS: ColorThemePreset[] = [
-  { id: 'cyan', name: '青色', rgb: [0, 255, 136] },
-  { id: 'red', name: '红色', rgb: [255, 59, 48] },
-  { id: 'blue', name: '蓝色', rgb: [10, 132, 255] },
-  { id: 'purple', name: '紫色', rgb: [191, 90, 242] },
-  { id: 'gold', name: '金色', rgb: [255, 204, 0] },
-  { id: 'rainbow', name: '彩虹', rgb: [0, 255, 136] }, // 基础色是青色，但会进行色相循环
+  { id: 'cyan', nameKey: 'editor.style-editor.colorTheme.cyan', rgb: [0, 255, 136] },
+  { id: 'red', nameKey: 'editor.style-editor.colorTheme.red', rgb: [255, 59, 48] },
+  { id: 'blue', nameKey: 'editor.style-editor.colorTheme.blue', rgb: [10, 132, 255] },
+  { id: 'purple', nameKey: 'editor.style-editor.colorTheme.purple', rgb: [191, 90, 242] },
+  { id: 'gold', nameKey: 'editor.style-editor.colorTheme.gold', rgb: [255, 204, 0] },
+  { id: 'rainbow', nameKey: 'editor.style-editor.colorTheme.rainbow', rgb: [0, 255, 136] }, // 基础色是青色，但会进行色相循环
 ];
 
 export const StyleEditor = memo(function StyleEditor() {
+  const t = useT();
+
   // 从 localStorage 读取初始值（使用统一的 STORAGE_KEYS）
   const [selectedPixelShape, setSelectedPixelShape] = useState(() => {
     return readString(STORAGE_KEYS.PIXEL_SHAPE) || 'circle';
@@ -272,7 +275,7 @@ export const StyleEditor = memo(function StyleEditor() {
 
         const customTheme: ColorThemePreset = {
           id: 'custom',
-          name: '自定义',
+          nameKey: 'editor.style-editor.colorTheme.custom',
           rgb: [r, g, b],
         };
 
@@ -359,9 +362,9 @@ export const StyleEditor = memo(function StyleEditor() {
         <section className="style-section">
           <h3 className="section-title">
             <span className="section-icon">⬡</span>
-            Pixel 形状
+            {t('editor.style-editor.section.pixelShape.title')}
           </h3>
-          <p className="section-description">自定义 Pixel 点阵的形状样式</p>
+          <p className="section-description">{t('editor.style-editor.section.pixelShape.desc')}</p>
 
           <div className="preset-grid">
             {PIXEL_SHAPE_PRESETS.map((preset) => (
@@ -369,7 +372,7 @@ export const StyleEditor = memo(function StyleEditor() {
                 key={preset.id}
                 className={`preset-card preset-card-icon-only ${selectedPixelShape === preset.id ? 'active' : ''}`}
                 onClick={() => applyPixelShape(preset.id)}
-                title={preset.name}
+                title={t(preset.nameKey)}
               >
                 <span className="preset-shape-preview" data-shape={preset.shape}></span>
                 {selectedPixelShape === preset.id && <span className="preset-badge">✓</span>}
@@ -380,7 +383,7 @@ export const StyleEditor = memo(function StyleEditor() {
           {/* Pixel 尺寸调整 */}
           <div className="pixel-size-control">
             <label className="size-label">
-              <span>Pixel 尺寸</span>
+              <span>{t('editor.style-editor.pixelSize.label')}</span>
               <span className="size-value">{pixelSize}%</span>
             </label>
             <input
@@ -400,7 +403,7 @@ export const StyleEditor = memo(function StyleEditor() {
           {/* Pixel 透明度调整 */}
           <div className="pixel-size-control">
             <label className="size-label">
-              <span>Pixel 透明度</span>
+              <span>{t('editor.style-editor.pixelOpacity.label')}</span>
               <span className="size-value">{pixelOpacity}%</span>
             </label>
             <input
@@ -422,9 +425,11 @@ export const StyleEditor = memo(function StyleEditor() {
         <section className="style-section">
           <h3 className="section-title">
             <span className="section-icon">◫</span>
-            背景效果
+            {t('editor.style-editor.section.backgroundEffect.title')}
           </h3>
-          <p className="section-description">为主窗口添加全屏背景效果</p>
+          <p className="section-description">
+            {t('editor.style-editor.section.backgroundEffect.desc')}
+          </p>
 
           <div className="preset-grid">
             {BACKGROUND_EFFECT_PRESETS.map((preset) => (
@@ -434,7 +439,7 @@ export const StyleEditor = memo(function StyleEditor() {
                 onClick={() => applyBackgroundEffect(preset.id)}
               >
                 <div className="preset-header">
-                  <span className="preset-name">{preset.name}</span>
+                  <span className="preset-name">{t(preset.nameKey)}</span>
                   {selectedBackgroundEffect === preset.id && (
                     <span className="preset-badge">✓</span>
                   )}
@@ -450,7 +455,7 @@ export const StyleEditor = memo(function StyleEditor() {
                 key={theme.id}
                 className={`color-theme-btn ${theme.id === 'rainbow' ? 'rainbow-theme' : ''} ${backgroundThemeColor.id === theme.id ? 'active' : ''}`}
                 onClick={() => applyBackgroundThemeColor(theme)}
-                title={theme.name}
+                title={t(theme.nameKey)}
                 style={
                   theme.id !== 'rainbow'
                     ? {
@@ -463,7 +468,7 @@ export const StyleEditor = memo(function StyleEditor() {
             <button
               className="color-theme-btn color-picker-btn"
               onClick={(e) => openColorPicker('background', e)}
-              title="自定义颜色"
+              title={t('editor.style-editor.colorTheme.customColorTitle')}
             >
               <svg viewBox="0 0 20 20" fill="currentColor">
                 <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
@@ -476,9 +481,9 @@ export const StyleEditor = memo(function StyleEditor() {
         <section className="style-section">
           <h3 className="section-title">
             <span className="section-icon">◻</span>
-            边框效果
+            {t('editor.style-editor.section.borderEffect.title')}
           </h3>
-          <p className="section-description">为窗口边框添加动态效果</p>
+          <p className="section-description">{t('editor.style-editor.section.borderEffect.desc')}</p>
 
           <div className="preset-grid">
             {BORDER_EFFECT_PRESETS.map((preset) => (
@@ -488,7 +493,7 @@ export const StyleEditor = memo(function StyleEditor() {
                 onClick={() => applyBorderEffect(preset.id)}
               >
                 <div className="preset-header">
-                  <span className="preset-name">{preset.name}</span>
+                  <span className="preset-name">{t(preset.nameKey)}</span>
                   {selectedBorderEffect === preset.id && <span className="preset-badge">✓</span>}
                 </div>
               </div>
@@ -502,7 +507,7 @@ export const StyleEditor = memo(function StyleEditor() {
                 key={theme.id}
                 className={`color-theme-btn ${theme.id === 'rainbow' ? 'rainbow-theme' : ''} ${borderThemeColor.id === theme.id ? 'active' : ''}`}
                 onClick={() => applyBorderThemeColor(theme)}
-                title={theme.name}
+                title={t(theme.nameKey)}
                 style={
                   theme.id !== 'rainbow'
                     ? {
@@ -515,7 +520,7 @@ export const StyleEditor = memo(function StyleEditor() {
             <button
               className="color-theme-btn color-picker-btn"
               onClick={(e) => openColorPicker('border', e)}
-              title="自定义颜色"
+              title={t('editor.style-editor.colorTheme.customColorTitle')}
             >
               <svg viewBox="0 0 20 20" fill="currentColor">
                 <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />

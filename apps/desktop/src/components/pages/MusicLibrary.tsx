@@ -12,6 +12,7 @@ import {
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './MusicLibrary.css';
 
@@ -51,6 +52,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   embedded = false,
 }) => {
   const { navigateTo } = useNavigation();
+  const t = useT();
+  const locale = useLocale();
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     return isTauriRuntime() ? 'all' : 'albums';
   });
@@ -378,7 +381,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       setErrorMessage(null);
     } catch (error) {
       console.error('Failed to scan folder:', error);
-      setErrorMessage('扫描文件夹失败: ' + (error as Error).message);
+      setErrorMessage(
+        t('pages.music-library.error.scanFolderFailed', {
+          message: error instanceof Error ? error.message : String(error),
+        })
+      );
     }
   };
 
@@ -410,13 +417,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         setErrorMessage(null);
         console.log(`✅ All ${result.granted} folder permissions granted`);
       } else if (result.granted > 0) {
-        setErrorMessage(`部分权限刷新成功：${result.granted}/${result.total} 个文件夹`);
+        setErrorMessage(
+          t('pages.music-library.refreshPermissions.partial', {
+            granted: result.granted,
+            total: result.total,
+          })
+        );
       } else {
-        setErrorMessage('权限刷新失败，请尝试重新扫描文件夹');
+        setErrorMessage(t('pages.music-library.refreshPermissions.failed'));
       }
     } catch (error) {
       console.error('Failed to refresh permissions:', error);
-      setErrorMessage('权限刷新失败: ' + (error as Error).message);
+      setErrorMessage(
+        t('pages.music-library.refreshPermissions.failedWithReason', {
+          message: error instanceof Error ? error.message : String(error),
+        })
+      );
     } finally {
       setIsRefreshingPermissions(false);
     }
@@ -439,12 +455,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         if (track.album) {
           const key = `${track.album}-${track.artist}`;
           if (!albumMap.has(key)) {
-            albumMap.set(key, {
-              album: track.album,
-              artist: track.artist || '未知艺术家',
-              cover:
-                typeof track.coverUrl === 'string' &&
-                (track.coverUrl.toLowerCase().startsWith('data:') ||
+              albumMap.set(key, {
+                album: track.album,
+              artist: track.artist || t('common.unknown.artist'),
+                cover:
+                  typeof track.coverUrl === 'string' &&
+                  (track.coverUrl.toLowerCase().startsWith('data:') ||
                   track.coverUrl.toLowerCase().startsWith('blob:') ||
                   track.coverUrl.toLowerCase().startsWith('http:') ||
                   track.coverUrl.toLowerCase().startsWith('https:'))
@@ -632,23 +648,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const menuItems: ContextMenuItem[] = [
       {
-        label: '播放',
+        label: t('pages.music-library.contextMenu.play'),
         icon: '▶',
         onClick: () => handlePlaySingleTrack(track, e),
       },
       {
-        label: '添加到队列',
+        label: t('pages.music-library.contextMenu.addToQueue'),
         icon: '+',
         onClick: () => onAddToQueue?.([track]),
       },
       {
-        label: '播放全部（从此开始）',
+        label: t('pages.music-library.contextMenu.playAllFromHere'),
         icon: '🎵',
         onClick: () => onPlayNow?.(filteredTracks, index),
       },
       { divider: true } as ContextMenuItem,
       {
-        label: '查看专辑',
+        label: t('pages.music-library.contextMenu.viewAlbum'),
         icon: '💿',
         onClick: () => {
           if (track.album && embedded) {
@@ -658,7 +674,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         disabled: !track.album || !embedded,
       },
       {
-        label: '查看艺术家',
+        label: t('pages.music-library.contextMenu.viewArtist'),
         icon: '👤',
         onClick: () => {
           if (track.artist) {
@@ -683,18 +699,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const menuItems: ContextMenuItem[] = [
       {
-        label: '查看专辑',
+        label: t('pages.music-library.contextMenu.viewAlbum'),
         icon: '💿',
         onClick: () => handleAlbumClick(album, artist),
         disabled: !embedded,
       },
       {
-        label: '播放专辑',
+        label: t('pages.music-library.contextMenu.playAlbum'),
         icon: '▶',
         onClick: () => handlePlayAlbum(album),
       },
       {
-        label: '添加到队列',
+        label: t('pages.music-library.contextMenu.addToQueue'),
         icon: '+',
         onClick: async () => {
           const albumTracks = await musicLibraryService.getTracksByAlbum(album);
@@ -703,7 +719,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       },
       { divider: true } as ContextMenuItem,
       {
-        label: '查看艺术家',
+        label: t('pages.music-library.contextMenu.viewArtist'),
         icon: '👤',
         onClick: () => {
           handleViewModeChange('artists', { artist: artist });
@@ -730,7 +746,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const formatTotalDuration = (seconds: number): string => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    if (hours > 0) {
+      return t('pages.music-library.duration.hoursMinutes', { hours, minutes });
+    }
+    return t('pages.music-library.duration.minutes', { minutes });
   };
 
   // 格式化轨道时长
@@ -746,7 +765,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     <div className={`music-library ${embedded ? 'music-library-embedded' : ''}`}>
       {!embedded && (
         <div className="music-library-header">
-          <h2 className="music-library-title">♪ Music Library</h2>
+          <h2 className="music-library-title">♪ {t('pages.music-library.title')}</h2>
           {onClose && (
             <button className="music-library-close" onClick={onClose}>
               ✕
@@ -760,23 +779,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           <button
             className="music-library-btn"
             onClick={() => setShowPathsManager(true)}
-            title="管理库路径"
+            title={t('pages.music-library.paths.manageTitle')}
           >
-            <span>📁 库路径 ({libraryPaths.length})</span>
+            <span>📁 {t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
           </button>
           <button
             className="music-library-btn"
             onClick={() => setShowClearConfirm(true)}
             disabled={libraryStats.totalTracks === 0}
           >
-            × Clear
+            × {t('common.action.clear')}
           </button>
         </div>
 
         <div className="music-library-search">
           <input
             type="text"
-            placeholder="Search tracks, artists, albums..."
+            placeholder={t('pages.music-library.search.placeholder')}
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
           />
@@ -784,20 +803,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
 
         <div className="music-library-sort">
-          <label htmlFor="sort-select">排序：</label>
+          <label htmlFor="sort-select">{t('pages.music-library.sort.label')}</label>
           <select
             id="sort-select"
             className="music-library-sort-select"
             value={sortBy}
             onChange={(e) => handleSort(e.target.value as typeof sortBy)}
           >
-            <option value="default">默认</option>
+            <option value="default">{t('pages.music-library.sort.option.default')}</option>
             {/* Albums 视图只显示专辑和艺术家排序 */}
-            {viewMode !== 'albums' && <option value="title">标题</option>}
-            <option value="artist">艺术家</option>
-            <option value="album">专辑</option>
-            {viewMode !== 'albums' && <option value="duration">时长</option>}
-            {viewMode !== 'albums' && <option value="year">年份</option>}
+            {viewMode !== 'albums' && <option value="title">{t('pages.music-library.sort.option.title')}</option>}
+            <option value="artist">{t('pages.music-library.sort.option.artist')}</option>
+            <option value="album">{t('pages.music-library.sort.option.album')}</option>
+            {viewMode !== 'albums' && (
+              <option value="duration">{t('pages.music-library.sort.option.duration')}</option>
+            )}
+            {viewMode !== 'albums' && <option value="year">{t('pages.music-library.sort.option.year')}</option>}
           </select>
           <button
             className={`music-library-sort-order-btn ${sortBy === 'default' ? 'disabled' : ''}`}
@@ -807,17 +828,21 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             disabled={sortBy === 'default'}
             title={
               sortBy === 'default'
-                ? '请先选择排序字段'
+                ? t('pages.music-library.sortOrder.disabledTitle')
                 : sortOrder === 'asc'
-                  ? '升序 - 点击切换为降序'
-                  : '降序 - 点击切换为升序'
+                  ? t('pages.music-library.sortOrder.ascTitle')
+                  : t('pages.music-library.sortOrder.descTitle')
             }
           >
             {sortOrder === 'asc' ? '↑' : '↓'}
           </button>
           <span
             className="music-library-sort-hint"
-            title={sortBy === 'default' ? '当前使用默认顺序' : '播放时将按此排序顺序'}
+            title={
+              sortBy === 'default'
+                ? t('pages.music-library.sortHint.defaultTitle')
+                : t('pages.music-library.sortHint.playTitle')
+            }
             style={{ opacity: sortBy === 'default' ? 0.4 : 1 }}
           >
             🎵
@@ -829,37 +854,37 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             className={`music-library-view-btn ${viewMode === 'all' ? 'active' : ''}`}
             onClick={() => handleViewModeChange('all')}
           >
-            All
+            {t('pages.music-library.viewMode.all')}
           </button>
           <button
             className={`music-library-view-btn ${viewMode === 'albums' ? 'active' : ''}`}
             onClick={() => handleViewModeChange('albums')}
           >
-            Albums
+            {t('pages.music-library.viewMode.albums')}
           </button>
           <button
             className={`music-library-view-btn ${viewMode === 'artists' ? 'active' : ''}`}
             onClick={() => handleViewModeChange('artists')}
           >
-            Artists
+            {t('pages.music-library.viewMode.artists')}
           </button>
           <button
             className={`music-library-view-btn ${viewMode === 'genres' ? 'active' : ''}`}
             onClick={() => handleViewModeChange('genres')}
           >
-            Genres
+            {t('pages.music-library.viewMode.genres')}
           </button>
         </div>
 
         <div className="music-library-stats">
           <div className="music-library-stat">
-            <strong>{libraryStats.totalTracks}</strong> tracks
+            <strong>{libraryStats.totalTracks}</strong> {t('pages.music-library.stats.tracksUnit')}
           </div>
           <div className="music-library-stat">
-            <strong>{libraryStats.totalArtists}</strong> artists
+            <strong>{libraryStats.totalArtists}</strong> {t('pages.music-library.stats.artistsUnit')}
           </div>
           <div className="music-library-stat">
-            <strong>{libraryStats.totalAlbums}</strong> albums
+            <strong>{libraryStats.totalAlbums}</strong> {t('pages.music-library.stats.albumsUnit')}
           </div>
           <div className="music-library-stat">
             <strong>{formatFileSize(libraryStats.totalSize)}</strong>
@@ -875,7 +900,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           <div className="music-library-sidebar">
             {viewMode === 'artists' && (
               <div className="music-library-sidebar-section">
-                <div className="music-library-sidebar-title">Artists</div>
+                <div className="music-library-sidebar-title">{t('pages.music-library.sidebar.artists')}</div>
                 {artists.map((artist) => (
                   <div
                     key={artist}
@@ -894,7 +919,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             {viewMode === 'genres' && (
               <div className="music-library-sidebar-section">
-                <div className="music-library-sidebar-title">Genres</div>
+                <div className="music-library-sidebar-title">{t('pages.music-library.sidebar.genres')}</div>
                 {genres.map((genre) => (
                   <div
                     key={genre}
@@ -912,13 +937,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           </div>
         )}
 
-        <div className="music-library-main" ref={mainScrollRef}>
+          <div className="music-library-main" ref={mainScrollRef}>
           {libraryStats.totalTracks === 0 ? (
             <div className="music-library-empty">
               <div className="music-library-empty-icon">⊞</div>
-              <div className="music-library-empty-text">Your music library is empty</div>
+              <div className="music-library-empty-text">{t('pages.music-library.empty.title')}</div>
               <button className="music-library-btn" onClick={handleScanFolder}>
-                Scan a folder to get started
+                {t('pages.music-library.empty.scanButton')}
               </button>
             </div>
           ) : (
@@ -936,7 +961,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         onClick={() => handleAlbumClick(album, artist)}
                         onDoubleClick={() => handlePlayAlbum(album)}
                         onContextMenu={(e) => handleAlbumContextMenu(album, artist, e)}
-                        title={`单击查看专辑 / 双击播放 / 右键菜单`}
+                        title={t('pages.music-library.albums.cardTooltip')}
                       >
                         <div className="music-library-album-cover">
                           {cover ? (
@@ -957,11 +982,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 <div className="music-library-list">
                   <div className="music-library-list-header">
                     <div>#</div>
-                    <div>Title</div>
-                    <div>Artist</div>
-                    <div>Album</div>
-                    <div>Duration</div>
-                    <div>Actions</div>
+                    <div>{t('pages.music-library.tracks.header.title')}</div>
+                    <div>{t('pages.music-library.tracks.header.artist')}</div>
+                    <div>{t('pages.music-library.tracks.header.album')}</div>
+                    <div>{t('pages.music-library.tracks.header.duration')}</div>
+                    <div>{t('pages.music-library.tracks.header.actions')}</div>
                   </div>
                   {getFilteredTracks().map((track, index) => (
                     <div
@@ -969,7 +994,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       className="music-library-track"
                       onDoubleClick={() => handleTrackDoubleClick(track, index)}
                       onContextMenu={(e) => handleTrackContextMenu(track, index, e)}
-                      title="双击播放所有歌曲（从此歌曲开始） / 右键菜单"
+                      title={t('pages.music-library.tracks.rowTooltip')}
                     >
                       <div className="music-library-track-number">{index + 1}</div>
                       <div className="music-library-track-title">{track.title}</div>
@@ -982,7 +1007,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         {onPlayNow && (
                           <button
                             onClick={(e) => handlePlaySingleTrack(track, e)}
-                            title="只播放此歌曲"
+                            title={t('pages.music-library.tracks.action.playOneTitle')}
                             className="track-action-play"
                           >
                             ▶
@@ -991,7 +1016,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         {onAddToQueue && (
                           <button
                             onClick={(e) => handleAddSingleTrack(track, e)}
-                            title="只添加此歌曲到队列"
+                            title={t('pages.music-library.tracks.action.addOneTitle')}
                             className="track-action-add"
                           >
                             +
@@ -1010,20 +1035,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {scanProgress && scanProgress.isScanning && (
         <div className="music-library-scan-progress">
           <div className="music-library-scan-header">
-            <div className="music-library-scan-title">🔍 扫描中...</div>
+            <div className="music-library-scan-title">🔍 {t('pages.music-library.scan.title')}</div>
             <button
               className="music-library-scan-cancel"
               onClick={handleCancelScan}
-              title="取消扫描"
+              title={t('pages.music-library.scan.cancelTitle')}
             >
-              取消
+              {t('common.action.cancel')}
             </button>
             <div className="music-library-scan-percentage">
               {scanProgress.progress ? `${scanProgress.progress.toFixed(1)}%` : '0%'}
             </div>
           </div>
           {scanProgress.currentFile && (
-            <div className="music-library-scan-file">正在处理：{scanProgress.currentFile}</div>
+            <div className="music-library-scan-file">
+              {t('pages.music-library.scan.processing', { file: scanProgress.currentFile })}
+            </div>
           )}
           <div className="music-library-scan-progress-bar">
             <div
@@ -1035,14 +1062,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           </div>
           <div className="music-library-scan-stats">
             <span className="scan-stat-count">
-              {scanProgress.current} / {scanProgress.total} 个文件
+              {t('pages.music-library.scan.count', {
+                current: scanProgress.current,
+                total: scanProgress.total,
+              })}
             </span>
             {scanProgress.speed && (
-              <span className="scan-stat-speed">{scanProgress.speed.toFixed(1)} 文件/秒</span>
+              <span className="scan-stat-speed">
+                {t('pages.music-library.scan.speed', { speed: scanProgress.speed.toFixed(1) })}
+              </span>
             )}
             {scanProgress.remaining && scanProgress.remaining > 0 && (
               <span className="scan-stat-remaining">
-                预计剩余 {Math.ceil(scanProgress.remaining)} 秒
+                {t('pages.music-library.scan.remaining', { seconds: Math.ceil(scanProgress.remaining) })}
               </span>
             )}
           </div>
@@ -1052,10 +1084,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {/* 清空确认对话框 */}
       <ConfirmDialog
         isOpen={showClearConfirm}
-        title="清空音乐库"
-        message="确定要清空整个音乐库吗？此操作无法撤销。"
-        confirmText="清空"
-        cancelText="取消"
+        title={t('pages.music-library.clear.title')}
+        message={t('pages.music-library.clear.message')}
+        confirmText={t('common.action.clear')}
+        cancelText={t('common.action.cancel')}
         confirmButtonStyle="danger"
         onConfirm={handleClearLibrary}
         onCancel={() => setShowClearConfirm(false)}
@@ -1066,19 +1098,21 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         <div className="paths-manager-overlay" onClick={() => setShowPathsManager(false)}>
           <div className="paths-manager-modal" onClick={(e) => e.stopPropagation()}>
             <div className="paths-manager-header">
-              <h3>库路径管理</h3>
+              <h3>{t('pages.music-library.pathsManager.title')}</h3>
               <div className="paths-manager-header-actions">
                 <button
                   className="paths-scan-btn"
                   onClick={handleRefreshPermissions}
                   disabled={isRefreshingPermissions || libraryPaths.length === 0}
-                  title="刷新所有文件夹的访问权限"
+                  title={t('pages.music-library.pathsManager.refreshPermissionsTitle')}
                   style={{
                     background: 'rgba(0, 200, 100, 0.2)',
                     border: '1px solid rgba(0, 200, 100, 0.5)',
                   }}
                 >
-                  {isRefreshingPermissions ? '⟳ 刷新中...' : '🔑 刷新权限'}
+                  {isRefreshingPermissions
+                    ? t('pages.music-library.pathsManager.refreshingButton')
+                    : t('pages.music-library.pathsManager.refreshPermissionsButton')}
                 </button>
                 <button
                   className="paths-scan-btn"
@@ -1088,7 +1122,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                   }}
                   disabled={scanProgress?.isScanning}
                 >
-                  + 添加文件夹
+                  {t('pages.music-library.pathsManager.addFolderButton')}
                 </button>
                 <button onClick={() => setShowPathsManager(false)}>✕</button>
               </div>
@@ -1098,8 +1132,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               {libraryPaths.length === 0 ? (
                 <div className="paths-manager-empty">
                   <div className="paths-empty-icon">📁</div>
-                  <div className="paths-empty-text">暂无库路径</div>
-                  <div className="paths-empty-hint">点击“+ 添加文件夹”扫描音乐库</div>
+                  <div className="paths-empty-text">{t('pages.music-library.pathsManager.empty.title')}</div>
+                  <div className="paths-empty-hint">{t('pages.music-library.pathsManager.empty.hint')}</div>
                 </div>
               ) : (
                 <div className="paths-manager-list">
@@ -1112,12 +1146,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         </div>
                         <div className="path-item-meta">
                           {path.trackCount > 0 && (
-                            <span className="path-meta-tracks">♪ {path.trackCount} 首</span>
+                            <span className="path-meta-tracks">
+                              ♪ {t('pages.music-library.pathsManager.path.trackCount', { count: path.trackCount })}
+                            </span>
                           )}
                           {path.lastScanned && (
                             <span className="path-meta-time">
                               🕐{' '}
-                              {new Date(path.lastScanned).toLocaleString('zh-CN', {
+                              {new Date(path.lastScanned).toLocaleString(locale, {
                                 month: 'short',
                                 day: 'numeric',
                                 hour: '2-digit',
@@ -1125,7 +1161,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               })}
                             </span>
                           )}
-                          {!path.lastScanned && <span className="path-meta-unscanned">未扫描</span>}
+                          {!path.lastScanned && (
+                            <span className="path-meta-unscanned">
+                              {t('pages.music-library.pathsManager.path.unscanned')}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="path-item-actions">
@@ -1141,7 +1181,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             }
                           }}
                           disabled={scanProgress?.isScanning}
-                          title="重新扫描此路径"
+                          title={t('pages.music-library.pathsManager.path.rescanTitle')}
                         >
                           ↻
                         </button>
@@ -1151,7 +1191,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             await musicLibraryService.removeLibraryPath(path.id);
                             await loadLibraryPaths();
                           }}
-                          title="移除路径"
+                          title={t('pages.music-library.pathsManager.path.removeTitle')}
                         >
                           ×
                         </button>
@@ -1164,7 +1204,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             <div className="paths-manager-footer">
               <div className="paths-manager-info">
-                管理音乐库扫描路径。点击“⊞ 添加文件夹”扫描新的音乐文件夹，会自动保存路径。
+                {t('pages.music-library.pathsManager.footer')}
               </div>
             </div>
           </div>
@@ -1175,9 +1215,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {errorMessage && (
         <ConfirmDialog
           isOpen={true}
-          title="错误"
+          title={t('common.dialog.errorTitle')}
           message={errorMessage}
-          confirmText="确定"
+          confirmText={t('common.action.ok')}
           cancelText=""
           confirmButtonStyle="primary"
           onConfirm={() => setErrorMessage(null)}
