@@ -1148,7 +1148,7 @@ export function EditorWindowApp() {
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
               <div
-                className={`editor-window-app ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
+                className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
                 ref={rootRef}
               >
                   {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}

@@ -29,6 +29,12 @@
   --editor-window-glass-blur: 0px;
 }
 
+.editor-window-app.editor-window-app--control {
+  /* The control window is narrow; avoid wasting width with global padding. */
+  padding: 8px;
+  overflow: hidden;
+}
+
 .editor-window-app.editor-window-app--tauri {
   /* On Windows, prefer OS-level vibrancy; keep panels more translucent and avoid CSS blur. */
   --editor-window-panel-bg: rgba(10, 10, 20, 0.76);
