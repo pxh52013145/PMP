@@ -513,7 +513,8 @@
   min-width: 6.5em;
 }
 
-.control-button-group .pin-btn {
+.control-button-group .pin-btn,
+.control-button-group .matrix-hints-btn {
   flex: 0.0207;
   min-width: 0;
   padding: 0.5em;
@@ -528,68 +529,78 @@
 }
 
 /* 置顶按钮激活状态 */
-.pin-btn.active {
+.pin-btn.active,
+.matrix-hints-btn.active {
   --bg: #0a5a3f;
   --border-color: linear-gradient(-45deg, #6affb8, #6aff94);
   --color: #6affb8;
 }
 
-.pin-btn.active::before {
+.pin-btn.active::before,
+.matrix-hints-btn.active::before {
   animation: move-bg-active 5s ease infinite;
 }
 
 /* 修复悬停时的动画冲突 */
-.pin-btn:hover {
+.pin-btn:hover,
+.matrix-hints-btn:hover {
   transform: translateY(-2px);
   filter: brightness(1.2);
 }
 
-.pin-btn:active {
+.pin-btn:active,
+.matrix-hints-btn:active {
   transform: translateY(0);
   transition: transform 100ms ease;
 }
 
 /* Mirror the left-side hint button for symmetry. */
-.pin-btn.pin-btn--mirror {
+.matrix-hints-btn.matrix-hints-btn--mirror {
   transform: scaleX(-1);
 }
 
-.pin-btn.pin-btn--mirror:hover {
+.matrix-hints-btn.matrix-hints-btn--mirror:hover {
   transform: scaleX(-1) translateY(-2px);
 }
 
-.pin-btn.pin-btn--mirror:active {
+.matrix-hints-btn.matrix-hints-btn--mirror:active {
   transform: scaleX(-1) translateY(0);
 }
 
 /* 置顶按钮取消悬停填满效果，使用渐变透明度 */
-.pin-btn::after {
+.pin-btn::after,
+.matrix-hints-btn::after {
   transform: scaleX(1); /* 覆盖父类的 scaleX(0)，保持正常大小 */
   opacity: 1; /* 默认填满 */
   transition: opacity 400ms ease-out;
 }
 
-.pin-btn:hover::after {
+.pin-btn:hover::after,
+.matrix-hints-btn:hover::after {
   transform: scaleX(1); /* 覆盖父类的 hover 效果 */
   opacity: 1; /* 悬停时保持填满 */
 }
 
 /* 开启状态下渐变消失（空心效果） */
-.pin-btn.active::after {
+.pin-btn.active::after,
+.matrix-hints-btn.active::after {
   opacity: 0;
   transition: opacity 500ms ease-out;
 }
 
-.pin-btn.active:hover::after {
+.pin-btn.active:hover::after,
+.matrix-hints-btn.active:hover::after {
   opacity: 0; /* 保持空心 */
 }
 
 /* 置顶按钮移除 focus 视觉效果，防止点击后残留 */
-.pin-btn:focus {
+.pin-btn:focus,
+.matrix-hints-btn:focus {
   outline: none;
 }
 
-.pin-btn:focus-visible {
+.pin-btn:focus-visible,
+.matrix-hints-btn:focus-visible {
   outline: 2px solid rgba(106, 255, 168, 0.5);
   outline-offset: 2px;
 }
