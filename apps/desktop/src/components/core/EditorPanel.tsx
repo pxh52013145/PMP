@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { writeJson, type StorageWriteMode } from '../../modules/storage';
@@ -7,6 +7,7 @@ import { useMagnetConfig } from '../../modules/magnets';
 export function EditorPanel() {
   const { editorState } = useEditor();
   const { magnetLibrary, activeMagnetIds, builtInMagnetIds } = useMagnetConfig();
+  const didOpenControlWindowRef = useRef(false);
 
   const syncDataToStorage = useCallback(
     (mode: StorageWriteMode = 'idle') => {
@@ -24,22 +25,25 @@ export function EditorPanel() {
 
   useEffect(() => {
     if (editorState.isEditing) {
+      if (didOpenControlWindowRef.current) return;
+      didOpenControlWindowRef.current = true;
+
       syncDataToStorage('sync');
 
-      const openControlWindow = async () => {
+      void (async () => {
         try {
           const { calculateWindowPosition, openEditorWindow } = await import('../../utils/editorWindows');
           const position = await calculateWindowPosition('control');
           await openEditorWindow({ type: 'control', ...position });
         } catch (error) {
+          didOpenControlWindowRef.current = false;
           console.error('Failed to open control window:', error);
         }
-      };
-
-      void openControlWindow();
+      })();
       return;
     }
 
+    didOpenControlWindowRef.current = false;
     const close = async () => {
       try {
         const { closeEditorWindow } = await import('../../utils/editorWindows');

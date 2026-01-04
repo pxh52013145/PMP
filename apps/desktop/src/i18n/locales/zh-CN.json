@@ -536,6 +536,8 @@
 
   "editor.control-panel.pin.title.pin": "窗口置顶",
   "editor.control-panel.pin.title.unpin": "取消置顶",
+  "editor.control-panel.pixelHints.title.hide": "隐藏矩阵颜色提示",
+  "editor.control-panel.pixelHints.title.show": "显示矩阵颜色提示",
   "editor.control-panel.toggle.statistics.label": "统计",
   "editor.control-panel.toggle.library.label": "库",
   "editor.control-panel.toggle.style.label": "样式",

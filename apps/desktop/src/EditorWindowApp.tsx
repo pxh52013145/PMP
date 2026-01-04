@@ -79,6 +79,9 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [debugOpen, setDebugOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
+  const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
+    readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true)
+  );
 
   const setOpenStateForType = useCallback((type: string, open: boolean) => {
     switch (type) {
@@ -133,6 +136,40 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       // best-effort: visibility sync is non-critical
     }
   }, []);
+
+  const refreshPixelHintsVisible = useCallback(() => {
+    setPixelHintsVisible(readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true));
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    refreshPixelHintsVisible();
+
+    const teardownStorage = setupStorageListener(
+      [STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE],
+      refreshPixelHintsVisible
+    );
+
+    let unlistenTauri: (() => void) | null = null;
+    const setup = async () => {
+      const unlisten = await setupTauriListener(
+        TAURI_EVENTS.EDITOR_OVERLAY_PIXEL_HINTS_UPDATED,
+        refreshPixelHintsVisible
+      );
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenTauri = unlisten;
+    };
+    void setup();
+
+    return () => {
+      disposed = true;
+      teardownStorage();
+      if (unlistenTauri) unlistenTauri();
+    };
+  }, [refreshPixelHintsVisible]);
 
   // Keep toggle UI in sync with actual window lifecycle (including force-close paths).
   useEffect(() => {
@@ -313,6 +350,18 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   };
 
   // 切换所有编辑器窗口的置顶状态
+  const handleTogglePixelHints = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const newState = !pixelHintsVisible;
+    setPixelHintsVisible(newState);
+    e.currentTarget.blur();
+
+    void broadcastDataUpdate(
+      STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE,
+      newState,
+      TAURI_EVENTS.EDITOR_OVERLAY_PIXEL_HINTS_UPDATED
+    );
+  };
+
   const handleToggleAlwaysOnTop = async (e: React.MouseEvent<HTMLButtonElement>) => {
     const newState = !isAlwaysOnTop;
     setIsAlwaysOnTop(newState);
@@ -346,6 +395,22 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
 
       {/* 完成编辑按钮和置顶按钮 */}
       <div className="control-button-group">
+        <button
+          className={`cyber-btn pin-btn pin-btn--mirror ${pixelHintsVisible ? '' : 'active'}`}
+          onClick={handleTogglePixelHints}
+          title={
+            pixelHintsVisible
+              ? t('editor.control-panel.pixelHints.title.hide')
+              : t('editor.control-panel.pixelHints.title.show')
+          }
+          aria-label={
+            pixelHintsVisible
+              ? t('editor.control-panel.pixelHints.title.hide')
+              : t('editor.control-panel.pixelHints.title.show')
+          }
+        >
+          <span className="btn-text"></span>
+        </button>
         <button className="cyber-btn exit-cyber-btn" onClick={onExitEditMode}>
           <span className="btn-text">{t('common.action.done')}</span>
         </button>

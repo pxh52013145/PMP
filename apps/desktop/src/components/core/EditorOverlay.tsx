@@ -14,6 +14,8 @@ import {
   hitTestPixelGridFromPoint,
   nearestPixelGridFromPoint,
 } from '../../utils/pixelGrid';
+import { readJson } from '../../modules/storage';
+import { setupStorageListener, setupTauriListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import './EditorOverlay.css';
 
 interface EditorOverlayProps {
@@ -129,6 +131,43 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
   const lastDragKeyRef = useRef<string | null>(null);
   const lastMagnetDeltaRef = useRef<{ dx: number; dy: number } | null>(null);
   const drawRafRef = useRef<number | null>(null);
+  const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
+    readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true)
+  );
+
+  const refreshPixelHintsVisible = useCallback(() => {
+    setPixelHintsVisible(readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true));
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    refreshPixelHintsVisible();
+
+    const teardownStorage = setupStorageListener(
+      [STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE],
+      refreshPixelHintsVisible
+    );
+
+    let unlistenTauri: (() => void) | null = null;
+    const setup = async () => {
+      const unlisten = await setupTauriListener(
+        TAURI_EVENTS.EDITOR_OVERLAY_PIXEL_HINTS_UPDATED,
+        refreshPixelHintsVisible
+      );
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenTauri = unlisten;
+    };
+    void setup();
+
+    return () => {
+      disposed = true;
+      teardownStorage();
+      if (unlistenTauri) unlistenTauri();
+    };
+  }, [refreshPixelHintsVisible]);
 
   occupancyMapRef.current = occupancyMap;
   editorStateRef.current = editorState;
@@ -422,6 +461,8 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
     ctx.clearRect(0, 0, cssWidth, cssHeight);
 
+    if (!pixelHintsVisible) return;
+
     for (let row = 0; row < ROWS; row++) {
       for (let col = 0; col < COLUMNS; col++) {
         const key = `${col},${row}`;
@@ -488,7 +529,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
         ctx.strokeRect(dx + 0.5, dy + 0.5, w - 1, h - 1);
       }
     }
-  }, []);
+  }, [pixelHintsVisible]);
 
   const scheduleDraw = useCallback(() => {
     if (drawRafRef.current !== null) return;

@@ -536,6 +536,8 @@
 
   "editor.control-panel.pin.title.pin": "Pin window",
   "editor.control-panel.pin.title.unpin": "Unpin window",
+  "editor.control-panel.pixelHints.title.hide": "Hide matrix color hints",
+  "editor.control-panel.pixelHints.title.show": "Show matrix color hints",
   "editor.control-panel.toggle.statistics.label": "info",
   "editor.control-panel.toggle.library.label": "LIB",
   "editor.control-panel.toggle.style.label": "style",

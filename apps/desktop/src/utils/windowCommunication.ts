@@ -193,6 +193,7 @@ export const STORAGE_KEYS = {
 
   // === Editor Performance ===
   EDITOR_LOW_PERFORMANCE_MODE: 'pixel-matrix-editor-low-performance-mode',
+  EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE: 'pixel-matrix-editor-overlay-pixel-hints-visible',
 
   // === Background GIF Optimization ===
   BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',
@@ -232,6 +233,7 @@ export const TAURI_EVENTS = {
   EDITOR_WINDOW_HIDDEN: 'editor-window-hidden', // Rust 侧拦截 close 并 hide 后的通知
   EDITOR_WINDOW_SHOWN: 'editor-window-shown', // Rust 侧 show/unminimize 后的通知
   EDITOR_LOW_PERFORMANCE_MODE_UPDATED: 'editor-low-performance-mode-updated',
+  EDITOR_OVERLAY_PIXEL_HINTS_UPDATED: 'editor-overlay-pixel-hints-updated',
   CREATOR_WINDOW_OPENED: 'creator-window-opened',
   CREATOR_WINDOW_CLOSED: 'creator-window-closed',
 

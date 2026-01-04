@@ -522,6 +522,11 @@
     filter 200ms ease;
 }
 
+/* Avoid clipping by the panel border on the right side (glow/shadow). */
+.control-button-group .pin-btn:last-child {
+  margin-right: 4px;
+}
+
 /* 置顶按钮激活状态 */
 .pin-btn.active {
   --bg: #0a5a3f;
@@ -542,6 +547,19 @@
 .pin-btn:active {
   transform: translateY(0);
   transition: transform 100ms ease;
+}
+
+/* Mirror the left-side hint button for symmetry. */
+.pin-btn.pin-btn--mirror {
+  transform: scaleX(-1);
+}
+
+.pin-btn.pin-btn--mirror:hover {
+  transform: scaleX(-1) translateY(-2px);
+}
+
+.pin-btn.pin-btn--mirror:active {
+  transform: scaleX(-1) translateY(0);
 }
 
 /* 置顶按钮取消悬停填满效果，使用渐变透明度 */
