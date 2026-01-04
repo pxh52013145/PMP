@@ -1,6 +1,6 @@
 /**
  * 音频服务接口
- * 提供统一的音频播放控制 API，便于后续从 Web Audio 迁移到原生实现
+ * 提供统一的音频播放控制 API，便于后续扩展 Native Audio 功能
  */
 
 export type PlaybackState = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'error';

@@ -452,8 +452,11 @@ export class NativeAudioService implements IAudioService {
 
     switch (playMode) {
       case 'single-loop': {
-        this.seek(0);
-        await this.play();
+        const index =
+          currentIndex >= 0 && currentIndex < queue.length
+            ? currentIndex
+            : Math.max(0, queue.findIndex((track) => track.id === this.state.currentTrack?.id));
+        await this.playTrackAtIndex(index);
         return;
       }
       case 'loop': {
@@ -751,19 +754,25 @@ export class NativeAudioService implements IAudioService {
   }
 
   async playPrevious(): Promise<void> {
-    if (this.state.currentIndex > 0) {
-      await this.playTrackAtIndex(this.state.currentIndex - 1);
+    const { playMode, queue, currentIndex } = this.state;
+    if (!queue.length) return;
+
+    if (playMode === 'shuffle') {
+      const randomIndex = Math.floor(Math.random() * queue.length);
+      await this.playTrackAtIndex(randomIndex);
+      return;
     }
+
+    let prevIndex = currentIndex - 1;
+    if (prevIndex < 0) {
+      prevIndex = playMode === 'loop' ? queue.length - 1 : 0;
+    }
+    await this.playTrackAtIndex(prevIndex);
   }
 
   async playNext(): Promise<void> {
     const { playMode, queue, currentIndex } = this.state;
     if (!queue.length) return;
-
-    if (playMode === 'single-loop') {
-      await this.playTrackAtIndex(currentIndex);
-      return;
-    }
 
     if (playMode === 'shuffle') {
       const randomIndex = Math.floor(Math.random() * queue.length);
@@ -778,6 +787,7 @@ export class NativeAudioService implements IAudioService {
     }
     if (playMode === 'loop') {
       await this.playTrackAtIndex(0);
+      return;
     }
   }
 

@@ -109,4 +109,95 @@ describe('NativeAudioService', () => {
     expect(invoke).not.toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\b.mp3' });
     service.destroy();
   });
+
+  it('wraps to last track on playPrevious in loop mode', async () => {
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    service.setPlayMode('loop');
+    await service.playTrackAtIndex(0);
+    await service.playPrevious();
+
+    expect(service.getState().currentIndex).toBe(1);
+    service.destroy();
+  });
+
+  it('moves to next track on playNext in single-loop mode', async () => {
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    service.setPlayMode('single-loop');
+    await service.playTrackAtIndex(0);
+    await service.playNext();
+
+    expect(service.getState().currentIndex).toBe(1);
+    service.destroy();
+  });
+
+  it('replays first track on playPrevious in sequence mode', async () => {
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    await service.playTrackAtIndex(0);
+    vi.clearAllMocks();
+
+    await service.playPrevious();
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
+    service.destroy();
+  });
+
+  it('picks a random track on playPrevious in shuffle mode', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    service.setPlayMode('shuffle');
+    await service.playTrackAtIndex(0);
+    await service.playPrevious();
+
+    expect(service.getState().currentIndex).toBe(1);
+    random.mockRestore();
+    service.destroy();
+  });
+
+  it('replays the same track when ended in single-loop mode', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+    service.setPlayMode('single-loop');
+
+    await service.playTrackAtIndex(0);
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    handlers.native_audio_state?.({ payload: { playbackState: 'stopped', ended: true } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
+    expect(invoke).toHaveBeenCalledWith('native_audio_play', undefined);
+    service.destroy();
+  });
 });
