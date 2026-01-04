@@ -541,6 +541,10 @@
   animation: move-bg-active 5s ease infinite;
 }
 
+.pin-btn {
+  transform: scaleY(-1);
+}
+
 /* 修复悬停时的动画冲突 */
 .pin-btn:hover,
 .matrix-hints-btn:hover {
@@ -548,10 +552,18 @@
   filter: brightness(1.2);
 }
 
+.pin-btn:hover {
+  transform: translateY(-2px) scaleY(-1);
+}
+
 .pin-btn:active,
 .matrix-hints-btn:active {
   transform: translateY(0);
   transition: transform 100ms ease;
+}
+
+.pin-btn:active {
+  transform: translateY(0) scaleY(-1);
 }
 
 /* Mirror the left-side hint button for symmetry. */
