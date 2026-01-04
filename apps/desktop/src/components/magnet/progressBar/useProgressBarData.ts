@@ -15,8 +15,21 @@ export interface ProgressBarData {
   coverUrl?: string;
 }
 
+function trackKey(track: Track | null): string {
+  if (!track) return 'none';
+  return (
+    track.id ||
+    track.filePath ||
+    track.path ||
+    track.originalPath ||
+    `${track.title}::${track.artist || ''}`
+  );
+}
+
 export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const audioService = useAudioService();
+  const isSeekingRef = useRef(isSeeking);
+  const lastTrackKeyRef = useRef<string>('none');
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const buffered = 0;
@@ -29,21 +42,37 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     baseAtMs: number;
   } | null>(null);
 
+  isSeekingRef.current = isSeeking;
+
   useEffect(() => {
     const unsubscribeState = audioService.onStateChange((state) => {
-      if (!isSeeking) {
+      if (!isSeekingRef.current) {
         setCurrentTime(state.currentTime);
       }
       setDuration(state.duration);
-      setTrack(state.currentTrack);
-      const nextCoverUrl = state.currentTrack?.coverUrl;
+
+      const nextTrack = state.currentTrack;
+      const nextKey = trackKey(nextTrack);
+      if (nextKey !== lastTrackKeyRef.current) {
+        lastTrackKeyRef.current = nextKey;
+        setTrack(nextTrack);
+        fallbackRef.current = null;
+
+        const embeddedCoverUrl = nextTrack?.coverUrl;
+        setCoverUrl(
+          typeof embeddedCoverUrl === 'string' && embeddedCoverUrl ? embeddedCoverUrl : undefined
+        );
+        return;
+      }
+
+      const nextCoverUrl = nextTrack?.coverUrl;
       if (typeof nextCoverUrl === 'string' && nextCoverUrl) {
         setCoverUrl(nextCoverUrl);
       }
     });
 
     const unsubscribeTime = audioService.onTimeUpdate((time) => {
-      if (!isSeeking) {
+      if (!isSeekingRef.current) {
         setCurrentTime(time);
       }
     });
@@ -52,13 +81,15 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     setCurrentTime(state.currentTime);
     setDuration(state.duration);
     setTrack(state.currentTrack);
-    setCoverUrl(state.currentTrack?.coverUrl);
+    lastTrackKeyRef.current = trackKey(state.currentTrack);
+    const initialCoverUrl = state.currentTrack?.coverUrl;
+    setCoverUrl(typeof initialCoverUrl === 'string' && initialCoverUrl ? initialCoverUrl : undefined);
 
     return () => {
       unsubscribeTime();
       unsubscribeState();
     };
-  }, [audioService, isSeeking]);
+  }, [audioService]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {

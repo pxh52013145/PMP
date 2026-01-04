@@ -6,7 +6,7 @@
 import React from 'react';
 import { useProgressBarLogic } from './useProgressBarLogic';
 import { useProgressBarData } from './useProgressBarData';
-import { useDynamicColor } from '../trackInfo/useDynamicColor';
+import { useDynamicColor } from '../shared/useDynamicColor';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { ProgressBarVariantProps } from './ProgressBarTypes';
 import { StandardProgressBar, MinimalProgressBar } from './variants';
@@ -36,6 +36,7 @@ export const ProgressBar: React.FC = () => {
   // 动态颜色提取（复用TrackInfo的Hook）
   const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false; // 默认启用
   const dynamicColors = useDynamicColor(data.coverUrl, dynamicColorEnabled);
+  const dynamicColorConfig = themeConfig.dynamicColor;
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';
@@ -49,6 +50,7 @@ export const ProgressBar: React.FC = () => {
         data={data}
         logic={logic}
         dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+        dynamicColorConfig={dynamicColorConfig}
         variantConfig={themeConfig.variantConfig}
       />
     );
@@ -60,8 +62,8 @@ export const ProgressBar: React.FC = () => {
       data={data}
       logic={logic}
       dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+      dynamicColorConfig={dynamicColorConfig}
       variantConfig={themeConfig.variantConfig}
     />
   );
 };
-

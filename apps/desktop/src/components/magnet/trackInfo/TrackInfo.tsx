@@ -37,6 +37,7 @@ export const TrackInfo: React.FC = () => {
   // 动态颜色提取
   const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false; // 默认启用
   const dynamicColors = useDynamicColor(data.track?.coverUrl, dynamicColorEnabled);
+  const dynamicColorConfig = themeConfig.dynamicColor;
 
   // 选择变体组件
   const variant = themeConfig.variant || 'default';
@@ -50,6 +51,7 @@ export const TrackInfo: React.FC = () => {
         data={data}
         logic={logic}
         dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+        dynamicColorConfig={dynamicColorConfig}
         variantConfig={themeConfig.variantConfig}
       />
     );
@@ -61,6 +63,7 @@ export const TrackInfo: React.FC = () => {
       data={data}
       logic={logic}
       dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+      dynamicColorConfig={dynamicColorConfig}
       variantConfig={themeConfig.variantConfig}
     />
   );

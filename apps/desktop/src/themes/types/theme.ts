@@ -9,9 +9,15 @@ import { BackgroundConfig } from '../../types/background';
  * 动态颜色配置
  * 用于TrackInfo等组件从封面提取颜色
  */
+export type DynamicColorEffect = 'tone' | 'gradient' | 'dynamic';
+
 export interface DynamicColorConfig {
   // 是否从封面提取颜色
   extractFromCover?: boolean;
+
+  effect?: DynamicColorEffect;
+  gradientAngle?: number;
+  dynamicSpeed?: number;
 
   // 提取后如何应用
   applyMode?: 'full' | 'glow-only' | 'blend' | 'none';

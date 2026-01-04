@@ -900,6 +900,18 @@
   "editor.style-editor.pixelShape.hexagon.name": "Hexagon",
   "editor.style-editor.pixelShape.hexagon.desc": "Honeycomb-like hexagons",
 
+  "editor.style-editor.section.coverColor.title": "Cover Colors",
+  "editor.style-editor.section.coverColor.desc": "Sync TrackInfo / ProgressBar colors with the track cover",
+  "editor.style-editor.coverColor.enable": "Enable cover color extraction",
+  "editor.style-editor.coverColor.effect.tone.name": "Tone",
+  "editor.style-editor.coverColor.effect.tone.desc": "Use the cover dominant color as the accent",
+  "editor.style-editor.coverColor.effect.gradient.name": "Gradient",
+  "editor.style-editor.coverColor.effect.gradient.desc": "Blend dominant + accent colors",
+  "editor.style-editor.coverColor.effect.dynamic.name": "Dynamic",
+  "editor.style-editor.coverColor.effect.dynamic.desc": "Animated gradient/glow over time",
+  "editor.style-editor.coverColor.gradientAngle.label": "Gradient angle",
+  "editor.style-editor.coverColor.dynamicSpeed.label": "Animation speed",
+
   "editor.style-editor.section.backgroundEffect.title": "Background Effects",
   "editor.style-editor.section.backgroundEffect.desc": "Add fullscreen background effects to the main window",
   "editor.style-editor.backgroundEffect.glow-pulse.name": "Glow Pulse",

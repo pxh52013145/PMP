@@ -900,6 +900,18 @@
   "editor.style-editor.pixelShape.hexagon.name": "六边形",
   "editor.style-editor.pixelShape.hexagon.desc": "蜂窝状的六边形",
 
+  "editor.style-editor.section.coverColor.title": "封面取色",
+  "editor.style-editor.section.coverColor.desc": "TrackInfo / ProgressBar 跟随歌曲封面取色",
+  "editor.style-editor.coverColor.enable": "启用封面取色",
+  "editor.style-editor.coverColor.effect.tone.name": "主色调",
+  "editor.style-editor.coverColor.effect.tone.desc": "使用封面主色作为强调色",
+  "editor.style-editor.coverColor.effect.gradient.name": "渐变色调",
+  "editor.style-editor.coverColor.effect.gradient.desc": "使用封面主色 + 副色渐变",
+  "editor.style-editor.coverColor.effect.dynamic.name": "动态效果",
+  "editor.style-editor.coverColor.effect.dynamic.desc": "渐变/光效随时间动态变化",
+  "editor.style-editor.coverColor.gradientAngle.label": "渐变角度",
+  "editor.style-editor.coverColor.dynamicSpeed.label": "动态速度",
+
   "editor.style-editor.section.backgroundEffect.title": "背景效果",
   "editor.style-editor.section.backgroundEffect.desc": "为主窗口添加全屏背景效果",
   "editor.style-editor.backgroundEffect.glow-pulse.name": "光晕脉冲",

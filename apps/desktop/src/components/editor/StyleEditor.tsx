@@ -3,6 +3,8 @@ import './StyleEditor.css';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
 import { readJson, readString, writeJson, writeString } from '../../modules/storage';
 import { useT } from '../../i18n';
+import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
+import type { DynamicColorConfig, DynamicColorEffect } from '../../themes/types/theme';
 
 /**
  * Pixel 形状预设
@@ -134,8 +136,92 @@ const COLOR_THEME_PRESETS: ColorThemePreset[] = [
   { id: 'rainbow', nameKey: 'editor.style-editor.colorTheme.rainbow', rgb: [0, 255, 136] }, // 基础色是青色，但会进行色相循环
 ];
 
+interface CoverColorEffectPreset {
+  id: DynamicColorEffect;
+  nameKey: string;
+  descriptionKey: string;
+}
+
+const COVER_COLOR_EFFECT_PRESETS: CoverColorEffectPreset[] = [
+  {
+    id: 'tone',
+    nameKey: 'editor.style-editor.coverColor.effect.tone.name',
+    descriptionKey: 'editor.style-editor.coverColor.effect.tone.desc',
+  },
+  {
+    id: 'gradient',
+    nameKey: 'editor.style-editor.coverColor.effect.gradient.name',
+    descriptionKey: 'editor.style-editor.coverColor.effect.gradient.desc',
+  },
+  {
+    id: 'dynamic',
+    nameKey: 'editor.style-editor.coverColor.effect.dynamic.name',
+    descriptionKey: 'editor.style-editor.coverColor.effect.dynamic.desc',
+  },
+];
+
+function normalizeCoverColorEffect(value: unknown): DynamicColorEffect {
+  if (value === 'tone' || value === 'gradient' || value === 'dynamic') return value;
+  return 'tone';
+}
+
+function normalizeCoverGradientAngle(value: unknown): number {
+  const fallback = 90;
+  if (typeof value !== 'number' || !isFinite(value)) return fallback;
+  return ((value % 360) + 360) % 360;
+}
+
+function normalizeCoverDynamicSpeed(value: unknown): number {
+  const fallback = 6;
+  if (typeof value !== 'number' || !isFinite(value)) return fallback;
+  return Math.max(2, Math.min(20, value));
+}
+
 export const StyleEditor = memo(function StyleEditor() {
   const t = useT();
+  const { theme, applyTheme, getComponentTheme } = useTheme();
+
+  const currentCoverColorConfig: DynamicColorConfig = (() => {
+    const trackInfoConfig = getComponentTheme('track-info').dynamicColor;
+    const progressBarConfig = getComponentTheme('progress-bar').dynamicColor;
+    return (trackInfoConfig ?? progressBarConfig ?? {}) as DynamicColorConfig;
+  })();
+
+  const coverColorEnabled = currentCoverColorConfig.extractFromCover !== false;
+  const coverColorEffect = normalizeCoverColorEffect(currentCoverColorConfig.effect);
+  const coverColorGradientAngle = normalizeCoverGradientAngle(currentCoverColorConfig.gradientAngle);
+  const coverColorDynamicSpeed = normalizeCoverDynamicSpeed(currentCoverColorConfig.dynamicSpeed);
+
+  const applyCoverColorConfig = useCallback(
+    async (partial: Partial<DynamicColorConfig>) => {
+      const currentTrackInfoTheme = getComponentTheme('track-info');
+      const currentProgressBarTheme = getComponentTheme('progress-bar');
+
+      const nextTheme = {
+        ...theme,
+        componentThemes: {
+          ...(theme.componentThemes ?? {}),
+          'track-info': {
+            ...currentTrackInfoTheme,
+            dynamicColor: {
+              ...(currentTrackInfoTheme.dynamicColor ?? {}),
+              ...partial,
+            },
+          },
+          'progress-bar': {
+            ...currentProgressBarTheme,
+            dynamicColor: {
+              ...(currentProgressBarTheme.dynamicColor ?? {}),
+              ...partial,
+            },
+          },
+        },
+      };
+
+      await applyTheme(nextTheme);
+    },
+    [applyTheme, getComponentTheme, theme]
+  );
 
   // 从 localStorage 读取初始值（使用统一的 STORAGE_KEYS）
   const [selectedPixelShape, setSelectedPixelShape] = useState(() => {
@@ -419,6 +505,90 @@ export const StyleEditor = memo(function StyleEditor() {
               <span>100%</span>
             </div>
           </div>
+        </section>
+
+        {/* Cover Color */}
+        <section className="style-section">
+          <h3 className="section-title">
+            <span className="section-icon">◈</span>
+            {t('editor.style-editor.section.coverColor.title')}
+          </h3>
+          <p className="section-description">{t('editor.style-editor.section.coverColor.desc')}</p>
+
+          <div
+            className={`preset-card ${coverColorEnabled ? 'active' : ''}`}
+            onClick={() => void applyCoverColorConfig({ extractFromCover: !coverColorEnabled })}
+          >
+            <div className="preset-header">
+              <span className="preset-name">{t('editor.style-editor.coverColor.enable')}</span>
+            </div>
+          </div>
+
+          <div className="preset-grid">
+            {COVER_COLOR_EFFECT_PRESETS.map((preset) => (
+              <div
+                key={preset.id}
+                className={`preset-card ${coverColorEffect === preset.id ? 'active' : ''}`}
+                onClick={() => void applyCoverColorConfig({ effect: preset.id })}
+                title={t(preset.descriptionKey)}
+              >
+                <div className="preset-header">
+                  <span className="preset-name">{t(preset.nameKey)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {(coverColorEffect === 'gradient' || coverColorEffect === 'dynamic') && (
+            <div className="pixel-size-control">
+              <label className="size-label">
+                <span>{t('editor.style-editor.coverColor.gradientAngle.label')}</span>
+                <span className="size-value">{Math.round(coverColorGradientAngle)}°</span>
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="360"
+                value={Math.round(coverColorGradientAngle)}
+                onChange={(e) =>
+                  void applyCoverColorConfig({
+                    gradientAngle: parseInt(e.target.value, 10),
+                  })
+                }
+                className="size-slider"
+              />
+              <div className="size-hints">
+                <span>0°</span>
+                <span>360°</span>
+              </div>
+            </div>
+          )}
+
+          {coverColorEffect === 'dynamic' && (
+            <div className="pixel-size-control">
+              <label className="size-label">
+                <span>{t('editor.style-editor.coverColor.dynamicSpeed.label')}</span>
+                <span className="size-value">{coverColorDynamicSpeed.toFixed(1)}s</span>
+              </label>
+              <input
+                type="range"
+                min="2"
+                max="20"
+                step="0.5"
+                value={coverColorDynamicSpeed}
+                onChange={(e) =>
+                  void applyCoverColorConfig({
+                    dynamicSpeed: parseFloat(e.target.value),
+                  })
+                }
+                className="size-slider"
+              />
+              <div className="size-hints">
+                <span>2s</span>
+                <span>20s</span>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* 背景效果 */}
