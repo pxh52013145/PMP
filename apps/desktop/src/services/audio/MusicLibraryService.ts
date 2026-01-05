@@ -1642,7 +1642,7 @@ export class MusicLibraryService {
       track.addedAt = new Date(addedAt);
     }
 
-    // 直接使用文件路径，WebAudioService 会负责处理
+    // 直接使用文件路径，供播放器读取
     if (track.filePath) {
       track.path = track.filePath;
     }

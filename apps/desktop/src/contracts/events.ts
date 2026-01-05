@@ -7,7 +7,7 @@ export type AppEvents = {
     currentIndex: number;
   };
   'audio/engineChanged': {
-    engineType: 'web' | 'native';
+    engineType: 'native';
     isNativeAvailable: boolean;
   };
   'audio/stateChanged': unknown;
@@ -16,6 +16,6 @@ export type AppEvents = {
   'audio/error': {
     message: string;
     code?: string;
-    engineType: 'web' | 'native';
+    engineType: 'native';
   };
 };

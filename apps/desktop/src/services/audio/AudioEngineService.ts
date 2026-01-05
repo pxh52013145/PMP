@@ -1,15 +1,12 @@
 import type { ScopedEventBus } from '../../kernel';
 import { createServiceToken } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
-import { readString, writeString } from '../../modules/storage';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
-import type { AudioState, IAudioService, PlayMode } from './types';
-import { WebAudioService } from './WebAudioService';
+import type { IAudioService } from './types';
 
-export type AudioEngineType = 'web' | 'native';
+export type AudioEngineType = 'native';
 
 export type AudioEngineSnapshot = {
   audioService: IAudioService;
@@ -27,40 +24,6 @@ export const AUDIO_ENGINE_SERVICE_TOKEN = createServiceToken<AudioEngineService>
 
 type AudioEngineMode = 'real' | 'noop';
 
-function readStoredEngineType(): AudioEngineType {
-  if (typeof window === 'undefined') {
-    return 'web';
-  }
-
-  const nativeAvailable = isTauriRuntime();
-  const stored = readString(STORAGE_KEYS.AUDIO_ENGINE);
-  // Desktop policy: always default to Native when available.
-  // WebAudio is kept as a compatibility/debug mode but should never be the startup default on Desktop.
-  if (stored === 'web' && nativeAvailable) {
-    writeString(STORAGE_KEYS.AUDIO_ENGINE, 'native');
-    return 'native';
-  }
-  if (stored === 'web') return 'web';
-  if (stored === 'native' && nativeAvailable) {
-    return 'native';
-  }
-
-  // Desktop default: prefer Native when available, keep WebAudio as compatibility/debug mode.
-  return nativeAvailable ? 'native' : 'web';
-}
-
-function persistEngineType(type: AudioEngineType): void {
-  if (typeof window === 'undefined') return;
-  writeString(STORAGE_KEYS.AUDIO_ENGINE, type);
-}
-
-function createServiceForEngine(engine: AudioEngineType): IAudioService {
-  if (engine === 'native') {
-    return new NativeAudioService();
-  }
-  return new WebAudioService();
-}
-
 function isTimeUpdateListenerAvailable(service: IAudioService): service is IAudioService & {
   onTimeUpdate: (cb: (time: number) => void) => () => void;
 } {
@@ -77,45 +40,6 @@ function isErrorListenerAvailable(service: IAudioService): service is IAudioServ
   onError: (cb: (error: Error) => void) => () => void;
 } {
   return typeof service.onError === 'function';
-}
-
-function safeGetState(service: IAudioService): AudioState | null {
-  try {
-    return service.getState();
-  } catch {
-    return null;
-  }
-}
-
-function tryApplyPreviousState(service: IAudioService, previousState: AudioState): void {
-  try {
-    service.setVolume(previousState.volume);
-  } catch (err) {
-    void err;
-  }
-
-  try {
-    const nextMuted = safeGetState(service)?.muted;
-    if (typeof nextMuted === 'boolean' && nextMuted !== previousState.muted) {
-      service.toggleMute();
-    }
-  } catch (err) {
-    void err;
-  }
-
-  try {
-    service.setPlayMode(previousState.playMode as PlayMode);
-  } catch (err) {
-    void err;
-  }
-
-  try {
-    if (previousState.queue.length > 0) {
-      service.addMultipleToQueue(previousState.queue);
-    }
-  } catch (err) {
-    void err;
-  }
 }
 
 export class DefaultAudioEngineService implements AudioEngineService {
@@ -139,9 +63,12 @@ export class DefaultAudioEngineService implements AudioEngineService {
   ) {
     this.mode = options.mode ?? 'real';
     this.isNativeAvailable = this.mode === 'real' ? isTauriRuntime() : false;
-    this.engineType = this.mode === 'real' ? readStoredEngineType() : 'web';
-    this.audioService =
-      this.mode === 'real' ? createServiceForEngine(this.engineType) : new NoopAudioService();
+    this.engineType = 'native';
+    this.audioService = (() => {
+      if (this.mode !== 'real') return new NoopAudioService();
+      if (!this.isNativeAvailable) return new NoopAudioService();
+      return new NativeAudioService();
+    })();
 
     this.attachServiceListeners();
     if (options.enableTaskbarMediaControls !== false) {
@@ -163,48 +90,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
   }
 
   setEngineType(next: AudioEngineType): void {
-    if (this.mode !== 'real') {
-      this.engineType = next;
-      this.events.emit('audio/engineChanged', {
-        engineType: this.engineType,
-        isNativeAvailable: this.isNativeAvailable,
-      });
-      return;
-    }
-
-    if (next === this.engineType) return;
-
-    if (next === 'native' && !isTauriRuntime()) {
-      console.info('[AudioEngine] Native audio engine is under development.');
-      return;
-    }
-
-    const previousService = this.audioService;
-    const previousState = safeGetState(previousService);
-
-    this.detachServiceListeners();
-    try {
-      previousService.destroy();
-    } catch (err) {
-      void err;
-    }
-
-    const nextService = createServiceForEngine(next);
-    this.audioService = nextService;
-    this.engineType = next;
-    this.isNativeAvailable = isTauriRuntime();
-
-    if (previousState) {
-      tryApplyPreviousState(nextService, previousState);
-    }
-
-    persistEngineType(next);
-    this.attachServiceListeners();
-
-    this.events.emit('audio/engineChanged', {
-      engineType: this.engineType,
-      isNativeAvailable: this.isNativeAvailable,
-    });
+    void next;
   }
 
   destroy(): void {
@@ -289,7 +175,6 @@ export class DefaultAudioEngineService implements AudioEngineService {
         });
 
         if (this.mode !== 'real') return;
-        if (this.engineType !== 'native') return;
 
         const isTrackPathIssue =
           code === 'NATIVE_TRACK_PATH_MISSING' ||
@@ -311,11 +196,10 @@ export class DefaultAudioEngineService implements AudioEngineService {
           return;
         }
 
-        console.warn('[AudioEngine] Native audio error, falling back to WebAudio:', error);
-        this.setEngineType('web');
+        console.warn('[AudioEngine] Native audio error:', error);
         void import('@tauri-apps/api/dialog')
           .then(({ message }) =>
-            message(`Native audio error: ${messageText}\n\nFalling back to WebAudio.`, {
+            message(`Native audio error: ${messageText}`, {
               title: 'Audio Engine',
               type: 'warning',
             })
@@ -408,4 +292,3 @@ export class DefaultAudioEngineService implements AudioEngineService {
     };
   }
 }
-

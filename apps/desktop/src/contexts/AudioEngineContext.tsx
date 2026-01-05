@@ -1,6 +1,5 @@
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useState,
@@ -9,13 +8,12 @@ import {
 import { AUDIO_ENGINE_SERVICE_TOKEN, type IAudioService } from '../services/audio';
 import { useKernel } from './KernelContext';
 
-export type AudioEngineType = 'web' | 'native';
+export type AudioEngineType = 'native';
 
 interface AudioEngineContextValue {
   audioService: IAudioService;
   engineType: AudioEngineType;
   isNativeAvailable: boolean;
-  setEngineType: (next: AudioEngineType) => void;
 }
 
 const AudioEngineContext = createContext<AudioEngineContextValue | undefined>(undefined);
@@ -28,13 +26,6 @@ export function AudioEngineProvider({
   const kernel = useKernel();
   const audioEngine = kernel.services.get(AUDIO_ENGINE_SERVICE_TOKEN);
   const [snapshot, setSnapshot] = useState(() => audioEngine.getSnapshot());
-
-  const setEngineType = useCallback(
-    (next: AudioEngineType) => {
-      audioEngine.setEngineType(next);
-    },
-    [audioEngine]
-  );
 
   useEffect(() => {
     setSnapshot(audioEngine.getSnapshot());
@@ -49,7 +40,6 @@ export function AudioEngineProvider({
         audioService: snapshot.audioService,
         engineType: snapshot.engineType,
         isNativeAvailable: snapshot.isNativeAvailable,
-        setEngineType,
       }}
     >
       {children}
@@ -73,6 +63,5 @@ export function useAudioEngine() {
   return {
     engineType: context.engineType,
     isNativeAvailable: context.isNativeAvailable,
-    setEngineType: context.setEngineType,
   };
 }

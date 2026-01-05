@@ -185,11 +185,6 @@ export const STORAGE_KEYS = {
   // === Theme ===
   THEME_CONFIG: 'pixel-matrix-theme-config',
 
-  // === Audio Engine Selection ===
-  AUDIO_ENGINE: 'pixel-matrix-audio-engine',
-  AUDIO_VOLUME: 'audio_volume',
-  AUDIO_MUTED: 'audio_muted',
-
   // === Window Pin ===
   WINDOW_PIN_STATE: 'pixel-matrix-window-pin-state',
 

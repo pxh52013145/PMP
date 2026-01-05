@@ -158,7 +158,7 @@ function uniqueNodeId(type: string) {
 }
 
 export const DspRackPage: React.FC = () => {
-  const { engineType, isNativeAvailable } = useAudioEngine();
+  const { isNativeAvailable } = useAudioEngine();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const [graph, setGraph] = React.useState<DspGraphConfig | null>(null);
   const [vstStatuses, setVstStatuses] = React.useState<Record<string, VstSessionStatus>>({});
@@ -375,13 +375,13 @@ export const DspRackPage: React.FC = () => {
     );
   }
 
-  if (!isNativeAvailable || engineType !== 'native') {
+  if (!isNativeAvailable) {
     return (
       <div className="dsp-rack-page">
         <div className="dsp-rack-header">
           <div>
             <h2 className="dsp-rack-title">DSP Rack</h2>
-            <p className="dsp-rack-note">当前为 Web Audio 模式；切换到 Native Audio 后才会应用 DSP Graph。</p>
+            <p className="dsp-rack-note">Native Audio 不可用，暂时无法使用 DSP Rack。</p>
             <p className="dsp-rack-note">添加 VST：打开「VST3 插件管理器」→ 扫描 → 选中插件 → 添加到 DSP Rack。</p>
           </div>
 

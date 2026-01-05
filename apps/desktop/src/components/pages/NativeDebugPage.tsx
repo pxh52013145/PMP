@@ -81,7 +81,7 @@ export const NativeDebugPage: React.FC = () => {
   const audioService = useAudioService();
   const t = useT();
   const locale = useLocale();
-  const { engineType, setEngineType } = useAudioEngine();
+  const { isNativeAvailable } = useAudioEngine();
   const [state, setState] = useState(() => audioService.getState());
   const [logs, setLogs] = useState<string[]>([]);
   const [isSelectingFile, setIsSelectingFile] = useState(false);
@@ -142,7 +142,7 @@ export const NativeDebugPage: React.FC = () => {
     };
   }, [audioService, appendLog, t]);
 
-  const isNativeEngine = engineType === 'native';
+  const isNativeEngine = isNativeAvailable;
 
   useEffect(() => {
     if (!isNativeEngine) return;
@@ -716,9 +716,6 @@ export const NativeDebugPage: React.FC = () => {
         <div className="native-debug-card native-debug-warning">
           <h2>{t('pages.native-debug.notNative.title')}</h2>
           <p>{t('pages.native-debug.notNative.desc')}</p>
-          <button className="native-debug-primary" type="button" onClick={() => setEngineType('native')}>
-            {t('pages.native-debug.notNative.action.switchNow')}
-          </button>
         </div>
       </div>
     );
