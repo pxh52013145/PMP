@@ -1,36 +1,23 @@
 use once_cell::sync::{Lazy, OnceCell};
-use rodio::{decoder::Decoder, Source};
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
+use rodio::Source;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
-    fs::File,
-    io::BufReader,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     sync::mpsc,
     sync::Arc,
-    sync::Condvar,
     sync::Mutex,
     time::{Duration, Instant},
-};
-use symphonia::core::{
-    audio::SampleBuffer,
-    codecs::DecoderOptions,
-    errors::Error as SymphoniaError,
-    formats::FormatOptions,
-    formats::{FormatReader, SeekMode, SeekTo, Track},
-    io::{MediaSourceStream, MediaSourceStreamOptions},
-    meta::MetadataOptions,
-    probe::Hint,
-    units::Time,
 };
 use tauri::AppHandle;
 use tauri::Manager;
 
+use crate::audio::input::{
+    open_rodio_source_at, AudioInputKind, AudioInputRegistry, DecoderCommand, SharedSamplesSource,
+    StreamingPlayback, StreamingSamplesSource,
+};
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink};
 
 static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
@@ -792,153 +779,6 @@ where
 }
 
 #[derive(Clone)]
-struct AudioRingBuffer {
-    inner: Arc<(Mutex<AudioRingBufferInner>, Condvar, Condvar)>,
-}
-
-struct AudioRingBufferInner {
-    data: VecDeque<f32>,
-    capacity: usize,
-    finished: bool,
-}
-
-impl AudioRingBuffer {
-    fn new(capacity: usize) -> Self {
-        Self {
-            inner: Arc::new((
-                Mutex::new(AudioRingBufferInner {
-                    data: VecDeque::with_capacity(capacity.min(65_536)),
-                    capacity,
-                    finished: false,
-                }),
-                Condvar::new(),
-                Condvar::new(),
-            )),
-        }
-    }
-
-    fn clear(&self) {
-        let (lock, _available, space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.data.clear();
-        inner.finished = false;
-        space.notify_all();
-    }
-
-    fn mark_finished(&self) {
-        let (lock, available, _space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.finished = true;
-        available.notify_all();
-    }
-
-    fn len_samples(&self) -> usize {
-        let (lock, _available, _space) = &*self.inner;
-        let inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.data.len()
-    }
-
-    fn wait_for_samples(&self, min_samples: usize, timeout: Duration) {
-        if min_samples == 0 {
-            return;
-        }
-
-        let (lock, available, _space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-
-        while inner.data.len() < min_samples && !inner.finished {
-            let (guard, wait_result) = match available.wait_timeout(inner, timeout) {
-                Ok(value) => value,
-                Err(_) => break,
-            };
-            inner = guard;
-            if wait_result.timed_out() {
-                break;
-            }
-        }
-    }
-
-    fn pop_chunk(&self, max_samples: usize, wait_timeout: Duration) -> Vec<f32> {
-        if max_samples == 0 {
-            return Vec::new();
-        }
-
-        let (lock, available, space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-
-        if inner.data.is_empty() && !inner.finished {
-            inner = match available.wait_timeout(inner, wait_timeout) {
-                Ok((guard, _)) => guard,
-                Err(poisoned) => poisoned.into_inner().0,
-            };
-        }
-
-        let count = inner.data.len().min(max_samples);
-        if count == 0 {
-            return Vec::new();
-        }
-
-        let mut out = Vec::with_capacity(count);
-        for _ in 0..count {
-            if let Some(sample) = inner.data.pop_front() {
-                out.push(sample);
-            } else {
-                break;
-            }
-        }
-        space.notify_all();
-        out
-    }
-
-    fn is_finished_and_empty(&self) -> bool {
-        let (lock, _available, _space) = &*self.inner;
-        let inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.finished && inner.data.is_empty()
-    }
-
-    fn push_interleaved(&self, samples: &[f32], channels: usize) -> usize {
-        if channels == 0 {
-            return 0;
-        }
-        let total_frames = samples.len() / channels;
-        if total_frames == 0 {
-            return 0;
-        }
-
-        let (lock, available, space) = &*self.inner;
-        let mut inner = match lock.lock() {
-            Ok(inner) => inner,
-            Err(_) => return 0,
-        };
-
-        let mut free_samples = inner.capacity.saturating_sub(inner.data.len());
-        if free_samples < channels {
-            let (guard, timeout) = match space.wait_timeout(inner, Duration::from_millis(10)) {
-                Ok(value) => value,
-                Err(_) => return 0,
-            };
-            inner = guard;
-            if timeout.timed_out() {
-                return 0;
-            }
-            free_samples = inner.capacity.saturating_sub(inner.data.len());
-            if free_samples < channels {
-                return 0;
-            }
-        }
-
-        let free_frames = free_samples / channels;
-        let frames_to_push = free_frames.min(total_frames);
-        let samples_to_push = frames_to_push * channels;
-        inner
-            .data
-            .extend(samples.iter().take(samples_to_push).copied());
-        available.notify_all();
-        frames_to_push
-    }
-}
-
-#[derive(Clone)]
 struct SpectrumTap {
     inner: Arc<Mutex<SpectrumTapInner>>,
 }
@@ -1003,17 +843,6 @@ impl SpectrumTap {
     }
 }
 
-struct StreamingPlayback {
-    buffer: AudioRingBuffer,
-    command_tx: mpsc::Sender<DecoderCommand>,
-    error: Arc<Mutex<Option<String>>>,
-}
-
-enum DecoderCommand {
-    Seek(f64),
-    Shutdown,
-}
-
 struct ActiveCrossfade {
     cancel: Arc<AtomicBool>,
     finished: Arc<AtomicBool>,
@@ -1021,87 +850,8 @@ struct ActiveCrossfade {
     old_streaming_command_tx: Option<mpsc::Sender<DecoderCommand>>,
 }
 
-struct DecoderMeta {
-    channels: u16,
-    sample_rate: u32,
-    bit_depth: Option<u32>,
-    duration: f64,
-}
-
-#[derive(Clone)]
-struct StreamingSamplesSource {
-    buffer: AudioRingBuffer,
-    channels: u16,
-    sample_rate: u32,
-    duration: f64,
-    local: Vec<f32>,
-    local_index: usize,
-}
-
-impl StreamingSamplesSource {
-    fn new(buffer: AudioRingBuffer, channels: u16, sample_rate: u32, duration: f64) -> Self {
-        Self {
-            buffer,
-            channels,
-            sample_rate,
-            duration,
-            local: Vec::new(),
-            local_index: 0,
-        }
-    }
-}
-
-impl Iterator for StreamingSamplesSource {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.local_index >= self.local.len() {
-            if self.buffer.is_finished_and_empty() {
-                return None;
-            }
-
-            // Reduce mutex contention by draining chunks instead of per-sample locking.
-            // Small wait helps avoid injecting zeros on transient scheduling jitter.
-            self.local = self.buffer.pop_chunk(8192, Duration::from_millis(20));
-            self.local_index = 0;
-
-            if self.local.is_empty() {
-                if self.buffer.is_finished_and_empty() {
-                    return None;
-                }
-                return Some(0.0);
-            }
-        }
-
-        let sample = self.local[self.local_index];
-        self.local_index += 1;
-        Some(sample)
-    }
-}
-
-impl Source for StreamingSamplesSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        self.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        if self.duration > 0.0 {
-            Some(Duration::from_secs_f64(self.duration))
-        } else {
-            None
-        }
-    }
-}
-
 struct NativeAudioEngine {
+    input_registry: AudioInputRegistry,
     output_backend: Arc<dyn AudioOutputBackend>,
     sink: Option<Arc<dyn AudioSink>>,
     active_crossfade: Option<ActiveCrossfade>,
@@ -1166,6 +916,7 @@ impl NativeAudioEngine {
     fn new_with_backend(output_backend: Arc<dyn AudioOutputBackend>) -> Self {
         eprintln!("[NativeAudio] Output backend: {}", output_backend.id());
         Self {
+            input_registry: AudioInputRegistry::default(),
             output_backend,
             sink: None,
             active_crossfade: None,
@@ -1282,62 +1033,34 @@ impl NativeAudioEngine {
             .or_else(|| self.output_backend.default_device_name());
         sink.pause();
 
-        let mut used_streaming = false;
-        if let Ok((source, meta, streaming)) =
-            start_symphonia_stream(&path, self.output_sample_rate)
-        {
-            used_streaming = true;
-            self.duration = meta.duration;
-            self.decoded_samples = None;
-            self.decoded_channels = meta.channels;
-            self.decoded_sample_rate = meta.sample_rate;
-            self.decoded_bit_depth = meta.bit_depth;
-            sink.append(Box::new(DspProcessingSource::new(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-            self.streaming = Some(streaming);
+        let opened = self
+            .input_registry
+            .open(&path, self.output_sample_rate)
+            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
+        eprintln!("[NativeAudio] Input: {}", opened.input_id);
+
+        self.duration = opened.meta.duration;
+        self.decoded_channels = opened.meta.channels;
+        self.decoded_sample_rate = opened.meta.sample_rate;
+        self.decoded_bit_depth = opened.meta.bit_depth;
+        self.decoded_samples = None;
+        self.streaming = None;
+
+        match opened.kind {
+            AudioInputKind::Streaming(streaming) => {
+                self.streaming = Some(streaming);
+            }
+            AudioInputKind::Decoded { samples } => {
+                self.decoded_samples = Some(samples);
+            }
+            AudioInputKind::Rodio => {}
         }
 
-        if !used_streaming {
-            match decode_track_to_buffer(&path, self.output_sample_rate) {
-                Ok(decoded) => {
-                    self.duration = decoded.duration;
-                    self.decoded_samples = Some(decoded.samples.clone());
-                    self.decoded_channels = decoded.channels;
-                    self.decoded_sample_rate = decoded.sample_rate;
-                    self.decoded_bit_depth = decoded.bit_depth;
-                    sink.append(Box::new(DspProcessingSource::new(
-                        decoded.source,
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    )));
-                }
-                Err(err) => {
-                    eprintln!(
-                        "[NativeAudio] Symphonia decode failed, falling back to rodio decoder: {err}"
-                    );
-                    let file =
-                        File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
-                    let decoder = Decoder::new(BufReader::new(file))
-                        .map_err(|e| format!("Failed to decode audio file: {e}"))?;
-                    self.duration = decoder
-                        .total_duration()
-                        .map(|duration| duration.as_secs_f64())
-                        .unwrap_or(0.0);
-                    sink.append(Box::new(DspProcessingSource::new(
-                        decoder.convert_samples::<f32>(),
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    )));
-                    self.decoded_samples = None;
-                    self.decoded_channels = 0;
-                    self.decoded_sample_rate = 0;
-                    self.decoded_bit_depth = None;
-                }
-            }
-        }
+        sink.append(Box::new(DspProcessingSource::new(
+            opened.source,
+            self.dsp_runtime.clone(),
+            self.spectrum_tap.clone(),
+        )));
 
         if self.device_name.is_none() {
             self.device_name = self.output_backend.default_device_name();
@@ -1400,59 +1123,34 @@ impl NativeAudioEngine {
         new_sink.pause();
 
         let mut new_streaming: Option<StreamingPlayback> = None;
-        let duration: f64;
         let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
-        let mut decoded_channels: u16 = 0;
-        let mut decoded_sample_rate: u32 = 0;
-        let mut decoded_bit_depth: Option<u32> = None;
 
-        if let Ok((source, meta, streaming)) =
-            start_symphonia_stream(&path, self.output_sample_rate)
-        {
-            duration = meta.duration;
-            decoded_channels = meta.channels;
-            decoded_sample_rate = meta.sample_rate;
-            decoded_bit_depth = meta.bit_depth;
-            new_sink.append(Box::new(DspProcessingSource::new(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-            new_streaming = Some(streaming);
-        } else {
-            match decode_track_to_buffer(&path, self.output_sample_rate) {
-                Ok(decoded) => {
-                    duration = decoded.duration;
-                    decoded_samples = Some(decoded.samples.clone());
-                    decoded_channels = decoded.channels;
-                    decoded_sample_rate = decoded.sample_rate;
-                    decoded_bit_depth = decoded.bit_depth;
-                    new_sink.append(Box::new(DspProcessingSource::new(
-                        decoded.source,
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    )));
-                }
-                Err(err) => {
-                    eprintln!(
-                        "[NativeAudio] Symphonia decode failed during crossfade, falling back to rodio decoder: {err}"
-                    );
-                    let file =
-                        File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
-                    let decoder = Decoder::new(BufReader::new(file))
-                        .map_err(|e| format!("Failed to decode audio file: {e}"))?;
-                    duration = decoder
-                        .total_duration()
-                        .map(|duration| duration.as_secs_f64())
-                        .unwrap_or(0.0);
-                    new_sink.append(Box::new(DspProcessingSource::new(
-                        decoder.convert_samples::<f32>(),
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    )));
-                }
+        let opened = self
+            .input_registry
+            .open(&path, self.output_sample_rate)
+            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
+        eprintln!("[NativeAudio] Input: {}", opened.input_id);
+
+        let duration = opened.meta.duration;
+        let decoded_channels = opened.meta.channels;
+        let decoded_sample_rate = opened.meta.sample_rate;
+        let decoded_bit_depth = opened.meta.bit_depth;
+
+        match opened.kind {
+            AudioInputKind::Streaming(streaming) => {
+                new_streaming = Some(streaming);
             }
+            AudioInputKind::Decoded { samples } => {
+                decoded_samples = Some(samples);
+            }
+            AudioInputKind::Rodio => {}
         }
+
+        new_sink.append(Box::new(DspProcessingSource::new(
+            opened.source,
+            self.dsp_runtime.clone(),
+            self.spectrum_tap.clone(),
+        )));
 
         if self.device_name.is_none() {
             self.device_name = self.output_backend.default_device_name();
@@ -1644,14 +1342,12 @@ impl NativeAudioEngine {
                         self.dsp_runtime.clone(),
                         self.spectrum_tap.clone(),
                     )));
-                } else if let Ok(file) = File::open(&track_path) {
-                    if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                        sink.append(Box::new(DspProcessingSource::new(
-                            decoder.convert_samples::<f32>(),
-                            self.dsp_runtime.clone(),
-                            self.spectrum_tap.clone(),
-                        )));
-                    }
+                } else if let Ok((source, _)) = open_rodio_source_at(&track_path, 0.0) {
+                    sink.append(Box::new(DspProcessingSource::new(
+                        source,
+                        self.dsp_runtime.clone(),
+                        self.spectrum_tap.clone(),
+                    )));
                 }
                 sink.pause();
                 sink.set_volume(self.effective_volume());
@@ -1752,12 +1448,10 @@ impl NativeAudioEngine {
                 self.spectrum_tap.clone(),
             )));
         } else {
-            let file = File::open(&track_path).map_err(|e| format!("Failed to open file: {e}"))?;
-            let decoder = Decoder::new(BufReader::new(file))
-                .map_err(|e| format!("Failed to decode audio file: {e}"))?;
-            let skipped = decoder.skip_duration(Duration::from_secs_f64(target));
+            let (source, _) = open_rodio_source_at(&track_path, target)
+                .map_err(|err| format!("[{}] {}", err.code, err.message))?;
             sink.append(Box::new(DspProcessingSource::new(
-                skipped.convert_samples::<f32>(),
+                source,
                 self.dsp_runtime.clone(),
                 self.spectrum_tap.clone(),
             )));
@@ -1979,12 +1673,10 @@ impl NativeAudioEngine {
                 self.spectrum_tap.clone(),
             )));
         } else {
-            let file = File::open(&track_path).map_err(|e| format!("Failed to open file: {e}"))?;
-            let decoder = Decoder::new(BufReader::new(file))
-                .map_err(|e| format!("Failed to decode audio file: {e}"))?;
-            let skipped = decoder.skip_duration(Duration::from_secs_f64(target));
+            let (source, _) = open_rodio_source_at(&track_path, target)
+                .map_err(|err| format!("[{}] {}", err.code, err.message))?;
             sink.append(Box::new(DspProcessingSource::new(
-                skipped.convert_samples::<f32>(),
+                source,
                 self.dsp_runtime.clone(),
                 self.spectrum_tap.clone(),
             )));
@@ -2051,66 +1743,6 @@ fn emit_error(app_handle: &AppHandle, payload: NativeAudioErrorPayload) -> Resul
 }
 
 #[derive(Clone)]
-struct SharedSamplesSource {
-    samples: Arc<Vec<f32>>,
-    channels: u16,
-    sample_rate: u32,
-    position: usize,
-}
-
-impl SharedSamplesSource {
-    fn new(samples: Arc<Vec<f32>>, channels: u16, sample_rate: u32, position: usize) -> Self {
-        Self {
-            samples,
-            channels,
-            sample_rate,
-            position,
-        }
-    }
-
-    fn compute_total_duration(&self) -> Option<Duration> {
-        let channels = self.channels as usize;
-        if channels == 0 || self.sample_rate == 0 {
-            return None;
-        }
-        let frames = self.samples.len() / channels;
-        Some(Duration::from_secs_f64(
-            frames as f64 / self.sample_rate as f64,
-        ))
-    }
-}
-
-impl Iterator for SharedSamplesSource {
-    type Item = f32;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.position >= self.samples.len() {
-            return None;
-        }
-        let out = self.samples[self.position];
-        self.position += 1;
-        Some(out)
-    }
-}
-
-impl Source for SharedSamplesSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        self.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.compute_total_duration()
-    }
-}
-
-#[derive(Clone)]
 struct SpectrumSnapshot {
     sample_rate: u32,
     window: Vec<f32>,
@@ -2170,6 +1802,8 @@ fn compute_spectrum(
     Some(NativeAudioSpectrumPayload { bins: mags })
 }
 
+// Legacy symphonia implementation (moved into `crate::audio::input::symphonia`).
+#[cfg(any())]
 fn track_is_audio_like(track: &Track) -> bool {
     track.codec_params.sample_rate.is_some()
         || track.codec_params.channels.is_some()
@@ -2177,6 +1811,7 @@ fn track_is_audio_like(track: &Track) -> bool {
         || track.codec_params.bits_per_coded_sample.is_some()
 }
 
+#[cfg(any())]
 fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
     let tracks = format.tracks();
     let default = format.default_track();
@@ -2192,6 +1827,7 @@ fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
         .or_else(|| tracks.first())
 }
 
+#[cfg(any())]
 fn start_symphonia_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
@@ -2920,6 +2556,8 @@ pub fn seek(app_handle: &AppHandle, time: f64) -> Result<(), String> {
     Ok(())
 }
 
+// Legacy symphonia buffer decode (moved into `crate::audio::input::symphonia`).
+#[cfg(any())]
 struct DecodedAudioBuffer {
     source: SharedSamplesSource,
     samples: Arc<Vec<f32>>,
@@ -2929,6 +2567,7 @@ struct DecodedAudioBuffer {
     duration: f64,
 }
 
+#[cfg(any())]
 fn decode_track_to_buffer(
     path: &Path,
     output_sample_rate: Option<u32>,

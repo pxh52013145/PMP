@@ -1,0 +1,194 @@
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::audio::output::BoxedSource;
+
+mod rodio;
+mod symphonia;
+
+pub(crate) use rodio::{open_source_at as open_rodio_source_at, RodioInput};
+pub(crate) use symphonia::{
+    DecoderCommand, SharedSamplesSource, StreamingPlayback, StreamingSamplesSource, SymphoniaInput,
+};
+
+pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";
+pub(crate) const RODIO_INPUT_ID: &str = "rodio";
+
+#[derive(Clone, Debug)]
+pub(crate) struct AudioInputMeta {
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub bit_depth: Option<u32>,
+    pub duration: f64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AudioInputError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl AudioInputError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+pub(crate) enum AudioInputKind {
+    Streaming(StreamingPlayback),
+    Decoded { samples: Arc<Vec<f32>> },
+    Rodio,
+}
+
+pub(crate) struct AudioInputOpenResult {
+    pub input_id: &'static str,
+    pub meta: AudioInputMeta,
+    pub kind: AudioInputKind,
+    pub source: BoxedSource,
+}
+
+pub(crate) trait AudioInput: Send + Sync {
+    fn id(&self) -> &'static str;
+    fn open(
+        &self,
+        path: &Path,
+        output_sample_rate: Option<u32>,
+    ) -> Result<AudioInputOpenResult, AudioInputError>;
+}
+
+pub(crate) struct AudioInputRegistry {
+    inputs: Vec<Arc<dyn AudioInput>>,
+}
+
+impl AudioInputRegistry {
+    pub fn new() -> Self {
+        Self { inputs: Vec::new() }
+    }
+
+    pub fn with_defaults() -> Self {
+        let mut registry = Self::new();
+        registry.register(Arc::new(SymphoniaInput::default()));
+        registry.register(Arc::new(RodioInput::default()));
+        registry
+    }
+
+    pub fn register(&mut self, input: Arc<dyn AudioInput>) {
+        self.inputs.push(input);
+    }
+
+    pub fn list_ids(&self) -> Vec<&'static str> {
+        self.inputs.iter().map(|input| input.id()).collect()
+    }
+
+    pub fn open(
+        &self,
+        path: &Path,
+        output_sample_rate: Option<u32>,
+    ) -> Result<AudioInputOpenResult, AudioInputError> {
+        if self.inputs.is_empty() {
+            return Err(AudioInputError::new(
+                "AUDIO_INPUT_NO_INPUTS",
+                "No audio inputs registered",
+            ));
+        }
+
+        let mut attempts: Vec<(String, AudioInputError)> = Vec::new();
+        for input in &self.inputs {
+            match input.open(path, output_sample_rate) {
+                Ok(result) => return Ok(result),
+                Err(err) => attempts.push((input.id().to_string(), err)),
+            }
+        }
+
+        let mut message = String::from("All audio inputs failed to open track");
+        for (id, err) in attempts {
+            message.push_str(&format!("; {id}: [{}] {}", err.code, err.message));
+        }
+
+        Err(AudioInputError::new("AUDIO_INPUT_OPEN_FAILED", message))
+    }
+}
+
+impl Default for AudioInputRegistry {
+    fn default() -> Self {
+        Self::with_defaults()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailInput;
+
+    impl AudioInput for FailInput {
+        fn id(&self) -> &'static str {
+            "fail"
+        }
+
+        fn open(
+            &self,
+            _path: &Path,
+            _output_sample_rate: Option<u32>,
+        ) -> Result<AudioInputOpenResult, AudioInputError> {
+            Err(AudioInputError::new("FAIL", "nope"))
+        }
+    }
+
+    struct OkInput;
+
+    impl AudioInput for OkInput {
+        fn id(&self) -> &'static str {
+            "ok"
+        }
+
+        fn open(
+            &self,
+            _path: &Path,
+            _output_sample_rate: Option<u32>,
+        ) -> Result<AudioInputOpenResult, AudioInputError> {
+            let source = ::rodio::buffer::SamplesBuffer::new(2, 48_000, vec![0.0f32; 256]);
+            Ok(AudioInputOpenResult {
+                input_id: self.id(),
+                meta: AudioInputMeta {
+                    channels: 2,
+                    sample_rate: 48_000,
+                    bit_depth: None,
+                    duration: 0.0,
+                },
+                kind: AudioInputKind::Decoded {
+                    samples: Arc::new(vec![0.0f32; 256]),
+                },
+                source: Box::new(source),
+            })
+        }
+    }
+
+    #[test]
+    fn registry_falls_back_to_next_input() {
+        let mut registry = AudioInputRegistry::new();
+        registry.register(Arc::new(FailInput));
+        registry.register(Arc::new(OkInput));
+
+        let result = registry
+            .open(Path::new("dummy.wav"), None)
+            .expect("open should succeed");
+
+        assert_eq!(result.input_id, "ok");
+    }
+
+    #[test]
+    fn registry_returns_stable_error_code_when_all_fail() {
+        let mut registry = AudioInputRegistry::new();
+        registry.register(Arc::new(FailInput));
+
+        let err = registry
+            .open(Path::new("dummy.wav"), None)
+            .err()
+            .expect("open should fail");
+        assert_eq!(err.code, "AUDIO_INPUT_OPEN_FAILED");
+    }
+}
