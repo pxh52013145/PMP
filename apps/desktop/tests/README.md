@@ -11,8 +11,7 @@
 
 - **Config Load/Save**: `apps/desktop/src/utils/__tests__/configManager.spec.ts`
 - **Magnet Layout Solver**: `apps/desktop/src/utils/__tests__/magnetPositionResolver.spec.ts`
-- **WebAudio Playback Lifecycle**: `apps/desktop/src/services/audio/__tests__/WebAudioService.spec.ts`
-- **NativeAudio Adapter Skeleton**: `apps/desktop/src/services/audio/__tests__/NativeAudioService.spec.ts`
+- **Native Audio Playback Lifecycle**: `apps/desktop/src/services/audio/__tests__/NativeAudioService.spec.ts`
 
 ## Conventions
 
