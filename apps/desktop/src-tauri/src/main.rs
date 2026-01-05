@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
 mod background_media;
+mod audio;
 mod dsp_graph;
 mod music_library;
 mod native_audio;
