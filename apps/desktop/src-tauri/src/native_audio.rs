@@ -18,7 +18,7 @@ use crate::audio::input::{
     open_rodio_source_at, AudioInputKind, AudioInputRegistry, DecoderCommand, SharedSamplesSource,
     StreamingPlayback, StreamingSamplesSource,
 };
-use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink};
+use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
 
 static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
@@ -67,6 +67,16 @@ struct NativeAudioErrorPayload {
     seq: u64,
     code: String,
     message: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAudioComponentsStatePayload {
+    output_backend_id: String,
+    output_device: Option<String>,
+    output_sample_rate: Option<u32>,
+    preferred_input_id: Option<String>,
+    active_input_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -852,6 +862,8 @@ struct ActiveCrossfade {
 
 struct NativeAudioEngine {
     input_registry: AudioInputRegistry,
+    preferred_input_id: Option<String>,
+    active_input_id: Option<String>,
     output_backend: Arc<dyn AudioOutputBackend>,
     sink: Option<Arc<dyn AudioSink>>,
     active_crossfade: Option<ActiveCrossfade>,
@@ -917,6 +929,8 @@ impl NativeAudioEngine {
         eprintln!("[NativeAudio] Output backend: {}", output_backend.id());
         Self {
             input_registry: AudioInputRegistry::default(),
+            preferred_input_id: None,
+            active_input_id: None,
             output_backend,
             sink: None,
             active_crossfade: None,
@@ -1035,9 +1049,14 @@ impl NativeAudioEngine {
 
         let opened = self
             .input_registry
-            .open(&path, self.output_sample_rate)
+            .open_prefer(
+                &path,
+                self.output_sample_rate,
+                self.preferred_input_id.as_deref(),
+            )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
         eprintln!("[NativeAudio] Input: {}", opened.input_id);
+        self.active_input_id = Some(opened.input_id.to_string());
 
         self.duration = opened.meta.duration;
         self.decoded_channels = opened.meta.channels;
@@ -1127,9 +1146,14 @@ impl NativeAudioEngine {
 
         let opened = self
             .input_registry
-            .open(&path, self.output_sample_rate)
+            .open_prefer(
+                &path,
+                self.output_sample_rate,
+                self.preferred_input_id.as_deref(),
+            )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
         eprintln!("[NativeAudio] Input: {}", opened.input_id);
+        let active_input_id = opened.input_id.to_string();
 
         let duration = opened.meta.duration;
         let decoded_channels = opened.meta.channels;
@@ -1189,6 +1213,7 @@ impl NativeAudioEngine {
         self.decoded_channels = decoded_channels;
         self.decoded_sample_rate = decoded_sample_rate;
         self.decoded_bit_depth = decoded_bit_depth;
+        self.active_input_id = Some(active_input_id);
 
         if !self.queue_initialized {
             self.queue_initialized = true;
@@ -1381,6 +1406,7 @@ impl NativeAudioEngine {
             }
             self.shutdown_streaming();
             self.current_track = None;
+            self.active_input_id = None;
             self.current_position = 0.0;
             self.base_position = 0.0;
             self.playback_started_at = None;
@@ -1578,6 +1604,26 @@ impl NativeAudioEngine {
         self.gain_db = self.dsp_runtime.apply_chain(&self.dsp_chain);
     }
 
+    fn set_preferred_input_id(&mut self, input_id: Option<String>) -> Result<(), String> {
+        let input_id = input_id.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+        if let Some(id) = input_id.as_deref() {
+            if !self.input_registry.contains_id(id) {
+                return Err(format!("Unknown audio input id: {id}"));
+            }
+        }
+
+        self.preferred_input_id = input_id;
+        Ok(())
+    }
+
     fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
         NativeAudioStatePayload {
             playback_state: self.playback_state.as_str().to_string(),
@@ -1621,6 +1667,16 @@ impl NativeAudioEngine {
                 .filter(|seq| *seq > 0),
             error_code: self.last_error_code.clone(),
             error_message: self.last_error_message.clone(),
+        }
+    }
+
+    fn build_components_payload(&self) -> NativeAudioComponentsStatePayload {
+        NativeAudioComponentsStatePayload {
+            output_backend_id: self.output_backend.id().to_string(),
+            output_device: self.device_name.clone(),
+            output_sample_rate: self.output_sample_rate,
+            preferred_input_id: self.preferred_input_id.clone(),
+            active_input_id: self.active_input_id.clone(),
         }
     }
 
@@ -2854,6 +2910,173 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
     };
     emit_state(app_handle, payload)?;
     Ok(())
+}
+
+fn available_output_backend_ids() -> [&'static str; 1] {
+    [RODIO_CPAL_BACKEND_ID]
+}
+
+fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> {
+    match id {
+        RODIO_CPAL_BACKEND_ID => Some(default_backend()),
+        _ => None,
+    }
+}
+
+pub fn list_output_backends() -> Result<Vec<String>, String> {
+    Ok(available_output_backend_ids()
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect())
+}
+
+pub fn list_audio_inputs() -> Result<Vec<String>, String> {
+    let ids = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.input_registry.list_ids()
+    };
+
+    Ok(ids.into_iter().map(|id| id.to_string()).collect())
+}
+
+pub fn get_audio_components_state() -> Result<NativeAudioComponentsStatePayload, String> {
+    let engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    Ok(engine.build_components_payload())
+}
+
+pub fn select_output_backend(
+    app_handle: &AppHandle,
+    backend_id: Option<String>,
+) -> Result<NativeAudioComponentsStatePayload, String> {
+    init_emitter(app_handle);
+
+    let requested = backend_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let target_id = requested.unwrap_or(RODIO_CPAL_BACKEND_ID);
+
+    let Some(target_backend) = create_output_backend_by_id(target_id) else {
+        let message = format!("Unknown output backend id: {target_id}");
+        let (state_payload, maybe_error) = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.set_error("NATIVE_AUDIO_BACKEND_SELECT_FAILED", message.clone());
+            let state_payload = engine.build_state_payload(false);
+            let maybe_error = match (
+                state_payload.error_seq,
+                state_payload.error_code.clone(),
+                state_payload.error_message.clone(),
+            ) {
+                (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
+                    seq,
+                    code,
+                    message,
+                }),
+                _ => None,
+            };
+            (state_payload, maybe_error)
+        };
+
+        emit_state(app_handle, state_payload)?;
+        if let Some(error_payload) = maybe_error {
+            emit_error(app_handle, error_payload)?;
+        }
+        return Err(message);
+    };
+
+    let (result, state_payload, components_payload, maybe_error) = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+
+        let mut result: Result<(), String> = Ok(());
+        if engine.output_backend.id() != target_id {
+            engine.output_backend = target_backend;
+            engine.device_name = None;
+            if let Err(err) = engine.rebuild_sink_on_new_device() {
+                engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
+                result = Err(err);
+            }
+        }
+
+        let state_payload = engine.build_state_payload(false);
+        let components_payload = engine.build_components_payload();
+        let maybe_error = match (
+            state_payload.error_seq,
+            state_payload.error_code.clone(),
+            state_payload.error_message.clone(),
+        ) {
+            (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
+                seq,
+                code,
+                message,
+            }),
+            _ => None,
+        };
+
+        (result, state_payload, components_payload, maybe_error)
+    };
+
+    emit_state(app_handle, state_payload)?;
+    if let Err(err) = result {
+        if let Some(error_payload) = maybe_error {
+            emit_error(app_handle, error_payload)?;
+        }
+        return Err(err);
+    }
+
+    Ok(components_payload)
+}
+
+pub fn select_audio_input(
+    app_handle: &AppHandle,
+    input_id: Option<String>,
+) -> Result<NativeAudioComponentsStatePayload, String> {
+    init_emitter(app_handle);
+
+    let (result, state_payload, components_payload, maybe_error) = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+
+        let result = engine.set_preferred_input_id(input_id).map_err(|err| {
+            engine.set_error("NATIVE_AUDIO_INPUT_SELECT_FAILED", err.clone());
+            err
+        });
+
+        let state_payload = engine.build_state_payload(false);
+        let components_payload = engine.build_components_payload();
+        let maybe_error = match (
+            state_payload.error_seq,
+            state_payload.error_code.clone(),
+            state_payload.error_message.clone(),
+        ) {
+            (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
+                seq,
+                code,
+                message,
+            }),
+            _ => None,
+        };
+
+        (result, state_payload, components_payload, maybe_error)
+    };
+
+    emit_state(app_handle, state_payload)?;
+    if let Err(err) = result {
+        if let Some(error_payload) = maybe_error {
+            emit_error(app_handle, error_payload)?;
+        }
+        return Err(err);
+    }
+
+    Ok(components_payload)
 }
 
 pub fn list_output_devices() -> Result<Vec<String>, String> {

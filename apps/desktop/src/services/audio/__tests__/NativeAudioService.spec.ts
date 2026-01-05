@@ -15,6 +15,7 @@ import { listen } from '@tauri-apps/api/event';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 describe('NativeAudioService', () => {
@@ -59,6 +60,23 @@ describe('NativeAudioService', () => {
     const error = onError.mock.calls[0]?.[0] as { code?: unknown; message?: unknown } | undefined;
     expect(error?.code).toBe('NATIVE_AUDIO_STREAM_ERROR');
     expect(String(error?.message)).toContain('decoder failed');
+    service.destroy();
+  });
+
+  it('restores output backend and audio input from storage', async () => {
+    localStorage.setItem(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND, JSON.stringify('rodio-cpal'));
+    localStorage.setItem(STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID, JSON.stringify('symphonia'));
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_select_output_backend', {
+      backendId: 'rodio-cpal',
+    });
+    expect(invoke).toHaveBeenCalledWith('native_audio_select_audio_input', {
+      inputId: 'symphonia',
+    });
+
     service.destroy();
   });
 

@@ -149,7 +149,9 @@ export const STORAGE_KEYS = {
   EDITOR_STATE: 'pixel-matrix-editor-state', // 编辑器状态（包括选中信息）
 
   // === Native Audio ===
+  NATIVE_AUDIO_OUTPUT_BACKEND: 'pixel-matrix-native-audio-output-backend', // 输出后端 ID（string | null）
   NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
+  NATIVE_AUDIO_INPUT_ID: 'pixel-matrix-native-audio-input-id', // 输入/解码组件 ID（string | null）
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
   NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph（object）
@@ -249,7 +251,9 @@ export const TAURI_EVENTS = {
 
   // Native Audio
   NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED: 'native-audio-output-device-updated',
+  NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED: 'native-audio-output-backend-updated',
   NATIVE_AUDIO_GAIN_DB_UPDATED: 'native-audio-gain-db-updated',
+  NATIVE_AUDIO_INPUT_ID_UPDATED: 'native-audio-input-id-updated',
   NATIVE_AUDIO_DSP_CHAIN_UPDATED: 'native-audio-dsp-chain-updated',
   NATIVE_AUDIO_DSP_GRAPH_UPDATED: 'native-audio-dsp-graph-updated',
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',

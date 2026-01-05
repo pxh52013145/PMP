@@ -30,6 +30,20 @@ type NativeAudioMeta = {
   replayGainDb: number | null;
 };
 
+type NativeAudioComponentsState = {
+  outputBackendId: string | null;
+  preferredInputId: string | null;
+  activeInputId: string | null;
+};
+
+function parseNativeAudioComponentsState(payload: unknown): NativeAudioComponentsState {
+  const record = asRecord(payload);
+  const outputBackendId = typeof record?.outputBackendId === 'string' ? record.outputBackendId : null;
+  const preferredInputId = typeof record?.preferredInputId === 'string' ? record.preferredInputId : null;
+  const activeInputId = typeof record?.activeInputId === 'string' ? record.activeInputId : null;
+  return { outputBackendId, preferredInputId, activeInputId };
+}
+
 type NativeDspEqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
 
 type NativeDspEqBand = {
@@ -79,6 +93,15 @@ export const NativeDebugPage: React.FC = () => {
     gainDb: null,
     replayGainDb: null,
   });
+  const [componentsState, setComponentsState] = useState<NativeAudioComponentsState>({
+    outputBackendId: null,
+    preferredInputId: null,
+    activeInputId: null,
+  });
+  const [outputBackends, setOutputBackends] = useState<string[]>([]);
+  const [selectedBackend, setSelectedBackend] = useState<string>('');
+  const [audioInputs, setAudioInputs] = useState<string[]>([]);
+  const [selectedInput, setSelectedInput] = useState<string>('');
   const [dspGainDb, setDspGainDb] = useState(0);
   const [eqBands, setEqBands] = useState<NativeDspEqBand[]>(DEFAULT_EQ_BANDS);
   const [limiterEnabled, setLimiterEnabled] = useState(false);
@@ -128,6 +151,26 @@ export const NativeDebugPage: React.FC = () => {
       setSelectedDevice(persisted);
     } else if (persisted === null) {
       setSelectedDevice('');
+    }
+  }, [isNativeEngine]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    const persisted = readData<string | null>(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND);
+    if (typeof persisted === 'string') {
+      setSelectedBackend(persisted);
+    } else if (persisted === null) {
+      setSelectedBackend('');
+    }
+  }, [isNativeEngine]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    const persisted = readData<string | null>(STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID);
+    if (typeof persisted === 'string') {
+      setSelectedInput(persisted);
+    } else if (persisted === null) {
+      setSelectedInput('');
     }
   }, [isNativeEngine]);
 
@@ -248,6 +291,42 @@ export const NativeDebugPage: React.FC = () => {
     return artist ? `${title} – ${artist}` : title;
   }, [state.currentTrack, t]);
 
+  const handleRefreshAudioComponents = useCallback(async () => {
+    try {
+      const payload = await invoke<unknown>('native_audio_get_audio_components_state');
+      const parsed = parseNativeAudioComponentsState(payload);
+      setComponentsState(parsed);
+      setSelectedBackend(parsed.outputBackendId ?? '');
+      setSelectedInput(parsed.preferredInputId ?? '');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.error', { message }));
+    }
+
+    try {
+      const backends = await invoke<string[]>('native_audio_list_output_backends');
+      setOutputBackends(backends);
+      appendLog(t('pages.native-debug.log.outputBackendsFetched', { count: backends.length }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.outputBackendsFetchFailed', { message }));
+    }
+
+    try {
+      const inputs = await invoke<string[]>('native_audio_list_audio_inputs');
+      setAudioInputs(inputs);
+      appendLog(t('pages.native-debug.log.audioInputsFetched', { count: inputs.length }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.audioInputsFetchFailed', { message }));
+    }
+  }, [appendLog, t]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    void handleRefreshAudioComponents();
+  }, [handleRefreshAudioComponents, isNativeEngine]);
+
   const handleRefreshDevices = useCallback(async () => {
     try {
       const devices = await invoke<string[]>('native_audio_list_devices');
@@ -258,6 +337,80 @@ export const NativeDebugPage: React.FC = () => {
       appendLog(t('pages.native-debug.log.outputDevicesFetchFailed', { message }));
     }
   }, [appendLog, t]);
+
+  const handleApplyOutputBackend = useCallback(async () => {
+    const backendId = selectedBackend.length > 0 ? selectedBackend : null;
+
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND,
+        backendId,
+        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
+      );
+
+      const payload = await invoke<unknown>('native_audio_select_output_backend', {
+        backendId,
+      });
+      const parsed = parseNativeAudioComponentsState(payload);
+      setComponentsState(parsed);
+      setSelectedBackend(parsed.outputBackendId ?? '');
+
+      appendLog(
+        t('pages.native-debug.log.outputBackendSwitched', {
+          backendId: parsed.outputBackendId ?? t('pages.native-debug.outputBackend.default'),
+        })
+      );
+
+      if (componentsState.outputBackendId && componentsState.outputBackendId !== parsed.outputBackendId) {
+        setSelectedDevice('');
+        setOutputDevices([]);
+        await broadcastDataUpdate(
+          STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
+          null,
+          TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
+        );
+      }
+
+      await handleRefreshDevices();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.outputBackendSwitchFailed', { message }));
+    }
+  }, [
+    appendLog,
+    componentsState.outputBackendId,
+    handleRefreshDevices,
+    selectedBackend,
+    t,
+  ]);
+
+  const handleApplyAudioInput = useCallback(async () => {
+    const inputId = selectedInput.length > 0 ? selectedInput : null;
+
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID,
+        inputId,
+        TAURI_EVENTS.NATIVE_AUDIO_INPUT_ID_UPDATED
+      );
+
+      const payload = await invoke<unknown>('native_audio_select_audio_input', {
+        inputId,
+      });
+      const parsed = parseNativeAudioComponentsState(payload);
+      setComponentsState(parsed);
+      setSelectedInput(parsed.preferredInputId ?? '');
+
+      appendLog(
+        t('pages.native-debug.log.audioInputSelected', {
+          inputId: parsed.preferredInputId ?? t('pages.native-debug.audioInput.auto'),
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.audioInputSelectFailed', { message }));
+    }
+  }, [appendLog, selectedInput, t]);
 
   const handleApplyDevice = useCallback(async () => {
     try {
@@ -828,6 +981,74 @@ export const NativeDebugPage: React.FC = () => {
               disabled={!limiterEnabled}
               onChange={(e) => void handleLimiterThresholdChange(Number(e.target.value))}
             />
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.outputBackend.title')}</p>
+              <p className="device-value">
+                {componentsState.outputBackendId ?? t('pages.native-debug.outputBackend.default')}
+              </p>
+              <p className="device-hint">{t('pages.native-debug.outputBackend.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <select
+                value={selectedBackend}
+                onChange={(e) => setSelectedBackend(e.target.value)}
+                aria-label={t('pages.native-debug.outputBackend.select.ariaLabel')}
+              >
+                <option value="">{t('pages.native-debug.outputBackend.default')}</option>
+                {outputBackends.map((backendId) => (
+                  <option key={backendId} value={backendId}>
+                    {backendId}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => void handleRefreshAudioComponents()}>
+                {t('common.action.refresh')}
+              </button>
+              <button type="button" onClick={() => void handleApplyOutputBackend()}>
+                {t('common.action.apply')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.audioInput.title')}</p>
+              <p className="device-value">
+                {t('pages.native-debug.audioInput.preferred', {
+                  id: componentsState.preferredInputId ?? t('pages.native-debug.audioInput.auto'),
+                })}
+              </p>
+              <p className="device-hint">
+                {t('pages.native-debug.audioInput.active', {
+                  id:
+                    componentsState.activeInputId ??
+                    t('pages.native-debug.audioInput.active.none'),
+                })}
+              </p>
+            </div>
+            <div className="device-controls">
+              <select
+                value={selectedInput}
+                onChange={(e) => setSelectedInput(e.target.value)}
+                aria-label={t('pages.native-debug.audioInput.select.ariaLabel')}
+              >
+                <option value="">{t('pages.native-debug.audioInput.auto')}</option>
+                {audioInputs.map((inputId) => (
+                  <option key={inputId} value={inputId}>
+                    {inputId}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => void handleRefreshAudioComponents()}>
+                {t('common.action.refresh')}
+              </button>
+              <button type="button" onClick={() => void handleApplyAudioInput()}>
+                {t('common.action.apply')}
+              </button>
+            </div>
           </div>
 
           <div className="device-row">

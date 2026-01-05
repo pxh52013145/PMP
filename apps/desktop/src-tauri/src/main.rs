@@ -113,6 +113,38 @@ async fn native_audio_set_dsp_chain(
 }
 
 #[tauri::command]
+async fn native_audio_list_output_backends() -> Result<Vec<String>, String> {
+    native_audio::list_output_backends()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_select_output_backend(
+    app: tauri::AppHandle,
+    backend_id: Option<String>,
+) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
+    native_audio::select_output_backend(&app, backend_id)
+}
+
+#[tauri::command]
+async fn native_audio_list_audio_inputs() -> Result<Vec<String>, String> {
+    native_audio::list_audio_inputs()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_select_audio_input(
+    app: tauri::AppHandle,
+    input_id: Option<String>,
+) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
+    native_audio::select_audio_input(&app, input_id)
+}
+
+#[tauri::command]
+async fn native_audio_get_audio_components_state(
+) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
+    native_audio::get_audio_components_state()
+}
+
+#[tauri::command]
 async fn native_audio_list_devices() -> Result<Vec<String>, String> {
     native_audio::list_output_devices()
 }
@@ -670,6 +702,11 @@ fn main() {
             native_audio_vst_get_governance,
             native_audio_vst_disable_plugin,
             native_audio_vst_enable_plugin,
+            native_audio_list_output_backends,
+            native_audio_select_output_backend,
+            native_audio_list_audio_inputs,
+            native_audio_select_audio_input,
+            native_audio_get_audio_components_state,
             native_audio_list_devices,
             native_audio_select_device,
             native_audio_sync_queue

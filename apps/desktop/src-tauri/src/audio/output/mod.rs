@@ -7,6 +7,7 @@ mod null;
 mod rodio_cpal;
 
 pub use rodio_cpal::default_backend;
+pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 
 pub type BoxedSource = Box<dyn Source<Item = f32> + Send + 'static>;
 

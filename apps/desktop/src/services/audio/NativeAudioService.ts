@@ -61,7 +61,9 @@ export class NativeAudioService implements IAudioService {
   private spectrumListener?: UnlistenFn;
   private errorListener?: UnlistenFn;
   private spectrumData: Uint8Array | null = null;
+  private restoredOutputBackend = false;
   private restoredOutputDevice = false;
+  private restoredInputId = false;
   private restoredDspGraph = false;
   private restoredDspChain = false;
   private restoredDspChainApplied = false;
@@ -104,7 +106,9 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async restoreFromStorage(): Promise<void> {
+    await this.restoreOutputBackendFromStorage();
     await this.restoreOutputDeviceFromStorage();
+    await this.restoreAudioInputFromStorage();
 
     const restoredGraph = await this.restoreDspGraphFromBackend();
     if (!restoredGraph) {
@@ -375,6 +379,25 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
+  private restoreOutputBackendFromStorage() {
+    if (this.restoredOutputBackend) return;
+    this.restoredOutputBackend = true;
+
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      const backendId = typeof parsed === 'string' ? parsed : null;
+      if (!backendId) return;
+
+      return invoke('native_audio_select_output_backend', { backendId })
+        .then(() => {})
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
+
   private restoreOutputDeviceFromStorage() {
     if (this.restoredOutputDevice) return;
     this.restoredOutputDevice = true;
@@ -386,6 +409,25 @@ export class NativeAudioService implements IAudioService {
       const deviceName = typeof parsed === 'string' ? parsed : null;
       if (!deviceName) return;
       return invoke('native_audio_select_device', { deviceName })
+        .then(() => {})
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
+
+  private restoreAudioInputFromStorage() {
+    if (this.restoredInputId) return;
+    this.restoredInputId = true;
+
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      const inputId = typeof parsed === 'string' ? parsed : null;
+      if (!inputId) return;
+
+      return invoke('native_audio_select_audio_input', { inputId })
         .then(() => {})
         .catch(() => {});
     } catch {

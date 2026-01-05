@@ -83,10 +83,23 @@ impl AudioInputRegistry {
         self.inputs.iter().map(|input| input.id()).collect()
     }
 
+    pub fn contains_id(&self, id: &str) -> bool {
+        self.inputs.iter().any(|input| input.id() == id)
+    }
+
     pub fn open(
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+    ) -> Result<AudioInputOpenResult, AudioInputError> {
+        self.open_prefer(path, output_sample_rate, None)
+    }
+
+    pub fn open_prefer(
+        &self,
+        path: &Path,
+        output_sample_rate: Option<u32>,
+        preferred_id: Option<&str>,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         if self.inputs.is_empty() {
             return Err(AudioInputError::new(
@@ -96,7 +109,20 @@ impl AudioInputRegistry {
         }
 
         let mut attempts: Vec<(String, AudioInputError)> = Vec::new();
+        if let Some(preferred) = preferred_id {
+            if let Some(input) = self.inputs.iter().find(|input| input.id() == preferred) {
+                match input.open(path, output_sample_rate) {
+                    Ok(result) => return Ok(result),
+                    Err(err) => attempts.push((input.id().to_string(), err)),
+                }
+            }
+        }
+
         for input in &self.inputs {
+            if preferred_id.is_some_and(|preferred| preferred == input.id()) {
+                continue;
+            }
+
             match input.open(path, output_sample_rate) {
                 Ok(result) => return Ok(result),
                 Err(err) => attempts.push((input.id().to_string(), err)),
@@ -175,6 +201,19 @@ mod tests {
 
         let result = registry
             .open(Path::new("dummy.wav"), None)
+            .expect("open should succeed");
+
+        assert_eq!(result.input_id, "ok");
+    }
+
+    #[test]
+    fn registry_prefers_requested_input_id() {
+        let mut registry = AudioInputRegistry::new();
+        registry.register(Arc::new(FailInput));
+        registry.register(Arc::new(OkInput));
+
+        let result = registry
+            .open_prefer(Path::new("dummy.wav"), None, Some("ok"))
             .expect("open should succeed");
 
         assert_eq!(result.input_id, "ok");
