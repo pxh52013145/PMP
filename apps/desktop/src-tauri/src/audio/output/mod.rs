@@ -7,11 +7,15 @@ mod null;
 mod rodio_cpal;
 #[cfg(target_os = "windows")]
 mod wasapi;
+#[cfg(target_os = "windows")]
+mod wasapi_exclusive;
 
 pub use rodio_cpal::default_backend;
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
+#[cfg(target_os = "windows")]
+pub use wasapi_exclusive::{wasapi_exclusive_backend, WASAPI_EXCLUSIVE_BACKEND_ID};
 
 pub type BoxedSource = Box<dyn Source<Item = f32> + Send + 'static>;
 
@@ -64,4 +68,14 @@ pub trait AudioOutputBackend: Send + Sync {
     fn is_stream_open(&self) -> bool;
     fn select_device(&self, device_name: Option<String>) -> Result<OutputStreamInfo, String>;
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String>;
+
+    fn take_error(&self) -> Option<AudioOutputError> {
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioOutputError {
+    pub code: &'static str,
+    pub message: String,
 }

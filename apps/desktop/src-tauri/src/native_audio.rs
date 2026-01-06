@@ -20,7 +20,9 @@ use crate::audio::input::{
 };
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
 #[cfg(target_os = "windows")]
-use crate::audio::output::{wasapi_backend, WASAPI_BACKEND_ID};
+use crate::audio::output::{
+    wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID,
+};
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
@@ -1125,7 +1127,11 @@ impl NativeAudioEngine {
             .dsp_chain
             .iter()
             .any(|node| matches!(node, DspNodeConfig::Vst { .. }));
-        let can_crossfade = was_playing && self.sink.is_some() && duration_ms > 0 && !has_vst;
+        let can_crossfade = was_playing
+            && self.sink.is_some()
+            && duration_ms > 0
+            && !has_vst
+            && self.output_backend.id() != "wasapi-exclusive";
         if !can_crossfade {
             self.load(path)?;
             if was_playing {
@@ -1539,6 +1545,18 @@ impl NativeAudioEngine {
                 self.active_crossfade = None;
                 self.apply_effective_volume();
             }
+        }
+
+        if let Some(err) = self.output_backend.take_error() {
+            if let Some(sink) = &self.sink {
+                sink.pause();
+            }
+            self.sync_clock();
+            self.set_error(
+                "NATIVE_AUDIO_OUTPUT_ERROR",
+                format!("[{}] {}", err.code, err.message),
+            );
+            return true;
         }
 
         let streaming_error = if let Some(streaming) = self.streaming.as_ref() {
@@ -3249,7 +3267,10 @@ pub fn vst_warmup(app_handle: &AppHandle) -> Result<Vec<VstWarmupNodeReport>, St
 fn available_output_backend_ids() -> Vec<&'static str> {
     let mut ids = vec![RODIO_CPAL_BACKEND_ID];
     #[cfg(target_os = "windows")]
-    ids.push(WASAPI_BACKEND_ID);
+    {
+        ids.push(WASAPI_BACKEND_ID);
+        ids.push(WASAPI_EXCLUSIVE_BACKEND_ID);
+    }
     ids
 }
 
@@ -3258,6 +3279,8 @@ fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> 
         RODIO_CPAL_BACKEND_ID => Some(default_backend()),
         #[cfg(target_os = "windows")]
         WASAPI_BACKEND_ID => Some(wasapi_backend()),
+        #[cfg(target_os = "windows")]
+        WASAPI_EXCLUSIVE_BACKEND_ID => Some(wasapi_exclusive_backend()),
         _ => None,
     }
 }
