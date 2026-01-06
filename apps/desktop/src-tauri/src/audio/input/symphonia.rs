@@ -8,9 +8,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use rodio::Source;
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
 use symphonia::core::{
     audio::SampleBuffer,
     codecs::DecoderOptions,
@@ -413,8 +410,7 @@ fn start_symphonia_stream(
         let mut pending_trim_frames_out: usize = 0;
 
         let resample_chunk_frames = 1024usize;
-        let mut resampler: Option<SincFixedIn<f32>> = None;
-        let mut resampler_input: Vec<Vec<f32>> = Vec::new();
+        let mut resampler: Option<crate::audio::resample::StreamingResampler> = None;
         let mut channels_usize: usize = 0;
         let mut effective_sample_rate: u32 = 0;
         let mut meta_delivered = false;
@@ -464,9 +460,6 @@ fn start_symphonia_stream(
                             sample_buf = None;
                             if let Some(r) = resampler.as_mut() {
                                 r.reset();
-                            }
-                            for ch in &mut resampler_input {
-                                ch.clear();
                             }
                         }
                     }
@@ -535,31 +528,20 @@ fn start_symphonia_stream(
                             let requested_sample_rate =
                                 output_sample_rate.unwrap_or(input_sample_rate);
                             if requested_sample_rate != input_sample_rate {
-                                let params = SincInterpolationParameters {
-                                    sinc_len: 256,
-                                    f_cutoff: 0.95,
-                                    interpolation: SincInterpolationType::Cubic,
-                                    oversampling_factor: 128,
-                                    window: WindowFunction::BlackmanHarris2,
-                                };
-                                let resample_ratio =
-                                    requested_sample_rate as f64 / input_sample_rate as f64;
-                                match SincFixedIn::<f32>::new(
-                                    resample_ratio,
-                                    1.0,
-                                    params,
-                                    resample_chunk_frames,
+                                match crate::audio::resample::StreamingResampler::new(
+                                    input_sample_rate,
+                                    requested_sample_rate,
                                     channels_usize,
+                                    resample_chunk_frames,
                                 ) {
                                     Ok(instance) => {
                                         resampler = Some(instance);
-                                        resampler_input =
-                                            (0..channels_usize).map(|_| Vec::new()).collect();
                                         effective_sample_rate = requested_sample_rate;
                                     }
                                     Err(err) => {
                                         eprintln!(
-                                            "[NativeAudio] Failed to init resampler, falling back: {err}"
+                                            "[NativeAudio] Failed to init resampler, falling back: [{}] {}",
+                                            err.code, err.message
                                         );
                                     }
                                 }
@@ -590,57 +572,16 @@ fn start_symphonia_stream(
 
                             // Resample to device mix rate to avoid rodio's low-quality resampler artifacts.
                             let mut out_interleaved: Vec<f32> = Vec::new();
+                            let mut offset = 0usize;
                             if let Some(resampler) = resampler.as_mut() {
-                                // deinterleave
-                                let frames = slice.len() / channels;
-                                for frame in 0..frames {
-                                    for ch in 0..channels {
-                                        resampler_input[ch].push(slice[frame * channels + ch]);
-                                    }
-                                }
+                                out_interleaved = resampler.process_interleaved(slice);
 
-                                while channels_usize > 0
-                                    && resampler_input.len() == channels_usize
-                                    && resampler_input
-                                        .iter()
-                                        .all(|channel| channel.len() >= resample_chunk_frames)
-                                {
-                                    let mut input_block: Vec<Vec<f32>> =
-                                        Vec::with_capacity(channels_usize);
-                                    for ch in 0..channels_usize {
-                                        let drained: Vec<f32> = resampler_input[ch]
-                                            .drain(0..resample_chunk_frames)
-                                            .collect();
-                                        input_block.push(drained);
-                                    }
-
-                                    let output_blocks = match resampler.process(&input_block, None)
-                                    {
-                                        Ok(value) => value,
-                                        Err(_) => break,
-                                    };
-
-                                    let out_frames =
-                                        output_blocks.get(0).map(|v| v.len()).unwrap_or(0);
-                                    if out_frames == 0 {
-                                        continue;
-                                    }
-
-                                    let mut start_out_frame = 0usize;
-                                    if pending_trim_frames_out > 0 {
-                                        let trim_now = pending_trim_frames_out.min(out_frames);
-                                        start_out_frame = trim_now;
-                                        pending_trim_frames_out =
-                                            pending_trim_frames_out.saturating_sub(trim_now);
-                                    }
-
-                                    for frame in start_out_frame..out_frames {
-                                        for ch in 0..channels_usize {
-                                            if let Some(sample) = output_blocks[ch].get(frame) {
-                                                out_interleaved.push(*sample);
-                                            }
-                                        }
-                                    }
+                                let out_frames = out_interleaved.len() / channels_usize.max(1);
+                                if pending_trim_frames_out > 0 && channels_usize > 0 {
+                                    let trim_now = pending_trim_frames_out.min(out_frames);
+                                    offset = trim_now * channels_usize;
+                                    pending_trim_frames_out =
+                                        pending_trim_frames_out.saturating_sub(trim_now);
                                 }
                             } else {
                                 // No resampling: apply pending trim in input frames.
@@ -657,7 +598,6 @@ fn start_symphonia_stream(
                                 }
                             }
 
-                            let mut offset = 0usize;
                             while offset < out_interleaved.len() {
                                 if let Ok(cmd) = command_rx.try_recv() {
                                     match cmd {
@@ -709,9 +649,6 @@ fn start_symphonia_stream(
                                                 sample_buf = None;
                                                 if let Some(r) = resampler.as_mut() {
                                                     r.reset();
-                                                }
-                                                for ch in &mut resampler_input {
-                                                    ch.clear();
                                                 }
                                             }
 
