@@ -167,6 +167,8 @@
   "settings.audioCache.usage": "Used {used} / {max} · {entries} entries",
   "settings.audioCache.note.requireNative": "Requires Tauri desktop runtime (Native Audio).",
   "settings.audioCache.note.disk": "PCM cache grows fast (especially Hi-Res). Set a limit or clear it periodically.",
+  "settings.audioCache.cacheDir": "Cache directory: {path}",
+  "settings.audioCache.configPath": "Config file: {path}",
 
   "settings.performance.lowPerformance.label": "Low Performance Mode",
   "settings.performance.lowPerformance.desc": "Recommended when using multiple Editor windows to reduce lag.",

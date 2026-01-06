@@ -167,6 +167,8 @@
   "settings.audioCache.usage": "已使用 {used} / {max} · {entries} 个条目",
   "settings.audioCache.note.requireNative": "需要在 Tauri 桌面环境运行（Native Audio）。",
   "settings.audioCache.note.disk": "PCM 缓存增长很快（尤其是 Hi-Res）。建议设置上限或定期清空。",
+  "settings.audioCache.cacheDir": "缓存目录：{path}",
+  "settings.audioCache.configPath": "配置文件：{path}",
 
   "settings.performance.lowPerformance.label": "低性能模式",
   "settings.performance.lowPerformance.desc": "多开 Editor 窗口时推荐开启，减少滚动卡顿。",
