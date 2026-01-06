@@ -2358,6 +2358,7 @@ fn start_symphonia_stream(
 
 fn init_emitter(app_handle: &AppHandle) {
     let _ = APP_HANDLE.set(app_handle.clone());
+    let _ = crate::audio::resample_cache::init_from_app(app_handle);
     if EMITTER_STARTED.set(()).is_err() {
         return;
     }

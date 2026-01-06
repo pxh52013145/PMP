@@ -745,6 +745,21 @@ fn decode_track_to_buffer(
     path: &Path,
     output_sample_rate: Option<u32>,
 ) -> Result<DecodedAudioBuffer, AudioInputError> {
+    let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
+    if let Some(key) = cache_key.as_deref() {
+        if let Some(cached) = crate::audio::resample_cache::try_load(key) {
+            let frames = cached.samples.len() / cached.channels as usize;
+            let duration = frames as f64 / cached.sample_rate as f64;
+            return Ok(DecodedAudioBuffer {
+                samples: cached.samples,
+                channels: cached.channels,
+                sample_rate: cached.sample_rate,
+                bit_depth: cached.bit_depth,
+                duration,
+            });
+        }
+    }
+
     let file = File::open(path).map_err(|e| {
         AudioInputError::new(
             "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
@@ -877,6 +892,15 @@ fn decode_track_to_buffer(
     };
 
     let shared = Arc::new(samples);
+    if let Some(key) = cache_key {
+        crate::audio::resample_cache::store_async(
+            key,
+            shared.clone(),
+            channels as u16,
+            sample_rate,
+            bit_depth,
+        );
+    }
     Ok(DecodedAudioBuffer {
         samples: shared,
         channels: channels as u16,
