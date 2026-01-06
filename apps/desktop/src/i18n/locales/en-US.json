@@ -144,6 +144,8 @@
   "settings.panels.workbench.title": "Workbench",
   "settings.panels.performance.title": "Performance",
   "settings.panels.audio.title": "Audio",
+  "settings.panels.audioCache.title": "Audio Cache",
+  "settings.panels.audioCache.desc": "Manage decoded/resampled PCM cache.",
   "settings.panels.plugins.title": "Plugins",
   "settings.panels.visualizers.title": "Visualizers",
 
@@ -159,6 +161,12 @@
   "settings.audio.openDspRack": "Open DSP Rack",
   "settings.audio.openVstManager": "Open VST3 Plugin Manager",
   "settings.audio.openVstManager.requireTauri": "Requires the Tauri runtime (`pnpm dev:tauri`)",
+
+  "settings.audioCache.title": "Resample Cache",
+  "settings.audioCache.desc": "Caches decoded + resampled PCM to reduce CPU usage on repeated playback. This uses disk space.",
+  "settings.audioCache.usage": "Used {used} / {max} · {entries} entries",
+  "settings.audioCache.note.requireNative": "Requires Tauri desktop runtime (Native Audio).",
+  "settings.audioCache.note.disk": "PCM cache grows fast (especially Hi-Res). Set a limit or clear it periodically.",
 
   "settings.performance.lowPerformance.label": "Low Performance Mode",
   "settings.performance.lowPerformance.desc": "Recommended when using multiple Editor windows to reduce lag.",

@@ -14,6 +14,7 @@ import { LanguageSettingsPanel } from '../components/settings-panels/LanguageSet
 import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
 import { PerformanceSettingsPanel } from '../components/settings-panels/PerformanceSettingsPanel';
 import { PluginsSettingsPanel } from '../components/settings-panels/PluginsSettingsPanel';
+import { ResampleCacheSettingsPanel } from '../components/settings-panels/ResampleCacheSettingsPanel';
 import { VisualizersSettingsPanel } from '../components/settings-panels/VisualizersSettingsPanel';
 import { PluginPageHost } from '../magnet-system/plugins/PluginPageHost';
 import { PluginVisualizerHost } from '../magnet-system/plugins/PluginVisualizerHost';
@@ -110,6 +111,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => <AudioSettingsPanel />,
           source: 'builtin',
           order: 20,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'audio-cache',
+          title: t('settings.panels.audioCache.title'),
+          description: t('settings.panels.audioCache.desc'),
+          render: () => <ResampleCacheSettingsPanel />,
+          source: 'builtin',
+          order: 25,
           group: 'core',
         });
 

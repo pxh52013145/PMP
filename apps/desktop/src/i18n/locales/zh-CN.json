@@ -144,6 +144,8 @@
   "settings.panels.workbench.title": "主界面",
   "settings.panels.performance.title": "性能",
   "settings.panels.audio.title": "音频",
+  "settings.panels.audioCache.title": "音频缓存",
+  "settings.panels.audioCache.desc": "管理解码/重采样后的 PCM 缓存。",
   "settings.panels.plugins.title": "插件",
   "settings.panels.visualizers.title": "可视化",
 
@@ -159,6 +161,12 @@
   "settings.audio.openDspRack": "打开 DSP Rack",
   "settings.audio.openVstManager": "打开 VST3 插件管理器",
   "settings.audio.openVstManager.requireTauri": "需要在 Tauri 桌面环境运行（pnpm dev:tauri）",
+
+  "settings.audioCache.title": "重采样缓存",
+  "settings.audioCache.desc": "缓存解码 + 重采样后的 PCM，减少重复播放时的 CPU 开销（会占用磁盘空间）。",
+  "settings.audioCache.usage": "已使用 {used} / {max} · {entries} 个条目",
+  "settings.audioCache.note.requireNative": "需要在 Tauri 桌面环境运行（Native Audio）。",
+  "settings.audioCache.note.disk": "PCM 缓存增长很快（尤其是 Hi-Res）。建议设置上限或定期清空。",
 
   "settings.performance.lowPerformance.label": "低性能模式",
   "settings.performance.lowPerformance.desc": "多开 Editor 窗口时推荐开启，减少滚动卡顿。",
