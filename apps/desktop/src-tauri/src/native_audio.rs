@@ -19,6 +19,8 @@ use crate::audio::input::{
     StreamingPlayback, StreamingSamplesSource,
 };
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
+use crate::dsp_graph::DspGraphNode;
+use crate::vst_shm::ShmRing;
 
 static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
@@ -886,6 +888,7 @@ struct NativeAudioEngine {
     gain_db: f32,
     replay_gain_db: f32,
     dsp_chain: Vec<DspNodeConfig>,
+    vst_enabled: bool,
     dsp_runtime: Arc<DspRuntime>,
     spectrum_tap: SpectrumTap,
     muted: bool,
@@ -953,6 +956,7 @@ impl NativeAudioEngine {
             gain_db: 0.0,
             replay_gain_db: 0.0,
             dsp_chain: Vec::new(),
+            vst_enabled: false,
             dsp_runtime: Arc::new(DspRuntime::new()),
             spectrum_tap: SpectrumTap::new(1024),
             muted: false,
@@ -2845,11 +2849,20 @@ pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> R
 pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Result<(), String> {
     init_emitter(app_handle);
 
-    let sample_rate = {
+    let (sample_rate, vst_enabled, playback_active) = {
         let engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.output_sample_rate.unwrap_or(48_000).max(1)
+        let sample_rate = engine
+            .output_sample_rate
+            .or_else(|| engine.output_backend.current_info().output_sample_rate)
+            .unwrap_or(48_000)
+            .max(1);
+        let playback_active = matches!(
+            engine.playback_state,
+            PlaybackState::Playing | PlaybackState::Loading
+        );
+        (sample_rate, engine.vst_enabled, playback_active)
     };
 
     let channels = 2usize;
@@ -2870,7 +2883,16 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
             continue;
         };
 
+        if !vst_enabled {
+            continue;
+        }
+
         desired_vst_node_ids.push(id.clone());
+
+        if !playback_active {
+            continue;
+        }
+
         match crate::vst_runtime::ensure_audio_session(
             id.as_str(),
             plugin_id.as_str(),
@@ -2910,6 +2932,298 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
     };
     emit_state(app_handle, payload)?;
     Ok(())
+}
+
+pub fn set_vst_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), String> {
+    init_emitter(app_handle);
+    let chain = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.vst_enabled = enabled;
+        engine.dsp_chain.clone()
+    };
+
+    set_dsp_chain(app_handle, chain)
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VstWarmupNodeReport {
+    pub node_id: String,
+    pub plugin_id: String,
+    pub state: String,
+    pub message: Option<String>,
+    pub elapsed_ms: u64,
+    pub primed_frames: u64,
+}
+
+fn is_playback_active() -> Result<bool, String> {
+    let engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    Ok(matches!(
+        engine.playback_state,
+        PlaybackState::Playing | PlaybackState::Loading
+    ))
+}
+
+pub fn vst_warmup(app_handle: &AppHandle) -> Result<Vec<VstWarmupNodeReport>, String> {
+    const WARMUP_WAIT_ACTIVE_TIMEOUT: Duration = Duration::from_secs(90);
+    const WARMUP_PRIME_MS: u64 = 600;
+    const WARMUP_DRAIN_TIMEOUT: Duration = Duration::from_secs(4);
+    const BLOCK_FRAMES: usize = 512;
+    const DEMO_VST_PLUGIN_ID: &str = "demo.gain";
+
+    if is_playback_active()? {
+        return Err("VST warmup is only available while not playing".to_string());
+    }
+
+    let graph = crate::dsp_graph::get_dsp_graph(app_handle)?;
+    let mut targets = Vec::<(String, String)>::new();
+    for node in &graph.nodes {
+        let DspGraphNode::Vst {
+            id,
+            enabled,
+            plugin_id,
+            ..
+        } = node
+        else {
+            continue;
+        };
+
+        if !*enabled {
+            continue;
+        }
+        let node_id = id.trim();
+        let plugin_id = plugin_id.trim();
+        if node_id.is_empty() || plugin_id.is_empty() || plugin_id == DEMO_VST_PLUGIN_ID {
+            continue;
+        }
+        targets.push((node_id.to_string(), plugin_id.to_string()));
+    }
+
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sample_rate = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        let mut resolved = engine
+            .output_sample_rate
+            .or_else(|| engine.output_backend.current_info().output_sample_rate);
+        if resolved.is_some() {
+            engine.output_sample_rate = resolved;
+        }
+
+        if resolved.is_none() {
+            if let Ok((_sink, info)) = engine.output_backend.create_sink() {
+                resolved = info.output_sample_rate;
+                engine.output_sample_rate = resolved;
+                if engine.device_name.is_none() {
+                    engine.device_name = info
+                        .device_name
+                        .clone()
+                        .or_else(|| engine.output_backend.default_device_name());
+                }
+            }
+        }
+
+        resolved.unwrap_or(48_000).max(1)
+    };
+
+    let channels = 2usize;
+
+    let buffer_profile = crate::vst_settings::get_settings(app_handle)
+        .ok()
+        .map(|settings| settings.buffer_profile)
+        .unwrap_or_default();
+    let latency_frames = crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
+    let capacity_frames = latency_frames.saturating_add(2048).max(8192u32);
+
+    let mut reports = Vec::with_capacity(targets.len());
+
+    for (node_id, plugin_id) in targets.into_iter() {
+        if is_playback_active()? {
+            return Err("VST warmup aborted: playback started".to_string());
+        }
+
+        let started_at = Instant::now();
+
+        let info = match crate::vst_runtime::ensure_audio_session(
+            node_id.as_str(),
+            plugin_id.as_str(),
+            sample_rate,
+            channels,
+            capacity_frames,
+        ) {
+            Ok(info) => info,
+            Err(err) => {
+                reports.push(VstWarmupNodeReport {
+                    node_id,
+                    plugin_id,
+                    state: "error".to_string(),
+                    message: Some(err),
+                    elapsed_ms: started_at.elapsed().as_millis() as u64,
+                    primed_frames: 0,
+                });
+                continue;
+            }
+        };
+
+        let shm_in = match ShmRing::open(info.shm_in_name.as_str()) {
+            Ok(ring) => ring,
+            Err(err) => {
+                reports.push(VstWarmupNodeReport {
+                    node_id,
+                    plugin_id,
+                    state: "error".to_string(),
+                    message: Some(err),
+                    elapsed_ms: started_at.elapsed().as_millis() as u64,
+                    primed_frames: 0,
+                });
+                continue;
+            }
+        };
+        let shm_out = match ShmRing::open(info.shm_out_name.as_str()) {
+            Ok(ring) => ring,
+            Err(err) => {
+                reports.push(VstWarmupNodeReport {
+                    node_id,
+                    plugin_id,
+                    state: "error".to_string(),
+                    message: Some(err),
+                    elapsed_ms: started_at.elapsed().as_millis() as u64,
+                    primed_frames: 0,
+                });
+                continue;
+            }
+        };
+
+        let wait_deadline = Instant::now() + WARMUP_WAIT_ACTIVE_TIMEOUT;
+        loop {
+            if is_playback_active()? {
+                return Err("VST warmup aborted: playback started".to_string());
+            }
+
+            let header = shm_in.header();
+            if header.is_plugin_error() {
+                break;
+            }
+            if header.is_processing_active() {
+                break;
+            }
+            if Instant::now() >= wait_deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+
+        let header = shm_in.header();
+        if header.is_plugin_error() {
+            reports.push(VstWarmupNodeReport {
+                node_id,
+                plugin_id,
+                state: "error".to_string(),
+                message: Some("Sidecar reported plugin error".to_string()),
+                elapsed_ms: started_at.elapsed().as_millis() as u64,
+                primed_frames: 0,
+            });
+            continue;
+        }
+
+        if !header.is_processing_active() {
+            reports.push(VstWarmupNodeReport {
+                node_id,
+                plugin_id,
+                state: "timeout".to_string(),
+                message: Some("Timed out waiting for VST processing to start".to_string()),
+                elapsed_ms: started_at.elapsed().as_millis() as u64,
+                primed_frames: 0,
+            });
+            continue;
+        }
+
+        // Flush any buffered output from previous runs.
+        {
+            let out_header = shm_out.header();
+            let out_write = out_header.write_index.load(Ordering::Acquire);
+            out_header.read_index.store(out_write, Ordering::Release);
+        }
+
+        let warmup_frames = ((info.sample_rate as u64).saturating_mul(WARMUP_PRIME_MS) / 1000)
+            .max(1)
+            .min((info.sample_rate as u64).saturating_mul(4)) as usize;
+
+        let channels = shm_in.channels().max(1);
+        let mut buffer = vec![0.0f32; BLOCK_FRAMES.saturating_mul(channels)];
+        let mut remaining_frames = warmup_frames;
+        let mut primed_frames: u64 = 0;
+        let mut target_write = shm_in.header().write_index.load(Ordering::Acquire);
+
+        while remaining_frames > 0 {
+            if is_playback_active()? {
+                return Err("VST warmup aborted: playback started".to_string());
+            }
+
+            let frames = remaining_frames.min(BLOCK_FRAMES).max(1);
+            let needed = frames.saturating_mul(channels);
+            if buffer.len() != needed {
+                buffer.resize(needed, 0.0);
+            } else {
+                buffer.fill(0.0);
+            }
+
+            if shm_in.try_write_interleaved_all(&buffer) {
+                remaining_frames = remaining_frames.saturating_sub(frames);
+                primed_frames = primed_frames.saturating_add(frames as u64);
+                target_write = target_write.saturating_add(frames as u64);
+            } else {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+
+            let out_header = shm_out.header();
+            let out_write = out_header.write_index.load(Ordering::Acquire);
+            out_header.read_index.store(out_write, Ordering::Release);
+        }
+
+        let drain_deadline = Instant::now() + WARMUP_DRAIN_TIMEOUT;
+        while Instant::now() < drain_deadline {
+            if is_playback_active()? {
+                return Err("VST warmup aborted: playback started".to_string());
+            }
+
+            let read = shm_in.header().read_index.load(Ordering::Acquire);
+            if read >= target_write {
+                break;
+            }
+
+            let out_header = shm_out.header();
+            let out_write = out_header.write_index.load(Ordering::Acquire);
+            out_header.read_index.store(out_write, Ordering::Release);
+
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        {
+            let out_header = shm_out.header();
+            let out_write = out_header.write_index.load(Ordering::Acquire);
+            out_header.read_index.store(out_write, Ordering::Release);
+        }
+
+        reports.push(VstWarmupNodeReport {
+            node_id,
+            plugin_id,
+            state: "ok".to_string(),
+            message: None,
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            primed_frames,
+        });
+    }
+
+    Ok(reports)
 }
 
 fn available_output_backend_ids() -> [&'static str; 1] {

@@ -600,7 +600,7 @@ pub fn upsert_plugin_params(
         let scanned_at_ms = now_ms() as i64;
 
         tx.execute(
-            "UPDATE vst_plugins SET params_scanned_at_ms = ?2 WHERE plugin_id = ?1",
+            "UPDATE vst_plugins SET params_scanned_at_ms = ?2, status = 'ok' WHERE plugin_id = ?1",
             params![plugin_id, scanned_at_ms],
         )
         .map_err(|e| format!("Failed to update plugin params scan time: {e}"))?;

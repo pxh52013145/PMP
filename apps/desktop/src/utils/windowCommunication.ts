@@ -155,6 +155,7 @@ export const STORAGE_KEYS = {
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）
   NATIVE_AUDIO_DSP_GRAPH: 'pixel-matrix-native-audio-dsp-graph', // DSP graph（object）
+  NATIVE_AUDIO_VST_ENABLED: 'pixel-matrix-native-audio-vst-enabled', // VST enabled（boolean）
   DSP_RACK_LOCATE_NODE: 'pixel-matrix-dsp-rack-locate-node-v1', // DSP Rack 定位/高亮节点（object）
   NAVIGATION_REQUEST: 'pixel-matrix-navigation-request-v1', // 跨窗口导航请求（object）
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
@@ -251,6 +252,7 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_INPUT_ID_UPDATED: 'native-audio-input-id-updated',
   NATIVE_AUDIO_DSP_CHAIN_UPDATED: 'native-audio-dsp-chain-updated',
   NATIVE_AUDIO_DSP_GRAPH_UPDATED: 'native-audio-dsp-graph-updated',
+  NATIVE_AUDIO_VST_ENABLED_UPDATED: 'native-audio-vst-enabled-updated',
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',
   NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED: 'native-audio-crossfade-settings-updated',
   DSP_RACK_LOCATE_NODE: 'dsp-rack-locate-node',

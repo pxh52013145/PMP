@@ -266,6 +266,20 @@ async fn native_audio_vst_list_session_statuses() -> Result<Vec<vst_runtime::Vst
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_vst_enabled(&app, enabled))
+        .await
+        .map_err(|e| format!("VST set enabled task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn native_audio_vst_warmup(app: tauri::AppHandle) -> Result<Vec<native_audio::VstWarmupNodeReport>, String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::vst_warmup(&app))
+        .await
+        .map_err(|e| format!("VST warmup task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_open_native_editor(
     app: tauri::AppHandle,
     node_id: String,
@@ -689,6 +703,8 @@ fn main() {
             native_audio_vst_scan_cancel,
             native_audio_vst_scan_state,
             native_audio_vst_list_session_statuses,
+            native_audio_vst_set_enabled,
+            native_audio_vst_warmup,
             native_audio_vst_open_native_editor,
             native_audio_vst_close_native_editor,
             native_audio_vst_bring_editors_to_front,

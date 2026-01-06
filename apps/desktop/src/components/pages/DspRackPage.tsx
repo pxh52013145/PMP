@@ -455,7 +455,15 @@ export const DspRackPage: React.FC = () => {
                     (() => {
                       const pluginId = (readStringField(node, 'pluginId') ?? '').trim();
                       const status = vstStatuses[node.id];
-                      const statusOk = !!node.enabled && !!pluginId && !!status && !!status.peerReady && !status.pluginError;
+                      const statusKind: 'ok' | 'warn' | 'bad' = (() => {
+                        if (!node.enabled) return 'bad';
+                        if (!pluginId) return 'bad';
+                        if (!status) return 'bad';
+                        if (status.pluginError) return 'bad';
+                        if (!status.peerReady) return 'bad';
+                        if (status.processingActive) return 'ok';
+                        return 'warn';
+                      })();
                       const statusTitle = (() => {
                         if (!node.enabled) return 'Node disabled';
                         if (!pluginId) return 'Missing plugin';
@@ -474,7 +482,13 @@ export const DspRackPage: React.FC = () => {
                       return (
                         <div className="vst-node-indicators">
                           <span
-                            className={`vst-indicator ${statusOk ? 'vst-indicator--ok' : 'vst-indicator--bad'}`}
+                            className={`vst-indicator ${
+                              statusKind === 'ok'
+                                ? 'vst-indicator--ok'
+                                : statusKind === 'warn'
+                                  ? 'vst-indicator--warn'
+                                  : 'vst-indicator--bad'
+                            }`}
                             title={statusTitle}
                           >
                             <span className="vst-indicator-dot" />

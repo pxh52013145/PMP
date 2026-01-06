@@ -64,6 +64,7 @@ export class NativeAudioService implements IAudioService {
   private restoredOutputBackend = false;
   private restoredOutputDevice = false;
   private restoredInputId = false;
+  private restoredVstEnabled = false;
   private restoredDspGraph = false;
   private restoredDspChain = false;
   private restoredDspChainApplied = false;
@@ -109,6 +110,7 @@ export class NativeAudioService implements IAudioService {
     await this.restoreOutputBackendFromStorage();
     await this.restoreOutputDeviceFromStorage();
     await this.restoreAudioInputFromStorage();
+    await this.restoreVstEnabledFromStorage();
 
     const restoredGraph = await this.restoreDspGraphFromBackend();
     if (!restoredGraph) {
@@ -116,6 +118,20 @@ export class NativeAudioService implements IAudioService {
     }
 
     await this.restoreGainDbFromStorage();
+  }
+
+  private async restoreVstEnabledFromStorage(): Promise<void> {
+    if (this.restoredVstEnabled) return;
+    this.restoredVstEnabled = true;
+
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_VST_ENABLED);
+      const enabled = raw ? (JSON.parse(raw) as unknown) : false;
+      const resolved = typeof enabled === 'boolean' ? enabled : false;
+      await invoke('native_audio_vst_set_enabled', { enabled: resolved }).catch(() => {});
+    } catch {
+      // ignore
+    }
   }
 
   private async restoreDspGraphFromBackend(): Promise<boolean> {

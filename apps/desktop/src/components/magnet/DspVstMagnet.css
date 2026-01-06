@@ -1,4 +1,10 @@
 .dsp-vst-magnet {
+  --dsp-vst-ring-opacity: 0;
+  --dsp-vst-ring-color: rgba(255, 255, 255, 0.22);
+  --dsp-vst-progress-opacity: 0;
+  --dsp-vst-progress-color: rgba(255, 255, 255, 0.22);
+  --dsp-vst-progress-track-color: rgba(255, 255, 255, 0.16);
+
   width: 100%;
   height: 100%;
   border: 0;
@@ -13,6 +19,91 @@
   font-size: 11px;
   line-height: 1;
   user-select: none;
+  position: relative;
+}
+
+.dsp-vst-magnet::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid var(--dsp-vst-ring-color);
+  pointer-events: none;
+  opacity: var(--dsp-vst-ring-opacity);
+  transition:
+    opacity 0.18s ease,
+    filter 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.dsp-vst-magnet:hover::before {
+  filter: drop-shadow(0 0 6px var(--dsp-vst-ring-color));
+  opacity: 1;
+}
+
+.dsp-vst-magnet-progress {
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  pointer-events: none;
+  opacity: var(--dsp-vst-progress-opacity);
+  transition: opacity 0.18s ease;
+}
+
+.dsp-vst-magnet-progress-dot {
+  display: block;
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background-color: var(--dsp-vst-progress-track-color);
+  opacity: 0.55;
+  position: relative;
+}
+
+.dsp-vst-magnet-progress-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: var(--dsp-vst-progress-color);
+  box-shadow: 0 0 6px var(--dsp-vst-progress-color);
+  opacity: 0;
+}
+
+.dsp-vst-magnet-progress--loading .dsp-vst-magnet-progress-dot::after {
+  animation: dsp-vst-magnet-dot 1.1s infinite ease-in-out;
+}
+
+.dsp-vst-magnet-progress--loading .dsp-vst-magnet-progress-dot:nth-child(1)::after {
+  animation-delay: 0s;
+}
+.dsp-vst-magnet-progress--loading .dsp-vst-magnet-progress-dot:nth-child(2)::after {
+  animation-delay: 0.12s;
+}
+.dsp-vst-magnet-progress--loading .dsp-vst-magnet-progress-dot:nth-child(3)::after {
+  animation-delay: 0.24s;
+}
+.dsp-vst-magnet-progress--loading .dsp-vst-magnet-progress-dot:nth-child(4)::after {
+  animation-delay: 0.36s;
+}
+.dsp-vst-magnet-progress--loading .dsp-vst-magnet-progress-dot:nth-child(5)::after {
+  animation-delay: 0.48s;
+}
+
+@keyframes dsp-vst-magnet-dot {
+  0%,
+  65%,
+  100% {
+    opacity: 0;
+  }
+  28% {
+    opacity: 1;
+  }
 }
 
 .dsp-vst-magnet:disabled {
@@ -26,4 +117,3 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
