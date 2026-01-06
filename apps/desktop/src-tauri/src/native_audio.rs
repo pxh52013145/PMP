@@ -1690,15 +1690,31 @@ impl NativeAudioEngine {
             return Ok(());
         };
 
-        let target = self.current_position.max(0.0);
         let resume_playing = matches!(self.playback_state, PlaybackState::Playing);
 
+        if resume_playing {
+            self.update_position_from_clock();
+        }
+        let target = self.current_position.max(0.0);
+
+        let maybe_rodio_source = if self.streaming.is_none() && self.decoded_samples.is_none() {
+            Some(
+                open_rodio_source_at(&track_path, target)
+                    .map_err(|err| format!("[{}] {}", err.code, err.message))?,
+            )
+        } else {
+            None
+        };
+
+        // Attempt to create the new sink first so we can bail out without disrupting playback.
+        let (sink, output_info) = self.output_backend.create_sink()?;
+
+        // Commit point: stop current playback before mutating shared state (DSP runtime / streaming buffer).
         self.sync_clock();
         if let Some(old_sink) = self.sink.take() {
             old_sink.stop();
         }
 
-        let (sink, output_info) = self.output_backend.create_sink()?;
         self.output_sample_rate = output_info.output_sample_rate;
         self.device_name = output_info
             .device_name
@@ -1733,8 +1749,8 @@ impl NativeAudioEngine {
                 self.spectrum_tap.clone(),
             )));
         } else {
-            let (source, _) = open_rodio_source_at(&track_path, target)
-                .map_err(|err| format!("[{}] {}", err.code, err.message))?;
+            let (source, _) = maybe_rodio_source
+                .expect("rodio source prepared when no streaming/decoded samples");
             sink.append(Box::new(DspProcessingSource::new(
                 source,
                 self.dsp_runtime.clone(),
@@ -3040,7 +3056,8 @@ pub fn vst_warmup(app_handle: &AppHandle) -> Result<Vec<VstWarmupNodeReport>, St
         .ok()
         .map(|settings| settings.buffer_profile)
         .unwrap_or_default();
-    let latency_frames = crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
+    let latency_frames =
+        crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
     let capacity_frames = latency_frames.saturating_add(2048).max(8192u32);
 
     let mut reports = Vec::with_capacity(targets.len());
@@ -3287,11 +3304,9 @@ pub fn select_output_backend(
                 state_payload.error_code.clone(),
                 state_payload.error_message.clone(),
             ) {
-                (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
-                    seq,
-                    code,
-                    message,
-                }),
+                (Some(seq), Some(code), Some(message)) => {
+                    Some(NativeAudioErrorPayload { seq, code, message })
+                }
                 _ => None,
             };
             (state_payload, maybe_error)
@@ -3326,11 +3341,9 @@ pub fn select_output_backend(
             state_payload.error_code.clone(),
             state_payload.error_message.clone(),
         ) {
-            (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
-                seq,
-                code,
-                message,
-            }),
+            (Some(seq), Some(code), Some(message)) => {
+                Some(NativeAudioErrorPayload { seq, code, message })
+            }
             _ => None,
         };
 
@@ -3371,11 +3384,9 @@ pub fn select_audio_input(
             state_payload.error_code.clone(),
             state_payload.error_message.clone(),
         ) {
-            (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
-                seq,
-                code,
-                message,
-            }),
+            (Some(seq), Some(code), Some(message)) => {
+                Some(NativeAudioErrorPayload { seq, code, message })
+            }
             _ => None,
         };
 
@@ -3424,7 +3435,9 @@ pub fn select_output_device(
                 .device_name
                 .as_deref()
                 .is_some_and(|current| current == requested),
-            None => output_backend.current_info().device_name == output_backend.default_device_name(),
+            None => {
+                output_backend.current_info().device_name == output_backend.default_device_name()
+            }
         };
 
     if already_selected {
@@ -3495,6 +3508,7 @@ pub fn select_output_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn dsp_runtime_applies_gain_nodes() {
@@ -3590,5 +3604,94 @@ mod tests {
         let threshold = gain_db_to_linear(threshold_db);
         assert!((samples[0].abs() - threshold).abs() < 1e-6);
         assert!((samples[1].abs() - threshold).abs() < 1e-6);
+    }
+
+    struct FailBackend;
+
+    impl crate::audio::output::AudioOutputBackend for FailBackend {
+        fn id(&self) -> &'static str {
+            "fail-backend"
+        }
+
+        fn list_devices(&self) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+
+        fn default_device_name(&self) -> Option<String> {
+            None
+        }
+
+        fn current_info(&self) -> crate::audio::output::OutputStreamInfo {
+            crate::audio::output::OutputStreamInfo::default()
+        }
+
+        fn is_stream_open(&self) -> bool {
+            false
+        }
+
+        fn select_device(
+            &self,
+            _device_name: Option<String>,
+        ) -> Result<crate::audio::output::OutputStreamInfo, String> {
+            Ok(crate::audio::output::OutputStreamInfo::default())
+        }
+
+        fn create_sink(
+            &self,
+        ) -> Result<
+            (
+                std::sync::Arc<dyn crate::audio::output::AudioSink>,
+                crate::audio::output::OutputStreamInfo,
+            ),
+            String,
+        > {
+            Err("create_sink failed".into())
+        }
+    }
+
+    #[derive(Default)]
+    struct FlagSink {
+        stopped: AtomicBool,
+    }
+
+    impl crate::audio::output::AudioSink for FlagSink {
+        fn append(&self, _source: crate::audio::output::BoxedSource) {}
+
+        fn play(&self) {}
+
+        fn pause(&self) {}
+
+        fn stop(&self) {
+            self.stopped.store(true, Ordering::Release);
+        }
+
+        fn empty(&self) -> bool {
+            true
+        }
+
+        fn set_volume(&self, _value: f32) {}
+    }
+
+    #[test]
+    fn rebuild_sink_does_not_stop_old_sink_when_new_sink_fails() {
+        let backend: std::sync::Arc<dyn crate::audio::output::AudioOutputBackend> =
+            std::sync::Arc::new(FailBackend);
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let old_sink = std::sync::Arc::new(FlagSink::default());
+        engine.sink = Some(old_sink.clone());
+        engine.current_track = Some(std::path::PathBuf::from("dummy.wav"));
+        engine.decoded_samples = Some(std::sync::Arc::new(vec![0.0f32; 16]));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.playback_state = PlaybackState::Playing;
+        engine.playback_started_at = Some(std::time::Instant::now());
+
+        let err = engine
+            .rebuild_sink_on_new_device()
+            .expect_err("expected sink rebuild error");
+        assert_eq!(err, "create_sink failed");
+        assert!(engine.sink.is_some());
+        assert!(!old_sink.stopped.load(Ordering::Acquire));
     }
 }

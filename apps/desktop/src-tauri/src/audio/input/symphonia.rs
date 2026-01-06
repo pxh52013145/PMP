@@ -7,7 +7,7 @@ use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use ::rodio::Source;
+use rodio::Source;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -520,7 +520,8 @@ fn start_symphonia_stream(
                 Ok(decoded) => {
                     let spec = *decoded.spec();
                     if sample_buf.is_none() {
-                        sample_buf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+                        sample_buf =
+                            Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
                     }
 
                     if let Some(buf) = &mut sample_buf {
@@ -531,7 +532,8 @@ fn start_symphonia_stream(
                             let input_sample_rate = spec.rate.max(1);
                             effective_sample_rate = input_sample_rate;
 
-                            let requested_sample_rate = output_sample_rate.unwrap_or(input_sample_rate);
+                            let requested_sample_rate =
+                                output_sample_rate.unwrap_or(input_sample_rate);
                             if requested_sample_rate != input_sample_rate {
                                 let params = SincInterpolationParameters {
                                     sinc_len: 256,
@@ -779,7 +781,12 @@ fn start_symphonia_stream(
     };
 
     Ok((
-        StreamingSamplesSource::new(buffer.clone(), meta.channels, meta.sample_rate, meta.duration),
+        StreamingSamplesSource::new(
+            buffer.clone(),
+            meta.channels,
+            meta.sample_rate,
+            meta.duration,
+        ),
         meta,
         StreamingPlayback {
             buffer,
@@ -826,8 +833,9 @@ fn decode_track_to_buffer(
             )
         })?;
     let mut format = probed.format;
-    let track = pick_audio_track(format.as_ref())
-        .ok_or_else(|| AudioInputError::new("AUDIO_INPUT_SYMPHONIA_NO_TRACK", "No audio track found"))?;
+    let track = pick_audio_track(format.as_ref()).ok_or_else(|| {
+        AudioInputError::new("AUDIO_INPUT_SYMPHONIA_NO_TRACK", "No audio track found")
+    })?;
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| {
@@ -918,71 +926,15 @@ fn decode_track_to_buffer(
 
     let target_sample_rate = output_sample_rate.unwrap_or(sample_rate);
     let (samples, sample_rate) = if target_sample_rate != sample_rate {
-        let params = SincInterpolationParameters {
-            sinc_len: 256,
-            f_cutoff: 0.95,
-            interpolation: SincInterpolationType::Cubic,
-            oversampling_factor: 128,
-            window: WindowFunction::BlackmanHarris2,
-        };
-        let ratio = target_sample_rate as f64 / sample_rate as f64;
-        let chunk_size = 2048usize;
-        let mut resampler = SincFixedIn::<f32>::new(ratio, 1.0, params, chunk_size, channels)
-            .map_err(|e| {
-                AudioInputError::new(
-                    "AUDIO_INPUT_RESAMPLER_INIT_FAILED",
-                    format!("Failed to init resampler: {e}"),
-                )
-            })?;
+        let samples = crate::audio::resample::resample_interleaved_f32(
+            &samples,
+            sample_rate,
+            target_sample_rate,
+            channels,
+        )
+        .map_err(|err| AudioInputError::new(err.code, err.message))?;
 
-        let mut per_channel: Vec<Vec<f32>> = (0..channels).map(|_| Vec::new()).collect();
-        let frames_in = samples.len() / channels;
-        for frame in 0..frames_in {
-            for ch in 0..channels {
-                per_channel[ch].push(samples[frame * channels + ch]);
-            }
-        }
-
-        let expected_out_frames = ((frames_in as f64) * ratio).round().max(0.0) as usize;
-        let mut out_per_channel: Vec<Vec<f32>> = (0..channels).map(|_| Vec::new()).collect();
-
-        let mut start = 0usize;
-        while start < frames_in {
-            let end = (start + chunk_size).min(frames_in);
-            let block_len = end - start;
-
-            let mut input_block: Vec<Vec<f32>> = Vec::with_capacity(channels);
-            for ch in 0..channels {
-                let mut block = per_channel[ch][start..end].to_vec();
-                if block_len < chunk_size {
-                    block.resize(chunk_size, 0.0);
-                }
-                input_block.push(block);
-            }
-
-            let output_block = resampler.process(&input_block, None).map_err(|e| {
-                AudioInputError::new("AUDIO_INPUT_RESAMPLE_FAILED", format!("Resample failed: {e}"))
-            })?;
-
-            for ch in 0..channels {
-                out_per_channel[ch].extend_from_slice(&output_block[ch]);
-            }
-
-            start = end;
-        }
-
-        let out_frames_total = out_per_channel.get(0).map(|v| v.len()).unwrap_or(0);
-        let out_frames = expected_out_frames.min(out_frames_total);
-        let mut out_interleaved = Vec::with_capacity(out_frames * channels);
-        for frame in 0..out_frames {
-            for ch in 0..channels {
-                if let Some(sample) = out_per_channel[ch].get(frame) {
-                    out_interleaved.push(*sample);
-                }
-            }
-        }
-
-        (out_interleaved, target_sample_rate)
+        (samples, target_sample_rate)
     } else {
         (samples, sample_rate)
     };
