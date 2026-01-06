@@ -1131,7 +1131,7 @@ impl NativeAudioEngine {
             && self.sink.is_some()
             && duration_ms > 0
             && !has_vst
-            && self.output_backend.id() != "wasapi-exclusive";
+            && self.output_backend.id() != WASAPI_EXCLUSIVE_BACKEND_ID;
         if !can_crossfade {
             self.load(path)?;
             if was_playing {
@@ -1695,10 +1695,13 @@ impl NativeAudioEngine {
     }
 
     fn build_components_payload(&self) -> NativeAudioComponentsStatePayload {
+        let output_sample_rate = self
+            .output_sample_rate
+            .or_else(|| self.output_backend.current_info().output_sample_rate);
         NativeAudioComponentsStatePayload {
             output_backend_id: self.output_backend.id().to_string(),
             output_device: self.device_name.clone(),
-            output_sample_rate: self.output_sample_rate,
+            output_sample_rate,
             preferred_input_id: self.preferred_input_id.clone(),
             active_input_id: self.active_input_id.clone(),
         }
