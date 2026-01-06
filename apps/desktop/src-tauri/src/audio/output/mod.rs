@@ -5,9 +5,13 @@ use rodio::Source;
 #[cfg(test)]
 mod null;
 mod rodio_cpal;
+#[cfg(target_os = "windows")]
+mod wasapi;
 
 pub use rodio_cpal::default_backend;
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
+#[cfg(target_os = "windows")]
+pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
 
 pub type BoxedSource = Box<dyn Source<Item = f32> + Send + 'static>;
 

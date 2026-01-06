@@ -19,6 +19,8 @@ use crate::audio::input::{
     StreamingPlayback, StreamingSamplesSource,
 };
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
+#[cfg(target_os = "windows")]
+use crate::audio::output::{wasapi_backend, WASAPI_BACKEND_ID};
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
@@ -3244,13 +3246,18 @@ pub fn vst_warmup(app_handle: &AppHandle) -> Result<Vec<VstWarmupNodeReport>, St
     Ok(reports)
 }
 
-fn available_output_backend_ids() -> [&'static str; 1] {
-    [RODIO_CPAL_BACKEND_ID]
+fn available_output_backend_ids() -> Vec<&'static str> {
+    let mut ids = vec![RODIO_CPAL_BACKEND_ID];
+    #[cfg(target_os = "windows")]
+    ids.push(WASAPI_BACKEND_ID);
+    ids
 }
 
 fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> {
     match id {
         RODIO_CPAL_BACKEND_ID => Some(default_backend()),
+        #[cfg(target_os = "windows")]
+        WASAPI_BACKEND_ID => Some(wasapi_backend()),
         _ => None,
     }
 }
@@ -3327,9 +3334,16 @@ pub fn select_output_backend(
 
         let mut result: Result<(), String> = Ok(());
         if engine.output_backend.id() != target_id {
+            let previous_backend = engine.output_backend.clone();
+            let previous_device_name = engine.device_name.clone();
+            let previous_output_sample_rate = engine.output_sample_rate;
+
             engine.output_backend = target_backend;
             engine.device_name = None;
             if let Err(err) = engine.rebuild_sink_on_new_device() {
+                engine.output_backend = previous_backend;
+                engine.device_name = previous_device_name;
+                engine.output_sample_rate = previous_output_sample_rate;
                 engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
                 result = Err(err);
             }
@@ -3587,9 +3601,16 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
 
                     let mut result: Result<(), String> = Ok(());
                     if engine.output_backend.id() != target_id {
+                        let previous_backend = engine.output_backend.clone();
+                        let previous_device_name = engine.device_name.clone();
+                        let previous_output_sample_rate = engine.output_sample_rate;
+
                         engine.output_backend = target_backend;
                         engine.device_name = None;
                         if let Err(error) = engine.rebuild_sink_on_new_device() {
+                            engine.output_backend = previous_backend;
+                            engine.device_name = previous_device_name;
+                            engine.output_sample_rate = previous_output_sample_rate;
                             engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
                             result = Err(error);
                         }
