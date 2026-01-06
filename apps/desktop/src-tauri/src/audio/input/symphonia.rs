@@ -342,6 +342,8 @@ fn start_symphonia_stream(
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
     let buffer = AudioRingBuffer::new(352_800);
 
+    let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
+
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
@@ -411,6 +413,8 @@ fn start_symphonia_stream(
 
         let resample_chunk_frames = 1024usize;
         let mut resampler: Option<crate::audio::resample::StreamingResampler> = None;
+        let mut cache_key = cache_key;
+        let mut cache_handle: Option<crate::audio::resample_cache::StreamingCacheHandle> = None;
         let mut channels_usize: usize = 0;
         let mut effective_sample_rate: u32 = 0;
         let mut meta_delivered = false;
@@ -425,6 +429,8 @@ fn start_symphonia_stream(
                     DecoderCommand::Seek(target) => {
                         buffer_clone.clear();
                         pending_trim_frames_out = 0;
+                        cache_handle = None;
+                        cache_key = None;
 
                         let seek_to = SeekTo::Time {
                             time: Time::from(target.max(0.0)),
@@ -477,6 +483,9 @@ fn start_symphonia_stream(
                             *guard = Some(message.clone());
                         }
                         let _ = meta_tx.send(Err(message));
+                    }
+                    if let Some(handle) = cache_handle.take() {
+                        handle.finalize();
                     }
                     buffer_clone.mark_finished();
                     return;
@@ -547,6 +556,20 @@ fn start_symphonia_stream(
                                 }
                             }
 
+                            if cache_handle.is_none()
+                                && requested_sample_rate == effective_sample_rate
+                            {
+                                if let Some(key) = cache_key.take() {
+                                    cache_handle =
+                                        crate::audio::resample_cache::start_streaming_cache(
+                                            key,
+                                            channels_usize as u16,
+                                            effective_sample_rate,
+                                            bit_depth,
+                                        );
+                                }
+                            }
+
                             let duration = track
                                 .codec_params
                                 .n_frames
@@ -598,6 +621,14 @@ fn start_symphonia_stream(
                                 }
                             }
 
+                            if offset > 0 {
+                                if offset >= out_interleaved.len() {
+                                    continue;
+                                }
+                                out_interleaved = out_interleaved.split_off(offset);
+                                offset = 0;
+                            }
+
                             while offset < out_interleaved.len() {
                                 if let Ok(cmd) = command_rx.try_recv() {
                                     match cmd {
@@ -608,6 +639,8 @@ fn start_symphonia_stream(
                                         DecoderCommand::Seek(target) => {
                                             buffer_clone.clear();
                                             pending_trim_frames_out = 0;
+                                            cache_handle = None;
+                                            cache_key = None;
 
                                             let seek_to = SeekTo::Time {
                                                 time: Time::from(target.max(0.0)),
@@ -665,6 +698,13 @@ fn start_symphonia_stream(
                                 }
                                 offset += frames_pushed * channels;
                             }
+
+                            if let Some(handle) = cache_handle.as_ref() {
+                                let ok = handle.try_append(out_interleaved);
+                                if !ok {
+                                    cache_handle = None;
+                                }
+                            }
                         }
                     }
                 }
@@ -678,6 +718,9 @@ fn start_symphonia_stream(
                             *guard = Some(message.clone());
                         }
                         let _ = meta_tx.send(Err(message));
+                    }
+                    if let Some(handle) = cache_handle.take() {
+                        handle.finalize();
                     }
                     buffer_clone.mark_finished();
                     return;
@@ -923,6 +966,33 @@ impl AudioInput for SymphoniaInput {
         path: &Path,
         output_sample_rate: Option<u32>,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
+        let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
+        if let Some(key) = cache_key.as_deref() {
+            if let Some(cached) = crate::audio::resample_cache::try_load(key) {
+                let frames = cached.samples.len() / cached.channels as usize;
+                let duration = frames as f64 / cached.sample_rate as f64;
+                let source = Box::new(SharedSamplesSource::new(
+                    cached.samples.clone(),
+                    cached.channels,
+                    cached.sample_rate,
+                    0,
+                ));
+                return Ok(AudioInputOpenResult {
+                    input_id: self.id(),
+                    meta: AudioInputMeta {
+                        channels: cached.channels,
+                        sample_rate: cached.sample_rate,
+                        bit_depth: cached.bit_depth,
+                        duration,
+                    },
+                    kind: AudioInputKind::Decoded {
+                        samples: cached.samples,
+                    },
+                    source,
+                });
+            }
+        }
+
         match start_symphonia_stream(path, output_sample_rate) {
             Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                 input_id: self.id(),
