@@ -3506,6 +3506,310 @@ pub fn select_output_device(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct AudioSmokeOptions {
+    pub path: PathBuf,
+    pub backend_id: Option<String>,
+    pub device_name: Option<String>,
+    pub input_id: Option<String>,
+    pub play_ms: u64,
+    pub seek_seconds: f64,
+}
+
+fn audio_smoke_error_from_state(payload: &NativeAudioStatePayload) -> Option<NativeAudioErrorPayload> {
+    match (
+        payload.error_seq,
+        payload.error_code.as_deref(),
+        payload.error_message.as_deref(),
+    ) {
+        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload {
+            seq,
+            code: code.to_string(),
+            message: message.to_string(),
+        }),
+        _ => None,
+    }
+}
+
+fn audio_smoke_print_json<T: Serialize>(label: &str, value: &T) {
+    match serde_json::to_string(value) {
+        Ok(json) => println!("{label}: {json}"),
+        Err(err) => println!("{label}: <json_error: {err}>"),
+    }
+}
+
+fn audio_smoke_print_state(payload: &NativeAudioStatePayload) {
+    audio_smoke_print_json("native_audio_state", payload);
+    if let Some(error_payload) = audio_smoke_error_from_state(payload) {
+        audio_smoke_print_json("native_audio_error", &error_payload);
+    }
+}
+
+fn audio_smoke_step_result(
+    step: &str,
+    result: Result<(), String>,
+    payload: NativeAudioStatePayload,
+) -> Result<(), String> {
+    println!("\n==> {step}");
+    audio_smoke_print_state(&payload);
+
+    if let Err(error) = result {
+        return Err(error);
+    }
+
+    if let Some(error_payload) = audio_smoke_error_from_state(&payload) {
+        return Err(format!("{}: {}", error_payload.code, error_payload.message));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> {
+    println!("==> native_audio_list_output_backends");
+    let backends = list_output_backends()?;
+    audio_smoke_print_json("native_audio_list_output_backends", &backends);
+
+    let select_backend = {
+        let requested = options
+            .backend_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let target_id = requested.unwrap_or(RODIO_CPAL_BACKEND_ID);
+
+        let (result, payload) = match create_output_backend_by_id(target_id) {
+            Some(target_backend) => {
+                let (result, payload) = {
+                    let mut engine = ENGINE
+                        .lock()
+                        .map_err(|_| "Audio engine is locked".to_string())?;
+                    engine.clear_error();
+
+                    let mut result: Result<(), String> = Ok(());
+                    if engine.output_backend.id() != target_id {
+                        engine.output_backend = target_backend;
+                        engine.device_name = None;
+                        if let Err(error) = engine.rebuild_sink_on_new_device() {
+                            engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
+                            result = Err(error);
+                        }
+                    }
+
+                    let payload = engine.build_state_payload(false);
+                    (result, payload)
+                };
+                (result, payload)
+            }
+            None => {
+                let message = format!("Unknown output backend id: {target_id}");
+                let payload = {
+                    let mut engine = ENGINE
+                        .lock()
+                        .map_err(|_| "Audio engine is locked".to_string())?;
+                    engine.clear_error();
+                    engine.set_error("NATIVE_AUDIO_BACKEND_SELECT_FAILED", message.clone());
+                    engine.build_state_payload(false)
+                };
+                (Err(message), payload)
+            }
+        };
+
+        (result, payload)
+    };
+
+    audio_smoke_step_result(
+        "native_audio_select_output_backend",
+        select_backend.0,
+        select_backend.1,
+    )?;
+
+    println!("\n==> native_audio_list_devices");
+    let devices = list_output_devices()?;
+    audio_smoke_print_json("native_audio_list_devices", &devices);
+
+    let select_device = {
+        let output_backend = {
+            let engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.output_backend.clone()
+        };
+
+        let already_selected = output_backend.is_stream_open()
+            && match options.device_name.as_deref() {
+                Some(requested) => output_backend
+                    .current_info()
+                    .device_name
+                    .as_deref()
+                    .is_some_and(|current| current == requested),
+                None => output_backend.current_info().device_name == output_backend.default_device_name(),
+            };
+
+        if already_selected {
+            let payload = {
+                let mut engine = ENGINE
+                    .lock()
+                    .map_err(|_| "Audio engine is locked".to_string())?;
+                engine.clear_error();
+                engine.build_state_payload(false)
+            };
+            (Ok(()), payload)
+        } else {
+            match output_backend.select_device(options.device_name.clone()) {
+                Ok(output_info) => {
+                    let payload = {
+                        let mut engine = ENGINE
+                            .lock()
+                            .map_err(|_| "Audio engine is locked".to_string())?;
+
+                        engine.clear_error();
+                        engine.sync_clock();
+                        engine.output_sample_rate = output_info.output_sample_rate;
+                        engine.device_name = output_info
+                            .device_name
+                            .clone()
+                            .or_else(|| engine.device_name.clone())
+                            .or_else(|| engine.output_backend.default_device_name());
+
+                        if let Err(error) = engine.rebuild_sink_on_new_device() {
+                            engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
+                        }
+
+                        engine.build_state_payload(false)
+                    };
+                    (Ok(()), payload)
+                }
+                Err(error) => {
+                    let payload = {
+                        let mut engine = ENGINE
+                            .lock()
+                            .map_err(|_| "Audio engine is locked".to_string())?;
+                        engine.clear_error();
+                        engine.set_error("NATIVE_AUDIO_DEVICE_SELECT_FAILED", error.clone());
+                        engine.build_state_payload(false)
+                    };
+                    (Err(error), payload)
+                }
+            }
+        }
+    };
+
+    audio_smoke_step_result("native_audio_select_device", select_device.0, select_device.1)?;
+
+    println!("\n==> native_audio_list_audio_inputs");
+    let inputs = list_audio_inputs()?;
+    audio_smoke_print_json("native_audio_list_audio_inputs", &inputs);
+
+    let select_input = {
+        let (result, payload) = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.clear_error();
+            let result = engine.set_preferred_input_id(options.input_id.clone()).map_err(|err| {
+                engine.set_error("NATIVE_AUDIO_INPUT_SELECT_FAILED", err.clone());
+                err
+            });
+            let payload = engine.build_state_payload(false);
+            (result, payload)
+        };
+        (result, payload)
+    };
+    audio_smoke_step_result(
+        "native_audio_select_audio_input",
+        select_input.0,
+        select_input.1,
+    )?;
+
+    let load_step = {
+        let result = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.clear_error();
+            engine.set_state(PlaybackState::Loading);
+            match engine.load(options.path.clone()) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    engine.set_error("NATIVE_AUDIO_LOAD_FAILED", error.clone());
+                    Err(error)
+                }
+            }
+        };
+        let payload = {
+            let engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.build_state_payload(false)
+        };
+        (result, payload)
+    };
+    audio_smoke_step_result("native_audio_load", load_step.0, load_step.1)?;
+
+    let play_step = {
+        let (result, payload) = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.clear_error();
+            let result = engine.play().map_err(|err| {
+                engine.set_error("NATIVE_AUDIO_PLAY_FAILED", err.clone());
+                err
+            });
+            let payload = engine.build_state_payload(false);
+            (result, payload)
+        };
+        (result, payload)
+    };
+    audio_smoke_step_result("native_audio_play", play_step.0, play_step.1)?;
+
+    std::thread::sleep(Duration::from_millis(options.play_ms));
+    let tick_snapshot = {
+        let payload = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            let _ = engine.tick();
+            engine.build_state_payload(false)
+        };
+        (Ok(()), payload)
+    };
+    audio_smoke_step_result("native_audio_state (after play)", tick_snapshot.0, tick_snapshot.1)?;
+
+    let seek_step = {
+        let (result, payload) = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.clear_error();
+            let result = engine.seek(options.seek_seconds).map_err(|err| {
+                engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
+                err
+            });
+            let payload = engine.build_state_payload(false);
+            (result, payload)
+        };
+        (result, payload)
+    };
+    audio_smoke_step_result("native_audio_seek", seek_step.0, seek_step.1)?;
+
+    std::thread::sleep(Duration::from_millis(150));
+    let stop_step = {
+        let payload = {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.clear_error();
+            engine.stop();
+            engine.build_state_payload(false)
+        };
+        (Ok(()), payload)
+    };
+    audio_smoke_step_result("native_audio_stop", stop_step.0, stop_step.1)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

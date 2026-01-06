@@ -11,6 +11,7 @@ use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu
 
 mod background_media;
 mod audio;
+mod audio_smoke;
 mod dsp_graph;
 mod music_library;
 mod native_audio;
@@ -593,6 +594,10 @@ async fn background_import_media(
 }
 
 fn main() {
+    if let Some(exit_code) = audio_smoke::maybe_run_from_cli() {
+        std::process::exit(exit_code);
+    }
+
     let show = CustomMenuItem::new("show".to_string(), "显示窗口");
     let hide = CustomMenuItem::new("hide".to_string(), "隐藏窗口");
     let quit = CustomMenuItem::new("quit".to_string(), "退出");
