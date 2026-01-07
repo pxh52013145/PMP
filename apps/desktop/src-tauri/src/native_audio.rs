@@ -1326,7 +1326,11 @@ impl NativeAudioEngine {
             // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
             if let Some(streaming) = &self.streaming {
                 let channels = self.decoded_channels.max(1) as usize;
-                let target_frames = 2048usize; // ~46ms @ 44.1kHz
+                let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
+                    4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
+                } else {
+                    2048usize // ~46ms @ 44.1kHz
+                };
                 let target_samples = target_frames * channels;
                 if streaming.buffer.len_samples() < target_samples {
                     streaming
@@ -1798,6 +1802,21 @@ impl NativeAudioEngine {
         sink.set_volume(self.effective_volume());
 
         if resume_playing {
+            if let Some(streaming) = &self.streaming {
+                let channels = self.decoded_channels.max(1) as usize;
+                let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
+                    4096usize // ~93ms @ 44.1kHz
+                } else {
+                    2048usize // ~46ms @ 44.1kHz
+                };
+                let target_samples = target_frames * channels;
+                if streaming.buffer.len_samples() < target_samples {
+                    streaming
+                        .buffer
+                        .wait_for_samples(target_samples, Duration::from_millis(250));
+                }
+            }
+
             sink.play();
             self.base_position = target;
             self.playback_started_at = Some(Instant::now());

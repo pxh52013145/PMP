@@ -1130,11 +1130,13 @@ fn open_wasapi_exclusive_stream(
                 continue;
             }
 
-            let base_periodicity = default_period.max(1);
+            // Exclusive mode is more sensitive to underruns; prefer larger buffers for stability.
+            // Units: 100ns (20ms = 200_000).
+            let base_periodicity = default_period.max(min_period).max(200_000);
             let buffer_candidates = [
-                base_periodicity.saturating_mul(2),
                 base_periodicity.saturating_mul(4),
                 base_periodicity.saturating_mul(8),
+                base_periodicity.saturating_mul(2),
                 base_periodicity,
             ];
 
