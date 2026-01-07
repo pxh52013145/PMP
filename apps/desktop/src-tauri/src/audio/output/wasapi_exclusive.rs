@@ -294,6 +294,9 @@ fn pwstr_to_string(value: windows::core::PWSTR) -> String {
 enum WasapiSampleFormat {
     Float32,
     Pcm16,
+    Pcm24Packed,
+    Pcm24In32,
+    Pcm32,
 }
 
 #[cfg(target_os = "windows")]
@@ -685,6 +688,69 @@ fn render_frames(
                     *out.add(index) = quantized;
                 }
             }
+            WasapiSampleFormat::Pcm32 => {
+                let out = buffer as *mut i32;
+                let scale = (i32::MAX as f32) * volume;
+                for index in 0..total_samples {
+                    let sample = match (consume, source.as_mut()) {
+                        (true, Some(active)) => match active.next() {
+                            Some(value) => value * scale,
+                            None => {
+                                *source = None;
+                                0.0
+                            }
+                        },
+                        _ => 0.0,
+                    };
+                    let quantized =
+                        sample.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                    *out.add(index) = quantized;
+                }
+            }
+            WasapiSampleFormat::Pcm24In32 => {
+                let out = buffer as *mut i32;
+                let scale = 8_388_607.0f32 * volume;
+                for index in 0..total_samples {
+                    let sample = match (consume, source.as_mut()) {
+                        (true, Some(active)) => match active.next() {
+                            Some(value) => value * scale,
+                            None => {
+                                *source = None;
+                                0.0
+                            }
+                        },
+                        _ => 0.0,
+                    };
+                    let quantized = sample
+                        .round()
+                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
+                    *out.add(index) = quantized << 8;
+                }
+            }
+            WasapiSampleFormat::Pcm24Packed => {
+                let out = buffer as *mut u8;
+                let scale = 8_388_607.0f32 * volume;
+                for index in 0..total_samples {
+                    let sample = match (consume, source.as_mut()) {
+                        (true, Some(active)) => match active.next() {
+                            Some(value) => value * scale,
+                            None => {
+                                *source = None;
+                                0.0
+                            }
+                        },
+                        _ => 0.0,
+                    };
+                    let quantized = sample
+                        .round()
+                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
+                    let bytes = quantized.to_le_bytes();
+                    let offset = index * 3;
+                    *out.add(offset) = bytes[0];
+                    *out.add(offset + 1) = bytes[1];
+                    *out.add(offset + 2) = bytes[2];
+                }
+            }
         }
 
         stream
@@ -709,9 +775,12 @@ fn open_wasapi_exclusive_stream(
     use windows::Win32::Media::Audio::{
         IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
         AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVEFORMATEX,
-        WAVE_FORMAT_PCM,
+        WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_PCM,
     };
-    use windows::Win32::Media::Multimedia::WAVE_FORMAT_IEEE_FLOAT;
+    use windows::Win32::Media::KernelStreaming::{
+        KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, WAVE_FORMAT_EXTENSIBLE,
+    };
+    use windows::Win32::Media::Multimedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, WAVE_FORMAT_IEEE_FLOAT};
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
     use windows::Win32::System::Threading::CreateEventW;
 
@@ -732,36 +801,155 @@ fn open_wasapi_exclusive_stream(
                 message: format!("Failed to open output device: {e}"),
             })?;
 
-        let candidates = [WasapiSampleFormat::Float32, WasapiSampleFormat::Pcm16];
-        let mut last_error: Option<AudioOutputError> = None;
+        #[repr(C, align(8))]
+        struct AlignedWaveFormatExtensible(WAVEFORMATEXTENSIBLE);
 
-        for sample_format in candidates {
-            let audio_client: IAudioClient = device
-                .Activate(CLSCTX_ALL, None)
-                .map_err(|e| AudioOutputError {
-                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                    message: format!("Failed to activate audio client: {e}"),
-                })?;
+        enum WaveFormatAttempt {
+            Ex(WAVEFORMATEX),
+            Ext(AlignedWaveFormatExtensible),
+        }
 
-            let bytes_per_sample = match sample_format {
-                WasapiSampleFormat::Float32 => 4u16,
-                WasapiSampleFormat::Pcm16 => 2u16,
-            };
+        impl WaveFormatAttempt {
+            fn as_ptr(&self) -> *const WAVEFORMATEX {
+                match self {
+                    Self::Ex(format) => format as *const WAVEFORMATEX,
+                    Self::Ext(format) => {
+                        &format.0 as *const WAVEFORMATEXTENSIBLE as *const WAVEFORMATEX
+                    }
+                }
+            }
+        }
+
+        struct FormatAttempt {
+            label: &'static str,
+            sample_format: WasapiSampleFormat,
+            wave_format: WaveFormatAttempt,
+        }
+
+        fn build_wave_format_ex(
+            w_format_tag: u16,
+            sample_rate: u32,
+            channels: u16,
+            bytes_per_sample: u16,
+        ) -> WAVEFORMATEX {
             let block_align = channels.saturating_mul(bytes_per_sample).max(1);
             let bits_per_sample = bytes_per_sample.saturating_mul(8);
-
-            let wave_format = WAVEFORMATEX {
-                wFormatTag: match sample_format {
-                    WasapiSampleFormat::Float32 => WAVE_FORMAT_IEEE_FLOAT as u16,
-                    WasapiSampleFormat::Pcm16 => WAVE_FORMAT_PCM as u16,
-                },
+            WAVEFORMATEX {
+                wFormatTag: w_format_tag,
                 nChannels: channels,
                 nSamplesPerSec: sample_rate,
                 nAvgBytesPerSec: sample_rate.saturating_mul(block_align as u32),
                 nBlockAlign: block_align,
                 wBitsPerSample: bits_per_sample,
                 cbSize: 0,
-            };
+            }
+        }
+
+        fn build_wave_format_extensible(
+            sample_rate: u32,
+            channels: u16,
+            bytes_per_sample: u16,
+            valid_bits_per_sample: u16,
+            sub_format: windows::core::GUID,
+        ) -> WaveFormatAttempt {
+            let cb_size = (std::mem::size_of::<WAVEFORMATEXTENSIBLE>()
+                - std::mem::size_of::<WAVEFORMATEX>()) as u16;
+            let block_align = channels.saturating_mul(bytes_per_sample).max(1);
+            let bits_per_sample = bytes_per_sample.saturating_mul(8);
+
+            WaveFormatAttempt::Ext(AlignedWaveFormatExtensible(WAVEFORMATEXTENSIBLE {
+                Format: WAVEFORMATEX {
+                    wFormatTag: WAVE_FORMAT_EXTENSIBLE as u16,
+                    nChannels: channels,
+                    nSamplesPerSec: sample_rate,
+                    nAvgBytesPerSec: sample_rate.saturating_mul(block_align as u32),
+                    nBlockAlign: block_align,
+                    wBitsPerSample: bits_per_sample,
+                    cbSize: cb_size,
+                },
+                Samples: WAVEFORMATEXTENSIBLE_0 {
+                    wValidBitsPerSample: valid_bits_per_sample,
+                },
+                dwChannelMask: KSAUDIO_SPEAKER_DIRECTOUT,
+                SubFormat: sub_format,
+            }))
+        }
+
+        let candidates = vec![
+            FormatAttempt {
+                label: "Float32 (extensible)",
+                sample_format: WasapiSampleFormat::Float32,
+                wave_format: build_wave_format_extensible(
+                    sample_rate,
+                    channels,
+                    4,
+                    32,
+                    KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
+                ),
+            },
+            FormatAttempt {
+                label: "Float32 (waveex)",
+                sample_format: WasapiSampleFormat::Float32,
+                wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
+                    WAVE_FORMAT_IEEE_FLOAT as u16,
+                    sample_rate,
+                    channels,
+                    4,
+                )),
+            },
+            FormatAttempt {
+                label: "PCM32 (extensible)",
+                sample_format: WasapiSampleFormat::Pcm32,
+                wave_format: build_wave_format_extensible(
+                    sample_rate,
+                    channels,
+                    4,
+                    32,
+                    KSDATAFORMAT_SUBTYPE_PCM,
+                ),
+            },
+            FormatAttempt {
+                label: "PCM24 (extensible, 24-in-32)",
+                sample_format: WasapiSampleFormat::Pcm24In32,
+                wave_format: build_wave_format_extensible(
+                    sample_rate,
+                    channels,
+                    4,
+                    24,
+                    KSDATAFORMAT_SUBTYPE_PCM,
+                ),
+            },
+            FormatAttempt {
+                label: "PCM24 (extensible, packed)",
+                sample_format: WasapiSampleFormat::Pcm24Packed,
+                wave_format: build_wave_format_extensible(
+                    sample_rate,
+                    channels,
+                    3,
+                    24,
+                    KSDATAFORMAT_SUBTYPE_PCM,
+                ),
+            },
+            FormatAttempt {
+                label: "PCM16 (waveex)",
+                sample_format: WasapiSampleFormat::Pcm16,
+                wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
+                    WAVE_FORMAT_PCM as u16,
+                    sample_rate,
+                    channels,
+                    2,
+                )),
+            },
+        ];
+        let mut last_error: Option<AudioOutputError> = None;
+
+        for attempt in candidates {
+            let audio_client: IAudioClient = device
+                .Activate(CLSCTX_ALL, None)
+                .map_err(|e| AudioOutputError {
+                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                    message: format!("Failed to activate audio client: {e}"),
+                })?;
 
             let mut default_period = 0i64;
             let mut min_period = 0i64;
@@ -796,7 +984,7 @@ fn open_wasapi_exclusive_stream(
                     AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                     buffer_duration,
                     periodicity,
-                    &wave_format as *const WAVEFORMATEX,
+                    attempt.wave_format.as_ptr(),
                     None,
                 );
                 if let Err(e) = init {
@@ -804,7 +992,8 @@ fn open_wasapi_exclusive_stream(
                     last_error = Some(AudioOutputError {
                         code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
                         message: format!(
-                            "Failed to init exclusive stream (format={sample_format:?}, duration={buffer_duration}, period={periodicity}): {e}"
+                            "Failed to init exclusive stream (format={}, duration={buffer_duration}, period={periodicity}): {e}",
+                            attempt.label
                         ),
                     });
                     continue;
@@ -842,7 +1031,7 @@ fn open_wasapi_exclusive_stream(
                     buffer_frame_count,
                     channels,
                     sample_rate,
-                    sample_format,
+                    sample_format: attempt.sample_format,
                     started: false,
                 });
             }
