@@ -115,8 +115,22 @@ export function AudioComponentsSettingsPanel() {
       ids.unshift(activeBackendId);
     }
 
-    return ids.map((id) => describeOutputBackend(id));
-  }, [componentsState.outputBackendId, describeOutputBackend, outputBackends]);
+    const hasAsio = seen.has('asio') || activeBackendId === 'asio';
+    if (!hasAsio) {
+      ids.push('asio');
+    }
+
+    return ids.map((id) => {
+      const base = describeOutputBackend(id);
+      if (id !== 'asio') return base;
+      if (hasAsio) return base;
+      return {
+        ...base,
+        disabled: true,
+        warning: t('settings.audioComponents.outputBackend.option.asio.warningUnavailable'),
+      };
+    });
+  }, [componentsState.outputBackendId, describeOutputBackend, outputBackends, t]);
 
   const selectedBackendOption = useMemo(() => {
     if (!selectedBackend) return null;

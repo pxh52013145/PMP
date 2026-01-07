@@ -184,6 +184,7 @@
   "settings.audioComponents.outputBackend.option.asio.title": "ASIO（低延迟）",
   "settings.audioComponents.outputBackend.option.asio.desc": "低延迟输出（需要安装 ASIO 驱动；仅在启用 ASIO 支持的构建中可用）。",
   "settings.audioComponents.outputBackend.option.asio.warning": "ASIO 相关能力受 Steinberg ASIO SDK 许可约束；如遇到异常/无声，先切回 WASAPI（共享/独占）验证。",
+  "settings.audioComponents.outputBackend.option.asio.warningUnavailable": "当前构建未启用 ASIO（asio-sdk）。如需使用 ASIO，请切换到 ASIO 版本并重启应用。",
   "settings.audioComponents.outputBackend.option.unknown": "未知输出后端：{id}",
   "settings.audioComponents.outputDevice.title": "输出设备",
   "settings.audioComponents.outputDevice.desc": "选择当前输出后端的输出设备。",
