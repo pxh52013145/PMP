@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
@@ -10,9 +12,32 @@ pub const RODIO_CPAL_BACKEND_ID: &str = "rodio-cpal";
 
 #[derive(Default)]
 struct StreamState {
+    thread: Option<StreamThread>,
     handle: Option<OutputStreamHandle>,
     device_name: Option<String>,
     output_sample_rate: Option<u32>,
+}
+
+struct StreamThread {
+    shutdown_tx: Option<mpsc::Sender<()>>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl StreamThread {
+    fn shutdown(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for StreamThread {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 pub struct RodioCpalBackend {
@@ -26,62 +51,99 @@ impl RodioCpalBackend {
         }
     }
 
-    fn open_output_stream_handle(
-        preferred_device_name: Option<&str>,
-    ) -> Result<(OutputStreamHandle, Option<String>, Option<u32>), String> {
-        let host = rodio::cpal::default_host();
+    fn spawn_output_stream_thread(
+        preferred_device_name: Option<String>,
+    ) -> Result<(StreamThread, OutputStreamHandle, Option<String>, Option<u32>), String> {
+        let (ready_tx, ready_rx) = mpsc::channel::<
+            Result<(OutputStreamHandle, Option<String>, Option<u32>), String>,
+        >();
+        let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
-        if let Some(preferred) = preferred_device_name {
-            let devices = host
-                .output_devices()
-                .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
-            for device in devices {
-                let Ok(name) = device.name() else {
-                    continue;
-                };
-                if name != preferred {
-                    continue;
+        let join = thread::spawn(move || {
+            let result = (|| -> Result<(OutputStream, OutputStreamHandle, Option<String>, Option<u32>), String> {
+                let host = rodio::cpal::default_host();
+
+                if let Some(preferred) = preferred_device_name.as_deref() {
+                    let devices = host
+                        .output_devices()
+                        .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
+                    for device in devices {
+                        let Ok(name) = device.name() else {
+                            continue;
+                        };
+                        if name != preferred {
+                            continue;
+                        }
+                        let output_sample_rate = device
+                            .default_output_config()
+                            .ok()
+                            .map(|cfg| cfg.sample_rate().0);
+                        let (stream, handle) = OutputStream::try_from_device(&device).map_err(|e| {
+                            format!("Failed to init output device '{preferred}': {e}")
+                        })?;
+                        return Ok((stream, handle, Some(name), output_sample_rate));
+                    }
+                    return Err(format!("Output device not found: {preferred}"));
                 }
-                let output_sample_rate = device
-                    .default_output_config()
-                    .ok()
-                    .map(|cfg| cfg.sample_rate().0);
-                let (stream, handle) = OutputStream::try_from_device(&device)
-                    .map_err(|e| format!("Failed to init output device '{preferred}': {e}"))?;
-                std::mem::forget(stream);
-                return Ok((handle, Some(name), output_sample_rate));
-            }
-            return Err(format!("Output device not found: {preferred}"));
-        }
 
-        if let Some(device) = host.default_output_device() {
-            let device_name = device.name().ok();
-            let output_sample_rate = device
-                .default_output_config()
-                .ok()
-                .map(|cfg| cfg.sample_rate().0);
-            if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
-                std::mem::forget(stream);
-                return Ok((handle, device_name, output_sample_rate));
+                if let Some(device) = host.default_output_device() {
+                    let device_name = device.name().ok();
+                    let output_sample_rate = device
+                        .default_output_config()
+                        .ok()
+                        .map(|cfg| cfg.sample_rate().0);
+                    if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
+                        return Ok((stream, handle, device_name, output_sample_rate));
+                    }
+                }
+
+                let devices = host
+                    .output_devices()
+                    .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
+                for device in devices {
+                    let device_name = device.name().ok();
+                    let output_sample_rate = device
+                        .default_output_config()
+                        .ok()
+                        .map(|cfg| cfg.sample_rate().0);
+                    if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
+                        return Ok((stream, handle, device_name, output_sample_rate));
+                    }
+                }
+
+                Err("No usable output device found".into())
+            })();
+
+            match result {
+                Ok((stream, handle, device_name, output_sample_rate)) => {
+                    let _ = ready_tx.send(Ok((handle, device_name, output_sample_rate)));
+                    let _ = shutdown_rx.recv();
+                    drop(stream);
+                }
+                Err(err) => {
+                    let _ = ready_tx.send(Err(err));
+                }
+            }
+        });
+
+        let ready = ready_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "Timed out waiting for output stream thread".to_string())?;
+        match ready {
+            Ok((handle, device_name, output_sample_rate)) => Ok((
+                StreamThread {
+                    shutdown_tx: Some(shutdown_tx),
+                    join: Some(join),
+                },
+                handle,
+                device_name,
+                output_sample_rate,
+            )),
+            Err(err) => {
+                let _ = join.join();
+                Err(err)
             }
         }
-
-        let devices = host
-            .output_devices()
-            .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
-        for device in devices {
-            let device_name = device.name().ok();
-            let output_sample_rate = device
-                .default_output_config()
-                .ok()
-                .map(|cfg| cfg.sample_rate().0);
-            if let Ok((stream, handle)) = OutputStream::try_from_device(&device) {
-                std::mem::forget(stream);
-                return Ok((handle, device_name, output_sample_rate));
-            }
-        }
-
-        Err("No usable output device found".into())
     }
 
     fn ensure_stream_handle(&self) -> Result<(OutputStreamHandle, OutputStreamInfo), String> {
@@ -89,7 +151,7 @@ impl RodioCpalBackend {
             .state
             .lock()
             .map_err(|_| "Audio stream state is locked".to_string())?;
-        if let Some(handle) = guard.handle.clone() {
+        if let (Some(handle), Some(_thread)) = (guard.handle.clone(), guard.thread.as_ref()) {
             return Ok((
                 handle,
                 OutputStreamInfo {
@@ -99,8 +161,9 @@ impl RodioCpalBackend {
             ));
         }
 
-        let (handle, device_name, output_sample_rate) =
-            Self::open_output_stream_handle(guard.device_name.as_deref())?;
+        let (thread, handle, device_name, output_sample_rate) =
+            Self::spawn_output_stream_thread(guard.device_name.clone())?;
+        guard.thread = Some(thread);
         guard.handle = Some(handle.clone());
         guard.device_name = device_name.clone();
         guard.output_sample_rate = output_sample_rate;
@@ -170,17 +233,21 @@ impl AudioOutputBackend for RodioCpalBackend {
         let Ok(guard) = guard else {
             return false;
         };
-        guard.handle.is_some()
+        guard.handle.is_some() && guard.thread.is_some()
     }
 
     fn select_device(&self, device_name: Option<String>) -> Result<OutputStreamInfo, String> {
-        let (handle, resolved_name, output_sample_rate) =
-            Self::open_output_stream_handle(device_name.as_deref())?;
+        let (thread, handle, resolved_name, output_sample_rate) =
+            Self::spawn_output_stream_thread(device_name.clone())?;
 
         let mut guard = self
             .state
             .lock()
             .map_err(|_| "Audio stream state is locked".to_string())?;
+        if let Some(mut thread) = guard.thread.take() {
+            thread.shutdown();
+        }
+        guard.thread = Some(thread);
         guard.handle = Some(handle);
         guard.device_name = resolved_name.or(device_name);
         guard.output_sample_rate = output_sample_rate;
@@ -189,6 +256,17 @@ impl AudioOutputBackend for RodioCpalBackend {
             device_name: guard.device_name.clone(),
             output_sample_rate,
         })
+    }
+
+    fn close_stream(&self) {
+        let Ok(mut guard) = self.state.lock() else {
+            return;
+        };
+        guard.handle = None;
+        guard.output_sample_rate = None;
+        if let Some(mut thread) = guard.thread.take() {
+            thread.shutdown();
+        }
     }
 
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {

@@ -73,6 +73,8 @@ pub trait AudioOutputBackend: Send + Sync {
     fn select_device(&self, device_name: Option<String>) -> Result<OutputStreamInfo, String>;
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String>;
 
+    fn close_stream(&self) {}
+
     fn take_error(&self) -> Option<AudioOutputError> {
         None
     }

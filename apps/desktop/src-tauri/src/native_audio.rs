@@ -3408,14 +3408,20 @@ pub fn select_output_backend(
             let previous_backend = engine.output_backend.clone();
             let switching_from_exclusive = previous_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID
                 && target_id != WASAPI_EXCLUSIVE_BACKEND_ID;
+            let switching_to_exclusive = previous_backend.id() != WASAPI_EXCLUSIVE_BACKEND_ID
+                && target_id == WASAPI_EXCLUSIVE_BACKEND_ID;
             let previous_device_name = engine.device_name.clone();
             let previous_output_sample_rate = engine.output_sample_rate;
 
-            if switching_from_exclusive {
+            if switching_from_exclusive || switching_to_exclusive {
                 engine.cancel_crossfade();
                 engine.sync_clock();
                 if let Some(old_sink) = engine.sink.take() {
                     old_sink.stop();
+                }
+
+                if switching_to_exclusive {
+                    previous_backend.close_stream();
                 }
             }
 
@@ -3425,14 +3431,19 @@ pub fn select_output_backend(
 
             if engine.current_track.is_some() {
                 if let Err(err) = engine.rebuild_sink_on_new_device() {
-                    engine.output_backend = previous_backend;
+                    engine.output_backend = previous_backend.clone();
                     engine.device_name = previous_device_name;
                     engine.output_sample_rate = previous_output_sample_rate;
                     if switching_from_exclusive {
                         let _ = engine.rebuild_sink_on_new_device();
                     }
+                    if switching_to_exclusive {
+                        let _ = engine.rebuild_sink_on_new_device();
+                    }
                     engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
                     result = Err(err);
+                } else {
+                    previous_backend.close_stream();
                 }
             } else {
                 match engine.output_backend.create_sink() {
@@ -3443,12 +3454,16 @@ pub fn select_output_backend(
                             .or_else(|| engine.output_backend.default_device_name());
                     }
                     Err(err) => {
-                        engine.output_backend = previous_backend;
+                        engine.output_backend = previous_backend.clone();
                         engine.device_name = previous_device_name;
                         engine.output_sample_rate = previous_output_sample_rate;
                         engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
                         result = Err(err);
                     }
+                }
+
+                if result.is_ok() {
+                    previous_backend.close_stream();
                 }
             }
         }
