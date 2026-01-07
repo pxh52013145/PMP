@@ -299,6 +299,51 @@ enum WasapiSampleFormat {
     Pcm32,
 }
 
+#[inline]
+fn quantize_pcm24(sample: f32, volume: f32) -> i32 {
+    let scaled = sample * 8_388_607.0f32 * volume;
+    scaled.round().clamp(-8_388_608.0, 8_388_607.0) as i32
+}
+
+#[inline]
+fn pack_pcm24_in32(sample: i32) -> i32 {
+    sample << 8
+}
+
+#[inline]
+fn pack_pcm24_packed_bytes(sample: i32) -> [u8; 3] {
+    let bytes = sample.to_le_bytes();
+    [bytes[0], bytes[1], bytes[2]]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pack_pcm24_in32, pack_pcm24_packed_bytes, quantize_pcm24};
+
+    #[test]
+    fn pcm24_quantize_clamps_and_rounds() {
+        assert_eq!(quantize_pcm24(1.0, 1.0), 8_388_607);
+        assert_eq!(quantize_pcm24(-1.0, 1.0), -8_388_607);
+        assert_eq!(quantize_pcm24(2.0, 1.0), 8_388_607);
+        assert_eq!(quantize_pcm24(-2.0, 1.0), -8_388_608);
+        assert_eq!(quantize_pcm24(0.5, 1.0), 4_194_304);
+    }
+
+    #[test]
+    fn pcm24_packed_bytes_match_expected_layout() {
+        assert_eq!(pack_pcm24_packed_bytes(8_388_607), [0xff, 0xff, 0x7f]);
+        assert_eq!(pack_pcm24_packed_bytes(-8_388_608), [0x00, 0x00, 0x80]);
+        assert_eq!(pack_pcm24_packed_bytes(-8_388_607), [0x01, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn pcm24_in32_is_left_justified() {
+        assert_eq!(pack_pcm24_in32(8_388_607), 0x7f_ff_ff_00);
+        assert_eq!(pack_pcm24_in32(-8_388_608), i32::MIN);
+        assert_eq!(pack_pcm24_in32(-8_388_607), 0x80_00_01_00u32 as i32);
+    }
+}
+
 #[cfg(target_os = "windows")]
 struct WasapiStream {
     audio_client: windows::Win32::Media::Audio::IAudioClient,
@@ -709,11 +754,10 @@ fn render_frames(
             }
             WasapiSampleFormat::Pcm24In32 => {
                 let out = buffer as *mut i32;
-                let scale = 8_388_607.0f32 * volume;
                 for index in 0..total_samples {
                     let sample = match (consume, source.as_mut()) {
                         (true, Some(active)) => match active.next() {
-                            Some(value) => value * scale,
+                            Some(value) => value,
                             None => {
                                 *source = None;
                                 0.0
@@ -721,19 +765,16 @@ fn render_frames(
                         },
                         _ => 0.0,
                     };
-                    let quantized = sample
-                        .round()
-                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
-                    *out.add(index) = quantized << 8;
+                    let quantized = quantize_pcm24(sample, volume);
+                    *out.add(index) = pack_pcm24_in32(quantized);
                 }
             }
             WasapiSampleFormat::Pcm24Packed => {
                 let out = buffer as *mut u8;
-                let scale = 8_388_607.0f32 * volume;
                 for index in 0..total_samples {
                     let sample = match (consume, source.as_mut()) {
                         (true, Some(active)) => match active.next() {
-                            Some(value) => value * scale,
+                            Some(value) => value,
                             None => {
                                 *source = None;
                                 0.0
@@ -741,10 +782,8 @@ fn render_frames(
                         },
                         _ => 0.0,
                     };
-                    let quantized = sample
-                        .round()
-                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
-                    let bytes = quantized.to_le_bytes();
+                    let quantized = quantize_pcm24(sample, volume);
+                    let bytes = pack_pcm24_packed_bytes(quantized);
                     let offset = index * 3;
                     *out.add(offset) = bytes[0];
                     *out.add(offset + 1) = bytes[1];

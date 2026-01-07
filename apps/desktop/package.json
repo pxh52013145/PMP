@@ -6,13 +6,16 @@
   "scripts": {
     "dev:vite": "node ../../scripts/ensure-port-free.mjs 1420 && vite",
     "dev": "tauri dev",
+    "dev:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri dev --features asio-sdk",
     "build:vite": "vite build",
     "build": "tauri build",
+    "build:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri build --features asio-sdk",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:tauri": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:tauri:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && cargo test --manifest-path src-tauri/Cargo.toml --features asio-sdk",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "type-check": "tsc --noEmit"
   },
