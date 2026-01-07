@@ -118,6 +118,47 @@
   justify-content: center;
 }
 
+.settings-sidebar,
+.settings-content {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 255, 255, 0.28) rgba(0, 0, 0, 0.22);
+}
+
+.settings-sidebar::-webkit-scrollbar,
+.settings-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.settings-sidebar::-webkit-scrollbar-track,
+.settings-content::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 999px;
+  margin: 4px;
+}
+
+.settings-sidebar::-webkit-scrollbar-thumb,
+.settings-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 255, 0.22);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.settings-sidebar::-webkit-scrollbar-thumb:hover,
+.settings-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 255, 0.38);
+  box-shadow: 0 0 6px rgba(0, 255, 255, 0.25);
+}
+
+.settings-sidebar::-webkit-scrollbar-thumb:active,
+.settings-content::-webkit-scrollbar-thumb:active {
+  background: rgba(0, 255, 255, 0.5);
+}
+
 .settings-content-panel {
   width: min(640px, 100%);
   padding-right: 2px;
