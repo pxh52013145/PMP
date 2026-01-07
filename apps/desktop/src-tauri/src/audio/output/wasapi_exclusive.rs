@@ -774,8 +774,9 @@ fn open_wasapi_exclusive_stream(
     use windows::core::PCWSTR;
     use windows::Win32::Media::Audio::{
         IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-        AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVEFORMATEX,
-        WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_PCM,
+        AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+        WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_PCM,
     };
     use windows::Win32::Media::KernelStreaming::{
         KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, SPEAKER_FRONT_CENTER,
@@ -1008,12 +1009,12 @@ fn open_wasapi_exclusive_stream(
                 continue;
             }
 
-            let periodicity = default_period.max(1);
+            let base_periodicity = default_period.max(1);
             let buffer_candidates = [
-                periodicity,
-                periodicity.saturating_mul(2),
-                periodicity.saturating_mul(4),
-                periodicity.saturating_mul(8),
+                base_periodicity,
+                base_periodicity.saturating_mul(2),
+                base_periodicity.saturating_mul(4),
+                base_periodicity.saturating_mul(8),
             ];
 
             for buffer_duration in buffer_candidates {
@@ -1028,16 +1029,115 @@ fn open_wasapi_exclusive_stream(
                     AUDCLNT_SHAREMODE_EXCLUSIVE,
                     AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                     buffer_duration,
-                    periodicity,
+                    buffer_duration,
                     attempt.wave_format.as_ptr(),
                     None,
                 );
                 if let Err(e) = init {
                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
+
+                    if e.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
+                        let aligned_frames = match audio_client.GetBufferSize() {
+                            Ok(value) => value,
+                            Err(get_err) => {
+                                last_error = Some(AudioOutputError {
+                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
+                                    message: format!(
+                                        "Failed to query aligned buffer size after AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED (format={}, duration={buffer_duration}): {get_err}",
+                                        attempt.label
+                                    ),
+                                });
+                                continue;
+                            }
+                        };
+
+                        let sample_rate_u64 = sample_rate.max(1) as u64;
+                        let aligned_duration = ((10_000_000u64
+                            .saturating_mul(aligned_frames as u64)
+                            .saturating_add(sample_rate_u64 / 2))
+                            / sample_rate_u64)
+                            .max(1) as i64;
+
+                        let aligned_audio_client: IAudioClient = device
+                            .Activate(CLSCTX_ALL, None)
+                            .map_err(|e| AudioOutputError {
+                                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                                message: format!("Failed to activate audio client: {e}"),
+                            })?;
+
+                        let aligned_event_handle =
+                            CreateEventW(None, false, false, PCWSTR::null()).map_err(|e| {
+                                AudioOutputError {
+                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                                    message: format!("Failed to create audio event handle: {e}"),
+                                }
+                            })?;
+
+                        let aligned_init = aligned_audio_client.Initialize(
+                            AUDCLNT_SHAREMODE_EXCLUSIVE,
+                            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                            aligned_duration,
+                            aligned_duration,
+                            attempt.wave_format.as_ptr(),
+                            None,
+                        );
+                        if let Err(aligned_err) = aligned_init {
+                            let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                            last_error = Some(AudioOutputError {
+                                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
+                                message: format!(
+                                    "Failed to init aligned exclusive stream (format={}, duration={aligned_duration}, frames={aligned_frames}): {aligned_err}",
+                                    attempt.label
+                                ),
+                            });
+                            continue;
+                        }
+
+                        if let Err(e) = aligned_audio_client.SetEventHandle(aligned_event_handle) {
+                            let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                            last_error = Some(AudioOutputError {
+                                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                                message: format!("Failed to set event handle: {e}"),
+                            });
+                            continue;
+                        }
+
+                        let buffer_frame_count =
+                            aligned_audio_client.GetBufferSize().map_err(|e| {
+                                let _ =
+                                    windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                                AudioOutputError {
+                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                                    message: format!("Failed to get buffer size: {e}"),
+                                }
+                            })?;
+
+                        let render_client: IAudioRenderClient =
+                            aligned_audio_client.GetService().map_err(|e| {
+                                let _ =
+                                    windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                                AudioOutputError {
+                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                                    message: format!("Failed to get render client: {e}"),
+                                }
+                            })?;
+
+                        return Ok(WasapiStream {
+                            audio_client: aligned_audio_client,
+                            render_client,
+                            event_handle: aligned_event_handle,
+                            buffer_frame_count,
+                            channels,
+                            sample_rate,
+                            sample_format: attempt.sample_format,
+                            started: false,
+                        });
+                    }
+
                     last_error = Some(AudioOutputError {
                         code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
                         message: format!(
-                            "Failed to init exclusive stream (format={}, duration={buffer_duration}, period={periodicity}): {e}",
+                            "Failed to init exclusive stream (format={}, duration={buffer_duration}): {e}",
                             attempt.label
                         ),
                     });
