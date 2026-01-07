@@ -361,6 +361,7 @@ impl WasapiStream {
     fn stop(&mut self) {
         if self.started {
             let _ = unsafe { self.audio_client.Stop() };
+            let _ = unsafe { self.audio_client.Reset() };
             self.started = false;
         }
     }
@@ -687,27 +688,20 @@ fn render_once(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    let padding = unsafe { stream.audio_client.GetCurrentPadding() }.map_err(|e| AudioOutputError {
-        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED,
-        message: format!("Failed to query current padding: {e}"),
-    })?;
-    let available = stream.buffer_frame_count.saturating_sub(padding);
-    if available == 0 {
-        return Ok(());
-    }
+    let frames = stream.buffer_frame_count;
 
     if !playing || source.is_none() {
         unsafe {
             stream
                 .render_client
-                .GetBuffer(available)
+                .GetBuffer(frames)
                 .map_err(|e| AudioOutputError {
                     code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED,
                     message: format!("Failed to acquire render buffer: {e}"),
                 })?;
             stream
                 .render_client
-                .ReleaseBuffer(available, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)
+                .ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)
                 .map_err(|e| AudioOutputError {
                     code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED,
                     message: format!("Failed to release silent buffer: {e}"),
@@ -716,7 +710,7 @@ fn render_once(
         return Ok(());
     }
 
-    render_frames(stream, available, source, true, volume)?;
+    render_frames(stream, frames, source, true, volume)?;
     Ok(())
 }
 
@@ -1235,21 +1229,29 @@ fn open_wasapi_exclusive_stream(
                                 }
                             })?;
 
-                        let render_client: IAudioRenderClient =
-                            aligned_audio_client.GetService().map_err(|e| {
-                                let _ =
-                                    windows::Win32::Foundation::CloseHandle(aligned_event_handle);
-                                AudioOutputError {
-                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                                    message: format!("Failed to get render client: {e}"),
-                                }
-                            })?;
+                let render_client: IAudioRenderClient =
+                    aligned_audio_client.GetService().map_err(|e| {
+                        let _ =
+                            windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                        AudioOutputError {
+                            code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                            message: format!("Failed to get render client: {e}"),
+                        }
+                    })?;
 
-                        return Ok(WasapiStream {
-                            audio_client: aligned_audio_client,
-                            render_client,
-                            event_handle: aligned_event_handle,
-                            buffer_frame_count,
+                eprintln!(
+                    "[NativeAudio][wasapi-exclusive] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
+                    attempt.label,
+                    channels,
+                    sample_rate,
+                    buffer_frame_count,
+                    aligned_duration
+                );
+                return Ok(WasapiStream {
+                    audio_client: aligned_audio_client,
+                    render_client,
+                    event_handle: aligned_event_handle,
+                    buffer_frame_count,
                             channels,
                             sample_rate,
                             sample_format: attempt.sample_format,
@@ -1292,6 +1294,14 @@ fn open_wasapi_exclusive_stream(
                     }
                 })?;
 
+                eprintln!(
+                    "[NativeAudio][wasapi-exclusive] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
+                    attempt.label,
+                    channels,
+                    sample_rate,
+                    buffer_frame_count,
+                    buffer_duration
+                );
                 return Ok(WasapiStream {
                     audio_client,
                     render_client,
