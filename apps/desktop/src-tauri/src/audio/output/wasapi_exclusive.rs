@@ -778,7 +778,8 @@ fn open_wasapi_exclusive_stream(
         WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_PCM,
     };
     use windows::Win32::Media::KernelStreaming::{
-        KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, WAVE_FORMAT_EXTENSIBLE,
+        KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, SPEAKER_FRONT_CENTER,
+        SPEAKER_FRONT_LEFT, SPEAKER_FRONT_RIGHT, WAVE_FORMAT_EXTENSIBLE,
     };
     use windows::Win32::Media::Multimedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, WAVE_FORMAT_IEEE_FLOAT};
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
@@ -870,7 +871,11 @@ fn open_wasapi_exclusive_stream(
                 Samples: WAVEFORMATEXTENSIBLE_0 {
                     wValidBitsPerSample: valid_bits_per_sample,
                 },
-                dwChannelMask: KSAUDIO_SPEAKER_DIRECTOUT,
+                dwChannelMask: match channels {
+                    1 => SPEAKER_FRONT_CENTER,
+                    2 => SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
+                    _ => KSAUDIO_SPEAKER_DIRECTOUT,
+                },
                 SubFormat: sub_format,
             }))
         }
