@@ -21,7 +21,8 @@ use crate::audio::input::{
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
 #[cfg(target_os = "windows")]
 use crate::audio::output::{
-    wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID,
+    asio_backend, wasapi_backend, wasapi_exclusive_backend, ASIO_BACKEND_ID, WASAPI_BACKEND_ID,
+    WASAPI_EXCLUSIVE_BACKEND_ID,
 };
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
@@ -3273,6 +3274,7 @@ fn available_output_backend_ids() -> Vec<&'static str> {
     {
         ids.push(WASAPI_BACKEND_ID);
         ids.push(WASAPI_EXCLUSIVE_BACKEND_ID);
+        ids.push(ASIO_BACKEND_ID);
     }
     ids
 }
@@ -3284,6 +3286,8 @@ fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> 
         WASAPI_BACKEND_ID => Some(wasapi_backend()),
         #[cfg(target_os = "windows")]
         WASAPI_EXCLUSIVE_BACKEND_ID => Some(wasapi_exclusive_backend()),
+        #[cfg(target_os = "windows")]
+        ASIO_BACKEND_ID => Some(asio_backend()),
         _ => None,
     }
 }
@@ -3366,12 +3370,32 @@ pub fn select_output_backend(
 
             engine.output_backend = target_backend;
             engine.device_name = None;
-            if let Err(err) = engine.rebuild_sink_on_new_device() {
-                engine.output_backend = previous_backend;
-                engine.device_name = previous_device_name;
-                engine.output_sample_rate = previous_output_sample_rate;
-                engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
-                result = Err(err);
+            engine.output_sample_rate = None;
+
+            if engine.current_track.is_some() {
+                if let Err(err) = engine.rebuild_sink_on_new_device() {
+                    engine.output_backend = previous_backend;
+                    engine.device_name = previous_device_name;
+                    engine.output_sample_rate = previous_output_sample_rate;
+                    engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
+                    result = Err(err);
+                }
+            } else {
+                match engine.output_backend.create_sink() {
+                    Ok((_sink, output_info)) => {
+                        engine.output_sample_rate = output_info.output_sample_rate;
+                        engine.device_name = output_info
+                            .device_name
+                            .or_else(|| engine.output_backend.default_device_name());
+                    }
+                    Err(err) => {
+                        engine.output_backend = previous_backend;
+                        engine.device_name = previous_device_name;
+                        engine.output_sample_rate = previous_output_sample_rate;
+                        engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
+                        result = Err(err);
+                    }
+                }
             }
         }
 

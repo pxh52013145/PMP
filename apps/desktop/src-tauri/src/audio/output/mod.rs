@@ -4,6 +4,8 @@ use rodio::Source;
 
 #[cfg(test)]
 mod null;
+#[cfg(target_os = "windows")]
+mod asio;
 mod rodio_cpal;
 #[cfg(target_os = "windows")]
 mod wasapi;
@@ -12,6 +14,8 @@ mod wasapi_exclusive;
 
 pub use rodio_cpal::default_backend;
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
+#[cfg(target_os = "windows")]
+pub use asio::{asio_backend, ASIO_BACKEND_ID};
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
 #[cfg(target_os = "windows")]
