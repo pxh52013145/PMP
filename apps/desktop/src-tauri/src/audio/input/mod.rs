@@ -4,15 +4,18 @@ use std::sync::Arc;
 use crate::audio::output::BoxedSource;
 
 mod rodio;
+mod sacd;
 mod symphonia;
 
 pub(crate) use rodio::{open_source_at as open_rodio_source_at, RodioInput};
+pub(crate) use sacd::SacdInput;
 pub(crate) use symphonia::{
     DecoderCommand, SharedSamplesSource, StreamingPlayback, StreamingSamplesSource, SymphoniaInput,
 };
 
 pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";
 pub(crate) const RODIO_INPUT_ID: &str = "rodio";
+pub(crate) const SACD_INPUT_ID: &str = "sacd";
 
 #[derive(Clone, Debug)]
 pub(crate) struct AudioInputMeta {
@@ -70,6 +73,7 @@ impl AudioInputRegistry {
 
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
+        registry.register(Arc::new(SacdInput::default()));
         registry.register(Arc::new(SymphoniaInput::default()));
         registry.register(Arc::new(RodioInput::default()));
         registry
