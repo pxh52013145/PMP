@@ -964,6 +964,23 @@ fn open_wasapi_exclusive_stream(
                     KSDATAFORMAT_SUBTYPE_PCM,
                 ),
             });
+
+            candidates.push(FormatAttempt {
+                label: if mask_label == "directout" {
+                    "PCM16 (extensible, directout)"
+                } else {
+                    "PCM16 (extensible, speakers)"
+                },
+                sample_format: WasapiSampleFormat::Pcm16,
+                wave_format: build_wave_format_extensible(
+                    sample_rate,
+                    channels,
+                    2,
+                    16,
+                    mask,
+                    KSDATAFORMAT_SUBTYPE_PCM,
+                ),
+            });
         }
 
         candidates.push(FormatAttempt {
@@ -974,6 +991,28 @@ fn open_wasapi_exclusive_stream(
                 sample_rate,
                 channels,
                 4,
+            )),
+        });
+
+        candidates.push(FormatAttempt {
+            label: "PCM32 (waveex)",
+            sample_format: WasapiSampleFormat::Pcm32,
+            wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
+                WAVE_FORMAT_PCM as u16,
+                sample_rate,
+                channels,
+                4,
+            )),
+        });
+
+        candidates.push(FormatAttempt {
+            label: "PCM24 (waveex, packed)",
+            sample_format: WasapiSampleFormat::Pcm24Packed,
+            wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
+                WAVE_FORMAT_PCM as u16,
+                sample_rate,
+                channels,
+                3,
             )),
         });
 
