@@ -89,7 +89,6 @@ export function AudioComponentsSettingsPanel() {
             title: t('settings.audioComponents.outputBackend.option.asio.title'),
             desc: t('settings.audioComponents.outputBackend.option.asio.desc'),
             warning: t('settings.audioComponents.outputBackend.option.asio.warning'),
-            disabled: true,
           };
         default:
           return {

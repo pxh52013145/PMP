@@ -24,6 +24,7 @@ windows = { version = "0.54", features = ["Win32_Foundation", "Win32_Security", 
 
 # 音频处理
 rodio = "0.17"
+cpal = { version = "0.15", optional = true, features = ["asio"] }
 symphonia = { version = "0.5", features = ["all"] }
 rustfft = { version = "6.4.1", default-features = false }
 rubato = { version = "0.16", default-features = false }
@@ -40,3 +41,4 @@ sha2 = "0.10"
 # This feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
+asio-sdk = ["dep:cpal"]

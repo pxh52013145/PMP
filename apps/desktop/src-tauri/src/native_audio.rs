@@ -20,10 +20,9 @@ use crate::audio::input::{
 };
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
 #[cfg(target_os = "windows")]
-use crate::audio::output::{
-    asio_backend, wasapi_backend, wasapi_exclusive_backend, ASIO_BACKEND_ID, WASAPI_BACKEND_ID,
-    WASAPI_EXCLUSIVE_BACKEND_ID,
-};
+use crate::audio::output::{wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID};
+#[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+use crate::audio::output::{asio_backend, ASIO_BACKEND_ID};
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
@@ -3274,7 +3273,10 @@ fn available_output_backend_ids() -> Vec<&'static str> {
     {
         ids.push(WASAPI_BACKEND_ID);
         ids.push(WASAPI_EXCLUSIVE_BACKEND_ID);
-        ids.push(ASIO_BACKEND_ID);
+        #[cfg(feature = "asio-sdk")]
+        {
+            ids.push(ASIO_BACKEND_ID);
+        }
     }
     ids
 }
@@ -3286,7 +3288,7 @@ fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> 
         WASAPI_BACKEND_ID => Some(wasapi_backend()),
         #[cfg(target_os = "windows")]
         WASAPI_EXCLUSIVE_BACKEND_ID => Some(wasapi_exclusive_backend()),
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
         ASIO_BACKEND_ID => Some(asio_backend()),
         _ => None,
     }
