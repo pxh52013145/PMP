@@ -851,6 +851,7 @@ fn open_wasapi_exclusive_stream(
             channels: u16,
             bytes_per_sample: u16,
             valid_bits_per_sample: u16,
+            channel_mask: u32,
             sub_format: windows::core::GUID,
         ) -> WaveFormatAttempt {
             let cb_size = (std::mem::size_of::<WAVEFORMATEXTENSIBLE>()
@@ -871,81 +872,120 @@ fn open_wasapi_exclusive_stream(
                 Samples: WAVEFORMATEXTENSIBLE_0 {
                     wValidBitsPerSample: valid_bits_per_sample,
                 },
-                dwChannelMask: match channels {
-                    1 => SPEAKER_FRONT_CENTER,
-                    2 => SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
-                    _ => KSAUDIO_SPEAKER_DIRECTOUT,
-                },
+                dwChannelMask: channel_mask,
                 SubFormat: sub_format,
             }))
         }
 
-        let candidates = vec![
-            FormatAttempt {
-                label: "Float32 (extensible)",
+        let speaker_mask = match channels {
+            1 => SPEAKER_FRONT_CENTER,
+            2 => SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT,
+            _ => KSAUDIO_SPEAKER_DIRECTOUT,
+        };
+        let mask_candidates = if channels <= 2 {
+            vec![speaker_mask, KSAUDIO_SPEAKER_DIRECTOUT]
+        } else {
+            vec![KSAUDIO_SPEAKER_DIRECTOUT]
+        };
+
+        let mut candidates = Vec::new();
+        for mask in mask_candidates {
+            let mask_label = if mask == KSAUDIO_SPEAKER_DIRECTOUT {
+                "directout"
+            } else {
+                "speakers"
+            };
+
+            candidates.push(FormatAttempt {
+                label: if mask_label == "directout" {
+                    "Float32 (extensible, directout)"
+                } else {
+                    "Float32 (extensible, speakers)"
+                },
                 sample_format: WasapiSampleFormat::Float32,
                 wave_format: build_wave_format_extensible(
                     sample_rate,
                     channels,
                     4,
                     32,
+                    mask,
                     KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
                 ),
-            },
-            FormatAttempt {
-                label: "Float32 (waveex)",
-                sample_format: WasapiSampleFormat::Float32,
-                wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
-                    WAVE_FORMAT_IEEE_FLOAT as u16,
-                    sample_rate,
-                    channels,
-                    4,
-                )),
-            },
-            FormatAttempt {
-                label: "PCM32 (extensible)",
+            });
+
+            candidates.push(FormatAttempt {
+                label: if mask_label == "directout" {
+                    "PCM32 (extensible, directout)"
+                } else {
+                    "PCM32 (extensible, speakers)"
+                },
                 sample_format: WasapiSampleFormat::Pcm32,
                 wave_format: build_wave_format_extensible(
                     sample_rate,
                     channels,
                     4,
                     32,
+                    mask,
                     KSDATAFORMAT_SUBTYPE_PCM,
                 ),
-            },
-            FormatAttempt {
-                label: "PCM24 (extensible, 24-in-32)",
+            });
+
+            candidates.push(FormatAttempt {
+                label: if mask_label == "directout" {
+                    "PCM24 (extensible, 24-in-32, directout)"
+                } else {
+                    "PCM24 (extensible, 24-in-32, speakers)"
+                },
                 sample_format: WasapiSampleFormat::Pcm24In32,
                 wave_format: build_wave_format_extensible(
                     sample_rate,
                     channels,
                     4,
                     24,
+                    mask,
                     KSDATAFORMAT_SUBTYPE_PCM,
                 ),
-            },
-            FormatAttempt {
-                label: "PCM24 (extensible, packed)",
+            });
+
+            candidates.push(FormatAttempt {
+                label: if mask_label == "directout" {
+                    "PCM24 (extensible, packed, directout)"
+                } else {
+                    "PCM24 (extensible, packed, speakers)"
+                },
                 sample_format: WasapiSampleFormat::Pcm24Packed,
                 wave_format: build_wave_format_extensible(
                     sample_rate,
                     channels,
                     3,
                     24,
+                    mask,
                     KSDATAFORMAT_SUBTYPE_PCM,
                 ),
-            },
-            FormatAttempt {
-                label: "PCM16 (waveex)",
-                sample_format: WasapiSampleFormat::Pcm16,
-                wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
-                    WAVE_FORMAT_PCM as u16,
-                    sample_rate,
-                    channels,
-                    2,
-                )),
-            },
-        ];
+            });
+        }
+
+        candidates.push(FormatAttempt {
+            label: "Float32 (waveex)",
+            sample_format: WasapiSampleFormat::Float32,
+            wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
+                WAVE_FORMAT_IEEE_FLOAT as u16,
+                sample_rate,
+                channels,
+                4,
+            )),
+        });
+
+        candidates.push(FormatAttempt {
+            label: "PCM16 (waveex)",
+            sample_format: WasapiSampleFormat::Pcm16,
+            wave_format: WaveFormatAttempt::Ex(build_wave_format_ex(
+                WAVE_FORMAT_PCM as u16,
+                sample_rate,
+                channels,
+                2,
+            )),
+        });
         let mut last_error: Option<AudioOutputError> = None;
 
         for attempt in candidates {
