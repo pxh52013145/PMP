@@ -18,6 +18,14 @@ type NativeAudioComponentsState = {
   activeInputId: string | null;
 };
 
+type OutputBackendOption = {
+  id: string;
+  title: string;
+  desc: string;
+  warning?: string;
+  disabled?: boolean;
+};
+
 function parseNativeAudioComponentsState(payload: unknown): NativeAudioComponentsState {
   const record = asRecord(payload);
   const outputBackendId = typeof record?.outputBackendId === 'string' ? record.outputBackendId : null;
@@ -52,6 +60,69 @@ export function AudioComponentsSettingsPanel() {
   const [selectedDevice, setSelectedDevice] = useState('');
   const [audioInputs, setAudioInputs] = useState<string[]>([]);
   const [selectedInput, setSelectedInput] = useState('');
+
+  const describeOutputBackend = useCallback(
+    (backendId: string): OutputBackendOption => {
+      switch (backendId) {
+        case 'rodio-cpal':
+          return {
+            id: backendId,
+            title: t('settings.audioComponents.outputBackend.option.rodioCpal.title'),
+            desc: t('settings.audioComponents.outputBackend.option.rodioCpal.desc'),
+          };
+        case 'wasapi':
+          return {
+            id: backendId,
+            title: t('settings.audioComponents.outputBackend.option.wasapi.title'),
+            desc: t('settings.audioComponents.outputBackend.option.wasapi.desc'),
+          };
+        case 'wasapi-exclusive':
+          return {
+            id: backendId,
+            title: t('settings.audioComponents.outputBackend.option.wasapiExclusive.title'),
+            desc: t('settings.audioComponents.outputBackend.option.wasapiExclusive.desc'),
+            warning: t('settings.audioComponents.outputBackend.option.wasapiExclusive.warning'),
+          };
+        case 'asio':
+          return {
+            id: backendId,
+            title: t('settings.audioComponents.outputBackend.option.asio.title'),
+            desc: t('settings.audioComponents.outputBackend.option.asio.desc'),
+            warning: t('settings.audioComponents.outputBackend.option.asio.warning'),
+            disabled: true,
+          };
+        default:
+          return {
+            id: backendId,
+            title: backendId,
+            desc: t('settings.audioComponents.outputBackend.option.unknown', { id: backendId }),
+          };
+      }
+    },
+    [t]
+  );
+
+  const outputBackendOptions = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const backendId of outputBackends) {
+      if (seen.has(backendId)) continue;
+      seen.add(backendId);
+      ids.push(backendId);
+    }
+
+    const activeBackendId = componentsState.outputBackendId;
+    if (activeBackendId && !seen.has(activeBackendId)) {
+      ids.unshift(activeBackendId);
+    }
+
+    return ids.map((id) => describeOutputBackend(id));
+  }, [componentsState.outputBackendId, describeOutputBackend, outputBackends]);
+
+  const selectedBackendOption = useMemo(() => {
+    if (!selectedBackend) return null;
+    return describeOutputBackend(selectedBackend);
+  }, [describeOutputBackend, selectedBackend]);
 
   const refreshComponents = useCallback(async () => {
     if (!canUseBackend) return;
@@ -115,10 +186,12 @@ export function AudioComponentsSettingsPanel() {
 
   const badge = useMemo(() => {
     if (!canUseBackend) return t('settings.audioComponents.badge.unavailable');
-    const backend = componentsState.outputBackendId ?? t('settings.audioComponents.outputBackend.default');
+    const backend = componentsState.outputBackendId
+      ? describeOutputBackend(componentsState.outputBackendId).title
+      : t('settings.audioComponents.outputBackend.default');
     const device = componentsState.outputDevice ?? t('settings.audioComponents.outputDevice.default');
     return `${backend} \u00b7 ${device}`;
-  }, [canUseBackend, componentsState.outputBackendId, componentsState.outputDevice, t]);
+  }, [canUseBackend, componentsState.outputBackendId, componentsState.outputDevice, describeOutputBackend, t]);
 
   const handleApplyOutputBackend = useCallback(async () => {
     if (!canUseBackend) return;
@@ -130,18 +203,19 @@ export function AudioComponentsSettingsPanel() {
     setBusy(true);
     setError(null);
 
+    let needsRefreshDevices = false;
     try {
-      await broadcastDataUpdate(
-        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND,
-        backendId,
-        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
-      );
-
       const payload = await invoke<unknown>('native_audio_select_output_backend', { backendId });
       const parsed = parseNativeAudioComponentsState(payload);
       const prevBackend = componentsState.outputBackendId;
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
+
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND,
+        parsed.outputBackendId,
+        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
+      );
 
       if (prevBackend && prevBackend !== parsed.outputBackendId) {
         setSelectedDevice('');
@@ -153,12 +227,17 @@ export function AudioComponentsSettingsPanel() {
         );
       }
 
-      await refreshDevices();
+      needsRefreshDevices = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setSelectedBackend(componentsState.outputBackendId ?? '');
     } finally {
       busyRef.current = false;
       setBusy(false);
+    }
+
+    if (needsRefreshDevices) {
+      void refreshDevices();
     }
   }, [canUseBackend, componentsState.outputBackendId, refreshDevices, selectedBackend]);
 
@@ -172,19 +251,24 @@ export function AudioComponentsSettingsPanel() {
     setBusy(true);
     setError(null);
 
+    let needsRefreshComponents = false;
     try {
+      await invoke('native_audio_select_device', { deviceName });
       await broadcastDataUpdate(
         STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
         deviceName,
         TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
       );
-      await invoke('native_audio_select_device', { deviceName });
-      await refreshComponents();
+      needsRefreshComponents = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       busyRef.current = false;
       setBusy(false);
+    }
+
+    if (needsRefreshComponents) {
+      void refreshComponents();
     }
   }, [canUseBackend, refreshComponents, selectedDevice]);
 
@@ -199,11 +283,11 @@ export function AudioComponentsSettingsPanel() {
     setError(null);
 
     try {
-      await broadcastDataUpdate(STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID, inputId, TAURI_EVENTS.NATIVE_AUDIO_INPUT_ID_UPDATED);
       const payload = await invoke<unknown>('native_audio_select_audio_input', { inputId });
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedInput(parsed.preferredInputId ?? '');
+      await broadcastDataUpdate(STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID, inputId, TAURI_EVENTS.NATIVE_AUDIO_INPUT_ID_UPDATED);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -234,26 +318,100 @@ export function AudioComponentsSettingsPanel() {
               {t('settings.audioComponents.outputBackend.desc')}
             </p>
 
+            <fieldset
+              style={{ marginTop: 12, border: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}
+              aria-label={t('settings.audioComponents.outputBackend.select.ariaLabel')}
+            >
+              {outputBackendOptions.map((backend) => {
+                const isActive = componentsState.outputBackendId === backend.id;
+                const isSelected = selectedBackend === backend.id;
+                const isDisabled = busy || Boolean(backend.disabled);
+                return (
+                  <label
+                    key={backend.id}
+                    style={{
+                      display: 'flex',
+                      gap: 12,
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: isSelected ? '1px solid rgba(255, 255, 255, 0.28)' : '1px solid rgba(255, 255, 255, 0.14)',
+                      background: isSelected ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.03)',
+                      opacity: backend.disabled ? 0.55 : 1,
+                      cursor: isDisabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="audio-output-backend"
+                      value={backend.id}
+                      checked={isSelected}
+                      onChange={() => setSelectedBackend(backend.id)}
+                      disabled={isDisabled}
+                      style={{ marginTop: 3 }}
+                    />
+
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: 'rgba(255, 255, 255, 0.9)' }}>
+                          {backend.title}
+                        </span>
+                        <span style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.62)', fontFamily: 'monospace' }}>
+                          {backend.id}
+                        </span>
+                        {isActive && (
+                          <span
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 12,
+                              background: 'rgba(255, 255, 255, 0.08)',
+                              color: 'rgba(255, 255, 255, 0.82)',
+                            }}
+                          >
+                            {t('settings.audioComponents.outputBackend.tag.active')}
+                          </span>
+                        )}
+                        {backend.disabled && (
+                          <span
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 12,
+                              background: 'rgba(255, 184, 0, 0.12)',
+                              color: 'rgba(255, 212, 102, 0.95)',
+                            }}
+                          >
+                            {t('settings.audioComponents.outputBackend.tag.wip')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="settings-card-note" style={{ marginTop: 6 }}>
+                        {backend.desc}
+                      </p>
+                      {backend.warning && (
+                        <p
+                          className="settings-card-note"
+                          style={{ marginTop: 6, color: 'rgba(255, 212, 102, 0.95)' }}
+                        >
+                          {backend.warning}
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+            </fieldset>
+
             <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <select
-                className="settings-select"
-                value={selectedBackend}
-                onChange={(e) => setSelectedBackend(e.target.value)}
-                aria-label={t('settings.audioComponents.outputBackend.select.ariaLabel')}
-                disabled={busy}
-                style={{ flex: '1 1 320px' }}
-              >
-                <option value="">{t('settings.audioComponents.outputBackend.default')}</option>
-                {outputBackends.map((backendId) => (
-                  <option key={backendId} value={backendId}>
-                    {backendId}
-                  </option>
-                ))}
-              </select>
               <button type="button" className="settings-action-btn" onClick={() => void refreshComponents()} disabled={busy}>
                 {t('common.action.refresh')}
               </button>
-              <button type="button" className="settings-action-btn" onClick={() => void handleApplyOutputBackend()} disabled={busy}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void handleApplyOutputBackend()}
+                disabled={busy || Boolean(selectedBackendOption?.disabled)}
+              >
                 {t('common.action.apply')}
               </button>
             </div>
