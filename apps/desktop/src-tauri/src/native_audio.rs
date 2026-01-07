@@ -898,6 +898,7 @@ struct NativeAudioEngine {
     muted: bool,
     effective_volume_bits: Arc<AtomicU32>,
     playback_state: PlaybackState,
+    desired_playback_state: PlaybackState,
     error_seq_counter: u64,
     last_error_seq: u64,
     last_error_code: Option<String>,
@@ -966,6 +967,7 @@ impl NativeAudioEngine {
             muted: false,
             effective_volume_bits: Arc::new(AtomicU32::new(0.7f32.to_bits())),
             playback_state: PlaybackState::Idle,
+            desired_playback_state: PlaybackState::Idle,
             error_seq_counter: 1,
             last_error_seq: 0,
             last_error_code: None,
@@ -978,11 +980,15 @@ impl NativeAudioEngine {
         self.last_error_message = None;
     }
 
-    fn set_error(&mut self, code: &str, message: String) {
+    fn record_error(&mut self, code: &str, message: String) {
         self.error_seq_counter = self.error_seq_counter.saturating_add(1);
         self.last_error_seq = self.error_seq_counter;
         self.last_error_code = Some(code.to_string());
         self.last_error_message = Some(message);
+    }
+
+    fn set_error(&mut self, code: &str, message: String) {
+        self.record_error(code, message);
         self.playback_state = PlaybackState::Error;
     }
 
@@ -1027,6 +1033,12 @@ impl NativeAudioEngine {
 
     fn set_state(&mut self, state: PlaybackState) {
         self.playback_state = state;
+        if matches!(
+            state,
+            PlaybackState::Idle | PlaybackState::Playing | PlaybackState::Paused | PlaybackState::Stopped
+        ) {
+            self.desired_playback_state = state;
+        }
     }
 
     fn shutdown_streaming(&mut self) {
@@ -1713,7 +1725,8 @@ impl NativeAudioEngine {
             return Ok(());
         };
 
-        let resume_playing = matches!(self.playback_state, PlaybackState::Playing);
+        let was_error = matches!(self.playback_state, PlaybackState::Error);
+        let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
 
         if resume_playing {
             self.update_position_from_clock();
@@ -1788,6 +1801,7 @@ impl NativeAudioEngine {
             sink.play();
             self.base_position = target;
             self.playback_started_at = Some(Instant::now());
+            self.set_state(PlaybackState::Playing);
         } else {
             self.base_position = target;
             self.playback_started_at = None;
@@ -1795,6 +1809,12 @@ impl NativeAudioEngine {
 
         self.current_position = target;
         self.sink = Some(sink);
+
+        if was_error {
+            self.clear_error();
+            self.playback_state = self.desired_playback_state;
+        }
+
         Ok(())
     }
 }
@@ -3337,7 +3357,7 @@ pub fn select_output_backend(
             let mut engine = ENGINE
                 .lock()
                 .map_err(|_| "Audio engine is locked".to_string())?;
-            engine.set_error("NATIVE_AUDIO_BACKEND_SELECT_FAILED", message.clone());
+            engine.record_error("NATIVE_AUDIO_BACKEND_SELECT_FAILED", message.clone());
             let state_payload = engine.build_state_payload(false);
             let maybe_error = match (
                 state_payload.error_seq,
@@ -3367,8 +3387,18 @@ pub fn select_output_backend(
         let mut result: Result<(), String> = Ok(());
         if engine.output_backend.id() != target_id {
             let previous_backend = engine.output_backend.clone();
+            let switching_from_exclusive = previous_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID
+                && target_id != WASAPI_EXCLUSIVE_BACKEND_ID;
             let previous_device_name = engine.device_name.clone();
             let previous_output_sample_rate = engine.output_sample_rate;
+
+            if switching_from_exclusive {
+                engine.cancel_crossfade();
+                engine.sync_clock();
+                if let Some(old_sink) = engine.sink.take() {
+                    old_sink.stop();
+                }
+            }
 
             engine.output_backend = target_backend;
             engine.device_name = None;
@@ -3379,7 +3409,10 @@ pub fn select_output_backend(
                     engine.output_backend = previous_backend;
                     engine.device_name = previous_device_name;
                     engine.output_sample_rate = previous_output_sample_rate;
-                    engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
+                    if switching_from_exclusive {
+                        let _ = engine.rebuild_sink_on_new_device();
+                    }
+                    engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
                     result = Err(err);
                 }
             } else {
@@ -3394,7 +3427,7 @@ pub fn select_output_backend(
                         engine.output_backend = previous_backend;
                         engine.device_name = previous_device_name;
                         engine.output_sample_rate = previous_output_sample_rate;
-                        engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
+                        engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
                         result = Err(err);
                     }
                 }

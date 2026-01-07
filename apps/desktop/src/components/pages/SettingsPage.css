@@ -370,8 +370,19 @@
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.85);
+  color-scheme: dark;
   font-size: 13px;
   outline: none;
+}
+
+.settings-select option,
+.settings-select optgroup {
+  background: rgba(10, 10, 12, 0.98);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.settings-select option:disabled {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .settings-select:focus {

@@ -392,6 +392,38 @@ pub struct WasapiExclusiveSink {
     inner: Arc<SinkInner>,
 }
 
+#[cfg(target_os = "windows")]
+struct MmcssRegistration {
+    handle: windows::Win32::Foundation::HANDLE,
+}
+
+#[cfg(target_os = "windows")]
+impl MmcssRegistration {
+    fn register() -> Option<Self> {
+        use windows::core::w;
+        use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority};
+
+        unsafe {
+            let mut task_index = 0u32;
+            let handle = AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut task_index)
+                .or_else(|_| AvSetMmThreadCharacteristicsW(w!("Audio"), &mut task_index))
+                .ok()?;
+
+            let _ = AvSetMmThreadPriority(handle, windows::Win32::System::Threading::AVRT_PRIORITY_HIGH);
+            Some(Self { handle })
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for MmcssRegistration {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::System::Threading::AvRevertMmThreadCharacteristics(self.handle);
+        }
+    }
+}
+
 impl WasapiExclusiveSink {
     fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
         let device_id = backend_state.lock().ok().and_then(|state| state.device_id.clone());
@@ -487,6 +519,17 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
 
     #[cfg(target_os = "windows")]
     {
+        // Best-effort: ensure the render loop gets scheduled with audio-friendly priority to reduce underruns.
+        let _mmcss = MmcssRegistration::register();
+        if _mmcss.is_none() {
+            unsafe {
+                let _ = windows::Win32::System::Threading::SetThreadPriority(
+                    windows::Win32::System::Threading::GetCurrentThread(),
+                    windows::Win32::System::Threading::THREAD_PRIORITY_HIGHEST,
+                );
+            }
+        }
+
         let device_id = match inner.device_id.as_deref() {
             Some(value) => value,
             None => {
@@ -1089,10 +1132,10 @@ fn open_wasapi_exclusive_stream(
 
             let base_periodicity = default_period.max(1);
             let buffer_candidates = [
-                base_periodicity,
                 base_periodicity.saturating_mul(2),
                 base_periodicity.saturating_mul(4),
                 base_periodicity.saturating_mul(8),
+                base_periodicity,
             ];
 
             for buffer_duration in buffer_candidates {
