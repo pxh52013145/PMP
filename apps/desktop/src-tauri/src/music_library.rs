@@ -9,6 +9,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
+use dsf::DsfFile;
 use once_cell::sync::Lazy;
 use symphonia::core::{
     formats::{FormatOptions, FormatReader, Track},
@@ -444,6 +445,37 @@ fn extract_quick_metadata(
     ),
     String,
 > {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("dsf"))
+    {
+        let file = DsfFile::open(path).map_err(|e| format!("Failed to open DSF: {e:?}"))?;
+        let fmt = file.fmt_chunk();
+        let dsd_rate = fmt.sampling_frequency();
+        let sample_count = fmt.sample_count();
+        let duration = if dsd_rate > 0 {
+            Some(sample_count as f64 / dsd_rate as f64)
+        } else {
+            None
+        };
+
+        let max_pcm_sample_rate: u32 = 384_000;
+        let mut pcm_sample_rate: Option<u32> = None;
+        for factor in [32u32, 64, 128, 256] {
+            if dsd_rate == 0 || dsd_rate % factor != 0 {
+                continue;
+            }
+            let candidate = dsd_rate / factor;
+            if candidate > 0 && candidate <= max_pcm_sample_rate {
+                pcm_sample_rate = Some(candidate);
+                break;
+            }
+        }
+
+        return Ok((duration, pcm_sample_rate, Some(1), None, None, None, None, None));
+    }
+
     fn track_is_audio_like(track: &Track) -> bool {
         track.codec_params.sample_rate.is_some()
             || track.codec_params.channels.is_some()
@@ -914,7 +946,7 @@ pub fn scan_library_paths(
     let include_metadata = options.and_then(|o| o.include_metadata).unwrap_or(true);
 
     let supported_exts: HashSet<&'static str> =
-        ["mp3", "flac", "wav", "m4a", "mp4", "ogg", "weba", "aac"]
+        ["mp3", "flac", "wav", "dsf", "m4a", "mp4", "ogg", "weba", "aac"]
             .into_iter()
             .collect();
 
@@ -1042,7 +1074,11 @@ pub fn scan_library_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_replaygain_db;
+    use super::{extract_quick_metadata, parse_replaygain_db};
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parse_replaygain_db_parses_db_suffix() {
@@ -1060,5 +1096,68 @@ mod tests {
     fn parse_replaygain_db_returns_none_on_garbage() {
         assert_eq!(parse_replaygain_db(""), None);
         assert_eq!(parse_replaygain_db("abc"), None);
+    }
+
+    fn write_minimal_dsf_stereo(path: &Path, dsd_rate: u32) {
+        let channels = 2u32;
+        let bits_per_sample = 1u32; // triggers reverse_bits in dsf crate
+        let block_size = 4096u32;
+        let samples_per_block = 8u64 * block_size as u64;
+        let sample_count = samples_per_block; // 1 frame
+
+        let data_bytes = (channels as u64) * (block_size as u64);
+        let file_size = 28u64 + 52u64 + 12u64 + data_bytes;
+        let data_chunk_size = 12u64 + data_bytes;
+
+        let mut file = File::create(path).expect("create dsf");
+
+        // DSD chunk (28 bytes)
+        file.write_all(b"DSD ").unwrap();
+        file.write_all(&28u64.to_le_bytes()).unwrap(); // chunk size
+        file.write_all(&file_size.to_le_bytes()).unwrap();
+        file.write_all(&0u64.to_le_bytes()).unwrap(); // metadata offset
+
+        // FMT chunk (52 bytes)
+        file.write_all(b"fmt ").unwrap();
+        file.write_all(&52u64.to_le_bytes()).unwrap(); // chunk size
+        file.write_all(&1u32.to_le_bytes()).unwrap(); // format version
+        file.write_all(&0u32.to_le_bytes()).unwrap(); // format id
+        file.write_all(&2u32.to_le_bytes()).unwrap(); // channel type: stereo
+        file.write_all(&channels.to_le_bytes()).unwrap();
+        file.write_all(&dsd_rate.to_le_bytes()).unwrap();
+        file.write_all(&bits_per_sample.to_le_bytes()).unwrap();
+        file.write_all(&sample_count.to_le_bytes()).unwrap();
+        file.write_all(&block_size.to_le_bytes()).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap(); // reserved
+
+        // DATA chunk header (12 bytes)
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_chunk_size.to_le_bytes()).unwrap();
+
+        // sample data: 1 frame = channels * 4096 bytes
+        let block = vec![0xAA; block_size as usize];
+        for _ in 0..channels {
+            file.write_all(&block).unwrap();
+        }
+    }
+
+    #[test]
+    fn extract_quick_metadata_reads_dsf_headers() {
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let path = tmp_dir.join(format!("pmp_test_ml_{nonce}.dsf"));
+
+        write_minimal_dsf_stereo(&path, 2_822_400);
+
+        let (duration, sample_rate, bit_depth, ..) =
+            extract_quick_metadata(&path).expect("extract dsf");
+        assert!(duration.unwrap_or(0.0) > 0.0);
+        assert_eq!(sample_rate, Some(88_200));
+        assert_eq!(bit_depth, Some(1));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

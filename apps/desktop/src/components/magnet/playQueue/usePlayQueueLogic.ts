@@ -147,9 +147,9 @@ export function usePlayQueueLogic(): PlayQueueLogic {
 	        multiple: true,
 	        types: [
 	          {
-	            description: 'Audio Files',
+            description: 'Audio Files',
             accept: {
-              'audio/*': ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'],
+              'audio/*': ['.mp3', '.flac', '.wav', '.dsf', '.m4a', '.mp4', '.ogg', '.weba', '.aac'],
             },
           },
         ],

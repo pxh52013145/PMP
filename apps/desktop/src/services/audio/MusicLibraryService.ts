@@ -136,6 +136,7 @@ export class MusicLibraryService {
     if (lower.endsWith('.mp3')) return 'audio/mpeg';
     if (lower.endsWith('.flac')) return 'audio/flac';
     if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.dsf')) return 'audio/x-dsf';
     if (lower.endsWith('.m4a') || lower.endsWith('.mp4')) return 'audio/mp4';
     if (lower.endsWith('.aac')) return 'audio/aac';
     if (lower.endsWith('.ogg')) return 'audio/ogg';
@@ -1434,7 +1435,7 @@ export class MusicLibraryService {
     }>,
     basePath: string = ''
   ): Promise<void> {
-    const supportedFormats = ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
+    const supportedFormats = ['.mp3', '.flac', '.wav', '.dsf', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
     const currentPath = basePath ? `${basePath}/${dirHandle.name}` : dirHandle.name;
 
     try {
@@ -1478,7 +1479,7 @@ export class MusicLibraryService {
     }>,
     relativePath: string = ''
   ): Promise<void> {
-    const supportedFormats = ['.mp3', '.flac', '.wav', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
+    const supportedFormats = ['.mp3', '.flac', '.wav', '.dsf', '.m4a', '.mp4', '.ogg', '.weba', '.aac'];
 
     console.log(`Scanning directory: ${dirPath}`);
 
