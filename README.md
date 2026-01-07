@@ -21,6 +21,14 @@ pnpm install
 pnpm dev
 ```
 
+（可选）启用 ASIO 输出后端的构建（Windows，SDK gate）：
+
+```bash
+pnpm dev:asio
+```
+
+> 需要手动准备 Steinberg ASIO SDK 并设置 `CPAL_ASIO_DIR`，详见 `docs/guides/asio-sdk.md`。
+
 仅启动前端（不启动 Tauri）：
 
 ```bash
@@ -64,4 +72,3 @@ cargo test
 ## 开发协作规范
 
 请先阅读：`AGENTS.md`（目录边界、契约规范、质量门禁）。
-
