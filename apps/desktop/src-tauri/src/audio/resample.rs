@@ -139,6 +139,7 @@ pub(crate) struct StreamingResampler {
     chunk_frames: usize,
     resampler: SincFixedIn<f32>,
     input: Vec<Vec<f32>>,
+    scratch_in: Vec<Vec<f32>>,
 }
 
 impl StreamingResampler {
@@ -176,12 +177,16 @@ impl StreamingResampler {
         let input = (0..channels)
             .map(|_| Vec::with_capacity(chunk_frames * 2))
             .collect();
+        let scratch_in = (0..channels)
+            .map(|_| Vec::with_capacity(chunk_frames))
+            .collect();
 
         Ok(Self {
             channels,
             chunk_frames,
             resampler,
             input,
+            scratch_in,
         })
     }
 
@@ -223,6 +228,9 @@ impl StreamingResampler {
         for channel in &mut self.input {
             channel.clear();
         }
+        for channel in &mut self.scratch_in {
+            channel.clear();
+        }
     }
 
     pub fn process_interleaved(&mut self, input_interleaved: &[f32]) -> Vec<f32> {
@@ -239,15 +247,16 @@ impl StreamingResampler {
             .iter()
             .all(|channel| channel.len() >= self.chunk_frames)
         {
-            let mut input_block: Vec<Vec<f32>> = Vec::with_capacity(self.channels);
             for ch in 0..self.channels {
-                let drained: Vec<f32> = self.input[ch]
-                    .drain(0..self.chunk_frames)
-                    .collect::<Vec<f32>>();
-                input_block.push(drained);
+                self.scratch_in[ch].clear();
+                if self.input[ch].len() == self.chunk_frames {
+                    std::mem::swap(&mut self.scratch_in[ch], &mut self.input[ch]);
+                } else {
+                    self.scratch_in[ch].extend(self.input[ch].drain(0..self.chunk_frames));
+                }
             }
 
-            let output_blocks = match self.resampler.process(&input_block, None) {
+            let output_blocks = match self.resampler.process(&self.scratch_in, None) {
                 Ok(value) => value,
                 Err(_) => break,
             };
