@@ -12,7 +12,7 @@ use super::{
 };
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
-const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v3";
+const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v4";
 const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 255;
 const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
@@ -352,8 +352,14 @@ fn start_dsf_stream(
                 }
 
                 for bit in 0..32u32 {
+                    // The dsf crate normalizes sample storage so that data is MSB-first within each byte.
+                    // Expand in time order: for each byte (low->high), bits 7..0.
+                    let byte_index = (bit / 8) as u32;
+                    let bit_in_byte = 7u32.saturating_sub(bit % 8);
+                    let shift = byte_index * 8 + bit_in_byte;
+
                     for channel_index in 0..channels {
-                        let is_one = (words[channel_index] >> bit) & 1;
+                        let is_one = (words[channel_index] >> shift) & 1;
                         let value = if is_one == 1 { 1.0 } else { -1.0 };
                         dsd_chunk.push(value);
                     }
