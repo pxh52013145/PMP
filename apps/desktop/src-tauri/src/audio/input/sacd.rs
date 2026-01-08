@@ -6,16 +6,18 @@ use std::time::Duration;
 
 use dsf::DsfFile;
 
-use super::symphonia::{AudioRingBuffer, DecoderCommand, StreamingPlayback, StreamingSamplesSource};
-use super::{
-    AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
+use super::symphonia::{
+    AudioRingBuffer, DecoderCommand, StreamingPlayback, StreamingSamplesSource,
 };
+use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
 const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v4";
 const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 255;
 const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
+const SACD_DSD_TO_PCM_RESAMPLER_SINC_LEN: usize = 1024;
+const SACD_DSD_TO_PCM_RESAMPLER_OVERSAMPLING: usize = 256;
 const SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES: usize = 4096;
 
 fn pick_decimation_factor(dsd_rate: u32) -> Result<u32, AudioInputError> {
@@ -46,19 +48,11 @@ fn pick_decimation_factor(dsd_rate: u32) -> Result<u32, AudioInputError> {
     ))
 }
 
-fn dsd_ones_to_pcm(ones: u32, total_bits: u32) -> f32 {
-    if total_bits == 0 {
-        return 0.0;
-    }
-    let ones = ones as f32;
-    let total = total_bits as f32;
-    (ones * 2.0 - total) / total
-}
-
 fn dsd_lowpass_cutoff_hz(base_pcm_rate: u32) -> f32 {
     let base_pcm_rate = base_pcm_rate.max(1) as f32;
     let nyquist = base_pcm_rate * 0.5;
-    let cutoff = (nyquist * SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO).min(SACD_DSD_TO_PCM_MAX_CUTOFF_HZ);
+    let cutoff =
+        (nyquist * SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO).min(SACD_DSD_TO_PCM_MAX_CUTOFF_HZ);
     cutoff.clamp(2000.0, nyquist * 0.99)
 }
 
@@ -249,11 +243,21 @@ fn start_dsf_stream(
             );
         }
 
-        let mut dsd_resampler = match crate::audio::resample::StreamingResampler::new(
+        let dsd_cutoff_hz = dsd_lowpass_cutoff_hz(base_pcm_rate);
+        let dsd_cutoff_ratio =
+            (dsd_cutoff_hz / (base_pcm_rate.max(1) as f32 * 0.5)).clamp(0.01, 0.999);
+        let dsd_resample_profile = crate::audio::resample::SincResampleProfile {
+            sinc_len: SACD_DSD_TO_PCM_RESAMPLER_SINC_LEN,
+            f_cutoff: dsd_cutoff_ratio,
+            oversampling_factor: SACD_DSD_TO_PCM_RESAMPLER_OVERSAMPLING,
+        };
+
+        let mut dsd_resampler = match crate::audio::resample::StreamingResampler::new_with_profile(
             dsd_rate,
             base_pcm_rate,
             channels,
             SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES,
+            dsd_resample_profile,
         ) {
             Ok(value) => value,
             Err(err) => {
@@ -266,19 +270,18 @@ fn start_dsf_stream(
         };
 
         let resample_chunk_frames = 256usize;
-        let mut resampler: Option<crate::audio::resample::StreamingResampler> = if target_pcm_rate
-            != base_pcm_rate
-        {
-            crate::audio::resample::StreamingResampler::new(
-                base_pcm_rate,
-                target_pcm_rate,
-                channels,
-                resample_chunk_frames,
-            )
-            .ok()
-        } else {
-            None
-        };
+        let mut resampler: Option<crate::audio::resample::StreamingResampler> =
+            if target_pcm_rate != base_pcm_rate {
+                crate::audio::resample::StreamingResampler::new(
+                    base_pcm_rate,
+                    target_pcm_rate,
+                    channels,
+                    resample_chunk_frames,
+                )
+                .ok()
+            } else {
+                None
+            };
 
         let mut lowpass = StreamingFirLowpass::new(base_pcm_rate, channels);
 
@@ -321,7 +324,8 @@ fn start_dsf_stream(
                         let desired_dsd_sample =
                             desired_dsd_sample.min(sample_count.saturating_sub(1));
                         let aligned = if decimation_factor > 0 {
-                            decimation_factor as u64 * (desired_dsd_sample / decimation_factor as u64)
+                            decimation_factor as u64
+                                * (desired_dsd_sample / decimation_factor as u64)
                         } else {
                             0
                         };
@@ -333,9 +337,7 @@ fn start_dsf_stream(
             }
 
             let mut reached_eof = false;
-            'decode: while dsd_chunk.len()
-                < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
-            {
+            'decode: while dsd_chunk.len() < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels {
                 if iter.sample_index() >= sample_count {
                     reached_eof = true;
                     break 'decode;
@@ -364,9 +366,7 @@ fn start_dsf_stream(
                         dsd_chunk.push(value);
                     }
 
-                    if dsd_chunk.len()
-                        >= SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
-                    {
+                    if dsd_chunk.len() >= SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels {
                         break 'decode;
                     }
                 }
@@ -383,11 +383,8 @@ fn start_dsf_stream(
                 continue;
             }
 
-            if reached_eof
-                && dsd_chunk.len() < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
-            {
-                let missing =
-                    SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels - dsd_chunk.len();
+            if reached_eof && dsd_chunk.len() < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels {
+                let missing = SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels - dsd_chunk.len();
                 dsd_chunk.extend(std::iter::repeat(0.0).take(missing));
             }
 
@@ -441,7 +438,8 @@ fn start_dsf_stream(
     });
 
     let meta = match meta_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(value) => value.map_err(|message| AudioInputError::new("AUDIO_INPUT_SACD_OPEN_FAILED", message))?,
+        Ok(value) => value
+            .map_err(|message| AudioInputError::new("AUDIO_INPUT_SACD_OPEN_FAILED", message))?,
         Err(err) => {
             let _ = command_tx.send(DecoderCommand::Shutdown);
             return Err(AudioInputError::new(
@@ -452,7 +450,12 @@ fn start_dsf_stream(
     };
 
     Ok((
-        StreamingSamplesSource::new(buffer.clone(), meta.channels, meta.sample_rate, meta.duration),
+        StreamingSamplesSource::new(
+            buffer.clone(),
+            meta.channels,
+            meta.sample_rate,
+            meta.duration,
+        ),
         meta,
         StreamingPlayback {
             buffer,
@@ -708,6 +711,55 @@ mod tests {
     }
 
     #[test]
+    fn dsf_silence_pattern_decodes_near_zero() {
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let path = tmp_dir.join(format!("pmp_test_{nonce}.dsf"));
+
+        // DSD "digital silence" often looks like a fast alternating pattern.
+        write_minimal_dsf_stereo(&path, 2_822_400, 0xAA);
+
+        let input = SacdInput::default();
+        let opened = input.open(&path, None).expect("open dsf");
+        let AudioInputKind::Streaming(streaming) = opened.kind else {
+            panic!("expected streaming kind");
+        };
+
+        streaming
+            .buffer
+            .wait_for_samples(2048, Duration::from_millis(500));
+
+        let channels = opened.meta.channels as usize;
+        let mut iter = opened.source;
+
+        let warmup_samples = SACD_DSD_TO_PCM_FILTER_TAPS * channels;
+        for _ in 0..warmup_samples {
+            let sample = iter.next().unwrap_or(0.0);
+            assert!(sample.is_finite());
+        }
+
+        let sample_count = 4096usize * channels;
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for _ in 0..sample_count {
+            let sample = iter.next().unwrap_or(0.0) as f64;
+            sum += sample;
+            sum_sq += sample * sample;
+        }
+        let mean = sum / (sample_count as f64).max(1.0);
+        let rms = (sum_sq / (sample_count as f64).max(1.0)).sqrt();
+
+        assert!(mean.abs() < 0.02, "mean={mean}");
+        assert!(rms < 0.05, "rms={rms}");
+
+        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn dsf_seek_jumps_to_expected_region() {
         let tmp_dir = std::env::temp_dir();
         let nonce = SystemTime::now()
@@ -798,12 +850,5 @@ mod tests {
 
         let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
         let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn dsd_ones_to_pcm_maps_extremes() {
-        assert!((dsd_ones_to_pcm(0, 32) + 1.0).abs() < 1e-6);
-        assert!((dsd_ones_to_pcm(32, 32) - 1.0).abs() < 1e-6);
-        assert!(dsd_ones_to_pcm(16, 32).abs() < 1e-6);
     }
 }

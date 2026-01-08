@@ -27,6 +27,21 @@ fn default_sinc_params() -> SincInterpolationParameters {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SincResampleProfile {
+    pub sinc_len: usize,
+    pub f_cutoff: f32,
+    pub oversampling_factor: usize,
+}
+
+fn sinc_params_for_profile(profile: SincResampleProfile) -> SincInterpolationParameters {
+    let mut params = default_sinc_params();
+    params.sinc_len = profile.sinc_len.max(8);
+    params.f_cutoff = profile.f_cutoff.clamp(0.01, 0.999);
+    params.oversampling_factor = profile.oversampling_factor.max(8);
+    params
+}
+
 pub(crate) fn resample_interleaved_f32(
     samples: &[f32],
     input_sample_rate: u32,
@@ -127,11 +142,12 @@ pub(crate) struct StreamingResampler {
 }
 
 impl StreamingResampler {
-    pub fn new(
+    fn new_inner(
         input_sample_rate: u32,
         output_sample_rate: u32,
         channels: usize,
         chunk_frames: usize,
+        params: SincInterpolationParameters,
     ) -> Result<Self, ResampleError> {
         if channels == 0 {
             return Err(ResampleError::new(
@@ -149,7 +165,6 @@ impl StreamingResampler {
         let input_sample_rate = input_sample_rate.max(1);
         let output_sample_rate = output_sample_rate.max(1);
         let ratio = output_sample_rate as f64 / input_sample_rate as f64;
-        let params = default_sinc_params();
         let resampler = SincFixedIn::<f32>::new(ratio, 1.0, params, chunk_frames, channels)
             .map_err(|e| {
                 ResampleError::new(
@@ -168,6 +183,39 @@ impl StreamingResampler {
             resampler,
             input,
         })
+    }
+
+    pub fn new(
+        input_sample_rate: u32,
+        output_sample_rate: u32,
+        channels: usize,
+        chunk_frames: usize,
+    ) -> Result<Self, ResampleError> {
+        let params = default_sinc_params();
+        Self::new_inner(
+            input_sample_rate,
+            output_sample_rate,
+            channels,
+            chunk_frames,
+            params,
+        )
+    }
+
+    pub fn new_with_profile(
+        input_sample_rate: u32,
+        output_sample_rate: u32,
+        channels: usize,
+        chunk_frames: usize,
+        profile: SincResampleProfile,
+    ) -> Result<Self, ResampleError> {
+        let params = sinc_params_for_profile(profile);
+        Self::new_inner(
+            input_sample_rate,
+            output_sample_rate,
+            channels,
+            chunk_frames,
+            params,
+        )
     }
 
     pub fn reset(&mut self) {

@@ -91,14 +91,6 @@ impl AudioInputRegistry {
         self.inputs.iter().any(|input| input.id() == id)
     }
 
-    pub fn open(
-        &self,
-        path: &Path,
-        output_sample_rate: Option<u32>,
-    ) -> Result<AudioInputOpenResult, AudioInputError> {
-        self.open_prefer(path, output_sample_rate, None)
-    }
-
     pub fn open_prefer(
         &self,
         path: &Path,
@@ -204,7 +196,7 @@ mod tests {
         registry.register(Arc::new(OkInput));
 
         let result = registry
-            .open(Path::new("dummy.wav"), None)
+            .open_prefer(Path::new("dummy.wav"), None, None)
             .expect("open should succeed");
 
         assert_eq!(result.input_id, "ok");
@@ -229,7 +221,7 @@ mod tests {
         registry.register(Arc::new(FailInput));
 
         let err = registry
-            .open(Path::new("dummy.wav"), None)
+            .open_prefer(Path::new("dummy.wav"), None, None)
             .err()
             .expect("open should fail");
         assert_eq!(err.code, "AUDIO_INPUT_OPEN_FAILED");
