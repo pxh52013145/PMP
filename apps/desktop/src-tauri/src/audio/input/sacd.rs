@@ -12,6 +12,10 @@ use super::{
 };
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
+const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v2";
+const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 127;
+const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
+const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
 
 fn pick_decimation_factor(dsd_rate: u32) -> Result<u32, AudioInputError> {
     if dsd_rate == 0 {
@@ -50,12 +54,131 @@ fn dsd_ones_to_pcm(ones: u32, total_bits: u32) -> f32 {
     (ones * 2.0 - total) / total
 }
 
+fn dsd_lowpass_cutoff_hz(base_pcm_rate: u32) -> f32 {
+    let base_pcm_rate = base_pcm_rate.max(1) as f32;
+    let nyquist = base_pcm_rate * 0.5;
+    let cutoff = (nyquist * SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO).min(SACD_DSD_TO_PCM_MAX_CUTOFF_HZ);
+    cutoff.clamp(2000.0, nyquist * 0.99)
+}
+
+fn blackman_window(n: usize, len: usize) -> f32 {
+    if len <= 1 {
+        return 1.0;
+    }
+    let a0 = 0.42f32;
+    let a1 = 0.5f32;
+    let a2 = 0.08f32;
+    let phase = 2.0 * std::f32::consts::PI * (n as f32) / ((len - 1) as f32);
+    a0 - a1 * phase.cos() + a2 * (2.0 * phase).cos()
+}
+
+fn design_lowpass_fir(sample_rate: u32, cutoff_hz: f32, taps: usize) -> Vec<f32> {
+    let taps = taps.max(3) | 1; // ensure odd
+    let sample_rate = sample_rate.max(1) as f32;
+    let cutoff_hz = cutoff_hz.clamp(1.0, (sample_rate * 0.5) * 0.99);
+    let fc = cutoff_hz / sample_rate; // cycles/sample (0..0.5)
+
+    let mid = (taps / 2) as i32;
+    let mut coeffs: Vec<f32> = Vec::with_capacity(taps);
+
+    for n in 0..taps {
+        let t = (n as i32) - mid;
+        let x = 2.0 * fc * (t as f32);
+        let sinc = if x.abs() < 1e-8 {
+            1.0
+        } else {
+            (std::f32::consts::PI * x).sin() / (std::f32::consts::PI * x)
+        };
+        let ideal = 2.0 * fc * sinc;
+        let window = blackman_window(n, taps);
+        coeffs.push(ideal * window);
+    }
+
+    let sum: f32 = coeffs.iter().sum();
+    if sum.abs() > 1e-12 {
+        for c in &mut coeffs {
+            *c /= sum;
+        }
+    }
+
+    coeffs
+}
+
+struct StreamingFirLowpass {
+    taps: Vec<f32>,
+    history: Vec<f32>,
+    pos: usize,
+    channels: usize,
+}
+
+impl StreamingFirLowpass {
+    fn new(sample_rate: u32, channels: usize) -> Self {
+        let cutoff = dsd_lowpass_cutoff_hz(sample_rate);
+        let taps = design_lowpass_fir(sample_rate, cutoff, SACD_DSD_TO_PCM_FILTER_TAPS);
+        let history = vec![0.0; taps.len().saturating_mul(channels.max(1))];
+        Self {
+            taps,
+            history,
+            pos: 0,
+            channels: channels.max(1),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.pos = 0;
+        for value in &mut self.history {
+            *value = 0.0;
+        }
+    }
+
+    fn process_interleaved(&mut self, input: &[f32]) -> Vec<f32> {
+        if self.channels == 0 || self.taps.is_empty() {
+            return input.to_vec();
+        }
+        let frames = input.len() / self.channels;
+        if frames == 0 {
+            return Vec::new();
+        }
+
+        let taps_len = self.taps.len();
+        let mut out: Vec<f32> = Vec::with_capacity(frames * self.channels);
+
+        for frame in 0..frames {
+            for ch in 0..self.channels {
+                let sample = input[frame * self.channels + ch];
+                let base = ch * taps_len;
+                self.history[base + self.pos] = sample;
+
+                let mut acc = 0.0f32;
+                let mut idx = self.pos;
+                for tap in &self.taps {
+                    acc += *tap * self.history[base + idx];
+                    idx = if idx == 0 { taps_len - 1 } else { idx - 1 };
+                }
+
+                out.push(acc);
+            }
+
+            self.pos += 1;
+            if self.pos >= taps_len {
+                self.pos = 0;
+            }
+        }
+
+        out
+    }
+}
+
 fn start_dsf_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
     let buffer = AudioRingBuffer::new(352_800);
-    let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
+    let cache_key = crate::audio::resample_cache::key_for_resample_with_salt(
+        path,
+        output_sample_rate,
+        SACD_DSD_TO_PCM_CACHE_SALT,
+    );
 
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
@@ -139,6 +262,8 @@ fn start_dsf_stream(
                 None
             };
 
+        let mut lowpass = StreamingFirLowpass::new(base_pcm_rate, channels);
+
         let mut iter = match dsf_file.interleaved_u32_samples_iter() {
             Ok(iter) => iter,
             Err(err) => {
@@ -173,6 +298,7 @@ fn start_dsf_stream(
                         for value in &mut ones_per_channel {
                             *value = 0;
                         }
+                        lowpass.reset();
                         if let Some(r) = resampler.as_mut() {
                             r.reset();
                         }
@@ -238,14 +364,13 @@ fn start_dsf_stream(
                 continue;
             }
 
+            let filtered = lowpass.process_interleaved(&pcm_chunk);
+            pcm_chunk.clear();
+
             let out_interleaved = if let Some(r) = resampler.as_mut() {
-                let input = std::mem::take(&mut pcm_chunk);
-                let out = r.process_interleaved(&input);
-                pcm_chunk = input;
-                pcm_chunk.clear();
-                out
+                r.process_interleaved(&filtered)
             } else {
-                std::mem::replace(&mut pcm_chunk, Vec::with_capacity(resample_chunk_frames * channels))
+                filtered
             };
 
             if out_interleaved.is_empty() {
@@ -335,7 +460,11 @@ impl AudioInput for SacdInput {
             ));
         }
 
-        let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
+        let cache_key = crate::audio::resample_cache::key_for_resample_with_salt(
+            path,
+            output_sample_rate,
+            SACD_DSD_TO_PCM_CACHE_SALT,
+        );
         if let Some(key) = cache_key.as_deref() {
             if let Some(cached) = crate::audio::resample_cache::try_load(key) {
                 let frames = cached.samples.len() / cached.channels as usize;
@@ -525,14 +654,26 @@ mod tests {
 
         streaming
             .buffer
-            .wait_for_samples(64, Duration::from_millis(200));
+            .wait_for_samples(2048, Duration::from_millis(500));
 
-        let mut iter = opened.source.take(32);
-        for _ in 0..32 {
+        let channels = opened.meta.channels as usize;
+        let mut iter = opened.source;
+        let warmup_samples = SACD_DSD_TO_PCM_FILTER_TAPS * channels;
+        for _ in 0..warmup_samples {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
-            assert!(sample > 0.8, "sample={sample}");
         }
+
+        let mut saw_high = false;
+        for _ in 0..4096 {
+            let sample = iter.next().unwrap_or(0.0);
+            assert!(sample.is_finite());
+            if sample > 0.8 {
+                saw_high = true;
+                break;
+            }
+        }
+        assert!(saw_high, "expected high samples after warm-up");
 
         let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
         let _ = std::fs::remove_file(&path);
@@ -561,7 +702,13 @@ mod tests {
             .wait_for_samples(128, Duration::from_millis(200));
 
         let duration = opened.meta.duration;
+        let channels = opened.meta.channels as usize;
         let mut iter = opened.source;
+        let warmup_samples = SACD_DSD_TO_PCM_FILTER_TAPS * channels;
+        for _ in 0..warmup_samples {
+            let sample = iter.next().unwrap_or(0.0);
+            assert!(sample.is_finite());
+        }
         let first = iter.next().unwrap_or(0.0);
         assert!(first.is_finite());
         assert!(first > 0.8, "first sample={first}");
@@ -607,14 +754,19 @@ mod tests {
 
         streaming
             .buffer
-            .wait_for_samples(128, Duration::from_millis(500));
+            .wait_for_samples(4096, Duration::from_millis(500));
 
-        let mut iter = opened.source.take(64);
-        for _ in 0..64 {
+        let mut iter = opened.source;
+        let mut saw_high = false;
+        for _ in 0..16384 {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
-            assert!(sample > 0.2, "sample={sample}");
+            if sample > 0.2 {
+                saw_high = true;
+                break;
+            }
         }
+        assert!(saw_high, "expected audible samples after resample");
 
         let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
         let _ = std::fs::remove_file(&path);

@@ -746,6 +746,40 @@ pub fn get_or_create_cover(
         }
     }
 
+    // DSF fast path: symphonia cannot probe DSF for embedded visuals today.
+    // Prefer sidecar covers (folder.jpg, cover.png, etc.) and avoid noisy probe errors.
+    if Path::new(&audio_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("dsf"))
+        .unwrap_or(false)
+    {
+        if let Some(sidecar) = find_sidecar_cover(Path::new(&audio_path)) {
+            let meta =
+                fs::metadata(&sidecar).map_err(|e| format!("Failed to stat sidecar cover: {e}"))?;
+            if meta.is_file() && meta.len() <= max_bytes {
+                let bytes =
+                    fs::read(&sidecar).map_err(|e| format!("Failed to read sidecar cover: {e}"))?;
+                let media_type = media_type_from_cover_path(&sidecar)
+                    .unwrap_or_else(|| "image/jpeg".to_string());
+                let ext = cover_extension_from_media_type(&media_type);
+                let out_path = dir.join(format!("{key}.{ext}"));
+                fs::write(&out_path, &bytes).map_err(|e| format!("Failed to write cover: {e}"))?;
+                let bytes_base64 = general_purpose::STANDARD.encode(&bytes);
+
+                return Ok(Some(CachedCover {
+                    key,
+                    path: out_path.to_string_lossy().to_string(),
+                    size: bytes.len() as u64,
+                    media_type: Some(media_type),
+                    bytes_base64: Some(bytes_base64),
+                }));
+            }
+        }
+
+        return Ok(None);
+    }
+
     let file = fs::File::open(&audio_path).map_err(|e| format!("Failed to open file: {e}"))?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 
