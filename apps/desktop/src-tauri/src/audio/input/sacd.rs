@@ -12,7 +12,7 @@ use super::symphonia::{
 use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
-const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v4";
+const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v5";
 const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 255;
 const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
