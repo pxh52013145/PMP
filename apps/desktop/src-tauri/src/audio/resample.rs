@@ -140,6 +140,7 @@ pub(crate) struct StreamingResampler {
     resampler: SincFixedIn<f32>,
     input: Vec<Vec<f32>>,
     scratch_in: Vec<Vec<f32>>,
+    output: Vec<Vec<f32>>,
 }
 
 impl StreamingResampler {
@@ -180,6 +181,7 @@ impl StreamingResampler {
         let scratch_in = (0..channels)
             .map(|_| Vec::with_capacity(chunk_frames))
             .collect();
+        let output = resampler.output_buffer_allocate(true);
 
         Ok(Self {
             channels,
@@ -187,6 +189,7 @@ impl StreamingResampler {
             resampler,
             input,
             scratch_in,
+            output,
         })
     }
 
@@ -256,21 +259,21 @@ impl StreamingResampler {
                 }
             }
 
-            let output_blocks = match self.resampler.process(&self.scratch_in, None) {
-                Ok(value) => value,
-                Err(_) => break,
-            };
-
-            let out_frames = output_blocks.get(0).map(|v| v.len()).unwrap_or(0);
+            let (_in_frames, out_frames) =
+                match self
+                    .resampler
+                    .process_into_buffer(&self.scratch_in, &mut self.output, None)
+                {
+                    Ok(value) => value,
+                    Err(_) => break,
+                };
             if out_frames == 0 {
                 continue;
             }
 
             for frame in 0..out_frames {
                 for ch in 0..self.channels {
-                    if let Some(sample) = output_blocks[ch].get(frame) {
-                        out_interleaved.push(*sample);
-                    }
+                    out_interleaved.push(self.output[ch][frame]);
                 }
             }
         }
