@@ -6,19 +6,19 @@ use std::time::Duration;
 
 use dsf::DsfFile;
 
+use crate::audio::dsd2pcm::Dsd2PcmContext;
+
 use super::symphonia::{
     AudioRingBuffer, DecoderCommand, StreamingPlayback, StreamingSamplesSource,
 };
 use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
-const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v5";
-const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 255;
+const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v6";
+const SACD_DSD_TO_PCM_DECIMATOR_TAPS: usize = 255;
 const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
-const SACD_DSD_TO_PCM_RESAMPLER_SINC_LEN: usize = 1024;
-const SACD_DSD_TO_PCM_RESAMPLER_OVERSAMPLING: usize = 256;
-const SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES: usize = 4096;
+const SACD_DSD2PCM_MIN_CHUNK_FRAMES: usize = 4096;
 
 fn pick_decimation_factor(dsd_rate: u32) -> Result<u32, AudioInputError> {
     if dsd_rate == 0 {
@@ -99,28 +99,40 @@ fn design_lowpass_fir(sample_rate: u32, cutoff_hz: f32, taps: usize) -> Vec<f32>
     coeffs
 }
 
-struct StreamingFirLowpass {
+struct StreamingFirDecimator {
     taps: Vec<f32>,
     history: Vec<f32>,
     pos: usize,
     channels: usize,
+    decimation: usize,
+    phase: usize,
 }
 
-impl StreamingFirLowpass {
-    fn new(sample_rate: u32, channels: usize) -> Self {
-        let cutoff = dsd_lowpass_cutoff_hz(sample_rate);
-        let taps = design_lowpass_fir(sample_rate, cutoff, SACD_DSD_TO_PCM_FILTER_TAPS);
-        let history = vec![0.0; taps.len().saturating_mul(channels.max(1))];
+impl StreamingFirDecimator {
+    fn new(input_sample_rate: u32, output_sample_rate: u32, channels: usize, decimation: usize) -> Self {
+        let channels = channels.max(1);
+        let decimation = decimation.max(1);
+        let cutoff = dsd_lowpass_cutoff_hz(output_sample_rate);
+        let taps = design_lowpass_fir(
+            input_sample_rate,
+            cutoff,
+            SACD_DSD_TO_PCM_DECIMATOR_TAPS,
+        );
+        let history = vec![0.0; taps.len().saturating_mul(channels)];
+
         Self {
             taps,
             history,
             pos: 0,
-            channels: channels.max(1),
+            channels,
+            decimation,
+            phase: 0,
         }
     }
 
     fn reset(&mut self) {
         self.pos = 0;
+        self.phase = 0;
         for value in &mut self.history {
             *value = 0.0;
         }
@@ -128,35 +140,46 @@ impl StreamingFirLowpass {
 
     fn process_interleaved(&mut self, input: &[f32]) -> Vec<f32> {
         if self.channels == 0 || self.taps.is_empty() {
-            return input.to_vec();
+            return Vec::new();
         }
+
         let frames = input.len() / self.channels;
         if frames == 0 {
             return Vec::new();
         }
 
         let taps_len = self.taps.len();
-        let mut out: Vec<f32> = Vec::with_capacity(frames * self.channels);
+        let expected_out_frames = (frames + self.decimation - 1) / self.decimation;
+        let mut out: Vec<f32> = Vec::with_capacity(expected_out_frames * self.channels);
 
         for frame in 0..frames {
             for ch in 0..self.channels {
                 let sample = input[frame * self.channels + ch];
                 let base = ch * taps_len;
                 self.history[base + self.pos] = sample;
+            }
 
-                let mut acc = 0.0f32;
-                let mut idx = self.pos;
-                for tap in &self.taps {
-                    acc += *tap * self.history[base + idx];
-                    idx = if idx == 0 { taps_len - 1 } else { idx - 1 };
+            if self.phase == 0 {
+                for ch in 0..self.channels {
+                    let base = ch * taps_len;
+                    let mut acc = 0.0f32;
+                    let mut idx = self.pos;
+                    for tap in &self.taps {
+                        acc += *tap * self.history[base + idx];
+                        idx = if idx == 0 { taps_len - 1 } else { idx - 1 };
+                    }
+                    out.push(acc);
                 }
-
-                out.push(acc);
             }
 
             self.pos += 1;
             if self.pos >= taps_len {
                 self.pos = 0;
+            }
+
+            self.phase += 1;
+            if self.phase >= self.decimation {
+                self.phase = 0;
             }
         }
 
@@ -261,32 +284,20 @@ fn start_dsf_stream(
                 );
             }
 
-            let dsd_cutoff_hz = dsd_lowpass_cutoff_hz(base_pcm_rate);
-            let dsd_cutoff_ratio =
-                (dsd_cutoff_hz / (base_pcm_rate.max(1) as f32 * 0.5)).clamp(0.01, 0.999);
-            let dsd_resample_profile = crate::audio::resample::SincResampleProfile {
-                sinc_len: SACD_DSD_TO_PCM_RESAMPLER_SINC_LEN,
-                f_cutoff: dsd_cutoff_ratio,
-                oversampling_factor: SACD_DSD_TO_PCM_RESAMPLER_OVERSAMPLING,
-            };
+            let dsd_byte_rate = if dsd_rate % 8 == 0 { dsd_rate / 8 } else { 0 };
+            if dsd_byte_rate == 0 {
+                if let Ok(mut guard) = error_clone.lock() {
+                    *guard = Some(format!("Unsupported DSD sample rate: {dsd_rate} Hz"));
+                }
+                buffer_clone.mark_finished();
+                return;
+            }
 
-            let mut dsd_resampler =
-                match crate::audio::resample::StreamingResampler::new_with_profile(
-                    dsd_rate,
-                    base_pcm_rate,
-                    channels,
-                    SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES,
-                    dsd_resample_profile,
-                ) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        if let Ok(mut guard) = error_clone.lock() {
-                            *guard = Some(format!("[{}] {}", err.code, err.message));
-                        }
-                        buffer_clone.mark_finished();
-                        return;
-                    }
-                };
+            let decimation_ratio = (decimation_factor / 8).max(1) as usize;
+            let mut dsd2pcm: Vec<Dsd2PcmContext> =
+                (0..channels).map(|_| Dsd2PcmContext::default()).collect();
+            let mut decimator =
+                StreamingFirDecimator::new(dsd_byte_rate, base_pcm_rate, channels, decimation_ratio);
 
             let resample_chunk_frames = 256usize;
             let mut resampler: Option<crate::audio::resample::StreamingResampler> =
@@ -302,7 +313,10 @@ fn start_dsf_stream(
                     None
                 };
 
-            let mut lowpass = StreamingFirLowpass::new(base_pcm_rate, channels);
+            let mut stage1_chunk_frames =
+                SACD_DSD2PCM_MIN_CHUNK_FRAMES.max(resample_chunk_frames * decimation_ratio);
+            stage1_chunk_frames = stage1_chunk_frames.saturating_sub(stage1_chunk_frames % 4);
+            let stage1_chunk_samples = stage1_chunk_frames.saturating_mul(channels);
 
             let mut iter = match dsf_file.interleaved_u32_samples_iter() {
                 Ok(iter) => iter,
@@ -315,8 +329,7 @@ fn start_dsf_stream(
                 }
             };
 
-            let mut dsd_chunk: Vec<f32> =
-                Vec::with_capacity(SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels);
+            let mut pcm8_chunk: Vec<f32> = Vec::with_capacity(stage1_chunk_samples);
             let mut words: Vec<u32> = vec![0u32; channels];
 
             loop {
@@ -331,9 +344,11 @@ fn start_dsf_stream(
                         }
                         DecoderCommand::Seek(target) => {
                             buffer_clone.clear();
-                            dsd_chunk.clear();
-                            dsd_resampler.reset();
-                            lowpass.reset();
+                            pcm8_chunk.clear();
+                            for ctx in &mut dsd2pcm {
+                                ctx.reset();
+                            }
+                            decimator.reset();
                             if let Some(r) = resampler.as_mut() {
                                 r.reset();
                             }
@@ -356,14 +371,12 @@ fn start_dsf_stream(
                 }
 
                 let mut reached_eof = false;
-                'decode: while dsd_chunk.len() < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels {
+                'decode: while pcm8_chunk.len() < stage1_chunk_samples {
                     if iter.sample_index() >= sample_count {
                         reached_eof = true;
                         break 'decode;
                     }
 
-                    // Read one 32-bit "frame" (32 DSD samples per channel) and expand to interleaved
-                    // +/-1.0 samples (DSD bitstream) in time order (LSB-first).
                     for channel_index in 0..channels {
                         let Some(word) = iter.next() else {
                             reached_eof = true;
@@ -372,26 +385,22 @@ fn start_dsf_stream(
                         words[channel_index] = word;
                     }
 
-                    for bit in 0..32u32 {
-                        // The dsf crate normalizes sample storage so that data is MSB-first within each byte.
-                        // Expand in time order: for each byte (low->high), bits 7..0.
-                        let byte_index = (bit / 8) as u32;
-                        let bit_in_byte = 7u32.saturating_sub(bit % 8);
-                        let shift = byte_index * 8 + bit_in_byte;
-
+                    // Each u32 represents 4 bytes per channel, i.e. 32 DSD 1-bit samples. The dsd2pcm
+                    // stage consumes bytes and outputs PCM at dsd_rate/8 (one float per byte).
+                    for byte_index in 0..4usize {
                         for channel_index in 0..channels {
-                            let is_one = (words[channel_index] >> shift) & 1;
-                            let value = if is_one == 1 { 1.0 } else { -1.0 };
-                            dsd_chunk.push(value);
+                            let byte = ((words[channel_index] >> (byte_index * 8)) & 0xFF) as u8;
+                            let value = dsd2pcm[channel_index].translate_byte_msbf(byte);
+                            pcm8_chunk.push(value);
                         }
 
-                        if dsd_chunk.len() >= SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels {
+                        if pcm8_chunk.len() >= stage1_chunk_samples {
                             break 'decode;
                         }
                     }
                 }
 
-                if dsd_chunk.is_empty() {
+                if pcm8_chunk.is_empty() {
                     if reached_eof {
                         if let Some(handle) = cache_handle.take() {
                             handle.finalize();
@@ -402,21 +411,23 @@ fn start_dsf_stream(
                     continue;
                 }
 
-                if reached_eof && dsd_chunk.len() < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
-                {
-                    let missing =
-                        SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels - dsd_chunk.len();
-                    dsd_chunk.extend(std::iter::repeat(0.0).take(missing));
+                if reached_eof && pcm8_chunk.len() < stage1_chunk_samples {
+                    let missing_samples = stage1_chunk_samples - pcm8_chunk.len();
+                    let missing_frames = missing_samples / channels;
+                    for _ in 0..missing_frames {
+                        for ch in 0..channels {
+                            pcm8_chunk.push(dsd2pcm[ch].translate_byte_msbf(0x00));
+                        }
+                    }
                 }
 
-                let base_pcm = dsd_resampler.process_interleaved(&dsd_chunk);
-                dsd_chunk.clear();
+                let base_pcm = decimator.process_interleaved(&pcm8_chunk);
+                pcm8_chunk.clear();
 
-                let filtered = lowpass.process_interleaved(&base_pcm);
                 let out_interleaved = if let Some(r) = resampler.as_mut() {
-                    r.process_interleaved(&filtered)
+                    r.process_interleaved(&base_pcm)
                 } else {
-                    filtered
+                    base_pcm
                 };
 
                 if out_interleaved.is_empty() {
@@ -727,7 +738,7 @@ mod tests {
 
         let channels = opened.meta.channels as usize;
         let mut iter = opened.source;
-        let warmup_samples = SACD_DSD_TO_PCM_FILTER_TAPS * channels;
+        let warmup_samples = SACD_DSD_TO_PCM_DECIMATOR_TAPS * channels;
         for _ in 0..warmup_samples {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
@@ -737,7 +748,7 @@ mod tests {
         for _ in 0..4096 {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
-            if sample > 0.8 {
+            if sample > 0.2 {
                 saw_high = true;
                 break;
             }
@@ -773,7 +784,7 @@ mod tests {
         let channels = opened.meta.channels as usize;
         let mut iter = opened.source;
 
-        let warmup_samples = SACD_DSD_TO_PCM_FILTER_TAPS * channels;
+        let warmup_samples = SACD_DSD_TO_PCM_DECIMATOR_TAPS * channels;
         for _ in 0..warmup_samples {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
@@ -822,14 +833,14 @@ mod tests {
         let duration = opened.meta.duration;
         let channels = opened.meta.channels as usize;
         let mut iter = opened.source;
-        let warmup_samples = SACD_DSD_TO_PCM_FILTER_TAPS * channels;
+        let warmup_samples = SACD_DSD_TO_PCM_DECIMATOR_TAPS * channels;
         for _ in 0..warmup_samples {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
         }
         let first = iter.next().unwrap_or(0.0);
         assert!(first.is_finite());
-        assert!(first > 0.8, "first sample={first}");
+        assert!(first > 0.2, "first sample={first}");
 
         let seek_target = duration * 0.75;
         let _ = streaming.command_tx.send(DecoderCommand::Seek(seek_target));
@@ -840,7 +851,7 @@ mod tests {
         let mut saw_negative = false;
         for _ in 0..8192 {
             let sample = iter.next().unwrap_or(0.0);
-            if sample < -0.8 {
+            if sample < -0.2 {
                 saw_negative = true;
                 break;
             }

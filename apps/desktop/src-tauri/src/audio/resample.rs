@@ -27,21 +27,6 @@ fn default_sinc_params() -> SincInterpolationParameters {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SincResampleProfile {
-    pub sinc_len: usize,
-    pub f_cutoff: f32,
-    pub oversampling_factor: usize,
-}
-
-fn sinc_params_for_profile(profile: SincResampleProfile) -> SincInterpolationParameters {
-    let mut params = default_sinc_params();
-    params.sinc_len = profile.sinc_len.max(8);
-    params.f_cutoff = profile.f_cutoff.clamp(0.01, 0.999);
-    params.oversampling_factor = profile.oversampling_factor.max(8);
-    params
-}
-
 pub(crate) fn resample_interleaved_f32(
     samples: &[f32],
     input_sample_rate: u32,
@@ -200,23 +185,6 @@ impl StreamingResampler {
         chunk_frames: usize,
     ) -> Result<Self, ResampleError> {
         let params = default_sinc_params();
-        Self::new_inner(
-            input_sample_rate,
-            output_sample_rate,
-            channels,
-            chunk_frames,
-            params,
-        )
-    }
-
-    pub fn new_with_profile(
-        input_sample_rate: u32,
-        output_sample_rate: u32,
-        channels: usize,
-        chunk_frames: usize,
-        profile: SincResampleProfile,
-    ) -> Result<Self, ResampleError> {
-        let params = sinc_params_for_profile(profile);
         Self::new_inner(
             input_sample_rate,
             output_sample_rate,
