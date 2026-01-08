@@ -12,10 +12,11 @@ use super::{
 };
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
-const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v2";
-const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 127;
+const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v3";
+const SACD_DSD_TO_PCM_FILTER_TAPS: usize = 255;
 const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
+const SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES: usize = 4096;
 
 fn pick_decimation_factor(dsd_rate: u32) -> Result<u32, AudioInputError> {
     if dsd_rate == 0 {
@@ -248,19 +249,36 @@ fn start_dsf_stream(
             );
         }
 
-        let resample_chunk_frames = 1024usize;
-        let mut resampler: Option<crate::audio::resample::StreamingResampler> =
-            if target_pcm_rate != base_pcm_rate {
-                crate::audio::resample::StreamingResampler::new(
-                    base_pcm_rate,
-                    target_pcm_rate,
-                    channels,
-                    resample_chunk_frames,
-                )
-                .ok()
-            } else {
-                None
-            };
+        let mut dsd_resampler = match crate::audio::resample::StreamingResampler::new(
+            dsd_rate,
+            base_pcm_rate,
+            channels,
+            SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES,
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                if let Ok(mut guard) = error_clone.lock() {
+                    *guard = Some(format!("[{}] {}", err.code, err.message));
+                }
+                buffer_clone.mark_finished();
+                return;
+            }
+        };
+
+        let resample_chunk_frames = 256usize;
+        let mut resampler: Option<crate::audio::resample::StreamingResampler> = if target_pcm_rate
+            != base_pcm_rate
+        {
+            crate::audio::resample::StreamingResampler::new(
+                base_pcm_rate,
+                target_pcm_rate,
+                channels,
+                resample_chunk_frames,
+            )
+            .ok()
+        } else {
+            None
+        };
 
         let mut lowpass = StreamingFirLowpass::new(base_pcm_rate, channels);
 
@@ -275,12 +293,9 @@ fn start_dsf_stream(
             }
         };
 
-        let words_per_pcm_sample = (decimation_factor / 32).max(1) as usize;
-        let bits_per_pcm_sample = (words_per_pcm_sample as u32) * 32u32;
-        let dsd_bits_per_pcm_sample = (words_per_pcm_sample as u64) * 32u64;
-
-        let mut pcm_chunk: Vec<f32> = Vec::with_capacity(resample_chunk_frames * channels);
-        let mut ones_per_channel: Vec<u32> = vec![0u32; channels];
+        let mut dsd_chunk: Vec<f32> =
+            Vec::with_capacity(SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels);
+        let mut words: Vec<u32> = vec![0u32; channels];
 
         loop {
             while let Ok(cmd) = command_rx.try_recv() {
@@ -294,10 +309,8 @@ fn start_dsf_stream(
                     }
                     DecoderCommand::Seek(target) => {
                         buffer_clone.clear();
-                        pcm_chunk.clear();
-                        for value in &mut ones_per_channel {
-                            *value = 0;
-                        }
+                        dsd_chunk.clear();
+                        dsd_resampler.reset();
                         lowpass.reset();
                         if let Some(r) = resampler.as_mut() {
                             r.reset();
@@ -320,40 +333,40 @@ fn start_dsf_stream(
             }
 
             let mut reached_eof = false;
-            'decode: while pcm_chunk.len() < resample_chunk_frames * channels {
-                if iter
-                    .sample_index()
-                    .saturating_add(dsd_bits_per_pcm_sample)
-                    > sample_count
-                {
+            'decode: while dsd_chunk.len()
+                < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
+            {
+                if iter.sample_index() >= sample_count {
                     reached_eof = true;
                     break 'decode;
                 }
 
-                for value in &mut ones_per_channel {
-                    *value = 0;
-                }
-
-                for _ in 0..words_per_pcm_sample {
-                    for channel_index in 0..channels {
-                        let Some(word) = iter.next() else {
-                            reached_eof = true;
-                            break 'decode;
-                        };
-                        ones_per_channel[channel_index] =
-                            ones_per_channel[channel_index].saturating_add(word.count_ones());
-                    }
-                }
-
+                // Read one 32-bit "frame" (32 DSD samples per channel) and expand to interleaved
+                // +/-1.0 samples (DSD bitstream) in time order (LSB-first).
                 for channel_index in 0..channels {
-                    pcm_chunk.push(dsd_ones_to_pcm(
-                        ones_per_channel[channel_index],
-                        bits_per_pcm_sample,
-                    ));
+                    let Some(word) = iter.next() else {
+                        reached_eof = true;
+                        break 'decode;
+                    };
+                    words[channel_index] = word;
+                }
+
+                for bit in 0..32u32 {
+                    for channel_index in 0..channels {
+                        let is_one = (words[channel_index] >> bit) & 1;
+                        let value = if is_one == 1 { 1.0 } else { -1.0 };
+                        dsd_chunk.push(value);
+                    }
+
+                    if dsd_chunk.len()
+                        >= SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
+                    {
+                        break 'decode;
+                    }
                 }
             }
 
-            if pcm_chunk.is_empty() {
+            if dsd_chunk.is_empty() {
                 if reached_eof {
                     if let Some(handle) = cache_handle.take() {
                         handle.finalize();
@@ -364,9 +377,18 @@ fn start_dsf_stream(
                 continue;
             }
 
-            let filtered = lowpass.process_interleaved(&pcm_chunk);
-            pcm_chunk.clear();
+            if reached_eof
+                && dsd_chunk.len() < SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels
+            {
+                let missing =
+                    SACD_DSD_TO_PCM_RESAMPLE_CHUNK_FRAMES * channels - dsd_chunk.len();
+                dsd_chunk.extend(std::iter::repeat(0.0).take(missing));
+            }
 
+            let base_pcm = dsd_resampler.process_interleaved(&dsd_chunk);
+            dsd_chunk.clear();
+
+            let filtered = lowpass.process_interleaved(&base_pcm);
             let out_interleaved = if let Some(r) = resampler.as_mut() {
                 r.process_interleaved(&filtered)
             } else {
@@ -754,12 +776,12 @@ mod tests {
 
         streaming
             .buffer
-            .wait_for_samples(4096, Duration::from_millis(500));
+            .wait_for_samples(256, Duration::from_millis(500));
 
         let mut iter = opened.source;
         let mut saw_high = false;
-        for _ in 0..16384 {
-            let sample = iter.next().unwrap_or(0.0);
+        for _ in 0..8192 {
+            let Some(sample) = iter.next() else { break };
             assert!(sample.is_finite());
             if sample > 0.2 {
                 saw_high = true;
