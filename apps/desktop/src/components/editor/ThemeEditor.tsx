@@ -6,11 +6,10 @@ import { getInstalledPmpmPlugin, installPmpmPluginFromZipBytes } from '../../mag
 import { getInstalledPmpsShaderPack } from '../../shader-system/pmps';
 import { installPmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
-import { BUILTIN_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
 import { readJson } from '../../modules/storage';
 import {
   createDefaultMagnetSpacesState,
-  type MagnetSpaceLayout,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
   sanitizeMagnetSpaceLayout,
@@ -35,6 +34,7 @@ import {
   type ProfilePackManifestV1,
   type ProfilePackProfileV1,
 } from '../../themes/packs/profilePack';
+import { filterMagnetConfigSnapshotForImport, filterMagnetSpaceLayoutForImport } from '../../themes/packs/profilePackApply';
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
 import type { ComponentTheme, Theme } from '../../themes/types/theme';
@@ -70,49 +70,6 @@ function assertObject(value: unknown, path: string): asserts value is Record<str
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function filterMagnetSpaceLayoutToBuiltins(layout: MagnetSpaceLayout): MagnetSpaceLayout {
-  const activeMagnetIds: string[] = [];
-  const seen = new Set<string>();
-
-  for (const magnetId of layout.activeMagnetIds) {
-    if (!BUILTIN_MAGNET_IDS.has(magnetId)) continue;
-    if (seen.has(magnetId)) continue;
-    seen.add(magnetId);
-    activeMagnetIds.push(magnetId);
-  }
-
-  for (const requiredId of REQUIRED_MAGNET_IDS) {
-    if (seen.has(requiredId)) continue;
-    seen.add(requiredId);
-    activeMagnetIds.push(requiredId);
-  }
-
-  const anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {};
-  for (const [magnetId, anchors] of Object.entries(layout.anchorsByMagnetId)) {
-    if (!BUILTIN_MAGNET_IDS.has(magnetId)) continue;
-    anchorsByMagnetId[magnetId] = anchors;
-  }
-
-  return { ...layout, activeMagnetIds, anchorsByMagnetId };
-}
-
-function filterMagnetConfigSnapshotToBuiltins(value: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...value };
-
-  const rawMagnets = result.magnets;
-  if (isPlainObject(rawMagnets)) {
-    const filtered: Record<string, unknown> = {};
-    for (const [magnetId, magnetState] of Object.entries(rawMagnets)) {
-      if (!BUILTIN_MAGNET_IDS.has(magnetId)) continue;
-      filtered[magnetId] = magnetState;
-    }
-    result.magnets = filtered;
-  }
-
-  result.customMagnets = [];
-  return result;
 }
 
 function validateThemeJson(value: unknown): asserts value is Theme {
@@ -631,13 +588,13 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const layoutKey = resolveMagnetLayoutStorageKey(space.id);
       const layoutRaw = readJson<unknown | null>(layoutKey, null);
       if (layoutRaw !== null) {
-        layoutsBySpaceId[space.id] = filterMagnetSpaceLayoutToBuiltins(sanitizeMagnetSpaceLayout(layoutRaw));
+        layoutsBySpaceId[space.id] = sanitizeMagnetSpaceLayout(layoutRaw);
       }
 
       const configKey = resolveMagnetConfigStorageKey(space.id);
       const configRaw = readJson<unknown | null>(configKey, null);
       if (isPlainObject(configRaw)) {
-        configsBySpaceId[space.id] = filterMagnetConfigSnapshotToBuiltins(configRaw);
+        configsBySpaceId[space.id] = configRaw;
       }
     }
 
@@ -703,6 +660,13 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           return;
         }
 
+        const allowedMagnetIds = new Set<string>(BUILTIN_MAGNET_IDS);
+        for (const magnet of magnetLibrary) {
+          const id = magnet.id.trim();
+          if (!id) continue;
+          allowedMagnetIds.add(id);
+        }
+
         const rawSpaces = profilePack.profile.magnets?.spaces?.value;
         if (!isPlainObject(rawSpaces) || rawSpaces.version !== 1) {
           setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.invalidSpaces') });
@@ -721,7 +685,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
             if (!spaceIds.has(spaceId)) continue;
             if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
-            const layout = filterMagnetSpaceLayoutToBuiltins(sanitizeMagnetSpaceLayout(layoutValue));
+            const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
             await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
           }
 
@@ -730,7 +694,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             if (!isPlainObject(configValue)) continue;
             await broadcastDataUpdate(
               resolveMagnetConfigStorageKey(spaceId),
-              filterMagnetConfigSnapshotToBuiltins(configValue)
+              filterMagnetConfigSnapshotForImport(configValue, allowedMagnetIds)
             );
           }
 
@@ -758,7 +722,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
           const layoutValue = nextLayoutsBySpaceId[options.sourceSpaceId];
           if (isPlainObject(layoutValue) && layoutValue.version === 1) {
-            const layout = filterMagnetSpaceLayoutToBuiltins(sanitizeMagnetSpaceLayout(layoutValue));
+            const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
             await broadcastDataUpdate(resolveMagnetLayoutStorageKey(options.targetSpaceId), layout);
           }
 
@@ -766,7 +730,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           if (isPlainObject(configValue)) {
             await broadcastDataUpdate(
               resolveMagnetConfigStorageKey(options.targetSpaceId),
-              filterMagnetConfigSnapshotToBuiltins(configValue)
+              filterMagnetConfigSnapshotForImport(configValue, allowedMagnetIds)
             );
           }
 
@@ -790,7 +754,15 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     } finally {
       setProfilePackApplyBusy(false);
     }
-  }, [applyTheme, backupCurrentProfileSnapshot, confirm, profilePack, profilePackApplyOptions, t]);
+  }, [
+    applyTheme,
+    backupCurrentProfileSnapshot,
+    confirm,
+    magnetLibrary,
+    profilePack,
+    profilePackApplyOptions,
+    t,
+  ]);
 
   const rollbackProfilePackBackup = useCallback(async () => {
     const ok = await confirm({
@@ -1536,12 +1508,23 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
   const profilePackApplyWarnings = useMemo(() => {
     if (!profilePack) {
-      return { ignoredMagnetIds: [] as string[], missingRendererIds: [] as string[] };
+      return {
+        missingMagnetIds: [] as string[],
+        embeddedCustomMagnetIds: [] as string[],
+        missingRendererIds: [] as string[],
+      };
     }
 
-    const ignoredMagnetIds = new Set<string>();
+    const missingMagnetIds = new Set<string>();
+    const embeddedCustomMagnetIds = new Set<string>();
     const missingRendererIds = new Set<string>();
     const registeredRendererIds = new Set(rendererList.map((renderer) => renderer.id));
+    const allowedMagnetIds = new Set<string>(BUILTIN_MAGNET_IDS);
+    for (const magnet of magnetLibrary) {
+      const id = magnet.id.trim();
+      if (!id) continue;
+      allowedMagnetIds.add(id);
+    }
 
     if (profilePack.themeEntry?.text) {
       try {
@@ -1569,8 +1552,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             if (typeof entry !== 'string') continue;
             const id = entry.trim();
             if (!id) continue;
-            if (BUILTIN_MAGNET_IDS.has(id)) continue;
-            ignoredMagnetIds.add(id);
+            if (allowedMagnetIds.has(id)) continue;
+            missingMagnetIds.add(id);
           }
         }
 
@@ -1578,8 +1561,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         if (isPlainObject(anchors)) {
           for (const id of Object.keys(anchors)) {
             if (!id) continue;
-            if (BUILTIN_MAGNET_IDS.has(id)) continue;
-            ignoredMagnetIds.add(id);
+            if (allowedMagnetIds.has(id)) continue;
+            missingMagnetIds.add(id);
           }
         }
       }
@@ -1595,8 +1578,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           for (const [magnetId, state] of Object.entries(magnets)) {
             const normalizedMagnetId = magnetId.trim();
             if (!normalizedMagnetId) continue;
-            if (!BUILTIN_MAGNET_IDS.has(normalizedMagnetId)) {
-              ignoredMagnetIds.add(normalizedMagnetId);
+            if (!allowedMagnetIds.has(normalizedMagnetId)) {
+              missingMagnetIds.add(normalizedMagnetId);
               continue;
             }
 
@@ -1618,17 +1601,18 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             const id = typeof entry.id === 'string' ? entry.id.trim() : '';
             if (!id) continue;
             if (BUILTIN_MAGNET_IDS.has(id)) continue;
-            ignoredMagnetIds.add(id);
+            embeddedCustomMagnetIds.add(id);
           }
         }
       }
     }
 
     return {
-      ignoredMagnetIds: [...ignoredMagnetIds].sort(),
+      missingMagnetIds: [...missingMagnetIds].sort(),
+      embeddedCustomMagnetIds: [...embeddedCustomMagnetIds].sort(),
       missingRendererIds: [...missingRendererIds].sort(),
     };
-  }, [profilePack, rendererList]);
+  }, [magnetLibrary, profilePack, rendererList]);
 
   useEffect(() => {
     if (!selectedRendererId || selectedRenderer) return;
@@ -2514,22 +2498,36 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                 ) : null}
               </div>
 
-              {profilePackApplyWarnings.ignoredMagnetIds.length > 0 ||
+              {profilePackApplyWarnings.missingMagnetIds.length > 0 ||
+              profilePackApplyWarnings.embeddedCustomMagnetIds.length > 0 ||
               profilePackApplyWarnings.missingRendererIds.length > 0 ? (
                 <div className="profile-pack-apply-warnings">
                   <div className="profile-pack-apply-warnings-title">
                     {t('editor.theme-editor.profilePack.applyDialog.warnings.title')}
                   </div>
 
-                  {profilePackApplyWarnings.ignoredMagnetIds.length > 0 ? (
+                  {profilePackApplyWarnings.missingMagnetIds.length > 0 ? (
                     <>
                       <div className="theme-editor-muted">
-                        {t('editor.theme-editor.profilePack.applyDialog.warnings.customMagnetsIgnored', {
-                          count: profilePackApplyWarnings.ignoredMagnetIds.length,
+                        {t('editor.theme-editor.profilePack.applyDialog.warnings.missingMagnets', {
+                          count: profilePackApplyWarnings.missingMagnetIds.length,
                         })}
                       </div>
                       <pre className="theme-editor-panel-json">
-                        {profilePackApplyWarnings.ignoredMagnetIds.join('\n')}
+                        {profilePackApplyWarnings.missingMagnetIds.join('\n')}
+                      </pre>
+                    </>
+                  ) : null}
+
+                  {profilePackApplyWarnings.embeddedCustomMagnetIds.length > 0 ? (
+                    <>
+                      <div className="theme-editor-muted">
+                        {t('editor.theme-editor.profilePack.applyDialog.warnings.customMagnetsIgnored', {
+                          count: profilePackApplyWarnings.embeddedCustomMagnetIds.length,
+                        })}
+                      </div>
+                      <pre className="theme-editor-panel-json">
+                        {profilePackApplyWarnings.embeddedCustomMagnetIds.join('\n')}
                       </pre>
                     </>
                   ) : null}
