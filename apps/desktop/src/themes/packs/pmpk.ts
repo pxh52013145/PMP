@@ -57,10 +57,9 @@ function isValidId(id: string): boolean {
   return /^[a-z0-9-]+$/.test(id);
 }
 
-function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(buffer).set(data);
-  return buffer;
+function ensureUint8Array(data: Uint8Array): Uint8Array {
+  // Ensure `instanceof Uint8Array` matches the current realm (Vitest/jsdom may involve multiple realms).
+  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 }
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
@@ -68,7 +67,7 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
     throw new Error('crypto.subtle.digest is not available');
   }
 
-  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(data));
+  const digest = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
@@ -439,8 +438,8 @@ export async function createThemePackZipBytes(options: {
   const normalizedEntryThemePath = normalizeChecksumPath(entryThemePath);
 
   const zippable: AsyncZippable = {
-    'manifest.json': strToU8(manifestText),
-    [normalizedEntryThemePath]: strToU8(themeText),
+    'manifest.json': ensureUint8Array(strToU8(manifestText)),
+    [normalizedEntryThemePath]: ensureUint8Array(strToU8(themeText)),
   };
 
   const bundles = options.bundles ?? {};
@@ -460,7 +459,7 @@ export async function createThemePackZipBytes(options: {
     if (!bytes) {
       throw new Error(`Missing bundled bytes for ${path}`);
     }
-    zippable[path] = bytes;
+    zippable[path] = ensureUint8Array(bytes);
   }
 
   const checksumsEnabled = options.checksums?.enabled ?? true;
@@ -479,7 +478,7 @@ export async function createThemePackZipBytes(options: {
       algorithm: 'sha256',
       files,
     };
-    zippable['checksums.json'] = strToU8(JSON.stringify(checksums, null, 2));
+    zippable['checksums.json'] = ensureUint8Array(strToU8(JSON.stringify(checksums, null, 2)));
   }
 
   return await zipAsync(zippable);
