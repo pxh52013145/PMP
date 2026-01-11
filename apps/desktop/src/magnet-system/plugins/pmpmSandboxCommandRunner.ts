@@ -57,6 +57,8 @@ async function runRpc(api: PluginMountApi, request: RpcRequest): Promise<unknown
       return api.audio.setVolume(args[0] as number);
     case 'audio.toggleMute':
       return api.audio.toggleMute();
+    case 'audio.getCover':
+      return await api.audio.getCover();
     case 'navigation.navigateTo':
       return api.navigation.navigateTo(args[0] as never, args[1] as never);
     case 'navigation.goBack':
@@ -220,6 +222,7 @@ const api = {
     seek: (time) => void rpcCall('audio.seek', [time]),
     setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
     toggleMute: () => void rpcCall('audio.toggleMute'),
+    getCover: () => rpcCall('audio.getCover'),
   },
   visualizer: {
     getSpectrum: () => {

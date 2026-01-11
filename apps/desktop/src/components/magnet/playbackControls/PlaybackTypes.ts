@@ -4,6 +4,8 @@
 
 import { PlaybackData } from './usePlaybackData';
 import { PlaybackLogic } from './usePlaybackLogic';
+import type { DynamicColors } from '../shared/useDynamicColor';
+import type { DynamicColorConfig } from '../../../themes/types/theme';
 
 /**
  * 变体组件的统一Props
@@ -11,5 +13,7 @@ import { PlaybackLogic } from './usePlaybackLogic';
 export interface PlaybackVariantProps {
   data: PlaybackData;
   logic: PlaybackLogic;
+  dynamicColors?: DynamicColors;
+  dynamicColorConfig?: DynamicColorConfig;
   variantConfig?: unknown;
 }

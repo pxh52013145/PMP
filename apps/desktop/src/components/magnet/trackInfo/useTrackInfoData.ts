@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Track } from '../../../services/audio';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
-import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
+import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
 
 export interface TrackInfoData {
   track: Track | null;
@@ -15,16 +15,7 @@ export interface TrackInfoData {
   duration: number;
 }
 
-function trackKey(track: Track | null): string {
-  if (!track) return 'none';
-  return (
-    track.id ||
-    track.filePath ||
-    track.path ||
-    track.originalPath ||
-    `${track.title}::${track.artist || ''}`
-  );
-}
+
 
 /**
  * 获取TrackInfo的数据
@@ -32,20 +23,14 @@ function trackKey(track: Track | null): string {
 export function useTrackInfoData(): TrackInfoData {
   const audioService = useAudioService();
   const [baseTrack, setBaseTrack] = useState<Track | null>(null);
-  const [coverUrl, setCoverUrl] = useState<string | undefined>(undefined);
+  const coverUrl = useCoverUrlForTrack(baseTrack);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
   useEffect(() => {
     const unsubscribe = audioService.onStateChange((state) => {
-      setBaseTrack((prev) => {
-        const next = state.currentTrack;
-        if (trackKey(prev) !== trackKey(next)) {
-          setCoverUrl(undefined);
-        }
-        return next;
-      });
+      setBaseTrack(state.currentTrack);
       setIsPlaying(state.playbackState === 'playing');
       setCurrentTime(state.currentTime);
       setDuration(state.duration);
@@ -60,22 +45,6 @@ export function useTrackInfoData(): TrackInfoData {
 
     return unsubscribe;
   }, [audioService]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const current = baseTrack;
-    if (!current) return;
-
-    void musicLibraryService.getCoverUrlForTrack(current).then((url) => {
-      if (cancelled) return;
-      if (!url) return;
-      setCoverUrl(url);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [baseTrack]);
 
   const track = useMemo(() => {
     if (!baseTrack) return null;

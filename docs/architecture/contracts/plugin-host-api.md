@@ -30,7 +30,7 @@
   - `variants?: Array<{ id, label, description?, metadata? }>`（供 Theme Editor / Debug 发现并展示；仅声明，不授予任何“功能权限”）
 - `permissions?: string[]`（R5：deny-by-default 权限 gate + denied audit + per-plugin denylist；sandbox 内网络能力也会按权限 best-effort gate）
 - 常用权限（As-Is）：
-  - `api:audio-state` / `api:audio-control` / `api:audio-visual`
+  - `api:audio-state` / `api:audio-control` / `api:audio-visual` / `api:audio-cover`
   - `api:navigation`
   - `api:window`
   - `storage:local`（插件配置）
@@ -116,11 +116,14 @@ export function runCommand?(
 - Runtime restart/kill（R5）：`apps/desktop/src/magnet-system/plugins/pmpmRuntimeSupervisor.ts`（跨窗口同步 + audit `runtime-restart`）
 
 当前 API（最小集）：
-- `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute`）
+- `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute/getCover`）
 - `visualizer`：频谱（`getSpectrum/onSpectrum`）
 - `navigation`：页面跳转与返回（`navigateTo/goBack`，params 会走统一校验）
 - `config`：插件本地配置（`get/set/patch/reset/onChange`，由宿主持久化）
 - `window`：打开/关闭插件窗口（`open/close`，按 label/route 规范）
+
+补充：
+- `audio.getCover()`（需要 `api:audio-cover`）：返回 `{ url, colors } | null`，其中 `url` 为可在 sandbox 内使用的 `data:` URL；`colors` 为 `{ dominantColor, accentColor, textColor }`。
 
 限制（现状）：
 - `manifest.permissions` 已在 host 侧做权限 gate（`pluginHostApi.ts`）并记录 denied audit；Settings UI 支持 per-plugin denylist 与 enable/disable。

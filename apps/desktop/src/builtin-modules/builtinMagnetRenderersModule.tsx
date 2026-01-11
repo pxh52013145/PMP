@@ -215,6 +215,7 @@ function registerBuiltinVariants(): void {
   const labelCyber = t('magnet.variant.cyber');
   const labelCard = t('magnet.variant.card');
   const labelSpinningVinyl = t('magnet.variant.spinningVinyl');
+  const labelCoverGlow = t('magnet.variant.coverGlow');
 
   register(
     'track-info',
@@ -233,6 +234,12 @@ function registerBuiltinVariants(): void {
   register('btn-play-pause', 'default', labelDefault);
   register('btn-play-pause', 'standard', labelStandard);
   register('btn-play-pause', 'rounded', labelRounded);
+  register(
+    'btn-play-pause',
+    'cover-glow',
+    labelCoverGlow,
+    t('magnet.variant.btn-play-pause.coverGlow.description')
+  );
 
   register('btn-previous', 'default', labelDefault);
   register('btn-previous', 'standard', labelStandard);

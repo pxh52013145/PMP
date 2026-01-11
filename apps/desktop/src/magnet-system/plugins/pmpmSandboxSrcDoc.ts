@@ -203,14 +203,15 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           },
           play: () => rpcCall('audio.play'),
           pause: () => rpcCall('audio.pause'),
-          stop: () => void rpcCall('audio.stop'),
-          seek: (time) => void rpcCall('audio.seek', [time]),
-          setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
-          toggleMute: () => void rpcCall('audio.toggleMute'),
-        },
-        visualizer: {
-          getSpectrum: () => {
-            if (!permissions.has('api:audio-visual')) {
+           stop: () => void rpcCall('audio.stop'),
+           seek: (time) => void rpcCall('audio.seek', [time]),
+           setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
+           toggleMute: () => void rpcCall('audio.toggleMute'),
+           getCover: () => rpcCall('audio.getCover'),
+         },
+         visualizer: {
+           getSpectrum: () => {
+             if (!permissions.has('api:audio-visual')) {
               warnDenied('api:audio-visual', 'visualizer.getSpectrum()');
               return null;
             }

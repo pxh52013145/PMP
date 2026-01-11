@@ -1,6 +1,9 @@
 import type { NavigationPageType, NavigationParamsFor } from '../../contexts/NavigationContext';
 import { closePluginWindow, openPluginWindow } from '../../utils/pluginWindows';
 import { parseNavigationParams } from '../../contracts/navigationParams';
+import type { Track } from '../../services/audio';
+import { musicLibraryService } from '../../services/audio/MusicLibraryService';
+import { getDynamicColorsForImageUrl, type DynamicColors } from '../../utils/dynamicColors';
 import {
   patchPmpmPluginConfig,
   readPmpmPluginConfig,
@@ -16,6 +19,7 @@ export type PluginAudioApi = {
   onStateChange: (cb: (state: unknown) => void) => () => void;
   onTimeUpdate: (cb: (time: number) => void) => () => void;
   onEnded: (cb: () => void) => () => void;
+  getCover: () => Promise<PluginCoverSnapshot | null>;
   play: () => Promise<void>;
   pause: () => Promise<void> | void;
   stop: () => void;
@@ -30,6 +34,11 @@ export type PluginVisualizerApi = {
     cb: (bins: Uint8Array | null) => void,
     options?: { intervalMs?: number }
   ) => () => void;
+};
+
+export type PluginCoverSnapshot = {
+  url: string;
+  colors: DynamicColors;
 };
 
 export type PluginNavigationApi = {
@@ -116,6 +125,7 @@ export function createPluginMountApi({
   const allowAudioState = permissions.has('api:audio-state');
   const allowAudioControl = permissions.has('api:audio-control');
   const allowAudioVisual = permissions.has('api:audio-visual');
+  const allowAudioCover = permissions.has('api:audio-cover');
   const allowNavigation = permissions.has('api:navigation');
   const allowPluginConfig = permissions.has('storage:local');
   const allowWindows = permissions.has('api:window');
@@ -126,6 +136,49 @@ export function createPluginMountApi({
       recordPmpmPermissionDenied({ pluginId, hostLabel, capability, action });
     } catch {
       // ignore
+    }
+  };
+
+  let coverCache: { key: string; value: PluginCoverSnapshot | null } | null = null;
+  let coverInflight: { key: string; promise: Promise<PluginCoverSnapshot | null> } | null = null;
+
+  const getCover = async (): Promise<PluginCoverSnapshot | null> => {
+    if (!allowAudioCover) {
+      warnDenied('api:audio-cover', 'audio.getCover()');
+      return null;
+    }
+
+    const track = resolveCurrentTrack(audioService.getState());
+    if (!track) return null;
+
+    const cacheKey = buildTrackKey(track);
+    if (!cacheKey) return null;
+
+    if (coverCache?.key === cacheKey) {
+      return coverCache.value;
+    }
+    if (coverInflight?.key === cacheKey) {
+      return await coverInflight.promise;
+    }
+
+    const promise = (async (): Promise<PluginCoverSnapshot | null> => {
+      const coverUrl = await resolveCoverDataUrl(track);
+      if (!coverUrl) return null;
+
+      const colors = await getDynamicColorsForImageUrl(coverUrl, cacheKey);
+      return { url: coverUrl, colors };
+    })();
+
+    coverInflight = { key: cacheKey, promise };
+
+    try {
+      const value = await promise;
+      coverCache = { key: cacheKey, value };
+      return value;
+    } finally {
+      if (coverInflight?.key === cacheKey) {
+        coverInflight = null;
+      }
     }
   };
 
@@ -193,6 +246,7 @@ export function createPluginMountApi({
         }
         return audioService.onEnded(cb);
       },
+      getCover,
       play: async () => {
         if (!allowAudioControl) {
           warnDenied('api:audio-control', 'audio.play()');
@@ -349,4 +403,100 @@ export function createPluginMountApi({
     },
     window: windowApi,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text ? text : null;
+}
+
+function resolveCurrentTrack(state: unknown): Track | null {
+  if (!isRecord(state)) return null;
+  const current = state.currentTrack;
+  if (!isRecord(current)) return null;
+
+  const id = readNonEmptyString(current.id) ?? readNonEmptyString(current.filePath) ?? readNonEmptyString(current.path);
+  if (!id) return null;
+
+  const title = readNonEmptyString(current.title) ?? id;
+
+  const track: Track = {
+    id,
+    title,
+  };
+
+  const filePath = readNonEmptyString(current.filePath);
+  if (filePath) track.filePath = filePath;
+
+  const path = readNonEmptyString(current.path);
+  if (path) track.path = path;
+
+  const originalPath = readNonEmptyString(current.originalPath);
+  if (originalPath) track.originalPath = originalPath;
+
+  const coverKey = readNonEmptyString(current.coverKey);
+  if (coverKey) track.coverKey = coverKey;
+
+  const coverUrl = readNonEmptyString(current.coverUrl);
+  if (coverUrl) track.coverUrl = coverUrl;
+
+  const artist = readNonEmptyString(current.artist);
+  if (artist) track.artist = artist;
+
+  const album = readNonEmptyString(current.album);
+  if (album) track.album = album;
+
+  return track;
+}
+
+function buildTrackKey(track: Track): string | null {
+  return (
+    readNonEmptyString(track.coverKey) ||
+    readNonEmptyString(track.id) ||
+    readNonEmptyString(track.filePath) ||
+    readNonEmptyString(track.path) ||
+    readNonEmptyString(track.originalPath) ||
+    readNonEmptyString(track.title) ||
+    null
+  );
+}
+
+async function blobUrlToDataUrl(blobUrl: string): Promise<string | null> {
+  try {
+    const response = await fetch(blobUrl);
+    const blob = await response.blob();
+    return await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCoverDataUrl(track: Track): Promise<string | null> {
+  const existing = readNonEmptyString(track.coverUrl);
+  if (existing) {
+    const lower = existing.toLowerCase();
+    if (lower.startsWith('data:')) return existing;
+    if (lower.startsWith('http:') || lower.startsWith('https:')) return existing;
+    if (lower.startsWith('blob:')) return await blobUrlToDataUrl(existing);
+  }
+
+  const resolved = await musicLibraryService.getCoverUrlForTrack(track);
+  const url = readNonEmptyString(resolved);
+  if (!url) return null;
+
+  const lower = url.toLowerCase();
+  if (lower.startsWith('data:')) return url;
+  if (lower.startsWith('http:') || lower.startsWith('https:')) return url;
+  if (lower.startsWith('blob:')) return await blobUrlToDataUrl(url);
+
+  return null;
 }

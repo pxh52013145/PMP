@@ -6,9 +6,11 @@ import { getInstalledPmpmPlugin, installPmpmPluginFromZipBytes } from '../../mag
 import { getInstalledPmpsShaderPack } from '../../shader-system/pmps';
 import { installPmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
 import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
+import { BUILTIN_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
 import { readJson } from '../../modules/storage';
 import {
   createDefaultMagnetSpacesState,
+  type MagnetSpaceLayout,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
   sanitizeMagnetSpaceLayout,
@@ -68,6 +70,49 @@ function assertObject(value: unknown, path: string): asserts value is Record<str
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function filterMagnetSpaceLayoutToBuiltins(layout: MagnetSpaceLayout): MagnetSpaceLayout {
+  const activeMagnetIds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const magnetId of layout.activeMagnetIds) {
+    if (!BUILTIN_MAGNET_IDS.has(magnetId)) continue;
+    if (seen.has(magnetId)) continue;
+    seen.add(magnetId);
+    activeMagnetIds.push(magnetId);
+  }
+
+  for (const requiredId of REQUIRED_MAGNET_IDS) {
+    if (seen.has(requiredId)) continue;
+    seen.add(requiredId);
+    activeMagnetIds.push(requiredId);
+  }
+
+  const anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {};
+  for (const [magnetId, anchors] of Object.entries(layout.anchorsByMagnetId)) {
+    if (!BUILTIN_MAGNET_IDS.has(magnetId)) continue;
+    anchorsByMagnetId[magnetId] = anchors;
+  }
+
+  return { ...layout, activeMagnetIds, anchorsByMagnetId };
+}
+
+function filterMagnetConfigSnapshotToBuiltins(value: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...value };
+
+  const rawMagnets = result.magnets;
+  if (isPlainObject(rawMagnets)) {
+    const filtered: Record<string, unknown> = {};
+    for (const [magnetId, magnetState] of Object.entries(rawMagnets)) {
+      if (!BUILTIN_MAGNET_IDS.has(magnetId)) continue;
+      filtered[magnetId] = magnetState;
+    }
+    result.magnets = filtered;
+  }
+
+  result.customMagnets = [];
+  return result;
 }
 
 function validateThemeJson(value: unknown): asserts value is Theme {
@@ -175,6 +220,17 @@ type ThemePackExportBundle = {
   metaError?: string;
 };
 
+type ProfilePackApplyMode = 'replace-all' | 'map-one';
+
+type ProfilePackApplyOptions = {
+  applyTheme: boolean;
+  applyMagnets: boolean;
+  magnetsMode: ProfilePackApplyMode;
+  sourceSpaceId: string;
+  targetSpaceId: string;
+  acknowledgeOverwrite: boolean;
+};
+
 export type ThemeEditorProps = {
   magnetLibrary: Magnet[];
   applyRendererBindings: (
@@ -210,6 +266,16 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     JSON.stringify(buildDefaultProfilePackManifest(theme), null, 2)
   );
   const [profilePackExportChecksumsEnabled, setProfilePackExportChecksumsEnabled] = useState(true);
+  const [profilePackApplyOpen, setProfilePackApplyOpen] = useState(false);
+  const [profilePackApplyBusy, setProfilePackApplyBusy] = useState(false);
+  const [profilePackApplyOptions, setProfilePackApplyOptions] = useState<ProfilePackApplyOptions>(() => ({
+    applyTheme: true,
+    applyMagnets: false,
+    magnetsMode: 'replace-all',
+    sourceSpaceId: 'space1',
+    targetSpaceId: 'space1',
+    acknowledgeOverwrite: false,
+  }));
 
   const themePackRequires = useMemo(() => themePack?.manifest.requires ?? null, [themePack?.manifest.requires]);
   const themePackAppVersionSatisfaction = useMemo(
@@ -494,6 +560,25 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         const bytes = new Uint8Array(await file.arrayBuffer());
         const parsed = await parseProfilePackFromZipBytes(bytes);
         setProfilePack(parsed);
+
+        const packSpacesRaw = parsed.profile?.magnets?.spaces?.value;
+        const packSpaces =
+          isPlainObject(packSpacesRaw) && packSpacesRaw.version === 1
+            ? sanitizeMagnetSpacesState(packSpacesRaw)
+            : null;
+        const localSpaces = sanitizeMagnetSpacesState(
+          readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+        );
+
+        setProfilePackApplyOptions({
+          applyTheme: Boolean(parsed.themeEntry?.text),
+          applyMagnets: false,
+          magnetsMode: 'replace-all',
+          sourceSpaceId: packSpaces?.spaces[0]?.id ?? 'space1',
+          targetSpaceId: localSpaces.spaces[0]?.id ?? 'space1',
+          acknowledgeOverwrite: false,
+        });
+        setProfilePackApplyOpen(true);
         setProfilePackMessage({
           kind: 'success',
           text: t('editor.theme-editor.profilePack.message.fileLoaded', { name: file.name }),
@@ -512,25 +597,28 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     [t]
   );
 
-  const applyProfilePackTheme = useCallback(async () => {
-    if (!profilePack?.themeEntry?.text) {
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.themeMissing') });
-      return;
-    }
+  const openProfilePackApplyDialog = useCallback(() => {
+    if (!profilePack) return;
 
-    try {
-      const parsed = JSON.parse(profilePack.themeEntry.text) as unknown;
-      validateThemeJson(parsed);
-      await applyTheme(parsed);
-      setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.themeApplied') });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setProfilePackMessage({
-        kind: 'error',
-        text: t('editor.theme-editor.profilePack.message.themeApplyFailed', { message }),
-      });
-    }
-  }, [applyTheme, profilePack, t]);
+    const packSpacesRaw = profilePack.profile?.magnets?.spaces?.value;
+    const packSpaces =
+      isPlainObject(packSpacesRaw) && packSpacesRaw.version === 1
+        ? sanitizeMagnetSpacesState(packSpacesRaw)
+        : null;
+    const localSpaces = sanitizeMagnetSpacesState(
+      readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+    );
+
+    setProfilePackApplyOptions({
+      applyTheme: Boolean(profilePack.themeEntry?.text),
+      applyMagnets: false,
+      magnetsMode: 'replace-all',
+      sourceSpaceId: packSpaces?.spaces[0]?.id ?? 'space1',
+      targetSpaceId: localSpaces.spaces[0]?.id ?? 'space1',
+      acknowledgeOverwrite: false,
+    });
+    setProfilePackApplyOpen(true);
+  }, [profilePack]);
 
   const backupCurrentProfileSnapshot = useCallback(async () => {
     const spacesRaw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
@@ -543,13 +631,13 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const layoutKey = resolveMagnetLayoutStorageKey(space.id);
       const layoutRaw = readJson<unknown | null>(layoutKey, null);
       if (layoutRaw !== null) {
-        layoutsBySpaceId[space.id] = layoutRaw;
+        layoutsBySpaceId[space.id] = filterMagnetSpaceLayoutToBuiltins(sanitizeMagnetSpaceLayout(layoutRaw));
       }
 
       const configKey = resolveMagnetConfigStorageKey(space.id);
       const configRaw = readJson<unknown | null>(configKey, null);
-      if (configRaw !== null) {
-        configsBySpaceId[space.id] = configRaw;
+      if (isPlainObject(configRaw)) {
+        configsBySpaceId[space.id] = filterMagnetConfigSnapshotToBuiltins(configRaw);
       }
     }
 
@@ -567,65 +655,142 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     return await writeDurableText('profile-pack-backup', 'last', JSON.stringify(snapshot));
   }, [theme]);
 
-  const applyProfilePackMagnets = useCallback(async () => {
-    if (!profilePack?.profile) {
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.profileMissing') });
+  const applyProfilePackFromDialog = useCallback(async () => {
+    if (!profilePack) return;
+
+    const options = profilePackApplyOptions;
+    if (!options.applyTheme && !options.applyMagnets) {
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.nothingSelected') });
       return;
     }
 
-    const rawSpaces = profilePack.profile.magnets?.spaces?.value;
-    if (!isPlainObject(rawSpaces) || rawSpaces.version !== 1) {
-      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.invalidSpaces') });
+    if (options.applyMagnets && !options.acknowledgeOverwrite) {
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.ackRequired') });
       return;
     }
 
-    const nextSpaces = sanitizeMagnetSpacesState(rawSpaces);
-    const spaceIds = new Set(nextSpaces.spaces.map((s) => s.id));
+    setProfilePackApplyBusy(true);
+    setProfilePackApplyOpen(false);
 
-    const rawLayouts = profilePack.profile.magnets?.spaceLayout?.value;
-    const rawConfigs = profilePack.profile.magnets?.spaceConfig?.value;
+    try {
+      if (options.applyMagnets) {
+        const backedUp = await backupCurrentProfileSnapshot();
+        if (!backedUp) {
+          const continueWithoutBackup = await confirm({
+            title: t('editor.theme-editor.profilePack.backupFailed.title'),
+            message: t('editor.theme-editor.profilePack.backupFailed.message'),
+            confirmText: t('editor.theme-editor.profilePack.backupFailed.confirm'),
+            danger: true,
+          });
+          if (!continueWithoutBackup) return;
+        }
+      }
 
-    const nextLayoutsBySpaceId: Record<string, unknown> = isPlainObject(rawLayouts) ? rawLayouts : {};
-    const nextConfigsBySpaceId: Record<string, unknown> = isPlainObject(rawConfigs) ? rawConfigs : {};
+      if (options.applyTheme) {
+        if (!profilePack.themeEntry?.text) {
+          setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.themeMissing') });
+          return;
+        }
 
-    const ok = await confirm({
-      title: t('editor.theme-editor.profilePack.applyMagnets.confirm.title'),
-      message: t('editor.theme-editor.profilePack.applyMagnets.confirm.message', {
-        count: nextSpaces.spaces.length,
-      }),
-      confirmText: t('editor.theme-editor.profilePack.applyMagnets.confirm.confirm'),
-      danger: true,
-    });
-    if (!ok) return;
+        const parsed = JSON.parse(profilePack.themeEntry.text) as unknown;
+        validateThemeJson(parsed);
+        await applyTheme(parsed);
+      }
 
-    const backedUp = await backupCurrentProfileSnapshot();
-    if (!backedUp) {
-      const continueWithoutBackup = await confirm({
-        title: t('editor.theme-editor.profilePack.backupFailed.title'),
-        message: t('editor.theme-editor.profilePack.backupFailed.message'),
-        confirmText: t('editor.theme-editor.profilePack.backupFailed.confirm'),
-        danger: true,
+      if (options.applyMagnets) {
+        if (!profilePack.profile) {
+          setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.profileMissing') });
+          return;
+        }
+
+        const rawSpaces = profilePack.profile.magnets?.spaces?.value;
+        if (!isPlainObject(rawSpaces) || rawSpaces.version !== 1) {
+          setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.invalidSpaces') });
+          return;
+        }
+
+        const rawLayouts = profilePack.profile.magnets?.spaceLayout?.value;
+        const rawConfigs = profilePack.profile.magnets?.spaceConfig?.value;
+
+        const nextSpaces = sanitizeMagnetSpacesState(rawSpaces);
+        const spaceIds = new Set(nextSpaces.spaces.map((s) => s.id));
+        const nextLayoutsBySpaceId: Record<string, unknown> = isPlainObject(rawLayouts) ? rawLayouts : {};
+        const nextConfigsBySpaceId: Record<string, unknown> = isPlainObject(rawConfigs) ? rawConfigs : {};
+
+        if (options.magnetsMode === 'replace-all') {
+          for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
+            if (!spaceIds.has(spaceId)) continue;
+            if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+            const layout = filterMagnetSpaceLayoutToBuiltins(sanitizeMagnetSpaceLayout(layoutValue));
+            await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+          }
+
+          for (const [spaceId, configValue] of Object.entries(nextConfigsBySpaceId)) {
+            if (!spaceIds.has(spaceId)) continue;
+            if (!isPlainObject(configValue)) continue;
+            await broadcastDataUpdate(
+              resolveMagnetConfigStorageKey(spaceId),
+              filterMagnetConfigSnapshotToBuiltins(configValue)
+            );
+          }
+
+          await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+        } else {
+          if (!spaceIds.has(options.sourceSpaceId)) {
+            setProfilePackMessage({
+              kind: 'error',
+              text: t('editor.theme-editor.profilePack.message.sourceSpaceMissing', { id: options.sourceSpaceId }),
+            });
+            return;
+          }
+
+          const localSpaces = sanitizeMagnetSpacesState(
+            readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
+          );
+          const localSpaceIds = new Set(localSpaces.spaces.map((s) => s.id));
+          if (!localSpaceIds.has(options.targetSpaceId)) {
+            setProfilePackMessage({
+              kind: 'error',
+              text: t('editor.theme-editor.profilePack.message.targetSpaceMissing', { id: options.targetSpaceId }),
+            });
+            return;
+          }
+
+          const layoutValue = nextLayoutsBySpaceId[options.sourceSpaceId];
+          if (isPlainObject(layoutValue) && layoutValue.version === 1) {
+            const layout = filterMagnetSpaceLayoutToBuiltins(sanitizeMagnetSpaceLayout(layoutValue));
+            await broadcastDataUpdate(resolveMagnetLayoutStorageKey(options.targetSpaceId), layout);
+          }
+
+          const configValue = nextConfigsBySpaceId[options.sourceSpaceId];
+          if (isPlainObject(configValue)) {
+            await broadcastDataUpdate(
+              resolveMagnetConfigStorageKey(options.targetSpaceId),
+              filterMagnetConfigSnapshotToBuiltins(configValue)
+            );
+          }
+
+          await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, localSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+        }
+      }
+
+      if (options.applyTheme && options.applyMagnets) {
+        setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.appliedAll') });
+      } else if (options.applyTheme) {
+        setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.themeApplied') });
+      } else {
+        setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.magnetsApplied') });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.message.applyFailed', { message }),
       });
-      if (!continueWithoutBackup) return;
+    } finally {
+      setProfilePackApplyBusy(false);
     }
-
-    for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
-      if (!spaceIds.has(spaceId)) continue;
-      if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
-      const layout = sanitizeMagnetSpaceLayout(layoutValue);
-      await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
-    }
-
-    for (const [spaceId, configValue] of Object.entries(nextConfigsBySpaceId)) {
-      if (!spaceIds.has(spaceId)) continue;
-      if (!isPlainObject(configValue)) continue;
-      await broadcastDataUpdate(resolveMagnetConfigStorageKey(spaceId), configValue);
-    }
-
-    await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
-
-    setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.magnetsApplied') });
-  }, [backupCurrentProfileSnapshot, confirm, profilePack, t]);
+  }, [applyTheme, backupCurrentProfileSnapshot, confirm, profilePack, profilePackApplyOptions, t]);
 
   const rollbackProfilePackBackup = useCallback(async () => {
     const ok = await confirm({
@@ -1369,10 +1534,118 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     [rendererList, selectedRendererId]
   );
 
+  const profilePackApplyWarnings = useMemo(() => {
+    if (!profilePack) {
+      return { ignoredMagnetIds: [] as string[], missingRendererIds: [] as string[] };
+    }
+
+    const ignoredMagnetIds = new Set<string>();
+    const missingRendererIds = new Set<string>();
+    const registeredRendererIds = new Set(rendererList.map((renderer) => renderer.id));
+
+    if (profilePack.themeEntry?.text) {
+      try {
+        const parsedTheme = JSON.parse(profilePack.themeEntry.text) as unknown;
+        if (isPlainObject(parsedTheme)) {
+          const componentThemes = parsedTheme.componentThemes;
+          if (isPlainObject(componentThemes)) {
+            for (const rendererId of Object.keys(componentThemes)) {
+              if (!registeredRendererIds.has(rendererId)) missingRendererIds.add(rendererId);
+            }
+          }
+        }
+      } catch {
+        // ignore theme parsing errors here; apply flow validates separately
+      }
+    }
+
+    const rawLayouts = profilePack.profile?.magnets?.spaceLayout?.value;
+    if (isPlainObject(rawLayouts)) {
+      for (const layoutValue of Object.values(rawLayouts)) {
+        if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+        const active = (layoutValue as { activeMagnetIds?: unknown }).activeMagnetIds;
+        if (Array.isArray(active)) {
+          for (const entry of active) {
+            if (typeof entry !== 'string') continue;
+            const id = entry.trim();
+            if (!id) continue;
+            if (BUILTIN_MAGNET_IDS.has(id)) continue;
+            ignoredMagnetIds.add(id);
+          }
+        }
+
+        const anchors = (layoutValue as { anchorsByMagnetId?: unknown }).anchorsByMagnetId;
+        if (isPlainObject(anchors)) {
+          for (const id of Object.keys(anchors)) {
+            if (!id) continue;
+            if (BUILTIN_MAGNET_IDS.has(id)) continue;
+            ignoredMagnetIds.add(id);
+          }
+        }
+      }
+    }
+
+    const rawConfigs = profilePack.profile?.magnets?.spaceConfig?.value;
+    if (isPlainObject(rawConfigs)) {
+      for (const configValue of Object.values(rawConfigs)) {
+        if (!isPlainObject(configValue)) continue;
+
+        const magnets = (configValue as { magnets?: unknown }).magnets;
+        if (isPlainObject(magnets)) {
+          for (const [magnetId, state] of Object.entries(magnets)) {
+            const normalizedMagnetId = magnetId.trim();
+            if (!normalizedMagnetId) continue;
+            if (!BUILTIN_MAGNET_IDS.has(normalizedMagnetId)) {
+              ignoredMagnetIds.add(normalizedMagnetId);
+              continue;
+            }
+
+            if (!isPlainObject(state)) continue;
+            const rendererId = (state as { renderer?: unknown }).renderer;
+            if (typeof rendererId === 'string' && rendererId.trim().length > 0) {
+              const normalizedRendererId = rendererId.trim();
+              if (!registeredRendererIds.has(normalizedRendererId)) {
+                missingRendererIds.add(normalizedRendererId);
+              }
+            }
+          }
+        }
+
+        const customMagnets = (configValue as { customMagnets?: unknown }).customMagnets;
+        if (Array.isArray(customMagnets)) {
+          for (const entry of customMagnets) {
+            if (!isPlainObject(entry)) continue;
+            const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+            if (!id) continue;
+            if (BUILTIN_MAGNET_IDS.has(id)) continue;
+            ignoredMagnetIds.add(id);
+          }
+        }
+      }
+    }
+
+    return {
+      ignoredMagnetIds: [...ignoredMagnetIds].sort(),
+      missingRendererIds: [...missingRendererIds].sort(),
+    };
+  }, [profilePack, rendererList]);
+
   useEffect(() => {
     if (!selectedRendererId || selectedRenderer) return;
     setSelectedRendererId(rendererList[0]?.id ?? '');
   }, [rendererList, selectedRenderer, selectedRendererId]);
+
+  useEffect(() => {
+    if (!profilePackApplyOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      if (profilePackApplyBusy) return;
+      setProfilePackApplyOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [profilePackApplyBusy, profilePackApplyOpen]);
 
   return (
     <div className="editor-theme">
@@ -1870,20 +2143,17 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   <button
                     type="button"
                     className="theme-editor-action-btn"
-                    onClick={applyProfilePackTheme}
-                    disabled={!profilePack?.themeEntry?.text}
+                    onClick={openProfilePackApplyDialog}
+                    disabled={!profilePack || profilePackApplyBusy}
                   >
-                    {t('editor.theme-editor.profilePack.applyThemeOnly')}
+                    {t('editor.theme-editor.profilePack.apply')}
                   </button>
                   <button
                     type="button"
                     className="theme-editor-action-btn"
-                    onClick={applyProfilePackMagnets}
-                    disabled={!profilePack?.profile}
+                    onClick={rollbackProfilePackBackup}
+                    disabled={profilePackApplyBusy}
                   >
-                    {t('editor.theme-editor.profilePack.applyMagnets')}
-                  </button>
-                  <button type="button" className="theme-editor-action-btn" onClick={rollbackProfilePackBackup}>
                     {t('editor.theme-editor.profilePack.rollback')}
                   </button>
                 </div>
@@ -2067,6 +2337,245 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           </div>
         </div>
       </div>
+      {profilePackApplyOpen && profilePack ? (
+        <div
+          className="pmp-confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            if (profilePackApplyBusy) return;
+            setProfilePackApplyOpen(false);
+          }}
+        >
+          <div className="pmp-confirm-modal profile-pack-apply-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="pmp-confirm-header">
+              <div className="pmp-confirm-title">{t('editor.theme-editor.profilePack.applyDialog.title')}</div>
+            </div>
+            <div className="pmp-confirm-body">
+              <div className="profile-pack-apply-summary theme-pack-summary">
+                <div className="theme-pack-row">
+                  <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.idLabel')}</span>
+                  <span className="theme-pack-value">{profilePack.manifest.metadata.id}</span>
+                </div>
+                <div className="theme-pack-row">
+                  <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.nameLabel')}</span>
+                  <span className="theme-pack-value">{profilePack.manifest.metadata.name}</span>
+                </div>
+                <div className="theme-pack-row">
+                  <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.versionLabel')}</span>
+                  <span className="theme-pack-value">{profilePack.manifest.metadata.version}</span>
+                </div>
+              </div>
+
+              <div className="profile-pack-apply-options">
+                <label className="theme-pack-export-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={profilePackApplyOptions.applyTheme}
+                    disabled={!profilePack.themeEntry?.text || profilePackApplyBusy}
+                    onChange={(event) =>
+                      setProfilePackApplyOptions((prev) => ({
+                        ...prev,
+                        applyTheme: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span>{t('editor.theme-editor.profilePack.applyDialog.applyTheme')}</span>
+                </label>
+
+                <label className="theme-pack-export-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={profilePackApplyOptions.applyMagnets}
+                    disabled={!profilePack.profile || profilePackApplyBusy}
+                    onChange={(event) =>
+                      setProfilePackApplyOptions((prev) => ({
+                        ...prev,
+                        applyMagnets: event.target.checked,
+                        acknowledgeOverwrite: event.target.checked ? prev.acknowledgeOverwrite : false,
+                      }))
+                    }
+                  />
+                  <span>{t('editor.theme-editor.profilePack.applyDialog.applyMagnets')}</span>
+                </label>
+
+                {profilePackApplyOptions.applyMagnets ? (
+                  <div className="profile-pack-apply-magnets">
+                    <div className="profile-pack-apply-row">
+                      <label className="profile-pack-apply-radio">
+                        <input
+                          type="radio"
+                          name="profile-pack-apply-mode"
+                          checked={profilePackApplyOptions.magnetsMode === 'replace-all'}
+                          disabled={profilePackApplyBusy}
+                          onChange={() =>
+                            setProfilePackApplyOptions((prev) => ({
+                              ...prev,
+                              magnetsMode: 'replace-all',
+                            }))
+                          }
+                        />
+                        <span>{t('editor.theme-editor.profilePack.applyDialog.mode.replaceAll')}</span>
+                      </label>
+                      <label className="profile-pack-apply-radio">
+                        <input
+                          type="radio"
+                          name="profile-pack-apply-mode"
+                          checked={profilePackApplyOptions.magnetsMode === 'map-one'}
+                          disabled={profilePackApplyBusy}
+                          onChange={() =>
+                            setProfilePackApplyOptions((prev) => ({
+                              ...prev,
+                              magnetsMode: 'map-one',
+                            }))
+                          }
+                        />
+                        <span>{t('editor.theme-editor.profilePack.applyDialog.mode.mapOne')}</span>
+                      </label>
+                    </div>
+
+                    {profilePackApplyOptions.magnetsMode === 'map-one' ? (
+                      <div className="profile-pack-apply-row profile-pack-apply-row--mapping">
+                        <label className="profile-pack-apply-field">
+                          <span className="profile-pack-apply-label">
+                            {t('editor.theme-editor.profilePack.applyDialog.sourceSpace')}
+                          </span>
+                          <select
+                            className="profile-pack-apply-select"
+                            value={profilePackApplyOptions.sourceSpaceId}
+                            disabled={profilePackApplyBusy}
+                            onChange={(event) =>
+                              setProfilePackApplyOptions((prev) => ({
+                                ...prev,
+                                sourceSpaceId: event.target.value,
+                              }))
+                            }
+                          >
+                            {(() => {
+                              const rawSpaces = profilePack.profile?.magnets?.spaces?.value;
+                              if (!isPlainObject(rawSpaces) || rawSpaces.version !== 1) return null;
+                              const spaces = sanitizeMagnetSpacesState(rawSpaces);
+                              return spaces.spaces.map((space) => (
+                                <option key={space.id} value={space.id}>
+                                  {space.name} ({space.id})
+                                </option>
+                              ));
+                            })()}
+                          </select>
+                        </label>
+
+                        <label className="profile-pack-apply-field">
+                          <span className="profile-pack-apply-label">
+                            {t('editor.theme-editor.profilePack.applyDialog.targetSpace')}
+                          </span>
+                          <select
+                            className="profile-pack-apply-select"
+                            value={profilePackApplyOptions.targetSpaceId}
+                            disabled={profilePackApplyBusy}
+                            onChange={(event) =>
+                              setProfilePackApplyOptions((prev) => ({
+                                ...prev,
+                                targetSpaceId: event.target.value,
+                              }))
+                            }
+                          >
+                            {(() => {
+                              const spacesRaw = readJson(
+                                STORAGE_KEYS.MAGNET_SPACES,
+                                createDefaultMagnetSpacesState()
+                              );
+                              const spaces = sanitizeMagnetSpacesState(spacesRaw);
+                              return spaces.spaces.map((space) => (
+                                <option key={space.id} value={space.id}>
+                                  {space.name} ({space.id})
+                                </option>
+                              ));
+                            })()}
+                          </select>
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <label className="theme-pack-export-checkbox profile-pack-apply-ack">
+                      <input
+                        type="checkbox"
+                        checked={profilePackApplyOptions.acknowledgeOverwrite}
+                        disabled={profilePackApplyBusy}
+                        onChange={(event) =>
+                          setProfilePackApplyOptions((prev) => ({
+                            ...prev,
+                            acknowledgeOverwrite: event.target.checked,
+                          }))
+                        }
+                      />
+                      <span>{t('editor.theme-editor.profilePack.applyDialog.acknowledgeOverwrite')}</span>
+                    </label>
+                  </div>
+                ) : null}
+              </div>
+
+              {profilePackApplyWarnings.ignoredMagnetIds.length > 0 ||
+              profilePackApplyWarnings.missingRendererIds.length > 0 ? (
+                <div className="profile-pack-apply-warnings">
+                  <div className="profile-pack-apply-warnings-title">
+                    {t('editor.theme-editor.profilePack.applyDialog.warnings.title')}
+                  </div>
+
+                  {profilePackApplyWarnings.ignoredMagnetIds.length > 0 ? (
+                    <>
+                      <div className="theme-editor-muted">
+                        {t('editor.theme-editor.profilePack.applyDialog.warnings.customMagnetsIgnored', {
+                          count: profilePackApplyWarnings.ignoredMagnetIds.length,
+                        })}
+                      </div>
+                      <pre className="theme-editor-panel-json">
+                        {profilePackApplyWarnings.ignoredMagnetIds.join('\n')}
+                      </pre>
+                    </>
+                  ) : null}
+
+                  {profilePackApplyWarnings.missingRendererIds.length > 0 ? (
+                    <>
+                      <div className="theme-editor-muted">
+                        {t('editor.theme-editor.profilePack.applyDialog.warnings.missingRenderers', {
+                          count: profilePackApplyWarnings.missingRendererIds.length,
+                        })}
+                      </div>
+                      <pre className="theme-editor-panel-json">
+                        {profilePackApplyWarnings.missingRendererIds.join('\n')}
+                      </pre>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div className="pmp-confirm-footer">
+              <button
+                type="button"
+                className="pmp-confirm-btn"
+                onClick={() => setProfilePackApplyOpen(false)}
+                disabled={profilePackApplyBusy}
+              >
+                {t('common.action.cancel')}
+              </button>
+              <button
+                type="button"
+                className="pmp-confirm-btn pmp-confirm-btn--primary"
+                onClick={() => void applyProfilePackFromDialog()}
+                disabled={
+                  profilePackApplyBusy ||
+                  (!profilePackApplyOptions.applyTheme && !profilePackApplyOptions.applyMagnets) ||
+                  (profilePackApplyOptions.applyTheme && !profilePack.themeEntry?.text) ||
+                  (profilePackApplyOptions.applyMagnets && !profilePack.profile) ||
+                  (profilePackApplyOptions.applyMagnets && !profilePackApplyOptions.acknowledgeOverwrite)
+                }
+              >
+                {t('common.action.apply')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {confirmDialog}
     </div>
   );

@@ -6,24 +6,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Track } from '../../../services/audio';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
-import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
+import { trackKey } from '../shared/trackKey';
+import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
 
 export interface ProgressBarData {
   currentTime: number;
   duration: number;
   buffered: number;
   coverUrl?: string;
-}
-
-function trackKey(track: Track | null): string {
-  if (!track) return 'none';
-  return (
-    track.id ||
-    track.filePath ||
-    track.path ||
-    track.originalPath ||
-    `${track.title}::${track.artist || ''}`
-  );
 }
 
 export function useProgressBarData(isSeeking: boolean): ProgressBarData {
@@ -33,8 +23,8 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const buffered = 0;
-  const [coverUrl, setCoverUrl] = useState<string | undefined>(undefined);
   const [track, setTrack] = useState<Track | null>(null);
+  const coverUrl = useCoverUrlForTrack(track);
   const fallbackRef = useRef<{
     lastObservedTime: number;
     lastObservedAtMs: number;
@@ -57,17 +47,16 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
         lastTrackKeyRef.current = nextKey;
         setTrack(nextTrack);
         fallbackRef.current = null;
-
-        const embeddedCoverUrl = nextTrack?.coverUrl;
-        setCoverUrl(
-          typeof embeddedCoverUrl === 'string' && embeddedCoverUrl ? embeddedCoverUrl : undefined
-        );
         return;
       }
 
       const nextCoverUrl = nextTrack?.coverUrl;
       if (typeof nextCoverUrl === 'string' && nextCoverUrl) {
-        setCoverUrl(nextCoverUrl);
+        setTrack((prev) => {
+          if (!prev || trackKey(prev) !== nextKey) return nextTrack;
+          if (prev.coverUrl === nextCoverUrl) return prev;
+          return { ...prev, coverUrl: nextCoverUrl };
+        });
       }
     });
 
@@ -82,8 +71,6 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     setDuration(state.duration);
     setTrack(state.currentTrack);
     lastTrackKeyRef.current = trackKey(state.currentTrack);
-    const initialCoverUrl = state.currentTrack?.coverUrl;
-    setCoverUrl(typeof initialCoverUrl === 'string' && initialCoverUrl ? initialCoverUrl : undefined);
 
     return () => {
       unsubscribeTime();
@@ -146,22 +133,6 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
       window.clearInterval(interval);
     };
   }, [audioService, currentTime, isSeeking]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const current = track;
-    if (!current) return;
-
-    void musicLibraryService.getCoverUrlForTrack(current).then((url) => {
-      if (cancelled) return;
-      if (!url) return;
-      setCoverUrl(url);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [track]);
 
   return {
     currentTime,

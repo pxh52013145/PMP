@@ -258,6 +258,7 @@ function buildSandboxSrcDoc(frameId: string): string {
           seek: (time) => void rpcCall('audio.seek', [time]),
           setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
           toggleMute: () => void rpcCall('audio.toggleMute'),
+          getCover: () => rpcCall('audio.getCover'),
         },
         visualizer: {
           getSpectrum: () => {
@@ -709,6 +710,9 @@ export function PmpmSandboxHost({
                 break;
               case 'audio.toggleMute':
                 result = hostApi.audio.toggleMute();
+                break;
+              case 'audio.getCover':
+                result = await hostApi.audio.getCover();
                 break;
               case 'navigation.navigateTo':
                 result = hostApi.navigation.navigateTo(args[0] as never, args[1] as never);

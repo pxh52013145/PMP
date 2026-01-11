@@ -7,8 +7,10 @@ import React from 'react';
 import { usePlaybackData } from './usePlaybackData';
 import { usePlaybackLogic } from './usePlaybackLogic';
 import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
+import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
+import { useDynamicColor } from '../shared/useDynamicColor';
 import { PlaybackVariantProps } from './PlaybackTypes';
-import { StandardPlayPause, RoundedPlayPause } from './variants';
+import { CoverGlowPlayPause, RoundedPlayPause, StandardPlayPause } from './variants';
 
 /**
  * 变体组件注册表
@@ -16,6 +18,7 @@ import { StandardPlayPause, RoundedPlayPause } from './variants';
 const PLAY_PAUSE_VARIANTS: Record<string, React.ComponentType<PlaybackVariantProps>> = {
   standard: StandardPlayPause,
   rounded: RoundedPlayPause,
+  'cover-glow': CoverGlowPlayPause,
   default: StandardPlayPause,
 };
 
@@ -32,6 +35,11 @@ export const PlayPauseButton: React.FC = () => {
   // Layer 3: 主题配置
   const themeConfig = useComponentTheme('btn-play-pause');
 
+  const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false;
+  const coverUrl = useCoverUrlForTrack(dynamicColorEnabled ? data.currentTrack : null);
+  const dynamicColors = useDynamicColor(coverUrl, dynamicColorEnabled);
+  const dynamicColorConfig = themeConfig.dynamicColor;
+
   // 选择变体组件
   const variant = themeConfig.variant || 'default';
   const VariantComponent = PLAY_PAUSE_VARIANTS[variant] || StandardPlayPause;
@@ -39,9 +47,25 @@ export const PlayPauseButton: React.FC = () => {
   // 优先级：自定义渲染器 > 预设变体
   if (themeConfig.customRenderer) {
     const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+    return (
+      <CustomRenderer
+        data={data}
+        logic={logic}
+        dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+        dynamicColorConfig={dynamicColorConfig}
+        variantConfig={themeConfig.variantConfig}
+      />
+    );
   }
 
   // 使用预设变体
-  return <VariantComponent data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+  return (
+    <VariantComponent
+      data={data}
+      logic={logic}
+      dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
+      dynamicColorConfig={dynamicColorConfig}
+      variantConfig={themeConfig.variantConfig}
+    />
+  );
 };
