@@ -71,18 +71,12 @@ function ensureUint8Array(data: Uint8Array): Uint8Array {
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 }
 
-function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(buffer).set(data);
-  return buffer;
-}
-
 async function sha256Hex(data: Uint8Array): Promise<string> {
   if (typeof crypto === 'undefined' || !crypto.subtle?.digest) {
     throw new Error('crypto.subtle.digest is not available');
   }
 
-  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(data));
+  const digest = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
