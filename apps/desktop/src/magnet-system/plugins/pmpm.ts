@@ -962,10 +962,7 @@ export function upsertInstalledPmpmPlugin(plugin: InstalledPmpmPlugin): void {
   saveInstalledPmpmPlugins(plugins);
 }
 
-export async function parsePmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
-  const { readBinaryFile } = await import('@tauri-apps/api/fs');
-  const bytes = await readBinaryFile(filePath);
-  const packageBytes = new Uint8Array(bytes);
+export async function parsePmpmPluginFromZipBytes(packageBytes: Uint8Array): Promise<InstalledPmpmPlugin> {
   const files = await unzipAsync(packageBytes);
 
   const manifestBytes = files['manifest.json'];
@@ -1014,8 +1011,17 @@ export async function parsePmpmPluginFromFilePath(filePath: string): Promise<Ins
   };
 }
 
-export async function installPmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
-  const plugin = await parsePmpmPluginFromFilePath(filePath);
+export async function parsePmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
+  const { readBinaryFile } = await import('@tauri-apps/api/fs');
+  const bytes = await readBinaryFile(filePath);
+  return await parsePmpmPluginFromZipBytes(new Uint8Array(bytes));
+}
+
+export async function installPmpmPluginFromZipBytes(
+  packageBytes: Uint8Array,
+  options: { defaultEnabled?: boolean } = {}
+): Promise<InstalledPmpmPlugin> {
+  const plugin = await parsePmpmPluginFromZipBytes(packageBytes);
   const existing = getInstalledPmpmPlugin(plugin.manifest.metadata.id);
 
   const merged: InstalledPmpmPlugin = existing
@@ -1027,7 +1033,9 @@ export async function installPmpmPluginFromFilePath(filePath: string): Promise<I
         lastError: existing.lastError,
         lastErrorAt: existing.lastErrorAt,
       }
-    : plugin;
+    : options.defaultEnabled === false
+      ? { ...plugin, enabled: false, disabledReason: 'manual' }
+      : plugin;
 
   const entryCode = merged.entryCode;
   const stored =
@@ -1037,6 +1045,12 @@ export async function installPmpmPluginFromFilePath(filePath: string): Promise<I
   const persisted = stored ? { ...merged, entryCode: undefined } : merged;
   upsertInstalledPmpmPlugin(persisted);
   return persisted;
+}
+
+export async function installPmpmPluginFromFilePath(filePath: string): Promise<InstalledPmpmPlugin> {
+  const { readBinaryFile } = await import('@tauri-apps/api/fs');
+  const bytes = await readBinaryFile(filePath);
+  return await installPmpmPluginFromZipBytes(new Uint8Array(bytes));
 }
 
 export function uninstallPmpmPlugin(id: string): void {

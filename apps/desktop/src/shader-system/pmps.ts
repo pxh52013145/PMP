@@ -626,6 +626,28 @@ export async function rollbackPmpsDurableMigrationV1(options: {
   return { restored, missing, usedBackup: false, ok: true };
 }
 
+export async function installPmpsShaderPackFromZipBytes(
+  bytes: Uint8Array,
+  options: { overwrite?: boolean } = {}
+): Promise<InstalledPmpsShaderPack> {
+  const parsed = await parsePmpsShaderPackFromZipBytes(bytes);
+  const pack: InstalledPmpsShaderPack = { ...parsed, installedAt: Date.now() };
+  const exists = Boolean(getInstalledPmpsShaderPack(pack.manifest.metadata.id));
+  if (exists && options.overwrite === false) {
+    throw new Error(`Shader "${pack.manifest.metadata.id}" is already installed`);
+  }
+
+  const fragmentCode = pack.fragmentCode;
+  const stored =
+    typeof fragmentCode === 'string' && fragmentCode.length > 0
+      ? await persistPmpsFragmentCode(pack.manifest.metadata.id, fragmentCode)
+      : false;
+
+  const persisted = stored ? { ...pack, fragmentCode: undefined } : pack;
+  upsertInstalledPmpsShaderPack(persisted);
+  return persisted;
+}
+
 export async function installPmpsShaderPackFromFilePath(
   filePath: string,
   options: { overwrite?: boolean } = {}

@@ -327,6 +327,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
         registerEditorWindow('creator', t('windows.editor.creator.title'));
         registerEditorWindow('background', t('windows.editor.background.title'));
         registerEditorWindow('custom-background', t('windows.editor.custom-background.title'));
+        registerEditorWindow('theme', t('windows.editor.theme.title'));
         registerEditorWindow('debug', t('windows.editor.debug.title'));
       };
 

@@ -11,6 +11,7 @@ import { StyleEditor } from './components/editor/StyleEditor';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
+import { ThemeEditor } from './components/editor/ThemeEditor';
 import { ThemeDebugPage } from './components/debug/ThemeDebugPage';
 import { Magnet } from './types/pixel';
 import { BackgroundSettings, BackgroundConfig } from './types/background';
@@ -66,6 +67,7 @@ import './components/editor/EditorWindowApp.css';
 import './components/editor/MagnetCreator.css';
 import './components/editor/BackgroundManager.css';
 import './components/editor/CustomBackgroundEditor.css';
+import './components/editor/ThemeEditor.css';
 
 interface EditorControlPanelProps {
   onExitEditMode: () => void;
@@ -76,7 +78,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [debugOpen, setDebugOpen] = useState(false);
+  const [themeOpen, setThemeOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
   const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
@@ -94,8 +96,8 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       case 'style':
         setStyleOpen(open);
         return;
-      case 'debug':
-        setDebugOpen(open);
+      case 'theme':
+        setThemeOpen(open);
         return;
       case 'background':
         setBackgroundOpen(open);
@@ -119,18 +121,18 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         }
       };
 
-      const [statistics, library, style, debug, background] = await Promise.all([
+      const [statistics, library, style, theme, background] = await Promise.all([
         getVisible('statistics'),
         getVisible('library'),
         getVisible('style'),
-        getVisible('debug'),
+        getVisible('theme'),
         getVisible('background'),
       ]);
 
       setStatisticsOpen(statistics);
       setLibraryOpen(library);
       setStyleOpen(style);
-      setDebugOpen(debug);
+      setThemeOpen(theme);
       setBackgroundOpen(background);
     } catch {
       // best-effort: visibility sync is non-critical
@@ -183,7 +185,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
             setStatisticsOpen(false);
             setLibraryOpen(false);
             setStyleOpen(false);
-            setDebugOpen(false);
+            setThemeOpen(false);
             setBackgroundOpen(false);
             return;
           }
@@ -198,7 +200,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
             setStatisticsOpen(false);
             setLibraryOpen(false);
             setStyleOpen(false);
-            setDebugOpen(false);
+            setThemeOpen(false);
             setBackgroundOpen(false);
             void syncWindowStates();
             return;
@@ -303,23 +305,23 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     }
   };
 
-  const handleToggleDebug = async () => {
-    const newState = !debugOpen;
-    setDebugOpen(newState);
+  const handleToggleTheme = async () => {
+    const newState = !themeOpen;
+    setThemeOpen(newState);
 
     try {
       if (newState) {
         // 打开窗口
         const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('debug');
-        await openEditorWindow({ type: 'debug', ...position });
+        const position = await calculateWindowPosition('theme');
+        await openEditorWindow({ type: 'theme', ...position });
       } else {
         // 关闭窗口
         const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('debug');
+        await closeEditorWindow('theme');
       }
     } catch (error) {
-      console.error('Failed to toggle debug window:', error);
+      console.error('Failed to toggle theme window:', error);
     }
   };
 
@@ -396,7 +398,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       {/* 完成编辑按钮和置顶按钮 */}
       <div className="control-button-group">
         <button
-          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? '' : 'active'}`}
+          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? 'active' : ''}`}
           onClick={handleTogglePixelHints}
           title={
             pixelHintsVisible
@@ -471,15 +473,15 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         <span className="glow-label">{t('editor.control-panel.toggle.background.label')}</span>
       </div>
 
-      {/* Debug 开关 */}
+      {/* Theme Editor 开关 */}
       <div className="switch-container">
         <button
-          className={`cyber-switch-btn ${debugOpen ? 'active' : ''}`}
-          onClick={handleToggleDebug}
+          className={`cyber-switch-btn ${themeOpen ? 'active' : ''}`}
+          onClick={handleToggleTheme}
         >
           <span className="switch-indicator"></span>
         </button>
-        <span className="glow-label">{t('editor.control-panel.toggle.debug.label')}</span>
+        <span className="glow-label">{t('editor.control-panel.toggle.theme.label')}</span>
       </div>
     </div>
   );
@@ -1086,6 +1088,49 @@ export function EditorWindowApp() {
     console.log('EditorWindow: Magnet updated:', magnet.id);
   };
 
+  const handleApplyRendererBindings = useCallback(
+    async (bindings: Array<{ magnetId: string; rendererId: string }>): Promise<{ updated: number }> => {
+      const bindingByMagnetId = new Map<string, string>();
+      for (const binding of bindings) {
+        const magnetId = typeof binding.magnetId === 'string' ? binding.magnetId.trim() : '';
+        const rendererId = typeof binding.rendererId === 'string' ? binding.rendererId.trim() : '';
+        if (!magnetId || !rendererId) continue;
+        bindingByMagnetId.set(magnetId, rendererId);
+      }
+
+      if (bindingByMagnetId.size === 0) return { updated: 0 };
+
+      let updated = 0;
+      const nextLibrary = magnetLibrary.map((magnet) => {
+        const rendererId = bindingByMagnetId.get(magnet.id);
+        if (!rendererId) return magnet;
+        const nextRenderer = rendererId === magnet.id ? undefined : rendererId;
+        if (magnet.renderer === nextRenderer) return magnet;
+        updated += 1;
+        return { ...magnet, renderer: nextRenderer };
+      });
+
+      if (updated === 0) return { updated: 0 };
+
+      setMagnetLibrary(nextLibrary);
+
+      const activeSpaceId = readActiveMagnetSpaceId();
+      saveConfig(
+        nextLibrary,
+        activeMagnetIds,
+        { columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS },
+        defaultMagnetLibrary,
+        resolveMagnetConfigStorageKey(activeSpaceId),
+        { includeCustomMagnets: false }
+      );
+      writeJson(STORAGE_KEYS.MAGNET_LIBRARY, nextLibrary);
+      await broadcastSignal(TAURI_EVENTS.MAGNET_LIBRARY_UPDATED);
+
+      return { updated };
+    },
+    [activeMagnetIds, defaultMagnetLibrary, magnetLibrary]
+  );
+
   const handleBackgroundSettingsChange = async (settings: BackgroundSettings) => {
     setBackgroundSettings(settings);
     await broadcastDataUpdate(
@@ -1229,6 +1274,13 @@ export function EditorWindowApp() {
               <CustomBackgroundEditor
                 initialConfig={backgroundSettings[isMaximized ? 'maximized' : 'windowed']}
                 onSave={handleCustomBackgroundSave}
+              />
+            )}
+
+            {windowType === 'theme' && (
+              <ThemeEditor
+                magnetLibrary={magnetLibrary}
+                applyRendererBindings={handleApplyRendererBindings}
               />
             )}
 

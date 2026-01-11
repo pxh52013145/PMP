@@ -9,6 +9,7 @@ export type EditorWindowType =
   | 'creator'
   | 'background'
   | 'custom-background'
+  | 'theme'
   | 'debug';
 
 export interface EditorWindowConfig {
@@ -52,13 +53,14 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
  * 当父窗口关闭时，其所有子窗口也应该关闭
  */
 const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
-  control: ['statistics', 'library', 'style', 'background', 'debug'], // control 关闭时关闭所有主要窗口
+  control: ['statistics', 'library', 'style', 'background', 'theme', 'debug'], // control 关闭时关闭所有主要窗口
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
   style: [],
   creator: [],
   'custom-background': [],
+  theme: ['debug'],
   debug: [],
 };
 
@@ -295,6 +297,7 @@ export async function calculateWindowPosition(
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
+    theme: { width: 1200, height: 800 },
     debug: { width: 1200, height: 800 }, // 调试窗口 - 大窗口
   };
 
@@ -322,13 +325,14 @@ export async function calculateWindowPosition(
     creator: 4,
     background: 5,
     'custom-background': 6,
-    debug: 7, // 调试窗口
+    theme: 7,
+    debug: 8, // 调试窗口
   };
 
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
     offsetX = cached.x;
     y = cached.y;
-  } else if (type === 'custom-background' || type === 'debug') {
+  } else if (type === 'custom-background' || type === 'theme' || type === 'debug') {
     offsetX = (screenWidth - size.width) / 2;
     y = (screenHeight - size.height) / 2;
   } else {

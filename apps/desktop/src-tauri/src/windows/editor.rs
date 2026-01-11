@@ -22,6 +22,7 @@ pub enum EditorWindowType {
     Creator,
     Background,
     CustomBackground,
+    Theme,
     Debug,
 }
 
@@ -36,6 +37,7 @@ impl EditorWindowType {
             "creator" => Some(Self::Creator),
             "background" => Some(Self::Background),
             "custom-background" => Some(Self::CustomBackground),
+            "theme" => Some(Self::Theme),
             "debug" => Some(Self::Debug),
             _ => None,
         }
@@ -50,6 +52,7 @@ impl EditorWindowType {
             Self::Creator => "creator",
             Self::Background => "background",
             Self::CustomBackground => "custom-background",
+            Self::Theme => "theme",
             Self::Debug => "debug",
         }
     }
@@ -63,6 +66,7 @@ pub const ALL_EDITOR_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
+    EditorWindowType::Theme,
     EditorWindowType::Debug,
 ];
 
@@ -73,6 +77,7 @@ pub const CONTROL_CLOSE_HIDE_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
+    EditorWindowType::Theme,
     EditorWindowType::Debug,
 ];
 
@@ -85,6 +90,7 @@ pub fn label(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Creator => "editor-creator",
         EditorWindowType::Background => "editor-background",
         EditorWindowType::CustomBackground => "editor-custom-background",
+        EditorWindowType::Theme => "editor-theme",
         EditorWindowType::Debug => "editor-debug",
     }
 }
@@ -98,6 +104,7 @@ pub fn title(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Creator => "创建/导入 Magnet",
         EditorWindowType::Background => "背景管理",
         EditorWindowType::CustomBackground => "自定义背景",
+        EditorWindowType::Theme => "主题编辑器",
         EditorWindowType::Debug => "主题系统调试",
     }
 }
