@@ -5,6 +5,16 @@ import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '..
 import { getInstalledPmpmPlugin, installPmpmPluginFromZipBytes } from '../../magnet-system/plugins/pmpm';
 import { getInstalledPmpsShaderPack } from '../../shader-system/pmps';
 import { installPmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
+import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
+import { readJson } from '../../modules/storage';
+import {
+  createDefaultMagnetSpacesState,
+  resolveMagnetConfigStorageKey,
+  resolveMagnetLayoutStorageKey,
+  sanitizeMagnetSpaceLayout,
+  sanitizeMagnetSpacesState,
+} from '../../modules/magnets';
+import { readDurableText, writeDurableText } from '../../modules/storage/durableTextStore';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import {
   createThemePackZipBytes,
@@ -15,12 +25,20 @@ import {
   type ParsedThemePack,
   type ThemePackManifestV1,
 } from '../../themes/packs/pmpk';
+import {
+  createProfilePackZipBytes,
+  parseProfilePackFromZipBytes,
+  validateProfilePackManifestV1,
+  type ParsedProfilePack,
+  type ProfilePackManifestV1,
+  type ProfilePackProfileV1,
+} from '../../themes/packs/profilePack';
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
 import type { ComponentTheme, Theme } from '../../themes/types/theme';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
+import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
 
 function formatRendererSource(
   t: (key: string, params?: Record<string, unknown>) => string,
@@ -110,6 +128,11 @@ function normalizeBundlePath(path: string): string {
   return path.replace(/^\.?\//, '').replace(/\\/g, '/');
 }
 
+function buildRequiresSummaryLine(label: string, current: string, required?: string): string {
+  const range = required && required.trim().length > 0 ? required.trim() : '-';
+  return `${label}: ${range} (current: ${current})`;
+}
+
 function buildDefaultThemePackManifest(theme: Theme): ThemePackManifestV1 {
   const id = isValidId(theme.id) ? theme.id : 'theme-pack';
   return {
@@ -122,6 +145,22 @@ function buildDefaultThemePackManifest(theme: Theme): ThemePackManifestV1 {
     },
     entry: {
       theme: 'theme.pmpt',
+    },
+  };
+}
+
+function buildDefaultProfilePackManifest(theme: Theme): ProfilePackManifestV1 {
+  const id = isValidId(theme.id) ? theme.id : 'profile-pack';
+  return {
+    formatVersion: '1.0',
+    type: 'profile-pack',
+    metadata: {
+      id,
+      name: theme.name || id,
+      version: theme.version || '0.0.0',
+    },
+    entry: {
+      profile: 'profile.json',
     },
   };
 }
@@ -156,6 +195,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const [themeMessage, setThemeMessage] = useState<PanelMessage | null>(null);
   const [themePack, setThemePack] = useState<ParsedThemePack | null>(null);
   const [themePackMessage, setThemePackMessage] = useState<PanelMessage | null>(null);
+  const [profilePack, setProfilePack] = useState<ParsedProfilePack | null>(null);
+  const [profilePackMessage, setProfilePackMessage] = useState<PanelMessage | null>(null);
   const [variantPresetMessage, setVariantPresetMessage] = useState<PanelMessage | null>(null);
   const [dependencyRevision, setDependencyRevision] = useState(0);
   const [themePackExportManifestJson, setThemePackExportManifestJson] = useState(() =>
@@ -165,6 +206,22 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     {}
   );
   const [themePackExportChecksumsEnabled, setThemePackExportChecksumsEnabled] = useState(true);
+  const [profilePackExportManifestJson, setProfilePackExportManifestJson] = useState(() =>
+    JSON.stringify(buildDefaultProfilePackManifest(theme), null, 2)
+  );
+  const [profilePackExportChecksumsEnabled, setProfilePackExportChecksumsEnabled] = useState(true);
+
+  const themePackRequires = useMemo(() => themePack?.manifest.requires ?? null, [themePack?.manifest.requires]);
+  const themePackAppVersionSatisfaction = useMemo(
+    () => satisfiesSemverRange(APP_VERSION, themePackRequires?.appVersion ?? null),
+    [themePackRequires?.appVersion]
+  );
+  const themePackHostApiVersionSatisfaction = useMemo(
+    () => satisfiesSemverRange(HOST_API_VERSION, themePackRequires?.hostApiVersion ?? null),
+    [themePackRequires?.hostApiVersion]
+  );
+  const themePackRequiresViolated =
+    themePackAppVersionSatisfaction === 'violates' || themePackHostApiVersionSatisfaction === 'violates';
 
   const refreshRenderers = useCallback(() => {
     setRendererList(listRegisteredMagnetRenderers());
@@ -429,12 +486,231 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     [t]
   );
 
+  const handleProfilePackUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const parsed = await parseProfilePackFromZipBytes(bytes);
+        setProfilePack(parsed);
+        setProfilePackMessage({
+          kind: 'success',
+          text: t('editor.theme-editor.profilePack.message.fileLoaded', { name: file.name }),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setProfilePack(null);
+        setProfilePackMessage({
+          kind: 'error',
+          text: t('editor.theme-editor.profilePack.message.fileLoadFailed', { message }),
+        });
+      } finally {
+        event.target.value = '';
+      }
+    },
+    [t]
+  );
+
+  const applyProfilePackTheme = useCallback(async () => {
+    if (!profilePack?.themeEntry?.text) {
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.themeMissing') });
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(profilePack.themeEntry.text) as unknown;
+      validateThemeJson(parsed);
+      await applyTheme(parsed);
+      setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.themeApplied') });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.message.themeApplyFailed', { message }),
+      });
+    }
+  }, [applyTheme, profilePack, t]);
+
+  const backupCurrentProfileSnapshot = useCallback(async () => {
+    const spacesRaw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
+    const spaces = sanitizeMagnetSpacesState(spacesRaw);
+
+    const layoutsBySpaceId: Record<string, unknown> = {};
+    const configsBySpaceId: Record<string, unknown> = {};
+
+    for (const space of spaces.spaces) {
+      const layoutKey = resolveMagnetLayoutStorageKey(space.id);
+      const layoutRaw = readJson<unknown | null>(layoutKey, null);
+      if (layoutRaw !== null) {
+        layoutsBySpaceId[space.id] = layoutRaw;
+      }
+
+      const configKey = resolveMagnetConfigStorageKey(space.id);
+      const configRaw = readJson<unknown | null>(configKey, null);
+      if (configRaw !== null) {
+        configsBySpaceId[space.id] = configRaw;
+      }
+    }
+
+    const snapshot = {
+      formatVersion: '1.0',
+      createdAt: Date.now(),
+      theme,
+      magnets: {
+        spaces,
+        layoutsBySpaceId,
+        configsBySpaceId,
+      },
+    };
+
+    return await writeDurableText('profile-pack-backup', 'last', JSON.stringify(snapshot));
+  }, [theme]);
+
+  const applyProfilePackMagnets = useCallback(async () => {
+    if (!profilePack?.profile) {
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.profileMissing') });
+      return;
+    }
+
+    const rawSpaces = profilePack.profile.magnets?.spaces?.value;
+    if (!isPlainObject(rawSpaces) || rawSpaces.version !== 1) {
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.message.invalidSpaces') });
+      return;
+    }
+
+    const nextSpaces = sanitizeMagnetSpacesState(rawSpaces);
+    const spaceIds = new Set(nextSpaces.spaces.map((s) => s.id));
+
+    const rawLayouts = profilePack.profile.magnets?.spaceLayout?.value;
+    const rawConfigs = profilePack.profile.magnets?.spaceConfig?.value;
+
+    const nextLayoutsBySpaceId: Record<string, unknown> = isPlainObject(rawLayouts) ? rawLayouts : {};
+    const nextConfigsBySpaceId: Record<string, unknown> = isPlainObject(rawConfigs) ? rawConfigs : {};
+
+    const ok = await confirm({
+      title: t('editor.theme-editor.profilePack.applyMagnets.confirm.title'),
+      message: t('editor.theme-editor.profilePack.applyMagnets.confirm.message', {
+        count: nextSpaces.spaces.length,
+      }),
+      confirmText: t('editor.theme-editor.profilePack.applyMagnets.confirm.confirm'),
+      danger: true,
+    });
+    if (!ok) return;
+
+    const backedUp = await backupCurrentProfileSnapshot();
+    if (!backedUp) {
+      const continueWithoutBackup = await confirm({
+        title: t('editor.theme-editor.profilePack.backupFailed.title'),
+        message: t('editor.theme-editor.profilePack.backupFailed.message'),
+        confirmText: t('editor.theme-editor.profilePack.backupFailed.confirm'),
+        danger: true,
+      });
+      if (!continueWithoutBackup) return;
+    }
+
+    for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
+      if (!spaceIds.has(spaceId)) continue;
+      if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+      const layout = sanitizeMagnetSpaceLayout(layoutValue);
+      await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+    }
+
+    for (const [spaceId, configValue] of Object.entries(nextConfigsBySpaceId)) {
+      if (!spaceIds.has(spaceId)) continue;
+      if (!isPlainObject(configValue)) continue;
+      await broadcastDataUpdate(resolveMagnetConfigStorageKey(spaceId), configValue);
+    }
+
+    await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+
+    setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.message.magnetsApplied') });
+  }, [backupCurrentProfileSnapshot, confirm, profilePack, t]);
+
+  const rollbackProfilePackBackup = useCallback(async () => {
+    const ok = await confirm({
+      title: t('editor.theme-editor.profilePack.rollback.confirm.title'),
+      message: t('editor.theme-editor.profilePack.rollback.confirm.message'),
+      confirmText: t('editor.theme-editor.profilePack.rollback.confirm.confirm'),
+      danger: true,
+    });
+    if (!ok) return;
+
+    try {
+      const raw = await readDurableText('profile-pack-backup', 'last');
+      if (!raw) {
+        setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.rollback.missing') });
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as unknown;
+      assertObject(parsed, 'backup');
+      const backupTheme = parsed.theme as unknown;
+      validateThemeJson(backupTheme);
+      await applyTheme(backupTheme);
+
+      const magnets = (parsed.magnets ?? null) as unknown;
+      assertObject(magnets, 'backup.magnets');
+
+      const spaces = sanitizeMagnetSpacesState((magnets as { spaces?: unknown }).spaces);
+      const spaceIds = new Set(spaces.spaces.map((s) => s.id));
+
+      const layoutsBySpaceId = (magnets as { layoutsBySpaceId?: unknown }).layoutsBySpaceId;
+      if (isPlainObject(layoutsBySpaceId)) {
+        for (const [spaceId, layoutValue] of Object.entries(layoutsBySpaceId)) {
+          if (!spaceIds.has(spaceId)) continue;
+          if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+          const layout = sanitizeMagnetSpaceLayout(layoutValue);
+          await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+        }
+      }
+
+      const configsBySpaceId = (magnets as { configsBySpaceId?: unknown }).configsBySpaceId;
+      if (isPlainObject(configsBySpaceId)) {
+        for (const [spaceId, configValue] of Object.entries(configsBySpaceId)) {
+          if (!spaceIds.has(spaceId)) continue;
+          if (!isPlainObject(configValue)) continue;
+          await broadcastDataUpdate(resolveMagnetConfigStorageKey(spaceId), configValue);
+        }
+      }
+
+      await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, spaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+
+      setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.rollback.success') });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.rollback.failed', { message }) });
+    }
+  }, [applyTheme, confirm, t]);
+
   const applyThemePackTheme = useCallback(async () => {
     if (!themePack?.entryThemeText) {
       setThemePackMessage({ kind: 'error', text: t('editor.theme-editor.pmpk.message.themeMissing') });
       return;
     }
     try {
+      if (themePackRequiresViolated) {
+        const ok = await confirm({
+          title: t('editor.theme-editor.pmpk.requires.confirm.title'),
+          message: [
+            t('editor.theme-editor.pmpk.requires.confirm.message'),
+            buildRequiresSummaryLine(
+              t('editor.theme-editor.pmpk.requires.appVersion'),
+              APP_VERSION,
+              themePackRequires?.appVersion
+            ),
+            buildRequiresSummaryLine(
+              t('editor.theme-editor.pmpk.requires.hostApiVersion'),
+              HOST_API_VERSION,
+              themePackRequires?.hostApiVersion
+            ),
+          ].join('\n'),
+          confirmText: t('editor.theme-editor.pmpk.requires.confirm.confirm'),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+
       const parsed = JSON.parse(themePack.entryThemeText) as unknown;
       validateThemeJson(parsed);
       await applyTheme(parsed);
@@ -446,7 +722,15 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         text: t('editor.theme-editor.pmpk.message.themeApplyFailed', { message }),
       });
     }
-  }, [applyTheme, t, themePack]);
+  }, [
+    applyTheme,
+    confirm,
+    t,
+    themePack,
+    themePackRequires?.appVersion,
+    themePackRequires?.hostApiVersion,
+    themePackRequiresViolated,
+  ]);
 
   const themePackExportManifest = useMemo(() => {
     try {
@@ -458,6 +742,98 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       return { manifest: null as ThemePackManifestV1 | null, error: message };
     }
   }, [themePackExportManifestJson]);
+
+  const profilePackExportManifest = useMemo(() => {
+    try {
+      const parsed = JSON.parse(profilePackExportManifestJson) as unknown;
+      validateProfilePackManifestV1(parsed);
+      return { manifest: parsed as ProfilePackManifestV1, error: null as string | null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { manifest: null as ProfilePackManifestV1 | null, error: message };
+    }
+  }, [profilePackExportManifestJson]);
+
+  const downloadProfilePackPmpk = useCallback(async () => {
+    const { manifest, error } = profilePackExportManifest;
+    if (!manifest) {
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.export.manifestInvalid', { message: error ?? 'invalid' }),
+      });
+      return;
+    }
+
+    let themeText: string;
+    try {
+      const parsed = JSON.parse(themeJson) as unknown;
+      validateThemeJson(parsed);
+      themeText = JSON.stringify(parsed, null, 2);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProfilePackMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.profilePack.export.themeInvalid', { message }),
+      });
+      return;
+    }
+
+    const spacesRaw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
+    const spaces = sanitizeMagnetSpacesState(spacesRaw);
+
+    const layoutsBySpaceId: Record<string, unknown> = {};
+    const configsBySpaceId: Record<string, unknown> = {};
+
+    for (const space of spaces.spaces) {
+      const layoutKey = resolveMagnetLayoutStorageKey(space.id);
+      const layoutRaw = readJson<unknown | null>(layoutKey, null);
+      if (layoutRaw !== null) {
+        layoutsBySpaceId[space.id] = layoutRaw;
+      }
+
+      const configKey = resolveMagnetConfigStorageKey(space.id);
+      const configRaw = readJson<unknown | null>(configKey, null);
+      if (configRaw !== null) {
+        configsBySpaceId[space.id] = configRaw;
+      }
+    }
+
+    const profile: ProfilePackProfileV1 = {
+      formatVersion: '1.0',
+      app: { configVersion: 1 },
+      theme: { source: { kind: 'pmpt', path: 'theme.pmpt' } },
+      magnets: {
+        spaces: { storageKey: STORAGE_KEYS.MAGNET_SPACES, value: spaces },
+        spaceLayout: { storageKey: STORAGE_KEYS.MAGNET_SPACE_LAYOUT, value: layoutsBySpaceId },
+        spaceConfig: { storageKey: STORAGE_KEYS.CONFIG, value: configsBySpaceId },
+      },
+    };
+
+    try {
+      const bytes = await createProfilePackZipBytes({
+        manifest,
+        profile,
+        themeText,
+        checksums: { enabled: profilePackExportChecksumsEnabled },
+      });
+
+      const filename = `${manifest.metadata.id}-${manifest.metadata.version}.pmpk`;
+      const buffer = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buffer).set(bytes);
+      const blob = new Blob([buffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.export.success', { name: filename }) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.export.failed', { message }) });
+    }
+  }, [profilePackExportChecksumsEnabled, profilePackExportManifest, t, themeJson]);
 
   const themePackExportBundledDeps = useMemo(() => {
     const manifest = themePackExportManifest.manifest;
@@ -500,6 +876,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     setThemePackExportManifestJson(JSON.stringify(buildDefaultThemePackManifest(theme), null, 2));
     setThemePackExportBundles({});
     setThemePackMessage(null);
+  }, [theme]);
+
+  const resetProfilePackExport = useCallback(() => {
+    setProfilePackExportManifestJson(JSON.stringify(buildDefaultProfilePackManifest(theme), null, 2));
+    setProfilePackMessage(null);
   }, [theme]);
 
   const attachThemePackExportBundle = useCallback(
@@ -723,6 +1104,28 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         return;
       }
 
+      if (themePackRequiresViolated) {
+        const ok = await confirm({
+          title: t('editor.theme-editor.pmpk.requires.confirm.title'),
+          message: [
+            t('editor.theme-editor.pmpk.requires.confirm.message'),
+            buildRequiresSummaryLine(
+              t('editor.theme-editor.pmpk.requires.appVersion'),
+              APP_VERSION,
+              themePackRequires?.appVersion
+            ),
+            buildRequiresSummaryLine(
+              t('editor.theme-editor.pmpk.requires.hostApiVersion'),
+              HOST_API_VERSION,
+              themePackRequires?.hostApiVersion
+            ),
+          ].join('\n'),
+          confirmText: t('editor.theme-editor.pmpk.requires.confirm.confirm'),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+
       const needsConfirm = Boolean(dep.installedVersion);
       if (needsConfirm) {
         const ok = await confirm({
@@ -758,7 +1161,13 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         });
       }
     },
-    [confirm, t]
+    [
+      confirm,
+      t,
+      themePackRequires?.appVersion,
+      themePackRequires?.hostApiVersion,
+      themePackRequiresViolated,
+    ]
   );
 
   const installAllThemePackDependencies = useCallback(async () => {
@@ -789,8 +1198,28 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
     const ok = await confirm({
       title: t('editor.theme-editor.pmpk.installAll.confirm.title'),
-      message: [...lines, ...(skipped.length > 0 ? ['', t('editor.theme-editor.pmpk.installAll.skipped.title'), ...skipped] : [])].join('\n'),
+      message: [
+        ...(themePackRequiresViolated
+          ? [
+              t('editor.theme-editor.pmpk.requires.confirm.message'),
+              buildRequiresSummaryLine(
+                t('editor.theme-editor.pmpk.requires.appVersion'),
+                APP_VERSION,
+                themePackRequires?.appVersion
+              ),
+              buildRequiresSummaryLine(
+                t('editor.theme-editor.pmpk.requires.hostApiVersion'),
+                HOST_API_VERSION,
+                themePackRequires?.hostApiVersion
+              ),
+              '',
+            ]
+          : []),
+        ...lines,
+        ...(skipped.length > 0 ? ['', t('editor.theme-editor.pmpk.installAll.skipped.title'), ...skipped] : []),
+      ].join('\n'),
       confirmText: t('common.action.install'),
+      danger: themePackRequiresViolated,
     });
     if (!ok) return;
 
@@ -821,7 +1250,15 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       kind: 'error',
       text: t('editor.theme-editor.pmpk.installAll.failed', { message: failures.join('\n') }),
     });
-  }, [confirm, t, themePack, themePackDepsView]);
+  }, [
+    confirm,
+    t,
+    themePack,
+    themePackDepsView,
+    themePackRequires?.appVersion,
+    themePackRequires?.hostApiVersion,
+    themePackRequiresViolated,
+  ]);
 
   const themePackRecommendedBindings = useMemo(() => {
     const bindings = themePack?.manifest.recommended?.bindings ?? [];
@@ -853,6 +1290,28 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         return;
       }
 
+      if (themePackRequiresViolated) {
+        const ok = await confirm({
+          title: t('editor.theme-editor.pmpk.requires.confirm.title'),
+          message: [
+            t('editor.theme-editor.pmpk.requires.confirm.message'),
+            buildRequiresSummaryLine(
+              t('editor.theme-editor.pmpk.requires.appVersion'),
+              APP_VERSION,
+              themePackRequires?.appVersion
+            ),
+            buildRequiresSummaryLine(
+              t('editor.theme-editor.pmpk.requires.hostApiVersion'),
+              HOST_API_VERSION,
+              themePackRequires?.hostApiVersion
+            ),
+          ].join('\n'),
+          confirmText: t('editor.theme-editor.pmpk.requires.confirm.confirm'),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+
       try {
         const result = await applyRendererBindings(applicable);
         const summary = t('editor.theme-editor.pmpk.recommended.bindings.applied', {
@@ -872,7 +1331,15 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         });
       }
     },
-    [applyRendererBindings, magnetLibrary, t]
+    [
+      applyRendererBindings,
+      confirm,
+      magnetLibrary,
+      t,
+      themePackRequires?.appVersion,
+      themePackRequires?.hostApiVersion,
+      themePackRequiresViolated,
+    ]
   );
 
   const rendererGroups = useMemo(() => {
@@ -1070,6 +1537,26 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                           ? t('editor.theme-editor.pmpk.integrity.ok')
                           : t('editor.theme-editor.pmpk.integrity.missing')}
                       </span>
+                    </div>
+
+                    <div className="theme-pack-row">
+                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.requires.title')}</span>
+                      <div className="theme-pack-dep-chips">
+                        <span className={`theme-pack-chip theme-pack-chip--${themePackAppVersionSatisfaction}`}>
+                          {t('editor.theme-editor.pmpk.requires.appVersion')}: {themePackRequires?.appVersion ?? '-'}
+                          <span className="theme-pack-chip-suffix">
+                            {APP_VERSION} ·{' '}
+                            {t(`editor.theme-editor.pmpk.deps.satisfaction.${themePackAppVersionSatisfaction}`)}
+                          </span>
+                        </span>
+                        <span className={`theme-pack-chip theme-pack-chip--${themePackHostApiVersionSatisfaction}`}>
+                          {t('editor.theme-editor.pmpk.requires.hostApiVersion')}: {themePackRequires?.hostApiVersion ?? '-'}
+                          <span className="theme-pack-chip-suffix">
+                            {HOST_API_VERSION} ·{' '}
+                            {t(`editor.theme-editor.pmpk.deps.satisfaction.${themePackHostApiVersionSatisfaction}`)}
+                          </span>
+                        </span>
+                      </div>
                     </div>
 
                     <div className="theme-pack-deps">
@@ -1369,6 +1856,130 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   ) : (
                     <div className="theme-editor-muted">{t('editor.theme-editor.pmpk.export.bundles.empty')}</div>
                   )}
+                </div>
+              </div>
+
+              <div className="theme-editor-section">
+                <div className="theme-editor-section-title">{t('editor.theme-editor.profilePack.section.title')}</div>
+
+                <div className="theme-editor-section-actions">
+                  <label className="theme-editor-file-btn">
+                    <input type="file" accept=".pmpk,application/zip" onChange={handleProfilePackUpload} />
+                    {t('editor.theme-editor.profilePack.importFile')}
+                  </label>
+                  <button
+                    type="button"
+                    className="theme-editor-action-btn"
+                    onClick={applyProfilePackTheme}
+                    disabled={!profilePack?.themeEntry?.text}
+                  >
+                    {t('editor.theme-editor.profilePack.applyThemeOnly')}
+                  </button>
+                  <button
+                    type="button"
+                    className="theme-editor-action-btn"
+                    onClick={applyProfilePackMagnets}
+                    disabled={!profilePack?.profile}
+                  >
+                    {t('editor.theme-editor.profilePack.applyMagnets')}
+                  </button>
+                  <button type="button" className="theme-editor-action-btn" onClick={rollbackProfilePackBackup}>
+                    {t('editor.theme-editor.profilePack.rollback')}
+                  </button>
+                </div>
+
+                {profilePackMessage ? (
+                  <div className={`theme-editor-message theme-editor-message--${profilePackMessage.kind}`}>
+                    {profilePackMessage.text}
+                  </div>
+                ) : null}
+
+                {profilePack ? (
+                  <div className="theme-pack-summary">
+                    <div className="theme-pack-row">
+                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.idLabel')}</span>
+                      <span className="theme-pack-value">{profilePack.manifest.metadata.id}</span>
+                    </div>
+                    <div className="theme-pack-row">
+                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.nameLabel')}</span>
+                      <span className="theme-pack-value">{profilePack.manifest.metadata.name}</span>
+                    </div>
+                    <div className="theme-pack-row">
+                      <span className="theme-pack-key">
+                        {t('editor.theme-editor.profilePack.summary.entryProfileLabel')}
+                      </span>
+                      <span className="theme-pack-value">{profilePack.entryProfilePath}</span>
+                      <span className={`theme-pack-status ${profilePack.profile ? 'is-ok' : 'is-missing'}`}>
+                        {profilePack.profile
+                          ? t('editor.theme-editor.pmpk.entryTheme.ok')
+                          : t('editor.theme-editor.pmpk.entryTheme.missing')}
+                      </span>
+                    </div>
+                    <div className="theme-pack-row">
+                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.entryThemeLabel')}</span>
+                      <span className="theme-pack-value">{profilePack.themeEntry?.path ?? '-'}</span>
+                      <span className={`theme-pack-status ${profilePack.themeEntry?.text ? 'is-ok' : 'is-missing'}`}>
+                        {profilePack.themeEntry?.text
+                          ? t('editor.theme-editor.pmpk.entryTheme.ok')
+                          : t('editor.theme-editor.pmpk.entryTheme.missing')}
+                      </span>
+                    </div>
+                    <div className="theme-pack-row">
+                      <span className="theme-pack-key">{t('editor.theme-editor.pmpk.summary.integrityLabel')}</span>
+                      <span className={`theme-pack-status ${profilePack.checksums ? 'is-ok' : ''}`}>
+                        {profilePack.checksums
+                          ? t('editor.theme-editor.pmpk.integrity.ok')
+                          : t('editor.theme-editor.pmpk.integrity.missing')}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="theme-editor-muted">{t('editor.theme-editor.profilePack.empty')}</div>
+                )}
+
+                <div className="theme-pack-divider" />
+
+                <div className="theme-pack-export">
+                  <div className="theme-pack-export-header">
+                    <div className="theme-pack-export-title">{t('editor.theme-editor.profilePack.export.title')}</div>
+                    <div className="theme-editor-section-actions">
+                      <button type="button" className="theme-editor-action-btn" onClick={resetProfilePackExport}>
+                        {t('common.action.reset')}
+                      </button>
+                      <button
+                        type="button"
+                        className="theme-editor-action-btn"
+                        onClick={downloadProfilePackPmpk}
+                        disabled={!profilePackExportManifest.manifest}
+                      >
+                        {t('editor.theme-editor.profilePack.export.exportFile')}
+                      </button>
+                    </div>
+                  </div>
+
+                  <label className="theme-pack-export-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={profilePackExportChecksumsEnabled}
+                      onChange={(event) => setProfilePackExportChecksumsEnabled(event.target.checked)}
+                    />
+                    <span>{t('editor.theme-editor.profilePack.export.includeChecksums')}</span>
+                  </label>
+
+                  {profilePackExportManifest.error ? (
+                    <div className="theme-editor-message theme-editor-message--error">
+                      {t('editor.theme-editor.profilePack.export.manifestError', {
+                        message: profilePackExportManifest.error,
+                      })}
+                    </div>
+                  ) : null}
+
+                  <textarea
+                    className="theme-editor-textarea theme-editor-textarea--compact"
+                    value={profilePackExportManifestJson}
+                    onChange={(event) => setProfilePackExportManifestJson(event.target.value)}
+                    spellCheck={false}
+                  />
                 </div>
               </div>
 

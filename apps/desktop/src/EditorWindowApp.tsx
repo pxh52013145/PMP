@@ -398,7 +398,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
       {/* 完成编辑按钮和置顶按钮 */}
       <div className="control-button-group">
         <button
-          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? '' : 'active'}`}
+          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? 'active' : ''}`}
           onClick={handleTogglePixelHints}
           title={
             pixelHintsVisible
