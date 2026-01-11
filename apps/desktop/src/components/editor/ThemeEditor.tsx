@@ -15,8 +15,9 @@ import {
   type ParsedThemePack,
   type ThemePackManifestV1,
 } from '../../themes/packs/pmpk';
+import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
-import type { Theme } from '../../themes/types/theme';
+import type { ComponentTheme, Theme } from '../../themes/types/theme';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
@@ -45,6 +46,10 @@ function assertObject(value: unknown, path: string): asserts value is Record<str
   if (!value || typeof value !== 'object') {
     throw new Error(`${path} must be an object`);
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function validateThemeJson(value: unknown): asserts value is Theme {
@@ -140,7 +145,7 @@ export type ThemeEditorProps = {
 
 export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEditorProps) {
   const t = useT();
-  const { theme, applyTheme } = useTheme();
+  const { theme, applyTheme, updateComponentTheme } = useTheme();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const [debugOpen, setDebugOpen] = useState(false);
   const [rendererList, setRendererList] = useState<MagnetRendererDefinition[]>(() =>
@@ -151,6 +156,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const [themeMessage, setThemeMessage] = useState<PanelMessage | null>(null);
   const [themePack, setThemePack] = useState<ParsedThemePack | null>(null);
   const [themePackMessage, setThemePackMessage] = useState<PanelMessage | null>(null);
+  const [variantPresetMessage, setVariantPresetMessage] = useState<PanelMessage | null>(null);
   const [dependencyRevision, setDependencyRevision] = useState(0);
   const [themePackExportManifestJson, setThemePackExportManifestJson] = useState(() =>
     JSON.stringify(buildDefaultThemePackManifest(theme), null, 2)
@@ -231,6 +237,100 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   useEffect(() => {
     setThemeJson(JSON.stringify(theme, null, 2));
   }, [theme]);
+
+  const downloadVariantPresetPmpv = useCallback(() => {
+    if (!selectedRendererId) {
+      setVariantPresetMessage({ kind: 'error', text: t('editor.theme-editor.pmpv.message.noRenderer') });
+      return;
+    }
+
+    try {
+      const rendererId = selectedRendererId;
+      const rawId = `${theme.id}-${rendererId}`;
+      const id = isValidId(rawId) ? rawId : isValidId(rendererId) ? rendererId : 'variant-preset';
+
+      const componentTheme = isPlainObject(theme.componentThemes?.[rendererId])
+        ? (theme.componentThemes?.[rendererId] as unknown as Record<string, unknown>)
+        : {};
+
+      const preset: VariantPresetV1 = {
+        formatVersion: '1.0',
+        type: 'variant-preset',
+        metadata: {
+          id,
+          name: `${theme.name || theme.id} / ${rendererId}`,
+          version: theme.version || '0.0.0',
+        },
+        target: { rendererId },
+        componentTheme,
+      };
+
+      const text = JSON.stringify(preset, null, 2);
+      const filename = `${preset.metadata.id}.pmpv`;
+      const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      setVariantPresetMessage({
+        kind: 'success',
+        text: t('editor.theme-editor.pmpv.message.exported', { name: filename }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setVariantPresetMessage({
+        kind: 'error',
+        text: t('editor.theme-editor.pmpv.message.exportFailed', { message }),
+      });
+    }
+  }, [selectedRendererId, t, theme.componentThemes, theme.id, theme.name, theme.version]);
+
+  const handleVariantPresetUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = parseVariantPresetFromText(text);
+
+        const rendererId = parsed.target.rendererId;
+
+        const ok = await confirm({
+          title: t('editor.theme-editor.pmpv.import.confirm.title'),
+          message: t('editor.theme-editor.pmpv.import.confirm.message', {
+            rendererId,
+            name: file.name,
+          }),
+          confirmText: t('editor.theme-editor.pmpv.import.confirm.confirm'),
+        });
+        if (!ok) return;
+
+        const componentTheme = parsed.componentTheme as unknown as ComponentTheme;
+        await updateComponentTheme(rendererId, componentTheme);
+
+        setVariantPresetMessage({
+          kind: 'success',
+          text: t('editor.theme-editor.pmpv.message.applied', { rendererId }),
+        });
+
+        setSelectedRendererId((current) => {
+          const exists = rendererList.some((renderer) => renderer.id === rendererId);
+          return exists ? rendererId : current;
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setVariantPresetMessage({
+          kind: 'error',
+          text: t('editor.theme-editor.pmpv.message.fileLoadFailed', { message }),
+        });
+      } finally {
+        event.target.value = '';
+      }
+    },
+    [confirm, rendererList, t, updateComponentTheme]
+  );
 
   const applyThemeJson = useCallback(async () => {
     try {
@@ -1272,11 +1372,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                 </div>
               </div>
 
-              <div className="theme-editor-section">
-                <div className="theme-editor-section-title">{t('editor.theme-editor.renderers.section.title')}</div>
-                {!selectedRenderer ? (
-                  <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
-                ) : (
+                <div className="theme-editor-section">
+                  <div className="theme-editor-section-title">{t('editor.theme-editor.renderers.section.title')}</div>
+                  {!selectedRenderer ? (
+                    <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
+                  ) : (
                   <>
                     <div className="theme-editor-panel-title">{selectedRenderer.id}</div>
                     <div className="theme-editor-panel-meta">
@@ -1298,6 +1398,52 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                           group: selectedRenderer.group ?? null,
                           tags: selectedRenderer.tags ?? null,
                           metadata: selectedRenderer.metadata ?? null,
+                        },
+                        null,
+                        2
+                      )}
+                    </pre>
+                  </>
+                )}
+              </div>
+
+              <div className="theme-editor-section">
+                <div className="theme-editor-section-title">{t('editor.theme-editor.pmpv.section.title')}</div>
+                {!selectedRenderer ? (
+                  <div className="theme-editor-muted">{t('editor.theme-debug.renderers.empty')}</div>
+                ) : (
+                  <>
+                    <div className="theme-editor-section-actions">
+                      <button
+                        type="button"
+                        className="theme-editor-action-btn"
+                        onClick={downloadVariantPresetPmpv}
+                      >
+                        {t('editor.theme-editor.pmpv.action.export')}
+                      </button>
+                      <label className="theme-editor-file-btn">
+                        {t('editor.theme-editor.pmpv.action.import')}
+                        <input
+                          type="file"
+                          accept=".pmpv,application/json"
+                          onChange={handleVariantPresetUpload}
+                        />
+                      </label>
+                    </div>
+
+                    {variantPresetMessage ? (
+                      <div
+                        className={`theme-editor-message theme-editor-message--${variantPresetMessage.kind}`}
+                      >
+                        {variantPresetMessage.text}
+                      </div>
+                    ) : null}
+
+                    <pre className="theme-editor-panel-json">
+                      {JSON.stringify(
+                        {
+                          rendererId: selectedRenderer.id,
+                          componentTheme: theme.componentThemes?.[selectedRenderer.id] ?? null,
                         },
                         null,
                         2
