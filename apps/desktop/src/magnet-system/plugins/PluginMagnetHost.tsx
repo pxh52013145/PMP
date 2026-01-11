@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useComponentTheme } from '../../themes/contexts/ThemeContextWithSync';
 import {
   getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
@@ -22,9 +23,14 @@ import {
 } from './pmpmSandboxConfig';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const audioService = useAudioService();
   const navigation = useNavigation();
+  const componentTheme = useComponentTheme(pluginId);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +75,30 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
     });
   }, [audioService, navigation, permissions, pluginId]);
 
+  const mountContext = useMemo(() => {
+    const themeVariant =
+      typeof componentTheme.variant === 'string' && componentTheme.variant.trim().length > 0
+        ? componentTheme.variant.trim()
+        : null;
+    const themeVariantConfig = isPlainObject(componentTheme.variantConfig) ? componentTheme.variantConfig : null;
+
+    const manifestDefaultVariant =
+      typeof plugin?.manifest.magnet?.defaultVariant === 'string' &&
+      plugin.manifest.magnet.defaultVariant.trim().length > 0
+        ? plugin.manifest.magnet.defaultVariant.trim()
+        : null;
+
+    const variant = themeVariant ?? manifestDefaultVariant ?? 'default';
+
+    return {
+      surface: 'magnet' as const,
+      theme: {
+        variant,
+        ...(themeVariantConfig ? { variantConfig: themeVariantConfig } : {}),
+      },
+    };
+  }, [componentTheme.variant, componentTheme.variantConfig, plugin?.manifest.magnet?.defaultVariant]);
+
   useEffect(() => {
     if (!enabled) return;
     if (sandboxEnabled) return;
@@ -82,7 +112,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
       .then((runtime) => {
         if (cancelled) return;
         try {
-          const cleanup = (runtime as PmpmPluginRuntime).mount(container, api);
+          const cleanup = (runtime as PmpmPluginRuntime).mount(container, api, mountContext);
           cleanupRef.current = typeof cleanup === 'function' ? cleanup : null;
         } catch (err) {
           throw err instanceof Error ? err : new Error(String(err));
@@ -104,7 +134,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
         container.innerHTML = '';
       }
     };
-  }, [api, enabled, pluginId, restartToken, sandboxEnabled]);
+  }, [api, enabled, mountContext, pluginId, restartToken, sandboxEnabled]);
 
   if (!plugin) {
     return (
@@ -125,7 +155,14 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   }
 
   if (sandboxEnabled) {
-    return <PmpmSandboxHost pluginId={pluginId} hostLabel="PluginMagnetHost" kind="magnet" />;
+    return (
+      <PmpmSandboxHost
+        pluginId={pluginId}
+        hostLabel="PluginMagnetHost"
+        kind="magnet"
+        mountContext={mountContext}
+      />
+    );
   }
 
   if (error) {

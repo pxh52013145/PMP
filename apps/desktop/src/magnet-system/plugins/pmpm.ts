@@ -113,6 +113,13 @@ export type PmpmManifest = {
       coordinates?: Array<{ x: number; y: number }>;
     };
     defaultStyle?: Record<string, unknown>;
+    defaultVariant?: string;
+    variants?: Array<{
+      id: string;
+      label: string;
+      description?: string;
+      metadata?: Record<string, unknown>;
+    }>;
   };
   permissions?: string[];
 };
@@ -290,6 +297,119 @@ export function validatePmpmManifest(manifest: unknown): asserts manifest is Pmp
   const entryPoint = m.entryPoint;
   if (typeof entryPoint !== 'string' || entryPoint.length < 1) throw new Error('manifest.entryPoint is required');
   if (BUILTIN_MAGNET_IDS.has(id)) throw new Error(`metadata.id "${id}" conflicts with builtin magnets`);
+
+  const magnet = m.magnet;
+  if (typeof magnet !== 'undefined') {
+    if (!magnet || typeof magnet !== 'object' || Array.isArray(magnet)) {
+      throw new Error('manifest.magnet must be an object');
+    }
+
+    const mag = magnet as Record<string, unknown>;
+
+    const defaultAnchor = mag.defaultAnchor;
+    if (typeof defaultAnchor !== 'undefined') {
+      if (!defaultAnchor || typeof defaultAnchor !== 'object' || Array.isArray(defaultAnchor)) {
+        throw new Error('manifest.magnet.defaultAnchor must be an object');
+      }
+
+      const anchor = defaultAnchor as Record<string, unknown>;
+      const type = anchor.type;
+      if (typeof type !== 'undefined' && type !== 'single' && type !== 'range') {
+        throw new Error('manifest.magnet.defaultAnchor.type must be "single" or "range"');
+      }
+
+      const coordinates = anchor.coordinates;
+      if (typeof coordinates !== 'undefined') {
+        if (!Array.isArray(coordinates)) {
+          throw new Error('manifest.magnet.defaultAnchor.coordinates must be an array');
+        }
+
+        for (const item of coordinates) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            throw new Error('manifest.magnet.defaultAnchor.coordinates must be an array of {x,y}');
+          }
+          const coord = item as Record<string, unknown>;
+          const x = coord.x;
+          const y = coord.y;
+          if (
+            typeof x !== 'number' ||
+            !Number.isFinite(x) ||
+            typeof y !== 'number' ||
+            !Number.isFinite(y)
+          ) {
+            throw new Error(
+              'manifest.magnet.defaultAnchor.coordinates must be an array of {x:number,y:number}'
+            );
+          }
+        }
+      }
+    }
+
+    const defaultStyle = mag.defaultStyle;
+    if (typeof defaultStyle !== 'undefined') {
+      if (!defaultStyle || typeof defaultStyle !== 'object' || Array.isArray(defaultStyle)) {
+        throw new Error('manifest.magnet.defaultStyle must be an object');
+      }
+    }
+
+    const defaultVariant = mag.defaultVariant;
+    if (typeof defaultVariant !== 'undefined') {
+      if (typeof defaultVariant !== 'string' || defaultVariant.length < 1) {
+        throw new Error('manifest.magnet.defaultVariant must be a string');
+      }
+      if (!/^[a-z0-9-]{1,48}$/.test(defaultVariant)) {
+        throw new Error('manifest.magnet.defaultVariant must match /^[a-z0-9-]{1,48}$/');
+      }
+    }
+
+    const variants = mag.variants;
+    if (typeof variants !== 'undefined') {
+      if (!Array.isArray(variants)) {
+        throw new Error('manifest.magnet.variants must be an array');
+      }
+
+      const ids = new Set<string>();
+      for (const item of variants) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error('manifest.magnet.variants entries must be objects');
+        }
+
+        const variant = item as Record<string, unknown>;
+        const variantId = variant.id;
+        if (typeof variantId !== 'string' || variantId.length < 1) {
+          throw new Error('manifest.magnet.variants[].id is required');
+        }
+        if (!/^[a-z0-9-]{1,48}$/.test(variantId)) {
+          throw new Error('manifest.magnet.variants[].id must match /^[a-z0-9-]{1,48}$/');
+        }
+        if (ids.has(variantId)) {
+          throw new Error(`manifest.magnet.variants[].id duplicated: "${variantId}"`);
+        }
+        ids.add(variantId);
+
+        const label = variant.label;
+        if (typeof label !== 'string' || label.length < 1) {
+          throw new Error(`manifest.magnet.variants["${variantId}"].label is required`);
+        }
+
+        const description = variant.description;
+        if (typeof description !== 'undefined' && typeof description !== 'string') {
+          throw new Error(`manifest.magnet.variants["${variantId}"].description must be a string`);
+        }
+
+        const metadata = variant.metadata;
+        if (typeof metadata !== 'undefined') {
+          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`manifest.magnet.variants["${variantId}"].metadata must be an object`);
+          }
+        }
+      }
+
+      if (typeof defaultVariant === 'string' && defaultVariant.length > 0 && !ids.has(defaultVariant)) {
+        throw new Error('manifest.magnet.defaultVariant must exist in manifest.magnet.variants');
+      }
+    }
+  }
 
   const permissions = m.permissions;
   if (typeof permissions !== 'undefined') {

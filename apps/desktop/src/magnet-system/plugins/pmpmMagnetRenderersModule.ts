@@ -1,6 +1,7 @@
 import type { KernelModule } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import { registerMagnetRenderer, unregisterMagnetRenderer } from '../registry';
+import { clearMagnetVariants, registerMagnetVariant } from '../variantRegistry';
 import { getPluginRendererDefinition, loadInstalledPmpmPlugins, subscribePmpmPlugins } from './pmpm';
 
 export function createPmpmMagnetRenderersModule(): KernelModule<AppEvents> {
@@ -11,11 +12,13 @@ export function createPmpmMagnetRenderersModule(): KernelModule<AppEvents> {
 
       const sync = () => {
         const installed = loadInstalledPmpmPlugins();
+        const installedById = new Map(installed.map((plugin) => [plugin.manifest.metadata.id, plugin]));
         const nextIds = new Set(installed.map((plugin) => plugin.manifest.metadata.id));
 
         for (const id of Array.from(registered)) {
           if (nextIds.has(id)) continue;
           unregisterMagnetRenderer(id);
+          clearMagnetVariants(id);
           registered.delete(id);
         }
 
@@ -24,6 +27,28 @@ export function createPmpmMagnetRenderersModule(): KernelModule<AppEvents> {
           if (!def) continue;
           registerMagnetRenderer(def, { overwrite: true });
           registered.add(id);
+
+          clearMagnetVariants(id);
+          const plugin = installedById.get(id);
+          if (!plugin) continue;
+          const variants = plugin.manifest.magnet?.variants ?? [];
+          for (const variant of variants) {
+            registerMagnetVariant(
+              id,
+              {
+                id: variant.id,
+                label: variant.label,
+                description: variant.description,
+                source: 'plugin',
+                metadata: {
+                  pluginId: id,
+                  pluginVersion: plugin.manifest.metadata.version,
+                  ...(variant.metadata ?? {}),
+                },
+              },
+              { overwrite: true }
+            );
+          }
         }
       };
 
@@ -39,6 +64,7 @@ export function createPmpmMagnetRenderersModule(): KernelModule<AppEvents> {
 
         for (const id of Array.from(registered)) {
           unregisterMagnetRenderer(id);
+          clearMagnetVariants(id);
         }
         registered.clear();
       };

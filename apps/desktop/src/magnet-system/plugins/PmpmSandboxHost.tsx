@@ -80,6 +80,7 @@ function buildSandboxSrcDoc(frameId: string): string {
       let cleanup = null;
       let mountedKind = null;
       let mountedId = null;
+      let mountContext = null;
 
       let permissions = new Set();
       let pluginId = '';
@@ -331,7 +332,7 @@ function buildSandboxSrcDoc(frameId: string): string {
         if (surface === 'magnet') {
           mount = runtime.mount;
           if (typeof mount !== 'function') throw new Error('Plugin entry must export "mount(container, api)"');
-          cleanup = mount(ROOT, api);
+          cleanup = mount(ROOT, api, mountContext);
           return;
         }
 
@@ -387,6 +388,7 @@ function buildSandboxSrcDoc(frameId: string): string {
           hostLabel = String(data.hostLabel || '');
           mountedKind = String(data.surface || '');
           mountedId = data.surfaceId == null ? null : String(data.surfaceId);
+          mountContext = data.mountContext ?? null;
           permissions = new Set(Array.isArray(data.permissions) ? data.permissions.filter((p) => typeof p === 'string') : []);
           audioState = data.initialAudioState ?? null;
           audioSpectrum = data.initialAudioSpectrum ?? null;
@@ -540,8 +542,9 @@ function DisabledPluginNotice({ pluginId }: { pluginId: string }) {
 export function PmpmSandboxHost({
   pluginId,
   hostLabel,
+  mountContext,
   ...surface
-}: { pluginId: string; hostLabel: string } & SandboxSurface) {
+}: { pluginId: string; hostLabel: string; mountContext?: unknown } & SandboxSurface) {
   const audioService = useAudioService();
   const navigation = useNavigation();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -779,6 +782,7 @@ export function PmpmSandboxHost({
           hostLabel,
           surface: surface.kind,
           surfaceId,
+          mountContext,
           permissions: Array.from(permissions),
           entryCode,
           initialAudioState: permissions.has('api:audio-state') ? audioService.getState() : null,
@@ -872,6 +876,7 @@ export function PmpmSandboxHost({
     hostApi,
     hostLabel,
     initialConfig,
+    mountContext,
     permissions,
     pluginId,
     postToFrame,

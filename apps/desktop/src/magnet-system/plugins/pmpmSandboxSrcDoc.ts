@@ -28,6 +28,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       let cleanup = null;
       let mountedKind = null;
       let mountedId = null;
+      let mountContext = null;
       let commandArgs = undefined;
 
       let permissions = new Set();
@@ -293,7 +294,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         if (surface === 'magnet') {
           mount = runtime.mount;
           if (typeof mount !== 'function') throw new Error('Plugin entry must export "mount(container, api)"');
-          cleanup = mount(ROOT, api);
+          cleanup = mount(ROOT, api, mountContext);
           return;
         }
 
@@ -349,6 +350,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           hostLabel = String(data.hostLabel || '');
           mountedKind = String(data.surface || '');
           mountedId = data.surfaceId == null ? null : String(data.surfaceId);
+          mountContext = data.mountContext ?? null;
           commandArgs = data.commandArgs;
           permissions = new Set(Array.isArray(data.permissions) ? data.permissions.filter((p) => typeof p === 'string') : []);
           audioState = data.initialAudioState ?? null;

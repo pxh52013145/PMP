@@ -23,7 +23,11 @@
 - `type: "magnet-plugin"`
 - `metadata: { id, name, version, author?, description?, tags? }`
 - `entryPoint: string`
-- `magnet?: { defaultAnchor?, defaultStyle? }`（用于生成 Magnet 模板）
+- `magnet?: { defaultAnchor?, defaultStyle?, defaultVariant?, variants? }`（用于生成 Magnet 模板 + 声明主题变体）
+  - `defaultAnchor?: { type?: "single" | "range", coordinates?: Array<{ x: number, y: number }> }`
+  - `defaultStyle?: Record<string, unknown>`
+  - `defaultVariant?: string`（Theme 未指定 `componentThemes[pluginId].variant` 时的默认值；建议与 `variants[].id` 保持一致）
+  - `variants?: Array<{ id, label, description?, metadata? }>`（供 Theme Editor / Debug 发现并展示；仅声明，不授予任何“功能权限”）
 - `permissions?: string[]`（R5：deny-by-default 权限 gate + denied audit + per-plugin denylist；sandbox 内网络能力也会按权限 best-effort gate）
 - 常用权限（As-Is）：
   - `api:audio-state` / `api:audio-control` / `api:audio-visual`
@@ -43,8 +47,17 @@
 插件 entry 模块必须导出：
 
 ```ts
-export function mount(container: HTMLElement, api: PluginMountApi): void | (() => void);
+export function mount(
+  container: HTMLElement,
+  api: PluginMountApi,
+  context?: {
+    surface: 'magnet';
+    theme: { variant: string; variantConfig?: Record<string, unknown> };
+  }
+): void | (() => void);
 ```
+
+> 兼容性：宿主可能传入 `context` 第三参；旧插件可忽略。插件应对未知 `variant` 做 fallback（例如回退到 default）。
 
 可选导出（现状代码已支持的 surface）：
 

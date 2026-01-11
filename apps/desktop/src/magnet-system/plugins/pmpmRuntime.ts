@@ -4,7 +4,7 @@ import { disablePmpmPluginByPolicy, getInstalledPmpmPlugin, readPmpmPluginEntryC
 import { isPmpmSigningKeyTrusted } from './pmpmTrust';
 
 export type PmpmPluginRuntime = {
-  mount: (container: HTMLElement, api: unknown) => void | (() => void);
+  mount: (container: HTMLElement, api: unknown, context?: unknown) => void | (() => void);
   unmount?: (container: HTMLElement) => void;
   mountWorkbench?: (container: HTMLElement, api: unknown, workbenchId: string) => void | (() => void);
   unmountWorkbench?: (container: HTMLElement, workbenchId: string) => void;
