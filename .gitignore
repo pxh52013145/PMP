@@ -45,6 +45,10 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 
+# Supabase local dev (community)
+community/supabase/.branches/
+community/supabase/.temp/
+
 # OS generated files
 Thumbs.db
 .DS_Store
