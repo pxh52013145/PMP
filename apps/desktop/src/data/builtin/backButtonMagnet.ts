@@ -12,7 +12,7 @@ export const BACK_BUTTON_MAGNET: Magnet = {
   anchors: [
     {
       id: 'anchor',
-      gridX: 0,
+      gridX: 6,
       gridY: 0,
       role: 'anchor',
     },

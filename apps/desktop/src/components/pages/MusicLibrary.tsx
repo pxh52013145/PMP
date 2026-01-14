@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Track } from '../../services/audio';
 import {
@@ -33,6 +33,28 @@ let moduleCache: {
   timestamp: number;
 } | null = null;
 
+// ? 模块级滚动位置缓存：按 viewMode 记忆主滚动条位置与锚点（跨页面跳转/组件卸载保持）
+type MainScrollAnchor =
+  | { kind: 'track'; id: string; offset: number }
+  | { kind: 'album'; key: string; offset: number };
+
+type MainScrollMemory = { scrollTop: number; anchor?: MainScrollAnchor };
+
+type ViewScrollMemory = Partial<Record<ViewMode, MainScrollMemory>>;
+const moduleScrollMemory: ViewScrollMemory = {};
+let moduleLastViewMode: ViewMode | null = null;
+
+type SidebarViewMode = Extract<ViewMode, 'artists' | 'genres'>;
+
+type SidebarScrollAnchor =
+  | { kind: 'artist'; key: string; offset: number }
+  | { kind: 'genre'; key: string; offset: number };
+
+type SidebarScrollMemory = { scrollTop: number; anchor?: SidebarScrollAnchor };
+
+type SidebarViewScrollMemory = Partial<Record<SidebarViewMode, SidebarScrollMemory>>;
+const moduleSidebarScrollMemory: SidebarViewScrollMemory = {};
+
 const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
 // 清除模块缓存
@@ -55,7 +77,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const t = useT();
   const locale = useLocale();
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    return isTauriRuntime() ? 'all' : 'albums';
+    return moduleLastViewMode ?? (isTauriRuntime() ? 'all' : 'albums');
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -80,6 +102,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [isRefreshingPermissions, setIsRefreshingPermissions] = useState(false);
   const requestedAlbumCoversRef = useRef<Set<string>>(new Set());
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
+  const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const albumCardElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const albumCardRefCallbacksRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(
     new Map()
@@ -90,6 +113,348 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const albumCoverDrainRafRef = useRef<number | null>(null);
   const albumInfoByKeyRef = useRef<Map<string, AlbumSummary>>(new Map());
   const albumCoverGenerationRef = useRef<number>(0);
+
+  // ? 记忆滚动位置：按 viewMode 维护主滚动条 scrollTop + 锚点，避免跨页面/切换 tab 丢失位置
+  const isRestoringMainScrollRef = useRef(false);
+  const mainScrollUserDirtyRef = useRef(false);
+  const mainScrollRestoreStateRef = useRef<{ viewMode: ViewMode | null; done: boolean }>({
+    viewMode: null,
+    done: false,
+  });
+
+  const escapeCssSelector = useCallback((value: string): string => {
+    const css = (globalThis as unknown as { CSS?: { escape?: (text: string) => string } }).CSS;
+    if (css?.escape) return css.escape(value);
+    return value.replace(/["\\]/g, '\\$&');
+  }, []);
+
+  const getMainScrollRoot = useCallback((): HTMLElement | null => {
+    const main = mainScrollRef.current;
+    if (!main) return null;
+
+    const isScrollable = (element: HTMLElement): boolean =>
+      element.scrollHeight > element.clientHeight + 1;
+
+    if (isScrollable(main)) return main;
+
+    const navigationContent = main.closest<HTMLElement>('.navigation-content');
+    if (navigationContent && isScrollable(navigationContent)) return navigationContent;
+
+    return main;
+  }, []);
+
+  const computeMainScrollAnchor = useCallback(
+    (root: HTMLElement, mode: ViewMode): MainScrollAnchor | null => {
+      const rootRect = root.getBoundingClientRect();
+
+      const findFirstVisible = (selector: string): HTMLElement | null => {
+        const elements = Array.from(root.querySelectorAll<HTMLElement>(selector));
+        for (const element of elements) {
+          const rect = element.getBoundingClientRect();
+          if (rect.bottom <= rootRect.top) continue;
+          return element;
+        }
+        return null;
+      };
+
+      if (mode === 'albums') {
+        const element = findFirstVisible('.music-library-album-card[data-album-key]');
+        const key = element?.getAttribute('data-album-key')?.trim();
+        if (!element || !key) return null;
+        const rect = element.getBoundingClientRect();
+        return { kind: 'album', key, offset: rect.top - rootRect.top };
+      }
+
+      const element = findFirstVisible('.music-library-track[data-track-id]');
+      const id = element?.getAttribute('data-track-id')?.trim();
+      if (!element || !id) return null;
+      const rect = element.getBoundingClientRect();
+      return { kind: 'track', id, offset: rect.top - rootRect.top };
+    },
+    []
+  );
+
+  const captureMainScrollMemory = useCallback(
+    (mode: ViewMode) => {
+      const root = getMainScrollRoot();
+      if (!root) return;
+
+      const memory: MainScrollMemory = {
+        scrollTop: root.scrollTop,
+      };
+
+      const anchor = computeMainScrollAnchor(root, mode);
+      if (anchor) memory.anchor = anchor;
+
+      moduleScrollMemory[mode] = memory;
+    },
+    [computeMainScrollAnchor, getMainScrollRoot]
+  );
+
+  const handleMainScroll = useCallback(() => {
+    if (isRestoringMainScrollRef.current) return;
+    const root = getMainScrollRoot();
+    if (!root) return;
+    mainScrollUserDirtyRef.current = true;
+
+    const previous = moduleScrollMemory[viewMode];
+    moduleScrollMemory[viewMode] = {
+      ...(previous ?? { scrollTop: 0 }),
+      scrollTop: root.scrollTop,
+    };
+  }, [getMainScrollRoot, viewMode]);
+
+  useEffect(() => {
+    moduleLastViewMode = viewMode;
+  }, [viewMode]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const root = getMainScrollRoot();
+    if (!root) return;
+
+    if (mainScrollRestoreStateRef.current.viewMode !== viewMode) {
+      mainScrollRestoreStateRef.current = { viewMode, done: false };
+      mainScrollUserDirtyRef.current = false;
+    }
+
+    if (mainScrollRestoreStateRef.current.done) return;
+
+    const memory = moduleScrollMemory[viewMode];
+    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+
+    const setScrollTop = (target: number) => {
+      const clamped = Math.min(Math.max(0, target), maxScrollTop);
+      if (root.scrollTop === clamped) return;
+      isRestoringMainScrollRef.current = true;
+      root.scrollTop = clamped;
+      window.requestAnimationFrame(() => {
+        isRestoringMainScrollRef.current = false;
+      });
+    };
+
+    const tryRestoreFromScrollTop = (scrollTop: number): boolean => {
+      setScrollTop(scrollTop);
+      return scrollTop === 0 || scrollTop <= maxScrollTop;
+    };
+
+    if (!memory) {
+      setScrollTop(0);
+      mainScrollRestoreStateRef.current.done = true;
+      return;
+    }
+
+    const anchor = memory.anchor;
+    if (anchor) {
+      if (anchor.kind === 'track') {
+        const selector = `[data-track-id="${escapeCssSelector(anchor.id)}"]`;
+        const element = root.querySelector<HTMLElement>(selector);
+        if (element) {
+          const rootRect = root.getBoundingClientRect();
+          const elementRect = element.getBoundingClientRect();
+          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
+          const targetScrollTop = elementTopInContent - anchor.offset;
+          setScrollTop(targetScrollTop);
+          mainScrollRestoreStateRef.current.done = true;
+          return;
+        }
+      } else if (anchor.kind === 'album') {
+        const selector = `[data-album-key="${escapeCssSelector(anchor.key)}"]`;
+        const element = root.querySelector<HTMLElement>(selector);
+        if (element) {
+          const rootRect = root.getBoundingClientRect();
+          const elementRect = element.getBoundingClientRect();
+          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
+          const targetScrollTop = elementTopInContent - anchor.offset;
+          setScrollTop(targetScrollTop);
+          mainScrollRestoreStateRef.current.done = true;
+          return;
+        }
+      }
+    }
+
+    if (tryRestoreFromScrollTop(memory.scrollTop)) {
+      mainScrollRestoreStateRef.current.done = true;
+    }
+  }, [
+    albums.length,
+    artists.length,
+    escapeCssSelector,
+    genres.length,
+    getMainScrollRoot,
+    isOpen,
+    libraryStats.totalTracks,
+    tracks.length,
+    viewMode,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return () => {
+      const root = getMainScrollRoot();
+      const currentScrollTop = root?.scrollTop ?? 0;
+      const existing = moduleScrollMemory[viewMode];
+      const shouldCapture =
+        mainScrollUserDirtyRef.current ||
+        !existing ||
+        (currentScrollTop > 0 && existing.scrollTop !== currentScrollTop);
+
+      if (shouldCapture) captureMainScrollMemory(viewMode);
+    };
+  }, [captureMainScrollMemory, getMainScrollRoot, isOpen, viewMode]);
+
+  // ? Artists/Genres sidebar: 独立滚动记忆（锚点式恢复）
+  const isRestoringSidebarScrollRef = useRef(false);
+  const sidebarScrollUserDirtyRef = useRef(false);
+  const sidebarScrollRestoreStateRef = useRef<{ viewMode: SidebarViewMode | null; done: boolean }>({
+    viewMode: null,
+    done: false,
+  });
+
+  const getSidebarScrollRoot = useCallback((): HTMLElement | null => {
+    return sidebarScrollRef.current;
+  }, []);
+
+  const computeSidebarScrollAnchor = useCallback(
+    (root: HTMLElement, mode: SidebarViewMode): SidebarScrollAnchor | null => {
+      const rootRect = root.getBoundingClientRect();
+      const selector =
+        mode === 'artists'
+          ? '.music-library-sidebar-item[data-artist-name]'
+          : '.music-library-sidebar-item[data-genre-name]';
+
+      const elements = Array.from(root.querySelectorAll<HTMLElement>(selector));
+      for (const element of elements) {
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom <= rootRect.top) continue;
+        if (mode === 'artists') {
+          const key = element.getAttribute('data-artist-name')?.trim();
+          if (!key) return null;
+          return { kind: 'artist', key, offset: rect.top - rootRect.top };
+        }
+        const key = element.getAttribute('data-genre-name')?.trim();
+        if (!key) return null;
+        return { kind: 'genre', key, offset: rect.top - rootRect.top };
+      }
+      return null;
+    },
+    []
+  );
+
+  const captureSidebarScrollMemory = useCallback(
+    (mode: ViewMode) => {
+      if (mode !== 'artists' && mode !== 'genres') return;
+      const root = getSidebarScrollRoot();
+      if (!root) return;
+
+      const memory: SidebarScrollMemory = {
+        scrollTop: root.scrollTop,
+      };
+
+      const anchor = computeSidebarScrollAnchor(root, mode);
+      if (anchor) memory.anchor = anchor;
+
+      moduleSidebarScrollMemory[mode] = memory;
+    },
+    [computeSidebarScrollAnchor, getSidebarScrollRoot]
+  );
+
+  const handleSidebarScroll = useCallback(() => {
+    if (isRestoringSidebarScrollRef.current) return;
+    if (viewMode !== 'artists' && viewMode !== 'genres') return;
+    const root = getSidebarScrollRoot();
+    if (!root) return;
+    sidebarScrollUserDirtyRef.current = true;
+
+    const previous = moduleSidebarScrollMemory[viewMode];
+    moduleSidebarScrollMemory[viewMode] = {
+      ...(previous ?? { scrollTop: 0 }),
+      scrollTop: root.scrollTop,
+    };
+  }, [getSidebarScrollRoot, viewMode]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    if (viewMode !== 'artists' && viewMode !== 'genres') return;
+    const root = getSidebarScrollRoot();
+    if (!root) return;
+
+    if (sidebarScrollRestoreStateRef.current.viewMode !== viewMode) {
+      sidebarScrollRestoreStateRef.current = { viewMode, done: false };
+      sidebarScrollUserDirtyRef.current = false;
+    }
+
+    if (sidebarScrollRestoreStateRef.current.done) return;
+
+    const memory = moduleSidebarScrollMemory[viewMode];
+    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+
+    const setScrollTop = (target: number) => {
+      const clamped = Math.min(Math.max(0, target), maxScrollTop);
+      if (root.scrollTop === clamped) return;
+      isRestoringSidebarScrollRef.current = true;
+      root.scrollTop = clamped;
+      window.requestAnimationFrame(() => {
+        isRestoringSidebarScrollRef.current = false;
+      });
+    };
+
+    const tryRestoreFromScrollTop = (scrollTop: number): boolean => {
+      setScrollTop(scrollTop);
+      return scrollTop === 0 || scrollTop <= maxScrollTop;
+    };
+
+    if (!memory) {
+      setScrollTop(0);
+      sidebarScrollRestoreStateRef.current.done = true;
+      return;
+    }
+
+    const anchor = memory.anchor;
+    if (anchor) {
+      const selector =
+        viewMode === 'artists'
+          ? `[data-artist-name="${escapeCssSelector(anchor.key)}"]`
+          : `[data-genre-name="${escapeCssSelector(anchor.key)}"]`;
+      const element = root.querySelector<HTMLElement>(selector);
+      if (element) {
+        const rootRect = root.getBoundingClientRect();
+        const elementRect = element.getBoundingClientRect();
+        const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
+        const targetScrollTop = elementTopInContent - anchor.offset;
+        setScrollTop(targetScrollTop);
+        sidebarScrollRestoreStateRef.current.done = true;
+        return;
+      }
+    }
+
+    if (tryRestoreFromScrollTop(memory.scrollTop)) {
+      sidebarScrollRestoreStateRef.current.done = true;
+    }
+  }, [
+    artists.length,
+    escapeCssSelector,
+    genres.length,
+    getSidebarScrollRoot,
+    isOpen,
+    viewMode,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return () => {
+      if (viewMode !== 'artists' && viewMode !== 'genres') return;
+      const root = getSidebarScrollRoot();
+      const currentScrollTop = root?.scrollTop ?? 0;
+      const existing = moduleSidebarScrollMemory[viewMode];
+      const shouldCapture =
+        sidebarScrollUserDirtyRef.current ||
+        !existing ||
+        (currentScrollTop > 0 && existing.scrollTop !== currentScrollTop);
+
+      if (shouldCapture) captureSidebarScrollMemory(viewMode);
+    };
+  }, [captureSidebarScrollMemory, getSidebarScrollRoot, isOpen, viewMode]);
 
   // 排序状态
   const [sortBy, setSortBy] = useState<
@@ -109,6 +474,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     newMode: ViewMode,
     options?: { artist?: string; genre?: string }
   ) => {
+    captureMainScrollMemory(viewMode);
+    captureSidebarScrollMemory(viewMode);
+    moduleLastViewMode = newMode;
     setViewMode(newMode);
     // 清除所有筛选条件，让每个视图独立
     setSelectedArtist(options?.artist || null);
@@ -897,13 +1265,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       <div className="music-library-content">
         {(viewMode === 'artists' || viewMode === 'genres') && (
-          <div className="music-library-sidebar">
+          <div className="music-library-sidebar" ref={sidebarScrollRef} onScroll={handleSidebarScroll}>
             {viewMode === 'artists' && (
               <div className="music-library-sidebar-section">
                 <div className="music-library-sidebar-title">{t('pages.music-library.sidebar.artists')}</div>
                 {artists.map((artist) => (
                   <div
                     key={artist}
+                    data-artist-name={artist}
                     className={`music-library-sidebar-item ${selectedArtist === artist ? 'selected' : ''}`}
                     onClick={() => setSelectedArtist(selectedArtist === artist ? null : artist)}
                     onDoubleClick={() => handlePlayArtist(artist)}
@@ -923,6 +1292,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 {genres.map((genre) => (
                   <div
                     key={genre}
+                    data-genre-name={genre}
                     className={`music-library-sidebar-item ${selectedGenre === genre ? 'selected' : ''}`}
                     onClick={() => setSelectedGenre(selectedGenre === genre ? null : genre)}
                   >
@@ -937,7 +1307,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           </div>
         )}
 
-          <div className="music-library-main" ref={mainScrollRef}>
+          <div className="music-library-main" ref={mainScrollRef} onScroll={handleMainScroll}>
           {libraryStats.totalTracks === 0 ? (
             <div className="music-library-empty">
               <div className="music-library-empty-icon">⊞</div>
@@ -991,6 +1361,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                   {getFilteredTracks().map((track, index) => (
                     <div
                       key={track.id}
+                      data-track-id={track.id}
                       className="music-library-track"
                       onDoubleClick={() => handleTrackDoubleClick(track, index)}
                       onContextMenu={(e) => handleTrackContextMenu(track, index, e)}

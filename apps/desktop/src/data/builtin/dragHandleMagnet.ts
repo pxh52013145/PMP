@@ -14,13 +14,13 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
   anchors: [
     {
       id: 'left',
-      gridX: 9, // 左端点
+      gridX: 8, // 左端点
       gridY: 0,
       role: 'anchor',
     },
     {
       id: 'right',
-      gridX: 17, // 右端点（9列宽度）
+      gridX: 16, // 右端点（9列宽度）
       gridY: 0,
       role: 'boundary',
     },
