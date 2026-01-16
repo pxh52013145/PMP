@@ -9,14 +9,7 @@ export const MATRIX_CHANGE_MAGNET: Magnet = {
   description: '管理 Magnet Spaces（点击打开面板）',
   tags: ['space', 'layout'],
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 0,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '',
   style: {
     width: '78px',

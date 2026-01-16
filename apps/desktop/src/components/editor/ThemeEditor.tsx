@@ -10,10 +10,16 @@ import { BUILTIN_MAGNET_IDS } from '../../constants/magnets';
 import { readJson } from '../../modules/storage';
 import {
   createDefaultMagnetSpacesState,
+  magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreGetState,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
   sanitizeMagnetSpaceLayout,
   sanitizeMagnetSpacesState,
+  type MagnetLayoutStorePatch,
+  type MagnetLayoutStoreState,
+  type MagnetSpacesState,
 } from '../../modules/magnets';
 import { readDurableText, writeDurableText } from '../../modules/storage/durableTextStore';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
@@ -199,6 +205,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const t = useT();
   const { theme, applyTheme, updateComponentTheme } = useTheme();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  const isTauri = useMemo(() => isTauriRuntime(), []);
   const [debugOpen, setDebugOpen] = useState(false);
   const [rendererList, setRendererList] = useState<MagnetRendererDefinition[]>(() =>
     listRegisteredMagnetRenderers()
@@ -233,6 +240,81 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     targetSpaceId: 'space1',
     acknowledgeOverwrite: false,
   }));
+
+  const [localMagnetSpacesState, setLocalMagnetSpacesState] = useState<MagnetSpacesState>(() =>
+    sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()))
+  );
+
+  const loadMagnetLayoutStoreState = useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
+    if (!isTauri) return null;
+    const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+    return bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+  }, [isTauri]);
+
+  const refreshLocalMagnetSpacesState = useCallback(async (): Promise<MagnetSpacesState> => {
+    const legacy = sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+    const store = await loadMagnetLayoutStoreState();
+    const next = store?.spaces ?? legacy;
+    setLocalMagnetSpacesState(next);
+    return next;
+  }, [loadMagnetLayoutStoreState]);
+
+  const applyMagnetLayoutStorePatches = useCallback(
+    async (patches: MagnetLayoutStorePatch[], reason: string): Promise<MagnetLayoutStoreState | null> => {
+      if (!isTauri) return null;
+      const store = await loadMagnetLayoutStoreState();
+      if (!store) return null;
+
+      const response = await magnetLayoutStoreApplyPatch({ expectedRevision: store.revision, patches, reason });
+      if (!response) return store;
+
+      setLocalMagnetSpacesState(response.state.spaces);
+      if (response.ok) return response.state;
+      if (response.error?.code !== 'revisionConflict') return response.state;
+
+      const retry = await magnetLayoutStoreApplyPatch({
+        expectedRevision: response.state.revision,
+        patches,
+        reason: `${reason}:retry`,
+      });
+      if (!retry) return response.state;
+
+      setLocalMagnetSpacesState(retry.state.spaces);
+      return retry.state;
+    },
+    [isTauri, loadMagnetLayoutStoreState]
+  );
+
+  useEffect(() => {
+    void refreshLocalMagnetSpacesState();
+    if (!isTauri) return;
+
+    const setup = async () => {
+      const unlisten = await setupTauriListenerWithPayload<{ revision: number; reason: string }>(
+        TAURI_EVENTS.MAGNET_LAYOUT_STORE_UPDATED,
+        (_payload) => {
+          void refreshLocalMagnetSpacesState();
+        }
+      );
+
+      return () => {
+        unlisten();
+      };
+    };
+
+    const cleanupPromise = setup();
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [isTauri, refreshLocalMagnetSpacesState]);
+
+  useEffect(() => {
+    const ids = new Set(localMagnetSpacesState.spaces.map((space) => space.id));
+    if (ids.has(profilePackApplyOptions.targetSpaceId)) return;
+    const fallback = localMagnetSpacesState.spaces[0]?.id ?? 'space1';
+    if (fallback === profilePackApplyOptions.targetSpaceId) return;
+    setProfilePackApplyOptions((prev) => ({ ...prev, targetSpaceId: fallback }));
+  }, [localMagnetSpacesState.spaces, profilePackApplyOptions.targetSpaceId]);
 
   const themePackRequires = useMemo(() => themePack?.manifest.requires ?? null, [themePack?.manifest.requires]);
   const themePackAppVersionSatisfaction = useMemo(
@@ -523,9 +605,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           isPlainObject(packSpacesRaw) && packSpacesRaw.version === 1
             ? sanitizeMagnetSpacesState(packSpacesRaw)
             : null;
-        const localSpaces = sanitizeMagnetSpacesState(
-          readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
-        );
+        const localSpaces = await refreshLocalMagnetSpacesState();
 
         setProfilePackApplyOptions({
           applyTheme: Boolean(parsed.themeEntry?.text),
@@ -551,7 +631,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         event.target.value = '';
       }
     },
-    [t]
+    [refreshLocalMagnetSpacesState, t]
   );
 
   const openProfilePackApplyDialog = useCallback(() => {
@@ -562,33 +642,52 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       isPlainObject(packSpacesRaw) && packSpacesRaw.version === 1
         ? sanitizeMagnetSpacesState(packSpacesRaw)
         : null;
-    const localSpaces = sanitizeMagnetSpacesState(
-      readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
-    );
-
-    setProfilePackApplyOptions({
-      applyTheme: Boolean(profilePack.themeEntry?.text),
-      applyMagnets: false,
-      magnetsMode: 'replace-all',
-      sourceSpaceId: packSpaces?.spaces[0]?.id ?? 'space1',
-      targetSpaceId: localSpaces.spaces[0]?.id ?? 'space1',
-      acknowledgeOverwrite: false,
+    if (!isTauri) {
+      const localSpaces = sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
+      setProfilePackApplyOptions({
+        applyTheme: Boolean(profilePack.themeEntry?.text),
+        applyMagnets: false,
+        magnetsMode: 'replace-all',
+        sourceSpaceId: packSpaces?.spaces[0]?.id ?? 'space1',
+        targetSpaceId: localSpaces.spaces[0]?.id ?? 'space1',
+        acknowledgeOverwrite: false,
+      });
+      setProfilePackApplyOpen(true);
+      return;
+    }
+    void refreshLocalMagnetSpacesState().then((localSpaces) => {
+      setProfilePackApplyOptions((prev) => ({
+        ...prev,
+        applyTheme: Boolean(profilePack.themeEntry?.text),
+        applyMagnets: false,
+        magnetsMode: 'replace-all',
+        sourceSpaceId: packSpaces?.spaces[0]?.id ?? 'space1',
+        targetSpaceId: localSpaces.spaces[0]?.id ?? 'space1',
+        acknowledgeOverwrite: false,
+      }));
+      setProfilePackApplyOpen(true);
     });
-    setProfilePackApplyOpen(true);
-  }, [profilePack]);
+  }, [isTauri, profilePack, refreshLocalMagnetSpacesState]);
 
   const backupCurrentProfileSnapshot = useCallback(async () => {
-    const spacesRaw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
-    const spaces = sanitizeMagnetSpacesState(spacesRaw);
+    const store = await loadMagnetLayoutStoreState();
+    const spaces =
+      store?.spaces ??
+      sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
 
     const layoutsBySpaceId: Record<string, unknown> = {};
     const configsBySpaceId: Record<string, unknown> = {};
 
     for (const space of spaces.spaces) {
-      const layoutKey = resolveMagnetLayoutStorageKey(space.id);
-      const layoutRaw = readJson<unknown | null>(layoutKey, null);
-      if (layoutRaw !== null) {
-        layoutsBySpaceId[space.id] = sanitizeMagnetSpaceLayout(layoutRaw);
+      const storeLayout = store?.layoutsBySpaceId?.[space.id];
+      if (storeLayout) {
+        layoutsBySpaceId[space.id] = storeLayout;
+      } else {
+        const layoutKey = resolveMagnetLayoutStorageKey(space.id);
+        const layoutRaw = readJson<unknown | null>(layoutKey, null);
+        if (layoutRaw !== null) {
+          layoutsBySpaceId[space.id] = sanitizeMagnetSpaceLayout(layoutRaw);
+        }
       }
 
       const configKey = resolveMagnetConfigStorageKey(space.id);
@@ -610,7 +709,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     };
 
     return await writeDurableText('profile-pack-backup', 'last', JSON.stringify(snapshot));
-  }, [theme]);
+  }, [loadMagnetLayoutStoreState, theme]);
 
   const applyProfilePackFromDialog = useCallback(async () => {
     if (!profilePack) return;
@@ -682,11 +781,22 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         const nextConfigsBySpaceId: Record<string, unknown> = isPlainObject(rawConfigs) ? rawConfigs : {};
 
         if (options.magnetsMode === 'replace-all') {
-          for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
-            if (!spaceIds.has(spaceId)) continue;
-            if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
-            const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
-            await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+          if (isTauri) {
+            const patches: MagnetLayoutStorePatch[] = [{ kind: 'setSpacesState', spaces: nextSpaces }];
+            for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
+              if (!spaceIds.has(spaceId)) continue;
+              if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+              const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
+              patches.push({ kind: 'setSpaceLayout', spaceId, layout });
+            }
+            await applyMagnetLayoutStorePatches(patches, 'profilePack.replaceAll');
+          } else {
+            for (const [spaceId, layoutValue] of Object.entries(nextLayoutsBySpaceId)) {
+              if (!spaceIds.has(spaceId)) continue;
+              if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+              const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
+              await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+            }
           }
 
           for (const [spaceId, configValue] of Object.entries(nextConfigsBySpaceId)) {
@@ -698,7 +808,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             );
           }
 
-          await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+          if (!isTauri) {
+            await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+          }
         } else {
           if (!spaceIds.has(options.sourceSpaceId)) {
             setProfilePackMessage({
@@ -708,9 +820,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             return;
           }
 
-          const localSpaces = sanitizeMagnetSpacesState(
-            readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState())
-          );
+          const localSpaces = isTauri
+            ? await refreshLocalMagnetSpacesState()
+            : sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
           const localSpaceIds = new Set(localSpaces.spaces.map((s) => s.id));
           if (!localSpaceIds.has(options.targetSpaceId)) {
             setProfilePackMessage({
@@ -723,7 +835,14 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           const layoutValue = nextLayoutsBySpaceId[options.sourceSpaceId];
           if (isPlainObject(layoutValue) && layoutValue.version === 1) {
             const layout = filterMagnetSpaceLayoutForImport(sanitizeMagnetSpaceLayout(layoutValue), allowedMagnetIds);
-            await broadcastDataUpdate(resolveMagnetLayoutStorageKey(options.targetSpaceId), layout);
+            if (isTauri) {
+              await applyMagnetLayoutStorePatches(
+                [{ kind: 'setSpaceLayout', spaceId: options.targetSpaceId, layout }],
+                'profilePack.mapOne'
+              );
+            } else {
+              await broadcastDataUpdate(resolveMagnetLayoutStorageKey(options.targetSpaceId), layout);
+            }
           }
 
           const configValue = nextConfigsBySpaceId[options.sourceSpaceId];
@@ -734,7 +853,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
             );
           }
 
-          await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, localSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+          if (!isTauri) {
+            await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, localSpaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+          }
         }
       }
 
@@ -761,6 +882,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     magnetLibrary,
     profilePack,
     profilePackApplyOptions,
+    refreshLocalMagnetSpacesState,
+    applyMagnetLayoutStorePatches,
+    isTauri,
     t,
   ]);
 
@@ -794,12 +918,25 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
       const layoutsBySpaceId = (magnets as { layoutsBySpaceId?: unknown }).layoutsBySpaceId;
       if (isPlainObject(layoutsBySpaceId)) {
-        for (const [spaceId, layoutValue] of Object.entries(layoutsBySpaceId)) {
-          if (!spaceIds.has(spaceId)) continue;
-          if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
-          const layout = sanitizeMagnetSpaceLayout(layoutValue);
-          await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+        if (isTauri) {
+          const patches: MagnetLayoutStorePatch[] = [{ kind: 'setSpacesState', spaces }];
+          for (const [spaceId, layoutValue] of Object.entries(layoutsBySpaceId)) {
+            if (!spaceIds.has(spaceId)) continue;
+            if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+            const layout = sanitizeMagnetSpaceLayout(layoutValue);
+            patches.push({ kind: 'setSpaceLayout', spaceId, layout });
+          }
+          await applyMagnetLayoutStorePatches(patches, 'profilePack.rollback');
+        } else {
+          for (const [spaceId, layoutValue] of Object.entries(layoutsBySpaceId)) {
+            if (!spaceIds.has(spaceId)) continue;
+            if (!isPlainObject(layoutValue) || layoutValue.version !== 1) continue;
+            const layout = sanitizeMagnetSpaceLayout(layoutValue);
+            await broadcastDataUpdate(resolveMagnetLayoutStorageKey(spaceId), layout);
+          }
         }
+      } else if (isTauri) {
+        await applyMagnetLayoutStorePatches([{ kind: 'setSpacesState', spaces }], 'profilePack.rollback');
       }
 
       const configsBySpaceId = (magnets as { configsBySpaceId?: unknown }).configsBySpaceId;
@@ -811,14 +948,16 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         }
       }
 
-      await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, spaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+      if (!isTauri) {
+        await broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, spaces, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+      }
 
       setProfilePackMessage({ kind: 'success', text: t('editor.theme-editor.profilePack.rollback.success') });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.rollback.failed', { message }) });
     }
-  }, [applyTheme, confirm, t]);
+  }, [applyMagnetLayoutStorePatches, applyTheme, confirm, isTauri, t]);
 
   const applyThemePackTheme = useCallback(async () => {
     if (!themePack?.entryThemeText) {
@@ -915,17 +1054,24 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       return;
     }
 
-    const spacesRaw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
-    const spaces = sanitizeMagnetSpacesState(spacesRaw);
+    const store = await loadMagnetLayoutStoreState();
+    const spaces =
+      store?.spaces ??
+      sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()));
 
     const layoutsBySpaceId: Record<string, unknown> = {};
     const configsBySpaceId: Record<string, unknown> = {};
 
     for (const space of spaces.spaces) {
-      const layoutKey = resolveMagnetLayoutStorageKey(space.id);
-      const layoutRaw = readJson<unknown | null>(layoutKey, null);
-      if (layoutRaw !== null) {
-        layoutsBySpaceId[space.id] = layoutRaw;
+      const storeLayout = store?.layoutsBySpaceId?.[space.id];
+      if (storeLayout) {
+        layoutsBySpaceId[space.id] = storeLayout;
+      } else {
+        const layoutKey = resolveMagnetLayoutStorageKey(space.id);
+        const layoutRaw = readJson<unknown | null>(layoutKey, null);
+        if (layoutRaw !== null) {
+          layoutsBySpaceId[space.id] = layoutRaw;
+        }
       }
 
       const configKey = resolveMagnetConfigStorageKey(space.id);
@@ -970,7 +1116,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const message = error instanceof Error ? error.message : String(error);
       setProfilePackMessage({ kind: 'error', text: t('editor.theme-editor.profilePack.export.failed', { message }) });
     }
-  }, [profilePackExportChecksumsEnabled, profilePackExportManifest, t, themeJson]);
+  }, [loadMagnetLayoutStoreState, profilePackExportChecksumsEnabled, profilePackExportManifest, t, themeJson]);
 
   const themePackExportBundledDeps = useMemo(() => {
     const manifest = themePackExportManifest.manifest;
@@ -2463,18 +2609,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                               }))
                             }
                           >
-                            {(() => {
-                              const spacesRaw = readJson(
-                                STORAGE_KEYS.MAGNET_SPACES,
-                                createDefaultMagnetSpacesState()
-                              );
-                              const spaces = sanitizeMagnetSpacesState(spacesRaw);
-                              return spaces.spaces.map((space) => (
-                                <option key={space.id} value={space.id}>
-                                  {space.name} ({space.id})
-                                </option>
-                              ));
-                            })()}
+                            {localMagnetSpacesState.spaces.map((space) => (
+                              <option key={space.id} value={space.id}>
+                                {space.name} ({space.id})
+                              </option>
+                            ))}
                           </select>
                         </label>
                       </div>

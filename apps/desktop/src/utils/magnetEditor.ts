@@ -51,19 +51,22 @@ export function calculatePixelOccupancy(magnets: Magnet[]): Map<string, PixelOcc
  */
 export function getMagnetOccupiedPixels(magnet: Magnet): Array<{ x: number; y: number }> {
   const pixels: Array<{ x: number; y: number }> = [];
+  const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
 
   switch (magnet.anchorType) {
     case 'single': {
       // 单锚点：只占用锚点位置的 pixel
-      const anchor = magnet.anchors[0];
+      const anchor = anchors[0];
+      if (!anchor) break;
       pixels.push({ x: anchor.gridX, y: anchor.gridY });
       break;
     }
 
     case 'horizontal': {
       // 水平锚点：占用左右锚点之间的所有 pixel
-      const leftAnchor = magnet.anchors[0];
-      const rightAnchor = magnet.anchors[1];
+      const leftAnchor = anchors[0];
+      const rightAnchor = anchors[1];
+      if (!leftAnchor || !rightAnchor) break;
       const minX = Math.min(leftAnchor.gridX, rightAnchor.gridX);
       const maxX = Math.max(leftAnchor.gridX, rightAnchor.gridX);
       const y = leftAnchor.gridY;
@@ -76,8 +79,9 @@ export function getMagnetOccupiedPixels(magnet: Magnet): Array<{ x: number; y: n
 
     case 'vertical': {
       // 垂直锚点：占用顶底锚点之间的所有 pixel
-      const topAnchor = magnet.anchors[0];
-      const bottomAnchor = magnet.anchors[1];
+      const topAnchor = anchors[0];
+      const bottomAnchor = anchors[1];
+      if (!topAnchor || !bottomAnchor) break;
       const minY = Math.min(topAnchor.gridY, bottomAnchor.gridY);
       const maxY = Math.max(topAnchor.gridY, bottomAnchor.gridY);
       const x = topAnchor.gridX;
@@ -90,9 +94,10 @@ export function getMagnetOccupiedPixels(magnet: Magnet): Array<{ x: number; y: n
 
     case 'rectangular': {
       // 矩形锚点：占用四个角围成的矩形区域内的所有 pixel
-      const topLeft = magnet.anchors[0];
-      const topRight = magnet.anchors[1];
-      const bottomLeft = magnet.anchors[2];
+      const topLeft = anchors[0];
+      const topRight = anchors[1];
+      const bottomLeft = anchors[2];
+      if (!topLeft || !topRight || !bottomLeft) break;
 
       const minX = Math.min(topLeft.gridX, topRight.gridX);
       const maxX = Math.max(topLeft.gridX, topRight.gridX);

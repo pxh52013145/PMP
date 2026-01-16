@@ -13,32 +13,8 @@ export const AUDIO_VISUALIZER_MAGNET: Magnet = {
   description: '音频频谱可视化（FFT）',
   tags: ['audio', 'fft', 'spectrum', 'visualizer'],
   anchorType: 'rectangular',
-  anchors: [
-    {
-      id: 'top-left',
-      gridX: 0,
-      gridY: 8,
-      role: 'anchor',
-    },
-    {
-      id: 'top-right',
-      gridX: 5,
-      gridY: 8,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-left',
-      gridX: 0,
-      gridY: 13,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-right',
-      gridX: 5,
-      gridY: 13,
-      role: 'boundary',
-    },
-  ],
+  anchors: [],
+  gridFootprint: { width: 6, height: 6 },
   content: '',
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.35)',

@@ -9,14 +9,7 @@ export const EDITOR_BUTTON_MAGNET: Magnet = {
   type: 'custom',
   name: '编辑器',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 19,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '✎',
   style: {
     width: '36px',

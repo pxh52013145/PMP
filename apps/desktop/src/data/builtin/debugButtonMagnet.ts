@@ -12,14 +12,7 @@ export const DEBUG_BUTTON_MAGNET: Magnet = {
 
   // 单点锚定在左下角
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 0,
-      gridY: 19,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
 
   // 内容
   content: '🛠️',

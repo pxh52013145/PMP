@@ -11,14 +11,7 @@ export const WINDOW_PIN_MAGNET: Magnet = {
   type: 'window-control',
   name: '窗口置顶',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 20,
-      gridY: 0,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: React.createElement(WindowPinButton),
   style: {
     width: '36px',

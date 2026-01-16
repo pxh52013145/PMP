@@ -28,10 +28,12 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
 
   // 根据锚点计算实际位置和尺寸
   const bounds = useMemo(() => {
-    const { anchors, anchorType, style } = magnet;
+    const { anchorType, style } = magnet;
+    const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
 
     switch (anchorType) {
       case 'single': {
+        if (anchors.length < 1) return null;
         // 单锚点：固定尺寸，位置由锚点决定
         // 重要：Magnet 的中心对齐到 Pixel 的中心
         const pos = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
@@ -53,6 +55,7 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       }
 
       case 'horizontal': {
+        if (anchors.length < 2) return null;
         // 水平锚点：宽度自适应，高度固定
         // y 方向也需要垂直居中对齐 Pixel
         const left = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
@@ -73,6 +76,7 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       }
 
       case 'vertical': {
+        if (anchors.length < 2) return null;
         // 垂直锚点：高度自适应，宽度固定
         // x 方向也需要水平居中对齐 Pixel
         const top = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
@@ -93,6 +97,7 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       }
 
       case 'rectangular': {
+        if (anchors.length < 3) return null;
         // 矩形锚点：宽度和高度都自适应
         const topLeft = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
         const topRight = pixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);

@@ -10,32 +10,8 @@ export const NAVIGATOR_MAGNET: Magnet = {
   type: 'navigation',
   name: '路由导航器',
   anchorType: 'rectangular',
-  anchors: [
-    {
-      id: 'top-left',
-      gridX: 0,
-      gridY: 4,
-      role: 'anchor',
-    },
-    {
-      id: 'top-right',
-      gridX: 26,
-      gridY: 4,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-left',
-      gridX: 0,
-      gridY: 17,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-right',
-      gridX: 26,
-      gridY: 17,
-      role: 'boundary',
-    },
-  ],
+  anchors: [],
+  gridFootprint: { width: 27, height: 14 },
   content: '', // 内容由 Navigator 组件渲染
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0)', // 透明，让组件自己处理背景

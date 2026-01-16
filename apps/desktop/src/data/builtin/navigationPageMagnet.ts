@@ -10,32 +10,8 @@ export const NAVIGATION_PAGE_MAGNET: Magnet = {
   type: 'navigation',
   name: '导航页面',
   anchorType: 'rectangular',
-  anchors: [
-    {
-      id: 'top-left',
-      gridX: 6,
-      gridY: 1,
-      role: 'anchor',
-    },
-    {
-      id: 'top-right',
-      gridX: 26,
-      gridY: 1,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-left',
-      gridX: 6,
-      gridY: 17,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-right',
-      gridX: 26,
-      gridY: 17,
-      role: 'boundary',
-    },
-  ],
+  anchors: [],
+  gridFootprint: { width: 21, height: 17 },
   content: '', // 内容由 NavigationPage 组件渲染
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.85)',

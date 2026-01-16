@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import {
   STORAGE_KEYS,
@@ -18,7 +18,14 @@ import { PixelAnchor } from '../../types/pixel';
 import { BackgroundSettings } from '../../types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
 import { calculateWindowPosition } from '../../utils/editorWindows';
-import { useMagnetConfig } from '../../modules/magnets';
+import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import {
+  magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreGetState,
+  type MagnetSpaceHistoryItem,
+  type MagnetSpaceLayout,
+  useMagnetConfig,
+} from '../../modules/magnets';
 import { readJson, readString, writeJson } from '../../modules/storage';
 import { gcOrphanBackgroundMedia } from '../../modules/background/mediaCleanup';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -98,8 +105,101 @@ export function MatrixWorkbench({
     return readJson(STORAGE_KEYS.BACKGROUND_SETTINGS, DEFAULT_BACKGROUND_SETTINGS);
   });
 
-  const { toggleEditMode, exitEditMode, updateOccupancy } = useEditor();
-  const { magnetLibrary, activeMagnetIds, updateMagnetAnchors } = useMagnetConfig();
+  const { editorState, toggleEditMode, exitEditMode, updateOccupancy } = useEditor();
+  const { magnetLibrary, activeMagnetIds, activeSpaceId, updateMagnetAnchors } = useMagnetConfig();
+
+  const buildHistorySnapshotLayout = useCallback((): MagnetSpaceLayout => {
+    const active = new Set(activeMagnetIds);
+    for (const id of REQUIRED_MAGNET_IDS) active.add(id);
+
+    const anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {};
+    for (const magnet of magnetLibrary) {
+      if (!Array.isArray(magnet.anchors) || magnet.anchors.length === 0) continue;
+      anchorsByMagnetId[magnet.id] = magnet.anchors.map((anchor) => ({ ...anchor }));
+    }
+
+    return { version: 1, activeMagnetIds: [...active], anchorsByMagnetId };
+  }, [activeMagnetIds, magnetLibrary]);
+
+  const pushEditEntryHistory = useCallback(async (): Promise<void> => {
+    const item: MagnetSpaceHistoryItem = {
+      id: `history-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      reason: 'enterEdit',
+      createdAt: Date.now(),
+      layout: buildHistorySnapshotLayout(),
+    };
+
+    if (!isTauri) {
+      const historyState = readJson<Record<string, MagnetSpaceHistoryItem[]>>(
+        STORAGE_KEYS.MAGNET_SPACE_HISTORY,
+        {}
+      );
+      const existing = Array.isArray(historyState[activeSpaceId]) ? historyState[activeSpaceId] : [];
+      const nextList = [...existing, item];
+      if (nextList.length > 20) nextList.splice(0, nextList.length - 20);
+      writeJson(STORAGE_KEYS.MAGNET_SPACE_HISTORY, { ...historyState, [activeSpaceId]: nextList });
+      return;
+    }
+
+    const state = await magnetLayoutStoreGetState();
+    const expectedRevision = state?.revision ?? 0;
+    if (expectedRevision <= 0) return;
+
+    const patches = [{ kind: 'pushSpaceHistory', spaceId: activeSpaceId, item }] as const;
+    const response = await magnetLayoutStoreApplyPatch({
+      expectedRevision,
+      patches: [...patches],
+      reason: 'enterEdit',
+    });
+    if (!response) return;
+    if (response.ok) return;
+    if (response.error?.code !== 'revisionConflict') return;
+
+    const retryRevision = response.state.revision;
+    if (retryRevision <= 0 || retryRevision === expectedRevision) return;
+    await magnetLayoutStoreApplyPatch({
+      expectedRevision: retryRevision,
+      patches: [...patches],
+      reason: 'enterEdit:retry',
+    });
+  }, [activeSpaceId, buildHistorySnapshotLayout, isTauri]);
+
+  type LayoutUndoEntry = { magnetId: string; from: PixelAnchor[]; to: PixelAnchor[] };
+  const undoStackRef = useRef<LayoutUndoEntry[]>([]);
+  const redoStackRef = useRef<LayoutUndoEntry[]>([]);
+
+  const editHistoryCapturedRef = useRef(false);
+  useEffect(() => {
+    if (!editorState.isEditing) {
+      editHistoryCapturedRef.current = false;
+      return;
+    }
+    if (editHistoryCapturedRef.current) return;
+    editHistoryCapturedRef.current = true;
+    void pushEditEntryHistory();
+  }, [editorState.isEditing, pushEditEntryHistory]);
+
+  useEffect(() => {
+    if (editorState.isEditing) return;
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+  }, [editorState.isEditing]);
+
+  const undoLastMove = useCallback(() => {
+    if (!editorState.isEditing) return;
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+    redoStackRef.current.push(entry);
+    updateMagnetAnchors(entry.magnetId, entry.from);
+  }, [editorState.isEditing, updateMagnetAnchors]);
+
+  const redoLastMove = useCallback(() => {
+    if (!editorState.isEditing) return;
+    const entry = redoStackRef.current.pop();
+    if (!entry) return;
+    undoStackRef.current.push(entry);
+    updateMagnetAnchors(entry.magnetId, entry.to);
+  }, [editorState.isEditing, updateMagnetAnchors]);
 
   useEffect(() => {
     const preventDefault = (e: Event) => e.preventDefault();
@@ -217,6 +317,31 @@ export function MatrixWorkbench({
     };
   }, [exitEditMode]);
 
+  useEffect(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    const setup = async () => {
+      const unlistenUndo = await setupTauriListener(TAURI_EVENTS.EDITOR_LAYOUT_UNDO, () => {
+        if (disposed) return;
+        undoLastMove();
+      });
+      const unlistenRedo = await setupTauriListener(TAURI_EVENTS.EDITOR_LAYOUT_REDO, () => {
+        if (disposed) return;
+        redoLastMove();
+      });
+      return () => {
+        unlistenUndo();
+        unlistenRedo();
+      };
+    };
+
+    const cleanupPromise = setup();
+    return () => {
+      disposed = true;
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [isTauri, redoLastMove, undoLastMove]);
+
   // 获取当前激活的 Magnet（显示在点阵上的）
   const activeMagnets = useMemo(() => {
     const filtered = magnetLibrary
@@ -245,9 +370,21 @@ export function MatrixWorkbench({
   // 处理 Magnet 移动（只更新库中的 Magnet）
   const handleMagnetMove = useCallback(
     (magnetId: string, newAnchors: PixelAnchor[]) => {
+      const current = magnetLibrary.find((m) => m.id === magnetId);
+      const from = current?.anchors ?? [];
+      if (editorState.isEditing && from.length > 0 && newAnchors.length > 0) {
+        const entry: LayoutUndoEntry = {
+          magnetId,
+          from: from.map((a) => ({ ...a })),
+          to: newAnchors.map((a) => ({ ...a })),
+        };
+        undoStackRef.current.push(entry);
+        if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+        redoStackRef.current = [];
+      }
       updateMagnetAnchors(magnetId, newAnchors);
     },
-    [updateMagnetAnchors]
+    [editorState.isEditing, magnetLibrary, updateMagnetAnchors]
   );
 
   // 根据窗口状态选择背景配置

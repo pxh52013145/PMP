@@ -8,7 +8,7 @@ import {
   isValidElement,
   type ReactNode,
 } from 'react';
-import { Magnet } from '../../types/pixel';
+import { Magnet, type PixelAnchor } from '../../types/pixel';
 import { useEditor } from '../../contexts/EditorContext';
 import {
   STORAGE_KEYS,
@@ -18,6 +18,7 @@ import {
 } from '../../utils/windowCommunication';
 import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
+import { MATRIX_CONFIG } from '../../constants/config';
 import {
   createMagnetTemplateFromPlugin,
   installPmpmPluginFromFilePath,
@@ -26,9 +27,23 @@ import {
   uninstallPmpmPlugin,
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
-import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import { DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import {
+  createDefaultMagnetSpacesState,
+  ensureMagnetSpaceLayout,
+  magnetLayoutStoreGetState,
+  sanitizeMagnetSpacesState,
+} from '../../modules/magnets';
+import {
+  buildMagnetPlacementCandidates,
+  findFirstMagnetPlacementCandidate,
+  getOccupiedPixelKeys,
+  magnetHasPlacementConflict,
+  type MagnetPlacementCandidate,
+} from '../../utils/magnetPlacement';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { useT } from '../../i18n';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -36,7 +51,7 @@ interface EditorMagnetLibraryProps {
   activeMagnetIds: Set<string>;
   builtInMagnetIds: Set<string>;
   onMagnetAddToLibrary: (magnet: Magnet) => void;
-  onMagnetActivate: (magnetId: string) => void;
+  onMagnetActivate: (magnetId: string, options?: { anchors?: PixelAnchor[] }) => void;
   onMagnetDeactivate: (magnetId: string) => void;
   onMagnetDeleteFromLibrary: (magnetId: string) => void;
 }
@@ -46,7 +61,25 @@ type FilterMode = 'all' | 'builtin' | 'custom';
 
 function estimateMagnetPixelCount(magnet: Magnet): number {
   const anchors = magnet.anchors ?? [];
-  if (anchors.length === 0) return 0;
+  const footprint = magnet.gridFootprint;
+
+  if (anchors.length === 0) {
+    if (!footprint) return magnet.anchorType === 'single' ? 1 : 0;
+    const width = Math.max(1, Math.round(footprint.width));
+    const height = Math.max(1, Math.round(footprint.height));
+    switch (magnet.anchorType) {
+      case 'single':
+        return 1;
+      case 'horizontal':
+        return width;
+      case 'vertical':
+        return height;
+      case 'rectangular':
+        return width * height;
+      default:
+        return 0;
+    }
+  }
 
   let minX = anchors[0].gridX;
   let maxX = anchors[0].gridX;
@@ -89,6 +122,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 }: EditorMagnetLibraryProps) {
   const { importMagnet: validateAndImportMagnet } = useEditor();
   const t = useT();
+  const isTauri = useMemo(() => isTauriRuntime(), []);
 
   const formatRendererGroup = useCallback(
     (group: string) => {
@@ -114,6 +148,34 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [pluginError, setPluginError] = useState('');
   const [pluginBusy, setPluginBusy] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
+
+  const readActiveSpaceIdFromStorage = useCallback((): string => {
+    const raw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
+    return sanitizeMagnetSpacesState(raw).activeSpaceId;
+  }, []);
+  const [placementDialog, setPlacementDialog] = useState<
+    | {
+        magnetId: string;
+        magnetName: string;
+        occupiedKeys: Set<string>;
+        candidates: MagnetPlacementCandidate[];
+        selectedCandidateId: string | null;
+      }
+    | null
+  >(null);
+
+  const closePlacementDialog = useCallback(() => {
+    setPlacementDialog(null);
+  }, []);
+
+  useEffect(() => {
+    if (!placementDialog) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closePlacementDialog();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [closePlacementDialog, placementDialog]);
 
   // 初始化时清理可能残留的窗口状态
   useEffect(() => {
@@ -223,6 +285,109 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       },
     };
   }, [categorizedMagnets]);
+
+  const requestMagnetPlacement = useCallback(
+    async (magnet: Magnet) => {
+      const activeMagnets = magnetLibrary.filter((m) => m.id !== magnet.id && activeMagnetIds.has(m.id));
+      const occupiedKeys = getOccupiedPixelKeys(activeMagnets);
+
+      let hasStoredAnchors = false;
+      if (isTauri) {
+        const store = await magnetLayoutStoreGetState();
+        const activeSpaceId = store?.spaces.activeSpaceId ?? readActiveSpaceIdFromStorage();
+        const layout = store?.layoutsBySpaceId?.[activeSpaceId] ?? null;
+        hasStoredAnchors =
+          Array.isArray(layout?.anchorsByMagnetId?.[magnet.id]) && layout.anchorsByMagnetId[magnet.id]!.length > 0;
+      } else {
+        const activeSpaceId = readActiveSpaceIdFromStorage();
+        const layout = ensureMagnetSpaceLayout(activeSpaceId, { defaultActiveMagnetIds: DEFAULT_ACTIVE_MAGNET_IDS }).layout;
+        hasStoredAnchors = Array.isArray(layout.anchorsByMagnetId?.[magnet.id]) && layout.anchorsByMagnetId[magnet.id]!.length > 0;
+      }
+
+      if (!hasStoredAnchors) {
+        const candidate = findFirstMagnetPlacementCandidate(magnet, occupiedKeys);
+        if (!candidate) {
+          await confirm({
+            title: t('editor.magnet-library.placement.noSpace.title'),
+            message: t('editor.magnet-library.placement.noSpace.message', { name: magnet.name || magnet.id }),
+            confirmText: t('common.action.ok'),
+          });
+          return;
+        }
+        onMagnetActivate(magnet.id, { anchors: candidate.anchors });
+        return;
+      }
+
+      if (!isTauri) {
+        onMagnetActivate(magnet.id);
+        return;
+      }
+
+      if (!magnetHasPlacementConflict(magnet, occupiedKeys)) {
+        onMagnetActivate(magnet.id);
+        return;
+      }
+
+      const candidates = buildMagnetPlacementCandidates(magnet, occupiedKeys, {
+        maxCandidates: magnet.anchorType === 'horizontal' ? MATRIX_CONFIG.ROWS : 24,
+      });
+
+      if (candidates.length === 0) {
+        await confirm({
+          title: t('editor.magnet-library.placement.noSpace.title'),
+          message: t('editor.magnet-library.placement.noSpace.message', { name: magnet.name || magnet.id }),
+          confirmText: t('common.action.ok'),
+        });
+        return;
+      }
+
+      setPlacementDialog({
+        magnetId: magnet.id,
+        magnetName: magnet.name || magnet.id,
+        occupiedKeys,
+        candidates,
+        selectedCandidateId: null,
+      });
+    },
+    [
+      activeMagnetIds,
+      confirm,
+      isTauri,
+      magnetLibrary,
+      onMagnetActivate,
+      readActiveSpaceIdFromStorage,
+      t,
+    ]
+  );
+
+  const placementGridKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (let y = 0; y < MATRIX_CONFIG.ROWS; y++) {
+      for (let x = 0; x < MATRIX_CONFIG.COLUMNS; x++) {
+        keys.push(`${x},${y}`);
+      }
+    }
+    return keys;
+  }, []);
+
+  const placementCandidateByPixelKey = useMemo(() => {
+    if (!placementDialog) return new Map<string, string>();
+    const map = new Map<string, string>();
+    for (const candidate of placementDialog.candidates) {
+      for (const key of candidate.footprintKeys) {
+        map.set(key, candidate.id);
+      }
+    }
+    return map;
+  }, [placementDialog]);
+
+  const applyPlacementSelection = useCallback(() => {
+    if (!placementDialog?.selectedCandidateId) return;
+    const selected = placementDialog.candidates.find((candidate) => candidate.id === placementDialog.selectedCandidateId);
+    if (!selected) return;
+    onMagnetActivate(placementDialog.magnetId, { anchors: selected.anchors });
+    closePlacementDialog();
+  }, [closePlacementDialog, onMagnetActivate, placementDialog]);
 
   // 处理编辑
   const handleEdit = useCallback(
@@ -727,7 +892,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                     ) : (
                       <button
                         className="magnet-action-btn add"
-                        onClick={() => onMagnetActivate(magnet.id)}
+                        onClick={() => void requestMagnetPlacement(magnet)}
                         title={t('editor.magnet-library.magnet.tooltip.addToMatrix')}
                       >
                         ＋
@@ -801,6 +966,78 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         </div>
       </div>{' '}
       {/* 关闭 editor-window-content */}
+      {placementDialog && (
+        <div className="magnet-placement-overlay" role="dialog" aria-modal="true" onClick={closePlacementDialog}>
+          <div className="magnet-placement-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="magnet-placement-header">
+              <div className="magnet-placement-title">{t('editor.magnet-library.placement.title')}</div>
+              <div className="magnet-placement-subtitle">
+                {t('editor.magnet-library.placement.subtitle', { name: placementDialog.magnetName })}
+              </div>
+            </div>
+
+            <div className="magnet-placement-legend">
+              <span className="magnet-placement-legend-item magnet-placement-legend-item--occupied">
+                {t('editor.magnet-library.placement.legend.occupied')}
+              </span>
+              <span className="magnet-placement-legend-item magnet-placement-legend-item--candidate">
+                {t('editor.magnet-library.placement.legend.candidate')}
+              </span>
+              <span className="magnet-placement-hint">{t('editor.magnet-library.placement.hint')}</span>
+            </div>
+
+            <div
+              className="magnet-placement-grid"
+              style={{
+                gridTemplateColumns: `repeat(${MATRIX_CONFIG.COLUMNS}, 1fr)`,
+              }}
+            >
+              {placementGridKeys.map((key) => {
+                const isOccupied = placementDialog.occupiedKeys.has(key);
+                const candidateId = placementCandidateByPixelKey.get(key) ?? null;
+                const isCandidate = candidateId !== null;
+                const isSelected = candidateId !== null && candidateId === placementDialog.selectedCandidateId;
+                const className = [
+                  'magnet-placement-cell',
+                  isOccupied ? 'magnet-placement-cell--occupied' : '',
+                  isCandidate ? 'magnet-placement-cell--candidate' : '',
+                  isSelected ? 'magnet-placement-cell--selected' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
+
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={className}
+                    onClick={() => {
+                      if (!candidateId) return;
+                      setPlacementDialog((prev) => (prev ? { ...prev, selectedCandidateId: candidateId } : prev));
+                    }}
+                    title={key}
+                    aria-label={key}
+                  />
+                );
+              })}
+            </div>
+
+            <div className="magnet-placement-footer">
+              <button type="button" className="magnet-placement-btn" onClick={closePlacementDialog}>
+                {t('common.action.cancel')}
+              </button>
+              <button
+                type="button"
+                className="magnet-placement-btn magnet-placement-btn--primary"
+                onClick={applyPlacementSelection}
+                disabled={!placementDialog.selectedCandidateId}
+              >
+                {t('editor.magnet-library.placement.action.place')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {confirmDialog}
     </div>
   );

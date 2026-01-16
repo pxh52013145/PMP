@@ -9,14 +9,7 @@ export const DSP_VST_MAGNET: Magnet = {
   description: 'VST 管理入口：打开 DSP Rack（读取 DSP Graph）',
   tags: ['dsp', 'vst', 'vst3', 'native'],
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 6,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '',
   style: {
     width: '96px',

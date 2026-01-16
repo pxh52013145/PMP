@@ -164,3 +164,299 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.matrix-change-presets-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 100001;
+}
+
+.matrix-change-presets-dialog {
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+
+.matrix-change-presets-header {
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.matrix-change-presets-title {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+}
+
+.matrix-change-presets-subtitle {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.matrix-change-presets-list {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.matrix-change-presets-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.matrix-change-presets-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.matrix-change-presets-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.matrix-change-presets-item-name {
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrix-change-presets-item-meta {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.matrix-change-presets-item-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.matrix-change-presets-item-action {
+  padding: 6px 8px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.matrix-change-presets-item-action:hover {
+  border-color: rgba(78, 161, 255, 0.45);
+  background: rgba(78, 161, 255, 0.12);
+}
+
+.matrix-change-presets-item-action.primary:hover {
+  border-color: rgba(78, 161, 255, 0.55);
+  background: rgba(78, 161, 255, 0.16);
+}
+
+.matrix-change-presets-item-action.danger:hover {
+  border-color: rgba(255, 80, 80, 0.4);
+  background: rgba(255, 80, 80, 0.14);
+}
+
+.matrix-change-presets-footer {
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  gap: 10px;
+}
+
+.matrix-change-presets-footer-btn {
+  flex: 1;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.matrix-change-presets-footer-btn:hover {
+  border-color: rgba(78, 161, 255, 0.35);
+  background: rgba(78, 161, 255, 0.1);
+}
+
+.matrix-change-history-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 100001;
+}
+
+.matrix-change-history-dialog {
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+
+.matrix-change-history-header {
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.matrix-change-history-title {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+}
+
+.matrix-change-history-subtitle {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.matrix-change-history-list {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.matrix-change-history-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.matrix-change-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.matrix-change-history-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.matrix-change-history-item-name {
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrix-change-history-item-meta {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.matrix-change-history-item-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.matrix-change-history-item-action {
+  padding: 6px 8px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.matrix-change-history-item-action:hover {
+  border-color: rgba(255, 198, 64, 0.45);
+  background: rgba(255, 198, 64, 0.12);
+}
+
+.matrix-change-history-item-action.danger:hover {
+  border-color: rgba(255, 80, 80, 0.4);
+  background: rgba(255, 80, 80, 0.14);
+}
+
+.matrix-change-history-footer {
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  gap: 10px;
+}
+
+.matrix-change-history-footer-btn {
+  flex: 1;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.matrix-change-history-footer-btn:hover:not(:disabled) {
+  border-color: rgba(255, 198, 64, 0.35);
+  background: rgba(255, 198, 64, 0.1);
+}
+
+.matrix-change-history-footer-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

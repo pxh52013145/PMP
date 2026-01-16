@@ -25,6 +25,9 @@
 - `entryPoint: string`
 - `magnet?: { defaultAnchor?, defaultStyle?, defaultVariant?, variants? }`（用于生成 Magnet 模板 + 声明主题变体）
   - `defaultAnchor?: { type?: "single" | "range", coordinates?: Array<{ x: number, y: number }> }`
+    - 约定（R7/M5）：`defaultAnchor.coordinates` 仅作为“footprint/尺寸”的声明来源（用于推导 single/horizontal/vertical/rectangular 的占位大小）；宿主不会把它当作权威的默认坐标。
+      - 当某个 space 尚未保存该 magnet 的 anchors 时：启用该 magnet 会按当前 space 的“找空位”规则落位（必要时弹窗点选空位），并把最终 anchors 写入 space layout store。
+      - 当 `coordinates` 缺失/为空时：宿主视为“无默认锚点/无尺寸声明”，不会隐式回退到 `(0,0)`；footprint 默认按 `1×1(single)` 处理。
   - `defaultStyle?: Record<string, unknown>`
   - `defaultVariant?: string`（Theme 未指定 `componentThemes[pluginId].variant` 时的默认值；建议与 `variants[].id` 保持一致）
   - `variants?: Array<{ id, label, description?, metadata? }>`（供 Theme Editor / Debug 发现并展示；仅声明，不授予任何“功能权限”）

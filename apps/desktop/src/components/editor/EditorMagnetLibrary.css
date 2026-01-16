@@ -813,3 +813,172 @@
 .create-import-btn:active {
   transform: translateY(0);
 }
+
+/* === Magnet placement (conflict) dialog === */
+
+.magnet-placement-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.magnet-placement-modal {
+  width: min(760px, 92vw);
+  max-height: min(86vh, 780px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(10, 10, 20, 0.92);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.6);
+  padding: 18px 18px 14px 18px;
+}
+
+.magnet-placement-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.magnet-placement-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.magnet-placement-subtitle {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.magnet-placement-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.magnet-placement-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.magnet-placement-legend-item::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.magnet-placement-legend-item--occupied::before {
+  background: rgba(255, 59, 48, 0.35);
+  border-color: rgba(255, 59, 48, 0.5);
+}
+
+.magnet-placement-legend-item--candidate::before {
+  background: rgba(191, 90, 242, 0.35);
+  border-color: rgba(191, 90, 242, 0.65);
+}
+
+.magnet-placement-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.magnet-placement-grid {
+  width: min(680px, 92vw);
+  margin: 0 auto;
+  aspect-ratio: 27 / 20;
+  display: grid;
+  grid-template-rows: repeat(20, 1fr);
+  gap: 2px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.magnet-placement-cell {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: default;
+  padding: 0;
+}
+
+.magnet-placement-cell--occupied {
+  background: rgba(255, 59, 48, 0.22);
+  border-color: rgba(255, 59, 48, 0.3);
+}
+
+.magnet-placement-cell--candidate {
+  cursor: pointer;
+  background: rgba(191, 90, 242, 0.26);
+  border-color: rgba(191, 90, 242, 0.38);
+}
+
+.magnet-placement-cell--candidate:hover {
+  background: rgba(191, 90, 242, 0.4);
+  border-color: rgba(191, 90, 242, 0.7);
+}
+
+.magnet-placement-cell--selected {
+  background: rgba(191, 90, 242, 0.6);
+  border-color: rgba(191, 90, 242, 1);
+  box-shadow: 0 0 0 2px rgba(191, 90, 242, 0.35);
+}
+
+.magnet-placement-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.magnet-placement-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.86);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.magnet-placement-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.magnet-placement-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
+.magnet-placement-btn--primary {
+  border-color: rgba(191, 90, 242, 0.7);
+  background: rgba(191, 90, 242, 0.32);
+}
+
+.magnet-placement-btn--primary:hover {
+  background: rgba(191, 90, 242, 0.42);
+  border-color: rgba(191, 90, 242, 0.9);
+}

@@ -1,7 +1,7 @@
 import { Magnet } from '../../types/pixel';
 import { DEFAULT_ACTIVE_MAGNET_IDS } from '../../constants/magnets';
-import { detectConflicts, resolveMagnetPositions } from '../../utils/magnetPositionResolver';
 import { applyMagnetConfig, loadMagnetConfig } from './config';
+import { createDefaultMagnetSpaceLayout } from './layoutStorage';
 
 export interface MagnetStateSnapshot {
   magnetLibrary: Magnet[];
@@ -32,19 +32,14 @@ export function createInitialMagnetState(
     };
   }
 
-  const conflicts = detectConflicts(defaultMagnetLibrary);
-  if (conflicts.length > 0) {
-    console.warn(`🔧 首次加载检测到 ${conflicts.length} 个位置冲突，正在自动解决...`);
-    conflicts.forEach((conflict) => {
-      console.warn(
-        `   - "${conflict.magnet1}" 与 "${conflict.magnet2}" 在 ${conflict.conflictPixels.length} 个像素位置冲突`
-      );
-    });
-  }
+  const defaultActiveMagnetIds = options.defaultActiveMagnetIds ?? DEFAULT_ACTIVE_MAGNET_IDS;
+  const layout = createDefaultMagnetSpaceLayout('space1', defaultActiveMagnetIds);
 
-  const resolvedMagnets = resolveMagnetPositions(defaultMagnetLibrary);
-  return {
-    magnetLibrary: resolvedMagnets,
-    activeMagnetIds: new Set(options.defaultActiveMagnetIds ?? DEFAULT_ACTIVE_MAGNET_IDS),
-  };
+  const resolvedMagnets = defaultMagnetLibrary.map((magnet) => {
+    const anchors = layout.anchorsByMagnetId[magnet.id];
+    if (!Array.isArray(anchors) || anchors.length === 0) return magnet;
+    return { ...magnet, anchors: anchors.map((a) => ({ ...a })) };
+  });
+
+  return { magnetLibrary: resolvedMagnets, activeMagnetIds: new Set(layout.activeMagnetIds) };
 }

@@ -9,14 +9,7 @@ export const BACK_BUTTON_MAGNET: Magnet = {
   type: 'navigation',
   name: '返回',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 6,
-      gridY: 0,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '←',
   style: {
     width: '36px',

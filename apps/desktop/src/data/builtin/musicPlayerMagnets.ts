@@ -17,14 +17,7 @@ export const PREVIOUS_BUTTON: Magnet = {
   renderer: 'btn-previous',
   previewText: 'Prev',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 9,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '⟪',
   style: {
     width: '36px',
@@ -64,14 +57,7 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
   renderer: 'btn-play-pause',
   previewText: 'Play/Pause',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 11,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '▶', // 默认显示播放
   style: {
     width: '36px',
@@ -112,14 +98,7 @@ export const NEXT_BUTTON: Magnet = {
   renderer: 'btn-next',
   previewText: 'Next',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 13,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '⟫',
   style: {
     width: '36px',
@@ -159,14 +138,7 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
   renderer: 'btn-mode',
   previewText: 'Mode',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 15,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '↻', // 默认循环播放
   style: {
     width: '36px',
@@ -206,14 +178,7 @@ export const VOLUME_BUTTON: Magnet = {
   renderer: 'btn-volume',
   previewText: 'Volume',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 17,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '♪', // 音量图标
   style: {
     width: '36px',
@@ -254,20 +219,8 @@ export const PROGRESS_BAR: Magnet = {
   type: 'progress-bar',
   name: '播放进度条',
   anchorType: 'horizontal',
-  anchors: [
-    {
-      id: 'left',
-      gridX: 0, // 左端点
-      gridY: 19,
-      role: 'anchor',
-    },
-    {
-      id: 'right',
-      gridX: 26, // 右端点
-      gridY: 19,
-      role: 'boundary',
-    },
-  ],
+  anchors: [],
+  gridFootprint: { width: 27, height: 1 },
   content: '', // 进度条内容由React组件渲染
   style: {
     height: '24px',
@@ -308,32 +261,8 @@ export const TRACK_INFO: Magnet = {
   type: 'track-info',
   name: '歌曲信息',
   anchorType: 'rectangular',
-  anchors: [
-    {
-      id: 'top-left',
-      gridX: 0,
-      gridY: 14,
-      role: 'anchor',
-    },
-    {
-      id: 'top-right',
-      gridX: 5,
-      gridY: 14,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-left',
-      gridX: 0,
-      gridY: 17,
-      role: 'boundary',
-    },
-    {
-      id: 'bottom-right',
-      gridX: 5,
-      gridY: 17,
-      role: 'boundary',
-    },
-  ],
+  anchors: [],
+  gridFootprint: { width: 6, height: 4 },
   content: '', // 内容由React组件渲染
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.7)',

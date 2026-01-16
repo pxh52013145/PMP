@@ -1395,7 +1395,7 @@ export function setPmpmPluginDeniedPermissions(pluginId: string, denied: string[
   }
 }
 
-function buildAnchorsFromManifest(plugin: InstalledPmpmPlugin): Pick<Magnet, 'anchorType' | 'anchors'> {
+function buildFootprintFromManifest(plugin: InstalledPmpmPlugin): Pick<Magnet, 'anchorType' | 'gridFootprint'> {
   const anchor = plugin.manifest.magnet?.defaultAnchor;
   const coords = anchor?.coordinates?.filter(Boolean) ?? [];
 
@@ -1406,47 +1406,26 @@ function buildAnchorsFromManifest(plugin: InstalledPmpmPlugin): Pick<Magnet, 'an
     const minY = Math.min(a.y, b.y);
     const maxY = Math.max(a.y, b.y);
 
+    const width = Math.max(1, maxX - minX + 1);
+    const height = Math.max(1, maxY - minY + 1);
+
     if (minY === maxY) {
-      return {
-        anchorType: 'horizontal',
-        anchors: [
-          { id: 'left', gridX: minX, gridY: minY, role: 'anchor' },
-          { id: 'right', gridX: maxX, gridY: maxY, role: 'boundary' },
-        ],
-      };
+      return { anchorType: 'horizontal', gridFootprint: { width, height: 1 } };
     }
 
     if (minX === maxX) {
-      return {
-        anchorType: 'vertical',
-        anchors: [
-          { id: 'top', gridX: minX, gridY: minY, role: 'anchor' },
-          { id: 'bottom', gridX: maxX, gridY: maxY, role: 'boundary' },
-        ],
-      };
+      return { anchorType: 'vertical', gridFootprint: { width: 1, height } };
     }
 
-    return {
-      anchorType: 'rectangular',
-      anchors: [
-        { id: 'top-left', gridX: minX, gridY: minY, role: 'anchor' },
-        { id: 'top-right', gridX: maxX, gridY: minY, role: 'boundary' },
-        { id: 'bottom-left', gridX: minX, gridY: maxY, role: 'boundary' },
-        { id: 'bottom-right', gridX: maxX, gridY: maxY, role: 'boundary' },
-      ],
-    };
+    return { anchorType: 'rectangular', gridFootprint: { width, height } };
   }
 
-  const single = coords[0] ?? { x: 0, y: 0 };
-  return {
-    anchorType: 'single',
-    anchors: [{ id: 'anchor', gridX: single.x, gridY: single.y, role: 'anchor' }],
-  };
+  return { anchorType: 'single', gridFootprint: { width: 1, height: 1 } };
 }
 
 export function createMagnetTemplateFromPlugin(plugin: InstalledPmpmPlugin): Magnet {
   const { id, name, description, tags } = plugin.manifest.metadata;
-  const { anchorType, anchors } = buildAnchorsFromManifest(plugin);
+  const { anchorType, gridFootprint } = buildFootprintFromManifest(plugin);
 
   const style = {
     backgroundColor: 'rgba(0, 0, 0, 0.35)',
@@ -1465,7 +1444,8 @@ export function createMagnetTemplateFromPlugin(plugin: InstalledPmpmPlugin): Mag
     description,
     tags,
     anchorType,
-    anchors,
+    anchors: [],
+    gridFootprint,
     content: '',
     style,
     state: 'idle',

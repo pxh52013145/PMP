@@ -30,7 +30,8 @@ describe('pmpm plugins', () => {
     const magnet = createMagnetTemplateFromPlugin(plugin);
     expect(magnet.id).toBe('magnet-demo');
     expect(magnet.anchorType).toBe('rectangular');
-    expect(magnet.anchors).toHaveLength(4);
+    expect(magnet.anchors).toHaveLength(0);
+    expect(magnet.gridFootprint).toEqual({ width: 4, height: 5 });
   });
 
   it('exposes plugin renderer definition when installed', () => {
@@ -52,6 +53,25 @@ describe('pmpm plugins', () => {
     expect(def?.id).toBe('magnet-demo');
     expect(def?.source).toBe('plugin');
     expect(typeof def?.render).toBe('function');
+  });
+
+  it('creates a magnet template with no anchors when defaultAnchor is missing', () => {
+    const plugin: InstalledPmpmPlugin = {
+      manifest: {
+        formatVersion: '1.0',
+        type: 'magnet-plugin',
+        metadata: { id: 'magnet-no-anchor', name: 'No Anchor', version: '0.1.0' },
+        entryPoint: 'dist/plugin.js',
+      },
+      entryCode: 'export function mount() {}',
+      installedAt: Date.now(),
+    };
+
+    const magnet = createMagnetTemplateFromPlugin(plugin);
+    expect(magnet.id).toBe('magnet-no-anchor');
+    expect(magnet.anchorType).toBe('single');
+    expect(magnet.anchors).toHaveLength(0);
+    expect(magnet.gridFootprint).toEqual({ width: 1, height: 1 });
   });
 
   it('validates contributions.pages entries', () => {

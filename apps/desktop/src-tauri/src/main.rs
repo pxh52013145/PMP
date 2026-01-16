@@ -8,11 +8,15 @@ use std::sync::{
 use std::time::Duration;
 
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
+use magnet_layout_store::{
+    magnet_layout_store_apply_patch, magnet_layout_store_bootstrap, magnet_layout_store_get_state,
+};
 
 mod background_media;
 mod audio;
 mod audio_smoke;
 mod dsp_graph;
+mod magnet_layout_store;
 mod music_library;
 mod native_audio;
 mod vst_audit;
@@ -650,6 +654,10 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
+            let magnet_layout_store = magnet_layout_store::MagnetLayoutStore::new(&app.handle())
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+            app.manage(magnet_layout_store);
+
             let window = app.get_window(windows::MAIN_WINDOW_LABEL).unwrap();
 
             #[cfg(target_os = "windows")]
@@ -755,7 +763,10 @@ fn main() {
             native_audio_sync_queue,
             native_audio_resample_cache_get_status,
             native_audio_resample_cache_set_max_bytes,
-            native_audio_resample_cache_clear
+            native_audio_resample_cache_clear,
+            magnet_layout_store_get_state,
+            magnet_layout_store_bootstrap,
+            magnet_layout_store_apply_patch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

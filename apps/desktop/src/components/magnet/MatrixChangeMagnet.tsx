@@ -1,25 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { readString, removeKey, usePersistentSetting, writeString } from '../../modules/storage';
-import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
+import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupTauriListener } from '../../utils/windowCommunication';
 import { useT } from '../../i18n';
 import {
+  createDefaultMagnetSpaceLayout,
   createDefaultMagnetSpacesState,
   createNextSpaceId,
   ensureMagnetSpaceLayout,
+  magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreGetState,
   loadMagnetConfig,
   resolveMagnetConfigStorageKey,
   resolveMagnetLayoutStorageKey,
-  readMagnetCatalogState,
   saveMagnetSpaceLayout,
   sanitizeMagnetSpacesState,
+  sanitizeMagnetSpaceLayout,
+  type MagnetLayoutStoreState,
+  type MagnetSpacePreset,
+  type MagnetSpaceHistoryItem,
+  type MagnetSpaceLayout,
   useMagnetConfig,
 } from '../../modules/magnets';
-import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
-import type { Magnet, PixelAnchor } from '../../types/pixel';
+import { DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import type { PixelAnchor } from '../../types/pixel';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InputDialog } from './InputDialog';
 import './MatrixChangeMagnet.css';
+
+const MAX_HISTORY_PER_SPACE = 20;
 
 function getSpaceBadge(spaceId: string): string {
   const match = spaceId.match(/^space(\d+)$/);
@@ -40,6 +51,80 @@ function clonePixelAnchors(anchors: PixelAnchor[]): PixelAnchor[] {
   return anchors.map((anchor) => ({ ...anchor }));
 }
 
+function createMagnetSpacePresetId(): string {
+  const random = Math.random().toString(36).slice(2, 9);
+  return `preset-${Date.now()}-${random}`;
+}
+
+function createMagnetSpaceHistoryItemId(): string {
+  const random = Math.random().toString(36).slice(2, 9);
+  return `history-${Date.now()}-${random}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function sanitizeMagnetSpacePresetsState(raw: unknown): Record<string, MagnetSpacePreset[]> {
+  if (!isRecord(raw)) return {};
+  const result: Record<string, MagnetSpacePreset[]> = {};
+  for (const [spaceId, listRaw] of Object.entries(raw)) {
+    if (!Array.isArray(listRaw)) continue;
+    const seen = new Set<string>();
+    const presets: MagnetSpacePreset[] = [];
+    for (const entry of listRaw) {
+      if (!isRecord(entry)) continue;
+      const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+      const name = typeof entry.name === 'string' ? entry.name.trim() : '';
+      if (!id || !name) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const createdAtRaw = entry.createdAt;
+      const createdAt = typeof createdAtRaw === 'number' && Number.isFinite(createdAtRaw) ? createdAtRaw : Date.now();
+      presets.push({
+        id,
+        name,
+        createdAt,
+        layout: sanitizeMagnetSpaceLayout(entry.layout),
+      });
+    }
+    if (presets.length > 0) result[spaceId] = presets;
+  }
+  return result;
+}
+
+function sanitizeMagnetSpaceHistoryState(raw: unknown): Record<string, MagnetSpaceHistoryItem[]> {
+  if (!isRecord(raw)) return {};
+  const result: Record<string, MagnetSpaceHistoryItem[]> = {};
+  for (const [spaceId, listRaw] of Object.entries(raw)) {
+    if (!Array.isArray(listRaw)) continue;
+    const seen = new Set<string>();
+    const items: MagnetSpaceHistoryItem[] = [];
+    for (const entry of listRaw) {
+      if (!isRecord(entry)) continue;
+      const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+      const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
+      if (!id) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const createdAtRaw = entry.createdAt;
+      const createdAt = typeof createdAtRaw === 'number' && Number.isFinite(createdAtRaw) ? createdAtRaw : Date.now();
+      items.push({
+        id,
+        reason,
+        createdAt,
+        layout: sanitizeMagnetSpaceLayout(entry.layout),
+      });
+    }
+    if (items.length > MAX_HISTORY_PER_SPACE) {
+      items.sort((a, b) => a.createdAt - b.createdAt);
+      items.splice(0, items.length - MAX_HISTORY_PER_SPACE);
+    }
+    if (items.length > 0) result[spaceId] = items;
+  }
+  return result;
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -49,13 +134,80 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export function MatrixChangeMagnet() {
   const t = useT();
-  const { defaultMagnetLibrary, magnetLibrary, setActiveMagnetIds, setMagnetLibrary, reloadFromStorage } =
+  const { magnetLibrary, activeMagnetIds, setActiveMagnetIds, setMagnetLibrary, reloadFromStorage } =
     useMagnetConfig();
+  const isTauri = useMemo(() => isTauriRuntime(), []);
   const defaultSpacesState = useMemo(() => createDefaultMagnetSpacesState(), []);
   const [spacesRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACES, defaultSpacesState, {
     format: 'json',
   });
-  const spacesState = useMemo(() => sanitizeMagnetSpacesState(spacesRaw), [spacesRaw]);
+  const legacySpacesState = useMemo(() => sanitizeMagnetSpacesState(spacesRaw), [spacesRaw]);
+  const [layoutStoreState, setLayoutStoreState] = useState<MagnetLayoutStoreState | null>(null);
+  const storeRevisionRef = useRef(0);
+
+  const defaultPresetsState = useMemo(() => ({} as Record<string, MagnetSpacePreset[]>), []);
+  const [presetsRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACE_PRESETS, defaultPresetsState, {
+    format: 'json',
+  });
+  const legacyPresetsState = useMemo(() => sanitizeMagnetSpacePresetsState(presetsRaw), [presetsRaw]);
+
+  const defaultHistoryState = useMemo(() => ({} as Record<string, MagnetSpaceHistoryItem[]>), []);
+  const [historyRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_SPACE_HISTORY, defaultHistoryState, {
+    format: 'json',
+  });
+  const legacyHistoryState = useMemo(() => sanitizeMagnetSpaceHistoryState(historyRaw), [historyRaw]);
+
+  const spacesState = useMemo(() => {
+    if (isTauri && layoutStoreState) return layoutStoreState.spaces;
+    return legacySpacesState;
+  }, [isTauri, layoutStoreState, legacySpacesState]);
+
+  const presetsState = useMemo(() => {
+    if (isTauri && layoutStoreState) return layoutStoreState.presetsBySpaceId;
+    return legacyPresetsState;
+  }, [isTauri, layoutStoreState, legacyPresetsState]);
+
+  const historyState = useMemo(() => {
+    if (isTauri && layoutStoreState) return layoutStoreState.historyBySpaceId;
+    return legacyHistoryState;
+  }, [isTauri, layoutStoreState, legacyHistoryState]);
+
+  const refreshLayoutStoreState = useCallback(async () => {
+    if (!isTauri) return;
+    const state = await magnetLayoutStoreGetState();
+    if (!state) return;
+    storeRevisionRef.current = state.revision;
+    setLayoutStoreState(state);
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let disposed = false;
+
+    const run = async () => {
+      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const state = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+      if (disposed || !state) return;
+      storeRevisionRef.current = state.revision;
+      setLayoutStoreState(state);
+    };
+
+    void run();
+
+    return () => {
+      disposed = true;
+    };
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    const cleanupPromise = setupTauriListener(TAURI_EVENTS.MAGNET_LAYOUT_STORE_UPDATED, () => {
+      void refreshLayoutStoreState();
+    });
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [isTauri, refreshLayoutStoreState]);
   const activeSpaceId = spacesState.activeSpaceId;
   const activeSpace = useMemo(
     () => spacesState.spaces.find((s) => s.id === activeSpaceId) ?? null,
@@ -70,19 +222,80 @@ export function MatrixChangeMagnet() {
   });
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [dialog, setDialog] = useState<MatrixChangeDialogState>(null);
+  const [presetsDialogOpen, setPresetsDialogOpen] = useState(false);
+  const [presetNameDialog, setPresetNameDialog] = useState<{ defaultName: string } | null>(null);
+  const [deletePresetDialog, setDeletePresetDialog] = useState<{ presetId: string; presetName: string } | null>(
+    null
+  );
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [deleteHistoryDialog, setDeleteHistoryDialog] = useState<{ historyId: string; label: string } | null>(null);
+  const [clearHistoryDialogOpen, setClearHistoryDialogOpen] = useState(false);
+
+  const presetsForActiveSpace = useMemo(
+    () => presetsState[activeSpaceId] ?? [],
+    [activeSpaceId, presetsState]
+  );
+
+  const historyForActiveSpace = useMemo(
+    () => historyState[activeSpaceId] ?? [],
+    [activeSpaceId, historyState]
+  );
+
+  const applyLayoutStorePatch = useCallback(
+    async (patches: Parameters<typeof magnetLayoutStoreApplyPatch>[0]['patches'], reason: string) => {
+      if (!isTauri) return;
+      const expectedRevision = storeRevisionRef.current;
+      if (expectedRevision <= 0) return;
+      const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason });
+      if (!response) return;
+      storeRevisionRef.current = response.state.revision;
+      setLayoutStoreState(response.state);
+      if (response.ok) return;
+      if (response.error?.code !== 'revisionConflict') return;
+      const retryRevision = response.state.revision;
+      if (retryRevision <= 0 || retryRevision === expectedRevision) return;
+      const retry = await magnetLayoutStoreApplyPatch({
+        expectedRevision: retryRevision,
+        patches,
+        reason: `${reason}:retry`,
+      });
+      if (!retry) return;
+      storeRevisionRef.current = retry.state.revision;
+      setLayoutStoreState(retry.state);
+    },
+    [isTauri]
+  );
 
   const switchToSpace = useCallback(
     (nextSpaceId: string) => {
       if (!nextSpaceId || nextSpaceId === activeSpaceId) return;
-      const nextState = { ...spacesState, activeSpaceId: nextSpaceId };
-      void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextState, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+      if (!isTauri) {
+        const nextState = { ...spacesState, activeSpaceId: nextSpaceId };
+        void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextState, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
+        return;
+      }
+
+      const expectedRevision = storeRevisionRef.current;
+      if (expectedRevision <= 0) return;
+      void (async () => {
+        const response = await magnetLayoutStoreApplyPatch({
+          expectedRevision,
+          patches: [{ kind: 'setActiveSpaceId', spaceId: nextSpaceId }],
+          reason: 'switchToSpace',
+        });
+        if (!response) return;
+        storeRevisionRef.current = response.state.revision;
+        setLayoutStoreState(response.state);
+      })();
     },
-    [activeSpaceId, spacesState]
+    [activeSpaceId, isTauri, spacesState]
   );
 
   const copySpaceStorage = useCallback((sourceSpaceId: string, destSpaceId: string) => {
-    const layout = ensureMagnetSpaceLayout(sourceSpaceId).layout;
-    saveMagnetSpaceLayout(layout, resolveMagnetLayoutStorageKey(destSpaceId));
+    if (!isTauri) {
+      const layout = ensureMagnetSpaceLayout(sourceSpaceId).layout;
+      saveMagnetSpaceLayout(layout, resolveMagnetLayoutStorageKey(destSpaceId));
+    }
 
     const sourceConfigKey = resolveMagnetConfigStorageKey(sourceSpaceId);
     const destConfigKey = resolveMagnetConfigStorageKey(destSpaceId);
@@ -102,7 +315,7 @@ export function MatrixChangeMagnet() {
     } catch {
       writeString(destConfigKey, JSON.stringify({ ...sourceConfig, customMagnets: [] }));
     }
-  }, []);
+  }, [isTauri]);
 
   const closePanel = useCallback(() => {
     setPanel((prev) => (prev.open ? { ...prev, open: false } : prev));
@@ -223,6 +436,141 @@ export function MatrixChangeMagnet() {
   }, [activeSpace?.name, activeSpaceId, closePanel]);
 
   const closeDialog = useCallback(() => setDialog(null), []);
+
+  const closePresetsDialog = useCallback(() => {
+    setPresetsDialogOpen(false);
+    setPresetNameDialog(null);
+    setDeletePresetDialog(null);
+  }, []);
+
+  const openPresetsDialog = useCallback(() => {
+    setPresetsDialogOpen(true);
+    closePanel();
+  }, [closePanel]);
+
+  const closeHistoryDialog = useCallback(() => {
+    setHistoryDialogOpen(false);
+    setDeleteHistoryDialog(null);
+    setClearHistoryDialogOpen(false);
+  }, []);
+
+  const openHistoryDialog = useCallback(() => {
+    setHistoryDialogOpen(true);
+    closePanel();
+  }, [closePanel]);
+
+  useEffect(() => {
+    if (!presetsDialogOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closePresetsDialog();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [closePresetsDialog, presetsDialogOpen]);
+
+  useEffect(() => {
+    if (!historyDialogOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeHistoryDialog();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [closeHistoryDialog, historyDialogOpen]);
+
+  const formatHistoryReason = useCallback(
+    (reason: string): string => {
+      switch (reason) {
+        case 'enterEdit':
+          return t('magnet.matrix-change.history.reason.enterEdit');
+        case 'applyPreset':
+          return t('magnet.matrix-change.history.reason.applyPreset');
+        case 'applySystemPreset':
+          return t('magnet.matrix-change.history.reason.applySystemPreset');
+        case 'restoreHistory':
+          return t('magnet.matrix-change.history.reason.restoreHistory');
+        case 'clearSpaceLayout':
+          return t('magnet.matrix-change.history.reason.clearSpaceLayout');
+        case 'resetSpaceLayout':
+          return t('magnet.matrix-change.history.reason.resetSpaceLayout');
+        default:
+          return t('magnet.matrix-change.history.reason.fallback', { reason: reason || '?' });
+      }
+    },
+    [t]
+  );
+
+  const formatHistoryTime = useCallback((createdAt: number): string => {
+    try {
+      return new Date(createdAt).toLocaleString();
+    } catch {
+      return '';
+    }
+  }, []);
+
+  const buildCurrentLayoutSnapshot = useCallback((): MagnetSpaceLayout => {
+    const active = new Set<string>();
+    for (const id of activeMagnetIds) active.add(id);
+    for (const id of REQUIRED_MAGNET_IDS) active.add(id);
+    const anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {};
+    for (const magnet of magnetLibrary) {
+      if (!Array.isArray(magnet.anchors) || magnet.anchors.length === 0) continue;
+      anchorsByMagnetId[magnet.id] = clonePixelAnchors(magnet.anchors);
+    }
+    return { version: 1, activeMagnetIds: [...active], anchorsByMagnetId };
+  }, [activeMagnetIds, magnetLibrary]);
+
+  const buildSystemDefaultLayout = useCallback((): MagnetSpaceLayout => {
+    return createDefaultMagnetSpaceLayout('space1', DEFAULT_ACTIVE_MAGNET_IDS);
+  }, []);
+
+  const createHistorySnapshotItem = useCallback(
+    (reason: string): MagnetSpaceHistoryItem => {
+      return {
+        id: createMagnetSpaceHistoryItemId(),
+        reason,
+        createdAt: Date.now(),
+        layout: buildCurrentLayoutSnapshot(),
+      };
+    },
+    [buildCurrentLayoutSnapshot]
+  );
+
+  const applyPresetLayout = useCallback(
+    async (layout: MagnetSpaceLayout, reason: string) => {
+      const historyItem = createHistorySnapshotItem(reason);
+      if (isTauri) {
+        await applyLayoutStorePatch(
+          [
+            { kind: 'pushSpaceHistory', spaceId: activeSpaceId, item: historyItem },
+            { kind: 'setSpaceLayout', spaceId: activeSpaceId, layout },
+          ],
+          reason
+        );
+        reloadFromStorage();
+        return;
+      }
+      const nextHistory = sanitizeMagnetSpaceHistoryState({
+        ...historyState,
+        [activeSpaceId]: [...historyForActiveSpace, historyItem],
+      });
+      void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_HISTORY, nextHistory);
+      saveMagnetSpaceLayout(layout, resolveMagnetLayoutStorageKey(activeSpaceId));
+      reloadFromStorage();
+    },
+    [
+      activeSpaceId,
+      applyLayoutStorePatch,
+      createHistorySnapshotItem,
+      historyForActiveSpace,
+      historyState,
+      isTauri,
+      reloadFromStorage,
+    ]
+  );
 
   const shortcutPrefixActiveRef = useRef(false);
   const shortcutPrefixResetTimeoutRef = useRef<number | null>(null);
@@ -351,6 +699,20 @@ export function MatrixChangeMagnet() {
                   <button
                     type="button"
                     className="matrix-change-magnet-panel-action"
+                    onClick={openPresetsDialog}
+                  >
+                    {t('magnet.matrix-change.action.presets')}
+                  </button>
+                  <button
+                    type="button"
+                    className="matrix-change-magnet-panel-action"
+                    onClick={openHistoryDialog}
+                  >
+                    {t('magnet.matrix-change.action.history')}
+                  </button>
+                  <button
+                    type="button"
+                    className="matrix-change-magnet-panel-action"
                     onClick={openClearDialog}
                   >
                     {t('common.action.clear')}
@@ -402,11 +764,29 @@ export function MatrixChangeMagnet() {
               { id: dialog.newId, name, order: dialog.nextOrder, createdAt: Date.now() },
             ],
           });
-          void broadcastDataUpdate(
-            STORAGE_KEYS.MAGNET_SPACES,
-            nextState,
-            TAURI_EVENTS.MAGNET_SPACES_UPDATED
-          );
+          if (!isTauri) {
+            void broadcastDataUpdate(
+              STORAGE_KEYS.MAGNET_SPACES,
+              nextState,
+              TAURI_EVENTS.MAGNET_SPACES_UPDATED
+            );
+            closeDialog();
+            return;
+          }
+
+          const expectedRevision = storeRevisionRef.current;
+          if (expectedRevision > 0) {
+            void (async () => {
+              const response = await magnetLayoutStoreApplyPatch({
+                expectedRevision,
+                patches: [{ kind: 'setSpacesState', spaces: nextState }],
+                reason: 'createSpace',
+              });
+              if (!response) return;
+              storeRevisionRef.current = response.state.revision;
+              setLayoutStoreState(response.state);
+            })();
+          }
           closeDialog();
         }}
         onCancel={closeDialog}
@@ -435,11 +815,33 @@ export function MatrixChangeMagnet() {
               { id: dialog.newId, name, order: dialog.nextOrder, createdAt: Date.now() },
             ],
           });
-          void broadcastDataUpdate(
-            STORAGE_KEYS.MAGNET_SPACES,
-            nextState,
-            TAURI_EVENTS.MAGNET_SPACES_UPDATED
-          );
+          if (!isTauri) {
+            void broadcastDataUpdate(
+              STORAGE_KEYS.MAGNET_SPACES,
+              nextState,
+              TAURI_EVENTS.MAGNET_SPACES_UPDATED
+            );
+            closeDialog();
+            return;
+          }
+
+          const expectedRevision = storeRevisionRef.current;
+          const sourceLayout = layoutStoreState?.layoutsBySpaceId[dialog.sourceSpaceId];
+          if (expectedRevision > 0 && sourceLayout) {
+            void (async () => {
+              const response = await magnetLayoutStoreApplyPatch({
+                expectedRevision,
+                patches: [
+                  { kind: 'setSpacesState', spaces: nextState },
+                  { kind: 'setSpaceLayout', spaceId: dialog.newId, layout: sourceLayout },
+                ],
+                reason: 'cloneSpace',
+              });
+              if (!response) return;
+              storeRevisionRef.current = response.state.revision;
+              setLayoutStoreState(response.state);
+            })();
+          }
           closeDialog();
         }}
         onCancel={closeDialog}
@@ -465,14 +867,326 @@ export function MatrixChangeMagnet() {
               s.id === dialog.spaceId ? { ...s, name: nextName } : s
             ),
           });
-          void broadcastDataUpdate(
-            STORAGE_KEYS.MAGNET_SPACES,
-            nextState,
-            TAURI_EVENTS.MAGNET_SPACES_UPDATED
-          );
+          if (!isTauri) {
+            void broadcastDataUpdate(
+              STORAGE_KEYS.MAGNET_SPACES,
+              nextState,
+              TAURI_EVENTS.MAGNET_SPACES_UPDATED
+            );
+            closeDialog();
+            return;
+          }
+
+          const expectedRevision = storeRevisionRef.current;
+          if (expectedRevision > 0) {
+            void (async () => {
+              const response = await magnetLayoutStoreApplyPatch({
+                expectedRevision,
+                patches: [{ kind: 'setSpacesState', spaces: nextState }],
+                reason: 'renameSpace',
+              });
+              if (!response) return;
+              storeRevisionRef.current = response.state.revision;
+              setLayoutStoreState(response.state);
+            })();
+          }
           closeDialog();
         }}
         onCancel={closeDialog}
+      />
+
+      {presetsDialogOpen &&
+        (typeof document === 'undefined'
+          ? null
+          : createPortal(
+              <div className="matrix-change-presets-overlay" onMouseDown={closePresetsDialog}>
+                <div className="matrix-change-presets-dialog" onMouseDown={(e) => e.stopPropagation()}>
+                  <div className="matrix-change-presets-header">
+                    <div className="matrix-change-presets-title">{t('magnet.matrix-change.presets.title')}</div>
+                    <div className="matrix-change-presets-subtitle">
+                      {t('magnet.matrix-change.presets.subtitle', { name: activeSpace?.name ?? activeSpaceId })}
+                    </div>
+                  </div>
+
+                  <div className="matrix-change-presets-list">
+                    {activeSpaceId === 'space1' && (
+                      <div className="matrix-change-presets-item">
+                        <div className="matrix-change-presets-item-main">
+                          <div className="matrix-change-presets-item-name">
+                            {t('magnet.matrix-change.presets.systemDefault')}
+                          </div>
+                          <div className="matrix-change-presets-item-meta">{t('magnet.matrix-change.presets.systemBadge')}</div>
+                        </div>
+                        <div className="matrix-change-presets-item-actions">
+                          <button
+                            type="button"
+                            className="matrix-change-presets-item-action primary"
+                            onClick={() => {
+                              void applyPresetLayout(buildSystemDefaultLayout(), 'applySystemPreset');
+                              closePresetsDialog();
+                            }}
+                          >
+                            {t('common.action.apply')}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {presetsForActiveSpace.length === 0 ? (
+                      <div className="matrix-change-presets-empty">
+                        {t('magnet.matrix-change.presets.empty')}
+                      </div>
+                    ) : (
+                      presetsForActiveSpace.map((preset) => (
+                        <div key={preset.id} className="matrix-change-presets-item">
+                          <div className="matrix-change-presets-item-main">
+                            <div className="matrix-change-presets-item-name">{preset.name}</div>
+                          </div>
+                          <div className="matrix-change-presets-item-actions">
+                            <button
+                              type="button"
+                              className="matrix-change-presets-item-action"
+                              onClick={() => {
+                                void applyPresetLayout(preset.layout, 'applyPreset');
+                                closePresetsDialog();
+                              }}
+                            >
+                              {t('common.action.apply')}
+                            </button>
+                            <button
+                              type="button"
+                              className="matrix-change-presets-item-action danger"
+                              onClick={() => setDeletePresetDialog({ presetId: preset.id, presetName: preset.name })}
+                            >
+                              {t('common.action.delete')}
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="matrix-change-presets-footer">
+                    <button
+                      type="button"
+                      className="matrix-change-presets-footer-btn"
+                      onClick={() => {
+                        const defaultName = t('magnet.matrix-change.presets.defaultName', {
+                          order: presetsForActiveSpace.length + 1,
+                        });
+                        setPresetNameDialog({ defaultName });
+                      }}
+                    >
+                      {t('magnet.matrix-change.presets.saveCurrent')}
+                    </button>
+                    <button
+                      type="button"
+                      className="matrix-change-presets-footer-btn"
+                      onClick={closePresetsDialog}
+                    >
+                      {t('common.action.cancel')}
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            ))}
+
+      <InputDialog
+        isOpen={presetNameDialog !== null}
+        title={t('magnet.matrix-change.presets.saveDialog.title')}
+        message={t('magnet.matrix-change.presets.saveDialog.message')}
+        defaultValue={presetNameDialog?.defaultName ?? ''}
+        confirmText={t('common.action.save')}
+        cancelText={t('common.action.cancel')}
+        onConfirm={(value) => {
+          const resolved = value.trim() || presetNameDialog?.defaultName || '';
+          if (!resolved) {
+            setPresetNameDialog(null);
+            return;
+          }
+          const preset: MagnetSpacePreset = {
+            id: createMagnetSpacePresetId(),
+            name: resolved,
+            createdAt: Date.now(),
+            layout: buildCurrentLayoutSnapshot(),
+          };
+
+          if (isTauri) {
+            void applyLayoutStorePatch(
+              [{ kind: 'upsertSpacePreset', spaceId: activeSpaceId, preset }],
+              'saveSpacePreset'
+            );
+          } else {
+            const next = sanitizeMagnetSpacePresetsState({
+              ...presetsState,
+              [activeSpaceId]: [...presetsForActiveSpace, preset],
+            });
+            void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_PRESETS, next);
+          }
+          setPresetNameDialog(null);
+        }}
+        onCancel={() => setPresetNameDialog(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={deletePresetDialog !== null}
+        title={t('magnet.matrix-change.presets.deleteDialog.title')}
+        message={
+          deletePresetDialog
+            ? t('magnet.matrix-change.presets.deleteDialog.message', { name: deletePresetDialog.presetName })
+            : ''
+        }
+        confirmText={t('common.action.delete')}
+        cancelText={t('common.action.cancel')}
+        confirmButtonStyle="danger"
+        onConfirm={() => {
+          if (!deletePresetDialog) return;
+          const presetId = deletePresetDialog.presetId;
+          if (isTauri) {
+            void applyLayoutStorePatch(
+              [{ kind: 'deleteSpacePreset', spaceId: activeSpaceId, presetId }],
+              'deleteSpacePreset'
+            );
+          } else {
+            const nextList = presetsForActiveSpace.filter((p) => p.id !== presetId);
+            const next = sanitizeMagnetSpacePresetsState({
+              ...presetsState,
+              [activeSpaceId]: nextList,
+            });
+            void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_PRESETS, next);
+          }
+          setDeletePresetDialog(null);
+        }}
+        onCancel={() => setDeletePresetDialog(null)}
+      />
+
+      {historyDialogOpen &&
+        (typeof document === 'undefined'
+          ? null
+          : createPortal(
+              <div className="matrix-change-history-overlay" onMouseDown={closeHistoryDialog}>
+                <div className="matrix-change-history-dialog" onMouseDown={(e) => e.stopPropagation()}>
+                  <div className="matrix-change-history-header">
+                    <div className="matrix-change-history-title">{t('magnet.matrix-change.history.title')}</div>
+                    <div className="matrix-change-history-subtitle">
+                      {t('magnet.matrix-change.history.subtitle', { name: activeSpace?.name ?? activeSpaceId })}
+                    </div>
+                  </div>
+
+                  <div className="matrix-change-history-list">
+                    {historyForActiveSpace.length === 0 ? (
+                      <div className="matrix-change-history-empty">{t('magnet.matrix-change.history.empty')}</div>
+                    ) : (
+                      [...historyForActiveSpace]
+                        .sort((a, b) => b.createdAt - a.createdAt)
+                        .map((item) => {
+                          const label = `${formatHistoryReason(item.reason)} · ${formatHistoryTime(item.createdAt)}`;
+                          return (
+                            <div key={item.id} className="matrix-change-history-item">
+                              <div className="matrix-change-history-item-main">
+                                <div className="matrix-change-history-item-name">{formatHistoryReason(item.reason)}</div>
+                                <div className="matrix-change-history-item-meta">{formatHistoryTime(item.createdAt)}</div>
+                              </div>
+                              <div className="matrix-change-history-item-actions">
+                                <button
+                                  type="button"
+                                  className="matrix-change-history-item-action"
+                                  onClick={() => {
+                                    void applyPresetLayout(item.layout, 'restoreHistory');
+                                    closeHistoryDialog();
+                                  }}
+                                >
+                                  {t('common.action.apply')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="matrix-change-history-item-action danger"
+                                  onClick={() => setDeleteHistoryDialog({ historyId: item.id, label })}
+                                >
+                                  {t('common.action.delete')}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                    )}
+                  </div>
+
+                  <div className="matrix-change-history-footer">
+                    <button
+                      type="button"
+                      className="matrix-change-history-footer-btn"
+                      disabled={historyForActiveSpace.length === 0}
+                      onClick={() => setClearHistoryDialogOpen(true)}
+                    >
+                      {t('common.action.clear')}
+                    </button>
+                    <button
+                      type="button"
+                      className="matrix-change-history-footer-btn"
+                      onClick={closeHistoryDialog}
+                    >
+                      {t('common.action.cancel')}
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            ))}
+
+      <ConfirmDialog
+        isOpen={deleteHistoryDialog !== null}
+        title={t('magnet.matrix-change.history.deleteDialog.title')}
+        message={
+          deleteHistoryDialog
+            ? t('magnet.matrix-change.history.deleteDialog.message', { label: deleteHistoryDialog.label })
+            : ''
+        }
+        confirmText={t('common.action.delete')}
+        cancelText={t('common.action.cancel')}
+        confirmButtonStyle="danger"
+        onConfirm={() => {
+          if (!deleteHistoryDialog) return;
+          const historyId = deleteHistoryDialog.historyId;
+          if (isTauri) {
+            void applyLayoutStorePatch(
+              [{ kind: 'deleteSpaceHistoryItem', spaceId: activeSpaceId, historyId }],
+              'deleteSpaceHistoryItem'
+            );
+          } else {
+            const nextList = historyForActiveSpace.filter((item) => item.id !== historyId);
+            const next = sanitizeMagnetSpaceHistoryState({
+              ...historyState,
+              [activeSpaceId]: nextList,
+            });
+            void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_HISTORY, next);
+          }
+          setDeleteHistoryDialog(null);
+        }}
+        onCancel={() => setDeleteHistoryDialog(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={clearHistoryDialogOpen}
+        title={t('magnet.matrix-change.history.clearDialog.title')}
+        message={t('magnet.matrix-change.history.clearDialog.message', { name: activeSpace?.name ?? activeSpaceId })}
+        confirmText={t('common.action.clear')}
+        cancelText={t('common.action.cancel')}
+        confirmButtonStyle="danger"
+        onConfirm={() => {
+          if (isTauri) {
+            void applyLayoutStorePatch([{ kind: 'clearSpaceHistory', spaceId: activeSpaceId }], 'clearSpaceHistory');
+          } else {
+            const next = sanitizeMagnetSpaceHistoryState({
+              ...historyState,
+              [activeSpaceId]: [],
+            });
+            void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_HISTORY, next);
+          }
+          setClearHistoryDialogOpen(false);
+        }}
+        onCancel={() => setClearHistoryDialogOpen(false)}
       />
 
       <ConfirmDialog
@@ -499,11 +1213,29 @@ export function MatrixChangeMagnet() {
             activeSpaceId: nextActive,
             spaces: remaining,
           });
-          void broadcastDataUpdate(
-            STORAGE_KEYS.MAGNET_SPACES,
-            nextState,
-            TAURI_EVENTS.MAGNET_SPACES_UPDATED
-          );
+          if (!isTauri) {
+            void broadcastDataUpdate(
+              STORAGE_KEYS.MAGNET_SPACES,
+              nextState,
+              TAURI_EVENTS.MAGNET_SPACES_UPDATED
+            );
+            closeDialog();
+            return;
+          }
+
+          const expectedRevision = storeRevisionRef.current;
+          if (expectedRevision > 0) {
+            void (async () => {
+              const response = await magnetLayoutStoreApplyPatch({
+                expectedRevision,
+                patches: [{ kind: 'setSpacesState', spaces: nextState }],
+                reason: 'deleteSpace',
+              });
+              if (!response) return;
+              storeRevisionRef.current = response.state.revision;
+              setLayoutStoreState(response.state);
+            })();
+          }
           closeDialog();
         }}
         onCancel={closeDialog}
@@ -522,24 +1254,49 @@ export function MatrixChangeMagnet() {
         confirmButtonStyle="danger"
         onConfirm={() => {
           if (!dialog || dialog.kind !== 'clear') return;
-          const catalogMagnets = readMagnetCatalogState().magnets;
-          const defaultAnchorsByMagnetId = new Map<string, PixelAnchor[]>();
-          for (const magnet of defaultMagnetLibrary) {
-            defaultAnchorsByMagnetId.set(magnet.id, clonePixelAnchors(magnet.anchors));
+          const historyItem = createHistorySnapshotItem('clearSpaceLayout');
+          if (!isTauri) {
+            const nextHistory = sanitizeMagnetSpaceHistoryState({
+              ...historyState,
+              [activeSpaceId]: [...historyForActiveSpace, historyItem],
+            });
+            void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_HISTORY, nextHistory);
           }
-          for (const magnet of catalogMagnets) {
-            defaultAnchorsByMagnetId.set(magnet.id, clonePixelAnchors(magnet.anchors));
+          const nextActive = new Set(REQUIRED_MAGNET_IDS);
+          setActiveMagnetIds(nextActive);
+          setMagnetLibrary((prev) =>
+            prev.map((magnet) => {
+              if (REQUIRED_MAGNET_IDS.has(magnet.id)) return magnet;
+              return { ...magnet, anchors: [] };
+            })
+          );
+
+          if (isTauri) {
+            const anchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {};
+            for (const magnet of magnetLibrary) {
+              if (!REQUIRED_MAGNET_IDS.has(magnet.id)) continue;
+              if (!Array.isArray(magnet.anchors) || magnet.anchors.length === 0) continue;
+              anchorsByMagnetId[magnet.id] = clonePixelAnchors(magnet.anchors);
+            }
+
+            const systemLayout = createDefaultMagnetSpaceLayout(dialog.spaceId, new Set<string>());
+            for (const [magnetId, anchors] of Object.entries(systemLayout.anchorsByMagnetId)) {
+              if (Array.isArray(anchorsByMagnetId[magnetId]) && anchorsByMagnetId[magnetId]!.length > 0) continue;
+              anchorsByMagnetId[magnetId] = clonePixelAnchors(anchors);
+            }
+            const layout: MagnetSpaceLayout = {
+              version: 1,
+              activeMagnetIds: [...nextActive],
+              anchorsByMagnetId,
+            };
+            void applyLayoutStorePatch(
+              [
+                { kind: 'pushSpaceHistory', spaceId: dialog.spaceId, item: historyItem },
+                { kind: 'setSpaceLayout', spaceId: dialog.spaceId, layout },
+              ],
+              'clearSpaceLayout'
+            );
           }
-
-          const nextLibrary: Magnet[] = magnetLibrary.map((magnet) => {
-            if (REQUIRED_MAGNET_IDS.has(magnet.id)) return magnet;
-            const nextAnchors = defaultAnchorsByMagnetId.get(magnet.id);
-            if (!nextAnchors) return magnet;
-            return { ...magnet, anchors: nextAnchors };
-          });
-
-          setMagnetLibrary(nextLibrary);
-          setActiveMagnetIds(new Set(REQUIRED_MAGNET_IDS));
           closeDialog();
         }}
         onCancel={closeDialog}
@@ -558,8 +1315,27 @@ export function MatrixChangeMagnet() {
         confirmButtonStyle="danger"
         onConfirm={() => {
           if (!dialog || dialog.kind !== 'reset') return;
-          removeKey(resolveMagnetLayoutStorageKey(dialog.spaceId));
+          const historyItem = createHistorySnapshotItem('resetSpaceLayout');
+          if (!isTauri) {
+            const nextHistory = sanitizeMagnetSpaceHistoryState({
+              ...historyState,
+              [activeSpaceId]: [...historyForActiveSpace, historyItem],
+            });
+            void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACE_HISTORY, nextHistory);
+          }
           removeKey(resolveMagnetConfigStorageKey(dialog.spaceId));
+          removeKey(resolveMagnetLayoutStorageKey(dialog.spaceId));
+
+          if (isTauri) {
+            const layout = createDefaultMagnetSpaceLayout(dialog.spaceId, DEFAULT_ACTIVE_MAGNET_IDS);
+            void applyLayoutStorePatch(
+              [
+                { kind: 'pushSpaceHistory', spaceId: dialog.spaceId, item: historyItem },
+                { kind: 'setSpaceLayout', spaceId: dialog.spaceId, layout },
+              ],
+              'resetSpaceLayout'
+            );
+          }
           reloadFromStorage();
           closeDialog();
         }}

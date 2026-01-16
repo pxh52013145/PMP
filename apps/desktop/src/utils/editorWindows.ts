@@ -290,7 +290,7 @@ export async function calculateWindowPosition(
 
   // 默认窗口大小
   const windowSizes: Record<EditorWindowType, { width: number; height: number }> = {
-    control: { width: 220, height: 450 }, // 可拖动控制面板 - 增加高度以适配新的拖动区域
+    control: { width: 220, height: 520 }, // 可拖动控制面板 - 增加高度以适配底部 Undo/Redo
     statistics: { width: 380, height: 500 },
     library: { width: 520, height: 680 },
     style: { width: 520, height: 720 },

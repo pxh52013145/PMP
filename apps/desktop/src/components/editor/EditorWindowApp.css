@@ -274,6 +274,8 @@
   flex-direction: column;
   gap: 14px;
   padding: 50px 16px 20px 16px; /* 顶部留出更大拖动手柄空间 */
+  position: relative;
+  padding-bottom: 96px;
   background: rgba(10, 10, 20, 0.77);
   border: 2px solid rgba(0, 255, 255, 0.5);
   box-shadow:
@@ -527,8 +529,30 @@
 }
 
 .control-button-group .pin-btn,
-.control-button-group .matrix-hints-btn {
+.control-button-group .matrix-hints-btn,
+.control-button-group .layout-undo-btn,
+.control-button-group .layout-redo-btn {
   flex: 0.0207;
+  min-width: 0;
+  padding: 0.5em;
+  transition:
+    transform 200ms ease,
+    filter 200ms ease;
+}
+
+/* Bottom layout history (undo/redo) footer */
+.control-layout-history-group {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 20px;
+  display: flex;
+  gap: 8px;
+}
+
+.control-layout-history-group .layout-undo-btn,
+.control-layout-history-group .layout-redo-btn {
+  flex: 1;
   min-width: 0;
   padding: 0.5em;
   transition:
@@ -554,13 +578,22 @@
   animation: move-bg-active 5s ease infinite;
 }
 
+.layout-undo-btn,
+.layout-redo-btn {
+  --bg: #2b1b07;
+  --border-color: linear-gradient(-45deg, rgba(255, 184, 78, 0.85), rgba(255, 102, 78, 0.85));
+  --color: #ffd27a;
+}
+
 .pin-btn {
   transform: scaleY(-1);
 }
 
 /* 修复悬停时的动画冲突 */
 .pin-btn:hover,
-.matrix-hints-btn:hover {
+.matrix-hints-btn:hover,
+.layout-undo-btn:hover,
+.layout-redo-btn:hover {
   transform: translateY(-2px);
   filter: brightness(1.2);
 }
@@ -570,7 +603,9 @@
 }
 
 .pin-btn:active,
-.matrix-hints-btn:active {
+.matrix-hints-btn:active,
+.layout-undo-btn:active,
+.layout-redo-btn:active {
   transform: translateY(0);
   transition: transform 100ms ease;
 }
@@ -594,14 +629,18 @@
 
 /* 置顶按钮取消悬停填满效果，使用渐变透明度 */
 .pin-btn::after,
-.matrix-hints-btn::after {
+.matrix-hints-btn::after,
+.layout-undo-btn::after,
+.layout-redo-btn::after {
   transform: scaleX(1); /* 覆盖父类的 scaleX(0)，保持正常大小 */
   opacity: 1; /* 默认填满 */
   transition: opacity 400ms ease-out;
 }
 
 .pin-btn:hover::after,
-.matrix-hints-btn:hover::after {
+.matrix-hints-btn:hover::after,
+.layout-undo-btn:hover::after,
+.layout-redo-btn:hover::after {
   transform: scaleX(1); /* 覆盖父类的 hover 效果 */
   opacity: 1; /* 悬停时保持填满 */
 }
@@ -620,12 +659,16 @@
 
 /* 置顶按钮移除 focus 视觉效果，防止点击后残留 */
 .pin-btn:focus,
-.matrix-hints-btn:focus {
+.matrix-hints-btn:focus,
+.layout-undo-btn:focus,
+.layout-redo-btn:focus {
   outline: none;
 }
 
 .pin-btn:focus-visible,
-.matrix-hints-btn:focus-visible {
+.matrix-hints-btn:focus-visible,
+.layout-undo-btn:focus-visible,
+.layout-redo-btn:focus-visible {
   outline: 2px solid rgba(106, 255, 168, 0.5);
   outline-offset: 2px;
 }

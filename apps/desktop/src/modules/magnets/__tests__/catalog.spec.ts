@@ -37,7 +37,7 @@ describe('magnet catalog', () => {
         { id: 'missing-anchors' },
       ],
     });
-    expect(state.magnets.map((m) => m.id)).toEqual(['custom-1']);
+    expect(state.magnets.map((m) => m.id)).toEqual(['custom-1', 'missing-anchors']);
   });
 
   it('migrates customMagnets from per-space configs when missing', () => {
@@ -81,4 +81,3 @@ describe('magnet catalog', () => {
     expect(result.state.magnets.map((m) => m.id)).toEqual(['custom-1']);
   });
 });
-

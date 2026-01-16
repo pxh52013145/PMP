@@ -124,6 +124,8 @@ export const STORAGE_KEYS = {
   MAGNET_SPACES: 'pixel-matrix-magnet-spaces-v1', // Magnet spaces（active space + list）
   MAGNET_SPACE_LAYOUT: 'pixel-matrix-magnet-space-layout-v1', // Per-space magnet layout (active ids + anchors)
   MAGNET_CATALOG: 'pixel-matrix-magnet-catalog-v1', // Global custom magnet catalog (templates only, no per-space layout)
+  MAGNET_SPACE_PRESETS: 'pixel-matrix-magnet-space-presets-v1', // Per-space layout presets (web fallback; Tauri uses layout store)
+  MAGNET_SPACE_HISTORY: 'pixel-matrix-magnet-space-history-v1', // Per-space layout history (web fallback; Tauri uses layout store)
   MAGNET_LIBRARY: 'pixel-matrix-magnet-library', // Magnet 库（兼容旧版）
   ACTIVE_MAGNETS: 'pixel-matrix-active-magnets', // 激活的 Magnet ID
   BUILTIN_MAGNETS: 'pixel-matrix-builtin-magnets', // 内置 Magnet ID
@@ -209,6 +211,7 @@ export const TAURI_EVENTS = {
   MAGNET_ACTIVATED: 'magnet-activated',
   MAGNET_DEACTIVATED: 'magnet-deactivated',
   MAGNET_SPACES_UPDATED: 'magnet-spaces-updated',
+  MAGNET_LAYOUT_STORE_UPDATED: 'magnet-layout-store-updated',
 
   // 背景相关
   BACKGROUND_UPDATED: 'background-updated',
@@ -227,6 +230,8 @@ export const TAURI_EVENTS = {
   // 编辑器相关
   EDITOR_EXIT: 'editor-exit',
   EDITOR_STYLE_APPLY: 'editor-style-apply',
+  EDITOR_LAYOUT_UNDO: 'editor-layout-undo',
+  EDITOR_LAYOUT_REDO: 'editor-layout-redo',
   EDITOR_STATE_UPDATED: 'editor-state-updated', // 编辑器状态更新（选中区域等）
   EDITOR_WINDOW_HIDDEN: 'editor-window-hidden', // Rust 侧拦截 close 并 hide 后的通知
   EDITOR_WINDOW_SHOWN: 'editor-window-shown', // Rust 侧 show/unminimize 后的通知

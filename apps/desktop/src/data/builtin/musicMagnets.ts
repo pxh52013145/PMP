@@ -17,14 +17,7 @@ export const PLAY_QUEUE_MAGNET: Magnet = {
   previewText: 'Queue',
   description: '显示当前播放队列',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 21,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '☰',
   style: {
     width: '36px',
@@ -65,14 +58,7 @@ export const PLAYLISTS_MAGNET: Magnet = {
   previewText: 'Playlists',
   description: '显示歌单列表',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 23,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '♬',
   style: {
     width: '36px',
@@ -113,14 +99,7 @@ export const MUSIC_LIBRARY_MAGNET: Magnet = {
   previewText: 'Library',
   description: '进入音乐库管理界面',
   anchorType: 'single',
-  anchors: [
-    {
-      id: 'anchor',
-      gridX: 25,
-      gridY: 18,
-      role: 'anchor',
-    },
-  ],
+  anchors: [],
   content: '♪',
   style: {
     width: '36px',

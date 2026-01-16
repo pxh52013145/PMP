@@ -7,6 +7,7 @@ import {
   sanitizeMagnetSpaceLayout,
   type MagnetSpaceLayout,
 } from './layout';
+import { getSystemAnchorsForActiveMagnets } from './systemLayouts';
 
 export function loadMagnetSpaceLayout(storageKey: string): MagnetSpaceLayout | null {
   const raw = readJson<unknown | null>(storageKey, null);
@@ -110,7 +111,11 @@ export function createDefaultMagnetSpaceLayout(
   const active = new Set<string>();
   for (const id of seed) active.add(id);
   for (const id of REQUIRED_MAGNET_IDS) active.add(id);
-  return { version: 1, activeMagnetIds: [...active], anchorsByMagnetId: {} };
+  return {
+    version: 1,
+    activeMagnetIds: [...active],
+    anchorsByMagnetId: getSystemAnchorsForActiveMagnets(normalized, active),
+  };
 }
 
 function deriveAnchorsByMagnetId(magnets: Record<string, unknown>): Record<string, PixelAnchor[]> {
@@ -152,11 +157,24 @@ export function deriveMagnetSpaceLayoutFromLegacyConfig(
   legacyConfig: { magnets: Record<string, unknown> },
   options: { defaultActiveMagnetIds: ReadonlySet<string> }
 ): MagnetSpaceLayout {
-  return sanitizeMagnetSpaceLayout({
+  const layout = sanitizeMagnetSpaceLayout({
     version: 1,
     activeMagnetIds: deriveActiveMagnetIds(legacyConfig.magnets, spaceId, options.defaultActiveMagnetIds),
     anchorsByMagnetId: deriveAnchorsByMagnetId(legacyConfig.magnets),
   });
+
+  const active = new Set(layout.activeMagnetIds);
+  const systemAnchors = getSystemAnchorsForActiveMagnets(spaceId, active);
+  if (Object.keys(systemAnchors).length === 0) return layout;
+
+  let changed = false;
+  const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = { ...layout.anchorsByMagnetId };
+  for (const [magnetId, anchors] of Object.entries(systemAnchors)) {
+    if (Array.isArray(nextAnchorsByMagnetId[magnetId]) && nextAnchorsByMagnetId[magnetId]!.length > 0) continue;
+    nextAnchorsByMagnetId[magnetId] = anchors;
+    changed = true;
+  }
+  return changed ? { ...layout, anchorsByMagnetId: nextAnchorsByMagnetId } : layout;
 }
 
 export function ensureMagnetSpaceLayout(
@@ -171,7 +189,24 @@ export function ensureMagnetSpaceLayout(
   const storageKey = resolveMagnetLayoutStorageKey(spaceId);
   const existing = loadMagnetSpaceLayout(storageKey);
   if (existing) {
-    return { layout: existing, storageKey, didCreate: false };
+    const active = new Set(existing.activeMagnetIds);
+    const systemAnchors = getSystemAnchorsForActiveMagnets(spaceId, active);
+    if (Object.keys(systemAnchors).length === 0) {
+      return { layout: existing, storageKey, didCreate: false };
+    }
+
+    let changed = false;
+    const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = { ...existing.anchorsByMagnetId };
+    for (const [magnetId, anchors] of Object.entries(systemAnchors)) {
+      if (Array.isArray(nextAnchorsByMagnetId[magnetId]) && nextAnchorsByMagnetId[magnetId]!.length > 0) continue;
+      nextAnchorsByMagnetId[magnetId] = anchors;
+      changed = true;
+    }
+    if (!changed) return { layout: existing, storageKey, didCreate: false };
+
+    const nextLayout: MagnetSpaceLayout = { ...existing, anchorsByMagnetId: nextAnchorsByMagnetId };
+    saveMagnetSpaceLayout(nextLayout, storageKey);
+    return { layout: nextLayout, storageKey, didCreate: false };
   }
 
   const configKey = resolveMagnetConfigStorageKey(spaceId);

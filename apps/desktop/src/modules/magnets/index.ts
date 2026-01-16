@@ -22,6 +22,25 @@ export {
 } from './spaces';
 export type { MagnetSpaceLayout, MagnetSpaceLayoutV1 } from './layout';
 export { resolveMagnetLayoutStorageKey, sanitizeMagnetSpaceLayout } from './layout';
+export type {
+  MagnetLayoutStoreApplyPatchRequest,
+  MagnetLayoutStoreApplyPatchResponse,
+  MagnetLayoutStoreBootstrapRequest,
+  MagnetLayoutStoreBootstrapResponse,
+  MagnetLayoutStorePatch,
+  MagnetLayoutStoreState,
+  MagnetLayoutStoreStateV1,
+  MagnetSpacePreset,
+  MagnetSpacePresetV1,
+  MagnetSpaceHistoryItem,
+  MagnetSpaceHistoryItemV1,
+} from './layoutStore';
+export {
+  buildLegacyMagnetLayoutStoreBootstrapRequest,
+  magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreBootstrapFromLegacy,
+  magnetLayoutStoreGetState,
+} from './layoutStore';
 export type { MagnetCatalogState } from './catalog';
 export {
   createDefaultMagnetCatalogState,

@@ -11,20 +11,8 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
   type: 'drag-handle',
   name: '拖动区域',
   anchorType: 'horizontal',
-  anchors: [
-    {
-      id: 'left',
-      gridX: 8, // 左端点
-      gridY: 0,
-      role: 'anchor',
-    },
-    {
-      id: 'right',
-      gridX: 16, // 右端点（9列宽度）
-      gridY: 0,
-      role: 'boundary',
-    },
-  ],
+  anchors: [],
+  gridFootprint: { width: 9, height: 1 },
   content: '⋮⋮', // 拖动指示符
   style: {
     height: '36px', // 固定高度（2个pixel）

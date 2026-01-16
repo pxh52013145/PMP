@@ -11,14 +11,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     type: 'window-control',
     name: '最小化',
     anchorType: 'single',
-    anchors: [
-      {
-        id: 'anchor',
-        gridX: 22,
-        gridY: 0,
-        role: 'anchor',
-      },
-    ],
+    anchors: [],
     content: '─',
     style: {
       width: '36px',
@@ -51,14 +44,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     type: 'window-control',
     name: '最大化',
     anchorType: 'single',
-    anchors: [
-      {
-        id: 'anchor',
-        gridX: 24,
-        gridY: 0,
-        role: 'anchor',
-      },
-    ],
+    anchors: [],
     content: '◻', // 使用 Unicode 正方形符号，更好居中
     style: {
       width: '36px',
@@ -97,14 +83,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     type: 'window-control',
     name: '关闭',
     anchorType: 'single',
-    anchors: [
-      {
-        id: 'anchor',
-        gridX: 26,
-        gridY: 0,
-        role: 'anchor',
-      },
-    ],
+    anchors: [],
     content: '✕',
     style: {
       width: '36px',

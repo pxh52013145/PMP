@@ -46,6 +46,11 @@ export type MagnetType =
  */
 export type AnchorType = 'single' | 'horizontal' | 'vertical' | 'rectangular';
 
+export interface MagnetGridFootprint {
+  width: number;
+  height: number;
+}
+
 /**
  * Pixel 锚点
  * 用于将 Magnet 吸附到特定的 Pixel 位置
@@ -133,6 +138,9 @@ export interface Magnet {
   // - horizontal: 2个锚点（单行组件，如搜索栏）左端、右端
   // - vertical: 2个锚点（单列组件，如音量滑块）顶端、底端
   // - rectangular: 4个锚点（矩形组件，如播放列表）四个角
+
+  // Optional grid footprint (size in matrix cells), used when anchors are intentionally left empty.
+  gridFootprint?: MagnetGridFootprint;
 
   // 内容配置
   content: React.ReactNode | string;
