@@ -431,7 +431,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         </button>
         </div>
         <button
-          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? '' : 'active'}`}
+          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? 'active' : ''}`}
           onClick={handleTogglePixelHints}
           title={
             pixelHintsVisible
