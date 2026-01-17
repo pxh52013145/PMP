@@ -348,6 +348,63 @@ export function MatrixWorkbench({
       .filter((m) => activeMagnetIds.has(m.id))
       .map((m) => {
         // 为编辑器按钮绑定切换函数
+        if (m.id === 'drag-handle') {
+          return {
+            ...m,
+            interactions: {
+              ...m.interactions,
+              onDrag: () => {
+                if (!isTauri) return;
+                appWindow.startDragging();
+              },
+            },
+          };
+        }
+
+        if (m.id === 'btn-minimize') {
+          return {
+            ...m,
+            interactions: {
+              ...m.interactions,
+              onClick: () => {
+                if (!isTauri) return;
+                void appWindow.minimize();
+              },
+            },
+          };
+        }
+
+        if (m.id === 'btn-maximize') {
+          return {
+            ...m,
+            interactions: {
+              ...m.interactions,
+              onClick: async () => {
+                if (!isTauri) return;
+                const maximized = await appWindow.isMaximized();
+                if (maximized) {
+                  void appWindow.unmaximize();
+                } else {
+                  void appWindow.maximize();
+                }
+              },
+            },
+          };
+        }
+
+        if (m.id === 'btn-close') {
+          return {
+            ...m,
+            interactions: {
+              ...m.interactions,
+              onClick: () => {
+                if (!isTauri) return;
+                void appWindow.close();
+              },
+            },
+          };
+        }
+
         if (m.id === 'btn-editor') {
           return {
             ...m,
@@ -360,7 +417,7 @@ export function MatrixWorkbench({
         return m;
       });
     return filtered;
-  }, [magnetLibrary, activeMagnetIds, toggleEditMode]);
+  }, [activeMagnetIds, isTauri, magnetLibrary, toggleEditMode]);
 
   // 更新占用信息
   useEffect(() => {

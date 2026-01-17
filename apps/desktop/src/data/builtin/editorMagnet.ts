@@ -8,9 +8,10 @@ export const EDITOR_BUTTON_MAGNET: Magnet = {
   id: 'btn-editor',
   type: 'custom',
   name: '编辑器',
+  previewText: 'Edit',
   anchorType: 'single',
   anchors: [],
-  content: '✎',
+  content: '\u270e', // ✎
   style: {
     width: '36px',
     height: '36px',

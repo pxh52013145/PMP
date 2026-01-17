@@ -1,9 +1,10 @@
-import { appWindow } from '@tauri-apps/api/window';
 import { Magnet } from '../../types/pixel';
 
 /**
  * 窗口控制按钮 Magnet 配置
  * 三个单锚点类型的 Magnet：最小化、最大化、关闭
+ *
+ * 注意：具体窗口行为（Tauri / Web / Mobile）由运行时绑定提供，避免在模板层直接依赖平台 API。
  */
 export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
   {
@@ -12,7 +13,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     name: '最小化',
     anchorType: 'single',
     anchors: [],
-    content: '─',
+    content: '\u2500', // ─
     style: {
       width: '36px',
       height: '36px',
@@ -34,9 +35,6 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     interactions: {
       draggable: false,
       clickable: true,
-      onClick: () => {
-        appWindow.minimize();
-      },
     },
   },
   {
@@ -45,7 +43,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     name: '最大化',
     anchorType: 'single',
     anchors: [],
-    content: '◻', // 使用 Unicode 正方形符号，更好居中
+    content: '\u25fb', // ◻ 使用 Unicode 正方形符号，更好居中
     style: {
       width: '36px',
       height: '36px',
@@ -68,14 +66,6 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     interactions: {
       draggable: false,
       clickable: true,
-      onClick: async () => {
-        const isMaximized = await appWindow.isMaximized();
-        if (isMaximized) {
-          appWindow.unmaximize();
-        } else {
-          appWindow.maximize();
-        }
-      },
     },
   },
   {
@@ -84,7 +74,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     name: '关闭',
     anchorType: 'single',
     anchors: [],
-    content: '✕',
+    content: '\u2715', // ✕
     style: {
       width: '36px',
       height: '36px',
@@ -106,9 +96,6 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     interactions: {
       draggable: false,
       clickable: true,
-      onClick: () => {
-        appWindow.close();
-      },
     },
   },
 ];

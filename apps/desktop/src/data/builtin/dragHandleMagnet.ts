@@ -1,10 +1,9 @@
-import { appWindow } from '@tauri-apps/api/window';
 import { Magnet } from '../../types/pixel';
 
 /**
  * 拖动手柄 Magnet
  * 第一个水平锚点类型的 Magnet
- * 位于窗口顶部中央，用于拖动窗口
+ * 位于窗口顶部中部，用于拖动窗口
  */
 export const DRAG_HANDLE_MAGNET: Magnet = {
   id: 'drag-handle',
@@ -13,9 +12,9 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
   anchorType: 'horizontal',
   anchors: [],
   gridFootprint: { width: 9, height: 1 },
-  content: '⋮⋮', // 拖动指示符
+  content: '\u22ee\u22ee', // 拖动指示符 (⋮⋮)
   style: {
-    height: '36px', // 固定高度（2个pixel）
+    height: '36px', // 固定高度：1个pixel
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     border: '1px solid transparent',
     borderRadius: '4px',
@@ -45,9 +44,5 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
   interactions: {
     draggable: true,
     clickable: false,
-    onDrag: () => {
-      // Tauri 的窗口拖动
-      appWindow.startDragging();
-    },
   },
 };
