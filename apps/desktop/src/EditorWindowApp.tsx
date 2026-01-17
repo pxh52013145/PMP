@@ -410,56 +410,58 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
         </span>
       </div>
 
-      {/* 完成编辑按钮和置顶按钮 */}
-      <div className="control-button-group">
+      <div className="control-top-actions">
+        {/* 布局历史（撤回/恢复） */}
         <div className="control-layout-history-group">
-        <button
-          className="cyber-btn layout-undo-btn"
-          onClick={handleUndoLayout}
-          title={t('editor.control-panel.undo.title')}
-          aria-label={t('editor.control-panel.undo.title')}
-        >
-          <span className="btn-text">↶</span>
-        </button>
-        <button
-          className="cyber-btn layout-redo-btn"
-          onClick={handleRedoLayout}
-          title={t('editor.control-panel.redo.title')}
-          aria-label={t('editor.control-panel.redo.title')}
-        >
-          <span className="btn-text">↷</span>
-        </button>
+          <button
+            className="cyber-btn layout-undo-btn"
+            onClick={handleUndoLayout}
+            title={t('editor.control-panel.undo.title')}
+            aria-label={t('editor.control-panel.undo.title')}
+          >
+            <span className="btn-text">{'\u21b6'}</span>
+          </button>
+          <button
+            className="cyber-btn layout-redo-btn"
+            onClick={handleRedoLayout}
+            title={t('editor.control-panel.redo.title')}
+            aria-label={t('editor.control-panel.redo.title')}
+          >
+            <span className="btn-text">{'\u21b7'}</span>
+          </button>
         </div>
-        <button
-          className={`cyber-btn matrix-hints-btn matrix-hints-btn--mirror ${pixelHintsVisible ? 'active' : ''}`}
-          onClick={handleTogglePixelHints}
-          title={
-            pixelHintsVisible
-              ? t('editor.control-panel.pixelHints.title.hide')
-              : t('editor.control-panel.pixelHints.title.show')
-          }
-          aria-label={
-            pixelHintsVisible
-              ? t('editor.control-panel.pixelHints.title.hide')
-              : t('editor.control-panel.pixelHints.title.show')
-          }
-        >
-          <span className="btn-text"></span>
-        </button>
-        <button className="cyber-btn exit-cyber-btn" onClick={onExitEditMode}>
-          <span className="btn-text">{t('common.action.done')}</span>
-        </button>
-        <button
-          className={`cyber-btn pin-btn ${isAlwaysOnTop ? 'active' : ''}`}
-          onClick={handleToggleAlwaysOnTop}
-          title={
-            isAlwaysOnTop
-              ? t('editor.control-panel.pin.title.unpin')
-              : t('editor.control-panel.pin.title.pin')
-          }
-        >
-          <span className="btn-text"></span>
-        </button>
+
+        {/* 完成编辑按钮（由左右两侧按钮包裹） */}
+        <div className="control-button-group">
+          <button
+            className={`cyber-btn matrix-hints-btn ${pixelHintsVisible ? 'active' : ''}`}
+            onClick={handleTogglePixelHints}
+            title={
+              pixelHintsVisible
+                ? t('editor.control-panel.pixelHints.title.hide')
+                : t('editor.control-panel.pixelHints.title.show')
+            }
+            aria-label={
+              pixelHintsVisible
+                ? t('editor.control-panel.pixelHints.title.hide')
+                : t('editor.control-panel.pixelHints.title.show')
+            }
+          >
+            <span className="btn-text"></span>
+          </button>
+          <button className="cyber-btn exit-cyber-btn" onClick={onExitEditMode}>
+            <span className="btn-text">{t('common.action.done')}</span>
+          </button>
+          <button
+            className={`cyber-btn pin-btn ${isAlwaysOnTop ? 'active' : ''}`}
+            onClick={handleToggleAlwaysOnTop}
+            title={
+              isAlwaysOnTop ? t('editor.control-panel.pin.title.unpin') : t('editor.control-panel.pin.title.pin')
+            }
+          >
+            <span className="btn-text"></span>
+          </button>
+        </div>
       </div>
 
       {/* 统计开关 */}
