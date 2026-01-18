@@ -49,6 +49,9 @@ lerna-debug.log*
 community/supabase/.branches/
 community/supabase/.temp/
 
+# Community (local-only)
+community/
+
 # OS generated files
 Thumbs.db
 .DS_Store
