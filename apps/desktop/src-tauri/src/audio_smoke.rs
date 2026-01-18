@@ -30,6 +30,8 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
     let mut input_id: Option<String> = None;
     let mut play_ms: u64 = 800;
     let mut seek_seconds: f64 = 0.5;
+    let mut seek_count: u32 = 1;
+    let mut seek_interval_ms: u64 = 0;
 
     let mut index = 1;
     while index < args.len() {
@@ -81,6 +83,24 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
                     .map_err(|_| format!("Invalid --seek-seconds value: {value}"))?;
                 index += 1;
             }
+            "--seek-count" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --seek-count".to_string())?;
+                seek_count = value
+                    .parse::<u32>()
+                    .map_err(|_| format!("Invalid --seek-count value: {value}"))?;
+                index += 1;
+            }
+            "--seek-interval-ms" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --seek-interval-ms".to_string())?;
+                seek_interval_ms = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("Invalid --seek-interval-ms value: {value}"))?;
+                index += 1;
+            }
             other => {
                 if other.starts_with('-') {
                     return Err(format!("Unknown audio smoke argument: {other}"));
@@ -99,6 +119,8 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
         input_id,
         play_ms,
         seek_seconds,
+        seek_count,
+        seek_interval_ms,
     })
 }
 

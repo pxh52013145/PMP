@@ -221,6 +221,37 @@ pub(crate) enum DecoderCommand {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct DrainedDecoderCommands {
+    shutdown: bool,
+    seek_target: Option<f64>,
+}
+
+fn drain_decoder_commands(command_rx: &mpsc::Receiver<DecoderCommand>) -> DrainedDecoderCommands {
+    let mut result = DrainedDecoderCommands::default();
+
+    loop {
+        match command_rx.try_recv() {
+            Ok(DecoderCommand::Shutdown) => {
+                result.shutdown = true;
+                result.seek_target = None;
+                return result;
+            }
+            Ok(DecoderCommand::Seek(target)) => {
+                result.seek_target = Some(target);
+            }
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                result.shutdown = true;
+                result.seek_target = None;
+                return result;
+            }
+        }
+    }
+
+    result
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamingSamplesSource {
     buffer: AudioRingBuffer,
@@ -464,54 +495,49 @@ fn start_symphonia_stream(
         let mut meta_delivered = false;
 
         'decode_loop: loop {
-            while let Ok(cmd) = command_rx.try_recv() {
-                match cmd {
-                    DecoderCommand::Shutdown => {
-                        buffer_clone.mark_finished();
-                        return;
+            let drained = drain_decoder_commands(&command_rx);
+            if drained.shutdown {
+                buffer_clone.mark_finished();
+                return;
+            }
+            if let Some(target) = drained.seek_target {
+                buffer_clone.clear();
+                pending_trim_frames_out = 0;
+                cache_handle = None;
+                cache_key = None;
+
+                let seek_to = SeekTo::Time {
+                    time: Time::from(target.max(0.0)),
+                    track_id: Some(track_id),
+                };
+
+                if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
+                    if let Some(time_base) = track.codec_params.time_base {
+                        let required = time_base.calc_time(seeked.required_ts);
+                        let actual = time_base.calc_time(seeked.actual_ts);
+                        let required_seconds = required.seconds as f64 + required.frac;
+                        let actual_seconds = actual.seconds as f64 + actual.frac;
+                        let delta = (required_seconds - actual_seconds).max(0.0);
+                        pending_trim_frames_out = (delta * effective_sample_rate as f64) as usize;
                     }
-                    DecoderCommand::Seek(target) => {
-                        buffer_clone.clear();
-                        pending_trim_frames_out = 0;
-                        cache_handle = None;
-                        cache_key = None;
 
-                        let seek_to = SeekTo::Time {
-                            time: Time::from(target.max(0.0)),
-                            track_id: Some(track_id),
-                        };
-
-                        if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
-                            if let Some(time_base) = track.codec_params.time_base {
-                                let required = time_base.calc_time(seeked.required_ts);
-                                let actual = time_base.calc_time(seeked.actual_ts);
-                                let required_seconds = required.seconds as f64 + required.frac;
-                                let actual_seconds = actual.seconds as f64 + actual.frac;
-                                let delta = (required_seconds - actual_seconds).max(0.0);
-                                pending_trim_frames_out =
-                                    (delta * effective_sample_rate as f64) as usize;
-                            }
-
-                            decoder = match symphonia::default::get_codecs()
-                                .make(&track.codec_params, &DecoderOptions::default())
-                            {
-                                Ok(decoder) => decoder,
-                                Err(err) => {
-                                    if let Ok(mut guard) = error_clone.lock() {
-                                        if guard.is_none() {
-                                            *guard =
-                                                Some(format!("Failed to create decoder: {err}"));
-                                        }
-                                    }
-                                    buffer_clone.mark_finished();
-                                    return;
+                    decoder = match symphonia::default::get_codecs()
+                        .make(&track.codec_params, &DecoderOptions::default())
+                    {
+                        Ok(decoder) => decoder,
+                        Err(err) => {
+                            if let Ok(mut guard) = error_clone.lock() {
+                                if guard.is_none() {
+                                    *guard = Some(format!("Failed to create decoder: {err}"));
                                 }
-                            };
-                            sample_buf = None;
-                            if let Some(r) = resampler.as_mut() {
-                                r.reset();
                             }
+                            buffer_clone.mark_finished();
+                            return;
                         }
+                    };
+                    sample_buf = None;
+                    if let Some(r) = resampler.as_mut() {
+                        r.reset();
                     }
                 }
             }
@@ -674,64 +700,54 @@ fn start_symphonia_stream(
                             }
 
                             while offset < out_interleaved.len() {
-                                if let Ok(cmd) = command_rx.try_recv() {
-                                    match cmd {
-                                        DecoderCommand::Shutdown => {
-                                            buffer_clone.mark_finished();
-                                            return;
+                                let drained = drain_decoder_commands(&command_rx);
+                                if drained.shutdown {
+                                    buffer_clone.mark_finished();
+                                    return;
+                                }
+                                if let Some(target) = drained.seek_target {
+                                    buffer_clone.clear();
+                                    pending_trim_frames_out = 0;
+                                    cache_handle = None;
+                                    cache_key = None;
+
+                                    let seek_to = SeekTo::Time {
+                                        time: Time::from(target.max(0.0)),
+                                        track_id: Some(track_id),
+                                    };
+
+                                    if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
+                                        if let Some(time_base) = track.codec_params.time_base {
+                                            let required =
+                                                time_base.calc_time(seeked.required_ts);
+                                            let actual = time_base.calc_time(seeked.actual_ts);
+                                            let required_seconds =
+                                                required.seconds as f64 + required.frac;
+                                            let actual_seconds =
+                                                actual.seconds as f64 + actual.frac;
+                                            let delta =
+                                                (required_seconds - actual_seconds).max(0.0);
+                                            pending_trim_frames_out =
+                                                (delta * effective_sample_rate as f64) as usize;
                                         }
-                                        DecoderCommand::Seek(target) => {
-                                            buffer_clone.clear();
-                                            pending_trim_frames_out = 0;
-                                            cache_handle = None;
-                                            cache_key = None;
 
-                                            let seek_to = SeekTo::Time {
-                                                time: Time::from(target.max(0.0)),
-                                                track_id: Some(track_id),
-                                            };
-
-                                            if let Ok(seeked) =
-                                                format.seek(SeekMode::Accurate, seek_to)
-                                            {
-                                                if let Some(time_base) =
-                                                    track.codec_params.time_base
-                                                {
-                                                    let required =
-                                                        time_base.calc_time(seeked.required_ts);
-                                                    let actual =
-                                                        time_base.calc_time(seeked.actual_ts);
-                                                    let required_seconds =
-                                                        required.seconds as f64 + required.frac;
-                                                    let actual_seconds =
-                                                        actual.seconds as f64 + actual.frac;
-                                                    let delta = (required_seconds - actual_seconds)
-                                                        .max(0.0);
-                                                    pending_trim_frames_out = (delta
-                                                        * effective_sample_rate as f64)
-                                                        as usize;
-                                                }
-
-                                                decoder = match symphonia::default::get_codecs()
-                                                    .make(
-                                                        &track.codec_params,
-                                                        &DecoderOptions::default(),
-                                                    ) {
-                                                    Ok(decoder) => decoder,
-                                                    Err(_) => {
-                                                        buffer_clone.mark_finished();
-                                                        return;
-                                                    }
-                                                };
-                                                sample_buf = None;
-                                                if let Some(r) = resampler.as_mut() {
-                                                    r.reset();
-                                                }
+                                        decoder = match symphonia::default::get_codecs().make(
+                                            &track.codec_params,
+                                            &DecoderOptions::default(),
+                                        ) {
+                                            Ok(decoder) => decoder,
+                                            Err(_) => {
+                                                buffer_clone.mark_finished();
+                                                return;
                                             }
-
-                                            continue 'decode_loop;
+                                        };
+                                        sample_buf = None;
+                                        if let Some(r) = resampler.as_mut() {
+                                            r.reset();
                                         }
                                     }
+
+                                    continue 'decode_loop;
                                 }
 
                                 let remaining = &out_interleaved[offset..];
@@ -1147,5 +1163,25 @@ mod tests {
             }
         }
         assert!(finished, "expected stream to finish after buffer is drained");
+    }
+
+    #[test]
+    fn drain_decoder_commands_keeps_last_seek_and_stops_on_shutdown() {
+        let (tx, rx) = mpsc::channel::<DecoderCommand>();
+        tx.send(DecoderCommand::Seek(1.0)).unwrap();
+        tx.send(DecoderCommand::Seek(2.0)).unwrap();
+        tx.send(DecoderCommand::Seek(3.5)).unwrap();
+
+        let drained = drain_decoder_commands(&rx);
+        assert!(!drained.shutdown);
+        assert_eq!(drained.seek_target, Some(3.5));
+
+        tx.send(DecoderCommand::Seek(4.0)).unwrap();
+        tx.send(DecoderCommand::Shutdown).unwrap();
+        tx.send(DecoderCommand::Seek(5.0)).unwrap();
+
+        let drained = drain_decoder_commands(&rx);
+        assert!(drained.shutdown);
+        assert_eq!(drained.seek_target, None);
     }
 }

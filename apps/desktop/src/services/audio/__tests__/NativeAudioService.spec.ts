@@ -218,4 +218,28 @@ describe('NativeAudioService', () => {
     expect(invoke).toHaveBeenCalledWith('native_audio_play', undefined);
     service.destroy();
   });
+
+  it('coalesces rapid seek calls before invoking backend', async () => {
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    (service as unknown as { state: { duration: number } }).state.duration = 100;
+
+    vi.useFakeTimers();
+    service.seek(10);
+    service.seek(20);
+    service.seek(30);
+
+    expect(invoke).not.toHaveBeenCalledWith('native_audio_seek', expect.anything());
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_seek', { time: 30 });
+
+    vi.useRealTimers();
+    service.destroy();
+  });
 });

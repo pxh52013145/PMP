@@ -1,128 +1,29 @@
-use once_cell::sync::{Lazy, OnceCell};
-use rodio::Source;
-use rustfft::{num_complex::Complex, FftPlanner};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
-    collections::VecDeque,
     path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-    sync::mpsc,
+    sync::atomic::Ordering,
     sync::Arc,
-    sync::Condvar,
-    sync::Mutex,
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
-use tauri::Manager;
 
-use crate::audio::input::{
-    open_rodio_source_at, AudioInputKind, AudioInputRegistry, DecoderCommand, SharedSamplesSource,
-    StreamingPlayback, StreamingSamplesSource,
-};
-use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, RODIO_CPAL_BACKEND_ID};
+use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
+use crate::audio::emitter;
+use crate::audio::output::{default_backend, AudioOutputBackend, RODIO_CPAL_BACKEND_ID};
 #[cfg(target_os = "windows")]
 use crate::audio::output::{wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 use crate::audio::output::{asio_backend, ASIO_BACKEND_ID};
+use crate::audio::engine::{ENGINE, PlaybackState};
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
-static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
-static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
-static EMITTER_STARTED: OnceCell<()> = OnceCell::new();
-static LAST_EMITTED_ERROR_SEQ: AtomicU64 = AtomicU64::new(0);
+pub use crate::audio::engine::NativeAudioComponentsStatePayload;
 
-fn store_atomic_f32(target: &AtomicU32, value: f32) {
-    target.store(value.to_bits(), Ordering::Release);
-}
+pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
 
-fn load_atomic_f32(target: &AtomicU32) -> f32 {
-    f32::from_bits(target.load(Ordering::Acquire))
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct NativeAudioStatePayload {
-    playback_state: String,
-    volume: f32,
-    gain_db: f32,
-    replay_gain_db: f32,
-    muted: bool,
-    track_path: Option<String>,
-    current_time: f64,
-    duration: f64,
-    sample_rate: Option<u32>,
-    bit_depth: Option<u32>,
-    device: Option<String>,
-    queue: Option<Vec<String>>,
-    current_index: Option<i32>,
-    ended: bool,
-    error_seq: Option<u64>,
-    error_code: Option<String>,
-    error_message: Option<String>,
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct NativeAudioSpectrumPayload {
-    bins: Vec<f32>,
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct NativeAudioErrorPayload {
-    seq: u64,
-    code: String,
-    message: String,
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeAudioComponentsStatePayload {
-    output_backend_id: String,
-    output_device: Option<String>,
-    output_sample_rate: Option<u32>,
-    preferred_input_id: Option<String>,
-    active_input_id: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum EqBandKind {
-    Peaking,
-    LowShelf,
-    HighShelf,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EqBandConfig {
-    kind: EqBandKind,
-    frequency_hz: f32,
-    q: f32,
-    gain_db: f32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum DspNodeConfig {
-    Gain {
-        db: f32,
-    },
-    Eq {
-        bands: Vec<EqBandConfig>,
-    },
-    Limiter {
-        #[serde(rename = "thresholdDb")]
-        threshold_db: f32,
-    },
-    Vst {
-        id: String,
-        #[serde(rename = "pluginId")]
-        plugin_id: String,
-    },
-}
-
+#[cfg(any())]
+mod legacy_native_audio_dsp_pipeline {
 fn gain_db_to_linear(db: f32) -> f32 {
     10.0f32.powf(db / 20.0)
 }
@@ -1144,1624 +1045,10 @@ impl SpectrumTap {
     }
 }
 
-struct ActiveCrossfade {
-    cancel: Arc<AtomicBool>,
-    finished: Arc<AtomicBool>,
-    old_sink: Arc<dyn AudioSink>,
-    old_streaming_command_tx: Option<mpsc::Sender<DecoderCommand>>,
-}
-
-struct NativeAudioEngine {
-    input_registry: AudioInputRegistry,
-    preferred_input_id: Option<String>,
-    active_input_id: Option<String>,
-    output_backend: Arc<dyn AudioOutputBackend>,
-    sink: Option<Arc<dyn AudioSink>>,
-    active_crossfade: Option<ActiveCrossfade>,
-    current_track: Option<PathBuf>,
-    queue: Vec<PathBuf>,
-    current_index: i32,
-    queue_initialized: bool,
-    streaming: Option<StreamingPlayback>,
-    current_position: f64,
-    duration: f64,
-    base_position: f64,
-    playback_started_at: Option<Instant>,
-    decoded_samples: Option<Arc<Vec<f32>>>,
-    decoded_channels: u16,
-    decoded_sample_rate: u32,
-    decoded_bit_depth: Option<u32>,
-    output_sample_rate: Option<u32>,
-    device_name: Option<String>,
-    volume: f32,
-    gain_db: f32,
-    replay_gain_db: f32,
-    dsp_chain: Vec<DspNodeConfig>,
-    vst_enabled: bool,
-    dsp_runtime: Arc<DspRuntime>,
-    spectrum_tap: SpectrumTap,
-    muted: bool,
-    effective_volume_bits: Arc<AtomicU32>,
-    playback_state: PlaybackState,
-    desired_playback_state: PlaybackState,
-    error_seq_counter: u64,
-    last_error_seq: u64,
-    last_error_code: Option<String>,
-    last_error_message: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-enum PlaybackState {
-    Idle,
-    Loading,
-    Playing,
-    Paused,
-    Stopped,
-    Error,
-}
-
-impl PlaybackState {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PlaybackState::Idle => "idle",
-            PlaybackState::Loading => "loading",
-            PlaybackState::Playing => "playing",
-            PlaybackState::Paused => "paused",
-            PlaybackState::Stopped => "stopped",
-            PlaybackState::Error => "error",
-        }
-    }
-}
-
-impl NativeAudioEngine {
-    fn new() -> Self {
-        Self::new_with_backend(default_backend())
-    }
-
-    fn new_with_backend(output_backend: Arc<dyn AudioOutputBackend>) -> Self {
-        eprintln!("[NativeAudio] Output backend: {}", output_backend.id());
-        Self {
-            input_registry: AudioInputRegistry::default(),
-            preferred_input_id: None,
-            active_input_id: None,
-            output_backend,
-            sink: None,
-            active_crossfade: None,
-            current_track: None,
-            queue: Vec::new(),
-            current_index: -1,
-            queue_initialized: false,
-            streaming: None,
-            current_position: 0.0,
-            duration: 0.0,
-            base_position: 0.0,
-            playback_started_at: None,
-            decoded_samples: None,
-            decoded_channels: 0,
-            decoded_sample_rate: 0,
-            decoded_bit_depth: None,
-            output_sample_rate: None,
-            device_name: None,
-            volume: 0.7,
-            gain_db: 0.0,
-            replay_gain_db: 0.0,
-            dsp_chain: Vec::new(),
-            vst_enabled: false,
-            dsp_runtime: Arc::new(DspRuntime::new()),
-            spectrum_tap: SpectrumTap::new(1024),
-            muted: false,
-            effective_volume_bits: Arc::new(AtomicU32::new(0.7f32.to_bits())),
-            playback_state: PlaybackState::Idle,
-            desired_playback_state: PlaybackState::Idle,
-            error_seq_counter: 1,
-            last_error_seq: 0,
-            last_error_code: None,
-            last_error_message: None,
-        }
-    }
-
-    fn clear_error(&mut self) {
-        self.last_error_code = None;
-        self.last_error_message = None;
-    }
-
-    fn record_error(&mut self, code: &str, message: String) {
-        self.error_seq_counter = self.error_seq_counter.saturating_add(1);
-        self.last_error_seq = self.error_seq_counter;
-        self.last_error_code = Some(code.to_string());
-        self.last_error_message = Some(message);
-    }
-
-    fn set_error(&mut self, code: &str, message: String) {
-        self.record_error(code, message);
-        self.playback_state = PlaybackState::Error;
-    }
-
-    fn effective_volume(&self) -> f32 {
-        if self.muted {
-            0.0
-        } else {
-            self.volume.clamp(0.0, 4.0)
-        }
-    }
-
-    fn apply_effective_volume(&mut self) {
-        let effective = self.effective_volume();
-        store_atomic_f32(self.effective_volume_bits.as_ref(), effective);
-
-        if let Some(crossfade) = self.active_crossfade.as_ref() {
-            if crossfade.finished.load(Ordering::Acquire) {
-                self.active_crossfade = None;
-            }
-        }
-
-        if self.active_crossfade.is_some() {
-            return;
-        }
-
-        if let Some(sink) = &self.sink {
-            sink.set_volume(effective);
-        }
-    }
-
-    fn cancel_crossfade(&mut self) {
-        let Some(crossfade) = self.active_crossfade.take() else {
-            return;
-        };
-
-        crossfade.cancel.store(true, Ordering::Release);
-        crossfade.old_sink.stop();
-        if let Some(tx) = crossfade.old_streaming_command_tx {
-            let _ = tx.send(DecoderCommand::Shutdown);
-        }
-    }
-
-    fn set_state(&mut self, state: PlaybackState) {
-        self.playback_state = state;
-        if matches!(
-            state,
-            PlaybackState::Idle | PlaybackState::Playing | PlaybackState::Paused | PlaybackState::Stopped
-        ) {
-            self.desired_playback_state = state;
-        }
-    }
-
-    fn shutdown_streaming(&mut self) {
-        if let Some(streaming) = self.streaming.take() {
-            let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
-        }
-    }
-
-    fn load(&mut self, path: PathBuf) -> Result<(), String> {
-        self.cancel_crossfade();
-        self.sync_clock();
-        self.clear_error();
-        self.spectrum_tap.clear();
-        self.dsp_runtime.request_reset();
-        if let Some(old_sink) = self.sink.take() {
-            old_sink.stop();
-        }
-        self.shutdown_streaming();
-
-        let (sink, output_info) = self.output_backend.create_sink()?;
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
-        sink.pause();
-
-        let opened = self
-            .input_registry
-            .open_prefer(
-                &path,
-                self.output_sample_rate,
-                self.preferred_input_id.as_deref(),
-            )
-            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-        eprintln!("[NativeAudio] Input: {}", opened.input_id);
-        self.active_input_id = Some(opened.input_id.to_string());
-
-        self.duration = opened.meta.duration;
-        self.decoded_channels = opened.meta.channels;
-        self.decoded_sample_rate = opened.meta.sample_rate;
-        self.decoded_bit_depth = opened.meta.bit_depth;
-        self.decoded_samples = None;
-        self.streaming = None;
-
-        match opened.kind {
-            AudioInputKind::Streaming(streaming) => {
-                self.streaming = Some(streaming);
-            }
-            AudioInputKind::Decoded { samples } => {
-                self.decoded_samples = Some(samples);
-            }
-            AudioInputKind::Rodio => {}
-        }
-
-        sink.append(Box::new(DspProcessingSource::new(
-            opened.source,
-            self.dsp_runtime.clone(),
-            self.spectrum_tap.clone(),
-        )));
-
-        if self.device_name.is_none() {
-            self.device_name = self.output_backend.default_device_name();
-        }
-
-        sink.pause();
-        sink.set_volume(self.effective_volume());
-
-        self.sink = Some(sink);
-        self.current_track = Some(path.clone());
-
-        if !self.queue_initialized {
-            self.queue_initialized = true;
-        }
-        if self.queue.is_empty() {
-            self.queue.push(path.clone());
-            self.current_index = 0;
-        } else if let Some(index) = self.queue.iter().position(|entry| entry == &path) {
-            self.current_index = index as i32;
-        } else {
-            self.queue.push(path.clone());
-            self.current_index = (self.queue.len() as i32).saturating_sub(1);
-        }
-
-        self.current_position = 0.0;
-        self.base_position = 0.0;
-        self.playback_started_at = None;
-        self.set_state(PlaybackState::Paused);
-        Ok(())
-    }
-
-    fn crossfade_to(&mut self, path: PathBuf, duration_ms: u64) -> Result<(), String> {
-        let was_playing = matches!(self.playback_state, PlaybackState::Playing);
-        // VST nodes currently run as out-of-process sidecars and are not safe to drive from two
-        // concurrent sinks during crossfade; fall back to non-crossfade load for stability.
-        let has_vst = self
-            .dsp_chain
-            .iter()
-            .any(|node| matches!(node, DspNodeConfig::Vst { .. }));
-        let can_crossfade = was_playing
-            && self.sink.is_some()
-            && duration_ms > 0
-            && !has_vst
-            && self.output_backend.id() != WASAPI_EXCLUSIVE_BACKEND_ID;
-        if !can_crossfade {
-            self.load(path)?;
-            if was_playing {
-                self.play()?;
-            }
-            return Ok(());
-        }
-
-        self.cancel_crossfade();
-        self.clear_error();
-        self.spectrum_tap.clear();
-
-        let (new_sink, output_info) = self.output_backend.create_sink()?;
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
-        new_sink.pause();
-
-        let mut new_streaming: Option<StreamingPlayback> = None;
-        let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
-
-        let opened = self
-            .input_registry
-            .open_prefer(
-                &path,
-                self.output_sample_rate,
-                self.preferred_input_id.as_deref(),
-            )
-            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-        eprintln!("[NativeAudio] Input: {}", opened.input_id);
-        let active_input_id = opened.input_id.to_string();
-
-        let duration = opened.meta.duration;
-        let decoded_channels = opened.meta.channels;
-        let decoded_sample_rate = opened.meta.sample_rate;
-        let decoded_bit_depth = opened.meta.bit_depth;
-
-        match opened.kind {
-            AudioInputKind::Streaming(streaming) => {
-                new_streaming = Some(streaming);
-            }
-            AudioInputKind::Decoded { samples } => {
-                decoded_samples = Some(samples);
-            }
-            AudioInputKind::Rodio => {}
-        }
-
-        new_sink.append(Box::new(DspProcessingSource::new(
-            opened.source,
-            self.dsp_runtime.clone(),
-            self.spectrum_tap.clone(),
-        )));
-
-        if self.device_name.is_none() {
-            self.device_name = self.output_backend.default_device_name();
-        }
-
-        let base_volume = self.effective_volume();
-        store_atomic_f32(self.effective_volume_bits.as_ref(), base_volume);
-
-        new_sink.pause();
-        new_sink.set_volume(0.0);
-
-        // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
-        if let Some(streaming) = &new_streaming {
-            let channels = decoded_channels.max(1) as usize;
-            let target_frames = 2048usize; // ~46ms @ 44.1kHz
-            let target_samples = target_frames * channels;
-            if streaming.buffer.len_samples() < target_samples {
-                streaming
-                    .buffer
-                    .wait_for_samples(target_samples, Duration::from_millis(250));
-            }
-        }
-
-        new_sink.play();
-
-        let old_sink = self
-            .sink
-            .replace(new_sink.clone())
-            .ok_or_else(|| "No track loaded".to_string())?;
-        let old_streaming = std::mem::replace(&mut self.streaming, new_streaming);
-        let old_streaming_command_tx = old_streaming.map(|streaming| streaming.command_tx.clone());
-
-        self.current_track = Some(path.clone());
-        self.duration = duration;
-        self.decoded_samples = decoded_samples;
-        self.decoded_channels = decoded_channels;
-        self.decoded_sample_rate = decoded_sample_rate;
-        self.decoded_bit_depth = decoded_bit_depth;
-        self.active_input_id = Some(active_input_id);
-
-        if !self.queue_initialized {
-            self.queue_initialized = true;
-        }
-        if self.queue.is_empty() {
-            self.queue.push(path.clone());
-            self.current_index = 0;
-        } else if let Some(index) = self.queue.iter().position(|entry| entry == &path) {
-            self.current_index = index as i32;
-        } else {
-            self.queue.push(path.clone());
-            self.current_index = (self.queue.len() as i32).saturating_sub(1);
-        }
-
-        self.current_position = 0.0;
-        self.base_position = 0.0;
-        self.playback_started_at = Some(Instant::now());
-        self.set_state(PlaybackState::Playing);
-
-        let duration = Duration::from_millis(duration_ms.clamp(1, 30_000));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let finished = Arc::new(AtomicBool::new(false));
-        let base_bits = self.effective_volume_bits.clone();
-        let cancel_thread = cancel.clone();
-        let finished_thread = finished.clone();
-        let new_sink_thread = new_sink;
-        let old_sink_thread = old_sink.clone();
-        let old_tx_thread = old_streaming_command_tx.clone();
-
-        std::thread::spawn(move || {
-            let start = Instant::now();
-            let step = Duration::from_millis(10);
-            loop {
-                if cancel_thread.load(Ordering::Acquire) {
-                    break;
-                }
-                let elapsed = start.elapsed();
-                let t = if duration.as_nanos() == 0 {
-                    1.0f32
-                } else {
-                    (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
-                };
-
-                let mut base = load_atomic_f32(base_bits.as_ref());
-                if !base.is_finite() {
-                    base = 0.0;
-                }
-                base = base.max(0.0);
-
-                old_sink_thread.set_volume(base * (1.0 - t));
-                new_sink_thread.set_volume(base * t);
-
-                if t >= 1.0 {
-                    break;
-                }
-                std::thread::sleep(step);
-            }
-
-            let mut base = load_atomic_f32(base_bits.as_ref());
-            if !base.is_finite() {
-                base = 0.0;
-            }
-            base = base.max(0.0);
-
-            new_sink_thread.set_volume(base);
-            old_sink_thread.set_volume(0.0);
-            old_sink_thread.stop();
-            if let Some(tx) = old_tx_thread {
-                let _ = tx.send(DecoderCommand::Shutdown);
-            }
-            finished_thread.store(true, Ordering::Release);
-        });
-
-        self.active_crossfade = Some(ActiveCrossfade {
-            cancel,
-            finished,
-            old_sink,
-            old_streaming_command_tx,
-        });
-
-        Ok(())
-    }
-
-    fn play(&mut self) -> Result<(), String> {
-        if let Some(sink) = &self.sink {
-            // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
-            if let Some(streaming) = &self.streaming {
-                let channels = self.decoded_channels.max(1) as usize;
-                let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
-                    4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
-                } else {
-                    2048usize // ~46ms @ 44.1kHz
-                };
-                let target_samples = target_frames * channels;
-                if streaming.buffer.len_samples() < target_samples {
-                    streaming
-                        .buffer
-                        .wait_for_samples(target_samples, Duration::from_millis(250));
-                }
-            }
-
-            sink.play();
-            if let Some(crossfade) = self.active_crossfade.as_ref() {
-                crossfade.old_sink.play();
-            }
-            self.set_state(PlaybackState::Playing);
-            if self.playback_started_at.is_none() {
-                self.base_position = self.current_position;
-                self.playback_started_at = Some(Instant::now());
-            }
-            Ok(())
-        } else {
-            Err("No track loaded".into())
-        }
-    }
-
-    fn pause(&mut self) -> Result<(), String> {
-        if let Some(sink) = &self.sink {
-            sink.pause();
-            if let Some(crossfade) = self.active_crossfade.as_ref() {
-                crossfade.old_sink.pause();
-            }
-            self.sync_clock();
-            self.set_state(PlaybackState::Paused);
-            Ok(())
-        } else {
-            Err("No track loaded".into())
-        }
-    }
-
-    fn stop(&mut self) {
-        self.cancel_crossfade();
-        self.sync_clock();
-        self.spectrum_tap.clear();
-        self.dsp_runtime.request_reset();
-
-        if let Some(streaming) = &self.streaming {
-            streaming.buffer.clear();
-            let _ = streaming.command_tx.send(DecoderCommand::Seek(0.0));
-            if let Some(sink) = &self.sink {
-                sink.pause();
-            }
-        } else if self.current_track.is_some() && self.output_backend.is_stream_open() {
-            let track_path = self.current_track.clone().expect("checked is_some");
-            let sink = self.output_backend.create_sink().ok().map(|(sink, _)| sink);
-
-            if let Some(sink) = sink {
-                if let (Some(samples), channels, sample_rate) = (
-                    self.decoded_samples.clone(),
-                    self.decoded_channels,
-                    self.decoded_sample_rate,
-                ) {
-                    sink.append(Box::new(DspProcessingSource::new(
-                        SharedSamplesSource::new(samples, channels, sample_rate, 0),
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    )));
-                } else if let Ok((source, _)) = open_rodio_source_at(&track_path, 0.0) {
-                    sink.append(Box::new(DspProcessingSource::new(
-                        source,
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    )));
-                }
-                sink.pause();
-                sink.set_volume(self.effective_volume());
-                if let Some(old) = self.sink.replace(sink) {
-                    old.stop();
-                }
-            }
-        } else if let Some(sink) = &self.sink {
-            sink.pause();
-        }
-
-        self.current_position = 0.0;
-        self.base_position = 0.0;
-        self.playback_started_at = None;
-        self.set_state(PlaybackState::Stopped);
-    }
-
-    fn sync_queue_state(&mut self, queue: Vec<PathBuf>, current_index: i32) {
-        self.queue_initialized = true;
-        self.queue = queue;
-        let max_index = (self.queue.len() as i32).saturating_sub(1);
-        self.current_index = current_index.clamp(-1, max_index);
-
-        if self.queue.is_empty() || self.current_index < 0 {
-            self.cancel_crossfade();
-            self.sync_clock();
-            self.spectrum_tap.clear();
-            self.dsp_runtime.request_reset();
-            if let Some(sink) = self.sink.take() {
-                sink.stop();
-            }
-            self.shutdown_streaming();
-            self.current_track = None;
-            self.active_input_id = None;
-            self.current_position = 0.0;
-            self.base_position = 0.0;
-            self.playback_started_at = None;
-            self.duration = 0.0;
-            self.decoded_samples = None;
-            self.decoded_channels = 0;
-            self.decoded_sample_rate = 0;
-            self.decoded_bit_depth = None;
-            self.set_state(PlaybackState::Stopped);
-        }
-    }
-
-    fn seek(&mut self, seconds: f64) -> Result<(), String> {
-        self.cancel_crossfade();
-        self.sync_clock();
-        self.spectrum_tap.clear();
-        self.dsp_runtime.request_reset();
-        let track_path = self
-            .current_track
-            .clone()
-            .ok_or_else(|| "No track loaded".to_string())?;
-        let target = seconds.max(0.0);
-        let resume_playing = matches!(self.playback_state, PlaybackState::Playing);
-
-        if let Some(streaming) = &self.streaming {
-            streaming.buffer.clear();
-            self.spectrum_tap.clear();
-            self.dsp_runtime.request_reset();
-            let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
-
-            if resume_playing {
-                if let Some(sink) = &self.sink {
-                    sink.play();
-                }
-                self.base_position = target;
-                self.playback_started_at = Some(Instant::now());
-            } else {
-                self.base_position = target;
-                self.playback_started_at = None;
-            }
-
-            self.current_position = target;
-            return Ok(());
-        }
-
-        let (sink, output_info) = self.output_backend.create_sink()?;
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
-        sink.pause();
-
-        if let (Some(samples), channels, sample_rate) = (
-            self.decoded_samples.clone(),
-            self.decoded_channels,
-            self.decoded_sample_rate,
-        ) {
-            let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
-            let source = SharedSamplesSource::new(samples, channels, sample_rate, start_sample);
-            sink.append(Box::new(DspProcessingSource::new(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-        } else {
-            let (source, _) = open_rodio_source_at(&track_path, target)
-                .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-            sink.append(Box::new(DspProcessingSource::new(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-        }
-        sink.set_volume(self.effective_volume());
-
-        if resume_playing {
-            sink.play();
-            self.base_position = target;
-            self.playback_started_at = Some(Instant::now());
-        } else {
-            self.base_position = target;
-            self.playback_started_at = None;
-        }
-
-        if let Some(old_sink) = self.sink.replace(sink) {
-            old_sink.stop();
-        }
-
-        self.current_position = target;
-        Ok(())
-    }
-
-    fn snapshot_for_spectrum(&self) -> Option<SpectrumSnapshot> {
-        let (window, sample_rate) = self.spectrum_tap.snapshot()?;
-        Some(SpectrumSnapshot {
-            sample_rate,
-            window,
-        })
-    }
-
-    fn update_position_from_clock(&mut self) {
-        let Some(started_at) = self.playback_started_at else {
-            return;
-        };
-        let elapsed = started_at.elapsed().as_secs_f64();
-        let mut next = self.base_position + elapsed;
-        if self.duration > 0.0 {
-            next = next.min(self.duration);
-        }
-        self.current_position = next;
-    }
-
-    fn sync_clock(&mut self) {
-        self.update_position_from_clock();
-        self.base_position = self.current_position;
-        self.playback_started_at = None;
-    }
-
-    fn tick(&mut self) -> bool {
-        if let Some(crossfade) = self.active_crossfade.as_ref() {
-            if crossfade.finished.load(Ordering::Acquire) {
-                self.active_crossfade = None;
-                self.apply_effective_volume();
-            }
-        }
-
-        if let Some(err) = self.output_backend.take_error() {
-            if let Some(sink) = &self.sink {
-                sink.pause();
-            }
-            self.sync_clock();
-            self.set_error(
-                "NATIVE_AUDIO_OUTPUT_ERROR",
-                format!("[{}] {}", err.code, err.message),
-            );
-            return true;
-        }
-
-        let streaming_error = if let Some(streaming) = self.streaming.as_ref() {
-            if let Ok(mut guard) = streaming.error.lock() {
-                guard.take()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some(message) = streaming_error {
-            if let Some(sink) = &self.sink {
-                sink.pause();
-            }
-            self.sync_clock();
-            self.set_error("NATIVE_AUDIO_STREAM_ERROR", message);
-            return true;
-        }
-
-        if !matches!(self.playback_state, PlaybackState::Playing) {
-            return false;
-        }
-        self.update_position_from_clock();
-        let Some(sink) = &self.sink else {
-            return false;
-        };
-        if sink.empty() {
-            self.current_position = self.duration;
-            self.base_position = self.current_position;
-            self.playback_started_at = None;
-            self.set_state(PlaybackState::Stopped);
-        }
-        true
-    }
-
-    fn set_volume(&mut self, volume: f32) {
-        self.volume = volume;
-        self.apply_effective_volume();
-    }
-
-    fn set_mute(&mut self, muted: bool) {
-        self.muted = muted;
-        self.apply_effective_volume();
-    }
-
-    fn set_gain(&mut self, gain_db: f32) {
-        self.gain_db = gain_db.clamp(-60.0, 12.0);
-
-        // Keep non-gain nodes while replacing gain with a single node.
-        let mut next_chain = Vec::with_capacity(self.dsp_chain.len().max(1));
-        next_chain.push(DspNodeConfig::Gain { db: self.gain_db });
-        for node in &self.dsp_chain {
-            if !matches!(node, DspNodeConfig::Gain { .. }) {
-                next_chain.push(node.clone());
-            }
-        }
-        self.dsp_chain = next_chain;
-        self.gain_db = self.dsp_runtime.apply_chain(&self.dsp_chain);
-    }
-
-    fn set_replay_gain(&mut self, replay_gain_db: f32) {
-        self.replay_gain_db = self.dsp_runtime.set_replay_gain_db(replay_gain_db);
-    }
-
-    fn set_dsp_chain(&mut self, chain: Vec<DspNodeConfig>) {
-        self.dsp_chain = chain;
-        self.gain_db = self.dsp_runtime.apply_chain(&self.dsp_chain);
-    }
-
-    fn set_preferred_input_id(&mut self, input_id: Option<String>) -> Result<(), String> {
-        let input_id = input_id.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-
-        if let Some(id) = input_id.as_deref() {
-            if !self.input_registry.contains_id(id) {
-                return Err(format!("Unknown audio input id: {id}"));
-            }
-        }
-
-        self.preferred_input_id = input_id;
-        Ok(())
-    }
-
-    fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
-        NativeAudioStatePayload {
-            playback_state: self.playback_state.as_str().to_string(),
-            volume: self.volume,
-            gain_db: self.gain_db,
-            replay_gain_db: self.replay_gain_db,
-            muted: self.muted,
-            track_path: self
-                .current_track
-                .as_ref()
-                .and_then(|path| path.to_str().map(|s| s.to_string())),
-            current_time: self.current_position,
-            duration: self.duration,
-            sample_rate: if self.decoded_sample_rate > 0 {
-                Some(self.decoded_sample_rate)
-            } else {
-                None
-            },
-            bit_depth: self.decoded_bit_depth,
-            device: self.device_name.clone(),
-            queue: if self.queue_initialized {
-                Some(
-                    self.queue
-                        .iter()
-                        .filter_map(|path| path.to_str().map(|s| s.to_string()))
-                        .collect(),
-                )
-            } else {
-                None
-            },
-            current_index: if self.queue_initialized {
-                Some(self.current_index)
-            } else {
-                None
-            },
-            ended,
-            error_seq: self
-                .last_error_code
-                .as_ref()
-                .map(|_| self.last_error_seq)
-                .filter(|seq| *seq > 0),
-            error_code: self.last_error_code.clone(),
-            error_message: self.last_error_message.clone(),
-        }
-    }
-
-    fn build_components_payload(&self) -> NativeAudioComponentsStatePayload {
-        let output_sample_rate = self
-            .output_sample_rate
-            .or_else(|| self.output_backend.current_info().output_sample_rate);
-        NativeAudioComponentsStatePayload {
-            output_backend_id: self.output_backend.id().to_string(),
-            output_device: self.device_name.clone(),
-            output_sample_rate,
-            preferred_input_id: self.preferred_input_id.clone(),
-            active_input_id: self.active_input_id.clone(),
-        }
-    }
-
-    fn rebuild_sink_on_new_device(&mut self) -> Result<(), String> {
-        self.cancel_crossfade();
-        let Some(track_path) = self.current_track.clone() else {
-            return Ok(());
-        };
-
-        let was_error = matches!(self.playback_state, PlaybackState::Error);
-        let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
-
-        if resume_playing {
-            self.update_position_from_clock();
-        }
-        let target = self.current_position.max(0.0);
-
-        let maybe_rodio_source = if self.streaming.is_none() && self.decoded_samples.is_none() {
-            Some(
-                open_rodio_source_at(&track_path, target)
-                    .map_err(|err| format!("[{}] {}", err.code, err.message))?,
-            )
-        } else {
-            None
-        };
-
-        // Attempt to create the new sink first so we can bail out without disrupting playback.
-        let (sink, output_info) = self.output_backend.create_sink()?;
-
-        // Commit point: stop current playback before mutating shared state (DSP runtime / streaming buffer).
-        self.sync_clock();
-        if let Some(old_sink) = self.sink.take() {
-            old_sink.stop();
-        }
-
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
-
-        self.spectrum_tap.clear();
-        self.dsp_runtime.request_reset();
-
-        if let Some(streaming) = &self.streaming {
-            streaming.buffer.clear();
-            let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
-            let source = StreamingSamplesSource::new(
-                streaming.buffer.clone(),
-                self.decoded_channels.max(1),
-                self.decoded_sample_rate.max(1),
-                self.duration,
-            );
-            sink.append(Box::new(DspProcessingSource::new(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-        } else if let Some(samples) = self.decoded_samples.clone() {
-            let channels = self.decoded_channels.max(1);
-            let sample_rate = self.decoded_sample_rate.max(1);
-            let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
-            sink.append(Box::new(DspProcessingSource::new(
-                SharedSamplesSource::new(samples, channels, sample_rate, start_sample),
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-        } else {
-            let (source, _) = maybe_rodio_source
-                .expect("rodio source prepared when no streaming/decoded samples");
-            sink.append(Box::new(DspProcessingSource::new(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            )));
-        }
-
-        sink.pause();
-        sink.set_volume(self.effective_volume());
-
-        if resume_playing {
-            if let Some(streaming) = &self.streaming {
-                let channels = self.decoded_channels.max(1) as usize;
-                let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
-                    4096usize // ~93ms @ 44.1kHz
-                } else {
-                    2048usize // ~46ms @ 44.1kHz
-                };
-                let target_samples = target_frames * channels;
-                if streaming.buffer.len_samples() < target_samples {
-                    streaming
-                        .buffer
-                        .wait_for_samples(target_samples, Duration::from_millis(250));
-                }
-            }
-
-            sink.play();
-            self.base_position = target;
-            self.playback_started_at = Some(Instant::now());
-            self.set_state(PlaybackState::Playing);
-        } else {
-            self.base_position = target;
-            self.playback_started_at = None;
-        }
-
-        self.current_position = target;
-        self.sink = Some(sink);
-
-        if was_error {
-            self.clear_error();
-            self.playback_state = self.desired_playback_state;
-        }
-
-        Ok(())
-    }
-}
-
-fn emit_state(app_handle: &AppHandle, payload: NativeAudioStatePayload) -> Result<(), String> {
-    app_handle
-        .emit_all("native_audio_state", payload)
-        .map_err(|e| format!("Failed to emit state: {e}"))
-}
-
-fn emit_spectrum(
-    app_handle: &AppHandle,
-    payload: NativeAudioSpectrumPayload,
-) -> Result<(), String> {
-    app_handle
-        .emit_all("native_audio_spectrum", payload)
-        .map_err(|e| format!("Failed to emit spectrum: {e}"))
-}
-
-fn mark_error_emitted(seq: u64) -> bool {
-    if seq == 0 {
-        return false;
-    }
-    loop {
-        let prev = LAST_EMITTED_ERROR_SEQ.load(Ordering::Acquire);
-        if seq <= prev {
-            return false;
-        }
-        if LAST_EMITTED_ERROR_SEQ
-            .compare_exchange(prev, seq, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            return true;
-        }
-    }
-}
-
-fn emit_error(app_handle: &AppHandle, payload: NativeAudioErrorPayload) -> Result<(), String> {
-    if !mark_error_emitted(payload.seq) {
-        return Ok(());
-    }
-    app_handle
-        .emit_all("native_audio_error", payload)
-        .map_err(|e| format!("Failed to emit error: {e}"))
-}
-
-#[derive(Clone)]
-struct SpectrumSnapshot {
-    sample_rate: u32,
-    window: Vec<f32>,
-}
-
-fn compute_spectrum(
-    fft: &std::sync::Arc<dyn rustfft::Fft<f32>>,
-    snapshot: &SpectrumSnapshot,
-) -> Option<NativeAudioSpectrumPayload> {
-    let sample_rate = snapshot.sample_rate as usize;
-    if sample_rate == 0 {
-        return None;
-    }
-
-    let window_size = 1024usize;
-    let mut input: Vec<Complex<f32>> = Vec::with_capacity(window_size);
-    for frame in 0..window_size {
-        let mono = snapshot.window.get(frame).copied().unwrap_or(0.0);
-        let hann =
-            0.5 - 0.5 * ((2.0 * std::f32::consts::PI * frame as f32) / window_size as f32).cos();
-        input.push(Complex::new(mono * hann, 0.0));
-    }
-
-    fft.process(&mut input);
-
-    let half = window_size / 2;
-    let bins = 128usize;
-    let group = (half / bins).max(1);
-
-    let mut mags = vec![0.0f32; bins];
-    let mut max_mag = 0.0f32;
-    for i in 0..bins {
-        let start = i * group;
-        let end = ((i + 1) * group).min(half);
-        let mut acc = 0.0f32;
-        for k in start..end {
-            let c = input[k];
-            let mag = (c.re * c.re + c.im * c.im).sqrt();
-            acc += mag;
-        }
-        let avg = if end > start {
-            acc / (end - start) as f32
-        } else {
-            0.0
-        };
-        mags[i] = avg;
-        if avg > max_mag {
-            max_mag = avg;
-        }
-    }
-
-    let denom = if max_mag > 1e-9 { max_mag } else { 1.0 };
-    for mag in mags.iter_mut() {
-        *mag = (*mag / denom).clamp(0.0, 1.0);
-    }
-
-    Some(NativeAudioSpectrumPayload { bins: mags })
-}
-
-// Legacy symphonia implementation (moved into `crate::audio::input::symphonia`).
-#[cfg(any())]
-fn track_is_audio_like(track: &Track) -> bool {
-    track.codec_params.sample_rate.is_some()
-        || track.codec_params.channels.is_some()
-        || track.codec_params.bits_per_sample.is_some()
-        || track.codec_params.bits_per_coded_sample.is_some()
-}
-
-#[cfg(any())]
-fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
-    let tracks = format.tracks();
-    let default = format.default_track();
-    if let Some(track) = default {
-        if track_is_audio_like(track) {
-            return Some(track);
-        }
-    }
-    tracks
-        .iter()
-        .find(|t| track_is_audio_like(t))
-        .or(default)
-        .or_else(|| tracks.first())
-}
-
-#[cfg(any())]
-fn start_symphonia_stream(
-    path: &Path,
-    output_sample_rate: Option<u32>,
-) -> Result<(StreamingSamplesSource, DecoderMeta, StreamingPlayback), String> {
-    let buffer = AudioRingBuffer::new(352_800);
-
-    let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
-    let (meta_tx, meta_rx) = mpsc::channel::<Result<DecoderMeta, String>>();
-
-    let path = path.to_path_buf();
-    let buffer_clone = buffer.clone();
-    let error = Arc::new(Mutex::new(None::<String>));
-    let error_clone = error.clone();
-
-    std::thread::spawn(move || {
-        let init = (|| -> Result<(Box<dyn FormatReader>, Track), String> {
-            let file = File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
-            let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
-            let mut hint = Hint::new();
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                hint.with_extension(ext);
-            }
-            let format_options = FormatOptions {
-                prebuild_seek_index: false,
-                seek_index_fill_rate: 5,
-                enable_gapless: false,
-            };
-            let probed = symphonia::default::get_probe()
-                .format(&hint, mss, &format_options, &MetadataOptions::default())
-                .map_err(|e| format!("Failed to probe format: {e}"))?;
-            let format = probed.format;
-            let track = pick_audio_track(format.as_ref())
-                .ok_or_else(|| "No audio track found".to_string())?
-                .clone();
-            Ok((format, track))
-        })();
-
-        let (mut format, track) = match init {
-            Ok(value) => value,
-            Err(err) => {
-                if let Ok(mut guard) = error_clone.lock() {
-                    *guard = Some(err.clone());
-                }
-                let _ = meta_tx.send(Err(err));
-                buffer_clone.mark_finished();
-                return;
-            }
-        };
-
-        let bit_depth = track
-            .codec_params
-            .bits_per_sample
-            .or(track.codec_params.bits_per_coded_sample);
-
-        let track_id = track.id;
-        let mut decoder = match symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-        {
-            Ok(decoder) => decoder,
-            Err(err) => {
-                let message = format!("Failed to create decoder: {err}");
-                if let Ok(mut guard) = error_clone.lock() {
-                    *guard = Some(message.clone());
-                }
-                let _ = meta_tx.send(Err(message));
-                buffer_clone.mark_finished();
-                return;
-            }
-        };
-
-        let mut sample_buf: Option<SampleBuffer<f32>> = None;
-        let mut pending_trim_frames_out: usize = 0;
-
-        let resample_chunk_frames = 1024usize;
-        let mut resampler: Option<SincFixedIn<f32>> = None;
-        let mut resampler_input: Vec<Vec<f32>> = Vec::new();
-        let mut channels_usize: usize = 0;
-        let mut effective_sample_rate: u32 = 0;
-        let mut meta_delivered = false;
-
-        'decode_loop: loop {
-            while let Ok(cmd) = command_rx.try_recv() {
-                match cmd {
-                    DecoderCommand::Shutdown => {
-                        buffer_clone.mark_finished();
-                        return;
-                    }
-                    DecoderCommand::Seek(target) => {
-                        buffer_clone.clear();
-                        pending_trim_frames_out = 0;
-
-                        let seek_to = SeekTo::Time {
-                            time: Time::from(target.max(0.0)),
-                            track_id: Some(track_id),
-                        };
-
-                        if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
-                            if let Some(time_base) = track.codec_params.time_base {
-                                let required = time_base.calc_time(seeked.required_ts);
-                                let actual = time_base.calc_time(seeked.actual_ts);
-                                let required_seconds = required.seconds as f64 + required.frac;
-                                let actual_seconds = actual.seconds as f64 + actual.frac;
-                                let delta = (required_seconds - actual_seconds).max(0.0);
-                                pending_trim_frames_out =
-                                    (delta * effective_sample_rate as f64) as usize;
-                            }
-
-                            decoder = match symphonia::default::get_codecs()
-                                .make(&track.codec_params, &DecoderOptions::default())
-                            {
-                                Ok(decoder) => decoder,
-                                Err(err) => {
-                                    if let Ok(mut guard) = error_clone.lock() {
-                                        if guard.is_none() {
-                                            *guard =
-                                                Some(format!("Failed to create decoder: {err}"));
-                                        }
-                                    }
-                                    buffer_clone.mark_finished();
-                                    return;
-                                }
-                            };
-                            sample_buf = None;
-                            if let Some(r) = resampler.as_mut() {
-                                r.reset();
-                            }
-                            for ch in &mut resampler_input {
-                                ch.clear();
-                            }
-                        }
-                    }
-                }
-            }
-
-            let packet = match format.next_packet() {
-                Ok(packet) => packet,
-                Err(SymphoniaError::IoError(err))
-                    if err.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    if !meta_delivered {
-                        let message = "No audio packets decoded".to_string();
-                        if let Ok(mut guard) = error_clone.lock() {
-                            *guard = Some(message.clone());
-                        }
-                        let _ = meta_tx.send(Err(message));
-                    }
-                    buffer_clone.mark_finished();
-                    return;
-                }
-                Err(SymphoniaError::ResetRequired) => {
-                    if !meta_delivered {
-                        let message = "Decoder reset required".to_string();
-                        if let Ok(mut guard) = error_clone.lock() {
-                            *guard = Some(message.clone());
-                        }
-                        let _ = meta_tx.send(Err(message));
-                    }
-                    buffer_clone.mark_finished();
-                    return;
-                }
-                Err(err) => {
-                    if !meta_delivered {
-                        let message = format!("Failed to read packet: {err}");
-                        if let Ok(mut guard) = error_clone.lock() {
-                            *guard = Some(message.clone());
-                        }
-                        let _ = meta_tx.send(Err(message));
-                    }
-                    buffer_clone.mark_finished();
-                    return;
-                }
-            };
-
-            if packet.track_id() != track_id {
-                continue;
-            }
-
-            match decoder.decode(&packet) {
-                Ok(decoded) => {
-                    let spec = *decoded.spec();
-                    if sample_buf.is_none() {
-                        sample_buf =
-                            Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
-                    }
-
-                    if let Some(buf) = &mut sample_buf {
-                        buf.copy_interleaved_ref(decoded);
-                        let channels = spec.channels.count().max(1);
-                        if !meta_delivered {
-                            channels_usize = channels;
-                            let input_sample_rate = spec.rate.max(1);
-                            effective_sample_rate = input_sample_rate;
-
-                            let requested_sample_rate =
-                                output_sample_rate.unwrap_or(input_sample_rate);
-                            if requested_sample_rate != input_sample_rate {
-                                let params = SincInterpolationParameters {
-                                    sinc_len: 256,
-                                    f_cutoff: 0.95,
-                                    interpolation: SincInterpolationType::Cubic,
-                                    oversampling_factor: 128,
-                                    window: WindowFunction::BlackmanHarris2,
-                                };
-                                let resample_ratio =
-                                    requested_sample_rate as f64 / input_sample_rate as f64;
-                                match SincFixedIn::<f32>::new(
-                                    resample_ratio,
-                                    1.0,
-                                    params,
-                                    resample_chunk_frames,
-                                    channels_usize,
-                                ) {
-                                    Ok(instance) => {
-                                        resampler = Some(instance);
-                                        resampler_input =
-                                            (0..channels_usize).map(|_| Vec::new()).collect();
-                                        effective_sample_rate = requested_sample_rate;
-                                    }
-                                    Err(err) => {
-                                        eprintln!(
-                                            "[NativeAudio] Failed to init resampler, falling back: {err}"
-                                        );
-                                    }
-                                }
-                            }
-
-                            let duration = track
-                                .codec_params
-                                .n_frames
-                                .map(|frames| frames as f64 / input_sample_rate as f64)
-                                .unwrap_or(0.0);
-                            let _ = meta_tx.send(Ok(DecoderMeta {
-                                channels: channels_usize as u16,
-                                sample_rate: effective_sample_rate,
-                                bit_depth,
-                                duration,
-                            }));
-                            eprintln!(
-                                "[NativeAudio] Stream init: channels={} in_sr={input_sample_rate} out_sr={effective_sample_rate} resample={}",
-                                channels_usize,
-                                resampler.is_some()
-                            );
-                            meta_delivered = true;
-                        }
-                        let all = buf.samples();
-                        let total_frames = all.len() / channels;
-                        if total_frames > 0 {
-                            let slice = all;
-
-                            // Resample to device mix rate to avoid rodio's low-quality resampler artifacts.
-                            let mut out_interleaved: Vec<f32> = Vec::new();
-                            if let Some(resampler) = resampler.as_mut() {
-                                // deinterleave
-                                let frames = slice.len() / channels;
-                                for frame in 0..frames {
-                                    for ch in 0..channels {
-                                        resampler_input[ch].push(slice[frame * channels + ch]);
-                                    }
-                                }
-
-                                while channels_usize > 0
-                                    && resampler_input.len() == channels_usize
-                                    && resampler_input
-                                        .iter()
-                                        .all(|channel| channel.len() >= resample_chunk_frames)
-                                {
-                                    let mut input_block: Vec<Vec<f32>> =
-                                        Vec::with_capacity(channels_usize);
-                                    for ch in 0..channels_usize {
-                                        let drained: Vec<f32> = resampler_input[ch]
-                                            .drain(0..resample_chunk_frames)
-                                            .collect();
-                                        input_block.push(drained);
-                                    }
-
-                                    let output_blocks = match resampler.process(&input_block, None)
-                                    {
-                                        Ok(value) => value,
-                                        Err(_) => break,
-                                    };
-
-                                    let out_frames =
-                                        output_blocks.get(0).map(|v| v.len()).unwrap_or(0);
-                                    if out_frames == 0 {
-                                        continue;
-                                    }
-
-                                    let mut start_out_frame = 0usize;
-                                    if pending_trim_frames_out > 0 {
-                                        let trim_now = pending_trim_frames_out.min(out_frames);
-                                        start_out_frame = trim_now;
-                                        pending_trim_frames_out =
-                                            pending_trim_frames_out.saturating_sub(trim_now);
-                                    }
-
-                                    for frame in start_out_frame..out_frames {
-                                        for ch in 0..channels_usize {
-                                            if let Some(sample) = output_blocks[ch].get(frame) {
-                                                out_interleaved.push(*sample);
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                // No resampling: apply pending trim in input frames.
-                                let mut start_frame = 0usize;
-                                if pending_trim_frames_out > 0 {
-                                    let trim_now = pending_trim_frames_out.min(total_frames);
-                                    start_frame = trim_now;
-                                    pending_trim_frames_out =
-                                        pending_trim_frames_out.saturating_sub(trim_now);
-                                }
-                                let start_index = start_frame * channels;
-                                if start_index < slice.len() {
-                                    out_interleaved.extend_from_slice(&slice[start_index..]);
-                                }
-                            }
-
-                            let mut offset = 0usize;
-                            while offset < out_interleaved.len() {
-                                if let Ok(cmd) = command_rx.try_recv() {
-                                    match cmd {
-                                        DecoderCommand::Shutdown => {
-                                            buffer_clone.mark_finished();
-                                            return;
-                                        }
-                                        DecoderCommand::Seek(target) => {
-                                            buffer_clone.clear();
-                                            pending_trim_frames_out = 0;
-
-                                            let seek_to = SeekTo::Time {
-                                                time: Time::from(target.max(0.0)),
-                                                track_id: Some(track_id),
-                                            };
-
-                                            if let Ok(seeked) =
-                                                format.seek(SeekMode::Accurate, seek_to)
-                                            {
-                                                if let Some(time_base) =
-                                                    track.codec_params.time_base
-                                                {
-                                                    let required =
-                                                        time_base.calc_time(seeked.required_ts);
-                                                    let actual =
-                                                        time_base.calc_time(seeked.actual_ts);
-                                                    let required_seconds =
-                                                        required.seconds as f64 + required.frac;
-                                                    let actual_seconds =
-                                                        actual.seconds as f64 + actual.frac;
-                                                    let delta = (required_seconds - actual_seconds)
-                                                        .max(0.0);
-                                                    pending_trim_frames_out = (delta
-                                                        * effective_sample_rate as f64)
-                                                        as usize;
-                                                }
-
-                                                decoder = match symphonia::default::get_codecs()
-                                                    .make(
-                                                        &track.codec_params,
-                                                        &DecoderOptions::default(),
-                                                    ) {
-                                                    Ok(decoder) => decoder,
-                                                    Err(_) => {
-                                                        buffer_clone.mark_finished();
-                                                        return;
-                                                    }
-                                                };
-                                                sample_buf = None;
-                                                if let Some(r) = resampler.as_mut() {
-                                                    r.reset();
-                                                }
-                                                for ch in &mut resampler_input {
-                                                    ch.clear();
-                                                }
-                                            }
-
-                                            continue 'decode_loop;
-                                        }
-                                    }
-                                }
-
-                                let remaining = &out_interleaved[offset..];
-                                let frames_pushed =
-                                    buffer_clone.push_interleaved(remaining, channels);
-                                if frames_pushed == 0 {
-                                    continue;
-                                }
-                                offset += frames_pushed * channels;
-                            }
-                        }
-                    }
-                }
-                Err(SymphoniaError::DecodeError(_)) => continue,
-                Err(SymphoniaError::IoError(err))
-                    if err.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    if !meta_delivered {
-                        let message = "No audio samples decoded".to_string();
-                        if let Ok(mut guard) = error_clone.lock() {
-                            *guard = Some(message.clone());
-                        }
-                        let _ = meta_tx.send(Err(message));
-                    }
-                    buffer_clone.mark_finished();
-                    return;
-                }
-                Err(err) => {
-                    if !meta_delivered {
-                        let message = format!("Decoder error: {err}");
-                        if let Ok(mut guard) = error_clone.lock() {
-                            if guard.is_none() {
-                                *guard = Some(message.clone());
-                            }
-                        }
-                        let _ = meta_tx.send(Err(message));
-                    }
-                    if let Ok(mut guard) = error_clone.lock() {
-                        if guard.is_none() {
-                            *guard = Some(format!("Decoder error: {err}"));
-                        }
-                    }
-                    buffer_clone.mark_finished();
-                    return;
-                }
-            }
-        }
-    });
-
-    let meta = match meta_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(value) => value?,
-        Err(err) => {
-            let _ = command_tx.send(DecoderCommand::Shutdown);
-            return Err(format!("Timed out initializing decoder: {err}"));
-        }
-    };
-
-    Ok((
-        StreamingSamplesSource::new(
-            buffer.clone(),
-            meta.channels,
-            meta.sample_rate,
-            meta.duration,
-        ),
-        meta,
-        StreamingPlayback {
-            buffer,
-            command_tx,
-            error,
-        },
-    ))
-}
-
-fn init_emitter(app_handle: &AppHandle) {
-    let _ = APP_HANDLE.set(app_handle.clone());
-    let _ = crate::audio::resample_cache::init_from_app(app_handle);
-    if EMITTER_STARTED.set(()).is_err() {
-        return;
-    }
-
-    std::thread::spawn(|| {
-        let mut planner = FftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(1024);
-
-        loop {
-            std::thread::sleep(Duration::from_millis(250));
-            let Some(app_handle) = APP_HANDLE.get().cloned() else {
-                continue;
-            };
-
-            let Some((state_payload, spectrum_snapshot)) = (|| {
-                let mut engine = ENGINE.lock().ok()?;
-                let was_playing = matches!(engine.playback_state, PlaybackState::Playing);
-                let ticked = engine.tick();
-                if !ticked {
-                    return None;
-                }
-                let is_stopped = matches!(engine.playback_state, PlaybackState::Stopped);
-                let ended = was_playing && is_stopped;
-                Some((
-                    engine.build_state_payload(ended),
-                    engine.snapshot_for_spectrum(),
-                ))
-            })() else {
-                continue;
-            };
-
-            let maybe_error = match (
-                state_payload.error_seq,
-                state_payload.error_code.clone(),
-                state_payload.error_message.clone(),
-            ) {
-                (Some(seq), Some(code), Some(message)) => {
-                    Some(NativeAudioErrorPayload { seq, code, message })
-                }
-                _ => None,
-            };
-            let _ = emit_state(&app_handle, state_payload);
-            if let Some(error_payload) = maybe_error {
-                let _ = emit_error(&app_handle, error_payload);
-            }
-            if let Some(snapshot) = spectrum_snapshot {
-                if let Some(spectrum) = compute_spectrum(&fft, &snapshot) {
-                    let _ = emit_spectrum(&app_handle, spectrum);
-                }
-            }
-        }
-    });
 }
 
 pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let track_path = path.ok_or_else(|| "No path provided".to_string())?;
     let result = {
         let mut engine = ENGINE
@@ -2780,7 +1067,7 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
 
     match result {
         Ok(payload) => {
-            emit_state(app_handle, payload)?;
+            emitter::emit_state(app_handle, payload)?;
             Ok(())
         }
         Err((err, payload)) => {
@@ -2794,9 +1081,9 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
                 }
                 _ => None,
             };
-            emit_state(app_handle, payload)?;
+            emitter::emit_state(app_handle, payload)?;
             if let Some(error_payload) = maybe_error {
-                emit_error(app_handle, error_payload)?;
+                emitter::emit_error(app_handle, error_payload)?;
             }
             Err(err)
         }
@@ -2804,7 +1091,7 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
 }
 
 pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let (result, payload) = {
         let mut engine = ENGINE
             .lock()
@@ -2829,10 +1116,10 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         _ => None,
     };
 
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     if let Err(err) = result {
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(err);
     }
@@ -2840,7 +1127,7 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
 }
 
 pub fn play(app_handle: &AppHandle) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let (result, payload) = {
         let mut engine = ENGINE
             .lock()
@@ -2861,10 +1148,10 @@ pub fn play(app_handle: &AppHandle) -> Result<(), String> {
         }
         _ => None,
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     if let Err(err) = result {
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(err);
     }
@@ -2872,7 +1159,7 @@ pub fn play(app_handle: &AppHandle) -> Result<(), String> {
 }
 
 pub fn pause(app_handle: &AppHandle) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let (result, payload) = {
         let mut engine = ENGINE
             .lock()
@@ -2893,10 +1180,10 @@ pub fn pause(app_handle: &AppHandle) -> Result<(), String> {
         }
         _ => None,
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     if let Err(err) = result {
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(err);
     }
@@ -2904,7 +1191,7 @@ pub fn pause(app_handle: &AppHandle) -> Result<(), String> {
 }
 
 pub fn stop(app_handle: &AppHandle) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let payload = {
         let mut engine = ENGINE
             .lock()
@@ -2923,9 +1210,9 @@ pub fn stop(app_handle: &AppHandle) -> Result<(), String> {
         _ => None,
     };
 
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     if let Some(error_payload) = maybe_error {
-        emit_error(app_handle, error_payload)?;
+        emitter::emit_error(app_handle, error_payload)?;
     }
     Ok(())
 }
@@ -2935,7 +1222,7 @@ pub fn sync_queue(
     queue: Vec<String>,
     current_index: i32,
 ) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let payload = {
         let mut engine = ENGINE
             .lock()
@@ -2944,12 +1231,12 @@ pub fn sync_queue(
         engine.sync_queue_state(paths, current_index);
         engine.build_state_payload(false)
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
 pub fn seek(app_handle: &AppHandle, time: f64) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let (result, payload) = {
         let mut engine = ENGINE
             .lock()
@@ -2970,10 +1257,10 @@ pub fn seek(app_handle: &AppHandle, time: f64) -> Result<(), String> {
         }
         _ => None,
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     if let Err(err) = result {
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(err);
     }
@@ -3158,7 +1445,7 @@ fn decode_track_to_buffer(
 }
 
 pub fn set_volume(app_handle: &AppHandle, volume: f32) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let clamped = volume.clamp(0.0, 1.0);
     let payload = {
         let mut engine = ENGINE
@@ -3167,12 +1454,12 @@ pub fn set_volume(app_handle: &AppHandle, volume: f32) -> Result<(), String> {
         engine.set_volume(clamped);
         engine.build_state_payload(false)
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
 pub fn set_mute(app_handle: &AppHandle, muted: bool) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let payload = {
         let mut engine = ENGINE
             .lock()
@@ -3180,12 +1467,12 @@ pub fn set_mute(app_handle: &AppHandle, muted: bool) -> Result<(), String> {
         engine.set_mute(muted);
         engine.build_state_payload(false)
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
 pub fn set_gain(app_handle: &AppHandle, gain_db: f32) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let payload = {
         let mut engine = ENGINE
             .lock()
@@ -3193,12 +1480,12 @@ pub fn set_gain(app_handle: &AppHandle, gain_db: f32) -> Result<(), String> {
         engine.set_gain(gain_db);
         engine.build_state_payload(false)
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
 pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let payload = {
         let mut engine = ENGINE
             .lock()
@@ -3206,27 +1493,27 @@ pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> R
         engine.set_replay_gain(replay_gain_db.unwrap_or(0.0));
         engine.build_state_payload(false)
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
 pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
 
     let (sample_rate, vst_enabled, playback_active) = {
         let engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         let sample_rate = engine
-            .output_sample_rate
-            .or_else(|| engine.output_backend.current_info().output_sample_rate)
+            .output_sample_rate()
+            .or_else(|| engine.output_backend().current_info().output_sample_rate)
             .unwrap_or(48_000)
             .max(1);
         let playback_active = matches!(
-            engine.playback_state,
+            engine.playback_state(),
             PlaybackState::Playing | PlaybackState::Loading
         );
-        (sample_rate, engine.vst_enabled, playback_active)
+        (sample_rate, engine.vst_enabled(), playback_active)
     };
 
     let channels = 2usize;
@@ -3291,21 +1578,21 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_dsp_chain(chain);
-        engine.dsp_runtime.set_vst_nodes(vst_keys);
+        engine.set_vst_nodes(vst_keys);
         engine.build_state_payload(false)
     };
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
 pub fn set_vst_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
     let chain = {
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.vst_enabled = enabled;
-        engine.dsp_chain.clone()
+        engine.set_vst_enabled(enabled);
+        engine.clone_dsp_chain()
     };
 
     set_dsp_chain(app_handle, chain)
@@ -3327,7 +1614,7 @@ fn is_playback_active() -> Result<bool, String> {
         .lock()
         .map_err(|_| "Audio engine is locked".to_string())?;
     Ok(matches!(
-        engine.playback_state,
+        engine.playback_state(),
         PlaybackState::Playing | PlaybackState::Loading
     ))
 }
@@ -3375,27 +1662,7 @@ pub fn vst_warmup(app_handle: &AppHandle) -> Result<Vec<VstWarmupNodeReport>, St
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        let mut resolved = engine
-            .output_sample_rate
-            .or_else(|| engine.output_backend.current_info().output_sample_rate);
-        if resolved.is_some() {
-            engine.output_sample_rate = resolved;
-        }
-
-        if resolved.is_none() {
-            if let Ok((_sink, info)) = engine.output_backend.create_sink() {
-                resolved = info.output_sample_rate;
-                engine.output_sample_rate = resolved;
-                if engine.device_name.is_none() {
-                    engine.device_name = info
-                        .device_name
-                        .clone()
-                        .or_else(|| engine.output_backend.default_device_name());
-                }
-            }
-        }
-
-        resolved.unwrap_or(48_000).max(1)
+        engine.resolve_output_sample_rate()
     };
 
     let channels = 2usize;
@@ -3630,7 +1897,7 @@ pub fn list_audio_inputs() -> Result<Vec<String>, String> {
         let engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.input_registry.list_ids()
+        engine.list_input_ids()
     };
 
     Ok(ids.into_iter().map(|id| id.to_string()).collect())
@@ -3647,7 +1914,7 @@ pub fn select_output_backend(
     app_handle: &AppHandle,
     backend_id: Option<String>,
 ) -> Result<NativeAudioComponentsStatePayload, String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
 
     let requested = backend_id
         .as_deref()
@@ -3676,9 +1943,9 @@ pub fn select_output_backend(
             (state_payload, maybe_error)
         };
 
-        emit_state(app_handle, state_payload)?;
+        emitter::emit_state(app_handle, state_payload)?;
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(message);
     };
@@ -3688,70 +1955,10 @@ pub fn select_output_backend(
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
 
-        let mut result: Result<(), String> = Ok(());
-        if engine.output_backend.id() != target_id {
-            let previous_backend = engine.output_backend.clone();
-            let switching_from_exclusive = previous_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID
-                && target_id != WASAPI_EXCLUSIVE_BACKEND_ID;
-            let switching_to_exclusive = previous_backend.id() != WASAPI_EXCLUSIVE_BACKEND_ID
-                && target_id == WASAPI_EXCLUSIVE_BACKEND_ID;
-            let previous_device_name = engine.device_name.clone();
-            let previous_output_sample_rate = engine.output_sample_rate;
-
-            if switching_from_exclusive || switching_to_exclusive {
-                engine.cancel_crossfade();
-                engine.sync_clock();
-                if let Some(old_sink) = engine.sink.take() {
-                    old_sink.stop();
-                }
-
-                if switching_to_exclusive {
-                    previous_backend.close_stream();
-                }
-            }
-
-            engine.output_backend = target_backend;
-            engine.device_name = None;
-            engine.output_sample_rate = None;
-
-            if engine.current_track.is_some() {
-                if let Err(err) = engine.rebuild_sink_on_new_device() {
-                    engine.output_backend = previous_backend.clone();
-                    engine.device_name = previous_device_name;
-                    engine.output_sample_rate = previous_output_sample_rate;
-                    if switching_from_exclusive {
-                        let _ = engine.rebuild_sink_on_new_device();
-                    }
-                    if switching_to_exclusive {
-                        let _ = engine.rebuild_sink_on_new_device();
-                    }
-                    engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
-                    result = Err(err);
-                } else {
-                    previous_backend.close_stream();
-                }
-            } else {
-                match engine.output_backend.create_sink() {
-                    Ok((_sink, output_info)) => {
-                        engine.output_sample_rate = output_info.output_sample_rate;
-                        engine.device_name = output_info
-                            .device_name
-                            .or_else(|| engine.output_backend.default_device_name());
-                    }
-                    Err(err) => {
-                        engine.output_backend = previous_backend.clone();
-                        engine.device_name = previous_device_name;
-                        engine.output_sample_rate = previous_output_sample_rate;
-                        engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
-                        result = Err(err);
-                    }
-                }
-
-                if result.is_ok() {
-                    previous_backend.close_stream();
-                }
-            }
-        }
+        let result = engine.switch_output_backend(target_backend).map_err(|err| {
+            engine.record_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err.clone());
+            err
+        });
 
         let state_payload = engine.build_state_payload(false);
         let components_payload = engine.build_components_payload();
@@ -3769,10 +1976,10 @@ pub fn select_output_backend(
         (result, state_payload, components_payload, maybe_error)
     };
 
-    emit_state(app_handle, state_payload)?;
+    emitter::emit_state(app_handle, state_payload)?;
     if let Err(err) = result {
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(err);
     }
@@ -3784,7 +1991,7 @@ pub fn select_audio_input(
     app_handle: &AppHandle,
     input_id: Option<String>,
 ) -> Result<NativeAudioComponentsStatePayload, String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
 
     let (result, state_payload, components_payload, maybe_error) = {
         let mut engine = ENGINE
@@ -3812,10 +2019,10 @@ pub fn select_audio_input(
         (result, state_payload, components_payload, maybe_error)
     };
 
-    emit_state(app_handle, state_payload)?;
+    emitter::emit_state(app_handle, state_payload)?;
     if let Err(err) = result {
         if let Some(error_payload) = maybe_error {
-            emit_error(app_handle, error_payload)?;
+            emitter::emit_error(app_handle, error_payload)?;
         }
         return Err(err);
     }
@@ -3828,7 +2035,7 @@ pub fn list_output_devices() -> Result<Vec<String>, String> {
         let engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.output_backend.clone()
+        engine.output_backend()
     };
 
     output_backend.list_devices()
@@ -3838,13 +2045,13 @@ pub fn select_output_device(
     app_handle: &AppHandle,
     device_name: Option<String>,
 ) -> Result<(), String> {
-    init_emitter(app_handle);
+    emitter::ensure_started(app_handle);
 
     let output_backend = {
         let engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.output_backend.clone()
+        engine.output_backend()
     };
 
     let already_selected = output_backend.is_stream_open()
@@ -3866,7 +2073,7 @@ pub fn select_output_device(
                 .map_err(|_| "Audio engine is locked".to_string())?;
             engine.build_state_payload(false)
         };
-        emit_state(app_handle, payload)?;
+        emitter::emit_state(app_handle, payload)?;
         return Ok(());
     }
 
@@ -3892,9 +2099,9 @@ pub fn select_output_device(
                 _ => None,
             };
 
-            emit_state(app_handle, payload)?;
+            emitter::emit_state(app_handle, payload)?;
             if let Some(error_payload) = maybe_error {
-                emit_error(app_handle, error_payload)?;
+                emitter::emit_error(app_handle, error_payload)?;
             }
             return Err(err);
         }
@@ -3905,22 +2112,11 @@ pub fn select_output_device(
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
 
-        engine.sync_clock();
-        engine.output_sample_rate = output_info.output_sample_rate;
-        engine.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| engine.device_name.clone())
-            .or_else(|| engine.output_backend.default_device_name());
-
-        if let Err(err) = engine.rebuild_sink_on_new_device() {
-            engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err);
-        }
-
+        engine.apply_selected_output_device(output_info);
         engine.build_state_payload(false)
     };
 
-    emit_state(app_handle, payload)?;
+    emitter::emit_state(app_handle, payload)?;
     Ok(())
 }
 
@@ -3932,6 +2128,8 @@ pub(crate) struct AudioSmokeOptions {
     pub input_id: Option<String>,
     pub play_ms: u64,
     pub seek_seconds: f64,
+    pub seek_count: u32,
+    pub seek_interval_ms: u64,
 }
 
 fn audio_smoke_error_from_state(payload: &NativeAudioStatePayload) -> Option<NativeAudioErrorPayload> {
@@ -4003,22 +2201,10 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
                         .map_err(|_| "Audio engine is locked".to_string())?;
                     engine.clear_error();
 
-                    let mut result: Result<(), String> = Ok(());
-                    if engine.output_backend.id() != target_id {
-                        let previous_backend = engine.output_backend.clone();
-                        let previous_device_name = engine.device_name.clone();
-                        let previous_output_sample_rate = engine.output_sample_rate;
-
-                        engine.output_backend = target_backend;
-                        engine.device_name = None;
-                        if let Err(error) = engine.rebuild_sink_on_new_device() {
-                            engine.output_backend = previous_backend;
-                            engine.device_name = previous_device_name;
-                            engine.output_sample_rate = previous_output_sample_rate;
-                            engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
-                            result = Err(error);
-                        }
-                    }
+                    let result = engine.switch_output_backend(target_backend).map_err(|error| {
+                        engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
+                        error
+                    });
 
                     let payload = engine.build_state_payload(false);
                     (result, payload)
@@ -4057,7 +2243,7 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
             let engine = ENGINE
                 .lock()
                 .map_err(|_| "Audio engine is locked".to_string())?;
-            engine.output_backend.clone()
+            engine.output_backend()
         };
 
         let already_selected = output_backend.is_stream_open()
@@ -4088,17 +2274,7 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
                             .map_err(|_| "Audio engine is locked".to_string())?;
 
                         engine.clear_error();
-                        engine.sync_clock();
-                        engine.output_sample_rate = output_info.output_sample_rate;
-                        engine.device_name = output_info
-                            .device_name
-                            .clone()
-                            .or_else(|| engine.device_name.clone())
-                            .or_else(|| engine.output_backend.default_device_name());
-
-                        if let Err(error) = engine.rebuild_sink_on_new_device() {
-                            engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
-                        }
+                        engine.apply_selected_output_device(output_info);
 
                         engine.build_state_payload(false)
                     };
@@ -4169,6 +2345,7 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
         };
         (result, payload)
     };
+    let loaded_duration = load_step.1.duration;
     audio_smoke_step_result("native_audio_load", load_step.0, load_step.1)?;
 
     let play_step = {
@@ -4201,22 +2378,43 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
     };
     audio_smoke_step_result("native_audio_state (after play)", tick_snapshot.0, tick_snapshot.1)?;
 
-    let seek_step = {
-        let (result, payload) = {
-            let mut engine = ENGINE
-                .lock()
-                .map_err(|_| "Audio engine is locked".to_string())?;
-            engine.clear_error();
-            let result = engine.seek(options.seek_seconds).map_err(|err| {
-                engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
-                err
-            });
-            let payload = engine.build_state_payload(false);
+    let seek_count = options.seek_count.max(1);
+    for index in 0..seek_count {
+        let target = if index % 2 == 0 {
+            options.seek_seconds
+        } else if loaded_duration.is_finite() && loaded_duration > 0.0 {
+            (loaded_duration - options.seek_seconds).max(0.0)
+        } else {
+            options.seek_seconds
+        };
+        let target = if loaded_duration.is_finite() && loaded_duration > 0.0 {
+            target.max(0.0).min(loaded_duration)
+        } else {
+            target.max(0.0)
+        };
+
+        let seek_step = {
+            let (result, payload) = {
+                let mut engine = ENGINE
+                    .lock()
+                    .map_err(|_| "Audio engine is locked".to_string())?;
+                engine.clear_error();
+                let result = engine.seek(target).map_err(|err| {
+                    engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
+                    err
+                });
+                let payload = engine.build_state_payload(false);
+                (result, payload)
+            };
             (result, payload)
         };
-        (result, payload)
-    };
-    audio_smoke_step_result("native_audio_seek", seek_step.0, seek_step.1)?;
+        let step_name = format!("native_audio_seek[{}/{}]", index + 1, seek_count);
+        audio_smoke_step_result(&step_name, seek_step.0, seek_step.1)?;
+
+        if options.seek_interval_ms > 0 {
+            std::thread::sleep(Duration::from_millis(options.seek_interval_ms));
+        }
+    }
 
     std::thread::sleep(Duration::from_millis(150));
     let stop_step = {
@@ -4233,414 +2431,4 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
     audio_smoke_step_result("native_audio_stop", stop_step.0, stop_step.1)?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    #[test]
-    fn dsp_runtime_applies_gain_nodes() {
-        let runtime = DspRuntime::new();
-        let gain_db = runtime.apply_chain(&[DspNodeConfig::Gain { db: -6.0 }]);
-        assert!((gain_db + 6.0).abs() < 1e-6);
-
-        let snapshot = runtime.snapshot();
-        assert!((snapshot.gain_db + 6.0).abs() < 1e-6);
-        assert!((snapshot.gain_linear - gain_db_to_linear(-6.0)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dsp_runtime_replay_gain_updates_gain_linear() {
-        let runtime = DspRuntime::new();
-        let _ = runtime.apply_chain(&[DspNodeConfig::Gain { db: 0.0 }]);
-
-        let replay_gain_db = runtime.set_replay_gain_db(-6.0);
-        assert!((replay_gain_db + 6.0).abs() < 1e-6);
-
-        let snapshot = runtime.snapshot();
-        assert!((snapshot.gain_db - 0.0).abs() < 1e-6);
-        assert!((snapshot.replay_gain_db + 6.0).abs() < 1e-6);
-        assert!((snapshot.gain_linear - gain_db_to_linear(-6.0)).abs() < 1e-6);
-
-        let _ = runtime.apply_chain(&[DspNodeConfig::Gain { db: 3.0 }]);
-        let snapshot = runtime.snapshot();
-        assert!((snapshot.gain_db - 3.0).abs() < 1e-6);
-        assert!((snapshot.replay_gain_db + 6.0).abs() < 1e-6);
-        assert!((snapshot.gain_linear - gain_db_to_linear(-3.0)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dsp_processing_source_applies_gain_updates_without_version_bump() {
-        #[derive(Clone)]
-        struct TestSource {
-            remaining: usize,
-            channels: u16,
-            sample_rate: u32,
-            value: f32,
-        }
-
-        impl Iterator for TestSource {
-            type Item = f32;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.remaining == 0 {
-                    return None;
-                }
-                self.remaining -= 1;
-                Some(self.value)
-            }
-        }
-
-        impl Source for TestSource {
-            fn current_frame_len(&self) -> Option<usize> {
-                None
-            }
-
-            fn channels(&self) -> u16 {
-                self.channels
-            }
-
-            fn sample_rate(&self) -> u32 {
-                self.sample_rate
-            }
-
-            fn total_duration(&self) -> Option<Duration> {
-                None
-            }
-        }
-
-        let dsp = Arc::new(DspRuntime::new());
-        let _ = dsp.apply_chain(&[DspNodeConfig::Gain { db: 0.0 }]);
-        let version_before = dsp.version();
-
-        let inner = TestSource {
-            remaining: DspProcessingSource::<TestSource>::CHUNK_SAMPLES * 2,
-            channels: 2,
-            sample_rate: 48_000,
-            value: 0.5,
-        };
-        let tap = SpectrumTap::new(8);
-        let mut processed = DspProcessingSource::new(inner, dsp.clone(), tap);
-
-        let first = processed.next().expect("first sample");
-        assert!((first - 0.5).abs() < 1e-6);
-
-        for _ in 1..DspProcessingSource::<TestSource>::CHUNK_SAMPLES {
-            processed.next().expect("first chunk sample");
-        }
-
-        let _ = dsp.apply_chain(&[DspNodeConfig::Gain { db: -6.0 }]);
-        assert_eq!(dsp.version(), version_before);
-
-        let second = processed.next().expect("second chunk sample");
-        let expected = 0.5 * gain_db_to_linear(-6.0);
-        assert!((second - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dsp_processing_source_does_not_block_on_slow_config_contention() {
-        #[derive(Clone)]
-        struct TestSource {
-            remaining: usize,
-            channels: u16,
-            sample_rate: u32,
-            value: f32,
-        }
-
-        impl Iterator for TestSource {
-            type Item = f32;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.remaining == 0 {
-                    return None;
-                }
-                self.remaining -= 1;
-                Some(self.value)
-            }
-        }
-
-        impl Source for TestSource {
-            fn current_frame_len(&self) -> Option<usize> {
-                None
-            }
-
-            fn channels(&self) -> u16 {
-                self.channels
-            }
-
-            fn sample_rate(&self) -> u32 {
-                self.sample_rate
-            }
-
-            fn total_duration(&self) -> Option<Duration> {
-                None
-            }
-        }
-
-        let dsp = Arc::new(DspRuntime::new());
-        let inner = TestSource {
-            remaining: DspProcessingSource::<TestSource>::CHUNK_SAMPLES,
-            channels: 2,
-            sample_rate: 48_000,
-            value: 0.25,
-        };
-        let tap = SpectrumTap::new(8);
-        let mut processed = DspProcessingSource::new(inner, dsp.clone(), tap);
-
-        let guard = dsp.slow_config.lock().expect("slow config lock");
-        dsp.slow_version.fetch_add(1, Ordering::AcqRel);
-
-        let sample = processed.next().expect("processed sample");
-        drop(guard);
-
-        assert!((sample - 0.25).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dsp_processing_source_applies_limiter_update_after_async_rebuild() {
-        #[derive(Clone)]
-        struct TestSource {
-            remaining: usize,
-            channels: u16,
-            sample_rate: u32,
-            value: f32,
-        }
-
-        impl Iterator for TestSource {
-            type Item = f32;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.remaining == 0 {
-                    return None;
-                }
-                self.remaining -= 1;
-                Some(self.value)
-            }
-        }
-
-        impl Source for TestSource {
-            fn current_frame_len(&self) -> Option<usize> {
-                None
-            }
-
-            fn channels(&self) -> u16 {
-                self.channels
-            }
-
-            fn sample_rate(&self) -> u32 {
-                self.sample_rate
-            }
-
-            fn total_duration(&self) -> Option<Duration> {
-                None
-            }
-        }
-
-        let dsp = Arc::new(DspRuntime::new());
-        let _ = dsp.apply_chain(&[DspNodeConfig::Gain { db: 0.0 }]);
-
-        let inner = TestSource {
-            remaining: DspProcessingSource::<TestSource>::CHUNK_SAMPLES * 2,
-            channels: 2,
-            sample_rate: 48_000,
-            value: 1.0,
-        };
-        let tap = SpectrumTap::new(8);
-        let mut processed = DspProcessingSource::new(inner, dsp.clone(), tap);
-
-        for _ in 0..DspProcessingSource::<TestSource>::CHUNK_SAMPLES {
-            processed.next().expect("first chunk sample");
-        }
-
-        let _ = dsp.apply_chain(&[
-            DspNodeConfig::Gain { db: 0.0 },
-            DspNodeConfig::Limiter { threshold_db: -6.0 },
-        ]);
-
-        std::thread::sleep(Duration::from_millis(40));
-
-        let crossfade_frames = ((48_000u64).saturating_mul(5) / 1000).max(1).min(2048) as usize;
-        let crossfade_samples = crossfade_frames * 2;
-        for _ in 0..crossfade_samples {
-            processed.next().expect("crossfade sample");
-        }
-
-        let sample = processed.next().expect("post-update sample");
-        let expected = gain_db_to_linear(-6.0);
-        assert!((sample - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn peaking_eq_zero_db_yields_unity_transfer() {
-        let band = EqBandConfig {
-            kind: EqBandKind::Peaking,
-            frequency_hz: 1_000.0,
-            q: 1.0,
-            gain_db: 0.0,
-        };
-        let coeffs = BiquadCoeffs::from_eq_band(&band, 48_000);
-
-        assert!(coeffs.b0.is_finite());
-        assert!(coeffs.b1.is_finite());
-        assert!(coeffs.b2.is_finite());
-        assert!(coeffs.a1.is_finite());
-        assert!(coeffs.a2.is_finite());
-
-        assert!((coeffs.b0 - 1.0).abs() < 1e-5);
-        assert!((coeffs.b1 - coeffs.a1).abs() < 1e-5);
-        assert!((coeffs.b2 - coeffs.a2).abs() < 1e-5);
-    }
-
-    #[test]
-    fn dsp_chain_gain_only_scales_samples() {
-        let gain_db = 6.0;
-        let config = DspRuntimeConfig {
-            gain_db,
-            replay_gain_db: 0.0,
-            gain_linear: gain_db_to_linear(gain_db),
-            eq_bands: Vec::new(),
-            limiter_threshold_db: None,
-            vst_nodes: Vec::new(),
-        };
-
-        let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);
-        let mut samples = vec![0.1, -0.1, 0.25, -0.25];
-        processor.process_interleaved_in_place(&mut samples);
-
-        let scale = gain_db_to_linear(gain_db);
-        assert!((samples[0] - 0.1 * scale).abs() < 1e-6);
-        assert!((samples[1] + 0.1 * scale).abs() < 1e-6);
-        assert!((samples[2] - 0.25 * scale).abs() < 1e-6);
-        assert!((samples[3] + 0.25 * scale).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dsp_chain_limiter_clamps_peaks() {
-        let threshold_db = -6.0;
-        let config = DspRuntimeConfig {
-            gain_db: 0.0,
-            replay_gain_db: 0.0,
-            gain_linear: 1.0,
-            eq_bands: Vec::new(),
-            limiter_threshold_db: Some(threshold_db),
-            vst_nodes: Vec::new(),
-        };
-
-        let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);
-        let mut samples = vec![1.0, -1.0];
-        processor.process_interleaved_in_place(&mut samples);
-
-        let threshold = gain_db_to_linear(threshold_db);
-        assert!((samples[0].abs() - threshold).abs() < 1e-6);
-        assert!((samples[1].abs() - threshold).abs() < 1e-6);
-    }
-
-    #[test]
-    fn spectrum_tap_drops_samples_when_contended() {
-        let tap = SpectrumTap::new(8);
-        tap.set_sample_rate(48_000);
-
-        let guard = tap.inner.lock().expect("tap lock");
-        tap.push_interleaved(&[0.25, 0.25, 0.5, 0.5], 2);
-        drop(guard);
-
-        assert!(tap.snapshot().is_none());
-
-        tap.push_interleaved(&[1.0, -1.0, 0.5, 0.5], 2);
-        let (window, sample_rate) = tap.snapshot().expect("snapshot");
-        assert_eq!(sample_rate, 48_000);
-        assert_eq!(window.len(), 2);
-        assert!(window[1] > 0.4);
-    }
-
-    struct FailBackend;
-
-    impl crate::audio::output::AudioOutputBackend for FailBackend {
-        fn id(&self) -> &'static str {
-            "fail-backend"
-        }
-
-        fn list_devices(&self) -> Result<Vec<String>, String> {
-            Ok(Vec::new())
-        }
-
-        fn default_device_name(&self) -> Option<String> {
-            None
-        }
-
-        fn current_info(&self) -> crate::audio::output::OutputStreamInfo {
-            crate::audio::output::OutputStreamInfo::default()
-        }
-
-        fn is_stream_open(&self) -> bool {
-            false
-        }
-
-        fn select_device(
-            &self,
-            _device_name: Option<String>,
-        ) -> Result<crate::audio::output::OutputStreamInfo, String> {
-            Ok(crate::audio::output::OutputStreamInfo::default())
-        }
-
-        fn create_sink(
-            &self,
-        ) -> Result<
-            (
-                std::sync::Arc<dyn crate::audio::output::AudioSink>,
-                crate::audio::output::OutputStreamInfo,
-            ),
-            String,
-        > {
-            Err("create_sink failed".into())
-        }
-    }
-
-    #[derive(Default)]
-    struct FlagSink {
-        stopped: AtomicBool,
-    }
-
-    impl crate::audio::output::AudioSink for FlagSink {
-        fn append(&self, _source: crate::audio::output::BoxedSource) {}
-
-        fn play(&self) {}
-
-        fn pause(&self) {}
-
-        fn stop(&self) {
-            self.stopped.store(true, Ordering::Release);
-        }
-
-        fn empty(&self) -> bool {
-            true
-        }
-
-        fn set_volume(&self, _value: f32) {}
-    }
-
-    #[test]
-    fn rebuild_sink_does_not_stop_old_sink_when_new_sink_fails() {
-        let backend: std::sync::Arc<dyn crate::audio::output::AudioOutputBackend> =
-            std::sync::Arc::new(FailBackend);
-        let mut engine = NativeAudioEngine::new_with_backend(backend);
-
-        let old_sink = std::sync::Arc::new(FlagSink::default());
-        engine.sink = Some(old_sink.clone());
-        engine.current_track = Some(std::path::PathBuf::from("dummy.wav"));
-        engine.decoded_samples = Some(std::sync::Arc::new(vec![0.0f32; 16]));
-        engine.decoded_channels = 2;
-        engine.decoded_sample_rate = 48_000;
-        engine.playback_state = PlaybackState::Playing;
-        engine.playback_started_at = Some(std::time::Instant::now());
-
-        let err = engine
-            .rebuild_sink_on_new_device()
-            .expect_err("expected sink rebuild error");
-        assert_eq!(err, "create_sink failed");
-        assert!(engine.sink.is_some());
-        assert!(!old_sink.stopped.load(Ordering::Acquire));
-    }
 }

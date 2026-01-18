@@ -74,9 +74,50 @@ export class NativeAudioService implements IAudioService {
   private fallbackClockStartedAtMs: number | null = null;
   private fallbackClockBaseTimeSec: number = 0;
   private lastBackendTimeUpdateAtMs: number = 0;
+  private pendingSeekTime: number | null = null;
+  private pendingSeekTimer: number | null = null;
+  private desiredPlayIndex: number | null = null;
+  private playIndexQueue: Promise<void> = Promise.resolve();
+
+  private static readonly SEEK_COALESCE_MS = 60;
 
   private fireAndForgetCommand(cmd: string, payload?: Record<string, unknown>): void {
     void this.invokeCommand(cmd, payload).catch(() => {});
+  }
+
+  private clearPendingSeek(): void {
+    this.pendingSeekTime = null;
+    if (this.pendingSeekTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.pendingSeekTimer);
+    }
+    this.pendingSeekTimer = null;
+  }
+
+  private scheduleSeekFlush(): void {
+    if (this.pendingSeekTimer !== null) return;
+    const scheduled =
+      typeof window !== 'undefined'
+        ? window.setTimeout(() => {
+            this.pendingSeekTimer = null;
+            const target = this.pendingSeekTime;
+            this.pendingSeekTime = null;
+            if (typeof target === 'number' && isFinite(target)) {
+              this.fireAndForgetCommand('native_audio_seek', { time: target });
+            }
+          }, NativeAudioService.SEEK_COALESCE_MS)
+        : null;
+
+    // Non-browser (tests) fallback: flush immediately.
+    if (scheduled === null) {
+      const target = this.pendingSeekTime;
+      this.pendingSeekTime = null;
+      if (typeof target === 'number' && isFinite(target)) {
+        this.fireAndForgetCommand('native_audio_seek', { time: target });
+      }
+      return;
+    }
+
+    this.pendingSeekTimer = scheduled;
   }
 
   private isProbablyAbsolutePath(value: string): boolean {
@@ -559,67 +600,81 @@ export class NativeAudioService implements IAudioService {
 
   // ===== 播放控制 =====
   async loadTrack(track: Track): Promise<void> {
-    if (!track) return;
+    try {
+      this.clearPendingSeek();
+      if (!track) return;
 
-    const trackPath = this.getTrackPath(track);
-    if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
-      const error = new Error(
-        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-      ) as Error & { code?: string };
-      error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-      this.emitError(error);
-      return;
+      const trackPath = this.getTrackPath(track);
+      if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
+        const error = new Error(
+          'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+        ) as Error & { code?: string };
+        error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+        this.emitError(error);
+        return;
+      }
+
+      let queue = this.state.queue;
+      let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
+      if (index === -1) {
+        queue = [...queue, track];
+        index = queue.length - 1;
+      }
+
+      const nextState = this.updateState({
+        currentTrack: track,
+        queue,
+        currentIndex: index,
+        playbackState: 'loading',
+        duration: track.duration ?? 0,
+        currentTime: 0,
+      });
+      this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+
+      this.syncQueueToNative(queue, index);
+
+      await this.applyReplayGainForTrack(track);
+      await this.invokeCommand('native_audio_load', { path: trackPath });
+
+      this.updateState({
+        playbackState: 'paused',
+        currentTime: 0,
+      });
+    } catch {
+      // invokeCommand already emits error; swallow to avoid unhandled rejections in UI call sites.
     }
-
-    let queue = this.state.queue;
-    let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
-    if (index === -1) {
-      queue = [...queue, track];
-      index = queue.length - 1;
-    }
-
-    const nextState = this.updateState({
-      currentTrack: track,
-      queue,
-      currentIndex: index,
-      playbackState: 'loading',
-      duration: track.duration ?? 0,
-      currentTime: 0,
-    });
-    this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
-
-    this.syncQueueToNative(queue, index);
-
-    await this.applyReplayGainForTrack(track);
-    await this.invokeCommand('native_audio_load', { path: trackPath });
-
-    this.updateState({
-      playbackState: 'paused',
-      currentTime: 0,
-    });
   }
 
   async play(): Promise<void> {
-    if (!this.state.currentTrack && this.state.queue.length === 0) {
-      return;
+    try {
+      if (!this.state.currentTrack && this.state.queue.length === 0) {
+        return;
+      }
+      await this.invokeCommand('native_audio_play');
+      const nextState = this.updateState({ playbackState: 'playing' });
+      this.fallbackClockBaseTimeSec = nextState.currentTime;
+      this.fallbackClockStartedAtMs = performance.now();
+      this.ensureFallbackTicker();
+      this.applyPlaybackStateSideEffects(nextState.playbackState);
+    } catch {
+      // invokeCommand already emits error; swallow to avoid unhandled rejections in UI call sites.
     }
-    await this.invokeCommand('native_audio_play');
-    const nextState = this.updateState({ playbackState: 'playing' });
-    this.fallbackClockBaseTimeSec = nextState.currentTime;
-    this.fallbackClockStartedAtMs = performance.now();
-    this.ensureFallbackTicker();
-    this.applyPlaybackStateSideEffects(nextState.playbackState);
   }
 
   async pause(): Promise<void> {
-    await this.invokeCommand('native_audio_pause');
-    const nextState = this.updateState({ playbackState: 'paused' });
-    this.fallbackClockBaseTimeSec = nextState.currentTime;
-    this.fallbackClockStartedAtMs = null;
-    this.applyPlaybackStateSideEffects(nextState.playbackState);
+    try {
+      await this.invokeCommand('native_audio_pause');
+      const nextState = this.updateState({ playbackState: 'paused' });
+      this.fallbackClockBaseTimeSec = nextState.currentTime;
+      this.fallbackClockStartedAtMs = null;
+      this.applyPlaybackStateSideEffects(nextState.playbackState);
+    } catch {
+      // invokeCommand already emits error; swallow to avoid unhandled rejections in UI call sites.
+    }
   }
 
   stop(): void {
+    this.clearPendingSeek();
     this.fireAndForgetCommand('native_audio_stop');
     this.updateState({ playbackState: 'stopped', currentTime: 0 });
     this.fallbackClockBaseTimeSec = 0;
@@ -630,7 +685,8 @@ export class NativeAudioService implements IAudioService {
   seek(time: number): void {
     const duration = this.state.duration || time;
     const clamped = Math.max(0, Math.min(time, duration));
-    this.fireAndForgetCommand('native_audio_seek', { time: clamped });
+    this.pendingSeekTime = clamped;
+    this.scheduleSeekFlush();
     const nextState = this.updateState({ currentTime: clamped });
     this.fallbackClockBaseTimeSec = clamped;
     this.fallbackClockStartedAtMs = nextState.playbackState === 'playing' ? performance.now() : null;
@@ -722,6 +778,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   clearQueue(): void {
+    this.clearPendingSeek();
     this.updateState({
       queue: [],
       currentIndex: -1,
@@ -740,47 +797,75 @@ export class NativeAudioService implements IAudioService {
 
   async playTrackAtIndex(index: number): Promise<void> {
     if (index < 0 || index >= this.state.queue.length) return;
-    const wasPlaying = this.state.playbackState === 'playing';
-    const previousIndex = this.state.currentIndex;
-    const track = this.state.queue[index];
-    this.updateState({ currentIndex: index });
-    this.syncQueueToNative(this.state.queue, index);
+    this.clearPendingSeek();
+    this.desiredPlayIndex = index;
 
-    const crossfade = this.readCrossfadeSettings();
-    const shouldCrossfade = wasPlaying && crossfade.enabled && crossfade.durationMs > 0 && index !== previousIndex;
+    const run = async () => {
+      const targetIndex = this.desiredPlayIndex;
+      if (typeof targetIndex !== 'number') return;
+      this.desiredPlayIndex = null;
+      await this.playTrackAtIndexOnce(targetIndex);
+    };
 
-    if (shouldCrossfade) {
-      const trackPath = this.getTrackPath(track);
-      if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
-        const error = new Error(
-          'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-        ) as Error & { code?: string };
-        error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-        this.emitError(error);
+    this.playIndexQueue = this.playIndexQueue.then(run, run);
+    try {
+      await this.playIndexQueue;
+    } catch {
+      // invokeCommand already emits error; swallow to avoid unhandled rejections in UI call sites.
+    }
+  }
+
+  private async playTrackAtIndexOnce(index: number): Promise<void> {
+    try {
+      if (index < 0 || index >= this.state.queue.length) return;
+      const wasPlaying = this.state.playbackState === 'playing';
+      const previousIndex = this.state.currentIndex;
+      const track = this.state.queue[index];
+      this.updateState({ currentIndex: index });
+      this.syncQueueToNative(this.state.queue, index);
+
+      const crossfade = this.readCrossfadeSettings();
+      const shouldCrossfade =
+        wasPlaying && crossfade.enabled && crossfade.durationMs > 0 && index !== previousIndex;
+
+      if (shouldCrossfade) {
+        const trackPath = this.getTrackPath(track);
+        if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
+          const error = new Error(
+            'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+          ) as Error & { code?: string };
+          error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+          this.emitError(error);
+          return;
+        }
+
+        const nextState = this.updateState({
+          currentTrack: track,
+          playbackState: 'loading',
+          duration: track.duration ?? 0,
+          currentTime: 0,
+        });
+        this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+
+        await this.applyReplayGainForTrack(track);
+        await this.invokeCommand('native_audio_crossfade_to', {
+          path: trackPath,
+          durationMs: crossfade.durationMs,
+        });
+
+        const playingState = this.updateState({ playbackState: 'playing', currentTime: 0 });
+        this.fallbackClockBaseTimeSec = playingState.currentTime;
+        this.fallbackClockStartedAtMs = performance.now();
+        this.ensureFallbackTicker();
+        this.applyPlaybackStateSideEffects(playingState.playbackState);
         return;
       }
 
-      const nextState = this.updateState({
-        currentTrack: track,
-        playbackState: 'loading',
-        duration: track.duration ?? 0,
-        currentTime: 0,
-      });
-      this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
-
-      await this.applyReplayGainForTrack(track);
-      await this.invokeCommand('native_audio_crossfade_to', { path: trackPath, durationMs: crossfade.durationMs });
-
-      const playingState = this.updateState({ playbackState: 'playing', currentTime: 0 });
-      this.fallbackClockBaseTimeSec = playingState.currentTime;
-      this.fallbackClockStartedAtMs = performance.now();
-      this.ensureFallbackTicker();
-      this.applyPlaybackStateSideEffects(playingState.playbackState);
-      return;
+      await this.loadTrack(track);
+      await this.play();
+    } catch {
+      // invokeCommand already emits error; swallow to avoid breaking the coalescing queue.
     }
-
-    await this.loadTrack(track);
-    await this.play();
   }
 
   reorderQueue(fromIndex: number, toIndex: number): void {

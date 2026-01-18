@@ -20,6 +20,37 @@ const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
 const SACD_DSD2PCM_MIN_CHUNK_FRAMES: usize = 4096;
 
+#[derive(Clone, Copy, Debug, Default)]
+struct DrainedDecoderCommands {
+    shutdown: bool,
+    seek_target: Option<f64>,
+}
+
+fn drain_decoder_commands(command_rx: &mpsc::Receiver<DecoderCommand>) -> DrainedDecoderCommands {
+    let mut result = DrainedDecoderCommands::default();
+
+    loop {
+        match command_rx.try_recv() {
+            Ok(DecoderCommand::Shutdown) => {
+                result.shutdown = true;
+                result.seek_target = None;
+                return result;
+            }
+            Ok(DecoderCommand::Seek(target)) => {
+                result.seek_target = Some(target);
+            }
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                result.shutdown = true;
+                result.seek_target = None;
+                return result;
+            }
+        }
+    }
+
+    result
+}
+
 fn pick_decimation_factor(dsd_rate: u32) -> Result<u32, AudioInputError> {
     if dsd_rate == 0 {
         return Err(AudioInputError::new(
@@ -332,42 +363,35 @@ fn start_dsf_stream(
             let mut pcm8_chunk: Vec<f32> = Vec::with_capacity(stage1_chunk_samples);
             let mut words: Vec<u32> = vec![0u32; channels];
 
-            loop {
-                while let Ok(cmd) = command_rx.try_recv() {
-                    match cmd {
-                        DecoderCommand::Shutdown => {
-                            if let Some(handle) = cache_handle.take() {
-                                handle.finalize();
-                            }
-                            buffer_clone.mark_finished();
-                            return;
-                        }
-                        DecoderCommand::Seek(target) => {
-                            buffer_clone.clear();
-                            pcm8_chunk.clear();
-                            for ctx in &mut dsd2pcm {
-                                ctx.reset();
-                            }
-                            decimator.reset();
-                            if let Some(r) = resampler.as_mut() {
-                                r.reset();
-                            }
-                            cache_handle = None;
-
-                            let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
-                            let desired_dsd_sample =
-                                desired_dsd_sample.min(sample_count.saturating_sub(1));
-                            let aligned = if decimation_factor > 0 {
-                                decimation_factor as u64
-                                    * (desired_dsd_sample / decimation_factor as u64)
-                            } else {
-                                0
-                            };
-                            if iter.set_sample_index(aligned).is_err() {
-                                continue;
-                            }
-                        }
+            'decode_loop: loop {
+                let drained = drain_decoder_commands(&command_rx);
+                if drained.shutdown {
+                    drop(cache_handle.take());
+                    buffer_clone.mark_finished();
+                    return;
+                }
+                if let Some(target) = drained.seek_target {
+                    buffer_clone.clear();
+                    pcm8_chunk.clear();
+                    for ctx in &mut dsd2pcm {
+                        ctx.reset();
                     }
+                    decimator.reset();
+                    if let Some(r) = resampler.as_mut() {
+                        r.reset();
+                    }
+                    cache_handle = None;
+
+                    let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
+                    let desired_dsd_sample =
+                        desired_dsd_sample.min(sample_count.saturating_sub(1));
+                    let aligned = if decimation_factor > 0 {
+                        decimation_factor as u64
+                            * (desired_dsd_sample / decimation_factor as u64)
+                    } else {
+                        0
+                    };
+                    let _ = iter.set_sample_index(aligned);
                 }
 
                 let mut reached_eof = false;
@@ -443,6 +467,37 @@ fn start_dsf_stream(
 
                 let mut offset = 0usize;
                 while offset < out_interleaved.len() {
+                    let drained = drain_decoder_commands(&command_rx);
+                    if drained.shutdown {
+                        drop(cache_handle.take());
+                        buffer_clone.mark_finished();
+                        return;
+                    }
+                    if let Some(target) = drained.seek_target {
+                        buffer_clone.clear();
+                        pcm8_chunk.clear();
+                        for ctx in &mut dsd2pcm {
+                            ctx.reset();
+                        }
+                        decimator.reset();
+                        if let Some(r) = resampler.as_mut() {
+                            r.reset();
+                        }
+                        cache_handle = None;
+
+                        let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
+                        let desired_dsd_sample =
+                            desired_dsd_sample.min(sample_count.saturating_sub(1));
+                        let aligned = if decimation_factor > 0 {
+                            decimation_factor as u64
+                                * (desired_dsd_sample / decimation_factor as u64)
+                        } else {
+                            0
+                        };
+                        let _ = iter.set_sample_index(aligned);
+                        continue 'decode_loop;
+                    }
+
                     let remaining = &out_interleaved[offset..];
                     let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
                     if frames_pushed == 0 {
@@ -637,6 +692,48 @@ mod tests {
         }
     }
 
+    fn write_dsf_stereo_frames(path: &Path, dsd_rate: u32, fill: u8, frames: u32) {
+        let channels = 2u32;
+        let bits_per_sample = 1u32;
+        let block_size = 4096u32;
+        let frames = frames.max(1);
+        let samples_per_block = 8u64 * block_size as u64;
+        let sample_count = samples_per_block.saturating_mul(frames as u64);
+
+        let data_bytes = (channels as u64) * (block_size as u64) * (frames as u64);
+        let file_size = 28u64 + 52u64 + 12u64 + data_bytes;
+        let data_chunk_size = 12u64 + data_bytes;
+
+        let mut file = File::create(path).expect("create dsf");
+
+        file.write_all(b"DSD ").unwrap();
+        file.write_all(&28u64.to_le_bytes()).unwrap();
+        file.write_all(&file_size.to_le_bytes()).unwrap();
+        file.write_all(&0u64.to_le_bytes()).unwrap();
+
+        file.write_all(b"fmt ").unwrap();
+        file.write_all(&52u64.to_le_bytes()).unwrap();
+        file.write_all(&1u32.to_le_bytes()).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+        file.write_all(&2u32.to_le_bytes()).unwrap();
+        file.write_all(&channels.to_le_bytes()).unwrap();
+        file.write_all(&dsd_rate.to_le_bytes()).unwrap();
+        file.write_all(&bits_per_sample.to_le_bytes()).unwrap();
+        file.write_all(&sample_count.to_le_bytes()).unwrap();
+        file.write_all(&block_size.to_le_bytes()).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_chunk_size.to_le_bytes()).unwrap();
+
+        let block = vec![fill; block_size as usize];
+        for _ in 0..channels {
+            for _ in 0..frames {
+                file.write_all(&block).unwrap();
+            }
+        }
+    }
+
     fn write_minimal_dsf_stereo_split(path: &Path, dsd_rate: u32, first: u8, second: u8) {
         let channels = 2u32;
         let bits_per_sample = 1u32; // triggers reverse_bits in dsf crate
@@ -757,6 +854,26 @@ mod tests {
 
         let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn drain_decoder_commands_keeps_last_seek_and_stops_on_shutdown() {
+        let (tx, rx) = mpsc::channel::<DecoderCommand>();
+        tx.send(DecoderCommand::Seek(1.0)).unwrap();
+        tx.send(DecoderCommand::Seek(2.0)).unwrap();
+        tx.send(DecoderCommand::Seek(3.0)).unwrap();
+
+        let drained = super::drain_decoder_commands(&rx);
+        assert!(!drained.shutdown);
+        assert_eq!(drained.seek_target, Some(3.0));
+
+        tx.send(DecoderCommand::Seek(4.0)).unwrap();
+        tx.send(DecoderCommand::Shutdown).unwrap();
+        tx.send(DecoderCommand::Seek(5.0)).unwrap();
+
+        let drained = super::drain_decoder_commands(&rx);
+        assert!(drained.shutdown);
+        assert_eq!(drained.seek_target, None);
     }
 
     #[test]
@@ -898,6 +1015,70 @@ mod tests {
         assert!(saw_high, "expected audible samples after resample");
 
         let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dsf_shutdown_does_not_persist_partial_resample_cache() {
+        let cache_dir = {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time ok")
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!("pmp-resample-cache-dsf-test-{nanos}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create cache dir");
+            crate::audio::resample_cache::init_for_tests(dir)
+        };
+
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let path = tmp_dir.join(format!("pmp_test_{nonce}.dsf"));
+
+        write_dsf_stereo_frames(&path, 2_822_400, 0xFF, 1024);
+
+        let output_sample_rate = Some(48_000);
+        let key = crate::audio::resample_cache::key_for_resample_with_salt(
+            &path,
+            output_sample_rate,
+            SACD_DSD_TO_PCM_CACHE_SALT,
+        )
+        .expect("cache key");
+        let cache_file = cache_dir.join(format!("{key}.bin"));
+        let _ = std::fs::remove_file(&cache_file);
+
+        let input = SacdInput::default();
+        let opened = input
+            .open(&path, output_sample_rate)
+            .expect("open dsf");
+        let AudioInputKind::Streaming(streaming) = opened.kind else {
+            panic!("expected streaming kind");
+        };
+
+        streaming
+            .buffer
+            .wait_for_samples(1024, Duration::from_millis(800));
+
+        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+
+        let mut iter = opened.source;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if iter.next().is_none() {
+                break;
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(
+            !cache_file.exists(),
+            "shutdown should not finalize partial DSF resample cache entry"
+        );
+
         let _ = std::fs::remove_file(&path);
     }
 }
