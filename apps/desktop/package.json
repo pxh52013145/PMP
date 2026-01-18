@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:vite": "node ../../scripts/ensure-port-free.mjs 1420 && vite",
-    "dev": "tauri dev",
+    "dev": "node ../../scripts/dev-tauri.mjs",
     "dev:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri dev --features asio-sdk",
     "build:vite": "vite build",
     "build": "tauri build",
