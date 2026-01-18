@@ -36,6 +36,12 @@ struct AudioRingBufferInner {
     finished: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PopChunkResult {
+    popped: usize,
+    finished: bool,
+}
+
 impl AudioRingBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -92,15 +98,37 @@ impl AudioRingBuffer {
         }
     }
 
-    pub fn pop_chunk(&self, max_samples: usize, wait_timeout: Duration) -> Vec<f32> {
+    fn pop_chunk_into(
+        &self,
+        out: &mut Vec<f32>,
+        max_samples: usize,
+        wait_timeout: Duration,
+    ) -> PopChunkResult {
+        out.clear();
+
         if max_samples == 0 {
-            return Vec::new();
+            return PopChunkResult {
+                popped: 0,
+                finished: self.is_finished_and_empty(),
+            };
         }
 
         let (lock, available, space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
+        let mut inner = if wait_timeout.is_zero() {
+            match lock.try_lock() {
+                Ok(inner) => inner,
+                Err(_) => {
+                    return PopChunkResult {
+                        popped: 0,
+                        finished: false,
+                    };
+                }
+            }
+        } else {
+            lock.lock().expect("ring buffer lock poisoned")
+        };
 
-        if inner.data.is_empty() && !inner.finished {
+        if !wait_timeout.is_zero() && inner.data.is_empty() && !inner.finished {
             inner = match available.wait_timeout(inner, wait_timeout) {
                 Ok((guard, _)) => guard,
                 Err(poisoned) => poisoned.into_inner().0,
@@ -109,19 +137,29 @@ impl AudioRingBuffer {
 
         let count = inner.data.len().min(max_samples);
         if count == 0 {
-            return Vec::new();
+            return PopChunkResult {
+                popped: 0,
+                finished: inner.finished && inner.data.is_empty(),
+            };
         }
 
-        let mut out = Vec::with_capacity(count);
-        for _ in 0..count {
-            if let Some(sample) = inner.data.pop_front() {
-                out.push(sample);
-            } else {
-                break;
-            }
+        if out.capacity() < count {
+            out.reserve(count);
         }
+
+        for _ in 0..count {
+            let Some(sample) = inner.data.pop_front() else {
+                break;
+            };
+            out.push(sample);
+        }
+
         space.notify_all();
-        out
+
+        PopChunkResult {
+            popped: out.len(),
+            finished: inner.finished && inner.data.is_empty(),
+        }
     }
 
     pub fn is_finished_and_empty(&self) -> bool {
@@ -194,13 +232,16 @@ pub(crate) struct StreamingSamplesSource {
 }
 
 impl StreamingSamplesSource {
+    const CHUNK_SAMPLES: usize = 8192;
+    const SILENCE_FRAMES: usize = 64;
+
     pub fn new(buffer: AudioRingBuffer, channels: u16, sample_rate: u32, duration: f64) -> Self {
         Self {
             buffer,
-            channels,
-            sample_rate,
+            channels: channels.max(1),
+            sample_rate: sample_rate.max(1),
             duration,
-            local: Vec::new(),
+            local: Vec::with_capacity(Self::CHUNK_SAMPLES),
             local_index: 0,
         }
     }
@@ -211,18 +252,21 @@ impl Iterator for StreamingSamplesSource {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.local_index >= self.local.len() {
-            if self.buffer.is_finished_and_empty() {
-                return None;
-            }
-
-            self.local = self.buffer.pop_chunk(8192, Duration::from_millis(20));
+            let channels = self.channels.max(1) as usize;
+            let result = self.buffer.pop_chunk_into(
+                &mut self.local,
+                Self::CHUNK_SAMPLES,
+                Duration::from_millis(0),
+            );
             self.local_index = 0;
 
-            if self.local.is_empty() {
-                if self.buffer.is_finished_and_empty() {
+            if result.popped == 0 {
+                if result.finished {
                     return None;
                 }
-                return Some(0.0);
+
+                let silence_samples = (Self::SILENCE_FRAMES * channels).max(1);
+                self.local.resize(silence_samples, 0.0);
             }
         }
 
@@ -1031,5 +1075,77 @@ impl AudioInput for SymphoniaInput {
                 )),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_buffer_pop_chunk_into_preserves_order_and_reports_finished() {
+        let buffer = AudioRingBuffer::new(64);
+        let channels = 1usize;
+        let input = (0..10usize).map(|i| i as f32).collect::<Vec<_>>();
+
+        let pushed = buffer.push_interleaved(&input, channels);
+        assert_eq!(pushed, 10);
+
+        let mut out = Vec::with_capacity(16);
+        let result = buffer.pop_chunk_into(&mut out, 4, Duration::from_millis(0));
+        assert_eq!(result.popped, 4);
+        assert!(!result.finished);
+        assert_eq!(out, vec![0.0, 1.0, 2.0, 3.0]);
+
+        buffer.mark_finished();
+
+        out.clear();
+        let result = buffer.pop_chunk_into(&mut out, 32, Duration::from_millis(0));
+        assert_eq!(result.popped, 6);
+        assert!(result.finished);
+        assert_eq!(out, vec![4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+
+        out.clear();
+        let result = buffer.pop_chunk_into(&mut out, 32, Duration::from_millis(0));
+        assert_eq!(result.popped, 0);
+        assert!(result.finished);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn streaming_samples_source_emits_silence_until_samples_arrive_then_finishes() {
+        let buffer = AudioRingBuffer::new(512);
+        let mut source = StreamingSamplesSource::new(buffer.clone(), 2, 48_000, 0.0);
+
+        for _ in 0..8 {
+            assert_eq!(source.next(), Some(0.0));
+        }
+
+        let samples = vec![0.5f32, 0.5, 0.6, 0.6];
+        let pushed = buffer.push_interleaved(&samples, 2);
+        assert_eq!(pushed, 2);
+
+        let mut saw_sample = false;
+        for _ in 0..1024 {
+            let Some(value) = source.next() else {
+                break;
+            };
+            if (value - 0.5).abs() < 1e-6 {
+                saw_sample = true;
+                break;
+            }
+        }
+        assert!(saw_sample, "expected buffered samples to reach the consumer");
+
+        buffer.mark_finished();
+
+        let mut finished = false;
+        for _ in 0..4096 {
+            if source.next().is_none() {
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished, "expected stream to finish after buffer is drained");
     }
 }
