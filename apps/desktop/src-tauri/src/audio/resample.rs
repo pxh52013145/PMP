@@ -63,58 +63,59 @@ pub(crate) fn resample_interleaved_f32(
             )
         })?;
 
-    let mut per_channel: Vec<Vec<f32>> = (0..channels)
-        .map(|_| Vec::with_capacity(frames_in))
-        .collect();
-    for frame in 0..frames_in {
-        for ch in 0..channels {
-            per_channel[ch].push(samples[frame * channels + ch]);
-        }
-    }
-
     let expected_out_frames = ((frames_in as f64) * ratio).round().max(0.0) as usize;
-    let mut out_per_channel: Vec<Vec<f32>> = (0..channels)
-        .map(|_| Vec::with_capacity(expected_out_frames))
+    let mut out_interleaved =
+        Vec::with_capacity(expected_out_frames.saturating_mul(channels.max(1)));
+
+    let mut scratch_in: Vec<Vec<f32>> = (0..channels)
+        .map(|_| Vec::with_capacity(chunk_size))
         .collect();
+    let mut output = resampler.output_buffer_allocate(true);
 
     let mut start = 0usize;
     while start < frames_in {
         let end = (start + chunk_size).min(frames_in);
         let block_len = end - start;
 
-        let mut input_block: Vec<Vec<f32>> = Vec::with_capacity(channels);
-        for ch in 0..channels {
-            let mut block = per_channel[ch][start..end].to_vec();
-            if block_len < chunk_size {
-                block.resize(chunk_size, 0.0);
-            }
-            input_block.push(block);
+        for channel in &mut scratch_in {
+            channel.clear();
         }
 
-        let output_block = resampler.process(&input_block, None).map_err(|e| {
-            ResampleError::new(
-                "AUDIO_INPUT_RESAMPLE_FAILED",
-                format!("Resample failed: {e}"),
-            )
-        })?;
+        for frame in start..end {
+            let base = frame * channels;
+            for ch in 0..channels {
+                scratch_in[ch].push(samples[base + ch]);
+            }
+        }
 
-        for ch in 0..channels {
-            out_per_channel[ch].extend_from_slice(&output_block[ch]);
+        if block_len < chunk_size {
+            for channel in &mut scratch_in {
+                channel.resize(chunk_size, 0.0);
+            }
+        }
+
+        let (_in_frames, out_frames) =
+            resampler
+                .process_into_buffer(&scratch_in, &mut output, None)
+                .map_err(|e| {
+                    ResampleError::new(
+                        "AUDIO_INPUT_RESAMPLE_FAILED",
+                        format!("Resample failed: {e}"),
+                    )
+                })?;
+
+        for frame in 0..out_frames {
+            for ch in 0..channels {
+                out_interleaved.push(output[ch][frame]);
+            }
         }
 
         start = end;
     }
 
-    let out_frames_total = out_per_channel.get(0).map(|v| v.len()).unwrap_or(0);
+    let out_frames_total = out_interleaved.len() / channels;
     let out_frames = expected_out_frames.min(out_frames_total);
-    let mut out_interleaved = Vec::with_capacity(out_frames * channels);
-    for frame in 0..out_frames {
-        for ch in 0..channels {
-            if let Some(sample) = out_per_channel[ch].get(frame) {
-                out_interleaved.push(*sample);
-            }
-        }
-    }
+    out_interleaved.truncate(out_frames * channels);
 
     Ok(out_interleaved)
 }
