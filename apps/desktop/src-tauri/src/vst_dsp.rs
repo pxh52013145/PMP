@@ -157,8 +157,8 @@ impl VstDspNode {
             drop_output_before_frame: write_total_frames,
             shm_written_frames: 0,
             shm_read_frames: 0,
-            scratch_in: Vec::new(),
-            scratch_out: Vec::new(),
+            scratch_in: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(channels).max(1)],
+            scratch_out: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(channels).max(1)],
             last_drain_attempt: now,
             last_health_check: now,
             last_heartbeat_progress: now,
@@ -240,7 +240,11 @@ impl VstDspNode {
             return;
         }
 
-        self.scratch_in.resize(frames * self.channels, 0.0);
+        let required_samples = frames.saturating_mul(self.channels);
+        if required_samples > self.scratch_in.len() {
+            self.scratch_in.resize(required_samples, 0.0);
+        }
+        let scratch_in = &mut self.scratch_in[..required_samples];
 
         for frame in 0..frames {
             let global_frame = self.write_total_frames + frame as u64;
@@ -250,7 +254,7 @@ impl VstDspNode {
             for ch in 0..self.channels {
                 let idx = block_base + ch;
                 let input = samples[idx];
-                self.scratch_in[idx] = input;
+                scratch_in[idx] = input;
 
                 samples[idx] = self.delay_ring[ring_base + ch];
                 self.delay_ring[ring_base + ch] = input;
@@ -261,7 +265,7 @@ impl VstDspNode {
             if transport.channels == self.channels {
                 let ok = transport
                     .in_ring
-                    .try_write_interleaved_all(&self.scratch_in);
+                    .try_write_interleaved_all(scratch_in);
                 if ok {
                     self.shm_written_frames += frames as u64;
                 } else {
@@ -300,8 +304,12 @@ impl VstDspNode {
                 break;
             }
             let frames = available.min(MAX_BLOCK_FRAMES).min(budget_frames);
-            self.scratch_out.resize(frames * self.channels, 0.0);
-            if !shm_out.try_read_interleaved_all(&mut self.scratch_out) {
+            let required_samples = frames.saturating_mul(self.channels);
+            if required_samples > self.scratch_out.len() {
+                self.scratch_out.resize(required_samples, 0.0);
+            }
+            let scratch_out = &mut self.scratch_out[..required_samples];
+            if !shm_out.try_read_interleaved_all(scratch_out) {
                 break;
             }
 
@@ -321,7 +329,7 @@ impl VstDspNode {
                 let ring_base = ring_frame * self.channels;
                 let src_base = frame * self.channels;
                 for ch in 0..self.channels {
-                    self.delay_ring[ring_base + ch] = self.scratch_out[src_base + ch];
+                    self.delay_ring[ring_base + ch] = scratch_out[src_base + ch];
                 }
             }
 
