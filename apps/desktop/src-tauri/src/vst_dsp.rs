@@ -9,6 +9,7 @@ const MAX_BLOCK_FRAMES: usize = 512;
 const MAX_DRAIN_FRAMES_PER_CALL: usize = 8192;
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const HEARTBEAT_STALL_TIMEOUT: Duration = Duration::from_millis(1500);
+const MIX_IN_RAMP_MS: u64 = 5;
 const RESTART_BACKOFF_BASE_MS: u64 = 500;
 const RESTART_BACKOFF_MAX_MS: u64 = 60_000;
 const DISABLE_AFTER_FAILURES: u32 = 8;
@@ -92,6 +93,8 @@ pub struct VstDspNode {
     latency_frames: usize,
     channels: usize,
     delay_ring: Vec<f32>,
+    mix_in_remaining_frames: u32,
+    mix_in_total_frames: u32,
     write_total_frames: u64,
     shm_base_frame: u64,
     drop_output_before_frame: u64,
@@ -129,6 +132,7 @@ impl VstDspNode {
         }
 
         let delay_ring = vec![0.0; latency_frames.saturating_mul(channels).max(1)];
+        let mix_in_frames = mix_in_ramp_frames(key.sample_rate.max(1));
         let now = Instant::now();
         let (write_total_frames, shm_base_frame, last_heartbeat_in, last_heartbeat_out) = transport
             .as_ref()
@@ -152,6 +156,8 @@ impl VstDspNode {
             latency_frames,
             channels,
             delay_ring,
+            mix_in_remaining_frames: mix_in_frames,
+            mix_in_total_frames: mix_in_frames,
             write_total_frames,
             shm_base_frame,
             drop_output_before_frame: write_total_frames,
@@ -173,6 +179,7 @@ impl VstDspNode {
 
     pub fn reset(&mut self) {
         self.delay_ring.fill(0.0);
+        self.begin_mix_in();
 
         if let Some(transport) = self.transport.as_ref() {
             let in_write = transport
@@ -233,6 +240,24 @@ impl VstDspNode {
             let end_sample = start_sample + block_frames * self.channels;
             self.process_block(&mut samples[start_sample..end_sample], block_frames);
         }
+    }
+
+    fn begin_mix_in(&mut self) {
+        let frames = mix_in_ramp_frames(self.key.sample_rate.max(1));
+        self.mix_in_remaining_frames = frames;
+        self.mix_in_total_frames = frames;
+    }
+
+    fn write_processed_frame_into_ring(&mut self, global_frame: u64, processed_frame: &[f32]) {
+        write_processed_frame_into_delay_ring(
+            &mut self.delay_ring,
+            self.channels,
+            self.latency_frames,
+            &mut self.mix_in_remaining_frames,
+            self.mix_in_total_frames,
+            global_frame,
+            processed_frame,
+        );
     }
 
     fn process_block(&mut self, samples: &mut [f32], frames: usize) {
@@ -325,12 +350,17 @@ impl VstDspNode {
                     break;
                 }
 
-                let ring_frame = (global_frame % self.latency_frames as u64) as usize;
-                let ring_base = ring_frame * self.channels;
                 let src_base = frame * self.channels;
-                for ch in 0..self.channels {
-                    self.delay_ring[ring_base + ch] = scratch_out[src_base + ch];
-                }
+                let processed_frame = &scratch_out[src_base..src_base + self.channels];
+                write_processed_frame_into_delay_ring(
+                    &mut self.delay_ring,
+                    self.channels,
+                    self.latency_frames,
+                    &mut self.mix_in_remaining_frames,
+                    self.mix_in_total_frames,
+                    global_frame,
+                    processed_frame,
+                );
             }
 
             self.shm_read_frames += frames as u64;
@@ -342,6 +372,8 @@ impl VstDspNode {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         self.transport = None;
         self.restart_rx = None;
+        self.mix_in_remaining_frames = 0;
+        self.mix_in_total_frames = 0;
         self.last_failure_reason = reason;
 
         let shift = self.consecutive_failures.saturating_sub(1).min(6);
@@ -360,6 +392,16 @@ impl VstDspNode {
                 match ShmAudioTransport::open(info.shm_in_name.as_str(), info.shm_out_name.as_str())
                 {
                     Some(transport) => {
+                        if transport.channels != self.channels {
+                            self.mark_failure(FailureReason::TransportOpenFailed);
+                            self.restart_rx = None;
+                            return;
+                        }
+
+                        let out_header = transport.out_ring.header();
+                        let out_write = out_header.write_index.load(Ordering::Acquire);
+                        out_header.read_index.store(out_write, Ordering::Release);
+
                         self.key.node_id = info.node_id;
                         self.key.plugin_id = info.plugin_id;
                         self.key.shm_in_name = info.shm_in_name;
@@ -373,6 +415,7 @@ impl VstDspNode {
                         self.drop_output_before_frame = self.write_total_frames;
                         self.shm_written_frames = 0;
                         self.shm_read_frames = 0;
+                        self.begin_mix_in();
                         self.consecutive_failures = 0;
                         self.last_health_check = Instant::now();
                         self.last_heartbeat_progress = Instant::now();
@@ -505,5 +548,107 @@ impl VstDspNode {
         if now.duration_since(self.last_heartbeat_progress) > HEARTBEAT_STALL_TIMEOUT {
             self.mark_failure(FailureReason::HeartbeatStalled);
         }
+    }
+}
+
+fn write_processed_frame_into_delay_ring(
+    delay_ring: &mut [f32],
+    channels: usize,
+    latency_frames: usize,
+    mix_in_remaining_frames: &mut u32,
+    mix_in_total_frames: u32,
+    global_frame: u64,
+    processed_frame: &[f32],
+) {
+    if channels == 0 || latency_frames == 0 {
+        return;
+    }
+    if processed_frame.len() < channels {
+        return;
+    }
+
+    let ring_frame = (global_frame % latency_frames as u64) as usize;
+    let ring_base = ring_frame * channels;
+    if ring_base + channels > delay_ring.len() {
+        return;
+    }
+
+    if *mix_in_remaining_frames > 0 {
+        let total = mix_in_total_frames.max(1);
+        let already = total.saturating_sub(*mix_in_remaining_frames);
+        let t = ((already + 1) as f32 / total as f32).min(1.0);
+        let a = 1.0 - t;
+
+        for ch in 0..channels {
+            delay_ring[ring_base + ch] =
+                delay_ring[ring_base + ch] * a + processed_frame[ch] * t;
+        }
+
+        *mix_in_remaining_frames = (*mix_in_remaining_frames).saturating_sub(1);
+        return;
+    }
+
+    for ch in 0..channels {
+        delay_ring[ring_base + ch] = processed_frame[ch];
+    }
+}
+
+fn mix_in_ramp_frames(sample_rate: u32) -> u32 {
+    ((sample_rate as u64).saturating_mul(MIX_IN_RAMP_MS) / 1000)
+        .max(1)
+        .min(2048) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_NONCE: AtomicU64 = AtomicU64::new(0);
+
+    fn make_nonexistent_key(sample_rate: u32, channels: u32, latency_frames: u32) -> VstNodeKey {
+        let pid = std::process::id();
+        let nonce = TEST_NONCE.fetch_add(1, Ordering::Relaxed);
+        VstNodeKey {
+            node_id: format!("test-node-{pid}-{nonce}"),
+            plugin_id: format!("test-plugin-{pid}-{nonce}"),
+            shm_in_name: format!("Local\\pmp-vst-dsp-test-in-{pid}-{nonce}"),
+            shm_out_name: format!("Local\\pmp-vst-dsp-test-out-{pid}-{nonce}"),
+            sample_rate,
+            channels,
+            capacity_frames: 1024,
+            latency_frames,
+        }
+    }
+
+    #[test]
+    fn mix_in_blends_processed_output_over_ramp() {
+        let key = make_nonexistent_key(1000, 1, 8);
+        let mut node = VstDspNode::new(VstNodeSpec { key });
+        assert_eq!(node.mix_in_total_frames, 5);
+        assert_eq!(node.mix_in_remaining_frames, 5);
+
+        for frame in 0u64..5 {
+            let idx = (frame as usize) % node.latency_frames;
+            node.delay_ring[idx] = 1.0;
+            node.write_processed_frame_into_ring(frame, &[0.0]);
+        }
+
+        let expected = [0.8, 0.6, 0.4, 0.2, 0.0];
+        for (frame, &exp) in expected.iter().enumerate() {
+            let idx = frame % node.latency_frames;
+            let got = node.delay_ring[idx];
+            assert!(
+                (got - exp).abs() < 1e-6,
+                "frame={frame} expected={exp} got={got}"
+            );
+        }
+
+        assert_eq!(node.mix_in_remaining_frames, 0);
+        let frame = 5u64;
+        let idx = (frame as usize) % node.latency_frames;
+        node.delay_ring[idx] = 1.0;
+        node.write_processed_frame_into_ring(frame, &[0.0]);
+        assert_eq!(node.delay_ring[idx], 0.0);
     }
 }
