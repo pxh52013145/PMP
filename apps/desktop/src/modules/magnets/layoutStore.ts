@@ -127,3 +127,39 @@ export async function magnetLayoutStoreApplyPatch(
     return null;
   }
 }
+
+export type MagnetLayoutStoreApplyPatchFn = (
+  request: MagnetLayoutStoreApplyPatchRequest
+) => Promise<MagnetLayoutStoreApplyPatchResponse | null>;
+
+export async function magnetLayoutStoreApplyPatchWithRetry(
+  request: MagnetLayoutStoreApplyPatchRequest,
+  options: { maxRetries?: number; applyPatch?: MagnetLayoutStoreApplyPatchFn } = {}
+): Promise<MagnetLayoutStoreApplyPatchResponse | null> {
+  const applyPatch = options.applyPatch ?? magnetLayoutStoreApplyPatch;
+  const maxRetries = typeof options.maxRetries === 'number' && options.maxRetries >= 0 ? options.maxRetries : 1;
+  const baseReason = request.reason ?? 'patch';
+
+  let expectedRevision = request.expectedRevision;
+  let response = await applyPatch(request);
+  if (!response) return null;
+  if (response.ok) return response;
+  if (response.error?.code !== 'revisionConflict') return response;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const nextRevision = response.state.revision;
+    if (nextRevision <= 0 || nextRevision === expectedRevision) return response;
+
+    expectedRevision = nextRevision;
+    response = await applyPatch({
+      ...request,
+      expectedRevision,
+      reason: `${baseReason}:retry${attempt === 1 ? '' : attempt}`,
+    });
+    if (!response) return null;
+    if (response.ok) return response;
+    if (response.error?.code !== 'revisionConflict') return response;
+  }
+
+  return response;
+}

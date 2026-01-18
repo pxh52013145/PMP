@@ -59,6 +59,21 @@ describe('ensureMagnetSpaceLayout', () => {
     expect(result.layout.activeMagnetIds).toEqual([...REQUIRED_MAGNET_IDS]);
   });
 
+  it('bootstraps space1 using the system defaults', () => {
+    const result = ensureMagnetSpaceLayout('space1');
+    expect(result.didCreate).toBe(true);
+    expect(result.storageKey).toBe(STORAGE_KEYS.MAGNET_SPACE_LAYOUT);
+    expect(result.layout.activeMagnetIds).toContain('btn-debug');
+    expect(result.layout.activeMagnetIds).toContain('audio-visualizer');
+    expect(result.layout.anchorsByMagnetId['btn-matrix-change']).toEqual([
+      { id: 'anchor', gridX: 3, gridY: 19, role: 'anchor' },
+    ]);
+    expect(result.layout.anchorsByMagnetId['progress-bar']).toEqual([
+      { id: 'left', gridX: 6, gridY: 18, role: 'anchor' },
+      { id: 'right', gridX: 26, gridY: 18, role: 'boundary' },
+    ]);
+  });
+
   it('migrates active + anchors from legacy config (space2 keeps strict blank)', () => {
     const legacyConfig = {
       version: '1.1.0',

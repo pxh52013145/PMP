@@ -232,30 +232,24 @@ export function MagnetLibraryProvider({
   const applyLayoutStorePatch = useCallback(
     async (patches: MagnetLayoutStorePatch[], reason: string): Promise<void> => {
       if (!isTauri) return;
-      const expectedRevision = layoutStoreRevisionRef.current;
-      if (expectedRevision <= 0) return;
+      let expectedRevision = layoutStoreRevisionRef.current;
+      const maxRetries = 2;
 
-      const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason });
-      if (!response) return;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const attemptReason = attempt === 0 ? reason : `${reason}:retry${attempt === 1 ? '' : attempt}`;
+        const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason: attemptReason });
+        if (!response) return;
 
-      layoutStoreRevisionRef.current = response.state.revision;
-      setLayoutStoreState(response.state);
+        layoutStoreRevisionRef.current = response.state.revision;
+        setLayoutStoreState(response.state);
 
-      if (response.ok) return;
-      if (response.error?.code !== 'revisionConflict') return;
+        if (response.ok) return;
+        if (response.error?.code !== 'revisionConflict') return;
 
-      const retryRevision = response.state.revision;
-      if (retryRevision <= 0 || retryRevision === expectedRevision) return;
-
-      const retry = await magnetLayoutStoreApplyPatch({
-        expectedRevision: retryRevision,
-        patches,
-        reason: `${reason}:retry`,
-      });
-      if (!retry) return;
-
-      layoutStoreRevisionRef.current = retry.state.revision;
-      setLayoutStoreState(retry.state);
+        const retryRevision = response.state.revision;
+        if (retryRevision <= 0 || retryRevision === expectedRevision) return;
+        expectedRevision = retryRevision;
+      }
     },
     [isTauri]
   );

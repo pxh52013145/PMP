@@ -38,7 +38,7 @@ import {
   createDefaultMagnetSpaceLayout,
   createDefaultMagnetSpacesState,
   ensureMagnetCatalogState,
-  magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreBootstrapFromLegacy,
   magnetLayoutStoreGetState,
   removeMagnetCatalogMagnet,
@@ -1028,19 +1028,16 @@ export function EditorWindowApp() {
         }
         patches.push({ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: true });
 
-        const response = await magnetLayoutStoreApplyPatch({
-          expectedRevision: store.revision,
-          patches,
-          reason: 'activateMagnet',
-        });
-        if (response?.ok) {
-          // ok
-        } else if (response?.error?.code === 'revisionConflict') {
-          await magnetLayoutStoreApplyPatch({
-            expectedRevision: response.state.revision,
+        const response = await magnetLayoutStoreApplyPatchWithRetry(
+          {
+            expectedRevision: store.revision,
             patches,
-            reason: 'activateMagnet:retry',
-          });
+            reason: 'activateMagnet',
+          },
+          { maxRetries: 2 }
+        );
+        if (!response?.ok) {
+          console.warn('[editor-window] Failed to activate magnet via layout store', response?.error ?? response);
         }
       }
     } else {
@@ -1083,11 +1080,17 @@ export function EditorWindowApp() {
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
-        await magnetLayoutStoreApplyPatch({
-          expectedRevision: store.revision,
-          patches: [{ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: false }],
-          reason: 'deactivateMagnet',
-        });
+        const response = await magnetLayoutStoreApplyPatchWithRetry(
+          {
+            expectedRevision: store.revision,
+            patches: [{ kind: 'setMagnetActive', spaceId: activeSpaceId, magnetId, active: false }],
+            reason: 'deactivateMagnet',
+          },
+          { maxRetries: 2 }
+        );
+        if (!response?.ok) {
+          console.warn('[editor-window] Failed to deactivate magnet via layout store', response?.error ?? response);
+        }
       }
     } else {
       // Save per-space layout (source of truth for active + anchors)
@@ -1127,11 +1130,17 @@ export function EditorWindowApp() {
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
-        await magnetLayoutStoreApplyPatch({
-          expectedRevision: store.revision,
-          patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
-          reason: 'deleteMagnetFromLibrary',
-        });
+        const response = await magnetLayoutStoreApplyPatchWithRetry(
+          {
+            expectedRevision: store.revision,
+            patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
+            reason: 'deleteMagnetFromLibrary',
+          },
+          { maxRetries: 2 }
+        );
+        if (!response?.ok) {
+          console.warn('[editor-window] Failed to persist magnet delete via layout store', response?.error ?? response);
+        }
       }
     } else {
       saveMagnetSpaceLayout(nextLayout, resolveMagnetLayoutStorageKey(activeSpaceId));
@@ -1167,11 +1176,17 @@ export function EditorWindowApp() {
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
-        await magnetLayoutStoreApplyPatch({
-          expectedRevision: store.revision,
-          patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
-          reason: 'addMagnetToLibrary',
-        });
+        const response = await magnetLayoutStoreApplyPatchWithRetry(
+          {
+            expectedRevision: store.revision,
+            patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
+            reason: 'addMagnetToLibrary',
+          },
+          { maxRetries: 2 }
+        );
+        if (!response?.ok) {
+          console.warn('[editor-window] Failed to persist magnet add via layout store', response?.error ?? response);
+        }
       }
     } else {
       saveMagnetSpaceLayout(nextLayout, resolveMagnetLayoutStorageKey(activeSpaceId));
@@ -1207,11 +1222,17 @@ export function EditorWindowApp() {
       const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (store) {
         activeSpaceId = store.spaces.activeSpaceId;
-        await magnetLayoutStoreApplyPatch({
-          expectedRevision: store.revision,
-          patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
-          reason: 'updateMagnetInLibrary',
-        });
+        const response = await magnetLayoutStoreApplyPatchWithRetry(
+          {
+            expectedRevision: store.revision,
+            patches: [{ kind: 'setSpaceLayout', spaceId: activeSpaceId, layout: nextLayout }],
+            reason: 'updateMagnetInLibrary',
+          },
+          { maxRetries: 2 }
+        );
+        if (!response?.ok) {
+          console.warn('[editor-window] Failed to persist magnet update via layout store', response?.error ?? response);
+        }
       }
     } else {
       saveMagnetSpaceLayout(nextLayout, resolveMagnetLayoutStorageKey(activeSpaceId));

@@ -25,6 +25,7 @@ export { resolveMagnetLayoutStorageKey, sanitizeMagnetSpaceLayout } from './layo
 export type {
   MagnetLayoutStoreApplyPatchRequest,
   MagnetLayoutStoreApplyPatchResponse,
+  MagnetLayoutStoreApplyPatchFn,
   MagnetLayoutStoreBootstrapRequest,
   MagnetLayoutStoreBootstrapResponse,
   MagnetLayoutStorePatch,
@@ -38,6 +39,7 @@ export type {
 export {
   buildLegacyMagnetLayoutStoreBootstrapRequest,
   magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreBootstrapFromLegacy,
   magnetLayoutStoreGetState,
 } from './layoutStore';

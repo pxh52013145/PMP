@@ -56,6 +56,7 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-window-pin',
   'btn-matrix-change',
   'btn-editor',
+  'btn-debug',
   // DSP / VST
   'dsp-vst',
   // 导航页面
@@ -69,6 +70,7 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-volume',
   'progress-bar',
   'track-info',
+  'audio-visualizer',
   // 音乐功能按钮
   'btn-play-queue',
   'btn-playlists',

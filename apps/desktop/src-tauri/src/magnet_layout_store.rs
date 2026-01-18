@@ -25,27 +25,29 @@ const REQUIRED_MAGNET_IDS: [&str; 7] = [
     "btn-editor",
 ];
 
-const DEFAULT_ACTIVE_MAGNET_IDS_SPACE1: [&str; 20] = [
+const DEFAULT_ACTIVE_MAGNET_IDS_SPACE1: [&str; 22] = [
     "drag-handle",
     "btn-minimize",
     "btn-maximize",
     "btn-close",
     "btn-window-pin",
-    "btn-matrix-change",
-    "btn-editor",
-    "dsp-vst",
-    "navigation-page",
-    "btn-back",
-    "btn-play-pause",
     "btn-previous",
+    "btn-play-pause",
     "btn-next",
     "btn-mode",
     "btn-volume",
     "progress-bar",
     "track-info",
+    "audio-visualizer",
+    "btn-editor",
+    "btn-debug",
+    "btn-matrix-change",
+    "dsp-vst",
     "btn-play-queue",
     "btn-playlists",
     "btn-music-library",
+    "navigation-page",
+    "btn-back",
 ];
 
 fn now_ms() -> i64 {
@@ -86,6 +88,7 @@ fn system_required_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>> {
 
 fn system_space1_additional_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>> {
     match magnet_id {
+        "btn-debug" => Some(vec![build_anchor("anchor", 18.0, 0.0, "anchor")]),
         "btn-back" => Some(vec![build_anchor("anchor", 6.0, 0.0, "anchor")]),
         "navigation-page" => Some(vec![
             build_anchor("top-left", 6.0, 1.0, "anchor"),
@@ -93,25 +96,33 @@ fn system_space1_additional_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>>
             build_anchor("bottom-left", 6.0, 17.0, "boundary"),
             build_anchor("bottom-right", 26.0, 17.0, "boundary"),
         ]),
+        "audio-visualizer" => Some(vec![
+            build_anchor("top-left", 0.0, 9.0, "anchor"),
+            build_anchor("top-right", 5.0, 9.0, "boundary"),
+            build_anchor("bottom-left", 0.0, 14.0, "boundary"),
+            build_anchor("bottom-right", 5.0, 14.0, "boundary"),
+        ]),
         "track-info" => Some(vec![
-            build_anchor("top-left", 0.0, 14.0, "anchor"),
-            build_anchor("top-right", 5.0, 14.0, "boundary"),
-            build_anchor("bottom-left", 0.0, 17.0, "boundary"),
-            build_anchor("bottom-right", 5.0, 17.0, "boundary"),
+            build_anchor("top-left", 0.0, 15.0, "anchor"),
+            build_anchor("top-right", 5.0, 15.0, "boundary"),
+            build_anchor("bottom-left", 0.0, 18.0, "boundary"),
+            build_anchor("bottom-right", 5.0, 18.0, "boundary"),
         ]),
         "progress-bar" => Some(vec![
-            build_anchor("left", 0.0, 19.0, "anchor"),
-            build_anchor("right", 26.0, 19.0, "boundary"),
+            build_anchor("left", 6.0, 18.0, "anchor"),
+            build_anchor("right", 26.0, 18.0, "boundary"),
         ]),
-        "btn-previous" => Some(vec![build_anchor("anchor", 9.0, 18.0, "anchor")]),
-        "btn-play-pause" => Some(vec![build_anchor("anchor", 11.0, 18.0, "anchor")]),
-        "btn-next" => Some(vec![build_anchor("anchor", 13.0, 18.0, "anchor")]),
-        "btn-mode" => Some(vec![build_anchor("anchor", 15.0, 18.0, "anchor")]),
-        "btn-volume" => Some(vec![build_anchor("anchor", 17.0, 18.0, "anchor")]),
-        "dsp-vst" => Some(vec![build_anchor("anchor", 6.0, 18.0, "anchor")]),
-        "btn-play-queue" => Some(vec![build_anchor("anchor", 21.0, 18.0, "anchor")]),
-        "btn-playlists" => Some(vec![build_anchor("anchor", 23.0, 18.0, "anchor")]),
-        "btn-music-library" => Some(vec![build_anchor("anchor", 25.0, 18.0, "anchor")]),
+        "btn-matrix-change" => Some(vec![build_anchor("anchor", 3.0, 19.0, "anchor")]),
+        "dsp-vst" => Some(vec![build_anchor("anchor", 7.0, 19.0, "anchor")]),
+        "btn-previous" => Some(vec![build_anchor("anchor", 10.0, 19.0, "anchor")]),
+        "btn-play-pause" => Some(vec![build_anchor("anchor", 12.0, 19.0, "anchor")]),
+        "btn-next" => Some(vec![build_anchor("anchor", 14.0, 19.0, "anchor")]),
+        "btn-mode" => Some(vec![build_anchor("anchor", 16.0, 19.0, "anchor")]),
+        "btn-volume" => Some(vec![build_anchor("anchor", 18.0, 19.0, "anchor")]),
+        "btn-editor" => Some(vec![build_anchor("anchor", 20.0, 19.0, "anchor")]),
+        "btn-play-queue" => Some(vec![build_anchor("anchor", 22.0, 19.0, "anchor")]),
+        "btn-playlists" => Some(vec![build_anchor("anchor", 24.0, 19.0, "anchor")]),
+        "btn-music-library" => Some(vec![build_anchor("anchor", 26.0, 19.0, "anchor")]),
         _ => None,
     }
 }
@@ -249,7 +260,7 @@ pub struct MagnetLayoutStoreApplyPatchError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum MagnetLayoutStorePatch {
     SetActiveSpaceId { space_id: String },
     SetSpacesState { spaces: MagnetSpacesState },
@@ -1104,17 +1115,41 @@ mod tests {
     fn default_space1_layout_includes_system_anchors() {
         let layout = default_layout_for_space("space1");
         assert!(
-            layout.active_magnet_ids.iter().any(|id| id == "navigation-page"),
-            "space1 should include default navigation-page"
+            layout.active_magnet_ids.iter().any(|id| id == "audio-visualizer"),
+            "space1 should include default audio-visualizer"
         );
         assert!(
-            layout.anchors_by_magnet_id.get("navigation-page").is_some(),
-            "space1 should include system anchors for navigation-page"
+            layout.active_magnet_ids.iter().any(|id| id == "btn-debug"),
+            "space1 should include default btn-debug"
         );
-        assert!(
-            layout.anchors_by_magnet_id.get("progress-bar").is_some(),
-            "space1 should include system anchors for progress-bar"
-        );
+
+        let progress = layout
+            .anchors_by_magnet_id
+            .get("progress-bar")
+            .expect("space1 should include system anchors for progress-bar");
+        assert_eq!(progress[0].grid_x, 6.0);
+        assert_eq!(progress[0].grid_y, 18.0);
+
+        let matrix_change = layout
+            .anchors_by_magnet_id
+            .get("btn-matrix-change")
+            .expect("space1 should include system anchors for btn-matrix-change");
+        assert_eq!(matrix_change[0].grid_x, 3.0);
+        assert_eq!(matrix_change[0].grid_y, 19.0);
+
+        let editor = layout
+            .anchors_by_magnet_id
+            .get("btn-editor")
+            .expect("space1 should include system anchors for btn-editor");
+        assert_eq!(editor[0].grid_x, 20.0);
+        assert_eq!(editor[0].grid_y, 19.0);
+
+        let visualizer = layout
+            .anchors_by_magnet_id
+            .get("audio-visualizer")
+            .expect("space1 should include system anchors for audio-visualizer");
+        assert_eq!(visualizer[0].grid_x, 0.0);
+        assert_eq!(visualizer[0].grid_y, 9.0);
     }
 
     #[test]
@@ -1137,5 +1172,20 @@ mod tests {
             clean.anchors_by_magnet_id.get("navigation-page").is_none(),
             "non-space1 should not auto-fill non-required system anchors"
         );
+    }
+
+    #[test]
+    fn patch_deserializes_camel_case_fields() {
+        let json = serde_json::json!({
+            "kind": "setActiveSpaceId",
+            "spaceId": "space2",
+        });
+        let patch: MagnetLayoutStorePatch = serde_json::from_value(json).expect("patch should deserialize");
+        match patch {
+            MagnetLayoutStorePatch::SetActiveSpaceId { space_id } => {
+                assert_eq!(space_id, "space2");
+            }
+            _ => panic!("Expected SetActiveSpaceId patch"),
+        }
     }
 }

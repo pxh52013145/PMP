@@ -244,24 +244,33 @@ export function MatrixChangeMagnet() {
   const applyLayoutStorePatch = useCallback(
     async (patches: Parameters<typeof magnetLayoutStoreApplyPatch>[0]['patches'], reason: string) => {
       if (!isTauri) return;
-      const expectedRevision = storeRevisionRef.current;
-      if (expectedRevision <= 0) return;
-      const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason });
-      if (!response) return;
-      storeRevisionRef.current = response.state.revision;
-      setLayoutStoreState(response.state);
-      if (response.ok) return;
-      if (response.error?.code !== 'revisionConflict') return;
-      const retryRevision = response.state.revision;
-      if (retryRevision <= 0 || retryRevision === expectedRevision) return;
-      const retry = await magnetLayoutStoreApplyPatch({
-        expectedRevision: retryRevision,
-        patches,
-        reason: `${reason}:retry`,
-      });
-      if (!retry) return;
-      storeRevisionRef.current = retry.state.revision;
-      setLayoutStoreState(retry.state);
+      let expectedRevision = storeRevisionRef.current;
+      const maxRetries = 2;
+
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const attemptReason = attempt === 0 ? reason : `${reason}:retry${attempt === 1 ? '' : attempt}`;
+        const response = await magnetLayoutStoreApplyPatch({ expectedRevision, patches, reason: attemptReason });
+        if (!response) {
+          console.warn('[magnets] Failed to apply layout store patch (no response)', { reason: attemptReason });
+          return;
+        }
+
+        storeRevisionRef.current = response.state.revision;
+        setLayoutStoreState(response.state);
+
+        if (response.ok) return;
+        if (response.error?.code !== 'revisionConflict') {
+          console.warn('[magnets] Failed to apply layout store patch', { reason: attemptReason, error: response.error });
+          return;
+        }
+
+        const retryRevision = response.state.revision;
+        if (retryRevision <= 0 || retryRevision === expectedRevision) {
+          console.warn('[magnets] Failed to apply layout store patch (revision conflict)', { reason: attemptReason });
+          return;
+        }
+        expectedRevision = retryRevision;
+      }
     },
     [isTauri]
   );
@@ -274,21 +283,9 @@ export function MatrixChangeMagnet() {
         void broadcastDataUpdate(STORAGE_KEYS.MAGNET_SPACES, nextState, TAURI_EVENTS.MAGNET_SPACES_UPDATED);
         return;
       }
-
-      const expectedRevision = storeRevisionRef.current;
-      if (expectedRevision <= 0) return;
-      void (async () => {
-        const response = await magnetLayoutStoreApplyPatch({
-          expectedRevision,
-          patches: [{ kind: 'setActiveSpaceId', spaceId: nextSpaceId }],
-          reason: 'switchToSpace',
-        });
-        if (!response) return;
-        storeRevisionRef.current = response.state.revision;
-        setLayoutStoreState(response.state);
-      })();
+      void applyLayoutStorePatch([{ kind: 'setActiveSpaceId', spaceId: nextSpaceId }], 'switchToSpace');
     },
-    [activeSpaceId, isTauri, spacesState]
+    [activeSpaceId, applyLayoutStorePatch, isTauri, spacesState]
   );
 
   const copySpaceStorage = useCallback((sourceSpaceId: string, destSpaceId: string) => {
@@ -773,20 +770,7 @@ export function MatrixChangeMagnet() {
             closeDialog();
             return;
           }
-
-          const expectedRevision = storeRevisionRef.current;
-          if (expectedRevision > 0) {
-            void (async () => {
-              const response = await magnetLayoutStoreApplyPatch({
-                expectedRevision,
-                patches: [{ kind: 'setSpacesState', spaces: nextState }],
-                reason: 'createSpace',
-              });
-              if (!response) return;
-              storeRevisionRef.current = response.state.revision;
-              setLayoutStoreState(response.state);
-            })();
-          }
+          void applyLayoutStorePatch([{ kind: 'setSpacesState', spaces: nextState }], 'createSpace');
           closeDialog();
         }}
         onCancel={closeDialog}
@@ -825,22 +809,15 @@ export function MatrixChangeMagnet() {
             return;
           }
 
-          const expectedRevision = storeRevisionRef.current;
           const sourceLayout = layoutStoreState?.layoutsBySpaceId[dialog.sourceSpaceId];
-          if (expectedRevision > 0 && sourceLayout) {
-            void (async () => {
-              const response = await magnetLayoutStoreApplyPatch({
-                expectedRevision,
-                patches: [
-                  { kind: 'setSpacesState', spaces: nextState },
-                  { kind: 'setSpaceLayout', spaceId: dialog.newId, layout: sourceLayout },
-                ],
-                reason: 'cloneSpace',
-              });
-              if (!response) return;
-              storeRevisionRef.current = response.state.revision;
-              setLayoutStoreState(response.state);
-            })();
+          if (sourceLayout) {
+            void applyLayoutStorePatch(
+              [
+                { kind: 'setSpacesState', spaces: nextState },
+                { kind: 'setSpaceLayout', spaceId: dialog.newId, layout: sourceLayout },
+              ],
+              'cloneSpace'
+            );
           }
           closeDialog();
         }}
@@ -877,19 +854,7 @@ export function MatrixChangeMagnet() {
             return;
           }
 
-          const expectedRevision = storeRevisionRef.current;
-          if (expectedRevision > 0) {
-            void (async () => {
-              const response = await magnetLayoutStoreApplyPatch({
-                expectedRevision,
-                patches: [{ kind: 'setSpacesState', spaces: nextState }],
-                reason: 'renameSpace',
-              });
-              if (!response) return;
-              storeRevisionRef.current = response.state.revision;
-              setLayoutStoreState(response.state);
-            })();
-          }
+          void applyLayoutStorePatch([{ kind: 'setSpacesState', spaces: nextState }], 'renameSpace');
           closeDialog();
         }}
         onCancel={closeDialog}
@@ -1222,20 +1187,7 @@ export function MatrixChangeMagnet() {
             closeDialog();
             return;
           }
-
-          const expectedRevision = storeRevisionRef.current;
-          if (expectedRevision > 0) {
-            void (async () => {
-              const response = await magnetLayoutStoreApplyPatch({
-                expectedRevision,
-                patches: [{ kind: 'setSpacesState', spaces: nextState }],
-                reason: 'deleteSpace',
-              });
-              if (!response) return;
-              storeRevisionRef.current = response.state.revision;
-              setLayoutStoreState(response.state);
-            })();
-          }
+          void applyLayoutStorePatch([{ kind: 'setSpacesState', spaces: nextState }], 'deleteSpace');
           closeDialog();
         }}
         onCancel={closeDialog}
