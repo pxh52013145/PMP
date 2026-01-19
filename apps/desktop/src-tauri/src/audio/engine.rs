@@ -17,6 +17,8 @@ use crate::audio::input::{
     StreamingSamplesSource,
 };
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
+#[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
 use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumSnapshot, SpectrumTap};
@@ -230,17 +232,23 @@ impl NativeAudioEngine {
         #[cfg(not(target_os = "windows"))]
         let switching_to_exclusive = false;
 
+        #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+        let switching_to_asio =
+            previous_backend.id() != ASIO_BACKEND_ID && target_id == ASIO_BACKEND_ID;
+        #[cfg(not(all(target_os = "windows", feature = "asio-sdk")))]
+        let switching_to_asio = false;
+
         let previous_device_name = self.device_name.clone();
         let previous_output_sample_rate = self.output_sample_rate;
 
-        if switching_from_exclusive || switching_to_exclusive {
+        if switching_from_exclusive || switching_to_exclusive || switching_to_asio {
             self.cancel_crossfade();
             self.sync_clock();
             if let Some(old_sink) = self.sink.take() {
                 old_sink.stop();
             }
 
-            if switching_to_exclusive {
+            if switching_to_exclusive || switching_to_asio {
                 previous_backend.close_stream();
             }
         }
@@ -249,20 +257,24 @@ impl NativeAudioEngine {
         self.device_name = None;
         self.output_sample_rate = None;
 
+        #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+        let should_close_previous_stream = previous_backend.id() != ASIO_BACKEND_ID;
+        #[cfg(not(all(target_os = "windows", feature = "asio-sdk")))]
+        let should_close_previous_stream = true;
+
         if self.current_track.is_some() {
             if let Err(err) = self.rebuild_sink_on_new_device() {
                 self.output_backend = previous_backend.clone();
                 self.device_name = previous_device_name;
                 self.output_sample_rate = previous_output_sample_rate;
-                if switching_from_exclusive {
-                    let _ = self.rebuild_sink_on_new_device();
-                }
-                if switching_to_exclusive {
+                if switching_from_exclusive || switching_to_exclusive || switching_to_asio {
                     let _ = self.rebuild_sink_on_new_device();
                 }
                 return Err(err);
             } else {
-                previous_backend.close_stream();
+                if should_close_previous_stream {
+                    previous_backend.close_stream();
+                }
             }
         } else {
             match self.output_backend.create_sink() {
@@ -280,7 +292,9 @@ impl NativeAudioEngine {
                 }
             }
 
-            previous_backend.close_stream();
+            if should_close_previous_stream {
+                previous_backend.close_stream();
+            }
         }
 
         Ok(())

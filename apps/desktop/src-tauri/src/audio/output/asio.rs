@@ -70,35 +70,105 @@ impl AsioBackend {
                 let host = Self::host()?;
                 let mut attempts: Vec<String> = Vec::new();
 
-                if let Some(preferred) = preferred_device_name.as_deref() {
-                    let devices = host
+                let preferred = preferred_device_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+
+                let mut devices = host
+                    .output_devices()
+                    .map_err(|e| format!("Failed to enumerate output devices: {e}"))?
+                    .collect::<Vec<_>>();
+                if devices.is_empty() {
+                    // Some ASIO drivers can leave a stale "current driver" behind when switching
+                    // backends quickly. Clearing it here helps CPAL re-enumerate drivers.
+                    unsafe {
+                        asio_sys::bindings::asio_import::remove_current_driver();
+                    }
+                    devices = host
                         .output_devices()
-                        .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
-                    for device in devices {
+                        .map_err(|e| format!("Failed to enumerate output devices: {e}"))?
+                        .collect::<Vec<_>>();
+                }
+                let _manual_driver = if devices.is_empty() {
+                    let asio = Asio::new();
+                    let candidates = preferred
+                        .into_iter()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>();
+                    let candidates = if candidates.is_empty() {
+                        asio.driver_names().into_iter().take(16).collect()
+                    } else {
+                        candidates
+                    };
+
+                    let mut loaded: Option<asio_sys::Driver> = None;
+                    for candidate in candidates {
+                        match asio.load_driver(&candidate) {
+                            Ok(driver) => {
+                                attempts.push(format!(
+                                    "asio_sys load_driver '{candidate}': ok (ins={}, outs={})",
+                                    driver.channels().map(|c| c.ins).unwrap_or_default(),
+                                    driver.channels().map(|c| c.outs).unwrap_or_default(),
+                                ));
+                                loaded = Some(driver);
+                                devices = host
+                                    .output_devices()
+                                    .map_err(|e| format!("Failed to enumerate output devices: {e}"))?
+                                    .collect::<Vec<_>>();
+                                break;
+                            }
+                            Err(err) => {
+                                attempts.push(format!("asio_sys load_driver '{candidate}': {err}"));
+                            }
+                        }
+                    }
+                    loaded
+                } else {
+                    None
+                };
+
+                if let Some(preferred) = preferred {
+                    let mut found = false;
+                    for device in devices.iter() {
                         let Ok(name) = device.name() else {
                             continue;
                         };
-                        if name != preferred {
+                        let normalized = name.trim();
+                        if normalized != preferred
+                            && !normalized.eq_ignore_ascii_case(preferred)
+                            && name != preferred
+                        {
                             continue;
                         }
+
+                        found = true;
                         let output_sample_rate = device
                             .default_output_config()
                             .ok()
                             .map(|cfg| cfg.sample_rate().0);
-                        let (stream, handle) = OutputStream::try_from_device(&device)
-                            .map_err(|e| format!("Failed to init output device '{preferred}': {e}"))?;
-                        return Ok((stream, handle, Some(name), output_sample_rate));
+                        match OutputStream::try_from_device(device) {
+                            Ok((stream, handle)) => {
+                                return Ok((stream, handle, Some(name), output_sample_rate));
+                            }
+                            Err(err) => {
+                                attempts.push(format!("preferred '{preferred}' failed: {err}"));
+                            }
+                        }
                     }
-                    return Err(format!("Output device not found: {preferred}"));
+
+                    if !found {
+                        attempts.push(format!("preferred '{preferred}' not found"));
+                    }
                 }
 
-                if let Some(device) = host.default_output_device() {
+                if let Some(device) = devices.first() {
                     let device_name = device.name().ok();
                     let output_sample_rate = device
                         .default_output_config()
                         .ok()
                         .map(|cfg| cfg.sample_rate().0);
-                    match OutputStream::try_from_device(&device) {
+                    match OutputStream::try_from_device(device) {
                         Ok((stream, handle)) => return Ok((stream, handle, device_name, output_sample_rate)),
                         Err(err) => {
                             let label = device_name
@@ -111,9 +181,6 @@ impl AsioBackend {
                     attempts.push("no default output device".into());
                 }
 
-                let devices = host
-                    .output_devices()
-                    .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
                 for device in devices {
                     let device_name = device.name().ok();
                     let output_sample_rate = device
@@ -220,9 +287,29 @@ impl AudioOutputBackend for AsioBackend {
     }
 
     fn list_devices(&self) -> Result<Vec<String>, String> {
-        // Avoid enumerating devices through CPAL here - CPAL's ASIO device enumeration loads and
-        // initializes drivers. With an active stream this may return an empty list because ASIO
-        // only supports a single loaded driver at a time.
+        let stream_open = self.is_stream_open();
+
+        if !stream_open {
+            if let Ok(host) = Self::host() {
+                if let Ok(devices) = host.output_devices() {
+                    let mut names = Vec::new();
+                    for device in devices {
+                        if let Ok(name) = device.name() {
+                            names.push(name);
+                        }
+                    }
+                    if !names.is_empty() {
+                        names.sort();
+                        names.dedup();
+                        return Ok(names);
+                    }
+                }
+            }
+        }
+
+        // Avoid enumerating devices through CPAL when a stream is open - CPAL's ASIO device
+        // enumeration loads and initializes drivers. With an active stream this may return an
+        // empty list because ASIO only supports a single loaded driver at a time.
         let mut names = Asio::new().driver_names();
         names.sort();
         names.dedup();

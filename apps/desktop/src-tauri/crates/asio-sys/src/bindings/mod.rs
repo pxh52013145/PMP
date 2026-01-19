@@ -50,12 +50,7 @@ fn default_sys_ref() -> *mut c_void {
 ///
 /// There should only be one instance of this type at any point in time.
 #[derive(Debug, Default)]
-pub struct Asio {
-    // Keeps track of whether or not a driver is already loaded.
-    //
-    // This is necessary as ASIO only supports one `Driver` at a time.
-    loaded_driver: Mutex<Weak<DriverInner>>,
-}
+pub struct Asio;
 
 /// A handle to a single ASIO driver.
 ///
@@ -93,6 +88,13 @@ struct DriverInner {
     // indicating to the `drop` implementation that there is nothing to be done.
     destroyed: bool,
 }
+
+/// Tracks the currently loaded driver across all `Asio` instances.
+///
+/// Some consumers (e.g. CPAL) may create short-lived `Asio` handles while the `Driver` outlives
+/// them. Keeping this state process-wide avoids losing track of the active driver, which would
+/// otherwise cause subsequent driver enumeration attempts to return an empty list.
+static LOADED_DRIVER: Mutex<Weak<DriverInner>> = Mutex::new(Weak::new());
 
 /// All possible states of an ASIO `Driver` instance.
 ///
@@ -397,7 +399,7 @@ impl Asio {
     /// This can be useful to check before calling `load_driver` as ASIO only supports loading a
     /// single driver at a time.
     pub fn loaded_driver(&self) -> Option<Driver> {
-        self.loaded_driver
+        LOADED_DRIVER
             .lock()
             .expect("failed to acquire loaded driver lock")
             .upgrade()
@@ -448,8 +450,7 @@ impl Asio {
                         state,
                         destroyed,
                     });
-                    *self
-                        .loaded_driver
+                    *LOADED_DRIVER
                         .lock()
                         .expect("failed to acquire loaded driver lock") = Arc::downgrade(&inner);
                     let driver = Driver { inner };
@@ -843,17 +844,35 @@ impl DriverState {
     }
 
     fn destroy(&mut self) -> Result<(), AsioError> {
+        let mut first_error: Option<AsioError> = None;
+
         if let DriverState::Running = *self {
-            self.stop()?;
+            if let Err(err) = self.stop() {
+                first_error = Some(err);
+            }
         }
         if let DriverState::Prepared = *self {
-            self.dispose_buffers()?;
+            if let Err(err) = self.dispose_buffers() {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
         }
+
         unsafe {
-            asio_result!(ai::ASIOExit())?;
+            let exit_result = asio_result!(ai::ASIOExit());
             ai::remove_current_driver();
+            if let Err(err) = exit_result {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
         }
-        Ok(())
+
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 }
 
