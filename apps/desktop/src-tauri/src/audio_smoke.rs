@@ -29,6 +29,8 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
     let mut device_name: Option<String> = None;
     let mut input_id: Option<String> = None;
     let mut play_ms: u64 = 800;
+    let mut switch_backends: Vec<String> = Vec::new();
+    let mut switch_interval_ms: u64 = 250;
     let mut seek_seconds: f64 = 0.5;
     let mut seek_count: u32 = 1;
     let mut seek_interval_ms: u64 = 0;
@@ -72,6 +74,27 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
                 play_ms = value
                     .parse::<u64>()
                     .map_err(|_| format!("Invalid --play-ms value: {value}"))?;
+                index += 1;
+            }
+            "--switch-backends" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --switch-backends".to_string())?;
+                switch_backends = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| entry.to_string())
+                    .collect::<Vec<_>>();
+                index += 1;
+            }
+            "--switch-interval-ms" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --switch-interval-ms".to_string())?;
+                switch_interval_ms = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("Invalid --switch-interval-ms value: {value}"))?;
                 index += 1;
             }
             "--seek-seconds" => {
@@ -118,6 +141,8 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
         device_name,
         input_id,
         play_ms,
+        switch_backends,
+        switch_interval_ms,
         seek_seconds,
         seek_count,
         seek_interval_ms,

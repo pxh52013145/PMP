@@ -2127,6 +2127,8 @@ pub(crate) struct AudioSmokeOptions {
     pub device_name: Option<String>,
     pub input_id: Option<String>,
     pub play_ms: u64,
+    pub switch_backends: Vec<String>,
+    pub switch_interval_ms: u64,
     pub seek_seconds: f64,
     pub seek_count: u32,
     pub seek_interval_ms: u64,
@@ -2377,6 +2379,53 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
         (Ok(()), payload)
     };
     audio_smoke_step_result("native_audio_state (after play)", tick_snapshot.0, tick_snapshot.1)?;
+
+    if !options.switch_backends.is_empty() {
+        for (index, target_id) in options.switch_backends.iter().enumerate() {
+            let step_name = format!(
+                "native_audio_switch_output_backend[{}/{}]",
+                index + 1,
+                options.switch_backends.len()
+            );
+
+            let (result, payload) = match create_output_backend_by_id(target_id) {
+                Some(target_backend) => {
+                    let (result, payload) = {
+                        let mut engine = ENGINE
+                            .lock()
+                            .map_err(|_| "Audio engine is locked".to_string())?;
+                        engine.clear_error();
+
+                        let result = engine.switch_output_backend(target_backend).map_err(|error| {
+                            engine.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", error.clone());
+                            error
+                        });
+
+                        let payload = engine.build_state_payload(false);
+                        (result, payload)
+                    };
+                    (result, payload)
+                }
+                None => {
+                    let message = format!("Unknown output backend id: {target_id}");
+                    let payload = {
+                        let mut engine = ENGINE
+                            .lock()
+                            .map_err(|_| "Audio engine is locked".to_string())?;
+                        engine.clear_error();
+                        engine.set_error("NATIVE_AUDIO_BACKEND_SELECT_FAILED", message.clone());
+                        engine.build_state_payload(false)
+                    };
+                    (Err(message), payload)
+                }
+            };
+
+            audio_smoke_step_result(&step_name, result, payload)?;
+            if options.switch_interval_ms > 0 {
+                std::thread::sleep(Duration::from_millis(options.switch_interval_ms));
+            }
+        }
+    }
 
     let seek_count = options.seek_count.max(1);
     for index in 0..seek_count {
