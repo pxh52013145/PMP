@@ -150,7 +150,7 @@ fn run_tone(args: &[String]) -> Result<(), String> {
     let default_config = device
         .default_output_config()
         .map_err(|e| format!("Failed to query default output config: {e}"))?;
-    let channels = default_config.channels().min(2).max(1);
+    let channels = default_config.channels().max(1);
     let supported_config = SupportedStreamConfig::new(
         channels,
         default_config.sample_rate(),

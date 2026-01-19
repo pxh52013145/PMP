@@ -82,24 +82,81 @@ impl AsioBackend {
                     let default_config = device
                         .default_output_config()
                         .map_err(|e| format!("Failed to query default output config: {e}"))?;
-                    let output_sample_rate = Some(default_config.sample_rate().0);
 
-                    // Prefer a stereo config when the driver exposes many channels. This improves
-                    // the odds that audio is routed to the primary output pair (common for ASIO4ALL
-                    // / multi-channel interfaces) while keeping a conservative fallback to the
-                    // driver's default config.
-                    let stream_result = if default_config.channels() > 2 {
-                        let stereo_config = rodio::cpal::SupportedStreamConfig::new(
-                            2,
-                            default_config.sample_rate(),
-                            *default_config.buffer_size(),
-                            default_config.sample_format(),
-                        );
-                        OutputStream::try_from_device_config(device, stereo_config)
-                            .or_else(|_| OutputStream::try_from_device_config(device, default_config.clone()))
-                    } else {
-                        OutputStream::try_from_device_config(device, default_config.clone())
+                    let select_config = |preferred_format: rodio::cpal::SampleFormat,
+                                         default_config: &rodio::cpal::SupportedStreamConfig| {
+                        let Ok(configs) = device.supported_output_configs() else {
+                            return None;
+                        };
+
+                        let desired_channels = default_config.channels();
+                        let desired_rate = default_config.sample_rate().0;
+                        let mut best: Option<(u32, rodio::cpal::SupportedStreamConfig)> = None;
+
+                        for range in configs {
+                            if range.channels() != desired_channels {
+                                continue;
+                            }
+                            if range.sample_format() != preferred_format {
+                                continue;
+                            }
+
+                            let min_rate = range.min_sample_rate().0;
+                            let max_rate = range.max_sample_rate().0;
+                            let picked = desired_rate.clamp(min_rate, max_rate);
+                            let delta = if desired_rate >= min_rate && desired_rate <= max_rate {
+                                0
+                            } else {
+                                desired_rate.abs_diff(picked)
+                            };
+                            let candidate = range.with_sample_rate(rodio::cpal::SampleRate(picked));
+
+                            match best.as_ref() {
+                                Some((best_delta, _)) if *best_delta <= delta => {}
+                                _ => best = Some((delta, candidate)),
+                            }
+
+                            if delta == 0 {
+                                break;
+                            }
+                        }
+
+                        best.map(|(_, cfg)| cfg)
                     };
+
+                    // Prefer float output when available. Some drivers (notably ASIO4ALL) may
+                    // report `I32` as the default format but produce silence in that mode.
+                    let selected_config = if default_config.sample_format() == rodio::cpal::SampleFormat::F32 {
+                        default_config.clone()
+                    } else {
+                        select_config(rodio::cpal::SampleFormat::F32, &default_config)
+                            .or_else(|| select_config(rodio::cpal::SampleFormat::I16, &default_config))
+                            .unwrap_or_else(|| default_config.clone())
+                    };
+
+                    let output_sample_rate = Some(selected_config.sample_rate().0);
+
+                    // Some ASIO drivers expose many output channels (often including disabled
+                    // busses). Forcing a 2-channel stream can end up mapped to an inactive pair,
+                    // resulting in silence even though the stream successfully opens. Prefer the
+                    // driver's default channel count so audio is present on all active outputs.
+                    let stream_result =
+                        OutputStream::try_from_device_config(device, selected_config.clone())
+                            .or_else(|err| {
+                                if selected_config.channels() <= 2 {
+                                    return Err(err);
+                                }
+
+                                // Fall back to a stereo stream for drivers that refuse to open
+                                // multi-channel configs.
+                                let stereo_config = rodio::cpal::SupportedStreamConfig::new(
+                                    2,
+                                    selected_config.sample_rate(),
+                                    *selected_config.buffer_size(),
+                                    selected_config.sample_format(),
+                                );
+                                OutputStream::try_from_device_config(device, stereo_config)
+                            });
 
                     match stream_result {
                         Ok((stream, handle)) => Ok((stream, handle, output_sample_rate)),

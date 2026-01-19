@@ -62,8 +62,6 @@ struct DspSlowConfig {
 
 #[derive(Clone, Debug)]
 struct DspRuntimeConfig {
-    gain_db: f32,
-    replay_gain_db: f32,
     gain_linear: f32,
     eq_bands: Vec<EqBandConfig>,
     limiter_threshold_db: Option<f32>,
@@ -73,8 +71,6 @@ struct DspRuntimeConfig {
 impl Default for DspRuntimeConfig {
     fn default() -> Self {
         Self {
-            gain_db: 0.0,
-            replay_gain_db: 0.0,
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
@@ -173,15 +169,31 @@ impl DspRuntime {
         }
     }
 
-    fn snapshot(&self) -> DspRuntimeConfig {
+    #[cfg(test)]
+    fn gain_db(&self) -> f32 {
         let gain_db = load_atomic_f32(&self.gain_db_bits);
+        if gain_db.is_finite() {
+            gain_db
+        } else {
+            0.0
+        }
+    }
+
+    #[cfg(test)]
+    fn replay_gain_db(&self) -> f32 {
         let replay_gain_db = load_atomic_f32(&self.replay_gain_db_bits);
+        if replay_gain_db.is_finite() {
+            replay_gain_db
+        } else {
+            0.0
+        }
+    }
+
+    fn snapshot(&self) -> DspRuntimeConfig {
         let gain_linear = load_atomic_f32(&self.gain_linear_bits);
         let slow = self.slow_config();
 
         DspRuntimeConfig {
-            gain_db,
-            replay_gain_db,
             gain_linear,
             eq_bands: slow.eq_bands.clone(),
             limiter_threshold_db: slow.limiter_threshold_db,
@@ -724,8 +736,6 @@ where
 
                 let slow = dsp_thread.slow_config();
                 let config = DspRuntimeConfig {
-                    gain_db: 0.0,
-                    replay_gain_db: 0.0,
                     gain_linear: 1.0,
                     eq_bands: slow.eq_bands.clone(),
                     limiter_threshold_db: slow.limiter_threshold_db,
@@ -1100,7 +1110,7 @@ mod tests {
         assert!((gain_db + 6.0).abs() < 1e-6);
 
         let snapshot = runtime.snapshot();
-        assert!((snapshot.gain_db + 6.0).abs() < 1e-6);
+        assert!((runtime.gain_db() + 6.0).abs() < 1e-6);
         assert!((snapshot.gain_linear - gain_db_to_linear(-6.0)).abs() < 1e-6);
     }
 
@@ -1113,14 +1123,14 @@ mod tests {
         assert!((replay_gain_db + 6.0).abs() < 1e-6);
 
         let snapshot = runtime.snapshot();
-        assert!((snapshot.gain_db - 0.0).abs() < 1e-6);
-        assert!((snapshot.replay_gain_db + 6.0).abs() < 1e-6);
+        assert!((runtime.gain_db() - 0.0).abs() < 1e-6);
+        assert!((runtime.replay_gain_db() + 6.0).abs() < 1e-6);
         assert!((snapshot.gain_linear - gain_db_to_linear(-6.0)).abs() < 1e-6);
 
         let _ = runtime.apply_chain(&[DspNodeConfig::Gain { db: 3.0 }]);
         let snapshot = runtime.snapshot();
-        assert!((snapshot.gain_db - 3.0).abs() < 1e-6);
-        assert!((snapshot.replay_gain_db + 6.0).abs() < 1e-6);
+        assert!((runtime.gain_db() - 3.0).abs() < 1e-6);
+        assert!((runtime.replay_gain_db() + 6.0).abs() < 1e-6);
         assert!((snapshot.gain_linear - gain_db_to_linear(-3.0)).abs() < 1e-6);
     }
 
@@ -1352,8 +1362,6 @@ mod tests {
     fn dsp_chain_gain_only_scales_samples() {
         let gain_db = 6.0;
         let config = DspRuntimeConfig {
-            gain_db,
-            replay_gain_db: 0.0,
             gain_linear: gain_db_to_linear(gain_db),
             eq_bands: Vec::new(),
             limiter_threshold_db: None,
@@ -1375,8 +1383,6 @@ mod tests {
     fn dsp_chain_limiter_clamps_peaks() {
         let threshold_db = -6.0;
         let config = DspRuntimeConfig {
-            gain_db: 0.0,
-            replay_gain_db: 0.0,
             gain_linear: 1.0,
             eq_bands: Vec::new(),
             limiter_threshold_db: Some(threshold_db),

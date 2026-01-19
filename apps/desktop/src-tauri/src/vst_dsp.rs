@@ -248,6 +248,7 @@ impl VstDspNode {
         self.mix_in_total_frames = frames;
     }
 
+    #[cfg(test)]
     fn write_processed_frame_into_ring(&mut self, global_frame: u64, processed_frame: &[f32]) {
         write_processed_frame_into_delay_ring(
             &mut self.delay_ring,
