@@ -746,6 +746,17 @@ impl Driver {
         self.inner.stop_inner()
     }
 
+    /// Opens the driver's control panel UI (routing/buffer size/etc.).
+    ///
+    /// The driver must be loaded and initialised before calling this method.
+    #[cfg(target_os = "windows")]
+    pub fn open_control_panel(&self) -> Result<(), AsioError> {
+        unsafe {
+            asio_result!(ai::ASIOControlPanel())?;
+        }
+        Ok(())
+    }
+
     /// Adds a callback to the list of active callbacks.
     ///
     /// The given function receives the index of the buffer currently ready for processing.

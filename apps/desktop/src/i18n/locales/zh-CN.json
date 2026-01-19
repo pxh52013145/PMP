@@ -193,6 +193,7 @@
   "settings.audioComponents.outputDevice.default": "默认设备",
   "settings.audioComponents.outputDevice.select.ariaLabel": "选择输出设备",
   "settings.audioComponents.outputDevice.current": "当前：{device} · {sampleRate}",
+  "settings.audioComponents.outputDevice.action.openAsioControlPanel": "打开 ASIO 控制面板",
   "settings.audioComponents.audioInput.title": "输入/解码器",
   "settings.audioComponents.audioInput.desc": "选择音频输入/解码实现（用于解码与供给 PCM）。",
   "settings.audioComponents.audioInput.auto": "自动",

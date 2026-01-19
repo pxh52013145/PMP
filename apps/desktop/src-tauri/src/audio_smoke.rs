@@ -31,6 +31,9 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
     let mut play_ms: u64 = 800;
     let mut switch_backends: Vec<String> = Vec::new();
     let mut switch_interval_ms: u64 = 250;
+    let mut switch_tracks: Vec<PathBuf> = Vec::new();
+    let mut switch_track_interval_ms: u64 = 250;
+    let mut crossfade_ms: u64 = 0;
     let mut seek_seconds: f64 = 0.5;
     let mut seek_count: u32 = 1;
     let mut seek_interval_ms: u64 = 0;
@@ -97,6 +100,36 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
                     .map_err(|_| format!("Invalid --switch-interval-ms value: {value}"))?;
                 index += 1;
             }
+            "--switch-tracks" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --switch-tracks".to_string())?;
+                switch_tracks = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>();
+                index += 1;
+            }
+            "--switch-track-interval-ms" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --switch-track-interval-ms".to_string())?;
+                switch_track_interval_ms = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("Invalid --switch-track-interval-ms value: {value}"))?;
+                index += 1;
+            }
+            "--crossfade-ms" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --crossfade-ms".to_string())?;
+                crossfade_ms = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("Invalid --crossfade-ms value: {value}"))?;
+                index += 1;
+            }
             "--seek-seconds" => {
                 let value = args
                     .get(index + 1)
@@ -143,6 +176,9 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
         play_ms,
         switch_backends,
         switch_interval_ms,
+        switch_tracks,
+        switch_track_interval_ms,
+        crossfade_ms,
         seek_seconds,
         seek_count,
         seek_interval_ms,

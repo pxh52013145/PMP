@@ -16,6 +16,8 @@ pub use rodio_cpal::default_backend;
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 pub use asio::{asio_backend, ASIO_BACKEND_ID};
+#[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+pub(crate) use asio::open_control_panel as open_asio_control_panel;
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
 #[cfg(target_os = "windows")]

@@ -137,6 +137,10 @@ export function AudioComponentsSettingsPanel() {
     return describeOutputBackend(selectedBackend);
   }, [describeOutputBackend, selectedBackend]);
 
+  const hasAsioFeature = useMemo(() => {
+    return outputBackends.includes('asio') || componentsState.outputBackendId === 'asio';
+  }, [componentsState.outputBackendId, outputBackends]);
+
   const refreshComponents = useCallback(async () => {
     if (!canUseBackend) return;
     if (busyRef.current) return;
@@ -284,6 +288,26 @@ export function AudioComponentsSettingsPanel() {
       void refreshComponents();
     }
   }, [canUseBackend, refreshComponents, selectedDevice]);
+
+  const handleOpenAsioControlPanel = useCallback(async () => {
+    if (!canUseBackend) return;
+    if (busyRef.current) return;
+
+    const deviceName = componentsState.outputDevice ?? (selectedDevice.length > 0 ? selectedDevice : null);
+
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+
+    try {
+      await invoke('native_audio_open_asio_control_panel', { deviceName });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [canUseBackend, componentsState.outputDevice, selectedDevice]);
 
   const handleApplyAudioInput = useCallback(async () => {
     if (!canUseBackend) return;
@@ -467,6 +491,16 @@ export function AudioComponentsSettingsPanel() {
               <button type="button" className="settings-action-btn" onClick={() => void handleApplyDevice()} disabled={busy}>
                 {t('common.action.apply')}
               </button>
+              {hasAsioFeature && (selectedBackend === 'asio' || componentsState.outputBackendId === 'asio') && (
+                <button
+                  type="button"
+                  className="settings-action-btn"
+                  onClick={() => void handleOpenAsioControlPanel()}
+                  disabled={busy}
+                >
+                  {t('settings.audioComponents.outputDevice.action.openAsioControlPanel')}
+                </button>
+              )}
             </div>
           </div>
 

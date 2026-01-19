@@ -2041,6 +2041,19 @@ pub fn list_output_devices() -> Result<Vec<String>, String> {
     output_backend.list_devices()
 }
 
+pub fn open_asio_control_panel(device_name: Option<String>) -> Result<(), String> {
+    #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+    {
+        crate::audio::output::open_asio_control_panel(device_name)
+    }
+
+    #[cfg(not(all(target_os = "windows", feature = "asio-sdk")))]
+    {
+        let _ = device_name;
+        Err("ASIO control panel is unavailable in this build".to_string())
+    }
+}
+
 pub fn select_output_device(
     app_handle: &AppHandle,
     device_name: Option<String>,
@@ -2129,6 +2142,9 @@ pub(crate) struct AudioSmokeOptions {
     pub play_ms: u64,
     pub switch_backends: Vec<String>,
     pub switch_interval_ms: u64,
+    pub switch_tracks: Vec<PathBuf>,
+    pub switch_track_interval_ms: u64,
+    pub crossfade_ms: u64,
     pub seek_seconds: f64,
     pub seek_count: u32,
     pub seek_interval_ms: u64,
@@ -2423,6 +2439,36 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
             audio_smoke_step_result(&step_name, result, payload)?;
             if options.switch_interval_ms > 0 {
                 std::thread::sleep(Duration::from_millis(options.switch_interval_ms));
+            }
+        }
+    }
+
+    if !options.switch_tracks.is_empty() {
+        for (index, track) in options.switch_tracks.iter().enumerate() {
+            let step_name = format!(
+                "native_audio_switch_track[{}/{}]",
+                index + 1,
+                options.switch_tracks.len()
+            );
+
+            let (result, payload) = {
+                let mut engine = ENGINE
+                    .lock()
+                    .map_err(|_| "Audio engine is locked".to_string())?;
+                engine.clear_error();
+                let result = engine
+                    .crossfade_to(track.clone(), options.crossfade_ms)
+                    .map_err(|error| {
+                        engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", error.clone());
+                        error
+                    });
+                let payload = engine.build_state_payload(false);
+                (result, payload)
+            };
+
+            audio_smoke_step_result(&step_name, result, payload)?;
+            if options.switch_track_interval_ms > 0 {
+                std::thread::sleep(Duration::from_millis(options.switch_track_interval_ms));
             }
         }
     }

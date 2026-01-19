@@ -164,6 +164,11 @@ async fn native_audio_select_device(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn native_audio_open_asio_control_panel(device_name: Option<String>) -> Result<(), String> {
+    native_audio::open_asio_control_panel(device_name)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn native_audio_sync_queue(
     app: tauri::AppHandle,
     queue: Vec<String>,
@@ -764,6 +769,7 @@ fn main() {
             native_audio_get_audio_components_state,
             native_audio_list_devices,
             native_audio_select_device,
+            native_audio_open_asio_control_panel,
             native_audio_sync_queue,
             native_audio_resample_cache_get_status,
             native_audio_resample_cache_set_max_bytes,

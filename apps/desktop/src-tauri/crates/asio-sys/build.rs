@@ -5,6 +5,7 @@ extern crate walkdir;
 
 use parse_cfg::*;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -80,7 +81,14 @@ fn main() {
     // If they don't create them
     let mut binding_path = out_dir.clone();
     binding_path.push("asio_bindings.rs");
-    if !binding_path.exists() {
+    let mut needs_bindings = !binding_path.exists();
+    if !needs_bindings {
+        needs_bindings = fs::read_to_string(&binding_path)
+            .map(|contents| !contents.contains("ASIOControlPanel"))
+            .unwrap_or(true);
+    }
+
+    if needs_bindings {
         if is_msvc() {
             invoke_vcvars_if_not_set();
         }
@@ -236,6 +244,7 @@ fn create_bindings(cpal_asio_dir: &PathBuf) {
         .allowlist_function("ASIOCreateBuffers")
         .allowlist_function("ASIOStart")
         .allowlist_function("ASIOStop")
+        .allowlist_function("ASIOControlPanel")
         .allowlist_function("ASIODisposeBuffers")
         .allowlist_function("ASIOExit")
         .allowlist_function("load_asio_driver")
