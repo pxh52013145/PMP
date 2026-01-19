@@ -14,6 +14,7 @@ use magnet_layout_store::{
 
 mod background_media;
 mod audio;
+mod asio_diag;
 mod audio_smoke;
 mod dsp_graph;
 mod magnet_layout_store;
@@ -598,6 +599,9 @@ async fn background_import_media(
 }
 
 fn main() {
+    if let Some(exit_code) = asio_diag::maybe_run_from_cli() {
+        std::process::exit(exit_code);
+    }
     if let Some(exit_code) = audio_smoke::maybe_run_from_cli() {
         std::process::exit(exit_code);
     }

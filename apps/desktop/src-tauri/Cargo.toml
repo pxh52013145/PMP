@@ -38,10 +38,14 @@ gif = "0.14"
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
+asio-sys = { version = "0.2.5", optional = true }
 cpal = { version = "0.15", optional = true, features = ["asio"] }
 
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
-asio-sdk = ["dep:cpal"]
+asio-sdk = ["dep:asio-sys", "dep:cpal"]
+
+[patch.crates-io]
+asio-sys = { path = "crates/asio-sys" }

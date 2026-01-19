@@ -2430,5 +2430,14 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
     };
     audio_smoke_step_result("native_audio_stop", stop_step.0, stop_step.1)?;
 
+    // Ensure the output stream thread is terminated so `--audio-smoke` exits cleanly.
+    let output_backend = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.output_backend()
+    };
+    output_backend.close_stream();
+
     Ok(())
 }

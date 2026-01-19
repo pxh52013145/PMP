@@ -105,8 +105,6 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "asio-sys"
 version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9eeb716b266643d95dbb4fe71f9ae5473c3ff2a7d796c0c58d2d219a56ce6c1a"
 dependencies = [
  "bindgen",
  "cc",
@@ -2687,6 +2685,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 name = "pixel-matrix-player"
 version = "0.1.0"
 dependencies = [
+ "asio-sys",
  "base64 0.22.1",
  "cpal",
  "dsf",
