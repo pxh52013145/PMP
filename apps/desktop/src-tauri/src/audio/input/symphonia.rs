@@ -1238,6 +1238,7 @@ impl AudioInput for SymphoniaInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn ring_buffer_pop_chunk_into_preserves_order_and_reports_finished() {
@@ -1324,5 +1325,44 @@ mod tests {
         let drained = drain_decoder_commands(&rx);
         assert!(drained.shutdown);
         assert_eq!(drained.seek_target, None);
+    }
+
+    #[test]
+    fn open_prefers_cached_pcm_stream() {
+        let cache_dir = {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!("pmp-resample-cache-symphonia-open-test-{nanos}"));
+            std::fs::create_dir_all(&dir).expect("create cache dir");
+            crate::audio::resample_cache::init_for_tests(dir)
+        };
+
+        let path = cache_dir.join("test.wav");
+        std::fs::write(&path, b"dummy").expect("write dummy file");
+
+        let output_rate = 44_100u32;
+        let key = crate::audio::resample_cache::key_for_resample(&path, Some(output_rate)).expect("cache key");
+
+        let samples = Arc::new(vec![0.0f32; (output_rate as usize) * 2]);
+        crate::audio::resample_cache::store_async(key.clone(), samples, 2, output_rate, Some(16));
+
+        let cache_file = cache_dir.join(format!("{key}.bin"));
+        let started_at = Instant::now();
+        while !cache_file.exists() && started_at.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(cache_file.exists(), "expected cached PCM file to exist");
+
+        let input = SymphoniaInput::default();
+        let result = input.open(&path, Some(output_rate)).expect("open should succeed");
+
+        match result.kind {
+            AudioInputKind::Streaming(playback) => {
+                let _ = playback.command_tx.send(DecoderCommand::Shutdown);
+            }
+            _ => panic!("expected streaming cached PCM playback"),
+        }
     }
 }
