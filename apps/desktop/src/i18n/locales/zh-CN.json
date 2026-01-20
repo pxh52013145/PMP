@@ -144,6 +144,8 @@
 
   "settings.panels.language.title": "语言",
   "settings.panels.workbench.title": "主界面",
+  "settings.panels.windowClose.title": "关闭行为",
+  "settings.panels.windowClose.desc": "配置关闭按钮与任务栏关闭的行为。",
   "settings.panels.performance.title": "性能",
   "settings.panels.audio.title": "音频",
   "settings.panels.audioComponents.title": "输出/输入",
@@ -156,6 +158,22 @@
   "settings.sections.system": "系统",
   "settings.sections.plugins": "插件",
   "settings.sections.visualizers": "可视化",
+
+  "settings.windowClose.behavior.ask": "每次询问",
+  "settings.windowClose.behavior.hide": "隐藏到后台",
+  "settings.windowClose.behavior.exit": "直接退出",
+  "settings.windowClose.magnet.label": "Magnet 关闭按钮",
+  "settings.windowClose.magnet.desc": "点击 Magnet 的关闭按钮时如何处理。",
+  "settings.windowClose.magnet.note": "建议选择“每次询问”或“隐藏到后台”，避免误退出。",
+  "settings.windowClose.system.label": "窗口关闭（任务栏/标题栏）",
+  "settings.windowClose.system.desc": "点击主窗口关闭按钮或从任务栏关闭时如何处理。",
+  "settings.windowClose.system.note": "默认隐藏到后台，可在系统托盘菜单中退出。",
+
+  "windowClose.dialog.title": "关闭主窗口",
+  "windowClose.dialog.message.system": "你想要退出应用，还是隐藏到后台？",
+  "windowClose.dialog.message.magnet": "你点击了 Magnet 的关闭按钮。请选择隐藏到后台或退出应用。",
+  "windowClose.action.hide": "隐藏到后台",
+  "windowClose.action.exit": "退出应用",
 
   "settings.audio.engine.label": "音频引擎",
   "settings.audio.engine.desc": "桌面端仅支持 Native Audio，统一接入 Magnet 控件。",

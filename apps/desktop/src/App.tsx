@@ -22,6 +22,7 @@ import {
 } from './modules/magnets';
 import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
 import { isTauriRuntime } from './utils/tauriRuntime';
+import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import './App.css';
 
 function AppContent() {
@@ -226,7 +227,9 @@ function App() {
               gridSize={{ columns: MATRIX_CONFIG.COLUMNS, rows: MATRIX_CONFIG.ROWS }}
               registerFlushHandler={registerFlushHandler}
             >
-              <AppContent />
+              <WindowCloseProvider>
+                <AppContent />
+              </WindowCloseProvider>
             </MagnetLibraryProvider>
           </NavigationProvider>
         </EditorProvider>

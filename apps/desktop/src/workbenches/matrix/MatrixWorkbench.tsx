@@ -29,6 +29,7 @@ import {
 import { readJson, readString, writeJson } from '../../modules/storage';
 import { gcOrphanBackgroundMedia } from '../../modules/background/mediaCleanup';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { useWindowClose } from '../../contexts/WindowCloseContext';
 
 type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
 const DEFAULT_BACKGROUND_THEME_COLOR: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
@@ -45,6 +46,7 @@ export function MatrixWorkbench({
   showWindowBorder,
 }: MatrixWorkbenchProps) {
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const { requestMainWindowClose } = useWindowClose();
 
   const [pixelPositions, setPixelPositions] = useState<Map<string, { x: number; y: number }>>(
     new Map()
@@ -399,7 +401,7 @@ export function MatrixWorkbench({
               ...m.interactions,
               onClick: () => {
                 if (!isTauri) return;
-                void appWindow.close();
+                requestMainWindowClose('magnet');
               },
             },
           };
@@ -417,7 +419,7 @@ export function MatrixWorkbench({
         return m;
       });
     return filtered;
-  }, [activeMagnetIds, isTauri, magnetLibrary, toggleEditMode]);
+  }, [activeMagnetIds, isTauri, magnetLibrary, requestMainWindowClose, toggleEditMode]);
 
   // 更新占用信息
   useEffect(() => {

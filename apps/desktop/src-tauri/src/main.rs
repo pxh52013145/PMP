@@ -7,6 +7,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use once_cell::sync::OnceCell;
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 use magnet_layout_store::{
     magnet_layout_store_apply_patch, magnet_layout_store_bootstrap, magnet_layout_store_get_state,
@@ -40,6 +41,11 @@ struct EditorEffectsState {
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to Pixel Matrix Player!", name)
+}
+
+#[tauri::command]
+fn app_request_exit(app: tauri::AppHandle) {
+    request_app_exit(&app);
 }
 
 #[cfg(test)]
@@ -690,7 +696,7 @@ fn main() {
                     }
                 }
                 "quit" => {
-                    std::process::exit(0);
+                    request_app_exit(app);
                 }
                 _ => {}
             },
@@ -713,12 +719,12 @@ fn main() {
             let app_handle = app.handle();
             let exit_flag = app.state::<ExitFlag>().0.clone();
             window.on_window_event(move |event| match event {
-                tauri::WindowEvent::CloseRequested { .. } => {
-                    exit_flag.store(true, Ordering::SeqCst);
-                    windows::editor::close_all_editor_windows(&app_handle);
-                    windows::plugin::close_all_plugin_windows(&app_handle);
-                    windows::vst_manager::close_all_vst_manager_windows(&app_handle);
-                    vst_runtime::close_all();
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if exit_flag.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    api.prevent_close();
+                    let _ = app_handle.emit_all(windows::EVENT_MAIN_WINDOW_CLOSE_REQUESTED, ());
                 }
                 tauri::WindowEvent::Focused(true) => {
                     let app_handle = app_handle.clone();
@@ -745,6 +751,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            app_request_exit,
             background_import_media,
             open_editor_window,
             close_editor_window,
@@ -814,4 +821,54 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn request_app_exit(app: &tauri::AppHandle) {
+    static EXIT_REQUESTED: OnceCell<()> = OnceCell::new();
+    if EXIT_REQUESTED.set(()).is_err() {
+        app.exit(0);
+        return;
+    }
+
+    eprintln!("[App] Exit requested");
+    let exit_flag = app.state::<ExitFlag>().0.clone();
+    exit_flag.store(true, Ordering::SeqCst);
+
+    // Safety: avoid blocking the UI thread on best-effort cleanup. If the event loop doesn't exit
+    // promptly (e.g. a backend/driver hangs), force-terminate to prevent a lingering process.
+    let exit_flag_for_watchdog = exit_flag.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(4));
+        if exit_flag_for_watchdog.load(Ordering::SeqCst) {
+            eprintln!("[App] Exit watchdog: forcing process exit");
+            std::process::exit(0);
+        }
+    });
+
+    // Stop background threads that would otherwise keep the process alive after `app.exit(0)`.
+    crate::audio::shutdown();
+    vst_runtime::shutdown_session_status_broadcaster();
+
+    windows::editor::close_all_editor_windows(app);
+    windows::plugin::close_all_plugin_windows(app);
+    windows::vst_manager::close_all_vst_manager_windows(app);
+    vst_runtime::close_all();
+
+    // Best-effort: stop playback and release output stream (especially ASIO) before exiting.
+    let backend = match crate::audio::engine::ENGINE.lock() {
+        Ok(mut engine) => {
+            engine.stop();
+            Some(engine.output_backend())
+        }
+        Err(poisoned) => {
+            let mut engine = poisoned.into_inner();
+            engine.stop();
+            Some(engine.output_backend())
+        }
+    };
+    if let Some(backend) = backend {
+        backend.close_stream();
+    }
+
+    app.exit(0);
 }

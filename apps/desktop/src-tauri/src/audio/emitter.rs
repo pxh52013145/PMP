@@ -1,6 +1,6 @@
 use once_cell::sync::OnceCell;
 use rustfft::FftPlanner;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -13,6 +13,7 @@ use crate::audio::events::{
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 static EMITTER_STARTED: OnceCell<()> = OnceCell::new();
 static LAST_EMITTED_ERROR_SEQ: AtomicU64 = AtomicU64::new(0);
+static EMITTER_STOP: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn ensure_started(app_handle: &AppHandle) {
     let _ = APP_HANDLE.set(app_handle.clone());
@@ -26,7 +27,13 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
         let fft = planner.plan_fft_forward(1024);
 
         loop {
+            if EMITTER_STOP.load(Ordering::Acquire) {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(250));
+            if EMITTER_STOP.load(Ordering::Acquire) {
+                break;
+            }
             let Some(app_handle) = APP_HANDLE.get().cloned() else {
                 continue;
             };
@@ -72,6 +79,10 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
     });
 }
 
+pub(crate) fn shutdown() {
+    EMITTER_STOP.store(true, Ordering::SeqCst);
+}
+
 pub(crate) fn emit_state(app_handle: &AppHandle, payload: NativeAudioStatePayload) -> Result<(), String> {
     app_handle
         .emit_all(NATIVE_AUDIO_STATE_EVENT, payload)
@@ -113,4 +124,3 @@ pub(crate) fn emit_error(app_handle: &AppHandle, payload: NativeAudioErrorPayloa
         .emit_all(NATIVE_AUDIO_ERROR_EVENT, payload)
         .map_err(|e| format!("Failed to emit error: {e}"))
 }
-

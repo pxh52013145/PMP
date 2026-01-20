@@ -13,6 +13,7 @@ import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsP
 import { AudioComponentsSettingsPanel } from '../components/settings-panels/AudioComponentsSettingsPanel';
 import { LanguageSettingsPanel } from '../components/settings-panels/LanguageSettingsPanel';
 import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
+import { WindowCloseSettingsPanel } from '../components/settings-panels/WindowCloseSettingsPanel';
 import { PerformanceSettingsPanel } from '../components/settings-panels/PerformanceSettingsPanel';
 import { PluginsSettingsPanel } from '../components/settings-panels/PluginsSettingsPanel';
 import { ResampleCacheSettingsPanel } from '../components/settings-panels/ResampleCacheSettingsPanel';
@@ -92,6 +93,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => <WorkbenchSettingsPanel />,
           source: 'builtin',
           order: 5,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'window-close',
+          title: t('settings.panels.windowClose.title'),
+          description: t('settings.panels.windowClose.desc'),
+          render: () => <WindowCloseSettingsPanel />,
+          source: 'builtin',
+          order: 7,
           group: 'core',
         });
 

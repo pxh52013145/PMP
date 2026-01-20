@@ -144,6 +144,8 @@
 
   "settings.panels.language.title": "Language",
   "settings.panels.workbench.title": "Workbench",
+  "settings.panels.windowClose.title": "Window Close",
+  "settings.panels.windowClose.desc": "Configure what happens when closing the main window.",
   "settings.panels.performance.title": "Performance",
   "settings.panels.audio.title": "Audio",
   "settings.panels.audioCache.title": "Audio Cache",
@@ -154,6 +156,22 @@
   "settings.sections.system": "System",
   "settings.sections.plugins": "Plugins",
   "settings.sections.visualizers": "Visualizers",
+
+  "settings.windowClose.behavior.ask": "Ask every time",
+  "settings.windowClose.behavior.hide": "Hide to tray",
+  "settings.windowClose.behavior.exit": "Exit app",
+  "settings.windowClose.magnet.label": "Magnet close button",
+  "settings.windowClose.magnet.desc": "Behavior when clicking the Magnet close button.",
+  "settings.windowClose.magnet.note": "Recommended: Ask or Hide to avoid accidental exit.",
+  "settings.windowClose.system.label": "Window close (taskbar/title bar)",
+  "settings.windowClose.system.desc": "Behavior when closing the main window via the window close button or taskbar.",
+  "settings.windowClose.system.note": "Default: Hide to tray. Use the tray menu to quit.",
+
+  "windowClose.dialog.title": "Close",
+  "windowClose.dialog.message.system": "Do you want to hide to tray or exit the app?",
+  "windowClose.dialog.message.magnet": "Do you want to hide to tray or exit the app?",
+  "windowClose.action.hide": "Hide",
+  "windowClose.action.exit": "Exit",
 
   "settings.audio.engine.label": "Audio Engine",
   "settings.audio.engine.desc": "Desktop uses Native Audio only, unified for Magnet controls.",

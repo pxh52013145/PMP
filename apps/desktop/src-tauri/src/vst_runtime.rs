@@ -86,6 +86,7 @@ static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 static FIRST_SESSION_SPAWN: AtomicBool = AtomicBool::new(true);
 static SESSION_STATUS_BROADCAST_STARTED: AtomicBool = AtomicBool::new(false);
 static SESSION_STATUS_BROADCAST_APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+static SESSION_STATUS_BROADCAST_STOP: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
 struct EditorOpenCacheEntry {
@@ -555,9 +556,13 @@ pub fn init_session_status_broadcaster(app: &AppHandle) {
         return;
     }
 
+    SESSION_STATUS_BROADCAST_STOP.store(false, Ordering::Release);
     std::thread::spawn(|| {
         let mut last_core: Vec<VstSessionStatusCore> = Vec::new();
         loop {
+            if SESSION_STATUS_BROADCAST_STOP.load(Ordering::Acquire) {
+                break;
+            }
             let app = {
                 let guard = match SESSION_STATUS_BROADCAST_APP.lock() {
                     Ok(guard) => guard,
@@ -587,6 +592,9 @@ pub fn init_session_status_broadcaster(app: &AppHandle) {
                 last_core = current_core;
             }
 
+            if SESSION_STATUS_BROADCAST_STOP.load(Ordering::Acquire) {
+                break;
+            }
             if last_core.is_empty() {
                 std::thread::sleep(Duration::from_millis(900));
             } else {
@@ -594,6 +602,15 @@ pub fn init_session_status_broadcaster(app: &AppHandle) {
             }
         }
     });
+}
+
+pub fn shutdown_session_status_broadcaster() {
+    SESSION_STATUS_BROADCAST_STOP.store(true, Ordering::SeqCst);
+    let mut guard = match SESSION_STATUS_BROADCAST_APP.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *guard = None;
 }
 
 #[cfg(target_os = "windows")]

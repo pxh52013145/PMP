@@ -140,28 +140,40 @@ impl AsioBackend {
                     // busses). Forcing a 2-channel stream can end up mapped to an inactive pair,
                     // resulting in silence even though the stream successfully opens. Prefer the
                     // driver's default channel count so audio is present on all active outputs.
-                    let stream_result =
-                        OutputStream::try_from_device_config(device, selected_config.clone())
-                            .or_else(|err| {
-                                if selected_config.channels() <= 2 {
-                                    return Err(err);
-                                }
+                    let mut opened_config = selected_config.clone();
+                    let (stream, handle) = match OutputStream::try_from_device_config(
+                        device,
+                        selected_config.clone(),
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            if selected_config.channels() <= 2 {
+                                return Err(format!("{err}"));
+                            }
 
-                                // Fall back to a stereo stream for drivers that refuse to open
-                                // multi-channel configs.
-                                let stereo_config = rodio::cpal::SupportedStreamConfig::new(
-                                    2,
-                                    selected_config.sample_rate(),
-                                    *selected_config.buffer_size(),
-                                    selected_config.sample_format(),
-                                );
-                                OutputStream::try_from_device_config(device, stereo_config)
-                            });
+                            // Fall back to a stereo stream for drivers that refuse to open
+                            // multi-channel configs.
+                            let stereo_config = rodio::cpal::SupportedStreamConfig::new(
+                                2,
+                                selected_config.sample_rate(),
+                                *selected_config.buffer_size(),
+                                selected_config.sample_format(),
+                            );
+                            opened_config = stereo_config.clone();
+                            OutputStream::try_from_device_config(device, stereo_config)
+                                .map_err(|e| format!("{e}"))?
+                        }
+                    };
 
-                    match stream_result {
-                        Ok((stream, handle)) => Ok((stream, handle, output_sample_rate)),
-                        Err(err) => Err(format!("{err}")),
-                    }
+                    let device_label = device.name().ok();
+                    eprintln!(
+                        "[NativeAudio] ASIO stream init: device={device_label:?} cfg={}ch @ {}Hz ({:?})",
+                        opened_config.channels(),
+                        opened_config.sample_rate().0,
+                        opened_config.sample_format()
+                    );
+
+                    Ok((stream, handle, output_sample_rate))
                 };
 
                 let mut enumerated_any = false;

@@ -220,6 +220,11 @@ impl NativeAudioEngine {
         }
 
         let previous_backend = self.output_backend.clone();
+        eprintln!(
+            "[NativeAudio] Switching output backend: {} -> {}",
+            previous_backend.id(),
+            target_id
+        );
         #[cfg(target_os = "windows")]
         let switching_from_exclusive = previous_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID
             && target_id != WASAPI_EXCLUSIVE_BACKEND_ID;
@@ -297,6 +302,15 @@ impl NativeAudioEngine {
             }
         }
 
+        let resolved_sample_rate = self
+            .output_sample_rate
+            .or_else(|| self.output_backend.current_info().output_sample_rate);
+        eprintln!(
+            "[NativeAudio] Output backend ready: {} device={:?} out_sr={:?}",
+            self.output_backend.id(),
+            self.device_name,
+            resolved_sample_rate
+        );
         Ok(())
     }
 

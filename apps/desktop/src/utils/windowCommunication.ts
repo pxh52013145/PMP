@@ -191,6 +191,10 @@ export const STORAGE_KEYS = {
   // === Window Pin ===
   WINDOW_PIN_STATE: 'pixel-matrix-window-pin-state',
 
+  // === Main Window Close Behavior ===
+  MAIN_WINDOW_CLOSE_BEHAVIOR_MAGNET: 'pixel-matrix-main-window-close-behavior-magnet',
+  MAIN_WINDOW_CLOSE_BEHAVIOR_SYSTEM: 'pixel-matrix-main-window-close-behavior-system',
+
   // === Editor Performance ===
   EDITOR_LOW_PERFORMANCE_MODE: 'pixel-matrix-editor-low-performance-mode',
   EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE: 'pixel-matrix-editor-overlay-pixel-hints-visible',
@@ -243,6 +247,7 @@ export const TAURI_EVENTS = {
   // 主窗口可见性
   MAIN_WINDOW_HIDDEN: 'main-window-hidden',
   MAIN_WINDOW_SHOWN: 'main-window-shown',
+  MAIN_WINDOW_CLOSE_REQUESTED: 'main-window-close-requested',
 
   // Plugin windows / VST manager window
   PLUGIN_WINDOW_HIDDEN: 'plugin-window-hidden',
