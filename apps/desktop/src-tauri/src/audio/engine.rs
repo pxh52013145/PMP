@@ -32,6 +32,7 @@ pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| {
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioComponentsStatePayload {
     output_backend_id: String,
+    output_device_id: Option<String>,
     output_device: Option<String>,
     output_sample_rate: Option<u32>,
     preferred_input_id: Option<String>,
@@ -66,6 +67,7 @@ pub(crate) struct NativeAudioEngine {
     decoded_sample_rate: u32,
     decoded_bit_depth: Option<u32>,
     output_sample_rate: Option<u32>,
+    device_id: Option<String>,
     device_name: Option<String>,
     volume: f32,
     gain_db: f32,
@@ -135,6 +137,7 @@ impl NativeAudioEngine {
             decoded_sample_rate: 0,
             decoded_bit_depth: None,
             output_sample_rate: None,
+            device_id: None,
             device_name: None,
             volume: 0.7,
             gain_db: 0.0,
@@ -204,6 +207,9 @@ impl NativeAudioEngine {
                         .clone()
                         .or_else(|| self.output_backend.default_device_name());
                 }
+                if self.device_id.is_none() {
+                    self.device_id = info.device_id.or_else(|| self.device_name.clone());
+                }
             }
         }
 
@@ -244,6 +250,7 @@ impl NativeAudioEngine {
         let switching_to_asio = false;
 
         let previous_device_name = self.device_name.clone();
+        let previous_device_id = self.device_id.clone();
         let previous_output_sample_rate = self.output_sample_rate;
 
         if switching_from_exclusive || switching_to_exclusive || switching_to_asio {
@@ -259,6 +266,7 @@ impl NativeAudioEngine {
         }
 
         self.output_backend = target_backend;
+        self.device_id = None;
         self.device_name = None;
         self.output_sample_rate = None;
 
@@ -270,6 +278,7 @@ impl NativeAudioEngine {
         if self.current_track.is_some() {
             if let Err(err) = self.rebuild_sink_on_new_device() {
                 self.output_backend = previous_backend.clone();
+                self.device_id = previous_device_id;
                 self.device_name = previous_device_name;
                 self.output_sample_rate = previous_output_sample_rate;
                 if switching_from_exclusive || switching_to_exclusive || switching_to_asio {
@@ -285,12 +294,14 @@ impl NativeAudioEngine {
             match self.output_backend.create_sink() {
                 Ok((_sink, output_info)) => {
                     self.output_sample_rate = output_info.output_sample_rate;
+                    self.device_id = output_info.device_id.or_else(|| output_info.device_name.clone());
                     self.device_name = output_info
                         .device_name
                         .or_else(|| self.output_backend.default_device_name());
                 }
                 Err(err) => {
                     self.output_backend = previous_backend.clone();
+                    self.device_id = previous_device_id;
                     self.device_name = previous_device_name;
                     self.output_sample_rate = previous_output_sample_rate;
                     return Err(err);
@@ -317,6 +328,10 @@ impl NativeAudioEngine {
     pub(crate) fn apply_selected_output_device(&mut self, output_info: OutputStreamInfo) {
         self.sync_clock();
         self.output_sample_rate = output_info.output_sample_rate;
+        self.device_id = output_info
+            .device_id
+            .or_else(|| output_info.device_name.clone())
+            .or_else(|| self.device_id.clone());
         self.device_name = output_info
             .device_name
             .or_else(|| self.device_name.clone())
@@ -1045,6 +1060,7 @@ impl NativeAudioEngine {
             .or_else(|| self.output_backend.current_info().output_sample_rate);
         NativeAudioComponentsStatePayload {
             output_backend_id: self.output_backend.id().to_string(),
+            output_device_id: self.device_id.clone(),
             output_device: self.device_name.clone(),
             output_sample_rate,
             preferred_input_id: self.preferred_input_id.clone(),
@@ -1085,6 +1101,10 @@ impl NativeAudioEngine {
         }
 
         self.output_sample_rate = output_info.output_sample_rate;
+        self.device_id = output_info
+            .device_id
+            .or_else(|| output_info.device_name.clone())
+            .or_else(|| self.device_id.clone());
         self.device_name = output_info
             .device_name
             .clone()

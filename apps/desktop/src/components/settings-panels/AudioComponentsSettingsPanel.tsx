@@ -12,10 +12,17 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 type NativeAudioComponentsState = {
   outputBackendId: string | null;
+  outputDeviceId: string | null;
   outputDevice: string | null;
   outputSampleRate: number | null;
   preferredInputId: string | null;
   activeInputId: string | null;
+};
+
+type NativeAudioOutputDevice = {
+  id: string;
+  name: string;
+  isDefault: boolean;
 };
 
 type OutputBackendOption = {
@@ -29,12 +36,37 @@ type OutputBackendOption = {
 function parseNativeAudioComponentsState(payload: unknown): NativeAudioComponentsState {
   const record = asRecord(payload);
   const outputBackendId = typeof record?.outputBackendId === 'string' ? record.outputBackendId : null;
+  const outputDeviceId = typeof record?.outputDeviceId === 'string' ? record.outputDeviceId : null;
   const outputDevice = typeof record?.outputDevice === 'string' ? record.outputDevice : null;
   const outputSampleRate = typeof record?.outputSampleRate === 'number' ? record.outputSampleRate : null;
   const preferredInputId = typeof record?.preferredInputId === 'string' ? record.preferredInputId : null;
   const activeInputId = typeof record?.activeInputId === 'string' ? record.activeInputId : null;
 
-  return { outputBackendId, outputDevice, outputSampleRate, preferredInputId, activeInputId };
+  return { outputBackendId, outputDeviceId, outputDevice, outputSampleRate, preferredInputId, activeInputId };
+}
+
+function parseNativeAudioOutputDevices(payload: unknown): NativeAudioOutputDevice[] {
+  if (!Array.isArray(payload)) return [];
+
+  const parsed: NativeAudioOutputDevice[] = [];
+  const seen = new Set<string>();
+  for (const item of payload) {
+    const record = asRecord(item);
+    const id = typeof record?.id === 'string' ? record.id.trim() : '';
+    const name = typeof record?.name === 'string' ? record.name.trim() : '';
+    if (!id || !name) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    parsed.push({
+      id,
+      name,
+      isDefault: typeof record?.isDefault === 'boolean' ? record.isDefault : false,
+    });
+  }
+
+  parsed.sort((a, b) => a.name.localeCompare(b.name));
+  return parsed;
 }
 
 export function AudioComponentsSettingsPanel() {
@@ -49,6 +81,7 @@ export function AudioComponentsSettingsPanel() {
 
   const [componentsState, setComponentsState] = useState<NativeAudioComponentsState>({
     outputBackendId: null,
+    outputDeviceId: null,
     outputDevice: null,
     outputSampleRate: null,
     preferredInputId: null,
@@ -56,8 +89,8 @@ export function AudioComponentsSettingsPanel() {
   });
   const [outputBackends, setOutputBackends] = useState<string[]>([]);
   const [selectedBackend, setSelectedBackend] = useState('');
-  const [outputDevices, setOutputDevices] = useState<string[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState('');
+  const [outputDevices, setOutputDevices] = useState<NativeAudioOutputDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [audioInputs, setAudioInputs] = useState<string[]>([]);
   const [selectedInput, setSelectedInput] = useState('');
 
@@ -155,7 +188,7 @@ export function AudioComponentsSettingsPanel() {
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
       setSelectedInput(parsed.preferredInputId ?? '');
-      setSelectedDevice(parsed.outputDevice ?? '');
+      setSelectedDeviceId(parsed.outputDeviceId ?? '');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -186,15 +219,20 @@ export function AudioComponentsSettingsPanel() {
     setBusy(true);
     setError(null);
     try {
-      const devices = await invoke<string[]>('native_audio_list_devices');
-      setOutputDevices(devices);
+      const payload = await invoke<unknown>('native_audio_list_devices_v2');
+      const parsed = parseNativeAudioOutputDevices(payload);
+      setOutputDevices(parsed);
+      if (selectedDeviceId.length === 0 && componentsState.outputDevice) {
+        const current = parsed.find((device) => device.name === componentsState.outputDevice);
+        if (current) setSelectedDeviceId(current.id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [canUseBackend]);
+  }, [canUseBackend, componentsState.outputDevice, selectedDeviceId]);
 
   useEffect(() => {
     if (!canUseBackend) return;
@@ -235,7 +273,7 @@ export function AudioComponentsSettingsPanel() {
       );
 
       if (prevBackend && prevBackend !== parsed.outputBackendId) {
-        setSelectedDevice('');
+        setSelectedDeviceId('');
         setOutputDevices([]);
         await broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
@@ -262,7 +300,9 @@ export function AudioComponentsSettingsPanel() {
     if (!canUseBackend) return;
     if (busyRef.current) return;
 
-    const deviceName = selectedDevice.length > 0 ? selectedDevice : null;
+    const deviceId = selectedDeviceId.length > 0 ? selectedDeviceId : null;
+    const selected = deviceId ? outputDevices.find((device) => device.id === deviceId) ?? null : null;
+    const deviceName = deviceId ? selected?.name ?? null : null;
 
     busyRef.current = true;
     setBusy(true);
@@ -270,10 +310,10 @@ export function AudioComponentsSettingsPanel() {
 
     let needsRefreshComponents = false;
     try {
-      await invoke('native_audio_select_device', { deviceName });
+      await invoke('native_audio_select_device', { deviceId, deviceName });
       await broadcastDataUpdate(
         STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-        deviceName,
+        deviceId && selected ? { id: deviceId, name: selected.name } : null,
         TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
       );
       needsRefreshComponents = true;
@@ -287,13 +327,14 @@ export function AudioComponentsSettingsPanel() {
     if (needsRefreshComponents) {
       void refreshComponents();
     }
-  }, [canUseBackend, refreshComponents, selectedDevice]);
+  }, [canUseBackend, outputDevices, refreshComponents, selectedDeviceId]);
 
   const handleOpenAsioControlPanel = useCallback(async () => {
     if (!canUseBackend) return;
     if (busyRef.current) return;
 
-    const deviceName = componentsState.outputDevice ?? (selectedDevice.length > 0 ? selectedDevice : null);
+    const selected = selectedDeviceId.length > 0 ? outputDevices.find((device) => device.id === selectedDeviceId) ?? null : null;
+    const deviceName = componentsState.outputDevice ?? selected?.name ?? null;
 
     busyRef.current = true;
     setBusy(true);
@@ -307,7 +348,7 @@ export function AudioComponentsSettingsPanel() {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [canUseBackend, componentsState.outputDevice, selectedDevice]);
+  }, [canUseBackend, componentsState.outputDevice, outputDevices, selectedDeviceId]);
 
   const handleApplyAudioInput = useCallback(async () => {
     if (!canUseBackend) return;
@@ -472,16 +513,16 @@ export function AudioComponentsSettingsPanel() {
             <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <select
                 className="settings-select"
-                value={selectedDevice}
-                onChange={(e) => setSelectedDevice(e.target.value)}
+                value={selectedDeviceId}
+                onChange={(e) => setSelectedDeviceId(e.target.value)}
                 aria-label={t('settings.audioComponents.outputDevice.select.ariaLabel')}
                 disabled={busy}
                 style={{ flex: '1 1 320px' }}
               >
                 <option value="">{t('settings.audioComponents.outputDevice.default')}</option>
-                {outputDevices.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
+                {outputDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name}
                   </option>
                 ))}
               </select>

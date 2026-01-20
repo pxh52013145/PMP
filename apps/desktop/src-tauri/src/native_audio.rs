@@ -9,7 +9,7 @@ use tauri::AppHandle;
 
 use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
 use crate::audio::emitter;
-use crate::audio::output::{default_backend, AudioOutputBackend, RODIO_CPAL_BACKEND_ID};
+use crate::audio::output::{default_backend, AudioOutputBackend, OutputDeviceInfo, RODIO_CPAL_BACKEND_ID};
 #[cfg(target_os = "windows")]
 use crate::audio::output::{wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -21,6 +21,14 @@ use crate::vst_shm::ShmRing;
 pub use crate::audio::engine::NativeAudioComponentsStatePayload;
 
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAudioOutputDevicePayload {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
 
 #[cfg(any())]
 mod legacy_native_audio_dsp_pipeline {
@@ -2041,6 +2049,25 @@ pub fn list_output_devices() -> Result<Vec<String>, String> {
     output_backend.list_devices()
 }
 
+pub fn list_output_devices_v2() -> Result<Vec<NativeAudioOutputDevicePayload>, String> {
+    let output_backend = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.output_backend()
+    };
+
+    let devices: Vec<OutputDeviceInfo> = output_backend.list_devices_v2()?;
+    Ok(devices
+        .into_iter()
+        .map(|device| NativeAudioOutputDevicePayload {
+            id: device.id,
+            name: device.name,
+            is_default: device.is_default,
+        })
+        .collect())
+}
+
 pub fn open_asio_control_panel(device_name: Option<String>) -> Result<(), String> {
     #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
     {
@@ -2056,6 +2083,7 @@ pub fn open_asio_control_panel(device_name: Option<String>) -> Result<(), String
 
 pub fn select_output_device(
     app_handle: &AppHandle,
+    device_id: Option<String>,
     device_name: Option<String>,
 ) -> Result<(), String> {
     emitter::ensure_started(app_handle);
@@ -2068,13 +2096,18 @@ pub fn select_output_device(
     };
 
     let already_selected = output_backend.is_stream_open()
-        && match device_name.as_deref() {
-            Some(requested) => output_backend
+        && match (device_id.as_deref(), device_name.as_deref()) {
+            (Some(requested_id), _) => output_backend
+                .current_info()
+                .device_id
+                .as_deref()
+                .is_some_and(|current| current == requested_id),
+            (None, Some(requested_name)) => output_backend
                 .current_info()
                 .device_name
                 .as_deref()
-                .is_some_and(|current| current == requested),
-            None => {
+                .is_some_and(|current| current == requested_name),
+            (None, None) => {
                 output_backend.current_info().device_name == output_backend.default_device_name()
             }
         };
@@ -2090,7 +2123,10 @@ pub fn select_output_device(
         return Ok(());
     }
 
-    let output_info = match output_backend.select_device(device_name.clone()) {
+    let output_info = match match device_id.as_ref() {
+        Some(_) => output_backend.select_device_by_id(device_id.clone()),
+        None => output_backend.select_device(device_name.clone()),
+    } {
         Ok(value) => value,
         Err(err) => {
             let payload = {

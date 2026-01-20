@@ -8,7 +8,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use rodio::Source;
 
-use super::{AudioOutputBackend, AudioOutputError, AudioSink, BoxedSource, OutputStreamInfo};
+use super::{AudioOutputBackend, AudioOutputError, AudioSink, BoxedSource, OutputDeviceInfo, OutputStreamInfo};
 
 pub const WASAPI_EXCLUSIVE_BACKEND_ID: &str = "wasapi-exclusive";
 
@@ -40,6 +40,27 @@ impl WasapiExclusiveBackend {
         Self {
             state: Arc::new(Mutex::new(BackendState::default())),
         }
+    }
+
+    fn resolve_device_by_id(&self, device_id: &str) -> Result<(), String> {
+        let device_id = device_id.trim();
+        if device_id.is_empty() {
+            return self.resolve_default_device();
+        }
+
+        let devices = enumerate_render_devices()?;
+        let matched = devices
+            .into_iter()
+            .find(|device| device.id == device_id)
+            .ok_or_else(|| format!("Output device not found: {device_id}"))?;
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.device_id = Some(matched.id);
+        state.device_name = Some(matched.name);
+        Ok(())
     }
 
     fn resolve_default_device(&self) -> Result<(), String> {
@@ -116,6 +137,22 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
         Ok(names)
     }
 
+    fn list_devices_v2(&self) -> Result<Vec<OutputDeviceInfo>, String> {
+        let default_id = resolve_default_render_device().ok().map(|device| device.id);
+        enumerate_render_devices().map(|devices| {
+            devices
+                .into_iter()
+                .map(|device| OutputDeviceInfo {
+                    id: device.id.clone(),
+                    name: device.name.clone(),
+                    is_default: default_id
+                        .as_deref()
+                        .is_some_and(|default_id| default_id == device.id.as_str()),
+                })
+                .collect()
+        })
+    }
+
     fn default_device_name(&self) -> Option<String> {
         resolve_default_render_device().ok().map(|device| device.name)
     }
@@ -126,6 +163,7 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
             return OutputStreamInfo::default();
         };
         OutputStreamInfo {
+            device_id: guard.device_id.clone(),
             device_name: guard.device_name.clone(),
             output_sample_rate: guard.output_sample_rate,
         }
@@ -155,6 +193,29 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
         state.error = None;
 
         Ok(OutputStreamInfo {
+            device_id: state.device_id.clone(),
+            device_name: state.device_name.clone(),
+            output_sample_rate: None,
+        })
+    }
+
+    fn select_device_by_id(&self, device_id: Option<String>) -> Result<OutputStreamInfo, String> {
+        if let Some(device_id) = device_id.as_deref() {
+            self.resolve_device_by_id(device_id)?;
+        } else {
+            self.resolve_default_device()?;
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.stream_open = false;
+        state.output_sample_rate = None;
+        state.error = None;
+
+        Ok(OutputStreamInfo {
+            device_id: state.device_id.clone(),
             device_name: state.device_name.clone(),
             output_sample_rate: None,
         })
@@ -163,10 +224,7 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
         self.ensure_device_selected()?;
         let sink = WasapiExclusiveSink::new(self.state.clone());
-        let info = OutputStreamInfo {
-            device_name: self.current_info().device_name,
-            output_sample_rate: None,
-        };
+        let info = self.current_info();
         Ok((Arc::new(sink), info))
     }
 
@@ -211,8 +269,7 @@ fn enumerate_render_devices() -> Result<Vec<DeviceInfo>, String> {
             devices.push(get_device_info(&device)?);
         }
 
-        devices.sort_by(|a, b| a.name.cmp(&b.name));
-        devices.dedup_by(|a, b| a.name == b.name);
+        devices.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
         Ok(devices)
     }
 }

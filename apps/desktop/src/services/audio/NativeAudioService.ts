@@ -465,9 +465,22 @@ export class NativeAudioService implements IAudioService {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
+
+      if (parsed && typeof parsed === 'object') {
+        const record = parsed as Record<string, unknown>;
+        const deviceId = typeof record.id === 'string' && record.id.length > 0 ? record.id : null;
+        const deviceName = typeof record.name === 'string' && record.name.length > 0 ? record.name : null;
+        if (deviceId || deviceName) {
+          return invoke('native_audio_select_device', { deviceId, deviceName })
+            .then(() => {})
+            .catch(() => {});
+        }
+        return;
+      }
+
       const deviceName = typeof parsed === 'string' ? parsed : null;
       if (!deviceName) return;
-      return invoke('native_audio_select_device', { deviceName })
+      return invoke('native_audio_select_device', { deviceId: null, deviceName })
         .then(() => {})
         .catch(() => {});
     } catch {

@@ -62,17 +62,43 @@ impl AudioSink for rodio::Sink {
 
 #[derive(Clone, Debug, Default)]
 pub struct OutputStreamInfo {
+    pub device_id: Option<String>,
     pub device_name: Option<String>,
     pub output_sample_rate: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OutputDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
 }
 
 pub trait AudioOutputBackend: Send + Sync {
     fn id(&self) -> &'static str;
     fn list_devices(&self) -> Result<Vec<String>, String>;
+    fn list_devices_v2(&self) -> Result<Vec<OutputDeviceInfo>, String> {
+        let default_name = self.default_device_name();
+        self.list_devices().map(|devices| {
+            devices
+                .into_iter()
+                .map(|name| OutputDeviceInfo {
+                    id: name.clone(),
+                    name: name.clone(),
+                    is_default: default_name
+                        .as_deref()
+                        .is_some_and(|default_device| default_device == name),
+                })
+                .collect()
+        })
+    }
     fn default_device_name(&self) -> Option<String>;
     fn current_info(&self) -> OutputStreamInfo;
     fn is_stream_open(&self) -> bool;
     fn select_device(&self, device_name: Option<String>) -> Result<OutputStreamInfo, String>;
+    fn select_device_by_id(&self, device_id: Option<String>) -> Result<OutputStreamInfo, String> {
+        self.select_device(device_id)
+    }
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String>;
 
     fn close_stream(&self) {}

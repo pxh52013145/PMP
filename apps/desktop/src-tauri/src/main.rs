@@ -189,14 +189,24 @@ async fn native_audio_list_devices() -> Result<Vec<String>, String> {
         .map_err(|e| format!("Native audio list devices task failed: {e}"))?
 }
 
+#[tauri::command]
+async fn native_audio_list_devices_v2() -> Result<Vec<native_audio::NativeAudioOutputDevicePayload>, String> {
+    tauri::async_runtime::spawn_blocking(native_audio::list_output_devices_v2)
+        .await
+        .map_err(|e| format!("Native audio list devices v2 task failed: {e}"))?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn native_audio_select_device(
     app: tauri::AppHandle,
+    device_id: Option<String>,
     device_name: Option<String>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || native_audio::select_output_device(&app, device_name))
-        .await
-        .map_err(|e| format!("Native audio select device task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::select_output_device(&app, device_id, device_name)
+    })
+    .await
+    .map_err(|e| format!("Native audio select device task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -809,6 +819,7 @@ fn main() {
             native_audio_select_audio_input,
             native_audio_get_audio_components_state,
             native_audio_list_devices,
+            native_audio_list_devices_v2,
             native_audio_select_device,
             native_audio_open_asio_control_panel,
             native_audio_sync_queue,

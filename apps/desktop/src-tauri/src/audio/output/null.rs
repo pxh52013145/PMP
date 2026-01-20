@@ -14,6 +14,7 @@ impl NullBackend {
     pub fn new(sample_rate: u32) -> Self {
         Self {
             info: OutputStreamInfo {
+                device_id: Some("null".to_string()),
                 device_name: Some("null".to_string()),
                 output_sample_rate: Some(sample_rate.max(1)),
             },

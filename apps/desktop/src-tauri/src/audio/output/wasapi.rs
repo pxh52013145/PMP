@@ -159,6 +159,7 @@ impl WasapiBackend {
             return Ok((
                 handle,
                 OutputStreamInfo {
+                    device_id: guard.device_name.clone(),
                     device_name: guard.device_name.clone(),
                     output_sample_rate: guard.output_sample_rate,
                 },
@@ -174,6 +175,7 @@ impl WasapiBackend {
         Ok((
             handle,
             OutputStreamInfo {
+                device_id: device_name.clone(),
                 device_name,
                 output_sample_rate,
             },
@@ -233,6 +235,7 @@ impl AudioOutputBackend for WasapiBackend {
             return OutputStreamInfo::default();
         };
         OutputStreamInfo {
+            device_id: guard.device_name.clone(),
             device_name: guard.device_name.clone(),
             output_sample_rate: guard.output_sample_rate,
         }
@@ -263,6 +266,7 @@ impl AudioOutputBackend for WasapiBackend {
         guard.output_sample_rate = output_sample_rate;
 
         Ok(OutputStreamInfo {
+            device_id: guard.device_name.clone(),
             device_name: guard.device_name.clone(),
             output_sample_rate,
         })

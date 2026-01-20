@@ -44,6 +44,35 @@ function parseNativeAudioComponentsState(payload: unknown): NativeAudioComponent
   return { outputBackendId, preferredInputId, activeInputId };
 }
 
+type NativeAudioOutputDevice = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+};
+
+function parseNativeAudioOutputDevices(payload: unknown): NativeAudioOutputDevice[] {
+  if (!Array.isArray(payload)) return [];
+
+  const devices: NativeAudioOutputDevice[] = [];
+  const seen = new Set<string>();
+  for (const entry of payload) {
+    const record = asRecord(entry);
+    const id = typeof record?.id === 'string' ? record.id.trim() : '';
+    const name = typeof record?.name === 'string' ? record.name.trim() : '';
+    if (!id || !name) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    devices.push({
+      id,
+      name,
+      isDefault: typeof record?.isDefault === 'boolean' ? record.isDefault : false,
+    });
+  }
+
+  devices.sort((a, b) => a.name.localeCompare(b.name));
+  return devices;
+}
+
 type NativeDspEqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
 
 type NativeDspEqBand = {
@@ -106,8 +135,8 @@ export const NativeDebugPage: React.FC = () => {
   const [eqBands, setEqBands] = useState<NativeDspEqBand[]>(DEFAULT_EQ_BANDS);
   const [limiterEnabled, setLimiterEnabled] = useState(false);
   const [limiterThresholdDb, setLimiterThresholdDb] = useState(-1);
-  const [outputDevices, setOutputDevices] = useState<string[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState<string>('');
+  const [outputDevices, setOutputDevices] = useState<NativeAudioOutputDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [replayGainSettings, setReplayGainSettings] = useState<ReplayGainSettings>({
     enabled: true,
     mode: 'track',
@@ -146,11 +175,21 @@ export const NativeDebugPage: React.FC = () => {
 
   useEffect(() => {
     if (!isNativeEngine) return;
-    const persisted = readData<string | null>(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
+    const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
     if (typeof persisted === 'string') {
-      setSelectedDevice(persisted);
-    } else if (persisted === null) {
-      setSelectedDevice('');
+      setSelectedDeviceId(persisted);
+      return;
+    }
+
+    const record = asRecord(persisted);
+    const id = typeof record?.id === 'string' ? record.id : '';
+    if (id) {
+      setSelectedDeviceId(id);
+      return;
+    }
+
+    if (persisted === null) {
+      setSelectedDeviceId('');
     }
   }, [isNativeEngine]);
 
@@ -273,7 +312,7 @@ export const NativeDebugPage: React.FC = () => {
       if (gainDb !== null) {
         setDspGainDb(gainDb);
       }
-      setSelectedDevice((prev) => prev || device || '');
+      setSelectedDeviceId((previous) => previous || device || '');
     })
       .then((fn) => {
         unlisten = fn;
@@ -329,8 +368,15 @@ export const NativeDebugPage: React.FC = () => {
 
   const handleRefreshDevices = useCallback(async () => {
     try {
-      const devices = await invoke<string[]>('native_audio_list_devices');
+      const payload = await invoke<unknown>('native_audio_list_devices_v2');
+      const devices = parseNativeAudioOutputDevices(payload);
       setOutputDevices(devices);
+      setSelectedDeviceId((previous) => {
+        if (!previous) return previous;
+        if (devices.some((device) => device.id === previous)) return previous;
+        const matchByName = devices.find((device) => device.name === previous);
+        return matchByName ? matchByName.id : previous;
+      });
       appendLog(t('pages.native-debug.log.outputDevicesFetched', { count: devices.length }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -362,7 +408,7 @@ export const NativeDebugPage: React.FC = () => {
       );
 
       if (componentsState.outputBackendId && componentsState.outputBackendId !== parsed.outputBackendId) {
-        setSelectedDevice('');
+        setSelectedDeviceId('');
         setOutputDevices([]);
         await broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
@@ -413,25 +459,30 @@ export const NativeDebugPage: React.FC = () => {
   }, [appendLog, selectedInput, t]);
 
   const handleApplyDevice = useCallback(async () => {
+    const selected = selectedDeviceId.length > 0 ? outputDevices.find((device) => device.id === selectedDeviceId) ?? null : null;
+    const deviceId = selected?.id ?? null;
+    const deviceName = selected ? selected.name : selectedDeviceId.length > 0 ? selectedDeviceId : null;
+
     try {
       await broadcastDataUpdate(
         STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-        selectedDevice.length > 0 ? selectedDevice : null,
+        deviceId && deviceName ? { id: deviceId, name: deviceName } : null,
         TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
       );
       await invoke('native_audio_select_device', {
-        deviceName: selectedDevice.length > 0 ? selectedDevice : null,
+        deviceId,
+        deviceName,
       });
       appendLog(
         t('pages.native-debug.log.outputDeviceSwitched', {
-          device: selectedDevice || t('pages.native-debug.outputDevice.default'),
+          device: deviceName || t('pages.native-debug.outputDevice.default'),
         })
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.outputDeviceSwitchFailed', { message }));
     }
-  }, [appendLog, selectedDevice, t]);
+  }, [appendLog, outputDevices, selectedDeviceId, t]);
 
   const applyDspChain = useCallback(
     async (
@@ -1059,14 +1110,14 @@ export const NativeDebugPage: React.FC = () => {
             </div>
             <div className="device-controls">
               <select
-                value={selectedDevice}
-                onChange={(e) => setSelectedDevice(e.target.value)}
+                value={selectedDeviceId}
+                onChange={(e) => setSelectedDeviceId(e.target.value)}
                 aria-label={t('pages.native-debug.outputDevice.select.ariaLabel')}
               >
                 <option value="">{t('pages.native-debug.outputDevice.default')}</option>
-                {outputDevices.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
+                {outputDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name}
                   </option>
                 ))}
               </select>
