@@ -25,6 +25,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
     std::thread::spawn(|| {
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(1024);
+        let mut spectrum = crate::audio::spectrum::SpectrumComputer::new();
 
         loop {
             if EMITTER_STOP.load(Ordering::Acquire) {
@@ -39,7 +40,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
             };
 
             let Some((state_payload, spectrum_snapshot)) = (|| {
-                let mut engine = ENGINE.lock().ok()?;
+                let mut engine = ENGINE.try_lock().ok()?;
                 let was_playing = matches!(engine.playback_state(), PlaybackState::Playing);
                 let ticked = engine.tick();
                 if !ticked {
@@ -70,8 +71,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 let _ = emit_error(&app_handle, error_payload);
             }
             if let Some(snapshot) = spectrum_snapshot {
-                if let Some(bins) = crate::audio::spectrum::compute_spectrum_bins(&fft, &snapshot)
-                {
+                if let Some(bins) = spectrum.compute_bins(&fft, &snapshot) {
                     let _ = emit_spectrum(&app_handle, NativeAudioSpectrumPayload { bins });
                 }
             }
@@ -91,7 +91,7 @@ pub(crate) fn emit_state(app_handle: &AppHandle, payload: NativeAudioStatePayloa
 
 pub(crate) fn emit_spectrum(
     app_handle: &AppHandle,
-    payload: NativeAudioSpectrumPayload,
+    payload: NativeAudioSpectrumPayload<'_>,
 ) -> Result<(), String> {
     app_handle
         .emit_all(NATIVE_AUDIO_SPECTRUM_EVENT, payload)

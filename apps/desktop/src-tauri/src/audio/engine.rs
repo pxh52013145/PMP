@@ -991,6 +991,7 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
+        let (underrun_events, underrun_frames) = crate::audio::input::streaming_underrun_stats();
         NativeAudioStatePayload {
             playback_state: self.playback_state.as_str().to_string(),
             volume: self.volume,
@@ -1026,6 +1027,8 @@ impl NativeAudioEngine {
                 None
             },
             ended,
+            underrun_events,
+            underrun_frames,
             error_seq: self
                 .last_error_code
                 .as_ref()

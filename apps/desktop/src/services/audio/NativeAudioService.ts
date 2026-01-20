@@ -14,6 +14,8 @@ type NativeAudioStatePayload = {
   currentTime?: number;
   duration?: number;
   sampleRate?: number;
+  underrunEvents?: number;
+  underrunFrames?: number;
   queue?: string[];
   currentIndex?: number;
   ended?: boolean;

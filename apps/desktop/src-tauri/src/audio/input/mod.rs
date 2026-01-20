@@ -10,7 +10,8 @@ mod symphonia;
 pub(crate) use rodio::{open_source_at as open_rodio_source_at, RodioInput};
 pub(crate) use sacd::SacdInput;
 pub(crate) use symphonia::{
-    DecoderCommand, SharedSamplesSource, StreamingPlayback, StreamingSamplesSource, SymphoniaInput,
+    streaming_underrun_stats, DecoderCommand, SharedSamplesSource, StreamingPlayback,
+    StreamingSamplesSource, SymphoniaInput,
 };
 
 pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";

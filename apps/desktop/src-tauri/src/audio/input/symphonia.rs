@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -24,6 +26,16 @@ use super::{
     AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
     SYMPHONIA_INPUT_ID,
 };
+
+static STREAMING_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
+static STREAMING_UNDERRUN_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn streaming_underrun_stats() -> (u64, u64) {
+    (
+        STREAMING_UNDERRUN_EVENTS.load(Ordering::Relaxed),
+        STREAMING_UNDERRUN_FRAMES.load(Ordering::Relaxed),
+    )
+}
 
 #[derive(Clone)]
 pub(crate) struct AudioRingBuffer {
@@ -295,6 +307,10 @@ impl Iterator for StreamingSamplesSource {
                 if result.finished {
                     return None;
                 }
+
+                STREAMING_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
+                STREAMING_UNDERRUN_FRAMES
+                    .fetch_add(Self::SILENCE_FRAMES as u64, Ordering::Relaxed);
 
                 let silence_samples = (Self::SILENCE_FRAMES * channels).max(1);
                 self.local.resize(silence_samples, 0.0);
@@ -836,6 +852,157 @@ fn start_symphonia_stream(
     ))
 }
 
+fn start_cached_pcm_stream(
+    cached: crate::audio::resample_cache::CachedPcmInfo,
+) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
+    let channels = cached.channels as usize;
+    if channels == 0 || cached.sample_rate == 0 {
+        return Err(AudioInputError::new(
+            "AUDIO_INPUT_SYMPHONIA_CACHE_INVALID",
+            "Invalid cached PCM metadata",
+        ));
+    }
+
+    let total_samples: usize = cached.sample_count.try_into().map_err(|_| {
+        AudioInputError::new(
+            "AUDIO_INPUT_SYMPHONIA_CACHE_TOO_LARGE",
+            "Cached PCM is too large to stream on this platform",
+        )
+    })?;
+    if total_samples == 0 || total_samples % channels != 0 {
+        return Err(AudioInputError::new(
+            "AUDIO_INPUT_SYMPHONIA_CACHE_INVALID",
+            "Cached PCM sample count is invalid",
+        ));
+    }
+
+    let frames_total = total_samples / channels;
+    let duration = frames_total as f64 / cached.sample_rate as f64;
+
+    let buffer = AudioRingBuffer::new(352_800);
+    let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+    let error = Arc::new(Mutex::new(None::<String>));
+
+    let meta = AudioInputMeta {
+        channels: cached.channels,
+        sample_rate: cached.sample_rate,
+        bit_depth: cached.bit_depth,
+        duration,
+    };
+
+    let buffer_clone = buffer.clone();
+    let error_clone = error.clone();
+    let path = cached.path.clone();
+    let sample_rate = cached.sample_rate;
+
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let mut file = File::open(&path).map_err(|e| format!("Failed to open cache file: {e}"))?;
+            let header_bytes = 32u64;
+            file.seek(SeekFrom::Start(header_bytes))
+                .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+
+            let mut current_sample: usize = 0;
+            let mut bytes: Vec<u8> = Vec::new();
+            let mut out_interleaved: Vec<f32> = Vec::new();
+
+            const READ_FRAMES_CHUNK: usize = 4_096;
+            let chunk_samples = READ_FRAMES_CHUNK * channels;
+
+            loop {
+                let drained = drain_decoder_commands(&command_rx);
+                if drained.shutdown {
+                    buffer_clone.mark_finished();
+                    return Ok(());
+                }
+                if let Some(target) = drained.seek_target {
+                    buffer_clone.clear();
+                    let target = target.max(0.0);
+                    let start_frame = (target * sample_rate as f64) as usize;
+                    let start_frame = start_frame.min(frames_total.saturating_sub(1));
+                    current_sample = start_frame * channels;
+                    let offset = header_bytes + (current_sample as u64).saturating_mul(4);
+                    file.seek(SeekFrom::Start(offset))
+                        .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+                }
+
+                if current_sample >= total_samples {
+                    buffer_clone.mark_finished();
+                    return Ok(());
+                }
+
+                let remaining_samples = total_samples - current_sample;
+                let mut read_samples = remaining_samples.min(chunk_samples);
+                read_samples = read_samples.saturating_sub(read_samples % channels);
+                if read_samples == 0 {
+                    buffer_clone.mark_finished();
+                    return Ok(());
+                }
+
+                bytes.resize(read_samples * 4, 0u8);
+                file.read_exact(&mut bytes)
+                    .map_err(|e| format!("Failed to read cache samples: {e}"))?;
+
+                out_interleaved.clear();
+                out_interleaved.reserve(read_samples);
+                for chunk in bytes.chunks_exact(4) {
+                    out_interleaved.push(f32::from_le_bytes(
+                        chunk
+                            .try_into()
+                            .map_err(|_| "Failed to parse cached PCM sample".to_string())?,
+                    ));
+                }
+
+                let mut pushed_samples = 0usize;
+                while pushed_samples < out_interleaved.len() {
+                    let drained = drain_decoder_commands(&command_rx);
+                    if drained.shutdown {
+                        buffer_clone.mark_finished();
+                        return Ok(());
+                    }
+                    if let Some(target) = drained.seek_target {
+                        buffer_clone.clear();
+                        let target = target.max(0.0);
+                        let start_frame = (target * sample_rate as f64) as usize;
+                        let start_frame = start_frame.min(frames_total.saturating_sub(1));
+                        current_sample = start_frame * channels;
+                        let offset = header_bytes + (current_sample as u64).saturating_mul(4);
+                        file.seek(SeekFrom::Start(offset))
+                            .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+                        break;
+                    }
+
+                    let remaining = &out_interleaved[pushed_samples..];
+                    let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
+                    if frames_pushed == 0 {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    pushed_samples += frames_pushed * channels;
+                    current_sample = current_sample.saturating_add(frames_pushed * channels);
+                }
+            }
+        })();
+
+        if let Err(err) = result {
+            if let Ok(mut guard) = error_clone.lock() {
+                *guard = Some(err);
+            }
+            buffer_clone.mark_finished();
+        }
+    });
+
+    Ok((
+        StreamingSamplesSource::new(buffer.clone(), meta.channels, meta.sample_rate, meta.duration),
+        meta,
+        StreamingPlayback {
+            buffer,
+            command_tx,
+            error,
+        },
+    ))
+}
+
 struct DecodedAudioBuffer {
     samples: Arc<Vec<f32>>,
     channels: u16,
@@ -849,19 +1016,6 @@ fn decode_track_to_buffer(
     output_sample_rate: Option<u32>,
 ) -> Result<DecodedAudioBuffer, AudioInputError> {
     let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
-    if let Some(key) = cache_key.as_deref() {
-        if let Some(cached) = crate::audio::resample_cache::try_load(key) {
-            let frames = cached.samples.len() / cached.channels as usize;
-            let duration = frames as f64 / cached.sample_rate as f64;
-            return Ok(DecodedAudioBuffer {
-                samples: cached.samples,
-                channels: cached.channels,
-                sample_rate: cached.sample_rate,
-                bit_depth: cached.bit_depth,
-                duration,
-            });
-        }
-    }
 
     let file = File::open(path).map_err(|e| {
         AudioInputError::new(
@@ -1028,28 +1182,15 @@ impl AudioInput for SymphoniaInput {
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
         if let Some(key) = cache_key.as_deref() {
-            if let Some(cached) = crate::audio::resample_cache::try_load(key) {
-                let frames = cached.samples.len() / cached.channels as usize;
-                let duration = frames as f64 / cached.sample_rate as f64;
-                let source = Box::new(SharedSamplesSource::new(
-                    cached.samples.clone(),
-                    cached.channels,
-                    cached.sample_rate,
-                    0,
-                ));
-                return Ok(AudioInputOpenResult {
-                    input_id: self.id(),
-                    meta: AudioInputMeta {
-                        channels: cached.channels,
-                        sample_rate: cached.sample_rate,
-                        bit_depth: cached.bit_depth,
-                        duration,
-                    },
-                    kind: AudioInputKind::Decoded {
-                        samples: cached.samples,
-                    },
-                    source,
-                });
+            if let Some(cached) = crate::audio::resample_cache::try_get_info(key) {
+                if let Ok((source, meta, streaming)) = start_cached_pcm_stream(cached) {
+                    return Ok(AudioInputOpenResult {
+                        input_id: self.id(),
+                        meta,
+                        kind: AudioInputKind::Streaming(streaming),
+                        source: Box::new(source),
+                    });
+                }
             }
         }
 

@@ -21,6 +21,8 @@ pub struct NativeAudioStatePayload {
     pub queue: Option<Vec<String>>,
     pub current_index: Option<i32>,
     pub ended: bool,
+    pub underrun_events: u64,
+    pub underrun_frames: u64,
     pub error_seq: Option<u64>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -28,8 +30,8 @@ pub struct NativeAudioStatePayload {
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeAudioSpectrumPayload {
-    pub bins: Vec<f32>,
+pub struct NativeAudioSpectrumPayload<'a> {
+    pub bins: &'a [f32],
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -39,4 +41,3 @@ pub struct NativeAudioErrorPayload {
     pub code: String,
     pub message: String,
 }
-
