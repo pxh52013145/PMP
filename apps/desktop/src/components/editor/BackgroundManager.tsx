@@ -671,6 +671,7 @@ export const BackgroundManager = memo(function BackgroundManager({
       const currentWin = getConfigMediaRelPath(settingsRef.current.windowed);
       if (currentWin) referenced.add(currentWin);
 
+      const allowDelete = referenced.size > 0;
       let removed = 0;
       let scanned = 0;
       let entries: Array<import('@tauri-apps/api/fs').FileEntry> = [];
@@ -688,6 +689,7 @@ export const BackgroundManager = memo(function BackgroundManager({
         const name = normalized.split('/').pop() || '';
         if (!name) continue;
         scanned += 1;
+        if (!allowDelete) continue;
         const rel = `background-media/${name}`;
         if (referenced.has(rel)) continue;
         try {

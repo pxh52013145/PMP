@@ -96,7 +96,14 @@ export function collectReferencedBackgroundMedia(): Set<string> {
 export async function gcOrphanBackgroundMedia(): Promise<{ scanned: number; removed: number }> {
   const fs = await import('@tauri-apps/api/fs');
 
+  // Safety: only delete files when we have a stable view of background storage.
+  // In Tauri startup we may restore settings/history from AppData snapshots asynchronously.
+  // If we GC before that restore finishes, we'd treat everything as "orphan" and delete user media.
+  const hasSettings = Boolean(readString(STORAGE_KEYS.BACKGROUND_SETTINGS));
+  const hasHistory = Boolean(readString(STORAGE_KEYS.BACKGROUND_HISTORY));
+
   const referenced = collectReferencedBackgroundMedia();
+  const allowDelete = hasSettings && hasHistory && referenced.size > 0;
   let entries: Array<import('@tauri-apps/api/fs').FileEntry> = [];
   try {
     entries = await fs.readDir('background-media', {
@@ -114,6 +121,7 @@ export async function gcOrphanBackgroundMedia(): Promise<{ scanned: number; remo
     const name = normalized.split('/').pop() || '';
     if (!name) continue;
     scanned += 1;
+    if (!allowDelete) continue;
     const rel = `background-media/${name}`;
     if (referenced.has(rel)) continue;
     try {
