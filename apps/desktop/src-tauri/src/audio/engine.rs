@@ -3,26 +3,24 @@ use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc,
         Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 
-use crate::audio::atomic_f32::{load_atomic_f32, store_atomic_f32};
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
     open_rodio_source_at, AudioInputRegistry, DecoderCommand, SharedSamplesSource, StreamingPlayback,
     StreamingSamplesSource,
 };
+use crate::audio::mixer::{coerce_source_format, PlaybackMixerController, PlaybackMixerSource};
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
 use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumSnapshot, SpectrumTap};
-use crate::audio::playback::prepare_playback;
 
 pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| {
     Mutex::new(NativeAudioEngine::new())
@@ -39,20 +37,13 @@ pub struct NativeAudioComponentsStatePayload {
     active_input_id: Option<String>,
 }
 
-struct ActiveCrossfade {
-    cancel: Arc<AtomicBool>,
-    finished: Arc<AtomicBool>,
-    old_sink: Arc<dyn AudioSink>,
-    old_streaming_command_tx: Option<mpsc::Sender<DecoderCommand>>,
-}
-
 pub(crate) struct NativeAudioEngine {
     input_registry: AudioInputRegistry,
     preferred_input_id: Option<String>,
     active_input_id: Option<String>,
     output_backend: Arc<dyn AudioOutputBackend>,
     sink: Option<Arc<dyn AudioSink>>,
-    active_crossfade: Option<ActiveCrossfade>,
+    mixer: Option<PlaybackMixerController>,
     current_track: Option<PathBuf>,
     queue: Vec<PathBuf>,
     current_index: i32,
@@ -77,13 +68,73 @@ pub(crate) struct NativeAudioEngine {
     dsp_runtime: Arc<DspRuntime>,
     spectrum_tap: SpectrumTap,
     muted: bool,
-    effective_volume_bits: Arc<AtomicU32>,
     playback_state: PlaybackState,
     desired_playback_state: PlaybackState,
+    operation_seq_counter: u64,
+    pending_operation_seq: u64,
     error_seq_counter: u64,
     last_error_seq: u64,
     last_error_code: Option<String>,
     last_error_message: Option<String>,
+}
+
+pub(crate) struct LoadOperation {
+    pub token: u64,
+    pub output_backend: Arc<dyn AudioOutputBackend>,
+    pub preferred_input_id: Option<String>,
+    pub dsp_runtime: Arc<DspRuntime>,
+    pub spectrum_tap: SpectrumTap,
+    pub effective_volume: f32,
+}
+
+pub(crate) struct PreparedLoad {
+    pub track_path: PathBuf,
+    pub sink: Arc<dyn AudioSink>,
+    pub output_info: OutputStreamInfo,
+    pub mixer: PlaybackMixerController,
+    pub input_id: &'static str,
+    pub meta: crate::audio::input::AudioInputMeta,
+    pub streaming: Option<StreamingPlayback>,
+    pub decoded_samples: Option<Arc<Vec<f32>>>,
+}
+
+impl PreparedLoad {
+    pub(crate) fn abort(self) {
+        self.sink.stop();
+        if let Some(streaming) = self.streaming {
+            let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        }
+    }
+}
+
+pub(crate) struct CrossfadeOperation {
+    pub token: u64,
+    pub preferred_input_id: Option<String>,
+    pub output_backend_id: &'static str,
+    pub target_channels: u16,
+    pub target_sample_rate: u32,
+    pub old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+}
+
+pub(crate) struct PreparedCrossfade {
+    pub track_path: PathBuf,
+    pub input_id: &'static str,
+    pub meta: crate::audio::input::AudioInputMeta,
+    pub streaming: Option<StreamingPlayback>,
+    pub decoded_samples: Option<Arc<Vec<f32>>>,
+    pub next_source: crate::audio::output::BoxedSource,
+    pub old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+    pub target_channels: u16,
+    pub target_sample_rate: u32,
+    pub duration_frames: u64,
+}
+
+impl PreparedCrossfade {
+    pub(crate) fn abort(self) {
+        if let Some(streaming) = self.streaming {
+            let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -122,7 +173,7 @@ impl NativeAudioEngine {
             active_input_id: None,
             output_backend,
             sink: None,
-            active_crossfade: None,
+            mixer: None,
             current_track: None,
             queue: Vec::new(),
             current_index: -1,
@@ -147,9 +198,10 @@ impl NativeAudioEngine {
             dsp_runtime: Arc::new(DspRuntime::new()),
             spectrum_tap: SpectrumTap::new(1024),
             muted: false,
-            effective_volume_bits: Arc::new(AtomicU32::new(0.7f32.to_bits())),
             playback_state: PlaybackState::Idle,
             desired_playback_state: PlaybackState::Idle,
+            operation_seq_counter: 0,
+            pending_operation_seq: 0,
             error_seq_counter: 1,
             last_error_seq: 0,
             last_error_code: None,
@@ -183,6 +235,199 @@ impl NativeAudioEngine {
 
     pub(crate) fn set_vst_nodes(&mut self, vst_nodes: Vec<crate::vst_dsp::VstNodeKey>) {
         self.dsp_runtime.set_vst_nodes(vst_nodes);
+    }
+
+    pub(crate) fn begin_operation(&mut self) -> u64 {
+        self.operation_seq_counter = self.operation_seq_counter.saturating_add(1);
+        self.pending_operation_seq = self.operation_seq_counter;
+        self.pending_operation_seq
+    }
+
+    pub(crate) fn is_pending_operation(&self, token: u64) -> bool {
+        token != 0 && self.pending_operation_seq == token
+    }
+
+    pub(crate) fn abandon_operation(&mut self, token: u64) {
+        if self.pending_operation_seq == token {
+            self.pending_operation_seq = 0;
+        }
+    }
+
+    pub(crate) fn begin_load_operation(&mut self) -> LoadOperation {
+        self.cancel_crossfade();
+        self.sync_clock();
+        self.clear_error();
+        self.spectrum_tap.clear();
+        self.dsp_runtime.request_reset();
+
+        if let Some(old_sink) = self.sink.take() {
+            old_sink.stop();
+        }
+        self.shutdown_streaming();
+        self.mixer = None;
+
+        let token = self.begin_operation();
+        self.set_state(PlaybackState::Loading);
+
+        LoadOperation {
+            token,
+            output_backend: self.output_backend.clone(),
+            preferred_input_id: self.preferred_input_id.clone(),
+            dsp_runtime: self.dsp_runtime.clone(),
+            spectrum_tap: self.spectrum_tap.clone(),
+            effective_volume: self.effective_volume(),
+        }
+    }
+
+    pub(crate) fn commit_load_operation(
+        &mut self,
+        token: u64,
+        prepared: PreparedLoad,
+    ) -> Result<bool, String> {
+        if !self.is_pending_operation(token) {
+            prepared.abort();
+            return Ok(false);
+        }
+
+        self.output_sample_rate = prepared.output_info.output_sample_rate;
+        self.device_id = prepared
+            .output_info
+            .device_id
+            .or_else(|| prepared.output_info.device_name.clone())
+            .or_else(|| self.device_id.clone());
+        self.device_name = prepared
+            .output_info
+            .device_name
+            .clone()
+            .or_else(|| self.device_name.clone())
+            .or_else(|| self.output_backend.default_device_name());
+
+        self.duration = prepared.meta.duration;
+        self.decoded_channels = prepared.meta.channels;
+        self.decoded_sample_rate = prepared.meta.sample_rate;
+        self.decoded_bit_depth = prepared.meta.bit_depth;
+        self.active_input_id = Some(prepared.input_id.to_string());
+
+        self.decoded_samples = prepared.decoded_samples;
+        self.streaming = prepared.streaming;
+        self.mixer = Some(prepared.mixer);
+        self.sink = Some(prepared.sink);
+        self.current_track = Some(prepared.track_path.clone());
+
+        if !self.queue_initialized {
+            self.queue_initialized = true;
+        }
+        if self.queue.is_empty() {
+            self.queue.push(prepared.track_path.clone());
+            self.current_index = 0;
+        } else if let Some(index) = self
+            .queue
+            .iter()
+            .position(|entry| entry == &prepared.track_path)
+        {
+            self.current_index = index as i32;
+        } else {
+            self.queue.push(prepared.track_path.clone());
+            self.current_index = (self.queue.len() as i32).saturating_sub(1);
+        }
+
+        self.current_position = 0.0;
+        self.base_position = 0.0;
+        self.playback_started_at = None;
+        self.set_state(PlaybackState::Paused);
+        self.abandon_operation(token);
+        Ok(true)
+    }
+
+    pub(crate) fn begin_crossfade_operation(&mut self, duration_ms: u64) -> Option<CrossfadeOperation> {
+        let was_playing = matches!(self.playback_state, PlaybackState::Playing);
+        let can_crossfade = was_playing
+            && self.sink.is_some()
+            && self.mixer.is_some()
+            && duration_ms > 0
+            && self.decoded_channels > 0
+            && self.decoded_sample_rate > 0;
+        if !can_crossfade {
+            return None;
+        }
+
+        self.cancel_crossfade();
+        self.clear_error();
+        self.spectrum_tap.clear();
+
+        let token = self.begin_operation();
+        Some(CrossfadeOperation {
+            token,
+            preferred_input_id: self.preferred_input_id.clone(),
+            output_backend_id: self.output_backend.id(),
+            target_channels: self.decoded_channels.max(1),
+            target_sample_rate: self.decoded_sample_rate.max(1),
+            old_shutdown_tx: self.streaming.as_ref().map(|streaming| streaming.command_tx.clone()),
+        })
+    }
+
+    pub(crate) fn commit_crossfade_operation(
+        &mut self,
+        token: u64,
+        prepared: PreparedCrossfade,
+    ) -> Result<bool, String> {
+        if !self.is_pending_operation(token) {
+            prepared.abort();
+            return Ok(false);
+        }
+
+        let was_playing = matches!(self.playback_state, PlaybackState::Playing);
+        let can_crossfade = was_playing
+            && self.sink.is_some()
+            && self.mixer.is_some()
+            && prepared.duration_frames > 0
+            && prepared.target_channels > 0
+            && prepared.target_sample_rate > 0;
+        if !can_crossfade {
+            prepared.abort();
+            self.abandon_operation(token);
+            return Ok(false);
+        }
+
+        let controller = self
+            .mixer
+            .as_ref()
+            .ok_or_else(|| "Playback mixer unavailable".to_string())?;
+        controller.crossfade_to(
+            prepared.next_source,
+            prepared.old_shutdown_tx,
+            prepared.duration_frames,
+        )?;
+
+        self.current_track = Some(prepared.track_path.clone());
+        self.duration = prepared.meta.duration;
+        self.decoded_samples = prepared.decoded_samples;
+        self.decoded_channels = prepared.target_channels;
+        self.decoded_sample_rate = prepared.target_sample_rate;
+        self.decoded_bit_depth = prepared.meta.bit_depth;
+        self.streaming = prepared.streaming;
+        self.active_input_id = Some(prepared.input_id.to_string());
+
+        if !self.queue_initialized {
+            self.queue_initialized = true;
+        }
+        if self.queue.is_empty() {
+            self.queue.push(prepared.track_path.clone());
+            self.current_index = 0;
+        } else if let Some(index) = self.queue.iter().position(|entry| entry == &prepared.track_path)
+        {
+            self.current_index = index as i32;
+        } else {
+            self.queue.push(prepared.track_path.clone());
+            self.current_index = (self.queue.len() as i32).saturating_sub(1);
+        }
+
+        self.current_position = 0.0;
+        self.base_position = 0.0;
+        self.playback_started_at = Some(Instant::now());
+        self.set_state(PlaybackState::Playing);
+        self.abandon_operation(token);
+        Ok(true)
     }
 
     pub(crate) fn list_input_ids(&self) -> Vec<&'static str> {
@@ -369,32 +614,14 @@ impl NativeAudioEngine {
 
     fn apply_effective_volume(&mut self) {
         let effective = self.effective_volume();
-        store_atomic_f32(self.effective_volume_bits.as_ref(), effective);
-
-        if let Some(crossfade) = self.active_crossfade.as_ref() {
-            if crossfade.finished.load(Ordering::Acquire) {
-                self.active_crossfade = None;
-            }
-        }
-
-        if self.active_crossfade.is_some() {
-            return;
-        }
-
         if let Some(sink) = &self.sink {
             sink.set_volume(effective);
         }
     }
 
     pub(crate) fn cancel_crossfade(&mut self) {
-        let Some(crossfade) = self.active_crossfade.take() else {
-            return;
-        };
-
-        crossfade.cancel.store(true, Ordering::Release);
-        crossfade.old_sink.stop();
-        if let Some(tx) = crossfade.old_streaming_command_tx {
-            let _ = tx.send(DecoderCommand::Shutdown);
+        if let Some(mixer) = &self.mixer {
+            mixer.cancel_crossfade();
         }
     }
 
@@ -442,18 +669,42 @@ impl NativeAudioEngine {
                 self.preferred_input_id.as_deref(),
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-        let prepared = prepare_playback(opened, self.dsp_runtime.clone(), self.spectrum_tap.clone());
-        eprintln!("[NativeAudio] Input: {}", prepared.input_id);
-        self.active_input_id = Some(prepared.input_id.to_string());
 
-        self.duration = prepared.meta.duration;
-        self.decoded_channels = prepared.meta.channels;
-        self.decoded_sample_rate = prepared.meta.sample_rate;
-        self.decoded_bit_depth = prepared.meta.bit_depth;
-        self.decoded_samples = prepared.decoded_samples;
-        self.streaming = prepared.streaming;
+        let crate::audio::input::AudioInputOpenResult {
+            input_id,
+            meta,
+            kind,
+            source,
+        } = opened;
 
-        sink.append(prepared.source);
+        eprintln!("[NativeAudio] Input: {input_id}");
+        self.active_input_id = Some(input_id.to_string());
+
+        self.duration = meta.duration;
+        self.decoded_channels = meta.channels;
+        self.decoded_sample_rate = meta.sample_rate;
+        self.decoded_bit_depth = meta.bit_depth;
+
+        self.decoded_samples = None;
+        self.streaming = None;
+        match kind {
+            crate::audio::input::AudioInputKind::Streaming(playback) => {
+                self.streaming = Some(playback);
+            }
+            crate::audio::input::AudioInputKind::Decoded { samples } => {
+                self.decoded_samples = Some(samples);
+            }
+            crate::audio::input::AudioInputKind::Rodio => {}
+        }
+
+        let (controller, mixer_source) =
+            PlaybackMixerSource::new(source, self.decoded_channels, self.decoded_sample_rate);
+        self.mixer = Some(controller);
+        sink.append(boxed_with_dsp(
+            mixer_source,
+            self.dsp_runtime.clone(),
+            self.spectrum_tap.clone(),
+        ));
 
         if self.device_name.is_none() {
             self.device_name = self.output_backend.default_device_name();
@@ -487,17 +738,13 @@ impl NativeAudioEngine {
 
     pub(crate) fn crossfade_to(&mut self, path: PathBuf, duration_ms: u64) -> Result<(), String> {
         let was_playing = matches!(self.playback_state, PlaybackState::Playing);
-        // VST nodes currently run as out-of-process sidecars and are not safe to drive from two
-        // concurrent sinks during crossfade; fall back to non-crossfade load for stability.
-        let has_vst = self
-            .dsp_chain
-            .iter()
-            .any(|node| matches!(node, DspNodeConfig::Vst { .. }));
         let can_crossfade = was_playing
             && self.sink.is_some()
+            && self.mixer.is_some()
             && duration_ms > 0
-            && !has_vst
-            && self.output_backend.id() != WASAPI_EXCLUSIVE_BACKEND_ID;
+            && self.decoded_channels > 0
+            && self.decoded_sample_rate > 0;
+
         if !can_crossfade {
             self.load(path)?;
             if was_playing {
@@ -510,51 +757,43 @@ impl NativeAudioEngine {
         self.clear_error();
         self.spectrum_tap.clear();
 
-        let (new_sink, output_info) = self.output_backend.create_sink()?;
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
-        new_sink.pause();
+        let target_channels = self.decoded_channels.max(1);
+        let target_sample_rate = self.decoded_sample_rate.max(1);
+        let open_sample_rate = Some(target_sample_rate);
 
         let opened = self
             .input_registry
-            .open_prefer(
-                &path,
-                self.output_sample_rate,
-                self.preferred_input_id.as_deref(),
-            )
+            .open_prefer(&path, open_sample_rate, self.preferred_input_id.as_deref())
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-        let prepared = prepare_playback(opened, self.dsp_runtime.clone(), self.spectrum_tap.clone());
-        eprintln!("[NativeAudio] Input: {}", prepared.input_id);
-        let active_input_id = prepared.input_id.to_string();
 
-        let duration = prepared.meta.duration;
-        let decoded_channels = prepared.meta.channels;
-        let decoded_sample_rate = prepared.meta.sample_rate;
-        let decoded_bit_depth = prepared.meta.bit_depth;
+        let crate::audio::input::AudioInputOpenResult {
+            input_id,
+            meta,
+            kind,
+            source,
+        } = opened;
+        eprintln!("[NativeAudio] Input: {input_id}");
 
-        let new_streaming = prepared.streaming;
-        let decoded_samples = prepared.decoded_samples;
-
-        new_sink.append(prepared.source);
-
-        if self.device_name.is_none() {
-            self.device_name = self.output_backend.default_device_name();
+        let mut new_streaming: Option<StreamingPlayback> = None;
+        let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
+        match kind {
+            crate::audio::input::AudioInputKind::Streaming(playback) => {
+                new_streaming = Some(playback);
+            }
+            crate::audio::input::AudioInputKind::Decoded { samples } => {
+                decoded_samples = Some(samples);
+            }
+            crate::audio::input::AudioInputKind::Rodio => {}
         }
-
-        let base_volume = self.effective_volume();
-        store_atomic_f32(self.effective_volume_bits.as_ref(), base_volume);
-
-        new_sink.pause();
-        new_sink.set_volume(0.0);
 
         // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
         if let Some(streaming) = &new_streaming {
-            let channels = decoded_channels.max(1) as usize;
-            let target_frames = 2048usize; // ~46ms @ 44.1kHz
+            let channels = meta.channels.max(1) as usize;
+            let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
+                4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
+            } else {
+                2048usize // ~46ms @ 44.1kHz
+            };
             let target_samples = target_frames * channels;
             if streaming.buffer.len_samples() < target_samples {
                 streaming
@@ -563,22 +802,33 @@ impl NativeAudioEngine {
             }
         }
 
-        new_sink.play();
+        let next_source = coerce_source_format(source, target_channels, target_sample_rate);
+        let old_shutdown_tx = self.streaming.as_ref().map(|streaming| streaming.command_tx.clone());
 
-        let old_sink = self
-            .sink
-            .replace(new_sink.clone())
-            .ok_or_else(|| "No track loaded".to_string())?;
-        let old_streaming = std::mem::replace(&mut self.streaming, new_streaming);
-        let old_streaming_command_tx = old_streaming.map(|streaming| streaming.command_tx.clone());
+        let controller = self
+            .mixer
+            .as_ref()
+            .ok_or_else(|| "Playback mixer unavailable".to_string())?;
+        let duration_frames = ((target_sample_rate as u64).saturating_mul(duration_ms.clamp(1, 30_000)))
+            / 1000;
+        controller.crossfade_to(next_source, old_shutdown_tx, duration_frames.max(1))?;
+
+        let decoded_samples = if decoded_samples.is_some()
+            && (meta.channels != target_channels || meta.sample_rate != target_sample_rate)
+        {
+            None
+        } else {
+            decoded_samples
+        };
 
         self.current_track = Some(path.clone());
-        self.duration = duration;
+        self.duration = meta.duration;
         self.decoded_samples = decoded_samples;
-        self.decoded_channels = decoded_channels;
-        self.decoded_sample_rate = decoded_sample_rate;
-        self.decoded_bit_depth = decoded_bit_depth;
-        self.active_input_id = Some(active_input_id);
+        self.decoded_channels = target_channels;
+        self.decoded_sample_rate = target_sample_rate;
+        self.decoded_bit_depth = meta.bit_depth;
+        self.streaming = new_streaming;
+        self.active_input_id = Some(input_id.to_string());
 
         if !self.queue_initialized {
             self.queue_initialized = true;
@@ -597,67 +847,6 @@ impl NativeAudioEngine {
         self.base_position = 0.0;
         self.playback_started_at = Some(Instant::now());
         self.set_state(PlaybackState::Playing);
-
-        let duration = Duration::from_millis(duration_ms.clamp(1, 30_000));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let finished = Arc::new(AtomicBool::new(false));
-        let base_bits = self.effective_volume_bits.clone();
-        let cancel_thread = cancel.clone();
-        let finished_thread = finished.clone();
-        let new_sink_thread = new_sink;
-        let old_sink_thread = old_sink.clone();
-        let old_tx_thread = old_streaming_command_tx.clone();
-
-        std::thread::spawn(move || {
-            let start = Instant::now();
-            let step = Duration::from_millis(10);
-            loop {
-                if cancel_thread.load(Ordering::Acquire) {
-                    break;
-                }
-                let elapsed = start.elapsed();
-                let t = if duration.as_nanos() == 0 {
-                    1.0f32
-                } else {
-                    (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
-                };
-
-                let mut base = load_atomic_f32(base_bits.as_ref());
-                if !base.is_finite() {
-                    base = 0.0;
-                }
-                base = base.max(0.0);
-
-                old_sink_thread.set_volume(base * (1.0 - t));
-                new_sink_thread.set_volume(base * t);
-
-                if t >= 1.0 {
-                    break;
-                }
-                std::thread::sleep(step);
-            }
-
-            let mut base = load_atomic_f32(base_bits.as_ref());
-            if !base.is_finite() {
-                base = 0.0;
-            }
-            base = base.max(0.0);
-
-            new_sink_thread.set_volume(base);
-            old_sink_thread.set_volume(0.0);
-            old_sink_thread.stop();
-            if let Some(tx) = old_tx_thread {
-                let _ = tx.send(DecoderCommand::Shutdown);
-            }
-            finished_thread.store(true, Ordering::Release);
-        });
-
-        self.active_crossfade = Some(ActiveCrossfade {
-            cancel,
-            finished,
-            old_sink,
-            old_streaming_command_tx,
-        });
 
         Ok(())
     }
@@ -681,9 +870,6 @@ impl NativeAudioEngine {
             }
 
             sink.play();
-            if let Some(crossfade) = self.active_crossfade.as_ref() {
-                crossfade.old_sink.play();
-            }
             self.set_state(PlaybackState::Playing);
             if self.playback_started_at.is_none() {
                 self.base_position = self.current_position;
@@ -698,9 +884,6 @@ impl NativeAudioEngine {
     pub(crate) fn pause(&mut self) -> Result<(), String> {
         if let Some(sink) = &self.sink {
             sink.pause();
-            if let Some(crossfade) = self.active_crossfade.as_ref() {
-                crossfade.old_sink.pause();
-            }
             self.sync_clock();
             self.set_state(PlaybackState::Paused);
             Ok(())
@@ -726,23 +909,38 @@ impl NativeAudioEngine {
             let sink = self.output_backend.create_sink().ok().map(|(sink, _)| sink);
 
             if let Some(sink) = sink {
-                if let (Some(samples), channels, sample_rate) = (
-                    self.decoded_samples.clone(),
-                    self.decoded_channels,
-                    self.decoded_sample_rate,
-                ) {
-                    sink.append(boxed_with_dsp(
-                        SharedSamplesSource::new(samples, channels, sample_rate, 0),
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    ));
-                } else if let Ok((source, _)) = open_rodio_source_at(&track_path, 0.0) {
-                    sink.append(boxed_with_dsp(
-                        source,
-                        self.dsp_runtime.clone(),
-                        self.spectrum_tap.clone(),
-                    ));
-                }
+                let (source, channels, sample_rate) = if let (Some(samples), channels, sample_rate) =
+                    (self.decoded_samples.clone(), self.decoded_channels, self.decoded_sample_rate)
+                {
+                    (
+                        Box::new(SharedSamplesSource::new(samples, channels, sample_rate, 0))
+                            as crate::audio::output::BoxedSource,
+                        channels,
+                        sample_rate,
+                    )
+                } else if let Ok((source, meta)) = open_rodio_source_at(&track_path, 0.0) {
+                    (source, meta.channels, meta.sample_rate)
+                } else {
+                    sink.pause();
+                    sink.set_volume(self.effective_volume());
+                    if let Some(old) = self.sink.replace(sink) {
+                        old.stop();
+                    }
+                    self.current_position = 0.0;
+                    self.base_position = 0.0;
+                    self.playback_started_at = None;
+                    self.set_state(PlaybackState::Stopped);
+                    return;
+                };
+
+                let (controller, mixer_source) =
+                    PlaybackMixerSource::new(source, channels.max(1), sample_rate.max(1));
+                self.mixer = Some(controller);
+                sink.append(boxed_with_dsp(
+                    mixer_source,
+                    self.dsp_runtime.clone(),
+                    self.spectrum_tap.clone(),
+                ));
                 sink.pause();
                 sink.set_volume(self.effective_volume());
                 if let Some(old) = self.sink.replace(sink) {
@@ -830,27 +1028,32 @@ impl NativeAudioEngine {
             .or_else(|| self.output_backend.default_device_name());
         sink.pause();
 
-        if let (Some(samples), channels, sample_rate) = (
+        let (source, channels, sample_rate) = if let (Some(samples), channels, sample_rate) = (
             self.decoded_samples.clone(),
             self.decoded_channels,
             self.decoded_sample_rate,
         ) {
             let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
-            let source = SharedSamplesSource::new(samples, channels, sample_rate, start_sample);
-            sink.append(boxed_with_dsp(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            ));
+            (
+                Box::new(SharedSamplesSource::new(samples, channels, sample_rate, start_sample))
+                    as crate::audio::output::BoxedSource,
+                channels,
+                sample_rate,
+            )
         } else {
-            let (source, _) = open_rodio_source_at(&track_path, target)
+            let (source, meta) = open_rodio_source_at(&track_path, target)
                 .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-            sink.append(boxed_with_dsp(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            ));
-        }
+            (source, meta.channels, meta.sample_rate)
+        };
+
+        let (controller, mixer_source) =
+            PlaybackMixerSource::new(source, channels.max(1), sample_rate.max(1));
+        self.mixer = Some(controller);
+        sink.append(boxed_with_dsp(
+            mixer_source,
+            self.dsp_runtime.clone(),
+            self.spectrum_tap.clone(),
+        ));
         sink.set_volume(self.effective_volume());
 
         if resume_playing {
@@ -897,13 +1100,6 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn tick(&mut self) -> bool {
-        if let Some(crossfade) = self.active_crossfade.as_ref() {
-            if crossfade.finished.load(Ordering::Acquire) {
-                self.active_crossfade = None;
-                self.apply_effective_volume();
-            }
-        }
-
         if let Some(err) = self.output_backend.take_error() {
             if let Some(sink) = &self.sink {
                 sink.pause();
@@ -1114,38 +1310,47 @@ impl NativeAudioEngine {
         self.spectrum_tap.clear();
         self.dsp_runtime.request_reset();
 
-        if let Some(streaming) = &self.streaming {
+        let (source, channels, sample_rate) = if let Some(streaming) = &self.streaming {
             streaming.buffer.clear();
             let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
-            let source = StreamingSamplesSource::new(
-                streaming.buffer.clone(),
-                self.decoded_channels.max(1),
-                self.decoded_sample_rate.max(1),
-                self.duration,
-            );
-            sink.append(boxed_with_dsp(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            ));
+            (
+                Box::new(StreamingSamplesSource::new(
+                    streaming.buffer.clone(),
+                    self.decoded_channels.max(1),
+                    self.decoded_sample_rate.max(1),
+                    self.duration,
+                )) as crate::audio::output::BoxedSource,
+                self.decoded_channels,
+                self.decoded_sample_rate,
+            )
         } else if let Some(samples) = self.decoded_samples.clone() {
             let channels = self.decoded_channels.max(1);
             let sample_rate = self.decoded_sample_rate.max(1);
             let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
-            sink.append(boxed_with_dsp(
-                SharedSamplesSource::new(samples, channels, sample_rate, start_sample),
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            ));
+            (
+                Box::new(SharedSamplesSource::new(
+                    samples,
+                    channels,
+                    sample_rate,
+                    start_sample,
+                )) as crate::audio::output::BoxedSource,
+                channels,
+                sample_rate,
+            )
         } else {
-            let (source, _) = maybe_rodio_source
+            let (source, meta) = maybe_rodio_source
                 .expect("rodio source prepared when no streaming/decoded samples");
-            sink.append(boxed_with_dsp(
-                source,
-                self.dsp_runtime.clone(),
-                self.spectrum_tap.clone(),
-            ));
-        }
+            (source, meta.channels, meta.sample_rate)
+        };
+
+        let (controller, mixer_source) =
+            PlaybackMixerSource::new(source, channels.max(1), sample_rate.max(1));
+        self.mixer = Some(controller);
+        sink.append(boxed_with_dsp(
+            mixer_source,
+            self.dsp_runtime.clone(),
+            self.spectrum_tap.clone(),
+        ));
 
         sink.pause();
         sink.set_volume(self.effective_volume());

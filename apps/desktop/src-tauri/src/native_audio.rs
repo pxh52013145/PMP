@@ -9,12 +9,16 @@ use tauri::AppHandle;
 
 use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
 use crate::audio::emitter;
+use crate::audio::input::{AudioInputKind, AudioInputRegistry};
+use crate::audio::mixer::PlaybackMixerSource;
 use crate::audio::output::{default_backend, AudioOutputBackend, OutputDeviceInfo, RODIO_CPAL_BACKEND_ID};
 #[cfg(target_os = "windows")]
 use crate::audio::output::{wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 use crate::audio::output::{asio_backend, ASIO_BACKEND_ID};
-use crate::audio::engine::{ENGINE, PlaybackState};
+use crate::audio::engine::{ENGINE, PlaybackState, PreparedCrossfade, PreparedLoad};
+use crate::audio::mixer::coerce_source_format;
+use crate::audio::pipeline::boxed_with_dsp;
 use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
@@ -1058,59 +1062,93 @@ impl SpectrumTap {
 pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> {
     emitter::ensure_started(app_handle);
     let track_path = path.ok_or_else(|| "No path provided".to_string())?;
-    let result = {
+    let track_path = PathBuf::from(track_path);
+
+    let op = {
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.clear_error();
-        engine.set_state(PlaybackState::Loading);
-        match engine.load(PathBuf::from(&track_path)) {
-            Ok(()) => Ok(engine.build_state_payload(false)),
-            Err(err) => {
-                engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
-                Err((err, engine.build_state_payload(false)))
-            }
-        }
+        engine.begin_load_operation()
     };
 
-    match result {
-        Ok(payload) => {
-            emitter::emit_state(app_handle, payload)?;
-            Ok(())
-        }
-        Err((err, payload)) => {
-            let maybe_error = match (
-                payload.error_seq,
-                payload.error_code.clone(),
-                payload.error_message.clone(),
-            ) {
-                (Some(seq), Some(code), Some(message)) => {
-                    Some(NativeAudioErrorPayload { seq, code, message })
-                }
-                _ => None,
-            };
-            emitter::emit_state(app_handle, payload)?;
-            if let Some(error_payload) = maybe_error {
-                emitter::emit_error(app_handle, error_payload)?;
-            }
-            Err(err)
-        }
-    }
-}
+    let prepared = (|| -> Result<PreparedLoad, String> {
+        let (sink, output_info) = op.output_backend.create_sink()?;
+        sink.pause();
 
-pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> Result<(), String> {
-    emitter::ensure_started(app_handle);
-    let (result, payload) = {
-        let mut engine = ENGINE
-            .lock()
-            .map_err(|_| "Audio engine is locked".to_string())?;
-        let result = engine
-            .crossfade_to(PathBuf::from(&path), duration_ms)
-            .map_err(|err| {
-                engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", err.clone());
-                err
-            });
-        (result, engine.build_state_payload(false))
+        let opened = AudioInputRegistry::default()
+            .open_prefer(
+                &track_path,
+                output_info.output_sample_rate,
+                op.preferred_input_id.as_deref(),
+            )
+            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
+
+        let crate::audio::input::AudioInputOpenResult {
+            input_id,
+            meta,
+            kind,
+            source,
+        } = opened;
+
+        eprintln!("[NativeAudio] Input: {input_id}");
+
+        let mut streaming: Option<crate::audio::input::StreamingPlayback> = None;
+        let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
+
+        match kind {
+            AudioInputKind::Streaming(playback) => {
+                streaming = Some(playback);
+            }
+            AudioInputKind::Decoded { samples } => {
+                decoded_samples = Some(samples);
+            }
+            AudioInputKind::Rodio => {}
+        }
+
+        let (controller, mixer_source) = PlaybackMixerSource::new(source, meta.channels, meta.sample_rate);
+        sink.append(boxed_with_dsp(
+            mixer_source,
+            op.dsp_runtime.clone(),
+            op.spectrum_tap.clone(),
+        ));
+        sink.pause();
+        sink.set_volume(op.effective_volume);
+
+        Ok(PreparedLoad {
+            track_path: track_path.clone(),
+            sink,
+            output_info,
+            mixer: controller,
+            input_id,
+            meta,
+            streaming,
+            decoded_samples,
+        })
+    })();
+
+    let (result, payload) = match prepared {
+        Ok(prepared) => {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            let result = engine
+                .commit_load_operation(op.token, prepared)
+                .map(|_| ())
+                .map_err(|err| {
+                    engine.abandon_operation(op.token);
+                    engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
+                    err
+                });
+            (result, engine.build_state_payload(false))
+        }
+        Err(err) => {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.abandon_operation(op.token);
+            engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
+            (Err(err), engine.build_state_payload(false))
+        }
     };
 
     let maybe_error = match (
@@ -1118,9 +1156,7 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         payload.error_code.clone(),
         payload.error_message.clone(),
     ) {
-        (Some(seq), Some(code), Some(message)) => {
-            Some(NativeAudioErrorPayload { seq, code, message })
-        }
+        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
         _ => None,
     };
 
@@ -1131,6 +1167,145 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         }
         return Err(err);
     }
+    Ok(())
+}
+
+pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let track_path = PathBuf::from(path.clone());
+
+    let (was_playing, op) = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        let was_playing = matches!(engine.playback_state(), PlaybackState::Playing);
+        let op = engine.begin_crossfade_operation(duration_ms);
+        (was_playing, op)
+    };
+
+    let Some(op) = op else {
+        load(app_handle, Some(path.clone()))?;
+        if was_playing {
+            play(app_handle)?;
+        }
+        return Ok(());
+    };
+
+    let prepared = (|| -> Result<PreparedCrossfade, String> {
+        let opened = AudioInputRegistry::default()
+            .open_prefer(
+                &track_path,
+                Some(op.target_sample_rate),
+                op.preferred_input_id.as_deref(),
+            )
+            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
+
+        let crate::audio::input::AudioInputOpenResult {
+            input_id,
+            meta,
+            kind,
+            source,
+        } = opened;
+
+        eprintln!("[NativeAudio] Input: {input_id}");
+
+        let mut streaming: Option<crate::audio::input::StreamingPlayback> = None;
+        let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
+        match kind {
+            AudioInputKind::Streaming(playback) => {
+                streaming = Some(playback);
+            }
+            AudioInputKind::Decoded { samples } => {
+                decoded_samples = Some(samples);
+            }
+            AudioInputKind::Rodio => {}
+        }
+
+        // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
+        if let Some(streaming) = &streaming {
+            let channels = meta.channels.max(1) as usize;
+            let target_frames = if op.output_backend_id == WASAPI_EXCLUSIVE_BACKEND_ID {
+                4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
+            } else {
+                2048usize // ~46ms @ 44.1kHz
+            };
+            let target_samples = target_frames * channels;
+            if streaming.buffer.len_samples() < target_samples {
+                streaming
+                    .buffer
+                    .wait_for_samples(target_samples, Duration::from_millis(250));
+            }
+        }
+
+        let next_source = coerce_source_format(source, op.target_channels, op.target_sample_rate);
+        let decoded_samples = if decoded_samples.is_some()
+            && (meta.channels != op.target_channels || meta.sample_rate != op.target_sample_rate)
+        {
+            None
+        } else {
+            decoded_samples
+        };
+
+        let duration_frames = ((op.target_sample_rate as u64)
+            .saturating_mul(duration_ms.clamp(1, 30_000)))
+            / 1000;
+
+        Ok(PreparedCrossfade {
+            track_path: track_path.clone(),
+            input_id,
+            meta,
+            streaming,
+            decoded_samples,
+            next_source,
+            old_shutdown_tx: op.old_shutdown_tx,
+            target_channels: op.target_channels,
+            target_sample_rate: op.target_sample_rate,
+            duration_frames: duration_frames.max(1),
+        })
+    })();
+
+    let (result, payload) = match prepared {
+        Ok(prepared) => {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            let result = engine
+                .commit_crossfade_operation(op.token, prepared)
+                .map(|_| ())
+                .map_err(|err| {
+                    engine.abandon_operation(op.token);
+                    engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", err.clone());
+                    err
+                });
+            (result, engine.build_state_payload(false))
+        }
+        Err(err) => {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.abandon_operation(op.token);
+            engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", err.clone());
+            (Err(err), engine.build_state_payload(false))
+        }
+    };
+
+    let maybe_error = match (
+        payload.error_seq,
+        payload.error_code.clone(),
+        payload.error_message.clone(),
+    ) {
+        (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+        _ => None,
+    };
+
+    emitter::emit_state(app_handle, payload)?;
+    if let Err(err) = result {
+        if let Some(error_payload) = maybe_error {
+            emitter::emit_error(app_handle, error_payload)?;
+        }
+        return Err(err);
+    }
+
     Ok(())
 }
 

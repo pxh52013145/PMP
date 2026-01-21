@@ -6,6 +6,7 @@ pub(crate) mod engine;
 pub(crate) mod emitter;
 pub(crate) mod pipeline;
 pub(crate) mod playback;
+pub(crate) mod mixer;
 pub(crate) mod spectrum;
 pub(crate) mod dsd2pcm;
 pub(crate) mod resample;
