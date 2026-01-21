@@ -2,7 +2,7 @@
 
 本文档用于指导人类开发者与自动化工具（Codex / Agent）在仓库内协作开发，目标是让项目在“高性能桌面应用 + 插件生态 + 微内核解耦”的前提下，保持一致的：目录结构、模块边界、命名方式、契约规范与质量门禁。
 
-适用范围：本仓库根目录与 `apps/*`、`packages/*`、`scripts/*`、`docs/*`、`Mannuals/*`（包含 `apps/desktop/src-tauri` 的 Rust 代码）。
+适用范围：本仓库根目录与 `apps/*`、`packages/*`、`scripts/*`、`docs/*`、`logs/*`、`Mannuals/*`（包含 `apps/desktop/src-tauri` 的 Rust 代码）。
 
 约束等级：
 - **必须/禁止**：强约束，违反即视为不合规。
@@ -91,10 +91,13 @@
 │  └─ magnet-devkit/            # PMPM 开发工具链（create/lint/pack/sign）
 ├─ scripts/                     # 构建/诊断脚本（node/mjs）
 ├─ docs/                        # 重构/架构/UI/验收（本轮新增）
+├─ logs/                        # 阶段日志/审计记录（按日期）
 ├─ Mannuals/                    # 手册/落地说明（历史/长期沉淀）
 ├─ package.json                 # 根脚本入口（pnpm --filter）
 └─ pnpm-workspace.yaml          # workspace 配置
 ```
+
+阶段日志/审计记录统一放 `logs/`（根目录）；请勿新增 `docs/logs/`。
 
 禁止修改/提交的目录（必须遵守）：
 - `**/node_modules/`
