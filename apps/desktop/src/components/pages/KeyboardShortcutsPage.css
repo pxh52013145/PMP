@@ -1,7 +1,7 @@
 .page-keyboard-shortcuts {
   width: 100%;
   height: 100%;
-  padding: 18px;
+  padding: 16px;
   overflow: auto;
   color: rgba(255, 255, 255, 0.92);
 }
@@ -9,7 +9,7 @@
 .page-keyboard-shortcuts,
 .keyboard-shortcuts-table-wrap {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.18);
+  scrollbar-color: rgba(0, 217, 255, 0.28) rgba(0, 0, 0, 0.18);
 }
 
 .page-keyboard-shortcuts::-webkit-scrollbar,
@@ -27,7 +27,7 @@
 
 .page-keyboard-shortcuts::-webkit-scrollbar-thumb,
 .keyboard-shortcuts-table-wrap::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 217, 255, 0.18);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: content-box;
@@ -38,13 +38,13 @@
 
 .page-keyboard-shortcuts::-webkit-scrollbar-thumb:hover,
 .keyboard-shortcuts-table-wrap::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(0, 217, 255, 0.28);
   box-shadow: 0 0 8px rgba(0, 0, 0, 0.22);
 }
 
 .page-keyboard-shortcuts::-webkit-scrollbar-thumb:active,
 .keyboard-shortcuts-table-wrap::-webkit-scrollbar-thumb:active {
-  background: rgba(255, 255, 255, 0.36);
+  background: rgba(0, 217, 255, 0.38);
 }
 
 .keyboard-shortcuts-header {
@@ -112,7 +112,7 @@
 }
 
 .keyboard-shortcuts-card-header {
-  padding: 12px 14px 10px;
+  padding: 10px 12px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -142,7 +142,7 @@
 
 .keyboard-shortcuts-table thead th {
   text-align: left;
-  padding: 8px 10px;
+  padding: 6px 10px;
   font-size: 11px;
   font-weight: 700;
   opacity: 0.78;
@@ -153,9 +153,9 @@
 }
 
 .keyboard-shortcuts-table tbody td {
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .keyboard-shortcuts-col-title {
@@ -227,7 +227,7 @@
   display: inline-flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .kbd-chord {
@@ -244,9 +244,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 20px;
-  padding: 0 6px;
-  border-radius: 5px;
+  min-height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(0, 0, 0, 0.38));
   box-shadow:
@@ -278,9 +278,10 @@
 }
 
 .cmd-id {
-  margin-top: 2px;
+  margin-top: 1px;
   opacity: 0.72;
   min-width: 0;
+  font-size: 11px;
 }
 
 .cmd-id code {
@@ -392,6 +393,15 @@
 
 .btn:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.btn:focus {
+  outline: none;
+}
+
+.btn:focus-visible {
+  outline: 2px solid rgba(0, 217, 255, 0.55);
+  outline-offset: 2px;
 }
 
 .btn-primary {

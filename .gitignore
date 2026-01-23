@@ -61,6 +61,7 @@ Thumbs.db
 *.temp
 *.log
 tmp/
+%TEMP%/
 
 # Cache directories
 .cache/

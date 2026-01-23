@@ -9,12 +9,15 @@ use windows::{
     Foundation::{TypedEventHandler, TimeSpan},
     Media::{
         MediaPlaybackStatus, MediaPlaybackType,
-        Playback::MediaPlayer,
         SystemMediaTransportControls, SystemMediaTransportControlsButton,
         SystemMediaTransportControlsButtonPressedEventArgs,
         SystemMediaTransportControlsTimelineProperties,
     },
-    Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
+    Win32::Foundation::HWND,
+    Win32::System::WinRT::{
+        ISystemMediaTransportControlsInterop, RoGetActivationFactory, RoInitialize,
+        RO_INIT_MULTITHREADED, RO_INIT_SINGLETHREADED,
+    },
 };
 
 use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
@@ -25,7 +28,6 @@ static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 static SMTC: Lazy<Mutex<Option<SmtcController>>> = Lazy::new(|| Mutex::new(None));
 
 struct SmtcController {
-    _player: MediaPlayer,
     controls: SystemMediaTransportControls,
     last_track_path: Option<String>,
     last_playback_state: Option<String>,
@@ -38,7 +40,10 @@ fn ensure_winrt_initialized() {
     // Best-effort: some environments are already initialized (STA/MTA).
     // We only need WinRT for SMTC registration and events.
     unsafe {
-        let _ = RoInitialize(RO_INIT_MULTITHREADED);
+        if RoInitialize(RO_INIT_MULTITHREADED).is_ok() {
+            return;
+        }
+        let _ = RoInitialize(RO_INIT_SINGLETHREADED);
     }
 }
 
@@ -92,26 +97,30 @@ pub fn init(app: &AppHandle) {
 
     ensure_winrt_initialized();
 
-    let player = match MediaPlayer::new() {
+    let Some(window) = app.get_window(crate::windows::MAIN_WINDOW_LABEL) else {
+        eprintln!("[SMTC] Main window not found");
+        return;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        eprintln!("[SMTC] Failed to get main window HWND");
+        return;
+    };
+
+    let controls = (|| unsafe {
+        let factory: ISystemMediaTransportControlsInterop = RoGetActivationFactory(&HSTRING::from(
+            "Windows.Media.SystemMediaTransportControls",
+        ))?;
+        factory.GetForWindow::<_, SystemMediaTransportControls>(HWND(hwnd.0 as isize))
+    })()
+    .map_err(|err| format!("{err:?}"));
+
+    let controls = match controls {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("[SMTC] Failed to create MediaPlayer: {err:?}");
+            eprintln!("[SMTC] Failed to get controls via interop: {err}");
             return;
         }
     };
-
-    let controls = match player.SystemMediaTransportControls() {
-        Ok(v) => v,
-        Err(err) => {
-            eprintln!("[SMTC] Failed to get SystemMediaTransportControls: {err:?}");
-            return;
-        }
-    };
-
-    // CommandManager controls the OS media UI integration; enable it.
-    if let Ok(command_manager) = player.CommandManager() {
-        let _ = command_manager.SetIsEnabled(true);
-    }
 
     let _ = controls.SetIsEnabled(true);
     let _ = controls.SetIsPlayEnabled(true);
@@ -142,7 +151,6 @@ pub fn init(app: &AppHandle) {
     let _ = controls.ButtonPressed(&handler);
 
     *registry = Some(SmtcController {
-        _player: player,
         controls,
         last_track_path: None,
         last_playback_state: None,

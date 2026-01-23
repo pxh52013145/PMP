@@ -227,7 +227,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
           if (!action) return;
 
           const now = Date.now();
-          if (lastAction === action && now - lastActionAtMs < 60) {
+          if (lastAction === action && now - lastActionAtMs < 200) {
             return;
           }
           lastAction = action;

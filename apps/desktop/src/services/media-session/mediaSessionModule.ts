@@ -25,13 +25,16 @@ function isMainWindowHash(): boolean {
 }
 
 function toMediaSessionPlaybackState(state: AudioState): MediaSessionPlaybackState {
-  if (!state.currentTrack) return 'none';
+  const hasSession = Boolean(state.currentTrack) || (Array.isArray(state.queue) && state.queue.length > 0);
+  if (!hasSession) return 'none';
+
   if (state.playbackState === 'playing') return 'playing';
   if (state.playbackState === 'paused') return 'paused';
   if (state.playbackState === 'loading') return 'paused';
   if (state.playbackState === 'stopped') return 'paused';
+  if (state.playbackState === 'idle') return 'paused';
   if (state.playbackState === 'error') return 'paused';
-  return 'none';
+  return 'paused';
 }
 
 function buildMediaMetadata(track: Track | null): MediaMetadata | null {
@@ -49,6 +52,16 @@ function buildMediaMetadata(track: Track | null): MediaMetadata | null {
   } catch {
     return null;
   }
+}
+
+function resolveDisplayTrack(state: AudioState): Track | null {
+  if (state.currentTrack) return state.currentTrack;
+  if (!Array.isArray(state.queue) || state.queue.length === 0) return null;
+  const index =
+    typeof state.currentIndex === 'number' && state.currentIndex >= 0 && state.currentIndex < state.queue.length
+      ? state.currentIndex
+      : 0;
+  return state.queue[index] ?? null;
 }
 
 function safeSetActionHandler(action: MediaSessionAction, handler: MediaSessionActionHandler): void {
@@ -240,7 +253,7 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
         lastTime = state.currentTime ?? lastTime;
 
         safeSetPlaybackState(toMediaSessionPlaybackState(state));
-        safeSetMetadata(buildMediaMetadata(state.currentTrack));
+        safeSetMetadata(buildMediaMetadata(resolveDisplayTrack(state)));
         applyPositionState(forcePosition);
 
         const shouldKeepalive = state.playbackState === 'playing';
