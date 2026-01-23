@@ -1,6 +1,7 @@
 import './SettingsPage.css';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
+import { useNavigation } from '../../contexts/NavigationContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
 
@@ -20,6 +21,7 @@ type SettingsSection = {
 
 export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
+  const { navigateTo } = useNavigation();
   const t = useT();
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
@@ -92,6 +94,15 @@ export const SettingsPage: React.FC = () => {
         <div>
           <h1 className="settings-title">{t('pages.settings.title')}</h1>
           <p className="settings-subtitle">{t('pages.settings.subtitle')}</p>
+        </div>
+        <div className="settings-header-actions">
+          <button
+            type="button"
+            className="settings-action-btn"
+            onClick={() => navigateTo('keyboard-shortcuts')}
+          >
+            {t('pages.keyboard-shortcuts.title')}
+          </button>
         </div>
       </div>
 

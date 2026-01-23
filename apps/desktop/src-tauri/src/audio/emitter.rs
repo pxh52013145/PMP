@@ -66,6 +66,17 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 }
                 _ => None,
             };
+
+            #[cfg(target_os = "windows")]
+            {
+                crate::windows::smtc::sync_from_native_audio_state(
+                    &state_payload.playback_state,
+                    state_payload.track_path.as_deref(),
+                    state_payload.current_time,
+                    state_payload.duration,
+                );
+            }
+
             let _ = emit_state(&app_handle, state_payload);
             if let Some(error_payload) = maybe_error {
                 let _ = emit_error(&app_handle, error_payload);

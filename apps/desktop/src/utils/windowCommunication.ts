@@ -115,6 +115,7 @@ export const STORAGE_KEYS = {
   // === 配置数据（主要数据源） ===
   CONFIG: 'pixel-matrix-player-config', // 主配置文件（包含 magnet、grid、styleOverride）
   LOCALE: 'pixel-matrix-locale', // UI locale（i18n）
+  KEYBINDINGS_USER_V1: 'pixel-matrix-keybindings-user-v1', // 用户自定义快捷键（array, VSCode-like rules）
   WORKBENCH_ID: 'pixel-matrix-workbench-id', // 当前 Workbench id（R4）
   WORKBENCH_LAYOUT_ID: 'pixel-matrix-workbench-layout-id', // Workbench layout contribution id（R4）
   WORKBENCH_NAVIGATION_ID: 'pixel-matrix-workbench-navigation-id', // Workbench navigation contribution id（R4）

@@ -66,6 +66,27 @@ export type CommandContribution = {
   metadata?: Record<string, unknown>;
 };
 
+export type KeybindingContribution = {
+  kind: 'keybinding';
+  id: string;
+  /** Space-separated chords, each chord is '+' separated. Example: "ctrl+k ctrl+s" */
+  key: string;
+  /** Target command id */
+  command: string;
+  /**
+   * VSCode-like when-clause (subset).
+   * - `key` / `!key`
+   * - boolean ops: `!`, `&&`, `||` with parentheses
+   * - comparisons: `key == value` / `key != value` (value can be string/number/boolean; unquoted identifiers are treated as strings)
+   */
+  when?: string;
+  args?: unknown;
+  source?: ContributionSource;
+  /** Priority among defaults; higher weight means later in default ordering. */
+  weight?: number;
+  metadata?: Record<string, unknown>;
+};
+
 export type WorkbenchContribution = {
   kind: 'workbench';
   id: string;
@@ -125,6 +146,7 @@ export type DesktopContribution =
   | SettingsPanelContribution
   | VisualizerContribution
   | CommandContribution
+  | KeybindingContribution
   | WorkbenchContribution
   | WorkbenchLayoutContribution
   | WorkbenchNavigationContribution

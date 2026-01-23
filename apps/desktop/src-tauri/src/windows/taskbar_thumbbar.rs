@@ -7,12 +7,20 @@ pub struct TaskbarMediaControlPayload {
     pub action: &'static str,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MouseSideButtonPayload {
+    pub button: &'static str,
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn init_main_window(_app: &AppHandle) {}
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use super::MouseSideButtonPayload;
     use super::TaskbarMediaControlPayload;
+    use crate::windows::EVENT_MOUSE_SIDE_BUTTON;
     use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
     use once_cell::sync::{Lazy, OnceCell};
     use std::{collections::HashMap, mem, sync::Mutex};
@@ -32,7 +40,7 @@ mod windows_impl {
                 WindowsAndMessaging::{
                     CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, LoadIconW,
                     RegisterWindowMessageW, SetWindowLongPtrW, GWLP_WNDPROC, IDI_APPLICATION,
-                    WM_COMMAND, WNDPROC,
+                    WM_APPCOMMAND, WM_COMMAND, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDPROC,
                 },
             },
         },
@@ -43,6 +51,13 @@ mod windows_impl {
     const BUTTON_ID_PREV: u32 = 0x9001;
     const BUTTON_ID_PLAY_PAUSE: u32 = 0x9002;
     const BUTTON_ID_NEXT: u32 = 0x9003;
+
+    const APPCOMMAND_BROWSER_BACKWARD: u32 = 1;
+    const APPCOMMAND_BROWSER_FORWARD: u32 = 2;
+    const APPCOMMAND_MEDIA_NEXTTRACK: u32 = 11;
+    const APPCOMMAND_MEDIA_PREVIOUSTRACK: u32 = 12;
+    const APPCOMMAND_MEDIA_STOP: u32 = 13;
+    const APPCOMMAND_MEDIA_PLAY_PAUSE: u32 = 14;
 
     static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
     static TASKBAR_BUTTON_CREATED_MSG: Lazy<u32> =
@@ -131,6 +146,13 @@ mod windows_impl {
         );
     }
 
+    fn emit_mouse_side_button(button: &'static str) {
+        let Some(app) = APP_HANDLE.get() else {
+            return;
+        };
+        let _ = app.emit_all(EVENT_MOUSE_SIDE_BUTTON, MouseSideButtonPayload { button });
+    }
+
     unsafe extern "system" fn wnd_proc(
         hwnd: HWND,
         msg: u32,
@@ -150,6 +172,69 @@ mod windows_impl {
                     BUTTON_ID_NEXT => emit_action("next"),
                     _ => {}
                 }
+            }
+        } else if msg == WM_XBUTTONDOWN {
+            // HIWORD(wparam) == XBUTTON1(1) / XBUTTON2(2)
+            let raw = wparam.0 as u32;
+            let xbutton = (raw >> 16) & 0xFFFF;
+            match xbutton {
+                1 => {
+                    emit_mouse_side_button("back");
+                    return LRESULT(0);
+                }
+                2 => {
+                    emit_mouse_side_button("forward");
+                    return LRESULT(0);
+                }
+                _ => {}
+            }
+        } else if msg == WM_XBUTTONUP {
+            // Some mouse drivers only emit XBUTTONUP; handle it the same way.
+            let raw = wparam.0 as u32;
+            let xbutton = (raw >> 16) & 0xFFFF;
+            match xbutton {
+                1 => {
+                    emit_mouse_side_button("back");
+                    return LRESULT(0);
+                }
+                2 => {
+                    emit_mouse_side_button("forward");
+                    return LRESULT(0);
+                }
+                _ => {}
+            }
+        } else if msg == WM_APPCOMMAND {
+            // Some mice map side buttons to "browser back/forward" app commands.
+            // Media keys can also arrive here when the window is focused.
+            // docs: GET_APPCOMMAND_LPARAM(lparam) = HIWORD(lparam) & 0xFFF
+            let raw = lparam.0 as u32;
+            let command = (raw >> 16) & 0x0FFF;
+            match command {
+                APPCOMMAND_BROWSER_BACKWARD => {
+                    emit_mouse_side_button("back");
+                    return LRESULT(1);
+                }
+                APPCOMMAND_BROWSER_FORWARD => {
+                    emit_mouse_side_button("forward");
+                    return LRESULT(1);
+                }
+                APPCOMMAND_MEDIA_PREVIOUSTRACK => {
+                    emit_action("previous");
+                    return LRESULT(1);
+                }
+                APPCOMMAND_MEDIA_NEXTTRACK => {
+                    emit_action("next");
+                    return LRESULT(1);
+                }
+                APPCOMMAND_MEDIA_PLAY_PAUSE => {
+                    emit_action("playPause");
+                    return LRESULT(1);
+                }
+                APPCOMMAND_MEDIA_STOP => {
+                    emit_action("stop");
+                    return LRESULT(1);
+                }
+                _ => {}
             }
         }
 

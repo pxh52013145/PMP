@@ -4,6 +4,7 @@ import type { PageContribution, SettingsPanelContribution, WindowContribution } 
 import { parseNavigationParams } from '../contracts/navigationParams';
 import { HomePage } from '../components/pages/HomePage';
 import { SettingsPage } from '../components/pages/SettingsPage';
+import { KeyboardShortcutsPage } from '../components/pages/KeyboardShortcutsPage';
 import { MusicLibrary } from '../components/pages/MusicLibrary';
 import { TrackDetailPage } from '../components/pages/TrackDetailPage';
 import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
@@ -25,11 +26,12 @@ import { useAudioService } from '../contexts/AudioEngineContext';
 import { calculateWindowPosition, openEditorWindow, type EditorWindowType } from '../utils/editorWindows';
 import { closeVstManagerWindow, openVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
+import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
 
 export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
   return {
     id: 'builtin-contributions',
-    activate: ({ contributions }) => {
+    activate: ({ contributions, services }) => {
       const unregisters = new Map<string, () => void>();
 
       const register = <T extends { kind: string; id: string }>(contribution: T) => {
@@ -73,6 +75,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 20,
           group: 'core',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'keyboard-shortcuts',
+          title: t('pages.keyboard-shortcuts.title'),
+          render: () => <KeyboardShortcutsPage />,
+          source: 'builtin',
+          order: 25,
+          group: 'core',
+          tags: ['core', 'keybindings'],
         });
 
         // Settings panels (rendered inside SettingsPage)
@@ -288,6 +301,18 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           },
           close: async () => {
             await closeVstManagerWindow();
+          },
+        });
+
+        register<WindowContribution>({
+          kind: 'window',
+          id: 'keyboard-shortcuts',
+          title: t('pages.keyboard-shortcuts.title'),
+          label: 'keyboard-shortcuts',
+          route: '/#/keyboard-shortcuts',
+          source: 'builtin',
+          open: async () => {
+            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('keyboard-shortcuts');
           },
         });
 

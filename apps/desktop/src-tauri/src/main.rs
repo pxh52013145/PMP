@@ -324,6 +324,26 @@ async fn native_audio_vst_library_list_scan_events(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_scan_paths_exist(
+    paths: Vec<String>,
+) -> Result<std::collections::HashMap<String, bool>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = std::collections::HashMap::new();
+        for raw in paths {
+            let path = raw.trim();
+            if path.is_empty() {
+                continue;
+            }
+            let exists = std::path::Path::new(path).exists();
+            out.insert(raw, exists);
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("VST scan path exists task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_scan_start(
     app: tauri::AppHandle,
     request: vst_scanner::VstScanRequest,
@@ -724,6 +744,7 @@ fn main() {
                 use window_shadows::set_shadow;
                 let _ = set_shadow(&window, false);
                 windows::taskbar_thumbbar::init_main_window(&app.handle());
+                windows::smtc::init(&app.handle());
             }
 
             let app_handle = app.handle();
@@ -794,6 +815,7 @@ fn main() {
             native_audio_vst_library_get_plugin_params,
             native_audio_vst_library_list_scan_runs,
             native_audio_vst_library_list_scan_events,
+            native_audio_vst_scan_paths_exist,
             native_audio_vst_scan_start,
             native_audio_vst_scan_cancel,
             native_audio_vst_scan_state,

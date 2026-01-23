@@ -12,6 +12,12 @@
   /* 注意：过渡动画和 hover/active 效果现在由 Magnet 的 animation 配置控制 */
 }
 
+/* Avoid default browser focus rings inside magnets (can cause white outlines / jank in WebView2). */
+.magnet button:focus,
+.magnet button:focus-visible {
+  outline: none;
+}
+
 /* 悬停时提升层级，避免被其他magnet遮挡 */
 .magnet:hover {
   z-index: 10;

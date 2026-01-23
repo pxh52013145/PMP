@@ -1,14 +1,15 @@
 import type { KernelModule } from '../kernel';
 import type { AppEvents } from '../contracts/events';
-import type { CommandContribution } from '../contracts/contributions';
+import type { CommandContribution, WindowContribution } from '../contracts/contributions';
 import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
+import { AUDIO_ENGINE_SERVICE_TOKEN } from '../services/audio';
 import { openVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
 
 export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
   return {
     id: 'builtin-commands',
-    activate: ({ contributions, services }) => {
+    activate: ({ contributions, services, events }) => {
       const unregisters = new Map<string, () => void>();
 
       const register = (contribution: CommandContribution) => {
@@ -18,6 +19,110 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
       };
 
       const sync = () => {
+        register({
+          kind: 'command',
+          id: 'commandPalette:toggle',
+          title: t('commands.commandPalette.toggle.title'),
+          description: t('commands.commandPalette.toggle.description'),
+          source: 'builtin',
+          group: 'core',
+          order: 1,
+          run: async () => {
+            events.emit('ui/commandPaletteToggleRequested', null);
+          },
+        });
+
+        register({
+          kind: 'command',
+          id: 'commandPalette:close',
+          title: t('commands.commandPalette.close.title'),
+          description: t('commands.commandPalette.close.description'),
+          source: 'builtin',
+          group: 'core',
+          order: 2,
+          run: async () => {
+            events.emit('ui/commandPaletteCloseRequested', null);
+          },
+        });
+
+        register({
+          kind: 'command',
+          id: 'app:open-keyboard-shortcuts-window',
+          title: t('commands.app.open-keyboard-shortcuts-window.title'),
+          description: t('commands.app.open-keyboard-shortcuts-window.description'),
+          source: 'builtin',
+          group: 'core',
+          order: 3,
+          run: async () => {
+            const win = contributions.get<WindowContribution>('window', 'keyboard-shortcuts');
+            if (!win) {
+              console.warn('[commands] keyboard-shortcuts window not registered');
+              return;
+            }
+            await win.open();
+          },
+        });
+
+        register({
+          kind: 'command',
+          id: 'audio:previous-track',
+          title: t('commands.audio.previous-track.title'),
+          description: t('commands.audio.previous-track.description'),
+          source: 'builtin',
+          group: 'audio',
+          order: 300,
+          run: async () => {
+            const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
+            const audioService = audioEngine.getSnapshot().audioService;
+            await audioService.playPrevious();
+          },
+        });
+
+        register({
+          kind: 'command',
+          id: 'audio:next-track',
+          title: t('commands.audio.next-track.title'),
+          description: t('commands.audio.next-track.description'),
+          source: 'builtin',
+          group: 'audio',
+          order: 310,
+          run: async () => {
+            const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
+            const audioService = audioEngine.getSnapshot().audioService;
+            await audioService.playNext();
+          },
+        });
+
+        register({
+          kind: 'command',
+          id: 'audio:toggle-play-pause',
+          title: t('commands.audio.toggle-play-pause.title'),
+          description: t('commands.audio.toggle-play-pause.description'),
+          source: 'builtin',
+          group: 'audio',
+          order: 320,
+          run: async () => {
+            const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
+            const audioService = audioEngine.getSnapshot().audioService;
+            const state = audioService.getState();
+            if (state.playbackState === 'playing') {
+              audioService.pause();
+              return;
+            }
+            if (!state.currentTrack && state.queue.length > 0) {
+              const index =
+                typeof state.currentIndex === 'number' &&
+                state.currentIndex >= 0 &&
+                state.currentIndex < state.queue.length
+                  ? state.currentIndex
+                  : 0;
+              await audioService.playTrackAtIndex(index);
+              return;
+            }
+            await audioService.play();
+          },
+        });
+
         register({
           kind: 'command',
           id: 'app:navigate-home',

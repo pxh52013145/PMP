@@ -215,6 +215,8 @@ export class DefaultAudioEngineService implements AudioEngineService {
 
     let unlisten: null | (() => void) = null;
     let disposed = false;
+    let lastAction: string | null = null;
+    let lastActionAtMs = 0;
 
     type Payload = { action?: string };
 
@@ -223,6 +225,13 @@ export class DefaultAudioEngineService implements AudioEngineService {
         listen<Payload>('taskbar-media-control', (event) => {
           const action = event.payload?.action;
           if (!action) return;
+
+          const now = Date.now();
+          if (lastAction === action && now - lastActionAtMs < 60) {
+            return;
+          }
+          lastAction = action;
+          lastActionAtMs = now;
 
           const service = this.audioService;
           if (!service) return;
@@ -237,6 +246,14 @@ export class DefaultAudioEngineService implements AudioEngineService {
             void service.playNext().catch((err) => {
               console.error('[Taskbar] playNext failed:', err);
             });
+            return;
+          }
+          if (action === 'stop') {
+            try {
+              service.stop();
+            } catch (err) {
+              console.error('[Taskbar] stop failed:', err);
+            }
             return;
           }
           if (action === 'playPause') {

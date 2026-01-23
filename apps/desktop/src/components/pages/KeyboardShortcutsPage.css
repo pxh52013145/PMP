@@ -1,0 +1,413 @@
+.page-keyboard-shortcuts {
+  width: 100%;
+  height: 100%;
+  padding: 18px;
+  overflow: auto;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.page-keyboard-shortcuts,
+.keyboard-shortcuts-table-wrap {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.18);
+}
+
+.page-keyboard-shortcuts::-webkit-scrollbar,
+.keyboard-shortcuts-table-wrap::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.page-keyboard-shortcuts::-webkit-scrollbar-track,
+.keyboard-shortcuts-table-wrap::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  margin: 4px;
+}
+
+.page-keyboard-shortcuts::-webkit-scrollbar-thumb,
+.keyboard-shortcuts-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition:
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.page-keyboard-shortcuts::-webkit-scrollbar-thumb:hover,
+.keyboard-shortcuts-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.22);
+}
+
+.page-keyboard-shortcuts::-webkit-scrollbar-thumb:active,
+.keyboard-shortcuts-table-wrap::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.keyboard-shortcuts-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.keyboard-shortcuts-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.keyboard-shortcuts-subtitle {
+  margin: 6px 0 0;
+  font-size: 12px;
+  opacity: 0.78;
+}
+
+.keyboard-shortcuts-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.keyboard-shortcuts-search {
+  flex: 1;
+  min-width: 240px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.26);
+  color: rgba(255, 255, 255, 0.92);
+  outline: none;
+}
+
+.keyboard-shortcuts-search:focus {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.keyboard-shortcuts-stats {
+  font-size: 12px;
+  opacity: 0.78;
+  white-space: nowrap;
+}
+
+.keyboard-shortcuts-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.keyboard-shortcuts-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.keyboard-shortcuts-card-header {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.keyboard-shortcuts-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.keyboard-shortcuts-card-subtitle {
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.keyboard-shortcuts-table-wrap {
+  overflow: auto;
+}
+
+.keyboard-shortcuts-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.keyboard-shortcuts-table thead th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.78;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+  user-select: none;
+}
+
+.keyboard-shortcuts-table tbody td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+
+.keyboard-shortcuts-col-title {
+  display: block;
+  padding-right: 10px;
+}
+
+.keyboard-shortcuts-col-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.keyboard-shortcuts-col-resizer::after {
+  content: '';
+  position: absolute;
+  top: 22%;
+  bottom: 22%;
+  left: 50%;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateX(-0.5px);
+  transition:
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.keyboard-shortcuts-col-resizer:hover::after,
+.page-keyboard-shortcuts[data-resizing='true'] .keyboard-shortcuts-col-resizer[data-active='true']::after {
+  background: rgba(0, 255, 255, 0.55);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.15);
+}
+
+.keyboard-shortcuts-empty {
+  padding: 18px 12px !important;
+  opacity: 0.75;
+}
+
+.kbd-code,
+.when-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  font-size: 11px;
+}
+
+.when-code {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kbd-sequence {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 88%, transparent 100%);
+}
+
+.kbd-sequence-inner {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.kbd-chord {
+  display: inline-flex;
+  align-items: center;
+}
+
+.kbd-part {
+  display: inline-flex;
+  align-items: center;
+}
+
+.kbd-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 0 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(0, 0, 0, 0.38));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  font-size: 11px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.kbd-plus {
+  margin: 0 4px;
+  font-size: 11px;
+  font-weight: 800;
+  opacity: 0.62;
+  user-select: none;
+}
+
+.cmd-title {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmd-id {
+  margin-top: 2px;
+  opacity: 0.72;
+  min-width: 0;
+}
+
+.cmd-id code {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.when-error {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.8;
+  color: rgba(255, 190, 160, 0.95);
+}
+
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 0.92;
+}
+
+.source-tag--plugin {
+  border-color: rgba(120, 200, 255, 0.3);
+  background: rgba(120, 200, 255, 0.12);
+}
+
+.source-tag--user {
+  border-color: rgba(160, 255, 190, 0.28);
+  background: rgba(160, 255, 190, 0.12);
+}
+
+.source-tag--default {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.keyboard-shortcuts-conflicts {
+  padding: 12px 14px 14px;
+}
+
+.keyboard-shortcuts-conflicts-title {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.88;
+}
+
+.keyboard-shortcuts-conflicts-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  opacity: 0.82;
+}
+
+.keyboard-shortcuts-conflicts-list .sep {
+  opacity: 0.6;
+  margin: 0 6px;
+}
+
+.keyboard-shortcuts-editor {
+  width: 100%;
+  min-height: 220px;
+  padding: 12px 12px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.18);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.keyboard-shortcuts-error {
+  padding: 10px 12px;
+  margin: 10px 12px 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 160, 120, 0.3);
+  background: rgba(255, 80, 50, 0.14);
+  color: rgba(255, 220, 210, 0.96);
+  font-size: 12px;
+}
+
+.keyboard-shortcuts-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 12px;
+}
+
+.btn {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.btn-primary {
+  border-color: rgba(120, 200, 255, 0.4);
+  background: rgba(120, 200, 255, 0.18);
+}
+
+.btn-primary:hover {
+  background: rgba(120, 200, 255, 0.26);
+}
+
+.btn-danger {
+  border-color: rgba(255, 140, 120, 0.45);
+  background: rgba(255, 90, 60, 0.16);
+}
+
+.btn-danger:hover {
+  background: rgba(255, 90, 60, 0.24);
+}

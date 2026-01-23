@@ -5,6 +5,9 @@ pub mod vst_manager;
 #[cfg(target_os = "windows")]
 pub mod taskbar_thumbbar;
 
+#[cfg(target_os = "windows")]
+pub mod smtc;
+
 pub const MAIN_WINDOW_LABEL: &str = "main";
 
 pub const EVENT_MAIN_WINDOW_SHOWN: &str = "main-window-shown";
@@ -22,3 +25,6 @@ pub const EVENT_VST_MANAGER_WINDOW_SHOWN: &str = "vst-manager-window-shown";
 pub const EVENT_VST_MANAGER_WINDOW_HIDDEN: &str = "vst-manager-window-hidden";
 
 pub const EVENT_TASKBAR_MEDIA_CONTROL: &str = "taskbar-media-control";
+
+// Best-effort: mouse side buttons (XButton1/XButton2) captured on Windows.
+pub const EVENT_MOUSE_SIDE_BUTTON: &str = "mouse-side-button";

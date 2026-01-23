@@ -5,12 +5,15 @@ import { createLifecycleModule } from '../services/lifecycle';
 import { createNavigationModule } from '../services/navigation';
 import { createAudioModule } from '../services/audio';
 import { createCommandsModule } from '../services/commands';
+import { createMediaSessionModule } from '../services/media-session';
 import { createBuiltinContributionsModule } from '../builtin-modules/builtinContributionsModule';
 import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMagnetRenderersModule';
 import { createBuiltinCommandsModule } from '../builtin-modules/builtinCommandsModule';
+import { createBuiltinKeybindingsModule } from '../builtin-modules/builtinKeybindingsModule';
 import { createBuiltinWorkbenchesModule } from '../builtin-modules/builtinWorkbenchesModule';
 import { createPmpmContributionsModule } from '../magnet-system/plugins/pmpmContributionsModule';
 import { createPmpmMagnetRenderersModule } from '../magnet-system/plugins/pmpmMagnetRenderersModule';
+import { createKeybindingsModule } from '../services/keybindings';
 
 type DesktopKernel = Kernel<AppEvents>;
 
@@ -41,9 +44,12 @@ function createRuntime(): KernelRuntime {
       enableTaskbarMediaControls: !isAuxWindow,
     }),
     createCommandsModule(),
+    createKeybindingsModule(),
+    createMediaSessionModule({ enabled: !isAuxWindow }),
     createBuiltinMagnetRenderersModule(),
     createPmpmMagnetRenderersModule(),
     createBuiltinCommandsModule(),
+    createBuiltinKeybindingsModule(),
   ];
 
   if (!isAuxWindow) {

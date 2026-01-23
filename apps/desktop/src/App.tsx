@@ -1,9 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
-import {
-  TAURI_EVENTS,
-  setupTauriListener,
-} from './utils/windowCommunication';
+import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useKernel } from './contexts/KernelContext';
 import { CommandPalette } from './components/commands/CommandPalette';
@@ -23,9 +20,13 @@ import {
 import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
+import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import './App.css';
 
 function AppContent() {
+  const kernel = useKernel();
+  const keybindings = kernel.services.get(KEYBINDINGS_SERVICE_TOKEN);
+
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isMainWindowFocused, setIsMainWindowFocused] = useState(() => document.hasFocus());
@@ -40,11 +41,13 @@ function AppContent() {
   useEffect(() => {
     const run = async () => {
       try {
-        const [{ migrateInstalledPmpmPluginsToDurableStorage }, { migrateInstalledPmpsShaderPacksToDurableStorage }] =
-          await Promise.all([
-            import('./magnet-system/plugins/pmpm'),
-            import('./shader-system/pmps'),
-          ]);
+        const [
+          { migrateInstalledPmpmPluginsToDurableStorage },
+          { migrateInstalledPmpsShaderPacksToDurableStorage },
+        ] = await Promise.all([
+          import('./magnet-system/plugins/pmpm'),
+          import('./shader-system/pmps'),
+        ]);
 
         const [pmpm, pmps] = await Promise.all([
           migrateInstalledPmpmPluginsToDurableStorage(),
@@ -59,9 +62,11 @@ function AppContent() {
       }
     };
 
-    const requestIdleCallback = (window as unknown as {
-      requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
-    }).requestIdleCallback;
+    const requestIdleCallback = (
+      window as unknown as {
+        requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number;
+      }
+    ).requestIdleCallback;
     if (requestIdleCallback) {
       requestIdleCallback(() => void run(), { timeout: 1500 });
       return;
@@ -135,33 +140,29 @@ function AppContent() {
   }, [isTauri]);
 
   useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null): boolean => {
-      if (!target || !(target instanceof HTMLElement)) return false;
-      const tag = target.tagName.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
-      return target.isContentEditable;
-    };
-
-    const isMac = navigator.platform.toLowerCase().includes('mac');
-
     const onKeyDown = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return;
-
-      const modifier = isMac ? e.metaKey : e.ctrlKey;
-      if (modifier && e.shiftKey && e.key.toLowerCase() === 'p') {
-        e.preventDefault();
-        setCommandPaletteOpen((value) => !value);
-        return;
-      }
-
-      if (e.key === 'Escape') {
-        setCommandPaletteOpen(false);
+      const handled = keybindings.handleKeyboardEvent(e);
+      if (handled) {
+        e.stopPropagation();
       }
     };
 
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, []);
+  }, [keybindings]);
+
+  useEffect(() => {
+    const unsubscribeToggle = kernel.events.on('ui/commandPaletteToggleRequested', () => {
+      setCommandPaletteOpen((value) => !value);
+    });
+    const unsubscribeClose = kernel.events.on('ui/commandPaletteCloseRequested', () => {
+      setCommandPaletteOpen(false);
+    });
+    return () => {
+      unsubscribeToggle();
+      unsubscribeClose();
+    };
+  }, [kernel.events]);
 
   useEffect(() => {
     const init = async () => {

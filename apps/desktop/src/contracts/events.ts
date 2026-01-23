@@ -1,4 +1,6 @@
 import type { NavigationPageData } from './navigation';
+import type { AudioState } from '../services/audio';
+import type { KeybindingsSnapshot } from '../services/keybindings/types';
 
 export type AppEvents = {
   'navigation/changed': {
@@ -6,11 +8,14 @@ export type AppEvents = {
     history: NavigationPageData[];
     currentIndex: number;
   };
+  'keybindings/changed': KeybindingsSnapshot;
+  'ui/commandPaletteToggleRequested': null;
+  'ui/commandPaletteCloseRequested': null;
   'audio/engineChanged': {
     engineType: 'native';
     isNativeAvailable: boolean;
   };
-  'audio/stateChanged': unknown;
+  'audio/stateChanged': AudioState;
   'audio/timeUpdated': { time: number };
   'audio/ended': null;
   'audio/error': {
