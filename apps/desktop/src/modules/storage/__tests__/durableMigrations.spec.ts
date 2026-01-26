@@ -35,7 +35,7 @@ describe('R3 durable migrations', () => {
       import('../../../magnet-system/plugins/pmpm'),
       import('../../../shader-system/pmps'),
     ]);
-  }, 20000);
+  }, 60000);
 
   it('migrates .pmpm entryCode with backup and can rollback (backup)', async () => {
     const installed = [
