@@ -445,10 +445,11 @@ pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> 
             .query_row(
                 "SELECT params_scanned_at_ms FROM vst_plugins WHERE plugin_id = ?1",
                 params![plugin.id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<i64>>(0),
             )
             .optional()
-            .map_err(|e| format!("Failed to query plugin params scan time: {e}"))?;
+            .map_err(|e| format!("Failed to query plugin params scan time: {e}"))?
+            .flatten();
         let had_cached_params = existing_params_scanned_at_ms.is_some();
 
         let existing_file: Option<(String, Option<i64>, Option<i64>, Option<String>)> = tx
@@ -517,11 +518,12 @@ pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> 
                 Err(_) => (None, None),
             };
 
-            let sha256_prefix = if prev_sha.is_none() || prev_mtime_ms != mtime_ms || prev_size != size {
-                sha256_prefix_hex(&fingerprint_path, 1024 * 1024)
-            } else {
-                prev_sha.clone()
-            };
+            let sha256_prefix =
+                if prev_sha.is_none() || prev_mtime_ms != mtime_ms || prev_size != size {
+                    sha256_prefix_hex(&fingerprint_path, 1024 * 1024)
+                } else {
+                    prev_sha.clone()
+                };
 
             let fingerprint_known =
                 prev_mtime_ms.is_some() || prev_size.is_some() || prev_sha.is_some();
