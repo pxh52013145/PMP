@@ -444,19 +444,12 @@ impl BridgeClient {
             cmd.env("PMP_VST_EDITOR_SAFE_MODE", "1");
         }
 
-        // Waves/WaveShell plugins are especially sensitive to host UI initialization, threading,
-        // and the exact editor attach flow. Make Waves stable by default, while keeping other
-        // plugins on the fast path.
-        let plugin_path_lower = plugin_path.to_ascii_lowercase();
-        let is_waves = plugin_path_lower.contains("waveshell")
-            || plugin_path_lower.contains("\\waves\\")
-            || plugin_path_lower.contains("/waves/");
-        if is_waves {
-            // 1) Load on the JUCE message thread.
-            // Use PMP_VST_LOAD_ON_UI_THREAD=0 to opt out.
-            if std::env::var("PMP_VST_LOAD_ON_UI_THREAD").is_err() {
-                cmd.env("PMP_VST_LOAD_ON_UI_THREAD", "1");
-            }
+        // Stability-first default: load/init the plugin on the JUCE message thread.
+        // Many VST3s may touch COM/OLE/UI during initialization; doing this work on the message
+        // thread tends to be the most compatible option.
+        // Use PMP_VST_LOAD_ON_UI_THREAD=0 to opt out.
+        if std::env::var("PMP_VST_LOAD_ON_UI_THREAD").is_err() {
+            cmd.env("PMP_VST_LOAD_ON_UI_THREAD", "1");
         }
 
         cmd.arg("--plugin-id")
