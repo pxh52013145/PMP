@@ -1,7 +1,10 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-pub const SHM_RING_VERSION: u32 = 1;
-pub const SHM_RING_MAGIC: [u8; 8] = *b"PMP_SHM1";
+pub const SHM_RING_VERSION_V1: u32 = 1;
+pub const SHM_RING_MAGIC_V1: [u8; 8] = *b"PMP_SHM1";
+
+pub const SHM_RING_VERSION_V2: u32 = 2;
+pub const SHM_RING_MAGIC_V2: [u8; 8] = *b"PMP_SHM2";
 
 const FLAG_HOST_READY: u32 = 1 << 0;
 const FLAG_PEER_READY: u32 = 1 << 1;
@@ -24,11 +27,67 @@ pub struct ShmRingHeaderV1 {
     pub reserved_tail: u64,
 }
 
+// v2 keeps the v1 header layout as a prefix (first 64 bytes), then appends bus metadata.
+// This allows reuse of the ring read/write logic (write/read index offsets stay identical).
+#[repr(C)]
+pub struct ShmRingHeaderV2 {
+    // v1 prefix (must match ShmRingHeaderV1 exactly)
+    pub magic: [u8; 8],
+    pub version: u32,
+    pub channels: u32,
+    pub sample_rate: u32,
+    pub capacity_frames: u32,
+    pub flags: AtomicU32,
+    pub heartbeat: AtomicU32,
+    pub reserved: [u32; 2],
+    pub write_index: AtomicU64,
+    pub read_index: AtomicU64,
+    pub reserved_tail: u64,
+
+    // v2 extension
+    pub header_bytes: u32,
+    /// 0 = interleaved (only supported layout for now)
+    pub layout: u32,
+    /// 1 = main only, 2 = main + sidechain
+    pub bus_count: u32,
+    /// bus0 = main
+    pub bus0_channels: u32,
+    /// bus1 = sidechain (0 means absent)
+    pub bus1_channels: u32,
+    pub reserved_v2: [u32; 3],
+}
+
+impl ShmRingHeaderV2 {
+    fn new(sample_rate: u32, bus0_channels: u32, bus1_channels: u32, capacity_frames: u32) -> Self {
+        let channels = bus0_channels.saturating_add(bus1_channels);
+        let bus_count = if bus1_channels > 0 { 2 } else { 1 };
+        Self {
+            magic: SHM_RING_MAGIC_V2,
+            version: SHM_RING_VERSION_V2,
+            channels,
+            sample_rate,
+            capacity_frames,
+            flags: AtomicU32::new(FLAG_HOST_READY),
+            heartbeat: AtomicU32::new(0),
+            reserved: [0; 2],
+            write_index: AtomicU64::new(0),
+            read_index: AtomicU64::new(0),
+            reserved_tail: 0,
+            header_bytes: std::mem::size_of::<ShmRingHeaderV2>() as u32,
+            layout: 0,
+            bus_count,
+            bus0_channels,
+            bus1_channels,
+            reserved_v2: [0; 3],
+        }
+    }
+}
+
 impl ShmRingHeaderV1 {
     fn new(sample_rate: u32, channels: u32, capacity_frames: u32) -> Self {
         Self {
-            magic: SHM_RING_MAGIC,
-            version: SHM_RING_VERSION,
+            magic: SHM_RING_MAGIC_V1,
+            version: SHM_RING_VERSION_V1,
             channels,
             sample_rate,
             capacity_frames,
@@ -67,6 +126,9 @@ pub struct ShmRing {
     mapping: SharedMemoryMapping,
     header_ptr: *mut ShmRingHeaderV1,
     data_ptr: *mut f32,
+    version: u32,
+    main_channels: usize,
+    sidechain_channels: usize,
     channels: usize,
     capacity_frames: usize,
 }
@@ -77,7 +139,7 @@ pub struct ShmRing {
 unsafe impl Send for ShmRing {}
 
 impl ShmRing {
-    pub fn create(
+    pub fn create_v1(
         name: &str,
         sample_rate: u32,
         channels: u32,
@@ -95,7 +157,8 @@ impl ShmRing {
             .checked_mul(std::mem::size_of::<f32>())
             .ok_or_else(|| "Shared memory size overflow".to_string())?;
 
-        let total_bytes = std::mem::size_of::<ShmRingHeaderV1>()
+        let header_bytes = std::mem::size_of::<ShmRingHeaderV1>();
+        let total_bytes = header_bytes
             .checked_add(data_bytes)
             .ok_or_else(|| "Shared memory size overflow".to_string())?;
 
@@ -105,17 +168,85 @@ impl ShmRing {
             header_ptr.write(ShmRingHeaderV1::new(sample_rate, channels, capacity_frames));
         }
 
-        let data_ptr =
-            unsafe { (mapping.view_ptr as *mut u8).add(std::mem::size_of::<ShmRingHeaderV1>()) }
-                as *mut f32;
+        let data_ptr = unsafe { (mapping.view_ptr as *mut u8).add(header_bytes) } as *mut f32;
 
         Ok(Self {
             mapping,
             header_ptr,
             data_ptr,
+            version: SHM_RING_VERSION_V1,
+            main_channels: channels as usize,
+            sidechain_channels: 0,
             channels: channels as usize,
             capacity_frames: capacity_frames as usize,
         })
+    }
+
+    pub fn create_v2(
+        name: &str,
+        sample_rate: u32,
+        bus0_channels: u32,
+        bus1_channels: u32,
+        capacity_frames: u32,
+    ) -> Result<Self, String> {
+        if bus0_channels == 0 {
+            return Err("bus0Channels must be > 0".to_string());
+        }
+        if capacity_frames == 0 {
+            return Err("capacityFrames must be > 0".to_string());
+        }
+
+        let channels = bus0_channels.saturating_add(bus1_channels);
+        if channels == 0 {
+            return Err("channels must be > 0".to_string());
+        }
+
+        let data_floats = capacity_frames as usize * channels as usize;
+        let data_bytes = data_floats
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or_else(|| "Shared memory size overflow".to_string())?;
+
+        let header_bytes = std::mem::size_of::<ShmRingHeaderV2>();
+        let total_bytes = header_bytes
+            .checked_add(data_bytes)
+            .ok_or_else(|| "Shared memory size overflow".to_string())?;
+
+        let mapping = SharedMemoryMapping::create(name, total_bytes)?;
+        let view_ptr = mapping.view_ptr;
+        let header_ptr = view_ptr as *mut ShmRingHeaderV2;
+        unsafe {
+            header_ptr.write(ShmRingHeaderV2::new(
+                sample_rate,
+                bus0_channels,
+                bus1_channels,
+                capacity_frames,
+            ));
+        }
+
+        let data_ptr = unsafe { (view_ptr as *mut u8).add(header_bytes) } as *mut f32;
+
+        Ok(Self {
+            mapping,
+            header_ptr: view_ptr as *mut ShmRingHeaderV1,
+            data_ptr,
+            version: SHM_RING_VERSION_V2,
+            main_channels: bus0_channels as usize,
+            sidechain_channels: bus1_channels as usize,
+            channels: channels as usize,
+            capacity_frames: capacity_frames as usize,
+        })
+    }
+
+    // Backward-compatible default: create v1.
+    // New code should call create_v1/create_v2 explicitly.
+    #[cfg(test)]
+    pub fn create(
+        name: &str,
+        sample_rate: u32,
+        channels: u32,
+        capacity_frames: u32,
+    ) -> Result<Self, String> {
+        Self::create_v1(name, sample_rate, channels, capacity_frames)
     }
 
     pub fn open(name: &str) -> Result<Self, String> {
@@ -123,34 +254,58 @@ impl ShmRing {
         let header_ptr = mapping.view_ptr as *mut ShmRingHeaderV1;
         let header = unsafe { &*header_ptr };
 
-        if header.magic != SHM_RING_MAGIC {
+        let (version, header_bytes, channels, main_channels, sidechain_channels) = if header.magic
+            == SHM_RING_MAGIC_V1
+            && header.version == SHM_RING_VERSION_V1
+        {
+            if header.channels == 0 || header.capacity_frames == 0 {
+                return Err("Shared memory header invalid (channels/capacityFrames)".to_string());
+            }
+            (
+                SHM_RING_VERSION_V1,
+                std::mem::size_of::<ShmRingHeaderV1>(),
+                header.channels as usize,
+                header.channels as usize,
+                0,
+            )
+        } else if header.magic == SHM_RING_MAGIC_V2 && header.version == SHM_RING_VERSION_V2 {
+            let header_v2 = unsafe { &*(mapping.view_ptr as *mut ShmRingHeaderV2) };
+            if header_v2.channels == 0 || header_v2.capacity_frames == 0 {
+                return Err("Shared memory header invalid (channels/capacityFrames)".to_string());
+            }
+            let hb = header_v2.header_bytes as usize;
+            let expected = std::mem::size_of::<ShmRingHeaderV2>();
+            if hb != expected {
+                return Err(format!(
+                    "Shared memory headerBytes mismatch (expected {expected}, got {hb})"
+                ));
+            }
+            (
+                SHM_RING_VERSION_V2,
+                expected,
+                header_v2.channels as usize,
+                header_v2.bus0_channels as usize,
+                header_v2.bus1_channels as usize,
+            )
+        } else {
             return Err(format!(
-                "Shared memory magic mismatch (expected {:?}, got {:?})",
-                SHM_RING_MAGIC, header.magic
+                "Shared memory magic/version mismatch (magic={:?} version={})",
+                header.magic, header.version
             ));
-        }
-        if header.version != SHM_RING_VERSION {
-            return Err(format!(
-                "Shared memory version mismatch (expected {SHM_RING_VERSION}, got {})",
-                header.version
-            ));
-        }
-        if header.channels == 0 || header.capacity_frames == 0 {
-            return Err("Shared memory header invalid (channels/capacityFrames)".to_string());
-        }
+        };
 
         header.mark_peer_ready();
 
-        let channels = header.channels as usize;
         let capacity_frames = header.capacity_frames as usize;
-        let data_ptr =
-            unsafe { (mapping.view_ptr as *mut u8).add(std::mem::size_of::<ShmRingHeaderV1>()) }
-                as *mut f32;
+        let data_ptr = unsafe { (mapping.view_ptr as *mut u8).add(header_bytes) } as *mut f32;
 
         Ok(Self {
             mapping,
             header_ptr,
             data_ptr,
+            version,
+            main_channels,
+            sidechain_channels,
             channels,
             capacity_frames,
         })
@@ -158,6 +313,27 @@ impl ShmRing {
 
     pub fn header(&self) -> &ShmRingHeaderV1 {
         unsafe { &*self.header_ptr }
+    }
+
+    pub fn shm_version(&self) -> u32 {
+        self.version
+    }
+
+    #[cfg(test)]
+    pub fn header_bytes(&self) -> usize {
+        match self.version {
+            SHM_RING_VERSION_V1 => std::mem::size_of::<ShmRingHeaderV1>(),
+            SHM_RING_VERSION_V2 => std::mem::size_of::<ShmRingHeaderV2>(),
+            other => panic!("Unknown SHM ring version: {other}"),
+        }
+    }
+
+    pub fn main_channels(&self) -> usize {
+        self.main_channels
+    }
+
+    pub fn sidechain_channels(&self) -> usize {
+        self.sidechain_channels
     }
 
     pub fn channels(&self) -> usize {
@@ -476,7 +652,7 @@ impl SharedMemoryMapping {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShmRing, ShmRingHeaderV1};
+    use super::{ShmRing, ShmRingHeaderV1, ShmRingHeaderV2};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -487,6 +663,50 @@ mod tests {
     fn shm_ring_header_size_is_stable() {
         assert_eq!(std::mem::size_of::<ShmRingHeaderV1>(), 64);
         assert_eq!(std::mem::align_of::<ShmRingHeaderV1>(), 8);
+
+        assert_eq!(std::mem::size_of::<ShmRingHeaderV2>(), 96);
+        assert_eq!(std::mem::align_of::<ShmRingHeaderV2>(), 8);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn shm_ring_v2_roundtrip_wraparound() {
+        let pid = std::process::id();
+        let nonce = TEST_NONCE.fetch_add(1, Ordering::Relaxed);
+        let name = format!("Local\\pmp-shm-test-v2-{pid}-{nonce}");
+
+        let ring_host = ShmRing::create_v2(&name, 48_000, 2, 2, 16).expect("create shm v2 ring");
+        assert_eq!(ring_host.shm_version(), 2);
+        assert_eq!(ring_host.header_bytes(), 96);
+        assert_eq!(ring_host.channels(), 4);
+        assert_eq!(ring_host.main_channels(), 2);
+        assert_eq!(ring_host.sidechain_channels(), 2);
+
+        let ring_peer = ShmRing::open(&name).expect("open shm v2 ring");
+        assert_eq!(ring_peer.shm_version(), 2);
+        assert_eq!(ring_peer.header_bytes(), 96);
+        assert_eq!(ring_peer.channels(), 4);
+        assert_eq!(ring_peer.main_channels(), 2);
+        assert_eq!(ring_peer.sidechain_channels(), 2);
+
+        let channels = ring_host.channels();
+        let block1 = make_frames(0, 12, channels);
+        assert_eq!(ring_host.try_write_interleaved(&block1), 12);
+
+        let mut first_read = vec![0.0f32; 8 * channels];
+        assert_eq!(ring_peer.try_read_interleaved(&mut first_read), 8);
+        assert_eq!(first_read, block1[..8 * channels]);
+
+        let block2 = make_frames(12, 10, channels);
+        assert_eq!(ring_host.try_write_interleaved(&block2), 10);
+
+        let mut remaining = vec![0.0f32; 14 * channels];
+        assert_eq!(ring_peer.try_read_interleaved(&mut remaining), 14);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&block1[8 * channels..]);
+        expected.extend_from_slice(&block2);
+        assert_eq!(remaining, expected);
     }
 
     #[cfg(target_os = "windows")]
