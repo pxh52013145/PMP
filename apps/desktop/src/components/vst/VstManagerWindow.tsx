@@ -3,7 +3,13 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { readJson, writeJson } from '../../modules/storage';
 import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { readData, STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
+import {
+  readData,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+  broadcastDataUpdate,
+  setupDualListener,
+} from '../../utils/windowCommunication';
 import './VstManagerWindow.css';
 
 type VstScanMode = 'fast' | 'full' | 'params';
@@ -178,8 +184,7 @@ function ensureVstScanState(value: unknown): VstScanState | null {
     stage: typeof record.stage === 'string' ? record.stage : null,
     total: typeof record.total === 'number' ? record.total : 0,
     current: typeof record.current === 'number' ? record.current : 0,
-    currentPluginId:
-      typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
+    currentPluginId: typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
     lastError: typeof record.lastError === 'string' ? record.lastError : null,
   };
 }
@@ -200,8 +205,7 @@ function ensureVstScanProgressPayload(value: unknown): VstScanProgressPayload | 
     stage,
     total: typeof record.total === 'number' ? record.total : 0,
     current: typeof record.current === 'number' ? record.current : 0,
-    currentPluginId:
-      typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
+    currentPluginId: typeof record.currentPluginId === 'string' ? record.currentPluginId : null,
     message: typeof record.message === 'string' ? record.message : null,
     status,
     error: typeof record.error === 'string' ? record.error : null,
@@ -457,9 +461,9 @@ export function VstManagerWindow() {
       const normalized = normalizePath(path);
       const next = ensureScanPaths(
         paths.map((entry) =>
-        normalizePath(entry.path).toLowerCase() === normalized.toLowerCase()
-          ? { ...entry, enabled: !entry.enabled }
-          : entry
+          normalizePath(entry.path).toLowerCase() === normalized.toLowerCase()
+            ? { ...entry, enabled: !entry.enabled }
+            : entry
         )
       );
       persistScanSettings({ ...scanSettings, scanPaths: next });
@@ -515,7 +519,8 @@ export function VstManagerWindow() {
         const activeRunId = (nextScanState?.runId ?? '').trim();
         const hasActive = activeRunId && nextScanRuns.some((run) => run.runId === activeRunId);
         if (nextScanState?.running && hasActive) return activeRunId;
-        if (currentTrimmed && nextScanRuns.some((run) => run.runId === currentTrimmed)) return currentTrimmed;
+        if (currentTrimmed && nextScanRuns.some((run) => run.runId === currentTrimmed))
+          return currentTrimmed;
         return nextScanRuns[0]?.runId ?? '';
       });
       if (libraryPlugins.length && !selectedPluginId) {
@@ -722,7 +727,9 @@ export function VstManagerWindow() {
     const pluginId = selectedPluginId.trim();
     if (!pluginId) return;
     await mutateDspGraph((graph) => ({
-      nodes: graph.nodes.filter((node) => !(node.type === 'vst' && readStringField(node, 'pluginId') === pluginId)),
+      nodes: graph.nodes.filter(
+        (node) => !(node.type === 'vst' && readStringField(node, 'pluginId') === pluginId)
+      ),
     }));
   }, [mutateDspGraph, selectedPluginId]);
 
@@ -737,7 +744,9 @@ export function VstManagerWindow() {
     setApplyBusy(true);
     setError(null);
     try {
-      const graphResp = await invoke<unknown>('native_audio_get_dsp_graph').catch(() => ({ nodes: [] }));
+      const graphResp = await invoke<unknown>('native_audio_get_dsp_graph').catch(() => ({
+        nodes: [],
+      }));
       const graph = ensureDspGraphConfig(graphResp);
 
       const node: VstNode = {
@@ -781,9 +790,7 @@ export function VstManagerWindow() {
   if (!isTauri) {
     return (
       <div className="vst-manager">
-        <div className="vst-manager-empty">
-          {t('windows.vst-manager.requiresTauri')}
-        </div>
+        <div className="vst-manager-empty">{t('windows.vst-manager.requiresTauri')}</div>
       </div>
     );
   }
@@ -801,7 +808,7 @@ export function VstManagerWindow() {
 
   const selectedUsage = selectedPlugin ? rackUsage[selectedPlugin.id] : null;
   const selectedScanRun = selectedScanRunId
-    ? scanRuns.find((run) => run.runId === selectedScanRunId) ?? null
+    ? (scanRuns.find((run) => run.runId === selectedScanRunId) ?? null)
     : null;
 
   return (
@@ -873,9 +880,7 @@ export function VstManagerWindow() {
               />
               {t('windows.vst-manager.options.includeDefaultPaths')}
             </label>
-            <div className="vst-manager-panel-note">
-              {t('windows.vst-manager.options.note')}
-            </div>
+            <div className="vst-manager-panel-note">{t('windows.vst-manager.options.note')}</div>
           </div>
 
           <div className="vst-manager-panel">
@@ -915,7 +920,9 @@ export function VstManagerWindow() {
                         className="vst-manager-path-remove"
                         onClick={() => removePath(entry.path)}
                         disabled={scanRunning}
-                        aria-label={t('windows.vst-manager.paths.removeAriaLabel', { path: entry.path })}
+                        aria-label={t('windows.vst-manager.paths.removeAriaLabel', {
+                          path: entry.path,
+                        })}
                       >
                         {t('common.action.remove')}
                       </button>
@@ -932,17 +939,23 @@ export function VstManagerWindow() {
           </div>
 
           <div className="vst-manager-panel">
-            <div className="vst-manager-panel-title">{t('windows.vst-manager.diagnostics.title')}</div>
+            <div className="vst-manager-panel-title">
+              {t('windows.vst-manager.diagnostics.title')}
+            </div>
             <div className="vst-manager-panel-note">
               {t('windows.vst-manager.diagnostics.note')}
             </div>
 
             {scanRuns.length === 0 ? (
-              <div className="vst-manager-panel-note">{t('windows.vst-manager.diagnostics.noScanRuns')}</div>
+              <div className="vst-manager-panel-note">
+                {t('windows.vst-manager.diagnostics.noScanRuns')}
+              </div>
             ) : (
               <>
                 <div className="vst-manager-kv">
-                  <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.recentScan')}</div>
+                  <div className="vst-manager-k">
+                    {t('windows.vst-manager.diagnostics.recentScan')}
+                  </div>
                   <div className="vst-manager-v">
                     <select
                       className="vst-manager-select"
@@ -963,18 +976,24 @@ export function VstManagerWindow() {
                   <>
                     {selectedScanRun ? (
                       <div className="vst-manager-kv">
-                        <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.status')}</div>
+                        <div className="vst-manager-k">
+                          {t('windows.vst-manager.diagnostics.status')}
+                        </div>
                         <div className="vst-manager-v">{selectedScanRun.status}</div>
                       </div>
                     ) : null}
                     <div className="vst-manager-kv">
-                      <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.runId')}</div>
+                      <div className="vst-manager-k">
+                        {t('windows.vst-manager.diagnostics.runId')}
+                      </div>
                       <div className="vst-manager-v" title={selectedScanRunId}>
                         {selectedScanRunId}
                       </div>
                     </div>
                     <div className="vst-manager-kv">
-                      <div className="vst-manager-k">{t('windows.vst-manager.diagnostics.events')}</div>
+                      <div className="vst-manager-k">
+                        {t('windows.vst-manager.diagnostics.events')}
+                      </div>
                       <div className="vst-manager-v">{scanEvents.length || 0}</div>
                     </div>
                     {selectedScanRun?.error ? (
@@ -1002,8 +1021,11 @@ export function VstManagerWindow() {
                           {t('windows.vst-manager.diagnostics.noLogs')}
                         </div>
                       ) : (
-                        scanEvents.map((entry) => (
-                          <div key={`${entry.atMs}-${entry.kind}-${entry.message}`} className="vst-manager-log-line">
+                        scanEvents.map((entry, idx) => (
+                          <div
+                            key={`${entry.atMs}-${entry.kind}-${entry.message}-${idx}`}
+                            className="vst-manager-log-line"
+                          >
                             <span className="vst-manager-log-time">
                               {new Date(entry.atMs).toLocaleTimeString(locale)}
                             </span>
@@ -1116,19 +1138,27 @@ export function VstManagerWindow() {
                 </div>
                 <div className="vst-manager-kv">
                   <div className="vst-manager-k">{t('windows.vst-manager.selected.file')}</div>
-                  <div className="vst-manager-v">{selectedPlugin.path ? basename(selectedPlugin.path) : '-'}</div>
+                  <div className="vst-manager-v">
+                    {selectedPlugin.path ? basename(selectedPlugin.path) : '-'}
+                  </div>
                 </div>
                 <div className="vst-manager-panel-actions">
                   <button type="button" onClick={() => void scanParams()} disabled={scanRunning}>
                     {t('windows.vst-manager.selected.action.scanParams')}
                   </button>
-                  <button type="button" onClick={() => void addToDspRack()} disabled={scanRunning || applyBusy}>
+                  <button
+                    type="button"
+                    onClick={() => void addToDspRack()}
+                    disabled={scanRunning || applyBusy}
+                  >
                     {t('windows.vst-manager.selected.action.addToRack')}
                   </button>
                 </div>
               </>
             ) : (
-              <div className="vst-manager-panel-note">{t('windows.vst-manager.selected.empty')}</div>
+              <div className="vst-manager-panel-note">
+                {t('windows.vst-manager.selected.empty')}
+              </div>
             )}
           </div>
         </div>
