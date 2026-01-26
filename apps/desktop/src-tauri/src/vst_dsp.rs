@@ -15,6 +15,22 @@ const RESTART_BACKOFF_MAX_MS: u64 = 60_000;
 const DISABLE_AFTER_FAILURES: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidechainSource {
+    Silence,
+    SelfFeed,
+}
+
+fn shm_sidechain_source() -> SidechainSource {
+    match std::env::var("PMP_VST_BRIDGE_SHM_SIDECHAIN_SOURCE")
+        .unwrap_or_else(|_| "silence".to_string())
+        .as_str()
+    {
+        "self" => SidechainSource::SelfFeed,
+        _ => SidechainSource::Silence,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FailureReason {
     Unknown,
     WriteBackpressure,
@@ -40,21 +56,34 @@ impl FailureReason {
 struct ShmAudioTransport {
     in_ring: ShmRing,
     out_ring: ShmRing,
-    channels: usize,
+    main_channels: usize,
+    sidechain_channels: usize,
+    in_channels: usize,
+    out_channels: usize,
 }
 
 impl ShmAudioTransport {
     fn open(shm_in_name: &str, shm_out_name: &str) -> Option<Self> {
         let in_ring = ShmRing::open(shm_in_name).ok()?;
         let out_ring = ShmRing::open(shm_out_name).ok()?;
-        let channels = in_ring.channels();
-        if channels == 0 || out_ring.channels() != channels {
+        let in_channels = in_ring.channels();
+        let out_channels = out_ring.channels();
+        let main_channels = in_ring.main_channels();
+        let sidechain_channels = in_ring.sidechain_channels();
+        if main_channels == 0 {
+            return None;
+        }
+        // Output must at least provide the main bus.
+        if out_ring.main_channels() != main_channels || out_channels < main_channels {
             return None;
         }
         Some(Self {
             in_ring,
             out_ring,
-            channels,
+            main_channels,
+            sidechain_channels,
+            in_channels,
+            out_channels,
         })
     }
 
@@ -91,7 +120,7 @@ pub struct VstDspNode {
     key: VstNodeKey,
     transport: Option<ShmAudioTransport>,
     latency_frames: usize,
-    channels: usize,
+    main_channels: usize,
     delay_ring: Vec<f32>,
     mix_in_remaining_frames: u32,
     mix_in_total_frames: u32,
@@ -100,8 +129,9 @@ pub struct VstDspNode {
     drop_output_before_frame: u64,
     shm_written_frames: u64,
     shm_read_frames: u64,
-    scratch_in: Vec<f32>,
-    scratch_out: Vec<f32>,
+    scratch_main_in: Vec<f32>,
+    scratch_shm_in: Vec<f32>,
+    scratch_shm_out: Vec<f32>,
     last_drain_attempt: Instant,
     last_health_check: Instant,
     last_heartbeat_progress: Instant,
@@ -119,7 +149,7 @@ impl VstDspNode {
         let transport =
             ShmAudioTransport::open(key.shm_in_name.as_str(), key.shm_out_name.as_str());
 
-        let channels = key.channels.max(1) as usize;
+        let main_channels = key.channels.max(1) as usize;
         let mut latency_frames = key.latency_frames.max(1) as usize;
 
         if let Some(transport) = transport.as_ref() {
@@ -131,7 +161,7 @@ impl VstDspNode {
             }
         }
 
-        let delay_ring = vec![0.0; latency_frames.saturating_mul(channels).max(1)];
+        let delay_ring = vec![0.0; latency_frames.saturating_mul(main_channels).max(1)];
         let mix_in_frames = mix_in_ramp_frames(key.sample_rate.max(1));
         let now = Instant::now();
         let (write_total_frames, shm_base_frame, last_heartbeat_in, last_heartbeat_out) = transport
@@ -154,7 +184,7 @@ impl VstDspNode {
             key,
             transport,
             latency_frames,
-            channels,
+            main_channels,
             delay_ring,
             mix_in_remaining_frames: mix_in_frames,
             mix_in_total_frames: mix_in_frames,
@@ -163,8 +193,9 @@ impl VstDspNode {
             drop_output_before_frame: write_total_frames,
             shm_written_frames: 0,
             shm_read_frames: 0,
-            scratch_in: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(channels).max(1)],
-            scratch_out: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(channels).max(1)],
+            scratch_main_in: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(main_channels).max(1)],
+            scratch_shm_in: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(main_channels).max(1)],
+            scratch_shm_out: vec![0.0; MAX_BLOCK_FRAMES.saturating_mul(main_channels).max(1)],
             last_drain_attempt: now,
             last_health_check: now,
             last_heartbeat_progress: now,
@@ -219,10 +250,10 @@ impl VstDspNode {
     }
 
     pub fn process_interleaved_in_place(&mut self, samples: &mut [f32]) {
-        if self.channels == 0 {
+        if self.main_channels == 0 {
             return;
         }
-        let frames = samples.len() / self.channels;
+        let frames = samples.len() / self.main_channels;
         if frames == 0 || self.latency_frames == 0 {
             return;
         }
@@ -236,8 +267,8 @@ impl VstDspNode {
         let total_frames = frames;
         for start_frame in (0..total_frames).step_by(MAX_BLOCK_FRAMES) {
             let block_frames = (total_frames - start_frame).min(MAX_BLOCK_FRAMES);
-            let start_sample = start_frame * self.channels;
-            let end_sample = start_sample + block_frames * self.channels;
+            let start_sample = start_frame * self.main_channels;
+            let end_sample = start_sample + block_frames * self.main_channels;
             self.process_block(&mut samples[start_sample..end_sample], block_frames);
         }
     }
@@ -252,7 +283,7 @@ impl VstDspNode {
     fn write_processed_frame_into_ring(&mut self, global_frame: u64, processed_frame: &[f32]) {
         write_processed_frame_into_delay_ring(
             &mut self.delay_ring,
-            self.channels,
+            self.main_channels,
             self.latency_frames,
             &mut self.mix_in_remaining_frames,
             self.mix_in_total_frames,
@@ -266,21 +297,21 @@ impl VstDspNode {
             return;
         }
 
-        let required_samples = frames.saturating_mul(self.channels);
-        if required_samples > self.scratch_in.len() {
-            self.scratch_in.resize(required_samples, 0.0);
+        let required_main_samples = frames.saturating_mul(self.main_channels);
+        if required_main_samples > self.scratch_main_in.len() {
+            self.scratch_main_in.resize(required_main_samples, 0.0);
         }
-        let scratch_in = &mut self.scratch_in[..required_samples];
+        let scratch_main_in = &mut self.scratch_main_in[..required_main_samples];
 
         for frame in 0..frames {
             let global_frame = self.write_total_frames + frame as u64;
             let ring_frame = (global_frame % self.latency_frames as u64) as usize;
-            let ring_base = ring_frame * self.channels;
-            let block_base = frame * self.channels;
-            for ch in 0..self.channels {
+            let ring_base = ring_frame * self.main_channels;
+            let block_base = frame * self.main_channels;
+            for ch in 0..self.main_channels {
                 let idx = block_base + ch;
                 let input = samples[idx];
-                scratch_in[idx] = input;
+                scratch_main_in[idx] = input;
 
                 samples[idx] = self.delay_ring[ring_base + ch];
                 self.delay_ring[ring_base + ch] = input;
@@ -288,14 +319,70 @@ impl VstDspNode {
         }
 
         if let Some(transport) = self.transport.as_ref() {
-            if transport.channels == self.channels {
-                let ok = transport
-                    .in_ring
-                    .try_write_interleaved_all(scratch_in);
-                if ok {
-                    self.shm_written_frames += frames as u64;
+            if transport.main_channels == self.main_channels {
+                let in_channels = transport.in_channels;
+                let sc_channels = transport.sidechain_channels;
+
+                // Fast path: v1-style main-only ring.
+                if in_channels == self.main_channels {
+                    if transport.in_ring.try_write_interleaved_all(scratch_main_in) {
+                        self.shm_written_frames += frames as u64;
+                    } else {
+                        self.mark_failure(FailureReason::WriteBackpressure);
+                    }
                 } else {
-                    self.mark_failure(FailureReason::WriteBackpressure);
+                    let required_shm_samples = frames.saturating_mul(in_channels);
+                    if required_shm_samples > self.scratch_shm_in.len() {
+                        self.scratch_shm_in.resize(required_shm_samples, 0.0);
+                    }
+                    let scratch_shm_in = &mut self.scratch_shm_in[..required_shm_samples];
+
+                    let sc_source = shm_sidechain_source();
+                    for frame in 0..frames {
+                        let main_base = frame * self.main_channels;
+                        let shm_base = frame * in_channels;
+
+                        // bus0 = main (offset 0)
+                        scratch_shm_in[shm_base..shm_base + self.main_channels].copy_from_slice(
+                            &scratch_main_in[main_base..main_base + self.main_channels],
+                        );
+
+                        // bus1 = sidechain (offset = main_channels)
+                        if sc_channels > 0 {
+                            let sc_base = shm_base + self.main_channels;
+                            match sc_source {
+                                SidechainSource::Silence => {
+                                    for ch in 0..sc_channels {
+                                        scratch_shm_in[sc_base + ch] = 0.0;
+                                    }
+                                }
+                                SidechainSource::SelfFeed => {
+                                    for ch in 0..sc_channels {
+                                        let v = if self.main_channels >= 2 {
+                                            // stereo main → map L/R where possible
+                                            scratch_main_in[main_base + (ch % self.main_channels)]
+                                        } else {
+                                            // mono main → duplicate
+                                            scratch_main_in[main_base]
+                                        };
+                                        scratch_shm_in[sc_base + ch] = v;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Any remaining channels (future) are zeroed.
+                        let used = self.main_channels.saturating_add(sc_channels);
+                        for ch in used..in_channels {
+                            scratch_shm_in[shm_base + ch] = 0.0;
+                        }
+                    }
+
+                    if transport.in_ring.try_write_interleaved_all(scratch_shm_in) {
+                        self.shm_written_frames += frames as u64;
+                    } else {
+                        self.mark_failure(FailureReason::WriteBackpressure);
+                    }
                 }
             }
         }
@@ -314,7 +401,10 @@ impl VstDspNode {
             return;
         };
         let shm_out = &transport.out_ring;
-        if shm_out.channels() != self.channels {
+        if transport.main_channels != self.main_channels {
+            return;
+        }
+        if transport.out_channels < self.main_channels {
             return;
         }
         if self.latency_frames == 0 {
@@ -330,11 +420,11 @@ impl VstDspNode {
                 break;
             }
             let frames = available.min(MAX_BLOCK_FRAMES).min(budget_frames);
-            let required_samples = frames.saturating_mul(self.channels);
-            if required_samples > self.scratch_out.len() {
-                self.scratch_out.resize(required_samples, 0.0);
+            let required_samples = frames.saturating_mul(transport.out_channels);
+            if required_samples > self.scratch_shm_out.len() {
+                self.scratch_shm_out.resize(required_samples, 0.0);
             }
-            let scratch_out = &mut self.scratch_out[..required_samples];
+            let scratch_out = &mut self.scratch_shm_out[..required_samples];
             if !shm_out.try_read_interleaved_all(scratch_out) {
                 break;
             }
@@ -351,11 +441,11 @@ impl VstDspNode {
                     break;
                 }
 
-                let src_base = frame * self.channels;
-                let processed_frame = &scratch_out[src_base..src_base + self.channels];
+                let src_base = frame * transport.out_channels;
+                let processed_frame = &scratch_out[src_base..src_base + self.main_channels];
                 write_processed_frame_into_delay_ring(
                     &mut self.delay_ring,
-                    self.channels,
+                    self.main_channels,
                     self.latency_frames,
                     &mut self.mix_in_remaining_frames,
                     self.mix_in_total_frames,
@@ -393,7 +483,7 @@ impl VstDspNode {
                 match ShmAudioTransport::open(info.shm_in_name.as_str(), info.shm_out_name.as_str())
                 {
                     Some(transport) => {
-                        if transport.channels != self.channels {
+                        if transport.main_channels != self.main_channels {
                             self.mark_failure(FailureReason::TransportOpenFailed);
                             self.restart_rx = None;
                             return;
@@ -581,8 +671,7 @@ fn write_processed_frame_into_delay_ring(
         let a = 1.0 - t;
 
         for ch in 0..channels {
-            delay_ring[ring_base + ch] =
-                delay_ring[ring_base + ch] * a + processed_frame[ch] * t;
+            delay_ring[ring_base + ch] = delay_ring[ring_base + ch] * a + processed_frame[ch] * t;
         }
 
         *mix_in_remaining_frames = (*mix_in_remaining_frames).saturating_sub(1);
