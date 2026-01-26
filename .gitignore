@@ -16,6 +16,8 @@ out/
 
 # Tauri
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/target-test/
+apps/desktop/src-tauri/target-test-no-run/
 
 # Misc
 .DS_Store
@@ -52,6 +54,9 @@ community/supabase/.temp/
 # Community (local-only)
 community/
 
+# Local scratch
+problem_test/
+
 # OS generated files
 Thumbs.db
 .DS_Store
@@ -75,6 +80,12 @@ tmp/
 
 # Cursor AI
 .cursor/
+
+# Agent / local automation
+.sisyphus/
+
+# Windows reserved / accidental files (can break tooling)
+NUL
 
 # pnpm
 pnpm-lock.yaml
