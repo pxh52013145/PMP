@@ -146,6 +146,17 @@ fn bridge_ping_timeout() -> Duration {
 }
 
 fn bridge_executable_path() -> Result<PathBuf, String> {
+    if let Ok(raw) = std::env::var("PMP_VST_BRIDGE_EXE") {
+        let candidate = PathBuf::from(raw.trim());
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        return Err(format!(
+            "PMP_VST_BRIDGE_EXE points to missing file: {}",
+            candidate.display()
+        ));
+    }
+
     let exe = std::env::current_exe().map_err(|e| format!("Failed to resolve current exe: {e}"))?;
     let mut dir = exe
         .parent()
@@ -164,14 +175,64 @@ fn bridge_executable_path() -> Result<PathBuf, String> {
     } else {
         "pmp-vst-bridge"
     };
-    let candidate = dir.join(file_name);
-    if candidate.exists() {
-        return Ok(candidate);
+    let local_candidate = dir.join(file_name);
+
+    // Dev-friendly fallback: scripts/prepare-sidecars.mjs writes to `apps/desktop/src-tauri/binaries/`.
+    // When running via `cargo tauri dev`, the app exe is typically under `src-tauri/target/{debug|release}`.
+    let mut tauri_dir = dir.clone();
+    if tauri_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("debug") || name.eq_ignore_ascii_case("release"))
+        .unwrap_or(false)
+    {
+        tauri_dir.pop();
     }
-    Err(format!(
-        "Bridge executable not found at: {}",
-        candidate.display()
-    ))
+    if tauri_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("target"))
+        .unwrap_or(false)
+    {
+        tauri_dir.pop();
+    }
+
+    let binaries_file_name = if cfg!(windows) {
+        "pmp-vst-bridge-x86_64-pc-windows-msvc.exe"
+    } else {
+        "pmp-vst-bridge"
+    };
+    let binaries_candidate = tauri_dir.join("binaries").join(binaries_file_name);
+
+    let pick_newer = |a: &PathBuf, b: &PathBuf| -> PathBuf {
+        let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+        match (a_time, b_time) {
+            (Some(a_time), Some(b_time)) if b_time > a_time => b.clone(),
+            _ => a.clone(),
+        }
+    };
+
+    let resolved = match (local_candidate.exists(), binaries_candidate.exists()) {
+        (true, true) => pick_newer(&local_candidate, &binaries_candidate),
+        (true, false) => local_candidate,
+        (false, true) => binaries_candidate,
+        (false, false) => {
+            return Err(format!(
+                "Bridge executable not found. Tried: {} and {}. You can override via PMP_VST_BRIDGE_EXE",
+                local_candidate.display(),
+                binaries_candidate.display()
+            ));
+        }
+    };
+
+    if matches!(std::env::var("PMP_VST_BRIDGE_DEBUG").as_deref(), Ok("1"))
+        || matches!(std::env::var("PMP_VST_BRIDGE_STDERR").as_deref(), Ok("1"))
+    {
+        eprintln!("[VST] Using bridge executable: {}", resolved.display());
+    }
+
+    Ok(resolved)
 }
 
 struct BridgeOutput {
@@ -274,7 +335,9 @@ pub fn describe_plugin(plugin_id: &str) -> Result<BridgePluginDescriptor, String
     describe_plugin_with_cancel(plugin_id, None)
 }
 
-pub fn list_plugins_with_cancel(cancel: Option<&AtomicBool>) -> Result<Vec<BridgePluginDescriptor>, String> {
+pub fn list_plugins_with_cancel(
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<BridgePluginDescriptor>, String> {
     list_plugins_with_scan_paths_with_cancel(&[], false, cancel)
 }
 
@@ -339,7 +402,11 @@ pub fn describe_plugin_with_scan_paths_with_cancel(
 
 fn append_scan_paths(args: &mut Vec<String>, scan_paths: &[String]) {
     let mut seen = HashSet::<String>::new();
-    for raw in scan_paths.iter().map(|path| path.trim()).filter(|path| !path.is_empty()) {
+    for raw in scan_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+    {
         let key = raw.to_lowercase();
         if !seen.insert(key) {
             continue;
@@ -369,6 +436,29 @@ impl BridgeClient {
             || matches!(std::env::var("PMP_VST_BRIDGE_DEBUG").as_deref(), Ok("1"))
             || matches!(std::env::var("PMP_VST_BRIDGE_STDERR").as_deref(), Ok("1"));
         let mut cmd = Command::new(bridge);
+
+        // Default to the more compatible editor window flow unless explicitly overridden.
+        // This avoids Windows popup/temporary window edge cases ("flash then disappear") on some hosts/plugins.
+        // Use PMP_VST_EDITOR_SAFE_MODE=0 to opt out.
+        if std::env::var("PMP_VST_EDITOR_SAFE_MODE").is_err() {
+            cmd.env("PMP_VST_EDITOR_SAFE_MODE", "1");
+        }
+
+        // Waves/WaveShell plugins are especially sensitive to host UI initialization, threading,
+        // and the exact editor attach flow. Make Waves stable by default, while keeping other
+        // plugins on the fast path.
+        let plugin_path_lower = plugin_path.to_ascii_lowercase();
+        let is_waves = plugin_path_lower.contains("waveshell")
+            || plugin_path_lower.contains("\\waves\\")
+            || plugin_path_lower.contains("/waves/");
+        if is_waves {
+            // 1) Load on the JUCE message thread.
+            // Use PMP_VST_LOAD_ON_UI_THREAD=0 to opt out.
+            if std::env::var("PMP_VST_LOAD_ON_UI_THREAD").is_err() {
+                cmd.env("PMP_VST_LOAD_ON_UI_THREAD", "1");
+            }
+        }
+
         cmd.arg("--plugin-id")
             .arg(plugin_id)
             .arg("--plugin-path")
@@ -466,11 +556,12 @@ impl BridgeClient {
     #[cfg(not(target_os = "windows"))]
     fn allow_set_foreground_window(&self) {}
 
-    fn request_raw(
+    fn request_raw_with_policy(
         &mut self,
         ty: u8,
         payload: Vec<u8>,
         timeout: Duration,
+        kill_on_timeout: bool,
     ) -> Result<(u8, Vec<u8>), String> {
         self.ensure_running()?;
 
@@ -489,7 +580,12 @@ impl BridgeClient {
         match response_rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.kill();
+                // Important: some requests (like ping) are best-effort and may time out while the
+                // sidecar is busy (e.g. opening a heavy native editor UI). Killing the bridge here
+                // can cause editor windows to flash then disappear.
+                if kill_on_timeout {
+                    self.kill();
+                }
                 Err(format!(
                     "Bridge request timed out after {}ms",
                     timeout.as_millis()
@@ -500,6 +596,15 @@ impl BridgeClient {
                 Err("Bridge worker disconnected".to_string())
             }
         }
+    }
+
+    fn request_raw(
+        &mut self,
+        ty: u8,
+        payload: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(u8, Vec<u8>), String> {
+        self.request_raw_with_policy(ty, payload, timeout, true)
     }
 
     #[allow(dead_code)]
@@ -513,7 +618,9 @@ impl BridgeClient {
         }))
         .map_err(|e| format!("Failed to encode ping payload: {e}"))?;
 
-        let (ty, payload) = self.request_raw(MSG_PING, payload, timeout)?;
+        // Ping is best-effort: if it times out while the sidecar is busy (e.g. creating an editor
+        // window), we must NOT kill the bridge process.
+        let (ty, payload) = self.request_raw_with_policy(MSG_PING, payload, timeout, false)?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }
@@ -632,7 +739,11 @@ impl BridgeClient {
         }))
         .map_err(|e| e.to_string())?;
 
-        let (ty, payload) = self.request_raw(MSG_OPEN_EDITOR, payload, bridge_editor_timeout())?;
+        // Opening native editors can legitimately take a long time (or block the message loop)
+        // for some plugins. If we kill the bridge process on a timeout, the editor window can
+        // flash then disappear, which is worse than returning an error.
+        let (ty, payload) =
+            self.request_raw_with_policy(MSG_OPEN_EDITOR, payload, bridge_editor_timeout(), false)?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }
@@ -643,8 +754,14 @@ impl BridgeClient {
     }
 
     pub fn close_editor_window(&mut self) -> Result<(), String> {
-        let (ty, payload) =
-            self.request_raw(MSG_CLOSE_EDITOR, Vec::new(), bridge_editor_timeout())?;
+        // Closing native editors can also block (plugin UI teardown). Avoid killing the bridge on
+        // timeout to prevent transient UI flicker / unexpected session loss.
+        let (ty, payload) = self.request_raw_with_policy(
+            MSG_CLOSE_EDITOR,
+            Vec::new(),
+            bridge_editor_timeout(),
+            false,
+        )?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }
@@ -709,13 +826,94 @@ fn write_message<W: Write>(writer: &mut W, ty: u8, payload: &[u8]) -> std::io::R
 
 fn read_message<R: Read>(reader: &mut R) -> std::io::Result<(u8, Vec<u8>)> {
     let mut ty = [0u8; 1];
-    reader.read_exact(&mut ty)?;
+    reader
+        .read_exact(&mut ty)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("read type byte: {e}")))?;
     let mut len = [0u8; 4];
-    reader.read_exact(&mut len)?;
+    reader
+        .read_exact(&mut len)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("read payload length: {e}")))?;
     let len = u32::from_le_bytes(len) as usize;
     let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload)?;
+    reader.read_exact(&mut payload).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("read payload bytes (len={len}): {e}"))
+    })?;
     Ok((ty[0], payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn open_editor_timeout_does_not_kill_bridge_process() {
+        // Regression guard: killing the bridge on editor-open timeouts causes the native editor
+        // window to flash then disappear.
+        // We simulate an unresponsive bridge process and assert that the host does NOT kill it
+        // when openEditor times out.
+
+        // Make the editor timeout tiny so the test is fast.
+        std::env::set_var("PMP_VST_BRIDGE_EDITOR_TIMEOUT_MS", "20");
+
+        // Spawn a dummy process that keeps stdout open but never responds.
+        // `ping` with output redirected sleeps for a few seconds and doesn't read stdin.
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping", "-n", "6", "127.0.0.1", ">", "nul"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn dummy bridge");
+
+        let stdin = child.stdin.take().expect("dummy stdin");
+        let stdout = child.stdout.take().expect("dummy stdout");
+
+        let (request_tx, request_rx) = mpsc::channel::<BridgeRequest>();
+        let worker = std::thread::spawn(move || bridge_worker(stdin, stdout, request_rx));
+
+        let mut client = BridgeClient {
+            child,
+            request_tx: Some(request_tx),
+            worker: Some(worker),
+        };
+
+        let err = client
+            .open_editor_window(None, None, BridgeOpenEditorOptions::default())
+            .unwrap_err();
+        assert!(err.contains("timed out"), "expected timeout, got: {err}");
+
+        // Critical behavior: process must still be alive because we used kill_on_timeout=false.
+        assert!(
+            matches!(client.child.try_wait(), Ok(None)),
+            "dummy bridge should still be running after timeout"
+        );
+
+        client.kill();
+        // Best-effort cleanup.
+        std::env::remove_var("PMP_VST_BRIDGE_EDITOR_TIMEOUT_MS");
+    }
+
+    #[test]
+    fn read_message_includes_context_on_eof() {
+        // Empty stream -> fail while reading type byte.
+        let mut empty = Cursor::new(Vec::<u8>::new());
+        let err = read_message(&mut empty).unwrap_err();
+        assert!(format!("{err}").contains("read type byte"));
+
+        // Only type byte -> fail while reading length.
+        let mut only_type = Cursor::new(vec![1u8]);
+        let err = read_message(&mut only_type).unwrap_err();
+        assert!(format!("{err}").contains("read payload length"));
+
+        // Type + length, but missing payload bytes.
+        let mut missing_payload = Cursor::new(vec![1u8, 3u8, 0, 0, 0, 0xAA]);
+        let err = read_message(&mut missing_payload).unwrap_err();
+        assert!(format!("{err}").contains("read payload bytes"));
+        assert!(format!("{err}").contains("len=3"));
+    }
 }
 
 fn parse_error_payload(payload: &[u8]) -> String {
