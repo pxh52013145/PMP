@@ -45,6 +45,7 @@ pub enum VstAuditEventKind {
     ScanPlugins,
     SessionSpawnFailed,
     SessionHandshakeTimeout,
+    EditorOpenFailed,
     RestartAttempt,
     RestartSucceeded,
     RestartFailed,

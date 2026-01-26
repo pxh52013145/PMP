@@ -9,7 +9,9 @@ use tauri::{AppHandle, Manager};
 
 use crate::dsp_graph::VstParamValue;
 use crate::vst_audit::{self, VstAuditEventKind};
-use crate::vst_bridge::{BridgeClient, BridgeOpenEditorOptions, BridgeParamValue, BridgePluginDescriptor};
+use crate::vst_bridge::{
+    BridgeClient, BridgeOpenEditorOptions, BridgeParamValue, BridgePluginDescriptor,
+};
 use crate::vst_governance;
 use crate::vst_shm::ShmRing;
 
@@ -78,6 +80,12 @@ struct VstNodeSession {
     client: BridgeClient,
     shm_in_name: String,
     shm_out_name: String,
+    // Keep SHM mappings alive for the entire session lifetime.
+    // Otherwise, if the bridge closes/reopens its mapping handles (e.g. bypass -> process),
+    // Windows may destroy the mapping and subsequent OpenFileMappingW calls will fail.
+    shm_in: ShmRing,
+    #[allow(dead_code)]
+    shm_out: ShmRing,
 }
 
 static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
@@ -85,7 +93,8 @@ static SESSIONS: Lazy<Mutex<HashMap<String, VstNodeSession>>> =
 static SHM_NONCE: AtomicU64 = AtomicU64::new(0);
 static FIRST_SESSION_SPAWN: AtomicBool = AtomicBool::new(true);
 static SESSION_STATUS_BROADCAST_STARTED: AtomicBool = AtomicBool::new(false);
-static SESSION_STATUS_BROADCAST_APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+static SESSION_STATUS_BROADCAST_APP: Lazy<Mutex<Option<AppHandle>>> =
+    Lazy::new(|| Mutex::new(None));
 static SESSION_STATUS_BROADCAST_STOP: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
@@ -97,10 +106,42 @@ struct EditorOpenCacheEntry {
 static EDITOR_OPEN_CACHE: Lazy<Mutex<HashMap<String, EditorOpenCacheEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+static EDITOR_OPEN_PING_TIMEOUT_LOG_AT_MS: Lazy<Mutex<HashMap<String, u64>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 const EVENT_VST_SESSION_STATUSES: &str = "vst-session-statuses";
 
 fn editor_open_cache_ttl() -> Duration {
     Duration::from_millis(900)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn maybe_log_editor_open_ping_timeout(node_id: &str, plugin_id: &str, err: &str) {
+    // Rate limit: an open editor may trigger ping checks; avoid log spam.
+    const INTERVAL_MS: u64 = 10_000;
+    if !err.contains("timed out") {
+        return;
+    }
+
+    let now = now_ms();
+    let mut map = match EDITOR_OPEN_PING_TIMEOUT_LOG_AT_MS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let last = map.get(node_id).copied().unwrap_or(0);
+    if now.saturating_sub(last) < INTERVAL_MS {
+        return;
+    }
+    map.insert(node_id.to_string(), now);
+
+    eprintln!("[VST] editor-open ping timed out (node={node_id}, plugin={plugin_id}): {err}");
 }
 
 fn cache_editor_open(node_id: &str, value: bool) {
@@ -133,6 +174,9 @@ fn query_editor_open(node_id: &str) -> Option<bool> {
     let ping_result = session
         .client
         .ping_with_timeout(Duration::from_millis(1_500));
+    if let Err(err) = &ping_result {
+        maybe_log_editor_open_ping_timeout(node_id, session.plugin_id.as_str(), err.as_str());
+    }
     let ping_ok = ping_result.is_ok();
     let editor_open = ping_result.ok().and_then(|resp| resp.editor_open);
 
@@ -255,6 +299,24 @@ fn bridge_ping_timeout() -> Duration {
     Duration::from_millis(ms.clamp(500, 120_000))
 }
 
+fn shm_ring_version() -> u32 {
+    std::env::var("PMP_VST_BRIDGE_SHM_VERSION")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|v| *v == 1 || *v == 2)
+        .unwrap_or(2)
+}
+
+fn shm_sidechain_channels(main_channels: usize) -> u32 {
+    // Default: match main channel width (mono->mono, stereo->stereo), clamped to 2.
+    let default = (main_channels.max(1).min(2)) as u32;
+    std::env::var("PMP_VST_BRIDGE_SHM_SIDECHAIN_CHANNELS")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .filter(|v| *v <= 2)
+        .unwrap_or(default)
+}
+
 fn ensure_session_internal(
     node_id: &str,
     plugin_id: &str,
@@ -270,6 +332,7 @@ fn ensure_session_internal(
     let sample_rate = sample_rate.max(1);
     let channels = channels.max(1);
     let capacity_frames = resolve_capacity_frames(capacity_frames.max(1));
+    let desired_shm_version = shm_ring_version();
 
     let needs_spawn = {
         let map = match SESSIONS.lock() {
@@ -282,6 +345,7 @@ fn ensure_session_internal(
                     existing.sample_rate != sample_rate
                         || existing.channels != channels
                         || existing.capacity_frames != capacity_frames
+                        || existing.shm_in.shm_version() != desired_shm_version
                 } else {
                     false
                 }
@@ -292,8 +356,8 @@ fn ensure_session_internal(
     };
 
     if !needs_spawn {
-        let desired_generation = crate::vst_instance_manager::desired_generation(node_id, plugin_id)
-            .unwrap_or(0);
+        let desired_generation =
+            crate::vst_instance_manager::desired_generation(node_id, plugin_id).unwrap_or(0);
 
         let needs_apply = {
             let map = match SESSIONS.lock() {
@@ -380,10 +444,10 @@ fn ensure_session_internal(
     let plugin_path = crate::vst_library::lookup_plugin_path(plugin_id)
         .or_else(|| crate::vst_audit::lookup_last_scan_path(plugin_id))
         .ok_or_else(|| {
-        format!(
-            "VST plugin not in scan cache: {plugin_id}. Run Scan Plugins in VST Manager first."
-        )
-    })?;
+            format!(
+                "VST plugin not in scan cache: {plugin_id}. Run Scan Plugins in VST Manager first."
+            )
+        })?;
 
     let nonce = SHM_NONCE.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
@@ -391,8 +455,20 @@ fn ensure_session_internal(
     let shm_in_name = format!("Local\\pmp-vst-in-{node_id}-{pid}-{nonce}");
     let shm_out_name = format!("Local\\pmp-vst-out-{node_id}-{pid}-{nonce}");
 
-    let shm_in = ShmRing::create(&shm_in_name, sample_rate, channels as u32, capacity_frames)?;
-    let shm_out = ShmRing::create(&shm_out_name, sample_rate, channels as u32, capacity_frames)?;
+    let (shm_in, shm_out) = if desired_shm_version == 2 {
+        let bus0 = channels as u32;
+        let bus1 = shm_sidechain_channels(channels);
+        let shm_in = ShmRing::create_v2(&shm_in_name, sample_rate, bus0, bus1, capacity_frames)?;
+        // Output ring typically only needs main bus.
+        let shm_out = ShmRing::create_v2(&shm_out_name, sample_rate, bus0, 0, capacity_frames)?;
+        (shm_in, shm_out)
+    } else {
+        let shm_in =
+            ShmRing::create_v1(&shm_in_name, sample_rate, channels as u32, capacity_frames)?;
+        let shm_out =
+            ShmRing::create_v1(&shm_out_name, sample_rate, channels as u32, capacity_frames)?;
+        (shm_in, shm_out)
+    };
 
     let mut client = match BridgeClient::spawn(
         plugin_id,
@@ -507,6 +583,8 @@ fn ensure_session_internal(
             client,
             shm_in_name: shm_in_name.clone(),
             shm_out_name: shm_out_name.clone(),
+            shm_in,
+            shm_out,
         },
     );
 
@@ -678,6 +756,15 @@ pub fn open_native_editor(
         )
         .map_err(|e| format!("Bridge open editor failed: {e}"));
 
+    if let Err(err) = &result {
+        vst_audit::record_event(
+            vst_audit::VstAuditEventKind::EditorOpenFailed,
+            Some(node_id_key.clone()),
+            Some(plugin_id.clone()),
+            err.clone(),
+        );
+    }
+
     let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
     if should_keep_session {
         let mut map = match SESSIONS.lock() {
@@ -734,6 +821,7 @@ fn bring_editors(
     app: &AppHandle,
     show: bool,
     activate: bool,
+    only_when_cached_open: bool,
 ) -> Result<u32, String> {
     let owner_hwnd = {
         #[cfg(target_os = "windows")]
@@ -746,13 +834,20 @@ fn bring_editors(
         }
     };
 
-    let node_ids = {
+    let mut node_ids = {
         let map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         map.keys().cloned().collect::<Vec<_>>()
     };
+
+    if only_when_cached_open {
+        // Avoid sending editor-related IPC to sessions that do not have an editor open.
+        // Some plugins (notably Waves) are sensitive to UI-thread interactions; keeping the focus
+        // handler "quiet" unless necessary improves stability.
+        node_ids.retain(|node_id| is_editor_open_cached(node_id.as_str()));
+    }
 
     let mut brought = 0u32;
     for node_id in node_ids {
@@ -800,11 +895,14 @@ fn bring_editors(
 }
 
 pub fn bring_all_editors_to_front(app: &AppHandle) -> Result<u32, String> {
-    bring_editors(app, true, true)
+    // User-initiated: be aggressive and try all sessions.
+    // `bring_only=true` ensures we won't reopen windows that were closed.
+    bring_editors(app, true, true, false)
 }
 
 pub fn raise_visible_editors_above_main(app: &AppHandle) -> Result<u32, String> {
-    bring_editors(app, false, false)
+    // Host focus handling: keep it quiet unless we believe an editor is already open.
+    bring_editors(app, false, false, true)
 }
 
 pub fn list_session_statuses() -> Vec<VstSessionStatus> {
@@ -830,22 +928,28 @@ pub fn list_session_statuses() -> Vec<VstSessionStatus> {
         let in_ring = ShmRing::open(shm_in_name.as_str()).ok();
         let out_ring = ShmRing::open(shm_out_name.as_str()).ok();
 
-        let (peer_ready, plugin_loaded, processing_active, plugin_error, heartbeat_in, heartbeat_out) =
-            match (in_ring.as_ref(), out_ring.as_ref()) {
-                (Some(in_ring), Some(out_ring)) => {
-                    let header_in = in_ring.header();
-                    let header_out = out_ring.header();
-                    (
-                        header_in.is_peer_ready() && header_out.is_peer_ready(),
-                        header_in.is_plugin_loaded(),
-                        header_in.is_processing_active(),
-                        header_in.is_plugin_error(),
-                        Some(header_in.heartbeat.load(Ordering::Relaxed)),
-                        Some(header_out.heartbeat.load(Ordering::Relaxed)),
-                    )
-                }
-                _ => (false, false, false, false, None, None),
-            };
+        let (
+            peer_ready,
+            plugin_loaded,
+            processing_active,
+            plugin_error,
+            heartbeat_in,
+            heartbeat_out,
+        ) = match (in_ring.as_ref(), out_ring.as_ref()) {
+            (Some(in_ring), Some(out_ring)) => {
+                let header_in = in_ring.header();
+                let header_out = out_ring.header();
+                (
+                    header_in.is_peer_ready() && header_out.is_peer_ready(),
+                    header_in.is_plugin_loaded(),
+                    header_in.is_processing_active(),
+                    header_in.is_plugin_error(),
+                    Some(header_in.heartbeat.load(Ordering::Relaxed)),
+                    Some(header_out.heartbeat.load(Ordering::Relaxed)),
+                )
+            }
+            _ => (false, false, false, false, None, None),
+        };
 
         out.push(VstSessionStatus {
             native_editor_open: is_editor_open_cached(node_id.as_str()),
@@ -870,7 +974,11 @@ pub fn set_params(
 ) -> Result<(), String> {
     let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
     ensure_control_session(node_id.as_str(), plugin_id.as_str())?;
-    crate::vst_instance_manager::set_node_params(node_id.as_str(), plugin_id.as_str(), params.clone());
+    crate::vst_instance_manager::set_node_params(
+        node_id.as_str(),
+        plugin_id.as_str(),
+        params.clone(),
+    );
     let desired_generation =
         crate::vst_instance_manager::desired_generation(node_id.as_str(), plugin_id.as_str())
             .unwrap_or(0);
@@ -989,6 +1097,7 @@ pub fn dispose_sessions_except(keep: &[String]) {
                 continue;
             }
             if let Some(session) = map.remove(key.as_str()) {
+                cache_editor_open(key.as_str(), false);
                 out.push(session);
             }
         }
