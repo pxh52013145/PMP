@@ -544,6 +544,8 @@ struct PluginDescriptor {
   std::optional<std::string> vendor;
   std::optional<std::string> version;
   std::optional<std::string> path;
+  std::optional<int> inputChannels;
+  std::optional<int> outputChannels;
   std::vector<ParamDescriptor> parameters;
   std::vector<BusDescriptor> audioBuses;
 };
@@ -1520,6 +1522,8 @@ juce::var pluginDescriptorToVar(const PluginDescriptor& desc) {
   if (desc.vendor.has_value()) obj->setProperty("vendor", juce::String(*desc.vendor));
   if (desc.version.has_value()) obj->setProperty("version", juce::String(*desc.version));
   if (desc.path.has_value()) obj->setProperty("path", juce::String(*desc.path));
+  if (desc.inputChannels.has_value()) obj->setProperty("inputChannels", *desc.inputChannels);
+  if (desc.outputChannels.has_value()) obj->setProperty("outputChannels", *desc.outputChannels);
 
   juce::Array<juce::var> params;
   for (const auto& param : desc.parameters) {
@@ -1771,6 +1775,8 @@ std::optional<PluginDescriptor> buildDescriptorForPluginId(const std::string& pl
   if (type.manufacturerName.isNotEmpty()) desc.vendor = type.manufacturerName.toStdString();
   if (type.version.isNotEmpty()) desc.version = type.version.toStdString();
   if (type.fileOrIdentifier.isNotEmpty()) desc.path = type.fileOrIdentifier.toStdString();
+  if (type.numInputChannels > 0) desc.inputChannels = type.numInputChannels;
+  if (type.numOutputChannels > 0) desc.outputChannels = type.numOutputChannels;
 
   const auto& params = instance->getParameters();
   const int maxParams = std::min<int>(static_cast<int>(params.size()), 256);
@@ -3308,6 +3314,8 @@ int main(int argc, char* argv[]) {
       if (type.manufacturerName.isNotEmpty()) desc.vendor = type.manufacturerName.toStdString();
       if (type.version.isNotEmpty()) desc.version = type.version.toStdString();
       if (type.fileOrIdentifier.isNotEmpty()) desc.path = type.fileOrIdentifier.toStdString();
+      if (type.numInputChannels > 0) desc.inputChannels = type.numInputChannels;
+      if (type.numOutputChannels > 0) desc.outputChannels = type.numOutputChannels;
       // Avoid enumerating parameters here: loading each plugin is expensive and can hang/crash.
       out.add(pluginDescriptorToVar(desc));
     }

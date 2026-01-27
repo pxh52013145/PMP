@@ -15,22 +15,6 @@ const RESTART_BACKOFF_MAX_MS: u64 = 60_000;
 const DISABLE_AFTER_FAILURES: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SidechainSource {
-    Silence,
-    SelfFeed,
-}
-
-fn shm_sidechain_source() -> SidechainSource {
-    match std::env::var("PMP_VST_BRIDGE_SHM_SIDECHAIN_SOURCE")
-        .unwrap_or_else(|_| "silence".to_string())
-        .as_str()
-    {
-        "self" => SidechainSource::SelfFeed,
-        _ => SidechainSource::Silence,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FailureReason {
     Unknown,
     WriteBackpressure,
@@ -107,6 +91,7 @@ pub struct VstNodeKey {
     pub shm_out_name: String,
     pub sample_rate: u32,
     pub channels: u32,
+    pub sidechain_mode: crate::vst_settings::VstSidechainMode,
     pub capacity_frames: u32,
     pub latency_frames: u32,
 }
@@ -337,7 +322,7 @@ impl VstDspNode {
                     }
                     let scratch_shm_in = &mut self.scratch_shm_in[..required_shm_samples];
 
-                    let sc_source = shm_sidechain_source();
+                    let sc_mode = self.key.sidechain_mode;
                     for frame in 0..frames {
                         let main_base = frame * self.main_channels;
                         let shm_base = frame * in_channels;
@@ -350,13 +335,14 @@ impl VstDspNode {
                         // bus1 = sidechain (offset = main_channels)
                         if sc_channels > 0 {
                             let sc_base = shm_base + self.main_channels;
-                            match sc_source {
-                                SidechainSource::Silence => {
+                            match sc_mode {
+                                crate::vst_settings::VstSidechainMode::Disabled
+                                | crate::vst_settings::VstSidechainMode::Silence => {
                                     for ch in 0..sc_channels {
                                         scratch_shm_in[sc_base + ch] = 0.0;
                                     }
                                 }
-                                SidechainSource::SelfFeed => {
+                                crate::vst_settings::VstSidechainMode::SelfFeed => {
                                     for ch in 0..sc_channels {
                                         let v = if self.main_channels >= 2 {
                                             // stereo main → map L/R where possible
@@ -706,6 +692,7 @@ mod tests {
             shm_out_name: format!("Local\\pmp-vst-dsp-test-out-{pid}-{nonce}"),
             sample_rate,
             channels,
+            sidechain_mode: crate::vst_settings::VstSidechainMode::Disabled,
             capacity_frames: 1024,
             latency_frames,
         }

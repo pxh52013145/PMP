@@ -416,3 +416,77 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.vst-manager-params {
+  margin-top: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 10px;
+}
+
+.vst-manager-params-title {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+
+.vst-manager-params-search {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.vst-manager-params-search::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.vst-manager-params-list {
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vst-manager-param-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.vst-manager-param-key {
+  opacity: 0.9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vst-manager-param-title {
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vst-manager-compat {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vst-manager-compat-toggle {
+  display: inline-flex;
+  align-items: center;
+}

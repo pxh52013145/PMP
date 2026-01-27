@@ -14,6 +14,32 @@ import './VstManagerWindow.css';
 
 type VstScanMode = 'fast' | 'full' | 'params';
 
+type VstBufferProfile = 'stable' | 'balanced' | 'low-latency';
+type VstSidechainMode = 'disabled' | 'silence' | 'self';
+
+type VstSettings = {
+  bufferProfile: VstBufferProfile;
+  sidechainMode: VstSidechainMode;
+  sidechainChannels: number;
+};
+
+type VstMonoInputPolicy = 'sum-average' | 'left-only';
+type VstCompatScope = 'plugin' | 'vendor';
+
+type VstCompatRule = {
+  editorSafeMode: boolean;
+  loadOnUiThread: boolean;
+  monoInput: VstMonoInputPolicy;
+};
+
+type VstCompatQueryResult = {
+  pluginId: string;
+  vendor?: string | null;
+  effective: VstCompatRule;
+  pluginOverride?: VstCompatRule | null;
+  vendorOverride?: VstCompatRule | null;
+};
+
 type VstScanState = {
   running: boolean;
   runId?: string | null;
@@ -52,6 +78,32 @@ type VstScanEvent = {
   message: string;
 };
 
+type VstScanRunSummary = {
+  runId: string;
+  mode?: string | null;
+  startedAtMs: number;
+  finishedAtMs?: number | null;
+  durationMs: number;
+  status: string;
+  error?: string | null;
+  eventsTotal: number;
+  pluginsSeen: number;
+  paramsScanned: number;
+  eventCounts: Record<string, number>;
+  lastDeadmanHint?: string | null;
+};
+
+type LibraryParamDescriptor = {
+  key: string;
+  title: string;
+  min: number;
+  max: number;
+  default: number;
+  step: number;
+  unit?: string | null;
+  scannedAtMs: number;
+};
+
 type LibraryPluginDescriptor = {
   id: string;
   name: string;
@@ -61,6 +113,11 @@ type LibraryPluginDescriptor = {
   status?: string | null;
   lastSeenAtMs?: number | null;
   paramsScannedAtMs?: number | null;
+  inputChannels?: number | null;
+  outputChannels?: number | null;
+  paramsCount?: number | null;
+  paramsAttemptedAtMs?: number | null;
+  paramsFailureCount?: number | null;
 };
 
 type VstScanPath = {
@@ -170,6 +227,75 @@ function isVstScanMode(value: string): value is VstScanMode {
   return value === 'fast' || value === 'full' || value === 'params';
 }
 
+function isVstBufferProfile(value: string): value is VstBufferProfile {
+  return value === 'stable' || value === 'balanced' || value === 'low-latency';
+}
+
+function isVstSidechainMode(value: string): value is VstSidechainMode {
+  return value === 'disabled' || value === 'silence' || value === 'self';
+}
+
+function defaultVstSettings(): VstSettings {
+  return { bufferProfile: 'stable', sidechainMode: 'disabled', sidechainChannels: 0 };
+}
+
+function ensureVstSettings(value: unknown): VstSettings {
+  const record = asRecord(value);
+  if (!record) return defaultVstSettings();
+
+  const bufferProfile = readStringField(record, 'bufferProfile');
+  const sidechainMode = readStringField(record, 'sidechainMode');
+  const sidechainChannels = readNumberField(record, 'sidechainChannels');
+
+  return {
+    bufferProfile: bufferProfile && isVstBufferProfile(bufferProfile) ? bufferProfile : 'stable',
+    sidechainMode: sidechainMode && isVstSidechainMode(sidechainMode) ? sidechainMode : 'disabled',
+    sidechainChannels:
+      sidechainChannels !== null && sidechainChannels >= 0 && sidechainChannels <= 2
+        ? Math.floor(sidechainChannels)
+        : 0,
+  };
+}
+
+function isVstMonoInputPolicy(value: string): value is VstMonoInputPolicy {
+  return value === 'sum-average' || value === 'left-only';
+}
+
+function defaultCompatRule(): VstCompatRule {
+  return { editorSafeMode: true, loadOnUiThread: true, monoInput: 'sum-average' };
+}
+
+function ensureCompatRule(value: unknown): VstCompatRule {
+  const record = asRecord(value);
+  if (!record) return defaultCompatRule();
+
+  const monoInput = readStringField(record, 'monoInput');
+  return {
+    editorSafeMode: typeof record.editorSafeMode === 'boolean' ? record.editorSafeMode : true,
+    loadOnUiThread: typeof record.loadOnUiThread === 'boolean' ? record.loadOnUiThread : true,
+    monoInput: monoInput && isVstMonoInputPolicy(monoInput) ? monoInput : 'sum-average',
+  };
+}
+
+function ensureCompatQueryResult(value: unknown): VstCompatQueryResult | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const pluginId = readStringField(record, 'pluginId');
+  const effectiveRaw = record.effective;
+  if (!pluginId || !effectiveRaw) return null;
+
+  const vendor = readStringField(record, 'vendor');
+  const pluginOverride = record.pluginOverride ? ensureCompatRule(record.pluginOverride) : null;
+  const vendorOverride = record.vendorOverride ? ensureCompatRule(record.vendorOverride) : null;
+  return {
+    pluginId,
+    vendor,
+    effective: ensureCompatRule(effectiveRaw),
+    pluginOverride,
+    vendorOverride,
+  };
+}
+
 function ensureVstScanState(value: unknown): VstScanState | null {
   const record = asRecord(value);
   if (!record) return null;
@@ -253,6 +379,80 @@ function ensureScanEvents(value: unknown): VstScanEvent[] {
   return out;
 }
 
+function ensureScanRunSummary(value: unknown): VstScanRunSummary | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const runId = readStringField(record, 'runId');
+  const startedAtMs = typeof record.startedAtMs === 'number' ? record.startedAtMs : null;
+  const durationMs = typeof record.durationMs === 'number' ? record.durationMs : null;
+  const status = readStringField(record, 'status');
+  if (!runId || startedAtMs === null || durationMs === null || !status) return null;
+
+  const rawCounts = asRecord(record.eventCounts);
+  const eventCounts: Record<string, number> = {};
+  if (rawCounts) {
+    for (const [key, value] of Object.entries(rawCounts)) {
+      if (typeof value === 'number' && isFinite(value)) {
+        eventCounts[key] = value;
+      }
+    }
+  }
+
+  return {
+    runId,
+    mode: typeof record.mode === 'string' ? record.mode : null,
+    startedAtMs,
+    finishedAtMs: typeof record.finishedAtMs === 'number' ? record.finishedAtMs : null,
+    durationMs,
+    status,
+    error: typeof record.error === 'string' ? record.error : null,
+    eventsTotal: typeof record.eventsTotal === 'number' ? record.eventsTotal : 0,
+    pluginsSeen: typeof record.pluginsSeen === 'number' ? record.pluginsSeen : 0,
+    paramsScanned: typeof record.paramsScanned === 'number' ? record.paramsScanned : 0,
+    eventCounts,
+    lastDeadmanHint: typeof record.lastDeadmanHint === 'string' ? record.lastDeadmanHint : null,
+  };
+}
+
+function ensureLibraryParams(value: unknown): LibraryParamDescriptor[] {
+  if (!Array.isArray(value)) return [];
+  const out: LibraryParamDescriptor[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const key = readStringField(record, 'key');
+    const title = readStringField(record, 'title');
+    const min = readNumberField(record, 'min');
+    const max = readNumberField(record, 'max');
+    const defaultValue = readNumberField(record, 'default');
+    const step = readNumberField(record, 'step');
+    const scannedAtMs = readNumberField(record, 'scannedAtMs');
+    if (
+      !key ||
+      !title ||
+      min === null ||
+      max === null ||
+      defaultValue === null ||
+      step === null ||
+      scannedAtMs === null
+    ) {
+      continue;
+    }
+    out.push({
+      key,
+      title,
+      min,
+      max,
+      default: defaultValue,
+      step,
+      unit: typeof record.unit === 'string' ? record.unit : null,
+      scannedAtMs,
+    });
+  }
+  return out;
+}
+
 function ensureLibraryPlugins(value: unknown): LibraryPluginDescriptor[] {
   if (!Array.isArray(value)) return [];
   const out: LibraryPluginDescriptor[] = [];
@@ -273,6 +473,13 @@ function ensureLibraryPlugins(value: unknown): LibraryPluginDescriptor[] {
       lastSeenAtMs: typeof record.lastSeenAtMs === 'number' ? record.lastSeenAtMs : null,
       paramsScannedAtMs:
         typeof record.paramsScannedAtMs === 'number' ? record.paramsScannedAtMs : null,
+      inputChannels: typeof record.inputChannels === 'number' ? record.inputChannels : null,
+      outputChannels: typeof record.outputChannels === 'number' ? record.outputChannels : null,
+      paramsCount: typeof record.paramsCount === 'number' ? record.paramsCount : null,
+      paramsAttemptedAtMs:
+        typeof record.paramsAttemptedAtMs === 'number' ? record.paramsAttemptedAtMs : null,
+      paramsFailureCount:
+        typeof record.paramsFailureCount === 'number' ? record.paramsFailureCount : null,
     });
   }
   return out;
@@ -328,13 +535,87 @@ function formatStatus(
   if (value === 'ok') return t('windows.vst-manager.status.ok');
   if (value === 'bad') return t('windows.vst-manager.status.bad');
   if (value === 'timeout') return t('windows.vst-manager.status.timeout');
+  if (value === 'missing') return t('windows.vst-manager.status.missing');
   return value;
+}
+
+function formatScanRunStatus(
+  value: string | null | undefined,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  if (!value) return '-';
+  if (value === 'running') return t('windows.vst-manager.scanRunStatus.running');
+  if (value === 'ok') return t('windows.vst-manager.scanRunStatus.ok');
+  if (value === 'error') return t('windows.vst-manager.scanRunStatus.error');
+  if (value === 'cancelled') return t('windows.vst-manager.scanRunStatus.cancelled');
+  return value;
+}
+
+function formatScanMode(
+  value: string | null | undefined,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  if (!value) return '-';
+  if (value === 'fast') return t('windows.vst-manager.scanMode.fast');
+  if (value === 'full') return t('windows.vst-manager.scanMode.full');
+  if (value === 'params') return t('windows.vst-manager.scanMode.params');
+  return value;
+}
+
+function formatDurationMs(
+  durationMs: number,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  if (!isFinite(durationMs) || durationMs <= 0) return '-';
+  const seconds = (durationMs / 1000).toFixed(1);
+  return t('windows.vst-manager.diagnostics.durationValue', { seconds });
+}
+
+function formatScanStageLabel(
+  stage: string | null | undefined,
+  pluginName: string | null,
+  pluginId: string | null,
+  t: (key: string, params?: Record<string, unknown>) => string
+): string {
+  const normalizedStage = (stage ?? '').trim();
+  switch (normalizedStage) {
+    case 'starting':
+      return t('windows.vst-manager.progress.stage.starting');
+    case 'list-plugins':
+      return t('windows.vst-manager.progress.stage.listPlugins');
+    case 'persist':
+      return pluginName
+        ? t('windows.vst-manager.progress.stage.persistPlugin', { name: pluginName })
+        : t('windows.vst-manager.progress.stage.persist');
+    case 'describe':
+      return pluginName
+        ? t('windows.vst-manager.progress.stage.describePlugin', { name: pluginName })
+        : pluginId
+          ? t('windows.vst-manager.progress.stage.describeId', { id: pluginId })
+          : t('windows.vst-manager.progress.stage.describe');
+    case 'list-from-library':
+      return t('windows.vst-manager.progress.stage.listFromLibrary');
+    case 'finished':
+      return t('windows.vst-manager.progress.stage.finished');
+    case 'done':
+      return t('windows.vst-manager.progress.stage.done');
+    default:
+      return pluginName || pluginId || normalizedStage || t('windows.vst-manager.progress.running');
+  }
 }
 
 function basename(path: string): string {
   const normalized = path.replace(/\\/g, '/');
   const parts = normalized.split('/');
   return parts[parts.length - 1] || path;
+}
+
+function formatIo(plugin: LibraryPluginDescriptor): string {
+  const input = typeof plugin.inputChannels === 'number' ? plugin.inputChannels : null;
+  const output = typeof plugin.outputChannels === 'number' ? plugin.outputChannels : null;
+  if (input === null || output === null) return '-';
+  if (!isFinite(input) || !isFinite(output) || input <= 0 || output <= 0) return '-';
+  return `${input}→${output}`;
 }
 
 function matchesQuery(candidate: string, query: string): boolean {
@@ -346,17 +627,32 @@ export function VstManagerWindow() {
   const locale = useLocale();
   const isTauri = React.useMemo(() => isTauriRuntime(), []);
   const usedLegacyScanPathsRef = React.useRef(false);
+  const paramsRequestIdRef = React.useRef(0);
   const [plugins, setPlugins] = React.useState<LibraryPluginDescriptor[]>([]);
   const [scanState, setScanState] = React.useState<VstScanState | null>(null);
   const [scanProgress, setScanProgress] = React.useState<VstScanProgressPayload | null>(null);
   const [scanRuns, setScanRuns] = React.useState<VstScanRun[]>([]);
   const [selectedScanRunId, setSelectedScanRunId] = React.useState<string>('');
   const [scanEvents, setScanEvents] = React.useState<VstScanEvent[]>([]);
+  const [scanSummary, setScanSummary] = React.useState<VstScanRunSummary | null>(null);
   const [rackUsage, setRackUsage] = React.useState<Record<string, RackPluginUsage>>({});
   const [applyBusy, setApplyBusy] = React.useState(false);
+  const [vstSettings, setVstSettings] = React.useState<VstSettings>(() => defaultVstSettings());
+  const [vstSettingsBusy, setVstSettingsBusy] = React.useState(false);
   const [verifyOnScan, setVerifyOnScan] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const [paramsOpen, setParamsOpen] = React.useState(false);
+  const [paramsQuery, setParamsQuery] = React.useState('');
+  const [paramsLoading, setParamsLoading] = React.useState(false);
+  const [selectedParams, setSelectedParams] = React.useState<LibraryParamDescriptor[]>([]);
+  const [paramsForPluginId, setParamsForPluginId] = React.useState<string | null>(null);
+  const [paramsForScannedAtMs, setParamsForScannedAtMs] = React.useState<number | null>(null);
   const [selectedPluginId, setSelectedPluginId] = React.useState<string | null>(null);
+  const [compatScope, setCompatScope] = React.useState<VstCompatScope>('plugin');
+  const [compatInfo, setCompatInfo] = React.useState<VstCompatQueryResult | null>(null);
+  const [compatDraft, setCompatDraft] = React.useState<VstCompatRule | null>(null);
+  const [compatBusy, setCompatBusy] = React.useState(false);
+  const [compatError, setCompatError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [scanPathExists, setScanPathExists] = React.useState<Record<string, boolean>>({});
   const [scanSettings, setScanSettings] = React.useState<VstScanSettingsV1>(() => {
@@ -413,6 +709,113 @@ export function VstManagerWindow() {
     if (!selectedPluginId) return null;
     return plugins.find((plugin) => plugin.id === selectedPluginId) ?? null;
   }, [plugins, selectedPluginId]);
+
+  const loadCompatibility = React.useCallback(
+    async (pluginId: string) => {
+      if (!isTauri) return;
+      setCompatBusy(true);
+      setCompatError(null);
+      try {
+        const resp = await invoke<unknown>('native_audio_vst_get_compatibility', { pluginId });
+        setCompatInfo(ensureCompatQueryResult(resp));
+      } catch (err) {
+        setCompatInfo(null);
+        setCompatError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCompatBusy(false);
+      }
+    },
+    [isTauri]
+  );
+
+  React.useEffect(() => {
+    if (!isTauri) return;
+    const pluginId = selectedPluginId?.trim() ?? '';
+    if (!pluginId) {
+      setCompatInfo(null);
+      setCompatDraft(null);
+      setCompatError(null);
+      return;
+    }
+    void loadCompatibility(pluginId);
+  }, [isTauri, loadCompatibility, selectedPluginId]);
+
+  React.useEffect(() => {
+    if (!compatInfo) {
+      setCompatDraft(null);
+      return;
+    }
+    if (compatScope === 'vendor' && !compatInfo.vendor) {
+      setCompatScope('plugin');
+      return;
+    }
+    const next =
+      compatScope === 'vendor'
+        ? compatInfo.vendorOverride ?? compatInfo.effective
+        : compatInfo.pluginOverride ?? compatInfo.effective;
+    setCompatDraft(next);
+  }, [compatInfo, compatScope]);
+
+  const persistCompatRule = React.useCallback(
+    async (next: VstCompatRule) => {
+      if (!isTauri) return;
+      const pluginId = selectedPluginId?.trim() ?? '';
+      if (!pluginId) return;
+      const key = compatScope === 'vendor' ? (compatInfo?.vendor ?? '') : pluginId;
+      if (!key.trim()) return;
+
+      setCompatBusy(true);
+      setCompatError(null);
+      try {
+        await invoke('native_audio_vst_set_compat_rule', { scope: compatScope, key, rule: next });
+        await loadCompatibility(pluginId);
+      } catch (err) {
+        setCompatError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCompatBusy(false);
+      }
+    },
+    [compatInfo?.vendor, compatScope, isTauri, loadCompatibility, selectedPluginId]
+  );
+
+  const updateCompatField = React.useCallback(
+    (patch: Partial<VstCompatRule>) => {
+      const base = compatDraft ?? compatInfo?.effective ?? defaultCompatRule();
+      const next = { ...base, ...patch };
+      setCompatDraft(next);
+      void persistCompatRule(next);
+    },
+    [compatDraft, compatInfo?.effective, persistCompatRule]
+  );
+
+  const clearCompatOverride = React.useCallback(async () => {
+    if (!isTauri) return;
+    const pluginId = selectedPluginId?.trim() ?? '';
+    if (!pluginId) return;
+    const key = compatScope === 'vendor' ? (compatInfo?.vendor ?? '') : pluginId;
+    if (!key.trim()) return;
+
+    setCompatBusy(true);
+    setCompatError(null);
+    try {
+      await invoke('native_audio_vst_clear_compat_rule', { scope: compatScope, key });
+      await loadCompatibility(pluginId);
+    } catch (err) {
+      setCompatError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompatBusy(false);
+    }
+  }, [compatInfo?.vendor, compatScope, isTauri, loadCompatibility, selectedPluginId]);
+
+  const normalizedParamsQuery = paramsQuery.trim().toLowerCase();
+  const filteredParams = React.useMemo(() => {
+    if (!normalizedParamsQuery) return selectedParams;
+    return selectedParams.filter(
+      (param) =>
+        matchesQuery(param.title, normalizedParamsQuery) ||
+        matchesQuery(param.key, normalizedParamsQuery)
+    );
+  }, [normalizedParamsQuery, selectedParams]);
 
   React.useEffect(() => {
     if (!usedLegacyScanPathsRef.current) return;
@@ -503,14 +906,16 @@ export function VstManagerWindow() {
     if (!isTauri) return;
     setError(null);
     try {
-      const [libraryResp, scanResp, scanRunsResp] = await Promise.all([
+      const [libraryResp, scanResp, scanRunsResp, settingsResp] = await Promise.all([
         invoke<unknown>('native_audio_vst_library_list_plugins').catch(() => []),
         invoke<unknown>('native_audio_vst_scan_state').catch(() => null),
         invoke<unknown>('native_audio_vst_library_list_scan_runs', { limit: 20 }).catch(() => []),
+        invoke<unknown>('native_audio_vst_get_settings').catch(() => null),
       ]);
       const libraryPlugins = ensureLibraryPlugins(libraryResp);
       const nextScanState = ensureVstScanState(scanResp);
       const nextScanRuns = ensureScanRuns(scanRunsResp);
+      setVstSettings(ensureVstSettings(settingsResp));
       setPlugins(libraryPlugins);
       setScanState(nextScanState);
       setScanRuns(nextScanRuns);
@@ -530,6 +935,25 @@ export function VstManagerWindow() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [isTauri, selectedPluginId]);
+
+  const applyVstSettings = React.useCallback(
+    async (next: VstSettings) => {
+      if (!isTauri) return;
+      setVstSettingsBusy(true);
+      setError(null);
+      setVstSettings(next);
+      try {
+        await invoke('native_audio_vst_set_settings', { settings: next });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        const refreshed = await invoke<unknown>('native_audio_vst_get_settings').catch(() => null);
+        setVstSettings(ensureVstSettings(refreshed));
+      } finally {
+        setVstSettingsBusy(false);
+      }
+    },
+    [isTauri]
+  );
 
   const refreshScanEvents = React.useCallback(
     async (runId: string) => {
@@ -553,6 +977,26 @@ export function VstManagerWindow() {
     [isTauri]
   );
 
+  const refreshScanSummary = React.useCallback(
+    async (runId: string) => {
+      if (!isTauri) return;
+      const normalized = runId.trim();
+      if (!normalized) {
+        setScanSummary(null);
+        return;
+      }
+      try {
+        const resp = await invoke<unknown>('native_audio_vst_library_get_scan_run_summary', {
+          runId: normalized,
+        }).catch(() => null);
+        setScanSummary(ensureScanRunSummary(resp));
+      } catch {
+        setScanSummary(null);
+      }
+    },
+    [isTauri]
+  );
+
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -560,6 +1004,10 @@ export function VstManagerWindow() {
   React.useEffect(() => {
     void refreshScanEvents(selectedScanRunId);
   }, [refreshScanEvents, selectedScanRunId]);
+
+  React.useEffect(() => {
+    void refreshScanSummary(selectedScanRunId);
+  }, [refreshScanSummary, selectedScanRunId]);
 
   React.useEffect(() => {
     void refreshRackUsage();
@@ -625,6 +1073,103 @@ export function VstManagerWindow() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [enabledScanPaths, includeDefaultPaths, isTauri, scanRunning, selectedPluginId]);
+
+  const resetSelectedPluginScanStatus = React.useCallback(async () => {
+    if (!isTauri) return;
+    if (scanRunning) return;
+    if (!selectedPluginId) return;
+    const pluginId = selectedPluginId.trim();
+    if (!pluginId) return;
+    setError(null);
+    try {
+      await invoke('native_audio_vst_library_reset_plugin_scan_status', { pluginId });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isTauri, refresh, scanRunning, selectedPluginId]);
+
+  const forgetSelectedPluginParamsCache = React.useCallback(async () => {
+    if (!isTauri) return;
+    if (scanRunning) return;
+    if (!selectedPluginId) return;
+    const pluginId = selectedPluginId.trim();
+    if (!pluginId) return;
+    setError(null);
+    try {
+      await invoke('native_audio_vst_library_invalidate_plugin_params_cache', { pluginId });
+      setSelectedParams([]);
+      setParamsForPluginId(null);
+      setParamsForScannedAtMs(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isTauri, refresh, scanRunning, selectedPluginId]);
+
+  const loadSelectedPluginParams = React.useCallback(
+    async (pluginId: string, scannedAtMs: number | null) => {
+      if (!isTauri) return;
+      const normalized = pluginId.trim();
+      if (!normalized) return;
+      const requestId = paramsRequestIdRef.current + 1;
+      paramsRequestIdRef.current = requestId;
+
+      setParamsLoading(true);
+      try {
+        const resp = await invoke<unknown>('native_audio_vst_library_get_plugin_params', {
+          pluginId: normalized,
+        }).catch(() => []);
+        const list = ensureLibraryParams(resp);
+        if (paramsRequestIdRef.current !== requestId) return;
+        setSelectedParams(list);
+        setParamsForPluginId(normalized);
+        setParamsForScannedAtMs(scannedAtMs);
+      } catch (err) {
+        if (paramsRequestIdRef.current !== requestId) return;
+        setSelectedParams([]);
+        setParamsForPluginId(normalized);
+        setParamsForScannedAtMs(scannedAtMs);
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (paramsRequestIdRef.current === requestId) {
+          setParamsLoading(false);
+        }
+      }
+    },
+    [isTauri]
+  );
+
+  React.useEffect(() => {
+    setSelectedParams([]);
+    setParamsForPluginId(null);
+    setParamsForScannedAtMs(null);
+    setParamsQuery('');
+    paramsRequestIdRef.current += 1;
+  }, [selectedPluginId]);
+
+  React.useEffect(() => {
+    if (!paramsOpen) return;
+    if (!selectedPluginId) return;
+    const scannedAtMs = selectedPlugin?.paramsScannedAtMs ?? null;
+    if (!scannedAtMs) return;
+    if (
+      paramsForPluginId === selectedPluginId &&
+      paramsForScannedAtMs === scannedAtMs &&
+      !paramsLoading
+    ) {
+      return;
+    }
+    void loadSelectedPluginParams(selectedPluginId, scannedAtMs);
+  }, [
+    loadSelectedPluginParams,
+    paramsForPluginId,
+    paramsForScannedAtMs,
+    paramsLoading,
+    paramsOpen,
+    selectedPlugin?.paramsScannedAtMs,
+    selectedPluginId,
+  ]);
 
   const applyDspGraph = React.useCallback(
     async (next: DspGraphConfig) => {
@@ -779,13 +1324,14 @@ export function VstManagerWindow() {
         if (payload.status !== 'running') {
           void refresh();
           void refreshScanEvents(payload.runId);
+          void refreshScanSummary(payload.runId);
         }
       });
     })();
     return () => {
       if (unlisten) void unlisten();
     };
-  }, [isTauri, refresh, refreshScanEvents]);
+  }, [isTauri, refresh, refreshScanEvents, refreshScanSummary]);
 
   if (!isTauri) {
     return (
@@ -797,13 +1343,16 @@ export function VstManagerWindow() {
 
   const progressTotal = scanProgress?.total ?? scanState?.total ?? 0;
   const progressCurrent = scanProgress?.current ?? scanState?.current ?? 0;
+  const progressStage = scanProgress?.stage ?? scanState?.stage ?? null;
+  const progressPluginId = scanProgress?.currentPluginId ?? scanState?.currentPluginId ?? null;
+  const progressPluginName =
+    progressStage === 'persist' && scanProgress?.message
+      ? scanProgress.message
+      : progressPluginId
+        ? plugins.find((plugin) => plugin.id === progressPluginId)?.name ?? null
+        : null;
   const progressText = scanRunning
-    ? scanProgress?.message ||
-      scanProgress?.currentPluginId ||
-      scanState?.currentPluginId ||
-      scanProgress?.stage ||
-      scanState?.stage ||
-      t('windows.vst-manager.progress.running')
+    ? formatScanStageLabel(progressStage, progressPluginName, progressPluginId, t)
     : t('windows.vst-manager.progress.idle');
 
   const selectedUsage = selectedPlugin ? rackUsage[selectedPlugin.id] : null;
@@ -881,6 +1430,30 @@ export function VstManagerWindow() {
               {t('windows.vst-manager.options.includeDefaultPaths')}
             </label>
             <div className="vst-manager-panel-note">{t('windows.vst-manager.options.note')}</div>
+          </div>
+
+          <div className="vst-manager-panel">
+            <div className="vst-manager-panel-title">{t('windows.vst-manager.vstSettings.title')}</div>
+            <div className="vst-manager-kv">
+              <div className="vst-manager-k">{t('windows.vst-manager.vstSettings.sidechainMode.label')}</div>
+              <div className="vst-manager-v">
+                <select
+                  className="vst-manager-select"
+                  value={vstSettings.sidechainMode}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (!isVstSidechainMode(raw)) return;
+                    void applyVstSettings({ ...vstSettings, sidechainMode: raw });
+                  }}
+                  disabled={scanRunning || vstSettingsBusy}
+                >
+                  <option value="disabled">{t('windows.vst-manager.vstSettings.sidechainMode.disabled')}</option>
+                  <option value="silence">{t('windows.vst-manager.vstSettings.sidechainMode.silence')}</option>
+                  <option value="self">{t('windows.vst-manager.vstSettings.sidechainMode.self')}</option>
+                </select>
+              </div>
+            </div>
+            <div className="vst-manager-panel-note">{t('windows.vst-manager.vstSettings.sidechainNote')}</div>
           </div>
 
           <div className="vst-manager-panel">
@@ -965,7 +1538,10 @@ export function VstManagerWindow() {
                     >
                       {scanRuns.map((run) => (
                         <option key={run.runId} value={run.runId}>
-                          {new Date(run.startedAtMs).toLocaleString(locale)} · {run.status}
+                          {t('windows.vst-manager.diagnostics.runOption', {
+                            time: new Date(run.startedAtMs).toLocaleString(locale),
+                            status: formatScanRunStatus(run.status, t),
+                          })}
                         </option>
                       ))}
                     </select>
@@ -979,7 +1555,9 @@ export function VstManagerWindow() {
                         <div className="vst-manager-k">
                           {t('windows.vst-manager.diagnostics.status')}
                         </div>
-                        <div className="vst-manager-v">{selectedScanRun.status}</div>
+                        <div className="vst-manager-v">
+                          {formatScanRunStatus(selectedScanRun.status, t)}
+                        </div>
                       </div>
                     ) : null}
                     <div className="vst-manager-kv">
@@ -994,8 +1572,49 @@ export function VstManagerWindow() {
                       <div className="vst-manager-k">
                         {t('windows.vst-manager.diagnostics.events')}
                       </div>
-                      <div className="vst-manager-v">{scanEvents.length || 0}</div>
+                      <div className="vst-manager-v">
+                        {scanSummary?.eventsTotal ?? scanEvents.length}
+                      </div>
                     </div>
+                    {scanSummary ? (
+                      <>
+                        <div className="vst-manager-kv">
+                          <div className="vst-manager-k">
+                            {t('windows.vst-manager.diagnostics.mode')}
+                          </div>
+                          <div className="vst-manager-v">
+                            {formatScanMode(scanSummary.mode, t)}
+                          </div>
+                        </div>
+                        <div className="vst-manager-kv">
+                          <div className="vst-manager-k">
+                            {t('windows.vst-manager.diagnostics.duration')}
+                          </div>
+                          <div className="vst-manager-v">
+                            {formatDurationMs(scanSummary.durationMs, t)}
+                          </div>
+                        </div>
+                        <div className="vst-manager-kv">
+                          <div className="vst-manager-k">
+                            {t('windows.vst-manager.diagnostics.pluginsSeen')}
+                          </div>
+                          <div className="vst-manager-v">{scanSummary.pluginsSeen}</div>
+                        </div>
+                        <div className="vst-manager-kv">
+                          <div className="vst-manager-k">
+                            {t('windows.vst-manager.diagnostics.paramsScanned')}
+                          </div>
+                          <div className="vst-manager-v">{scanSummary.paramsScanned}</div>
+                        </div>
+                        {scanSummary.lastDeadmanHint ? (
+                          <div className="vst-manager-panel-note vst-manager-panel-note--error">
+                            {t('windows.vst-manager.diagnostics.lastStall', {
+                              path: scanSummary.lastDeadmanHint,
+                            })}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
                     {selectedScanRun?.error ? (
                       <div className="vst-manager-panel-note vst-manager-panel-note--error">
                         {t('windows.vst-manager.diagnostics.scanError', {
@@ -1137,12 +1756,57 @@ export function VstManagerWindow() {
                   <div className="vst-manager-v">64</div>
                 </div>
                 <div className="vst-manager-kv">
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.io')}</div>
+                  <div className="vst-manager-v">{formatIo(selectedPlugin)}</div>
+                </div>
+                <div className="vst-manager-kv">
                   <div className="vst-manager-k">{t('windows.vst-manager.selected.file')}</div>
                   <div className="vst-manager-v">
                     {selectedPlugin.path ? basename(selectedPlugin.path) : '-'}
                   </div>
                 </div>
+                <div className="vst-manager-kv">
+                  <div className="vst-manager-k">{t('windows.vst-manager.selected.paramsCache')}</div>
+                  <div className="vst-manager-v">
+                    {selectedPlugin.paramsScannedAtMs
+                      ? t('windows.vst-manager.selected.paramsCache.ready', {
+                          count: selectedPlugin.paramsCount ?? '-',
+                        })
+                      : selectedPlugin.status === 'timeout' || selectedPlugin.status === 'bad'
+                        ? t('windows.vst-manager.selected.paramsCache.failed', {
+                            failures: selectedPlugin.paramsFailureCount ?? 0,
+                          })
+                        : t('windows.vst-manager.selected.paramsCache.missing')}
+                  </div>
+                </div>
                 <div className="vst-manager-panel-actions">
+                  {selectedPlugin.status === 'timeout' || selectedPlugin.status === 'bad' ? (
+                    <button
+                      type="button"
+                      onClick={() => void resetSelectedPluginScanStatus()}
+                      disabled={scanRunning || applyBusy}
+                    >
+                      {t('windows.vst-manager.selected.action.resetScanStatus')}
+                    </button>
+                  ) : null}
+                  {selectedPlugin.paramsScannedAtMs ? (
+                    <button
+                      type="button"
+                      onClick={() => void forgetSelectedPluginParamsCache()}
+                      disabled={scanRunning || applyBusy}
+                    >
+                      {t('windows.vst-manager.selected.action.forgetParamsCache')}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setParamsOpen((open) => !open)}
+                    disabled={scanRunning || applyBusy}
+                  >
+                    {paramsOpen
+                      ? t('windows.vst-manager.selected.action.hideParams')
+                      : t('windows.vst-manager.selected.action.showParams')}
+                  </button>
                   <button type="button" onClick={() => void scanParams()} disabled={scanRunning}>
                     {t('windows.vst-manager.selected.action.scanParams')}
                   </button>
@@ -1154,6 +1818,172 @@ export function VstManagerWindow() {
                     {t('windows.vst-manager.selected.action.addToRack')}
                   </button>
                 </div>
+                <div className="vst-manager-compat">
+                  <div className="vst-manager-node-list-title">
+                    {t('windows.vst-manager.selected.compat.title')}
+                  </div>
+                  <div className="vst-manager-kv">
+                    <div className="vst-manager-k">
+                      {t('windows.vst-manager.selected.compat.scope.label')}
+                    </div>
+                    <div className="vst-manager-v">
+                      <select
+                        className="vst-manager-select"
+                        value={compatScope}
+                        onChange={(e) => setCompatScope(e.target.value as VstCompatScope)}
+                        disabled={compatBusy || scanRunning || applyBusy}
+                      >
+                        <option value="plugin">
+                          {t('windows.vst-manager.selected.compat.scope.plugin')}
+                        </option>
+                        {compatInfo?.vendor ? (
+                          <option value="vendor">
+                            {t('windows.vst-manager.selected.compat.scope.vendor', {
+                              vendor: compatInfo.vendor,
+                            })}
+                          </option>
+                        ) : null}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="vst-manager-kv">
+                    <div className="vst-manager-k">
+                      {t('windows.vst-manager.selected.compat.editorSafeMode')}
+                    </div>
+                    <div className="vst-manager-v">
+                      <label className="vst-manager-compat-toggle">
+                        <input
+                          type="checkbox"
+                          checked={(compatDraft ?? compatInfo?.effective ?? defaultCompatRule()).editorSafeMode}
+                          onChange={(e) => updateCompatField({ editorSafeMode: e.target.checked })}
+                          disabled={compatBusy || scanRunning || applyBusy}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="vst-manager-kv">
+                    <div className="vst-manager-k">
+                      {t('windows.vst-manager.selected.compat.loadOnUiThread')}
+                    </div>
+                    <div className="vst-manager-v">
+                      <label className="vst-manager-compat-toggle">
+                        <input
+                          type="checkbox"
+                          checked={(compatDraft ?? compatInfo?.effective ?? defaultCompatRule()).loadOnUiThread}
+                          onChange={(e) => updateCompatField({ loadOnUiThread: e.target.checked })}
+                          disabled={compatBusy || scanRunning || applyBusy}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="vst-manager-kv">
+                    <div className="vst-manager-k">
+                      {t('windows.vst-manager.selected.compat.monoInput')}
+                    </div>
+                    <div className="vst-manager-v">
+                      <select
+                        className="vst-manager-select"
+                        value={(compatDraft ?? compatInfo?.effective ?? defaultCompatRule()).monoInput}
+                        onChange={(e) => updateCompatField({ monoInput: e.target.value as VstMonoInputPolicy })}
+                        disabled={compatBusy || scanRunning || applyBusy}
+                      >
+                        <option value="sum-average">
+                          {t('windows.vst-manager.selected.compat.monoInput.sum')}
+                        </option>
+                        <option value="left-only">
+                          {t('windows.vst-manager.selected.compat.monoInput.left')}
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="vst-manager-panel-note">
+                    {t('windows.vst-manager.selected.compat.note')}
+                  </div>
+                  <div className="vst-manager-panel-actions">
+                    <button
+                      type="button"
+                      onClick={() => void clearCompatOverride()}
+                      disabled={
+                        compatBusy ||
+                        scanRunning ||
+                        applyBusy ||
+                        (compatScope === 'vendor'
+                          ? !compatInfo?.vendorOverride
+                          : !compatInfo?.pluginOverride)
+                      }
+                    >
+                      {t('windows.vst-manager.selected.compat.action.reset')}
+                    </button>
+                  </div>
+                  {compatError ? (
+                    <div className="vst-manager-panel-note vst-manager-panel-note--error">
+                      {compatError}
+                    </div>
+                  ) : null}
+                </div>
+                {paramsOpen ? (
+                  <div className="vst-manager-params">
+                    <div className="vst-manager-params-title">
+                      {t('windows.vst-manager.selected.params.title', {
+                        count: selectedPlugin.paramsCount ?? selectedParams.length,
+                      })}
+                    </div>
+                    {selectedPlugin.paramsScannedAtMs ? (
+                      <>
+                        <input
+                          className="vst-manager-params-search"
+                          value={paramsQuery}
+                          onChange={(e) => setParamsQuery(e.target.value)}
+                          placeholder={t('windows.vst-manager.selected.params.search.placeholder')}
+                          aria-label={t('windows.vst-manager.selected.params.search.ariaLabel')}
+                        />
+                        {paramsLoading ? (
+                          <div className="vst-manager-panel-note">
+                            {t('windows.vst-manager.selected.params.loading')}
+                          </div>
+                        ) : filteredParams.length === 0 ? (
+                          <div className="vst-manager-panel-note">
+                            {selectedParams.length === 0
+                              ? t('windows.vst-manager.selected.params.empty')
+                              : t('windows.vst-manager.selected.params.filteredEmpty')}
+                          </div>
+                        ) : (
+                          <div className="vst-manager-params-list" role="list">
+                            {filteredParams.slice(0, 200).map((param) => (
+                              <div
+                                key={param.key}
+                                className="vst-manager-param-row"
+                                role="listitem"
+                                title={t('windows.vst-manager.selected.params.tooltip', {
+                                  key: param.key,
+                                  min: param.min,
+                                  max: param.max,
+                                  default: param.default,
+                                  unit: param.unit ?? '',
+                                })}
+                              >
+                                <span className="vst-manager-param-key">{param.key}</span>
+                                <span className="vst-manager-param-title">{param.title}</span>
+                              </div>
+                            ))}
+                            {filteredParams.length > 200 ? (
+                              <div className="vst-manager-panel-note">
+                                {t('windows.vst-manager.selected.params.limited', {
+                                  count: 200,
+                                  total: filteredParams.length,
+                                })}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="vst-manager-panel-note">
+                        {t('windows.vst-manager.selected.params.notCached')}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="vst-manager-panel-note">
@@ -1183,6 +2013,7 @@ export function VstManagerWindow() {
                   <th>{t('windows.vst-manager.table.header.status')}</th>
                   <th>{t('windows.vst-manager.table.header.format')}</th>
                   <th>{t('windows.vst-manager.table.header.bits')}</th>
+                  <th>{t('windows.vst-manager.table.header.io')}</th>
                   <th>{t('windows.vst-manager.table.header.type')}</th>
                   <th>{t('windows.vst-manager.table.header.vendor')}</th>
                   <th>{t('windows.vst-manager.table.header.filename')}</th>
@@ -1207,6 +2038,7 @@ export function VstManagerWindow() {
                       <td>{formatStatus(plugin.status, t)}</td>
                       <td>VST3</td>
                       <td>64</td>
+                      <td>{formatIo(plugin)}</td>
                       <td>{t('windows.vst-manager.pluginType.effect')}</td>
                       <td title={plugin.vendor ?? ''}>{plugin.vendor ?? '-'}</td>
                       <td title={plugin.path ?? ''}>{plugin.path ? basename(plugin.path) : '-'}</td>

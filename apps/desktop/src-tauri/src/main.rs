@@ -22,11 +22,13 @@ mod magnet_layout_store;
 mod music_library;
 mod native_audio;
 mod vst_audit;
+mod vst_compat;
 mod vst_bridge;
 mod vst_dsp;
 mod vst_governance;
 mod vst_instance_manager;
 mod vst_library;
+mod vst_presets;
 mod vst_runtime;
 mod vst_scanner;
 mod vst_settings;
@@ -303,6 +305,22 @@ async fn native_audio_vst_library_get_plugin_params(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_library_reset_plugin_scan_status(plugin_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_library::reset_plugin_scan_status(plugin_id.as_str()))
+        .await
+        .map_err(|e| format!("VST library reset scan status task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_library_invalidate_plugin_params_cache(
+    plugin_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || vst_library::invalidate_plugin_params_cache(plugin_id.as_str()))
+        .await
+        .map_err(|e| format!("VST library invalidate params cache task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_library_list_scan_runs(
     limit: Option<u32>,
 ) -> Result<Vec<vst_library::VstScanRun>, String> {
@@ -321,6 +339,15 @@ async fn native_audio_vst_library_list_scan_events(
     })
     .await
     .map_err(|e| format!("VST library scan events task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_library_get_scan_run_summary(
+    run_id: String,
+) -> Result<vst_library::VstScanRunSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_library::get_scan_run_summary(run_id.as_str()))
+        .await
+        .map_err(|e| format!("VST library scan run summary task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -421,6 +448,20 @@ async fn native_audio_vst_set_params(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_set_param_value(
+    app: tauri::AppHandle,
+    node_id: String,
+    key: String,
+    value: f32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_runtime::set_param_value(&app, node_id, key, value)
+    })
+    .await
+    .map_err(|e| format!("VST set param task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 async fn native_audio_vst_get_params(
     app: tauri::AppHandle,
     node_id: String,
@@ -451,9 +492,127 @@ async fn native_audio_vst_set_settings(
     app: tauri::AppHandle,
     settings: vst_settings::VstSettings,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vst_settings::set_settings(&app, settings))
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_settings::set_settings(&app, settings)?;
+        if let Err(err) = native_audio::refresh_dsp_chain(&app) {
+            eprintln!("[VST] Failed to refresh DSP chain after settings update: {err}");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("VST set settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_get_compatibility(
+    app: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<vst_compat::VstCompatQueryResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_compat::get_compatibility(&app, plugin_id.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST get compatibility task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_set_compat_rule(
+    app: tauri::AppHandle,
+    scope: vst_compat::VstCompatScope,
+    key: String,
+    rule: vst_compat::VstCompatRule,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_compat::set_rule(&app, scope, key.as_str(), rule)
+    })
+    .await
+    .map_err(|e| format!("VST set compatibility task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_clear_compat_rule(
+    app: tauri::AppHandle,
+    scope: vst_compat::VstCompatScope,
+    key: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_compat::clear_rule(&app, scope, key.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST clear compatibility task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_list_presets(
+    app: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<Vec<vst_presets::VstPresetSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_presets::list_presets(&app, plugin_id.as_str()))
         .await
-        .map_err(|e| format!("VST set settings task failed: {e}"))?
+        .map_err(|e| format!("VST list presets task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_save_preset(
+    app: tauri::AppHandle,
+    node_id: String,
+    name: String,
+) -> Result<vst_presets::VstPresetSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_presets::save_preset_from_node(&app, node_id.as_str(), name.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST save preset task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_delete_preset(
+    app: tauri::AppHandle,
+    plugin_id: String,
+    preset_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_presets::delete_preset(&app, plugin_id.as_str(), preset_id.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST delete preset task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_apply_preset(
+    app: tauri::AppHandle,
+    node_id: String,
+    preset_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_presets::apply_preset_to_node(&app, node_id.as_str(), preset_id.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST apply preset task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_get_locked_params(
+    app: tauri::AppHandle,
+    node_id: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || vst_presets::locked_params(&app, node_id.as_str()))
+        .await
+        .map_err(|e| format!("VST get locked params task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_vst_set_param_locked(
+    app: tauri::AppHandle,
+    node_id: String,
+    key: String,
+    locked: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_presets::set_param_locked(&app, node_id.as_str(), key.as_str(), locked)
+    })
+    .await
+    .map_err(|e| format!("VST set param locked task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -776,6 +935,9 @@ fn main() {
             if let Err(error) = vst_library::init(&app.handle()) {
                 eprintln!("[VST] Failed to init library: {error}");
             }
+            if let Err(error) = vst_compat::init(&app.handle()) {
+                eprintln!("[VST] Failed to init compatibility: {error}");
+            }
             vst_runtime::init_session_status_broadcaster(&app.handle());
 
             Ok(())
@@ -813,8 +975,11 @@ fn main() {
             native_audio_vst_describe_plugin,
             native_audio_vst_library_list_plugins,
             native_audio_vst_library_get_plugin_params,
+            native_audio_vst_library_reset_plugin_scan_status,
+            native_audio_vst_library_invalidate_plugin_params_cache,
             native_audio_vst_library_list_scan_runs,
             native_audio_vst_library_list_scan_events,
+            native_audio_vst_library_get_scan_run_summary,
             native_audio_vst_scan_paths_exist,
             native_audio_vst_scan_start,
             native_audio_vst_scan_cancel,
@@ -826,10 +991,20 @@ fn main() {
             native_audio_vst_close_native_editor,
             native_audio_vst_bring_editors_to_front,
             native_audio_vst_set_params,
+            native_audio_vst_set_param_value,
             native_audio_vst_get_params,
             native_audio_vst_dispose_session,
             native_audio_vst_get_settings,
             native_audio_vst_set_settings,
+            native_audio_vst_get_compatibility,
+            native_audio_vst_set_compat_rule,
+            native_audio_vst_clear_compat_rule,
+            native_audio_vst_list_presets,
+            native_audio_vst_save_preset,
+            native_audio_vst_delete_preset,
+            native_audio_vst_apply_preset,
+            native_audio_vst_get_locked_params,
+            native_audio_vst_set_param_locked,
             native_audio_vst_get_audit_log,
             native_audio_vst_clear_audit_log,
             native_audio_vst_get_governance,

@@ -2,6 +2,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use tauri::AppHandle;
 
 use crate::vst_bridge::{BridgeParamDescriptor, BridgePluginDescriptor};
 
-const DB_VERSION: i32 = 2;
+const DB_VERSION: i32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,11 @@ pub struct VstLibraryPlugin {
     pub status: String,
     pub last_seen_at_ms: u64,
     pub params_scanned_at_ms: Option<u64>,
+    pub input_channels: Option<u32>,
+    pub output_channels: Option<u32>,
+    pub params_count: Option<u32>,
+    pub params_attempted_at_ms: Option<u64>,
+    pub params_failure_count: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,6 +64,23 @@ pub struct VstScanEvent {
     pub message: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VstScanRunSummary {
+    pub run_id: String,
+    pub mode: Option<String>,
+    pub started_at_ms: u64,
+    pub finished_at_ms: Option<u64>,
+    pub duration_ms: u64,
+    pub status: String,
+    pub error: Option<String>,
+    pub events_total: u32,
+    pub plugins_seen: u32,
+    pub params_scanned: u32,
+    pub event_counts: HashMap<String, u32>,
+    pub last_deadman_hint: Option<String>,
+}
+
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 
@@ -66,6 +89,18 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn extract_deadman_hint(message: &str) -> Option<String> {
+    let idx = message.find("deadman=")?;
+    let rest = &message[idx + "deadman=".len()..];
+    let end = rest.find(')').unwrap_or(rest.len());
+    let hint = rest[..end].trim();
+    if hint.is_empty() {
+        None
+    } else {
+        Some(hint.to_string())
+    }
 }
 
 fn system_time_to_ms(value: SystemTime) -> Option<i64> {
@@ -180,7 +215,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA synchronous = NORMAL;")
         .map_err(|e| format!("Failed to set synchronous pragma: {e}"))?;
 
-    let version: i32 = conn
+    let mut version: i32 = conn
         .query_row("PRAGMA user_version;", [], |row| row.get(0))
         .map_err(|e| format!("Failed to read schema version: {e}"))?;
 
@@ -195,7 +230,12 @@ fn migrate(conn: &Connection) -> Result<(), String> {
               format TEXT NOT NULL,
               status TEXT NOT NULL,
               last_seen_at_ms INTEGER NOT NULL,
-              params_scanned_at_ms INTEGER
+              params_scanned_at_ms INTEGER,
+              input_channels INTEGER,
+              output_channels INTEGER,
+              params_count INTEGER,
+              params_attempted_at_ms INTEGER,
+              params_failure_count INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS vst_files (
@@ -238,7 +278,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS vst_scan_events_run_id_idx ON vst_scan_events(run_id);
             CREATE INDEX IF NOT EXISTS vst_params_plugin_id_idx ON vst_params(plugin_id);
 
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 3;
             "#,
         )
         .map_err(|e| format!("Failed to create VST library schema: {e}"))?;
@@ -294,7 +334,23 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|e| format!("Failed to migrate VST library schema to v2: {e}"))?;
-        return Ok(());
+        version = 2;
+    }
+
+    if version == 2 {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE vst_plugins ADD COLUMN input_channels INTEGER;
+            ALTER TABLE vst_plugins ADD COLUMN output_channels INTEGER;
+            ALTER TABLE vst_plugins ADD COLUMN params_count INTEGER;
+            ALTER TABLE vst_plugins ADD COLUMN params_attempted_at_ms INTEGER;
+            ALTER TABLE vst_plugins ADD COLUMN params_failure_count INTEGER NOT NULL DEFAULT 0;
+
+            PRAGMA user_version = 3;
+            "#,
+        )
+        .map_err(|e| format!("Failed to migrate VST library schema to v3: {e}"))?;
+        version = 3;
     }
 
     if version != DB_VERSION {
@@ -434,6 +490,151 @@ pub fn list_scan_events(run_id: &str, limit: u32) -> Result<Vec<VstScanEvent>, S
     })
 }
 
+pub fn get_scan_run_summary(run_id: &str) -> Result<VstScanRunSummary, String> {
+    let run_id = run_id.trim();
+    if run_id.is_empty() {
+        return Err("Missing runId".to_string());
+    }
+
+    with_conn(|conn| {
+        let run_row = conn
+            .query_row(
+                r#"
+                SELECT started_at_ms, finished_at_ms, status, error
+                FROM vst_scan_runs
+                WHERE run_id = ?1
+                "#,
+                params![run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query scan run summary: {e}"))?
+            .ok_or_else(|| "Scan run not found".to_string())?;
+
+        let started_at_ms = run_row.0.max(0) as u64;
+        let finished_at_ms = run_row.1.map(|v| v.max(0) as u64);
+        let status = run_row.2;
+        let error = run_row.3;
+        let duration_ms = finished_at_ms
+            .unwrap_or_else(now_ms)
+            .saturating_sub(started_at_ms);
+
+        let mode_message: Option<String> = conn
+            .query_row(
+                r#"
+                SELECT message
+                FROM vst_scan_events
+                WHERE run_id = ?1 AND kind = 'mode'
+                ORDER BY at_ms ASC
+                LIMIT 1
+                "#,
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query scan run mode: {e}"))?;
+        let mode = mode_message
+            .as_deref()
+            .and_then(|msg| msg.strip_prefix("Scan mode: "))
+            .map(|v| v.to_string());
+
+        let mut event_counts = HashMap::<String, u32>::new();
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT kind, COUNT(*) AS count
+                FROM vst_scan_events
+                WHERE run_id = ?1
+                GROUP BY kind
+                "#,
+            )
+            .map_err(|e| format!("Failed to prepare scan event counts query: {e}"))?;
+
+        let mut events_total = 0u32;
+        let rows = stmt
+            .query_map(params![run_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("Failed to query scan event counts: {e}"))?;
+        for row in rows {
+            let (kind, count) = row.map_err(|e| format!("Failed to read scan event counts row: {e}"))?;
+            let count_u32 = u32::try_from(count).unwrap_or(u32::MAX);
+            events_total = events_total.saturating_add(count_u32);
+            event_counts.insert(kind, count_u32);
+        }
+
+        let plugins_seen: u32 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(DISTINCT plugin_id)
+                FROM vst_scan_events
+                WHERE run_id = ?1 AND kind = 'seen' AND plugin_id IS NOT NULL
+                "#,
+                params![run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| format!("Failed to query scan plugin count: {e}"))?
+            .max(0)
+            .try_into()
+            .unwrap_or(u32::MAX);
+
+        let params_scanned: u32 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(DISTINCT plugin_id)
+                FROM vst_scan_events
+                WHERE run_id = ?1 AND kind = 'params' AND plugin_id IS NOT NULL
+                "#,
+                params![run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| format!("Failed to query scanned params count: {e}"))?
+            .max(0)
+            .try_into()
+            .unwrap_or(u32::MAX);
+
+        let deadman_message: Option<String> = conn
+            .query_row(
+                r#"
+                SELECT message
+                FROM vst_scan_events
+                WHERE run_id = ?1 AND message LIKE '%deadman=%'
+                ORDER BY at_ms DESC
+                LIMIT 1
+                "#,
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query scan deadman hint: {e}"))?;
+        let last_deadman_hint = deadman_message
+            .as_deref()
+            .and_then(extract_deadman_hint);
+
+        Ok(VstScanRunSummary {
+            run_id: run_id.to_string(),
+            mode,
+            started_at_ms,
+            finished_at_ms,
+            duration_ms,
+            status,
+            error,
+            events_total,
+            plugins_seen,
+            params_scanned,
+            event_counts,
+            last_deadman_hint,
+        })
+    })
+}
+
 pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> Result<(), String> {
     with_conn(|conn| {
         let tx = conn
@@ -470,20 +671,39 @@ pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> 
 
         tx.execute(
             r#"
-            INSERT INTO vst_plugins(plugin_id, name, vendor, version, format, status, last_seen_at_ms, params_scanned_at_ms)
-            VALUES (?1, ?2, ?3, ?4, 'vst3', 'ok', ?5, NULL)
+            INSERT INTO vst_plugins(
+              plugin_id,
+              name,
+              vendor,
+              version,
+              format,
+              status,
+              last_seen_at_ms,
+              params_scanned_at_ms,
+              input_channels,
+              output_channels
+            )
+            VALUES (?1, ?2, ?3, ?4, 'vst3', 'ok', ?5, NULL, ?6, ?7)
             ON CONFLICT(plugin_id) DO UPDATE SET
               name = excluded.name,
               vendor = excluded.vendor,
               version = excluded.version,
-              last_seen_at_ms = excluded.last_seen_at_ms
+              status = CASE
+                  WHEN status = 'missing' THEN 'ok'
+                  ELSE status
+              END,
+              last_seen_at_ms = excluded.last_seen_at_ms,
+              input_channels = excluded.input_channels,
+              output_channels = excluded.output_channels
             "#,
             params![
                 plugin.id,
                 plugin.name,
                 plugin.vendor,
                 plugin.version,
-                now
+                now,
+                plugin.input_channels.map(|v| v as i64),
+                plugin.output_channels.map(|v| v as i64)
             ],
         )
         .map_err(|e| format!("Failed to upsert plugin row: {e}"))?;
@@ -550,7 +770,7 @@ pub fn upsert_plugin_snapshot(run_id: &str, plugin: &BridgePluginDescriptor) -> 
 
             if file_changed && had_cached_params {
                 tx.execute(
-                    "UPDATE vst_plugins SET params_scanned_at_ms = NULL WHERE plugin_id = ?1",
+                    "UPDATE vst_plugins SET params_scanned_at_ms = NULL, params_count = NULL, params_attempted_at_ms = NULL, params_failure_count = 0 WHERE plugin_id = ?1",
                     params![plugin.id],
                 )
                 .map_err(|e| format!("Failed to invalidate params cache: {e}"))?;
@@ -600,10 +820,11 @@ pub fn upsert_plugin_params(
             .transaction()
             .map_err(|e| format!("Failed to start VST library transaction: {e}"))?;
         let scanned_at_ms = now_ms() as i64;
+        let params_count = params_list.len().min(u32::MAX as usize) as i64;
 
         tx.execute(
-            "UPDATE vst_plugins SET params_scanned_at_ms = ?2, status = 'ok' WHERE plugin_id = ?1",
-            params![plugin_id, scanned_at_ms],
+            "UPDATE vst_plugins SET params_scanned_at_ms = ?2, params_count = ?3, params_attempted_at_ms = ?2, params_failure_count = 0, status = 'ok' WHERE plugin_id = ?1",
+            params![plugin_id, scanned_at_ms, params_count],
         )
         .map_err(|e| format!("Failed to update plugin params scan time: {e}"))?;
 
@@ -663,6 +884,97 @@ pub fn mark_plugin_status(plugin_id: &str, status: &str) {
     });
 }
 
+pub fn reset_plugin_scan_status(plugin_id: &str) -> Result<(), String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("Missing pluginId".to_string());
+    }
+    with_conn(|conn| {
+        let changed = conn
+            .execute(
+                r#"
+                UPDATE vst_plugins
+                SET status = 'ok',
+                    params_attempted_at_ms = NULL,
+                    params_failure_count = 0
+                WHERE plugin_id = ?1
+                "#,
+                params![plugin_id],
+            )
+            .map_err(|e| format!("Failed to reset plugin scan status: {e}"))?;
+        if changed == 0 {
+            return Err("Plugin not found".to_string());
+        }
+        Ok(())
+    })
+}
+
+pub fn invalidate_plugin_params_cache(plugin_id: &str) -> Result<(), String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("Missing pluginId".to_string());
+    }
+    with_conn(|conn| {
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start VST library transaction: {e}"))?;
+
+        let changed = tx
+            .execute(
+                r#"
+                UPDATE vst_plugins
+                SET params_scanned_at_ms = NULL,
+                    params_count = NULL,
+                    params_attempted_at_ms = NULL,
+                    params_failure_count = 0,
+                    status = 'ok'
+                WHERE plugin_id = ?1
+                "#,
+                params![plugin_id],
+            )
+            .map_err(|e| format!("Failed to invalidate plugin params cache: {e}"))?;
+        if changed == 0 {
+            return Err("Plugin not found".to_string());
+        }
+
+        tx.execute("DELETE FROM vst_params WHERE plugin_id = ?1", params![plugin_id])
+            .map_err(|e| format!("Failed to delete cached plugin params: {e}"))?;
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit VST library transaction: {e}"))?;
+        Ok(())
+    })
+}
+
+pub fn record_params_scan_failure(plugin_id: &str, status: &str) -> Result<(), String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("Missing pluginId".to_string());
+    }
+    let status = status.trim();
+    if status.is_empty() {
+        return Err("Missing status".to_string());
+    }
+    let attempted_at_ms = now_ms() as i64;
+    with_conn(|conn| {
+        conn.execute(
+            r#"
+            UPDATE vst_plugins
+            SET params_attempted_at_ms = ?3,
+                params_failure_count = params_failure_count + 1,
+                status = CASE
+                    WHEN params_scanned_at_ms IS NULL THEN ?2
+                    ELSE status
+                END
+            WHERE plugin_id = ?1
+            "#,
+            params![plugin_id, status, attempted_at_ms],
+        )
+        .map_err(|e| format!("Failed to record params failure: {e}"))?;
+        Ok(())
+    })
+}
+
 pub fn list_plugins() -> Result<Vec<VstLibraryPlugin>, String> {
     with_conn(|conn| {
         let mut stmt = conn
@@ -675,7 +987,12 @@ pub fn list_plugins() -> Result<Vec<VstLibraryPlugin>, String> {
                        f.path,
                        p.status,
                        p.last_seen_at_ms,
-                       p.params_scanned_at_ms
+                       p.params_scanned_at_ms,
+                       p.input_channels,
+                       p.output_channels,
+                       p.params_count,
+                       p.params_attempted_at_ms,
+                       p.params_failure_count
                 FROM vst_plugins p
                 LEFT JOIN vst_files f ON f.plugin_id = p.plugin_id
                 ORDER BY p.name ASC
@@ -686,7 +1003,7 @@ pub fn list_plugins() -> Result<Vec<VstLibraryPlugin>, String> {
         let mut out = Vec::new();
         let rows = stmt
             .query_map([], |row| {
-                Ok(VstLibraryPlugin {
+                let mut plugin = VstLibraryPlugin {
                     id: row.get::<_, String>(0)?,
                     name: row.get::<_, String>(1)?,
                     vendor: row.get::<_, Option<String>>(2)?,
@@ -695,7 +1012,23 @@ pub fn list_plugins() -> Result<Vec<VstLibraryPlugin>, String> {
                     status: row.get::<_, String>(5)?,
                     last_seen_at_ms: row.get::<_, i64>(6)? as u64,
                     params_scanned_at_ms: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-                })
+                    input_channels: row.get::<_, Option<i64>>(8)?.and_then(|v| u32::try_from(v).ok()),
+                    output_channels: row.get::<_, Option<i64>>(9)?.and_then(|v| u32::try_from(v).ok()),
+                    params_count: row.get::<_, Option<i64>>(10)?.and_then(|v| u32::try_from(v).ok()),
+                    params_attempted_at_ms: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+                    params_failure_count: row.get::<_, i64>(12)? as u32,
+                };
+                if let Some(path) = plugin
+                    .path
+                    .as_deref()
+                    .map(|path| path.trim())
+                    .filter(|path| !path.is_empty())
+                {
+                    if !Path::new(path).exists() {
+                        plugin.status = "missing".to_string();
+                    }
+                }
+                Ok(plugin)
             })
             .map_err(|e| format!("Failed to query plugin list: {e}"))?;
 
@@ -703,6 +1036,35 @@ pub fn list_plugins() -> Result<Vec<VstLibraryPlugin>, String> {
             out.push(row.map_err(|e| format!("Failed to read plugin row: {e}"))?);
         }
         Ok(out)
+    })
+}
+
+pub fn plugin_vendor(plugin_id: &str) -> Option<String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return None;
+    }
+
+    let vendor = with_conn(|conn| {
+        conn.query_row(
+            "SELECT vendor FROM vst_plugins WHERE plugin_id = ?1",
+            params![plugin_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to query plugin vendor: {e}"))
+    })
+    .ok()
+    .flatten()
+    .flatten();
+
+    vendor.and_then(|raw| {
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     })
 }
 
@@ -759,4 +1121,120 @@ pub fn lookup_plugin_path(plugin_id: &str) -> Option<String> {
     .and_then(|path| path)
     .map(|path| path.trim().to_string())
     .filter(|path| !path.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn column_names(conn: &Connection, table: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table});"))
+            .expect("prepare pragma");
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .expect("query pragma")
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn migrate_creates_v3_schema_from_zero() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        migrate(&conn).expect("migrate");
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |row| row.get(0))
+            .expect("read version");
+        assert_eq!(version, DB_VERSION);
+
+        let cols = column_names(&conn, "vst_plugins");
+        assert!(cols.contains(&"input_channels".to_string()));
+        assert!(cols.contains(&"output_channels".to_string()));
+        assert!(cols.contains(&"params_count".to_string()));
+        assert!(cols.contains(&"params_attempted_at_ms".to_string()));
+        assert!(cols.contains(&"params_failure_count".to_string()));
+    }
+
+    #[test]
+    fn migrate_upgrades_v2_to_v3() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        // Simulate an older v2 schema.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS vst_plugins (
+              plugin_id TEXT PRIMARY KEY NOT NULL,
+              name TEXT NOT NULL,
+              vendor TEXT,
+              version TEXT,
+              format TEXT NOT NULL,
+              status TEXT NOT NULL,
+              last_seen_at_ms INTEGER NOT NULL,
+              params_scanned_at_ms INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS vst_files (
+              plugin_id TEXT PRIMARY KEY NOT NULL,
+              path TEXT NOT NULL,
+              mtime_ms INTEGER,
+              size INTEGER,
+              sha256_prefix TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS vst_params (
+              plugin_id TEXT NOT NULL,
+              key TEXT NOT NULL,
+              title TEXT NOT NULL,
+              min REAL NOT NULL,
+              max REAL NOT NULL,
+              default_value REAL NOT NULL,
+              step REAL NOT NULL,
+              unit TEXT,
+              scanned_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (plugin_id, key)
+            );
+
+            CREATE TABLE IF NOT EXISTS vst_scan_runs (
+              run_id TEXT PRIMARY KEY NOT NULL,
+              started_at_ms INTEGER NOT NULL,
+              finished_at_ms INTEGER,
+              status TEXT NOT NULL,
+              error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS vst_scan_events (
+              run_id TEXT NOT NULL,
+              at_ms INTEGER NOT NULL,
+              kind TEXT NOT NULL,
+              plugin_id TEXT,
+              message TEXT NOT NULL
+            );
+
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .expect("create v2 schema");
+
+        migrate(&conn).expect("migrate to v3");
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |row| row.get(0))
+            .expect("read version");
+        assert_eq!(version, DB_VERSION);
+
+        let cols = column_names(&conn, "vst_plugins");
+        assert!(cols.contains(&"input_channels".to_string()));
+        assert!(cols.contains(&"output_channels".to_string()));
+        assert!(cols.contains(&"params_count".to_string()));
+        assert!(cols.contains(&"params_attempted_at_ms".to_string()));
+        assert!(cols.contains(&"params_failure_count".to_string()));
+    }
+
+    #[test]
+    fn extract_deadman_hint_parses_path() {
+        let message = "Bridge command timed out after 30000ms: --list-plugins (deadman=C:\\\\VST3\\\\Bad Plugin.vst3)";
+        assert_eq!(
+            extract_deadman_hint(message).as_deref(),
+            Some("C:\\\\VST3\\\\Bad Plugin.vst3")
+        );
+
+        assert_eq!(extract_deadman_hint("no hint"), None);
+    }
 }

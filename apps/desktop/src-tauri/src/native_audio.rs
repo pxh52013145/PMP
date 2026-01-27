@@ -1701,10 +1701,9 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
 
     let channels = 2usize;
 
-    let buffer_profile = crate::vst_settings::get_settings(app_handle)
-        .ok()
-        .map(|settings| settings.buffer_profile)
-        .unwrap_or_default();
+    let settings = crate::vst_settings::get_settings(app_handle).unwrap_or_default();
+    let buffer_profile = settings.buffer_profile;
+    let sidechain_mode = settings.sidechain_mode;
     let latency_frames =
         crate::vst_settings::buffer_profile_latency_frames(buffer_profile, sample_rate);
     let capacity_frames = latency_frames.saturating_add(2048).max(8192u32);
@@ -1742,6 +1741,7 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
                     shm_out_name: info.shm_out_name,
                     sample_rate: info.sample_rate,
                     channels: info.channels as u32,
+                    sidechain_mode,
                     capacity_frames: info.capacity_frames,
                     latency_frames,
                 });
@@ -1775,6 +1775,17 @@ pub fn set_vst_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), Stri
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_vst_enabled(enabled);
+        engine.clone_dsp_chain()
+    };
+
+    set_dsp_chain(app_handle, chain)
+}
+
+pub fn refresh_dsp_chain(app_handle: &AppHandle) -> Result<(), String> {
+    let chain = {
+        let engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
         engine.clone_dsp_chain()
     };
 

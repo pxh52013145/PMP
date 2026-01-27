@@ -4,6 +4,7 @@ import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readData, STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupDualListener } from '../../utils/windowCommunication';
 import { openVstManagerWindow } from '../../utils/vstManagerWindows';
+import { VstNodeParamsPanel } from '../vst/VstNodeParamsPanel';
 import './DspRackPage.css';
 
 type EqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
@@ -141,6 +142,20 @@ function ensureEqBands(value: unknown): EqBand[] {
       q: ensureNumber(record.q, 1),
       gainDb: ensureNumber(record.gainDb, 0),
     });
+  }
+  return out;
+}
+
+function ensureVstParamValues(value: unknown): VstParamValue[] {
+  if (!Array.isArray(value)) return [];
+  const out: VstParamValue[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const key = readStringField(record, 'key');
+    const num = readNumberField(record, 'value');
+    if (!key || num === null) continue;
+    out.push({ key, value: num });
   }
   return out;
 }
@@ -650,6 +665,11 @@ export const DspRackPage: React.FC = () => {
                   <div className="dsp-rack-note">
                     PluginId: <span style={{ opacity: 0.9 }}>{readStringField(node, 'pluginId') ?? '(none)'}</span>
                   </div>
+                  <VstNodeParamsPanel
+                    nodeId={node.id}
+                    pluginId={readStringField(node, 'pluginId') ?? ''}
+                    params={ensureVstParamValues(asRecord(node)?.params)}
+                  />
                   <div className="dsp-rack-note">
                     提示：请在「VST3 插件管理器」中选中插件并点击“添加到 DSP Rack”添加（当前不支持拖拽）。
                   </div>

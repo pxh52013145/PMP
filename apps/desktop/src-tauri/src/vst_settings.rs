@@ -18,17 +18,38 @@ impl Default for VstBufferProfile {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VstSidechainMode {
+    Disabled,
+    Silence,
+    #[serde(rename = "self")]
+    SelfFeed,
+}
+
+impl Default for VstSidechainMode {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VstSettings {
     #[serde(default)]
     pub buffer_profile: VstBufferProfile,
+    #[serde(default)]
+    pub sidechain_mode: VstSidechainMode,
+    #[serde(default)]
+    pub sidechain_channels: u32,
 }
 
 impl Default for VstSettings {
     fn default() -> Self {
         Self {
             buffer_profile: VstBufferProfile::Stable,
+            sidechain_mode: VstSidechainMode::Disabled,
+            sidechain_channels: 0,
         }
     }
 }
@@ -77,6 +98,14 @@ pub fn get_settings(app: &AppHandle) -> Result<VstSettings, String> {
     Ok(settings)
 }
 
+pub fn cached_settings() -> VstSettings {
+    let guard = match SETTINGS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clone().unwrap_or_default()
+}
+
 pub fn set_settings(app: &AppHandle, settings: VstSettings) -> Result<(), String> {
     {
         let mut guard = SETTINGS
@@ -100,4 +129,50 @@ pub fn buffer_profile_latency_frames(profile: VstBufferProfile, sample_rate: u32
     let sample_rate = sample_rate.max(1) as u64;
     let ms = buffer_profile_latency_ms(profile);
     ((sample_rate.saturating_mul(ms)) / 1000).max(1) as u32
+}
+
+pub fn effective_sidechain_channels(settings: &VstSettings, main_channels: usize) -> u32 {
+    if settings.sidechain_mode == VstSidechainMode::Disabled {
+        return 0;
+    }
+
+    let default = (main_channels.max(1).min(2)) as u32;
+    let requested = settings.sidechain_channels.min(2);
+    if requested == 0 {
+        default
+    } else {
+        requested
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_sidechain_channels_disabled_is_zero() {
+        let settings = VstSettings::default();
+        assert_eq!(effective_sidechain_channels(&settings, 2), 0);
+        assert_eq!(effective_sidechain_channels(&settings, 1), 0);
+    }
+
+    #[test]
+    fn effective_sidechain_channels_defaults_to_main_width() {
+        let mut settings = VstSettings::default();
+        settings.sidechain_mode = VstSidechainMode::Silence;
+        settings.sidechain_channels = 0;
+        assert_eq!(effective_sidechain_channels(&settings, 2), 2);
+        assert_eq!(effective_sidechain_channels(&settings, 1), 1);
+    }
+
+    #[test]
+    fn effective_sidechain_channels_respects_override() {
+        let mut settings = VstSettings::default();
+        settings.sidechain_mode = VstSidechainMode::SelfFeed;
+        settings.sidechain_channels = 1;
+        assert_eq!(effective_sidechain_channels(&settings, 2), 1);
+
+        settings.sidechain_channels = 9;
+        assert_eq!(effective_sidechain_channels(&settings, 2), 2);
+    }
 }

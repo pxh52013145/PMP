@@ -192,6 +192,62 @@ pub fn resolve_vst_plugin_id(app: &AppHandle, node_id: &str) -> Result<String, S
     Err(format!("VST node not found: {node_id}"))
 }
 
+pub fn set_vst_node_params(
+    app: &AppHandle,
+    node_id: &str,
+    plugin_id: &str,
+    params: Vec<VstParamValue>,
+) -> Result<(), String> {
+    let node_id = node_id.trim();
+    let plugin_id = plugin_id.trim();
+    if node_id.is_empty() {
+        return Err("nodeId is required".to_string());
+    }
+    if plugin_id.is_empty() {
+        return Err("pluginId is required".to_string());
+    }
+
+    let mut guard = DSP_GRAPH
+        .lock()
+        .map_err(|_| "DSP graph state is locked".to_string())?;
+    let mut graph = guard.clone().unwrap_or_else(|| read_graph_from_disk(app).unwrap_or_default());
+
+    let mut found = false;
+    for node in &mut graph.nodes {
+        let DspGraphNode::Vst {
+            id,
+            plugin_id: existing_plugin_id,
+            params: node_params,
+            ..
+        } = node
+        else {
+            continue;
+        };
+
+        if id != node_id {
+            continue;
+        }
+
+        if existing_plugin_id.trim() != plugin_id {
+            return Err(format!(
+                "VST node plugin mismatch: expected {plugin_id}, got {existing_plugin_id}"
+            ));
+        }
+
+        *node_params = Some(params.clone());
+        found = true;
+        break;
+    }
+
+    if !found {
+        return Err(format!("VST node not found: {node_id}"));
+    }
+
+    write_graph_to_disk(app, &graph)?;
+    *guard = Some(graph);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{to_native_dsp_chain, DspGraphConfig, DspGraphNode};

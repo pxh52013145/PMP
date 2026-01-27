@@ -77,6 +77,8 @@ struct VstNodeSession {
     sample_rate: u32,
     channels: usize,
     capacity_frames: u32,
+    sidechain_mode: crate::vst_settings::VstSidechainMode,
+    sidechain_channels: u32,
     client: BridgeClient,
     shm_in_name: String,
     shm_out_name: String,
@@ -307,16 +309,6 @@ fn shm_ring_version() -> u32 {
         .unwrap_or(2)
 }
 
-fn shm_sidechain_channels(main_channels: usize) -> u32 {
-    // Default: match main channel width (mono->mono, stereo->stereo), clamped to 2.
-    let default = (main_channels.max(1).min(2)) as u32;
-    std::env::var("PMP_VST_BRIDGE_SHM_SIDECHAIN_CHANNELS")
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .filter(|v| *v <= 2)
-        .unwrap_or(default)
-}
-
 fn ensure_session_internal(
     node_id: &str,
     plugin_id: &str,
@@ -334,6 +326,18 @@ fn ensure_session_internal(
     let capacity_frames = resolve_capacity_frames(capacity_frames.max(1));
     let desired_shm_version = shm_ring_version();
 
+    let settings = crate::vst_settings::cached_settings();
+    let sidechain_mode = settings.sidechain_mode;
+    let sidechain_channels = if sidechain_mode == crate::vst_settings::VstSidechainMode::Disabled {
+        0
+    } else {
+        std::env::var("PMP_VST_BRIDGE_SHM_SIDECHAIN_CHANNELS")
+            .ok()
+            .and_then(|raw| raw.parse::<u32>().ok())
+            .filter(|v| *v <= 2)
+            .unwrap_or_else(|| crate::vst_settings::effective_sidechain_channels(&settings, channels))
+    };
+
     let needs_spawn = {
         let map = match SESSIONS.lock() {
             Ok(guard) => guard,
@@ -346,6 +350,8 @@ fn ensure_session_internal(
                         || existing.channels != channels
                         || existing.capacity_frames != capacity_frames
                         || existing.shm_in.shm_version() != desired_shm_version
+                        || existing.sidechain_mode != sidechain_mode
+                        || existing.sidechain_channels != sidechain_channels
                 } else {
                     false
                 }
@@ -448,6 +454,12 @@ fn ensure_session_internal(
                 "VST plugin not in scan cache: {plugin_id}. Run Scan Plugins in VST Manager first."
             )
         })?;
+    if !std::path::Path::new(plugin_path.as_str()).exists() {
+        crate::vst_library::mark_plugin_status(plugin_id, "missing");
+        return Err(format!(
+            "VST plugin file missing: {plugin_path}. Run Scan Plugins in VST Manager first."
+        ));
+    }
 
     let nonce = SHM_NONCE.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
@@ -457,7 +469,7 @@ fn ensure_session_internal(
 
     let (shm_in, shm_out) = if desired_shm_version == 2 {
         let bus0 = channels as u32;
-        let bus1 = shm_sidechain_channels(channels);
+        let bus1 = sidechain_channels;
         let shm_in = ShmRing::create_v2(&shm_in_name, sample_rate, bus0, bus1, capacity_frames)?;
         // Output ring typically only needs main bus.
         let shm_out = ShmRing::create_v2(&shm_out_name, sample_rate, bus0, 0, capacity_frames)?;
@@ -477,6 +489,8 @@ fn ensure_session_internal(
         channels,
         Some(shm_in_name.as_str()),
         Some(shm_out_name.as_str()),
+        sidechain_mode,
+        sidechain_channels,
     ) {
         Ok(client) => client,
         Err(err) => {
@@ -580,6 +594,8 @@ fn ensure_session_internal(
             sample_rate,
             channels,
             capacity_frames,
+            sidechain_mode,
+            sidechain_channels,
             client,
             shm_in_name: shm_in_name.clone(),
             shm_out_name: shm_out_name.clone(),
@@ -972,25 +988,54 @@ pub fn set_params(
     node_id: String,
     params: Vec<VstParamValue>,
 ) -> Result<(), String> {
+    let node_id = node_id.trim().to_string();
+    if node_id.is_empty() {
+        return Err("nodeId is required".to_string());
+    }
+
     let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
-    ensure_control_session(node_id.as_str(), plugin_id.as_str())?;
     crate::vst_instance_manager::set_node_params(
         node_id.as_str(),
         plugin_id.as_str(),
         params.clone(),
     );
+
+    let desired_snapshot = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str())
+        .into_iter()
+        .map(|(key, value)| VstParamValue { key, value })
+        .collect::<Vec<_>>();
+    if let Err(err) = crate::dsp_graph::set_vst_node_params(
+        app,
+        node_id.as_str(),
+        plugin_id.as_str(),
+        desired_snapshot,
+    ) {
+        eprintln!("[VST] Failed to persist params to DSP graph (node={node_id}, plugin={plugin_id}): {err}");
+    }
     let desired_generation =
         crate::vst_instance_manager::desired_generation(node_id.as_str(), plugin_id.as_str())
             .unwrap_or(0);
 
-    let mut session = {
+    let session = {
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         map.remove(node_id.as_str())
+    };
+
+    let Some(mut session) = session else {
+        return Ok(());
+    };
+
+    if session.plugin_id.trim() != plugin_id.as_str() {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.insert(node_id, session);
+        return Ok(());
     }
-    .ok_or_else(|| "VST session missing".to_string())?;
 
     let mapped = params
         .iter()
@@ -1004,6 +1049,128 @@ pub fn set_params(
 
     if result.is_ok() {
         session.applied_generation = desired_generation;
+    }
+
+    // Never drop sessions on transient control-plane errors (timeouts, busy sidecar, etc.).
+    // Dropping the session drops BridgeClient -> kills the sidecar -> native editor window flashes
+    // then disappears.
+    let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
+    if should_keep_session {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.insert(node_id, session);
+    }
+
+    result
+}
+
+pub fn set_param_value(
+    app: &AppHandle,
+    node_id: String,
+    key: String,
+    value: f32,
+) -> Result<(), String> {
+    let node_id = node_id.trim().to_string();
+    if node_id.is_empty() {
+        return Err("nodeId is required".to_string());
+    }
+
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        return Err("key is required".to_string());
+    }
+    if !value.is_finite() {
+        return Err("value must be finite".to_string());
+    }
+
+    let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
+
+    let existing = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str());
+    let mut merged: Vec<(String, f32)> = Vec::with_capacity(existing.len().saturating_add(1));
+    let mut index_by_key: HashMap<String, usize> = HashMap::new();
+    for (k, v) in existing {
+        if k.is_empty() {
+            continue;
+        }
+        if index_by_key.contains_key(&k) {
+            continue;
+        }
+        index_by_key.insert(k.clone(), merged.len());
+        merged.push((k, v));
+    }
+
+    match index_by_key.get(&key).copied() {
+        Some(idx) if idx < merged.len() => {
+            merged[idx] = (key.clone(), value);
+        }
+        _ => {
+            index_by_key.insert(key.clone(), merged.len());
+            merged.push((key.clone(), value));
+        }
+    }
+
+    let merged_values = merged
+        .into_iter()
+        .map(|(k, v)| VstParamValue { key: k, value: v })
+        .collect::<Vec<_>>();
+
+    crate::vst_instance_manager::set_node_params(
+        node_id.as_str(),
+        plugin_id.as_str(),
+        merged_values,
+    );
+
+    let desired_snapshot = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str())
+        .into_iter()
+        .map(|(key, value)| VstParamValue { key, value })
+        .collect::<Vec<_>>();
+    if let Err(err) = crate::dsp_graph::set_vst_node_params(
+        app,
+        node_id.as_str(),
+        plugin_id.as_str(),
+        desired_snapshot,
+    ) {
+        eprintln!("[VST] Failed to persist params to DSP graph (node={node_id}, plugin={plugin_id}): {err}");
+    }
+
+    let desired_generation =
+        crate::vst_instance_manager::desired_generation(node_id.as_str(), plugin_id.as_str())
+            .unwrap_or(0);
+
+    let session = {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.remove(node_id.as_str())
+    };
+
+    let Some(mut session) = session else {
+        return Ok(());
+    };
+
+    if session.plugin_id.trim() != plugin_id.as_str() {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.insert(node_id, session);
+        return Ok(());
+    }
+
+    let result = session
+        .client
+        .set_params(&[(key.clone(), value)])
+        .map_err(|e| format!("Bridge set params failed: {e}"));
+
+    if result.is_ok() {
+        session.applied_generation = desired_generation;
+    }
+
+    let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
+    if should_keep_session {
         let mut map = match SESSIONS.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -1032,19 +1199,20 @@ pub fn get_params(app: &AppHandle, node_id: String) -> Result<Vec<VstParamValue>
         .get_params()
         .map_err(|e| format!("Bridge get params failed: {e}"));
 
-    match result {
-        Ok(values) => {
-            let mut map = match SESSIONS.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            map.insert(node_id, session);
+    let should_keep_session = result.is_ok() || session.client.check_alive().is_ok();
+    if should_keep_session {
+        let mut map = match SESSIONS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.insert(node_id, session);
+    }
 
-            Ok(values
-                .into_iter()
-                .map(|BridgeParamValue { key, value }| VstParamValue { key, value })
-                .collect())
-        }
+    match result {
+        Ok(values) => Ok(values
+            .into_iter()
+            .map(|BridgeParamValue { key, value }| VstParamValue { key, value })
+            .collect()),
         Err(error) => Err(error),
     }
 }

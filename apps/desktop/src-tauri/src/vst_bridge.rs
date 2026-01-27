@@ -7,7 +7,7 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::mpsc,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 #[cfg(target_os = "windows")]
@@ -51,6 +51,10 @@ pub struct BridgePluginDescriptor {
     pub version: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub input_channels: Option<u32>,
+    #[serde(default)]
+    pub output_channels: Option<u32>,
     pub parameters: Vec<BridgeParamDescriptor>,
 }
 
@@ -89,6 +93,49 @@ fn timeout_from_env_ms(key: &str, default_ms: u64) -> Duration {
         .and_then(|raw| raw.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_millis(default_ms))
+}
+
+fn is_scanner_command(args: &[String]) -> bool {
+    if args.iter().any(|arg| arg == "--list-plugins") {
+        return true;
+    }
+    if args.iter().any(|arg| arg == "--describe-plugin") {
+        // When --plugin-path is not provided, the sidecar may scan default paths, which can hang/crash.
+        return !args.iter().any(|arg| arg == "--plugin-path");
+    }
+    false
+}
+
+fn scanner_stall_timeout() -> Duration {
+    // If the sidecar's JUCE PluginDirectoryScanner stops advancing the dead-man pedal file for
+    // too long, assume the scan is stuck and kill the process so we can retry (the dead-man pedal
+    // will cause JUCE to skip the problematic plugin next time).
+    timeout_from_env_ms("PMP_VST_BRIDGE_SCAN_STALL_TIMEOUT_MS", 30_000)
+}
+
+#[cfg(target_os = "windows")]
+fn scanner_deadman_file_path() -> Option<PathBuf> {
+    // Must match sidecar: juce::File::userApplicationDataDirectory/PixelMatrixPlayer/vst3_scanner_deadman.txt
+    std::env::var("APPDATA")
+        .ok()
+        .map(|dir| PathBuf::from(dir).join("PixelMatrixPlayer").join("vst3_scanner_deadman.txt"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn scanner_deadman_file_path() -> Option<PathBuf> {
+    None
+}
+
+fn read_scanner_deadman_hint() -> Option<String> {
+    let path = scanner_deadman_file_path()?;
+    let data = std::fs::read(&path).ok()?;
+    let raw = String::from_utf8_lossy(&data);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn bridge_list_timeout() -> Duration {
@@ -247,6 +294,14 @@ fn run_bridge_cli_cancellable_dynamic(
     cancel: Option<&AtomicBool>,
 ) -> Result<BridgeOutput, String> {
     let bridge = bridge_executable_path()?;
+
+    let watch_scanner_progress = is_scanner_command(&args);
+    let deadman_path = watch_scanner_progress.then(scanner_deadman_file_path).flatten();
+    let stall_timeout = watch_scanner_progress.then(scanner_stall_timeout);
+    let mut last_deadman_mtime: Option<SystemTime> = None;
+    let mut last_deadman_progress_at = Instant::now();
+    let mut saw_deadman = false;
+
     let mut child = Command::new(bridge)
         .args(&args)
         .stdin(Stdio::null())
@@ -290,6 +345,36 @@ fn run_bridge_cli_cancellable_dynamic(
             }
         }
 
+        if let Some(path) = deadman_path.as_ref() {
+            if let Ok(meta) = std::fs::metadata(path) {
+                saw_deadman = true;
+                if let Ok(modified) = meta.modified() {
+                    if last_deadman_mtime.map(|prev| prev != modified).unwrap_or(true) {
+                        last_deadman_mtime = Some(modified);
+                        last_deadman_progress_at = Instant::now();
+                    }
+                }
+            }
+        }
+
+        if saw_deadman {
+            if let Some(stall_timeout) = stall_timeout {
+                if last_deadman_progress_at.elapsed() >= stall_timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let hint = read_scanner_deadman_hint()
+                        .map(|v| format!(" (deadman={v})"))
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "Bridge scanner stalled after {}ms: {}{}",
+                        stall_timeout.as_millis(),
+                        args.join(" "),
+                        hint
+                    ));
+                }
+            }
+        }
+
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
@@ -303,10 +388,18 @@ fn run_bridge_cli_cancellable_dynamic(
         if start.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
+            let hint = if watch_scanner_progress {
+                read_scanner_deadman_hint()
+                    .map(|v| format!(" (deadman={v})"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             return Err(format!(
-                "Bridge command timed out after {}ms: {}",
+                "Bridge command timed out after {}ms: {}{}",
                 timeout.as_millis(),
-                args.join(" ")
+                args.join(" "),
+                hint
             ));
         }
 
@@ -430,6 +523,8 @@ impl BridgeClient {
         channels: usize,
         shm_in: Option<&str>,
         shm_out: Option<&str>,
+        sidechain_mode: crate::vst_settings::VstSidechainMode,
+        sidechain_channels: u32,
     ) -> Result<Self, String> {
         let bridge = bridge_executable_path()?;
         let debug_stderr = matches!(std::env::var("PMP_RACK_VST3_DEBUG").as_deref(), Ok("1"))
@@ -437,11 +532,16 @@ impl BridgeClient {
             || matches!(std::env::var("PMP_VST_BRIDGE_STDERR").as_deref(), Ok("1"));
         let mut cmd = Command::new(bridge);
 
+        let compat = crate::vst_compat::effective_rule(plugin_id);
+
         // Default to the more compatible editor window flow unless explicitly overridden.
         // This avoids Windows popup/temporary window edge cases ("flash then disappear") on some hosts/plugins.
         // Use PMP_VST_EDITOR_SAFE_MODE=0 to opt out.
         if std::env::var("PMP_VST_EDITOR_SAFE_MODE").is_err() {
-            cmd.env("PMP_VST_EDITOR_SAFE_MODE", "1");
+            cmd.env(
+                "PMP_VST_EDITOR_SAFE_MODE",
+                if compat.editor_safe_mode { "1" } else { "0" },
+            );
         }
 
         // Stability-first default: load/init the plugin on the JUCE message thread.
@@ -449,7 +549,32 @@ impl BridgeClient {
         // thread tends to be the most compatible option.
         // Use PMP_VST_LOAD_ON_UI_THREAD=0 to opt out.
         if std::env::var("PMP_VST_LOAD_ON_UI_THREAD").is_err() {
-            cmd.env("PMP_VST_LOAD_ON_UI_THREAD", "1");
+            cmd.env(
+                "PMP_VST_LOAD_ON_UI_THREAD",
+                if compat.load_on_ui_thread { "1" } else { "0" },
+            );
+        }
+
+        if std::env::var("PMP_VST_MONO_INPUT").is_err()
+            && compat.mono_input == crate::vst_compat::VstMonoInputPolicy::LeftOnly
+        {
+            cmd.env("PMP_VST_MONO_INPUT", "left");
+        }
+
+        if std::env::var("PMP_VST_SIDECHAIN_MODE").is_err() {
+            let value = match sidechain_mode {
+                crate::vst_settings::VstSidechainMode::Disabled => "disabled",
+                crate::vst_settings::VstSidechainMode::Silence => "silence",
+                crate::vst_settings::VstSidechainMode::SelfFeed => "self",
+            };
+            cmd.env("PMP_VST_SIDECHAIN_MODE", value);
+        }
+
+        if std::env::var("PMP_VST_BRIDGE_SHM_SIDECHAIN_CHANNELS").is_err() {
+            cmd.env(
+                "PMP_VST_BRIDGE_SHM_SIDECHAIN_CHANNELS",
+                sidechain_channels.min(2).to_string(),
+            );
         }
 
         cmd.arg("--plugin-id")
@@ -678,7 +803,11 @@ impl BridgeClient {
         }))
         .map_err(|e| format!("Failed to encode params: {e}"))?;
 
-        let (ty, payload) = self.request_raw(MSG_SET_PARAMS, payload, bridge_request_timeout())?;
+        // Some plugins can block the bridge (e.g. editor attach on the JUCE UI thread), and
+        // setParams is often invoked by UI polling/automation. Avoid killing the bridge process
+        // on transient timeouts to prevent "editor flashes then disappears" regressions.
+        let (ty, payload) =
+            self.request_raw_with_policy(MSG_SET_PARAMS, payload, bridge_request_timeout(), false)?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }
@@ -694,7 +823,10 @@ impl BridgeClient {
         }))
         .map_err(|e| format!("Failed to encode getParams payload: {e}"))?;
 
-        let (ty, payload) = self.request_raw(MSG_GET_PARAMS, payload, bridge_request_timeout())?;
+        // getParams is best-effort: if the sidecar is busy opening/closing a native editor,
+        // a timeout should not kill the bridge process.
+        let (ty, payload) =
+            self.request_raw_with_policy(MSG_GET_PARAMS, payload, bridge_request_timeout(), false)?;
         if ty == MSG_ERROR {
             return Err(parse_error_payload(&payload));
         }
@@ -906,6 +1038,82 @@ mod tests {
         let err = read_message(&mut missing_payload).unwrap_err();
         assert!(format!("{err}").contains("read payload bytes"));
         assert!(format!("{err}").contains("len=3"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn set_params_timeout_does_not_kill_bridge_process() {
+        // Regression guard: killing the bridge on setParams timeouts can tear down a native editor
+        // window and cause it to "flash then disappear".
+        std::env::set_var("PMP_VST_BRIDGE_REQUEST_TIMEOUT_MS", "20");
+
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping", "-n", "6", "127.0.0.1", ">", "nul"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn dummy bridge");
+
+        let stdin = child.stdin.take().expect("dummy stdin");
+        let stdout = child.stdout.take().expect("dummy stdout");
+
+        let (request_tx, request_rx) = mpsc::channel::<BridgeRequest>();
+        let worker = std::thread::spawn(move || bridge_worker(stdin, stdout, request_rx));
+
+        let mut client = BridgeClient {
+            child,
+            request_tx: Some(request_tx),
+            worker: Some(worker),
+        };
+
+        let err = client
+            .set_params(&[("0".to_string(), 0.5)])
+            .unwrap_err();
+        assert!(err.contains("timed out"), "expected timeout, got: {err}");
+        assert!(
+            matches!(client.child.try_wait(), Ok(None)),
+            "dummy bridge should still be running after timeout"
+        );
+
+        client.kill();
+        std::env::remove_var("PMP_VST_BRIDGE_REQUEST_TIMEOUT_MS");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn get_params_timeout_does_not_kill_bridge_process() {
+        std::env::set_var("PMP_VST_BRIDGE_REQUEST_TIMEOUT_MS", "20");
+
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping", "-n", "6", "127.0.0.1", ">", "nul"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn dummy bridge");
+
+        let stdin = child.stdin.take().expect("dummy stdin");
+        let stdout = child.stdout.take().expect("dummy stdout");
+
+        let (request_tx, request_rx) = mpsc::channel::<BridgeRequest>();
+        let worker = std::thread::spawn(move || bridge_worker(stdin, stdout, request_rx));
+
+        let mut client = BridgeClient {
+            child,
+            request_tx: Some(request_tx),
+            worker: Some(worker),
+        };
+
+        let err = client.get_params().unwrap_err();
+        assert!(err.contains("timed out"), "expected timeout, got: {err}");
+        assert!(
+            matches!(client.child.try_wait(), Ok(None)),
+            "dummy bridge should still be running after timeout"
+        );
+
+        client.kill();
+        std::env::remove_var("PMP_VST_BRIDGE_REQUEST_TIMEOUT_MS");
     }
 }
 

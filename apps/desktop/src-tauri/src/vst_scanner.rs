@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 use crate::vst_bridge::BridgePluginDescriptor;
@@ -246,11 +246,62 @@ fn scan_fast(
         },
     );
 
-    let plugins: Vec<BridgePluginDescriptor> = vst_bridge::list_plugins_with_scan_paths_with_cancel(
-        scan_paths,
-        include_default_paths,
-        Some(cancel),
-    )?;
+    // Listing can hang/crash on a problematic plugin. The sidecar uses JUCE's dead-man pedal file,
+    // so retrying after a kill will automatically skip the last problematic plugin and continue.
+    const MAX_LIST_ATTEMPTS: u32 = 12;
+    let mut attempt = 0u32;
+    let plugins: Vec<BridgePluginDescriptor> = loop {
+        if cancel.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        attempt = attempt.saturating_add(1);
+        match vst_bridge::list_plugins_with_scan_paths_with_cancel(
+            scan_paths,
+            include_default_paths,
+            Some(cancel),
+        ) {
+            Ok(plugins) => break plugins,
+            Err(err) => {
+                if cancel.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                if err.contains("cancelled") {
+                    return Ok(());
+                }
+
+                let kind = if err.contains("timed out") || err.contains("stalled") {
+                    "list-timeout"
+                } else {
+                    "list-failed"
+                };
+                vst_library::record_scan_event(run_id, kind, None, &err);
+
+                emit_progress(
+                    app,
+                    VstScanProgressPayload {
+                        run_id: run_id.to_string(),
+                        mode: VstScanMode::Fast,
+                        stage: "list-plugins".to_string(),
+                        total: 0,
+                        current: 0,
+                        current_plugin_id: None,
+                        message: Some(format!(
+                            "List plugins failed (attempt {attempt}/{MAX_LIST_ATTEMPTS}), retrying..."
+                        )),
+                        status: "running".to_string(),
+                        error: Some(err.clone()),
+                    },
+                );
+
+                if attempt >= MAX_LIST_ATTEMPTS {
+                    return Err(err);
+                }
+
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+        }
+    };
     let total = plugins.len().min(u32::MAX as usize) as u32;
     update_state(|state| {
         state.total = total;
@@ -338,6 +389,36 @@ fn scan_params(
         );
 
         let plugin_path = vst_library::lookup_plugin_path(plugin_id.as_str());
+        let plugin_path = match plugin_path {
+            Some(path) => {
+                let normalized = path.trim().to_string();
+                if normalized.is_empty() {
+                    None
+                } else if std::path::Path::new(&normalized).exists() {
+                    Some(normalized)
+                } else {
+                    let message = format!("Missing plugin file: {normalized}");
+                    let _ = vst_library::record_params_scan_failure(plugin_id.as_str(), "missing");
+                    vst_library::record_scan_event(
+                        run_id,
+                        "describe-missing",
+                        Some(plugin_id.as_str()),
+                        &message,
+                    );
+                    continue;
+                }
+            }
+            None => {
+                let _ = vst_library::record_params_scan_failure(plugin_id.as_str(), "missing");
+                vst_library::record_scan_event(
+                    run_id,
+                    "describe-missing",
+                    Some(plugin_id.as_str()),
+                    "Missing plugin path in library cache",
+                );
+                continue;
+            }
+        };
         let desc = match vst_bridge::describe_plugin_with_scan_paths_with_cancel(
             plugin_id.as_str(),
             plugin_path.as_deref(),
@@ -348,10 +429,10 @@ fn scan_params(
             Ok(desc) => desc,
             Err(err) => {
                 let kind = if err.contains("timed out") {
-                    vst_library::mark_plugin_status(plugin_id.as_str(), "timeout");
+                    let _ = vst_library::record_params_scan_failure(plugin_id.as_str(), "timeout");
                     "describe-timeout"
                 } else {
-                    vst_library::mark_plugin_status(plugin_id.as_str(), "bad");
+                    let _ = vst_library::record_params_scan_failure(plugin_id.as_str(), "bad");
                     "describe-failed"
                 };
                 vst_library::record_scan_event(run_id, kind, Some(plugin_id.as_str()), &err);
@@ -381,13 +462,71 @@ fn scan_full(
 
     update_state(|state| state.stage = Some("list-from-library".to_string()));
     let plugins = vst_library::list_plugins()?;
-    let plugin_ids = plugins
-        .into_iter()
-        .filter(|plugin| plugin.params_scanned_at_ms.is_none())
-        .map(|plugin| plugin.id)
-        .collect::<Vec<_>>();
+
+    // Avoid repeatedly stalling full scans on known-bad/timeouting plugins. Users can still
+    // explicitly retry a single plugin via mode=params.
+    const TIMEOUT_COOLDOWN_MS: u64 = 12 * 60 * 60 * 1000;
+    let now = now_ms();
+    let mut plugin_ids = Vec::new();
+    let mut missing_params = 0u32;
+    let mut skipped_params = 0u32;
+    for plugin in plugins {
+        if plugin.params_scanned_at_ms.is_some() {
+            continue;
+        }
+        missing_params = missing_params.saturating_add(1);
+
+        if plugin.status == "bad" {
+            skipped_params = skipped_params.saturating_add(1);
+            vst_library::record_scan_event(
+                run_id,
+                "params-skip",
+                Some(plugin.id.as_str()),
+                "Skipped params scan (status=bad)",
+            );
+            continue;
+        }
+
+        if plugin.status == "missing" {
+            skipped_params = skipped_params.saturating_add(1);
+            vst_library::record_scan_event(
+                run_id,
+                "params-skip",
+                Some(plugin.id.as_str()),
+                "Skipped params scan (missing plugin file)",
+            );
+            continue;
+        }
+
+        if plugin.status == "timeout" {
+            if let Some(attempted_at_ms) = plugin.params_attempted_at_ms {
+                if now.saturating_sub(attempted_at_ms) < TIMEOUT_COOLDOWN_MS {
+                    skipped_params = skipped_params.saturating_add(1);
+                    vst_library::record_scan_event(
+                        run_id,
+                        "params-skip",
+                        Some(plugin.id.as_str()),
+                        &format!(
+                            "Skipped params scan (recent timeout; failures={})",
+                            plugin.params_failure_count
+                        ),
+                    );
+                    continue;
+                }
+            }
+        }
+
+        plugin_ids.push(plugin.id);
+    }
     if plugin_ids.is_empty() {
-        vst_library::record_scan_event(run_id, "params-skip", None, "All plugins have cached params.");
+        let message = if missing_params == 0 {
+            "All plugins have cached params."
+        } else if skipped_params >= missing_params {
+            "Params scan skipped for all pending plugins (timeout/bad)."
+        } else {
+            "No plugins pending params scan."
+        };
+        vst_library::record_scan_event(run_id, "params-skip", None, message);
         return Ok(());
     }
     scan_params(

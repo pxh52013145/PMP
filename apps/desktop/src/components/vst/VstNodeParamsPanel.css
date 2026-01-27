@@ -1,0 +1,255 @@
+.vst-node-params-panel {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.vst-node-params-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vst-node-params-toggle,
+.vst-node-params-refresh,
+.vst-node-presets-row button,
+.vst-node-preset-actions button {
+  padding: 4px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  cursor: pointer;
+}
+
+.vst-node-params-toggle:disabled,
+.vst-node-params-refresh:disabled,
+.vst-node-presets-row button:disabled,
+.vst-node-preset-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.vst-node-params-meta {
+  font-size: 11px;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vst-node-params-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vst-node-params-error {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 68, 68, 0.35);
+  background: rgba(255, 68, 68, 0.12);
+  font-size: 12px;
+}
+
+.vst-node-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vst-node-presets-title {
+  font-weight: 600;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.vst-node-presets-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.vst-node-presets-input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+}
+
+.vst-node-presets-empty {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.vst-node-presets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vst-node-preset-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.vst-node-preset-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.vst-node-preset-count {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.vst-node-preset-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vst-node-params-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.vst-node-params-search {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+}
+
+.vst-node-params-count {
+  font-size: 12px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.vst-node-params-loading,
+.vst-node-params-empty {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.vst-node-params-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.vst-node-params-group:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.vst-node-params-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+
+.vst-node-params-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vst-node-param-row {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.vst-node-param-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.vst-node-param-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.vst-node-param-key {
+  font-size: 11px;
+  opacity: 0.7;
+  flex: none;
+}
+
+.vst-node-param-label {
+  font-size: 12px;
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vst-node-param-lock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  opacity: 0.8;
+  flex: none;
+}
+
+.vst-node-param-controls {
+  display: grid;
+  grid-template-columns: 1fr 90px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.vst-node-param-range {
+  width: 100%;
+}
+
+.vst-node-param-number {
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.vst-node-param-unit {
+  font-size: 11px;
+  opacity: 0.65;
+  text-align: right;
+  white-space: nowrap;
+}
+
