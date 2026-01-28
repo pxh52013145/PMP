@@ -26,7 +26,7 @@ import {
   type MagnetSpaceLayout,
   useMagnetConfig,
 } from '../../modules/magnets';
-import { readJson, readString, writeJson } from '../../modules/storage';
+import { readJson, readString, removeKey, writeJson } from '../../modules/storage';
 import { gcOrphanBackgroundMedia } from '../../modules/background/mediaCleanup';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useWindowClose } from '../../contexts/WindowCloseContext';
@@ -108,7 +108,78 @@ export function MatrixWorkbench({
   });
 
   const { editorState, toggleEditMode, exitEditMode, updateOccupancy } = useEditor();
-  const { magnetLibrary, activeMagnetIds, activeSpaceId, updateMagnetAnchors } = useMagnetConfig();
+  const { magnetLibrary, activeMagnetIds, activeSpaceId, updateMagnetAnchors, activateMagnet } =
+    useMagnetConfig();
+
+  type MagnetPlacementRequestV1 = { requestId: string; magnetId: string; createdAt: number };
+  const [placementRequest, setPlacementRequest] = useState<MagnetPlacementRequestV1 | null>(null);
+  const lastPlacementRequestIdRef = useRef<string | null>(null);
+
+  const parsePlacementRequest = useCallback((raw: unknown): MagnetPlacementRequestV1 | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const record = raw as Partial<MagnetPlacementRequestV1>;
+    if (typeof record.requestId !== 'string' || record.requestId.trim().length === 0) return null;
+    if (typeof record.magnetId !== 'string' || record.magnetId.trim().length === 0) return null;
+    if (typeof record.createdAt !== 'number' || !Number.isFinite(record.createdAt)) return null;
+    return { requestId: record.requestId, magnetId: record.magnetId, createdAt: record.createdAt };
+  }, []);
+
+  const cancelPlacement = useCallback(() => {
+    setPlacementRequest(null);
+    removeKey(STORAGE_KEYS.MAGNET_PLACEMENT_REQUEST_V1);
+  }, []);
+
+  useEffect(() => {
+    const onRequest = () => {
+      const raw = readJson<unknown>(STORAGE_KEYS.MAGNET_PLACEMENT_REQUEST_V1, null);
+      const request = parsePlacementRequest(raw);
+      if (!request) return;
+      if (request.requestId === lastPlacementRequestIdRef.current) return;
+      lastPlacementRequestIdRef.current = request.requestId;
+      setPlacementRequest(request);
+    };
+
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.MAGNET_PLACEMENT_REQUEST_V1],
+      [TAURI_EVENTS.MAGNET_PLACEMENT_REQUESTED],
+      onRequest
+    );
+
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [parsePlacementRequest]);
+
+  useEffect(() => {
+    if (editorState.isEditing) return;
+    if (!placementRequest) return;
+    cancelPlacement();
+  }, [cancelPlacement, editorState.isEditing, placementRequest]);
+
+  const placementMagnet = useMemo(() => {
+    if (!placementRequest) return null;
+    const magnet = magnetLibrary.find((m) => m.id === placementRequest.magnetId) ?? null;
+    if (!magnet) return null;
+    if (activeMagnetIds.has(magnet.id)) return null;
+    return magnet;
+  }, [activeMagnetIds, magnetLibrary, placementRequest]);
+
+  useEffect(() => {
+    if (placementRequest && !placementMagnet) {
+      cancelPlacement();
+    }
+  }, [cancelPlacement, placementMagnet, placementRequest]);
+
+  const confirmPlacement = useCallback(
+    (anchors: PixelAnchor[]) => {
+      if (!placementRequest) return;
+      updateMagnetAnchors(placementRequest.magnetId, anchors);
+      activateMagnet(placementRequest.magnetId);
+      setPlacementRequest(null);
+      removeKey(STORAGE_KEYS.MAGNET_PLACEMENT_REQUEST_V1);
+    },
+    [activateMagnet, placementRequest, updateMagnetAnchors]
+  );
 
   const buildHistorySnapshotLayout = useCallback((): MagnetSpaceLayout => {
     const active = new Set(activeMagnetIds);
@@ -476,6 +547,9 @@ export function MatrixWorkbench({
           pixelPositions={pixelPositions}
           magnets={activeMagnets}
           onMagnetMove={handleMagnetMove}
+          placementMagnet={placementMagnet}
+          onPlacementCancel={cancelPlacement}
+          onPlacementConfirm={confirmPlacement}
         />
       )}
 

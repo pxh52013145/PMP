@@ -1210,6 +1210,7 @@
   "editor.magnet-library.filter.all": "All ({count})",
   "editor.magnet-library.filter.builtin": "Builtin ({count})",
   "editor.magnet-library.filter.custom": "Custom ({count})",
+  "editor.magnet-library.filter.fixed": "Fixed ({count})",
   "editor.magnet-library.search.placeholder": "Search id / name / description / tag",
   "editor.magnet-library.search.clearTitle": "Clear search",
   "editor.magnet-library.search.countTitle": "Search result count",

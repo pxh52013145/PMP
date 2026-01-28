@@ -9,6 +9,7 @@ import { useEditor } from '../../contexts/EditorContext';
 import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
 import { calculateNewAnchors, checkMagnetCollision, getMagnetOccupiedPixels } from '../../utils/magnetEditor';
+import { buildMagnetAnchorsAtTopLeft, resolveMagnetFootprintShape } from '../../utils/magnetPlacement';
 import {
   computePixelGridLayout,
   hitTestPixelGridFromPoint,
@@ -22,6 +23,9 @@ interface EditorOverlayProps {
   pixelPositions: Map<string, { x: number; y: number }>;
   magnets: Magnet[];
   onMagnetMove: (magnetId: string, newAnchors: PixelAnchor[]) => void;
+  placementMagnet: Magnet | null;
+  onPlacementConfirm: (anchors: PixelAnchor[]) => void;
+  onPlacementCancel: () => void;
 }
 
 type DraggingMagnetState = {
@@ -116,7 +120,14 @@ function getMagnetBounds(
   }
 }
 
-export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorOverlayProps) {
+export function EditorOverlay({
+  pixelPositions,
+  magnets,
+  onMagnetMove,
+  placementMagnet,
+  onPlacementConfirm,
+  onPlacementCancel,
+}: EditorOverlayProps) {
   const { editorState, occupancyMap, startDrag, updateDrag, endDrag, setHoverPixel, selectMagnet } =
     useEditor();
 
@@ -125,6 +136,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
   const gridLayoutRef = useRef(computePixelGridLayout(window.innerWidth, window.innerHeight));
   const occupancyMapRef = useRef(occupancyMap);
   const editorStateRef = useRef(editorState);
+  const placementMagnetRef = useRef<Magnet | null>(placementMagnet);
   const moveRafRef = useRef<number | null>(null);
   const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
   const lastHoverKeyRef = useRef<string | null>(null);
@@ -171,6 +183,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
   occupancyMapRef.current = occupancyMap;
   editorStateRef.current = editorState;
+  placementMagnetRef.current = placementMagnet;
 
   useEffect(() => {
     gridLayoutRef.current = computePixelGridLayout(window.innerWidth, window.innerHeight);
@@ -187,6 +200,23 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
   useEffect(() => {
     draggingMagnetRef.current = draggingMagnet;
   }, [draggingMagnet]);
+
+  useEffect(() => {
+    if (!placementMagnet) return;
+    setDraggingMagnet(null);
+    if (editorStateRef.current.isDragging) {
+      endDrag();
+    }
+  }, [endDrag, placementMagnet]);
+
+  useEffect(() => {
+    if (!placementMagnet) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onPlacementCancel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onPlacementCancel, placementMagnet]);
 
   useEffect(() => {
     if (!draggingMagnet) lastMagnetDeltaRef.current = null;
@@ -240,6 +270,34 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
       const mouseY = e.clientY - rect.top;
 
       // 检查是否点击在 Magnet 上
+      const placementMagnet = placementMagnetRef.current;
+      if (placementMagnet) {
+        const pixel = getPixelAtPosition(mouseX, mouseY);
+        if (!pixel) return;
+        const shape = resolveMagnetFootprintShape(placementMagnet);
+        if (!shape) return;
+        if (
+          pixel.x < 0 ||
+          pixel.y < 0 ||
+          pixel.x + shape.width > MATRIX_CONFIG.COLUMNS ||
+          pixel.y + shape.height > MATRIX_CONFIG.ROWS
+        ) {
+          return;
+        }
+
+        for (let dy = 0; dy < shape.height; dy++) {
+          for (let dx = 0; dx < shape.width; dx++) {
+            const key = `${pixel.x + dx},${pixel.y + dy}`;
+            if (occupancyMapRef.current.get(key)?.isOccupied) return;
+          }
+        }
+
+        const anchors = buildMagnetAnchorsAtTopLeft(placementMagnet, { x: pixel.x, y: pixel.y });
+        if (!anchors) return;
+        onPlacementConfirm(anchors);
+        return;
+      }
+
       const clickedMagnet = getMagnetAtPosition(mouseX, mouseY);
 
       if (clickedMagnet) {
@@ -270,7 +328,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
         startDrag(pixel.x, pixel.y);
       }
     },
-    [editorState, getMagnetAtPosition, getPixelAtPosition, pixelPositions, startDrag, selectMagnet]
+    [editorState, getMagnetAtPosition, getPixelAtPosition, onPlacementConfirm, pixelPositions, startDrag, selectMagnet]
   );
 
   const flushMouseMove = useCallback(() => {
@@ -280,6 +338,17 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
     if (!pending) return;
 
     const { x: mouseX, y: mouseY } = pending;
+
+    if (placementMagnetRef.current) {
+      const pixel = getPixelAtPosition(mouseX, mouseY);
+      if (!pixel) return;
+      const key = `${pixel.x},${pixel.y}`;
+      if (key !== lastHoverKeyRef.current) {
+        lastHoverKeyRef.current = key;
+        setHoverPixel(pixel.x, pixel.y);
+      }
+      return;
+    }
 
     if (draggingMagnetRef.current) {
       const hoverPixel = getPixelAtPosition(mouseX, mouseY);
@@ -360,6 +429,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
   // 处理鼠标释放
   const handleMouseUp = useCallback(() => {
+    if (placementMagnetRef.current) return;
     // 如果正在拖动 Magnet
     if (draggingMagnet && !draggingMagnet.hasCollision) {
       // 检查锚点是否真的改变了
@@ -436,6 +506,8 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
     const state = editorStateRef.current;
     const occ = occupancyMapRef.current;
+    const placementMagnet = placementMagnetRef.current;
+    const placementShape = placementMagnet ? resolveMagnetFootprintShape(placementMagnet) : null;
 
     const draggingSelectedPixels = draggingMagnetRef.current
       ? new Set(
@@ -461,9 +533,10 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
     ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-    if (!pixelHintsVisible) return;
+    if (!pixelHintsVisible && !placementMagnet) return;
 
-    for (let row = 0; row < ROWS; row++) {
+    if (pixelHintsVisible) {
+      for (let row = 0; row < ROWS; row++) {
       for (let col = 0; col < COLUMNS; col++) {
         const key = `${col},${row}`;
         const occupancy = occ.get(key);
@@ -529,6 +602,79 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
         ctx.strokeRect(dx + 0.5, dy + 0.5, w - 1, h - 1);
       }
     }
+    }
+
+    if (!placementMagnet || !placementShape) return;
+
+    const hoveredTopLeft = state.hoverPixel ? { x: state.hoverPixel.x, y: state.hoverPixel.y } : null;
+    const hoveredWithinBounds =
+      hoveredTopLeft &&
+      hoveredTopLeft.x >= 0 &&
+      hoveredTopLeft.y >= 0 &&
+      hoveredTopLeft.x + placementShape.width <= COLUMNS &&
+      hoveredTopLeft.y + placementShape.height <= ROWS;
+
+    let hoveredIsCandidate = false;
+    if (hoveredWithinBounds && hoveredTopLeft) {
+      hoveredIsCandidate = true;
+      for (let dy = 0; dy < placementShape.height && hoveredIsCandidate; dy++) {
+        for (let dx = 0; dx < placementShape.width; dx++) {
+          const key = `${hoveredTopLeft.x + dx},${hoveredTopLeft.y + dy}`;
+          if (occ.get(key)?.isOccupied) {
+            hoveredIsCandidate = false;
+            break;
+          }
+        }
+      }
+    }
+
+    if (hoveredIsCandidate && hoveredTopLeft) {
+      const anchors = buildMagnetAnchorsAtTopLeft(placementMagnet, hoveredTopLeft);
+      if (anchors) {
+        const previewPixels = getMagnetOccupiedPixels({ ...placementMagnet, anchors });
+        for (const pixel of previewPixels) {
+          if (pixel.x === hoveredTopLeft.x && pixel.y === hoveredTopLeft.y) continue;
+          const baseX = EDGE_PADDING + pixel.x * stepX;
+          const baseY = EDGE_PADDING + pixel.y * stepY;
+          ctx.fillStyle = 'rgba(255, 0, 200, 0.30)';
+          ctx.strokeStyle = 'rgba(255, 0, 200, 0.72)';
+          ctx.lineWidth = 1;
+          ctx.fillRect(baseX, baseY, PIXEL_SIZE, PIXEL_SIZE);
+          ctx.strokeRect(baseX + 0.5, baseY + 0.5, PIXEL_SIZE - 1, PIXEL_SIZE - 1);
+        }
+      }
+    }
+
+    for (let y = 0; y <= ROWS - placementShape.height; y++) {
+      for (let x = 0; x <= COLUMNS - placementShape.width; x++) {
+        let free = true;
+        for (let dy = 0; dy < placementShape.height && free; dy++) {
+          for (let dx = 0; dx < placementShape.width; dx++) {
+            const key = `${x + dx},${y + dy}`;
+            if (occ.get(key)?.isOccupied) {
+              free = false;
+              break;
+            }
+          }
+        }
+        if (!free) continue;
+
+        const isHovered = hoveredTopLeft?.x === x && hoveredTopLeft?.y === y;
+        const baseX = EDGE_PADDING + x * stepX;
+        const baseY = EDGE_PADDING + y * stepY;
+        const scale = isHovered ? 1.1 : 1.0;
+        const w = PIXEL_SIZE * scale;
+        const h = PIXEL_SIZE * scale;
+        const dx = baseX + (PIXEL_SIZE - w) / 2;
+        const dy = baseY + (PIXEL_SIZE - h) / 2;
+
+        ctx.fillStyle = isHovered ? 'rgba(0, 212, 255, 0.30)' : 'rgba(0, 212, 255, 0.18)';
+        ctx.strokeStyle = isHovered ? 'rgba(0, 212, 255, 0.85)' : 'rgba(0, 212, 255, 0.55)';
+        ctx.lineWidth = isHovered ? 2 : 1;
+        ctx.fillRect(dx, dy, w, h);
+        ctx.strokeRect(dx + 0.5, dy + 0.5, w - 1, h - 1);
+      }
+    }
   }, [pixelHintsVisible]);
 
   const scheduleDraw = useCallback(() => {
@@ -538,7 +684,7 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
 
   useEffect(() => {
     scheduleDraw();
-  }, [scheduleDraw, editorState, occupancyMap, pixelPositions, draggingMagnet]);
+  }, [scheduleDraw, editorState, occupancyMap, pixelPositions, draggingMagnet, placementMagnet]);
 
   useEffect(() => {
     return () => {
@@ -563,14 +709,14 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
   }
 
   return (
-    <div
-      ref={overlayRef}
-      className="editor-overlay"
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseLeave}
-    >
+      <div
+        ref={overlayRef}
+        className={`editor-overlay ${placementMagnet ? 'editor-overlay--placing' : ''}`}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+      >
       <canvas
         ref={canvasRef}
         aria-hidden="true"
@@ -605,6 +751,46 @@ export function EditorOverlay({ pixelPositions, magnets, onMagnetMove }: EditorO
           {draggingMagnet.magnet.content}
         </div>
       )}
+
+      {placementMagnet &&
+        (() => {
+          const hover = editorState.hoverPixel;
+          if (!hover) return null;
+          const shape = resolveMagnetFootprintShape(placementMagnet);
+          if (!shape) return null;
+          if (
+            hover.x < 0 ||
+            hover.y < 0 ||
+            hover.x + shape.width > MATRIX_CONFIG.COLUMNS ||
+            hover.y + shape.height > MATRIX_CONFIG.ROWS
+          ) {
+            return null;
+          }
+          for (let dy = 0; dy < shape.height; dy++) {
+            for (let dx = 0; dx < shape.width; dx++) {
+              const key = `${hover.x + dx},${hover.y + dy}`;
+              if (occupancyMap.get(key)?.isOccupied) return null;
+            }
+          }
+          const anchors = buildMagnetAnchorsAtTopLeft(placementMagnet, { x: hover.x, y: hover.y });
+          if (!anchors) return null;
+
+          return (
+            <div
+              className="magnet-placement-preview"
+              style={{
+                position: 'absolute',
+                ...getMagnetPreviewStyle(placementMagnet, anchors, pixelPositions),
+                ...placementMagnet.style,
+                opacity: 0.75,
+                pointerEvents: 'none',
+                border: '2px dashed rgba(255, 0, 200, 0.85)',
+              }}
+            >
+              {placementMagnet.content}
+            </div>
+          );
+        })()}
     </div>
   );
 }
@@ -652,6 +838,25 @@ function getMagnetPreviewStyle(
       return {
         left: leftPos.x,
         top: leftPos.y + offsetY,
+        width,
+        height,
+      };
+    }
+
+    case 'vertical': {
+      const topAnchor = anchors[0];
+      const bottomAnchor = anchors[1];
+      const topPos = pixelPositions.get(`${topAnchor.gridX},${topAnchor.gridY}`);
+      const bottomPos = pixelPositions.get(`${bottomAnchor.gridX},${bottomAnchor.gridY}`);
+      if (!topPos || !bottomPos) return {};
+
+      const width = parseInt(magnet.style.width as string) || MATRIX_CONFIG.PIXEL_SIZE;
+      const offsetX = (MATRIX_CONFIG.PIXEL_SIZE - width) / 2;
+      const height = bottomPos.y - topPos.y + MATRIX_CONFIG.PIXEL_SIZE;
+
+      return {
+        left: topPos.x + offsetX,
+        top: topPos.y,
         width,
         height,
       };

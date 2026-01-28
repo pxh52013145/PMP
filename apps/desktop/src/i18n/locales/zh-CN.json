@@ -1248,6 +1248,7 @@
   "editor.magnet-library.filter.all": "全部 ({count})",
   "editor.magnet-library.filter.builtin": "内置 ({count})",
   "editor.magnet-library.filter.custom": "自定义 ({count})",
+  "editor.magnet-library.filter.fixed": "固定 ({count})",
   "editor.magnet-library.search.placeholder": "搜索 id / 名称 / 描述 / tag",
   "editor.magnet-library.search.clearTitle": "清空搜索",
   "editor.magnet-library.search.countTitle": "搜索结果数量",

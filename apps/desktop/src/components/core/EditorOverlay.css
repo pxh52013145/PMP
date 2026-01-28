@@ -8,6 +8,10 @@
   -webkit-user-select: none;
 }
 
+.editor-overlay--placing {
+  cursor: crosshair;
+}
+
 /* Pixel 状态显示 */
 .editor-pixel {
   border: 1px solid transparent;
@@ -64,6 +68,17 @@
 
 /* Magnet 拖动预览 */
 .magnet-drag-preview {
+  z-index: 2000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  transition: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.magnet-placement-preview {
   z-index: 2000;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   transition: none;

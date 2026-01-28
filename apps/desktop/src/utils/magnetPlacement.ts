@@ -9,6 +9,12 @@ export type MagnetPlacementCandidate = {
   score: number;
 };
 
+export type MagnetFootprintShape = {
+  width: number;
+  height: number;
+  offsets: Array<{ anchor: PixelAnchor; dx: number; dy: number }>;
+};
+
 function clampPositiveInt(value: unknown, fallback: number): number {
   const n = typeof value === 'number' ? value : Number.NaN;
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -130,11 +136,7 @@ export function buildMagnetPlacementCandidates(
 
 function getFootprintShape(
   magnet: Magnet
-): null | {
-  width: number;
-  height: number;
-  offsets: Array<{ anchor: PixelAnchor; dx: number; dy: number }>;
-} {
+): MagnetFootprintShape | null {
   const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
 
   if (anchors.length === 0) {
@@ -217,6 +219,32 @@ function getFootprintShape(
   }
 
   return null;
+}
+
+export function resolveMagnetFootprintShape(magnet: Magnet): MagnetFootprintShape | null {
+  return getFootprintShape(magnet);
+}
+
+export function buildMagnetAnchorsAtTopLeft(
+  magnet: Magnet,
+  topLeft: { x: number; y: number }
+): PixelAnchor[] | null {
+  const shape = getFootprintShape(magnet);
+  if (!shape) return null;
+  return shape.offsets.map(({ anchor, dx, dy }) => ({
+    ...anchor,
+    gridX: topLeft.x + dx,
+    gridY: topLeft.y + dy,
+  }));
+}
+
+export function buildMagnetFootprintKeysAtTopLeft(
+  magnet: Magnet,
+  topLeft: { x: number; y: number }
+): string[] | null {
+  const shape = getFootprintShape(magnet);
+  if (!shape) return null;
+  return buildFootprintKeysForRectangle(topLeft, { width: shape.width, height: shape.height });
 }
 
 export function findFirstMagnetPlacementCandidate(

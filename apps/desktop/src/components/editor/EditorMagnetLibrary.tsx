@@ -8,7 +8,7 @@ import {
   isValidElement,
   type ReactNode,
 } from 'react';
-import { Magnet, type PixelAnchor } from '../../types/pixel';
+import { Magnet } from '../../types/pixel';
 import { useEditor } from '../../contexts/EditorContext';
 import {
   STORAGE_KEYS,
@@ -18,7 +18,6 @@ import {
 } from '../../utils/windowCommunication';
 import { readJson, removeKey, writeJson, writeString } from '../../modules/storage';
 import { getMagnetPreviewNode, getMagnetRenderer } from '../../magnet-system/registry';
-import { MATRIX_CONFIG } from '../../constants/config';
 import {
   createMagnetTemplateFromPlugin,
   installPmpmPluginFromFilePath,
@@ -27,23 +26,14 @@ import {
   uninstallPmpmPlugin,
   type InstalledPmpmPlugin,
 } from '../../magnet-system/plugins/pmpm';
-import { DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+
 import {
-  createDefaultMagnetSpacesState,
-  ensureMagnetSpaceLayout,
-  magnetLayoutStoreGetState,
-  sanitizeMagnetSpacesState,
-} from '../../modules/magnets';
-import {
-  buildMagnetPlacementCandidates,
   findFirstMagnetPlacementCandidate,
   getOccupiedPixelKeys,
-  magnetHasPlacementConflict,
-  type MagnetPlacementCandidate,
 } from '../../utils/magnetPlacement';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { useT } from '../../i18n';
-import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './EditorMagnetLibrary.css';
 
 interface EditorMagnetLibraryProps {
@@ -51,13 +41,13 @@ interface EditorMagnetLibraryProps {
   activeMagnetIds: Set<string>;
   builtInMagnetIds: Set<string>;
   onMagnetAddToLibrary: (magnet: Magnet) => void;
-  onMagnetActivate: (magnetId: string, options?: { anchors?: PixelAnchor[] }) => void;
+  onMagnetActivate: (magnetId: string) => void;
   onMagnetDeactivate: (magnetId: string) => void;
   onMagnetDeleteFromLibrary: (magnetId: string) => void;
 }
 
 type ViewMode = 'active' | 'inactive';
-type FilterMode = 'all' | 'builtin' | 'custom';
+type FilterMode = 'all' | 'builtin' | 'custom' | 'fixed';
 
 function estimateMagnetPixelCount(magnet: Magnet): number {
   const anchors = magnet.anchors ?? [];
@@ -122,7 +112,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 }: EditorMagnetLibraryProps) {
   const { importMagnet: validateAndImportMagnet } = useEditor();
   const t = useT();
-  const isTauri = useMemo(() => isTauriRuntime(), []);
 
   const formatRendererGroup = useCallback(
     (group: string) => {
@@ -140,7 +129,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [importData, setImportData] = useState('');
   const [importError, setImportError] = useState('');
   const [creatorWindowOpen, setCreatorWindowOpen] = useState(false); // 默认为 false，避免误判
-  const [glitchingButton, setGlitchingButton] = useState<string | null>(null);
+  const [glitchingButton, setGlitchingButton] = useState<{
+    magnetId: string;
+    action: 'edit' | 'remove';
+  } | null>(null);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPmpmPlugin[]>(() =>
     loadInstalledPmpmPlugins()
   );
@@ -148,34 +140,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [pluginError, setPluginError] = useState('');
   const [pluginBusy, setPluginBusy] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
-
-  const readActiveSpaceIdFromStorage = useCallback((): string => {
-    const raw = readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
-    return sanitizeMagnetSpacesState(raw).activeSpaceId;
-  }, []);
-  const [placementDialog, setPlacementDialog] = useState<
-    | {
-        magnetId: string;
-        magnetName: string;
-        occupiedKeys: Set<string>;
-        candidates: MagnetPlacementCandidate[];
-        selectedCandidateId: string | null;
-      }
-    | null
-  >(null);
-
-  const closePlacementDialog = useCallback(() => {
-    setPlacementDialog(null);
-  }, []);
-
-  useEffect(() => {
-    if (!placementDialog) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closePlacementDialog();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closePlacementDialog, placementDialog]);
 
   // 初始化时清理可能残留的窗口状态
   useEffect(() => {
@@ -190,19 +154,21 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
   // 分类 Magnet
   const categorizedMagnets = useMemo(() => {
-    const active = magnetLibrary.filter((m) => activeMagnetIds.has(m.id));
-    const inactive = magnetLibrary.filter((m) => !activeMagnetIds.has(m.id));
+    const fixed = magnetLibrary.filter((m) => REQUIRED_MAGNET_IDS.has(m.id));
+    const nonFixed = magnetLibrary.filter((m) => !REQUIRED_MAGNET_IDS.has(m.id));
 
     return {
       active: {
-        all: active,
-        builtin: active.filter((m) => builtInMagnetIds.has(m.id)),
-        custom: active.filter((m) => !builtInMagnetIds.has(m.id)),
+        all: nonFixed.filter((m) => activeMagnetIds.has(m.id)),
+        builtin: nonFixed.filter((m) => activeMagnetIds.has(m.id) && builtInMagnetIds.has(m.id)),
+        custom: nonFixed.filter((m) => activeMagnetIds.has(m.id) && !builtInMagnetIds.has(m.id)),
+        fixed: fixed.filter((m) => activeMagnetIds.has(m.id)),
       },
       inactive: {
-        all: inactive,
-        builtin: inactive.filter((m) => builtInMagnetIds.has(m.id)),
-        custom: inactive.filter((m) => !builtInMagnetIds.has(m.id)),
+        all: nonFixed.filter((m) => !activeMagnetIds.has(m.id)),
+        builtin: nonFixed.filter((m) => !activeMagnetIds.has(m.id) && builtInMagnetIds.has(m.id)),
+        custom: nonFixed.filter((m) => !activeMagnetIds.has(m.id) && !builtInMagnetIds.has(m.id)),
+        fixed: fixed.filter((m) => !activeMagnetIds.has(m.id)),
       },
     };
   }, [magnetLibrary, activeMagnetIds, builtInMagnetIds]);
@@ -272,16 +238,25 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
 
   // 统计数量
   const counts = useMemo(() => {
+    const activeAll = categorizedMagnets.active.all.length;
+    const activeFixed = categorizedMagnets.active.fixed.length;
+    const inactiveAll = categorizedMagnets.inactive.all.length;
+    const inactiveFixed = categorizedMagnets.inactive.fixed.length;
+
     return {
       active: {
-        all: categorizedMagnets.active.all.length,
+        total: activeAll + activeFixed,
+        all: activeAll,
         builtin: categorizedMagnets.active.builtin.length,
         custom: categorizedMagnets.active.custom.length,
+        fixed: activeFixed,
       },
       inactive: {
-        all: categorizedMagnets.inactive.all.length,
+        total: inactiveAll + inactiveFixed,
+        all: inactiveAll,
         builtin: categorizedMagnets.inactive.builtin.length,
         custom: categorizedMagnets.inactive.custom.length,
+        fixed: inactiveFixed,
       },
     };
   }, [categorizedMagnets]);
@@ -291,48 +266,8 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       const activeMagnets = magnetLibrary.filter((m) => m.id !== magnet.id && activeMagnetIds.has(m.id));
       const occupiedKeys = getOccupiedPixelKeys(activeMagnets);
 
-      let hasStoredAnchors = false;
-      if (isTauri) {
-        const store = await magnetLayoutStoreGetState();
-        const activeSpaceId = store?.spaces.activeSpaceId ?? readActiveSpaceIdFromStorage();
-        const layout = store?.layoutsBySpaceId?.[activeSpaceId] ?? null;
-        hasStoredAnchors =
-          Array.isArray(layout?.anchorsByMagnetId?.[magnet.id]) && layout.anchorsByMagnetId[magnet.id]!.length > 0;
-      } else {
-        const activeSpaceId = readActiveSpaceIdFromStorage();
-        const layout = ensureMagnetSpaceLayout(activeSpaceId, { defaultActiveMagnetIds: DEFAULT_ACTIVE_MAGNET_IDS }).layout;
-        hasStoredAnchors = Array.isArray(layout.anchorsByMagnetId?.[magnet.id]) && layout.anchorsByMagnetId[magnet.id]!.length > 0;
-      }
-
-      if (!hasStoredAnchors) {
-        const candidate = findFirstMagnetPlacementCandidate(magnet, occupiedKeys);
-        if (!candidate) {
-          await confirm({
-            title: t('editor.magnet-library.placement.noSpace.title'),
-            message: t('editor.magnet-library.placement.noSpace.message', { name: magnet.name || magnet.id }),
-            confirmText: t('common.action.ok'),
-          });
-          return;
-        }
-        onMagnetActivate(magnet.id, { anchors: candidate.anchors });
-        return;
-      }
-
-      if (!isTauri) {
-        onMagnetActivate(magnet.id);
-        return;
-      }
-
-      if (!magnetHasPlacementConflict(magnet, occupiedKeys)) {
-        onMagnetActivate(magnet.id);
-        return;
-      }
-
-      const candidates = buildMagnetPlacementCandidates(magnet, occupiedKeys, {
-        maxCandidates: magnet.anchorType === 'horizontal' ? MATRIX_CONFIG.ROWS : 24,
-      });
-
-      if (candidates.length === 0) {
+      const candidate = findFirstMagnetPlacementCandidate(magnet, occupiedKeys);
+      if (!candidate) {
         await confirm({
           title: t('editor.magnet-library.placement.noSpace.title'),
           message: t('editor.magnet-library.placement.noSpace.message', { name: magnet.name || magnet.id }),
@@ -341,60 +276,17 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         return;
       }
 
-      setPlacementDialog({
-        magnetId: magnet.id,
-        magnetName: magnet.name || magnet.id,
-        occupiedKeys,
-        candidates,
-        selectedCandidateId: null,
-      });
+      onMagnetActivate(magnet.id);
     },
-    [
-      activeMagnetIds,
-      confirm,
-      isTauri,
-      magnetLibrary,
-      onMagnetActivate,
-      readActiveSpaceIdFromStorage,
-      t,
-    ]
+    [activeMagnetIds, confirm, magnetLibrary, onMagnetActivate, t]
   );
-
-  const placementGridKeys = useMemo(() => {
-    const keys: string[] = [];
-    for (let y = 0; y < MATRIX_CONFIG.ROWS; y++) {
-      for (let x = 0; x < MATRIX_CONFIG.COLUMNS; x++) {
-        keys.push(`${x},${y}`);
-      }
-    }
-    return keys;
-  }, []);
-
-  const placementCandidateByPixelKey = useMemo(() => {
-    if (!placementDialog) return new Map<string, string>();
-    const map = new Map<string, string>();
-    for (const candidate of placementDialog.candidates) {
-      for (const key of candidate.footprintKeys) {
-        map.set(key, candidate.id);
-      }
-    }
-    return map;
-  }, [placementDialog]);
-
-  const applyPlacementSelection = useCallback(() => {
-    if (!placementDialog?.selectedCandidateId) return;
-    const selected = placementDialog.candidates.find((candidate) => candidate.id === placementDialog.selectedCandidateId);
-    if (!selected) return;
-    onMagnetActivate(placementDialog.magnetId, { anchors: selected.anchors });
-    closePlacementDialog();
-  }, [closePlacementDialog, onMagnetActivate, placementDialog]);
 
   // 处理编辑
   const handleEdit = useCallback(
     async (magnet: Magnet) => {
       // 如果 creator 窗口已打开，触发故障动画
       if (creatorWindowOpen) {
-        setGlitchingButton(magnet.id);
+        setGlitchingButton({ magnetId: magnet.id, action: 'edit' });
         setTimeout(() => setGlitchingButton(null), 500);
         return;
       }
@@ -617,13 +509,13 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               className={`view-btn ${viewMode === 'active' ? 'active' : ''}`}
               onClick={() => setViewMode('active')}
             >
-              {t('editor.magnet-library.view.active', { count: counts.active.all })}
+              {t('editor.magnet-library.view.active', { count: counts.active.total })}
             </button>
             <button
               className={`view-btn ${viewMode === 'inactive' ? 'active' : ''}`}
               onClick={() => setViewMode('inactive')}
             >
-              {t('editor.magnet-library.view.inactive', { count: counts.inactive.all })}
+              {t('editor.magnet-library.view.inactive', { count: counts.inactive.total })}
             </button>
           </div>
 
@@ -646,6 +538,12 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               onClick={() => setFilterMode('custom')}
             >
               {t('editor.magnet-library.filter.custom', { count: counts[viewMode].custom })}
+            </button>
+            <button
+              className={`filter-btn ${filterMode === 'fixed' ? 'active' : ''}`}
+              onClick={() => setFilterMode('fixed')}
+            >
+              {t('editor.magnet-library.filter.fixed', { count: counts[viewMode].fixed })}
             </button>
           </div>
 
@@ -863,7 +761,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                   <div className="magnet-actions">
                     {/* 编辑 */}
                     <button
-                      className={`magnet-action-btn edit ${creatorWindowOpen ? 'disabled' : ''} ${glitchingButton === magnet.id ? 'glitch' : ''}`}
+                      className={`magnet-action-btn edit ${creatorWindowOpen ? 'disabled' : ''} ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'edit' ? 'glitch' : ''}`}
                       onClick={() => handleEdit(magnet)}
                       title={
                         creatorWindowOpen
@@ -878,14 +776,22 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                     {/* 添加/移除 */}
                     {isActive ? (
                       <button
-                        className="magnet-action-btn remove"
-                        onClick={() => onMagnetDeactivate(magnet.id)}
-                        disabled={isRequired}
+                        className={`magnet-action-btn remove ${isRequired ? 'disabled' : ''} ${glitchingButton?.magnetId === magnet.id && glitchingButton.action === 'remove' ? 'glitch' : ''}`}
+                        onClick={() => {
+                          if (isRequired) {
+                            setGlitchingButton({ magnetId: magnet.id, action: 'remove' });
+                            setTimeout(() => setGlitchingButton(null), 500);
+                            return;
+                          }
+                          onMagnetDeactivate(magnet.id);
+                        }}
+                        aria-disabled={isRequired}
                         title={
                           isRequired
                             ? t('editor.magnet-library.magnet.tooltip.cannotRemoveRequired')
                             : t('editor.magnet-library.magnet.tooltip.removeFromMatrix')
                         }
+                        data-text="－"
                       >
                         －
                       </button>
@@ -966,78 +872,6 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
         </div>
       </div>{' '}
       {/* 关闭 editor-window-content */}
-      {placementDialog && (
-        <div className="magnet-placement-overlay" role="dialog" aria-modal="true" onClick={closePlacementDialog}>
-          <div className="magnet-placement-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="magnet-placement-header">
-              <div className="magnet-placement-title">{t('editor.magnet-library.placement.title')}</div>
-              <div className="magnet-placement-subtitle">
-                {t('editor.magnet-library.placement.subtitle', { name: placementDialog.magnetName })}
-              </div>
-            </div>
-
-            <div className="magnet-placement-legend">
-              <span className="magnet-placement-legend-item magnet-placement-legend-item--occupied">
-                {t('editor.magnet-library.placement.legend.occupied')}
-              </span>
-              <span className="magnet-placement-legend-item magnet-placement-legend-item--candidate">
-                {t('editor.magnet-library.placement.legend.candidate')}
-              </span>
-              <span className="magnet-placement-hint">{t('editor.magnet-library.placement.hint')}</span>
-            </div>
-
-            <div
-              className="magnet-placement-grid"
-              style={{
-                gridTemplateColumns: `repeat(${MATRIX_CONFIG.COLUMNS}, 1fr)`,
-              }}
-            >
-              {placementGridKeys.map((key) => {
-                const isOccupied = placementDialog.occupiedKeys.has(key);
-                const candidateId = placementCandidateByPixelKey.get(key) ?? null;
-                const isCandidate = candidateId !== null;
-                const isSelected = candidateId !== null && candidateId === placementDialog.selectedCandidateId;
-                const className = [
-                  'magnet-placement-cell',
-                  isOccupied ? 'magnet-placement-cell--occupied' : '',
-                  isCandidate ? 'magnet-placement-cell--candidate' : '',
-                  isSelected ? 'magnet-placement-cell--selected' : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ');
-
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    className={className}
-                    onClick={() => {
-                      if (!candidateId) return;
-                      setPlacementDialog((prev) => (prev ? { ...prev, selectedCandidateId: candidateId } : prev));
-                    }}
-                    title={key}
-                    aria-label={key}
-                  />
-                );
-              })}
-            </div>
-
-            <div className="magnet-placement-footer">
-              <button type="button" className="magnet-placement-btn" onClick={closePlacementDialog}>
-                {t('common.action.cancel')}
-              </button>
-              <button
-                type="button"
-                className="magnet-placement-btn magnet-placement-btn--primary"
-                onClick={applyPlacementSelection}
-                disabled={!placementDialog.selectedCandidateId}
-              >
-                {t('editor.magnet-library.placement.action.place')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {confirmDialog}
     </div>
   );
