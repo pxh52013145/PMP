@@ -1220,61 +1220,31 @@ class AudioShmVstProcessor {
       // JUCE hosts typically do this via AudioProcessor::getCallbackLock().
       // Without it, some plugins (notably Waves/WaveShell) can crash when opening the editor
       // while audio is processing.
+      // Important: opening/attaching heavy native editors can hold callbackLock for a long time.
+      // If the audio thread blocks here, the host may interpret it as a stalled session and restart
+      // the bridge, causing the editor window to "flash then disappear". Prefer a try-lock and
+      // bypass processing for this block if the UI thread is busy.
+      bool processed = false;
       {
-        const juce::ScopedLock callbackLock(instance_->getCallbackLock());
+        const juce::ScopedTryLock callbackLock(instance_->getCallbackLock());
+        if (callbackLock.isLocked()) {
+          processed = true;
 
-        applyQueuedParams();
+          applyQueuedParams();
 
-        buffer.setSize(static_cast<int>(procChannels), static_cast<int>(framesRead), false, false, true);
+          buffer.setSize(static_cast<int>(procChannels), static_cast<int>(framesRead), false, false, true);
 
-        // Always clear the full process buffer first. This guarantees that any enabled sidechain/aux
-        // input bus receives silence unless explicitly filled.
-        buffer.clear();
+          // Always clear the full process buffer first. This guarantees that any enabled sidechain/aux
+          // input bus receives silence unless explicitly filled.
+          buffer.clear();
 
-        // Fill main input bus (bus 0) from SHM main audio.
-        {
-          auto mainIn = instance_->getBusBuffer(buffer, true, 0);
-          const int mainInChans = mainIn.getNumChannels();
-          if (mainInChans == 1) {
-            float* dst = mainIn.getWritePointer(0);
-            if (shmMainChannels >= 2) {
-              const auto policy = monoInputPolicy();
-              for (size_t frame = 0; frame < framesRead; frame++) {
-                const size_t base = frame * shmInChannels;
-                const float l = inInterleaved[base + 0];
-                const float r = inInterleaved[base + 1];
-                dst[frame] = downmixStereoToMono(l, r, policy);
-              }
-            } else if (shmMainChannels >= 1) {
-              for (size_t frame = 0; frame < framesRead; frame++) {
-                const size_t base = frame * shmInChannels;
-                dst[frame] = inInterleaved[base + 0];
-              }
-            }
-          } else if (mainInChans >= 2 && shmMainChannels >= 2) {
-            float* dstL = mainIn.getWritePointer(0);
-            float* dstR = mainIn.getWritePointer(1);
-            for (size_t frame = 0; frame < framesRead; frame++) {
-              const size_t base = frame * shmInChannels;
-              dstL[frame] = inInterleaved[base + 0];
-              dstR[frame] = inInterleaved[base + 1];
-            }
-          }
-        }
-
-        // Optional: fill sidechain/aux input buses.
-        // For v2 SHM, the sidechain samples are appended after main bus channels.
-        const auto scMode = sidechainMode();
-        if (scMode != SidechainMode::Disabled) {
-          const int busCount = instance_->getBusCount(true);
-          for (int busIndex = 1; busIndex < busCount; busIndex++) {
-            auto* bus = instance_->getBus(true, busIndex);
-            if (bus == nullptr || !bus->isEnabled()) continue;
-            auto scIn = instance_->getBusBuffer(buffer, true, busIndex);
-            const int scChans = scIn.getNumChannels();
-            if (scChans == 1) {
-              float* dst = scIn.getWritePointer(0);
-              if (scMode == SidechainMode::Self && shmMainChannels >= 2) {
+          // Fill main input bus (bus 0) from SHM main audio.
+          {
+            auto mainIn = instance_->getBusBuffer(buffer, true, 0);
+            const int mainInChans = mainIn.getNumChannels();
+            if (mainInChans == 1) {
+              float* dst = mainIn.getWritePointer(0);
+              if (shmMainChannels >= 2) {
                 const auto policy = monoInputPolicy();
                 for (size_t frame = 0; frame < framesRead; frame++) {
                   const size_t base = frame * shmInChannels;
@@ -1282,79 +1252,121 @@ class AudioShmVstProcessor {
                   const float r = inInterleaved[base + 1];
                   dst[frame] = downmixStereoToMono(l, r, policy);
                 }
-              } else if (shmSidechainChannels > 0) {
-                const size_t scOffset = shmMainChannels;
+              } else if (shmMainChannels >= 1) {
                 for (size_t frame = 0; frame < framesRead; frame++) {
                   const size_t base = frame * shmInChannels;
-                  const float v = inInterleaved[base + scOffset];
-                  dst[frame] = v;
+                  dst[frame] = inInterleaved[base + 0];
                 }
               }
-              // Otherwise keep buffer.clear() silence.
-            } else if (scChans >= 2) {
-              float* dstL = scIn.getWritePointer(0);
-              float* dstR = scIn.getWritePointer(1);
-              if (scMode == SidechainMode::Self && shmMainChannels >= 2) {
-                for (size_t frame = 0; frame < framesRead; frame++) {
-                  const size_t base = frame * shmInChannels;
-                  dstL[frame] = inInterleaved[base + 0];
-                  dstR[frame] = inInterleaved[base + 1];
+            } else if (mainInChans >= 2 && shmMainChannels >= 2) {
+              float* dstL = mainIn.getWritePointer(0);
+              float* dstR = mainIn.getWritePointer(1);
+              for (size_t frame = 0; frame < framesRead; frame++) {
+                const size_t base = frame * shmInChannels;
+                dstL[frame] = inInterleaved[base + 0];
+                dstR[frame] = inInterleaved[base + 1];
+              }
+            }
+          }
+
+          // Optional: fill sidechain/aux input buses.
+          // For v2 SHM, the sidechain samples are appended after main bus channels.
+          const auto scMode = sidechainMode();
+          if (scMode != SidechainMode::Disabled) {
+            const int busCount = instance_->getBusCount(true);
+            for (int busIndex = 1; busIndex < busCount; busIndex++) {
+              auto* bus = instance_->getBus(true, busIndex);
+              if (bus == nullptr || !bus->isEnabled()) continue;
+              auto scIn = instance_->getBusBuffer(buffer, true, busIndex);
+              const int scChans = scIn.getNumChannels();
+              if (scChans == 1) {
+                float* dst = scIn.getWritePointer(0);
+                if (scMode == SidechainMode::Self && shmMainChannels >= 2) {
+                  const auto policy = monoInputPolicy();
+                  for (size_t frame = 0; frame < framesRead; frame++) {
+                    const size_t base = frame * shmInChannels;
+                    const float l = inInterleaved[base + 0];
+                    const float r = inInterleaved[base + 1];
+                    dst[frame] = downmixStereoToMono(l, r, policy);
+                  }
+                } else if (shmSidechainChannels > 0) {
+                  const size_t scOffset = shmMainChannels;
+                  for (size_t frame = 0; frame < framesRead; frame++) {
+                    const size_t base = frame * shmInChannels;
+                    const float v = inInterleaved[base + scOffset];
+                    dst[frame] = v;
+                  }
                 }
-              } else if (shmSidechainChannels >= 2) {
-                const size_t scOffset = shmMainChannels;
+                // Otherwise keep buffer.clear() silence.
+              } else if (scChans >= 2) {
+                float* dstL = scIn.getWritePointer(0);
+                float* dstR = scIn.getWritePointer(1);
+                if (scMode == SidechainMode::Self && shmMainChannels >= 2) {
+                  for (size_t frame = 0; frame < framesRead; frame++) {
+                    const size_t base = frame * shmInChannels;
+                    dstL[frame] = inInterleaved[base + 0];
+                    dstR[frame] = inInterleaved[base + 1];
+                  }
+                } else if (shmSidechainChannels >= 2) {
+                  const size_t scOffset = shmMainChannels;
+                  for (size_t frame = 0; frame < framesRead; frame++) {
+                    const size_t base = frame * shmInChannels;
+                    dstL[frame] = inInterleaved[base + scOffset + 0];
+                    dstR[frame] = inInterleaved[base + scOffset + 1];
+                  }
+                }
+              }
+            }
+          }
+
+          midi.clear();
+          instance_->processBlock(buffer, midi);
+
+          // Write plugin output back to SHM.
+          {
+            auto mainOut = instance_->getBusBuffer(buffer, false, 0);
+            const int mainOutChans = mainOut.getNumChannels();
+            if (mainOutChans == 0) {
+              std::fill(outInterleaved.begin(), outInterleaved.begin() + (framesRead * shmOutChannels), 0.0f);
+            } else if (mainOutChans == 1) {
+              const float* src = mainOut.getReadPointer(0);
+              if (shmOutChannels >= 2) {
                 for (size_t frame = 0; frame < framesRead; frame++) {
-                  const size_t base = frame * shmInChannels;
-                  dstL[frame] = inInterleaved[base + scOffset + 0];
-                  dstR[frame] = inInterleaved[base + scOffset + 1];
+                  const float v = src[frame];
+                  outInterleaved[frame * shmOutChannels + 0] = v;
+                  outInterleaved[frame * shmOutChannels + 1] = v;
+                }
+              } else if (shmOutChannels >= 1) {
+                for (size_t frame = 0; frame < framesRead; frame++) {
+                  outInterleaved[frame * shmOutChannels + 0] = src[frame];
+                }
+              }
+            } else {
+              const float* srcL = mainOut.getReadPointer(0);
+              const float* srcR = mainOut.getReadPointer(1);
+              if (shmOutChannels >= 2) {
+                for (size_t frame = 0; frame < framesRead; frame++) {
+                  outInterleaved[frame * shmOutChannels + 0] = srcL[frame];
+                  outInterleaved[frame * shmOutChannels + 1] = srcR[frame];
+                }
+              }
+            }
+
+            // Zero any extra output channels (future-proof).
+            if (shmOutChannels > shmMainChannels) {
+              for (size_t frame = 0; frame < framesRead; frame++) {
+                const size_t base = frame * shmOutChannels;
+                for (size_t ch = shmMainChannels; ch < shmOutChannels; ch++) {
+                  outInterleaved[base + ch] = 0.0f;
                 }
               }
             }
           }
         }
-
-        midi.clear();
-        instance_->processBlock(buffer, midi);
-
-        // Write plugin output back to SHM.
-        {
-          auto mainOut = instance_->getBusBuffer(buffer, false, 0);
-          const int mainOutChans = mainOut.getNumChannels();
-          if (mainOutChans == 0) {
-            std::fill(outInterleaved.begin(), outInterleaved.begin() + (framesRead * shmOutChannels), 0.0f);
-          } else if (mainOutChans == 1) {
-            const float* src = mainOut.getReadPointer(0);
-            if (shmOutChannels >= 2) {
-              for (size_t frame = 0; frame < framesRead; frame++) {
-                const float v = src[frame];
-                outInterleaved[frame * shmOutChannels + 0] = v;
-                outInterleaved[frame * shmOutChannels + 1] = v;
-              }
-            } else if (shmOutChannels >= 1) {
-              for (size_t frame = 0; frame < framesRead; frame++) {
-                outInterleaved[frame * shmOutChannels + 0] = src[frame];
-              }
-            }
-          } else {
-            const float* srcL = mainOut.getReadPointer(0);
-            const float* srcR = mainOut.getReadPointer(1);
-            if (shmOutChannels >= 2) {
-              for (size_t frame = 0; frame < framesRead; frame++) {
-                outInterleaved[frame * shmOutChannels + 0] = srcL[frame];
-                outInterleaved[frame * shmOutChannels + 1] = srcR[frame];
-              }
-            }
-          }
-
-          // Zero any extra output channels (future-proof).
-          if (shmOutChannels > shmMainChannels) {
-            for (size_t frame = 0; frame < framesRead; frame++) {
-              const size_t base = frame * shmOutChannels;
-              for (size_t ch = shmMainChannels; ch < shmOutChannels; ch++) {
-                outInterleaved[base + ch] = 0.0f;
-              }
-            }
-          }
-        }
+      }
+      if (!processed) {
+        const size_t outSamples = framesRead * shmOutChannels;
+        std::copy(dryOutInterleaved.begin(), dryOutInterleaved.begin() + outSamples, outInterleaved.begin());
       }
 
       if (fadeFramesRemaining_ > 0 && fadeFramesTotal_ > 0) {
@@ -2395,70 +2407,91 @@ std::optional<std::string> openEditor(
       host.editorIsPlaceholder = true;
       host.editorWindow->bringToFront(reqActivate);
 
-      std::unique_ptr<juce::AudioProcessorEditor> editor;
-      if (isEditorLogEnabled()) {
-        std::fprintf(stderr, "[pmp-vst-bridge] openEditor: createEditorIfNeeded begin\n");
-      }
-      try {
-        const juce::ScopedLock callbackLock(instance->getCallbackLock());
-        editor.reset(instance->createEditorIfNeeded());
-      } catch (const std::exception& e) {
-        if (isEditorLogEnabled()) {
-          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: createEditorIfNeeded threw: %s\n", e.what());
-        }
-        host.editorWindow->replaceContent(std::make_unique<PlaceholderEditorContent>(
-            juce::String("Plugin editor threw an exception:\n") + juce::String(e.what())));
-        host.editorIsPlaceholder = true;
-        promise->set_value(std::nullopt);
-        return;
-      } catch (...) {
-        if (isEditorLogEnabled()) {
-          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: createEditorIfNeeded threw unknown exception\n");
-        }
-        host.editorWindow->replaceContent(
-            std::make_unique<PlaceholderEditorContent>("Plugin editor threw an unknown exception"));
-        host.editorIsPlaceholder = true;
-        promise->set_value(std::nullopt);
-        return;
-      }
-
-      if (isEditorLogEnabled()) {
-        std::fprintf(stderr,
-                     "[pmp-vst-bridge] openEditor: createEditorIfNeeded end editor=%p\n",
-                     editor.get());
-      }
-      if (!editor) {
-        host.editorWindow->replaceContent(
-            std::make_unique<PlaceholderEditorContent>("Failed to create plugin editor UI"));
-        host.editorIsPlaceholder = true;
-        promise->set_value(std::nullopt);
-        return;
-      }
-
-      if (isEditorLogEnabled()) {
-        std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent begin\n");
-      }
-      try {
-        const juce::ScopedLock callbackLock(instance->getCallbackLock());
-        host.editorWindow->replaceContent(std::move(editor));
-        host.editorIsPlaceholder = false;
-        host.editorWindow->bringToFront(reqActivate);
-        if (isEditorLogEnabled()) {
-          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent end\n");
-        }
-      } catch (const std::exception& e) {
-        if (isEditorLogEnabled()) {
-          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent threw: %s\n", e.what());
-        }
-        host.editorIsPlaceholder = true;
-      } catch (...) {
-        if (isEditorLogEnabled()) {
-          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent threw unknown exception\n");
-        }
-        host.editorIsPlaceholder = true;
-      }
-
+      // Respond immediately once the window exists. Creating/attaching heavy plugin editors can
+      // take a long time and may legitimately block the message thread; keeping this request
+      // synchronous can cause host-side timeouts and state mismatches ("UI says closed" while a
+      // placeholder window is already visible).
       promise->set_value(std::nullopt);
+
+      // Finish the heavy editor creation/attach asynchronously on the message thread.
+      juce::MessageManager::callAsync([&host, reqActivate]() mutable {
+        std::lock_guard<std::mutex> guard(host.editorMutex);
+        if (!host.editorWindow || !host.editorIsPlaceholder) return;
+
+        juce::AudioPluginInstance* instance = nullptr;
+        {
+          std::lock_guard<std::mutex> instanceGuard(host.instanceMutex);
+          instance = host.instance.get();
+        }
+        if (instance == nullptr) return;
+
+        if (!instance->hasEditor()) {
+          host.editorWindow->replaceContent(
+              std::make_unique<PlaceholderEditorContent>("Plugin does not provide a native editor UI"));
+          host.editorIsPlaceholder = true;
+          return;
+        }
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor;
+        if (isEditorLogEnabled()) {
+          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: createEditorIfNeeded begin\n");
+        }
+        try {
+          const juce::ScopedLock callbackLock(instance->getCallbackLock());
+          editor.reset(instance->createEditorIfNeeded());
+        } catch (const std::exception& e) {
+          if (isEditorLogEnabled()) {
+            std::fprintf(stderr, "[pmp-vst-bridge] openEditor: createEditorIfNeeded threw: %s\n", e.what());
+          }
+          host.editorWindow->replaceContent(std::make_unique<PlaceholderEditorContent>(
+              juce::String("Plugin editor threw an exception:\n") + juce::String(e.what())));
+          host.editorIsPlaceholder = true;
+          return;
+        } catch (...) {
+          if (isEditorLogEnabled()) {
+            std::fprintf(stderr, "[pmp-vst-bridge] openEditor: createEditorIfNeeded threw unknown exception\n");
+          }
+          host.editorWindow->replaceContent(
+              std::make_unique<PlaceholderEditorContent>("Plugin editor threw an unknown exception"));
+          host.editorIsPlaceholder = true;
+          return;
+        }
+
+        if (isEditorLogEnabled()) {
+          std::fprintf(stderr,
+                       "[pmp-vst-bridge] openEditor: createEditorIfNeeded end editor=%p\n",
+                       editor.get());
+        }
+        if (!editor) {
+          host.editorWindow->replaceContent(
+              std::make_unique<PlaceholderEditorContent>("Failed to create plugin editor UI"));
+          host.editorIsPlaceholder = true;
+          return;
+        }
+
+        if (isEditorLogEnabled()) {
+          std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent begin\n");
+        }
+        try {
+          const juce::ScopedLock callbackLock(instance->getCallbackLock());
+          host.editorWindow->replaceContent(std::move(editor));
+          host.editorIsPlaceholder = false;
+          host.editorWindow->bringToFront(reqActivate);
+          if (isEditorLogEnabled()) {
+            std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent end\n");
+          }
+        } catch (const std::exception& e) {
+          if (isEditorLogEnabled()) {
+            std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent threw: %s\n", e.what());
+          }
+          host.editorIsPlaceholder = true;
+        } catch (...) {
+          if (isEditorLogEnabled()) {
+            std::fprintf(stderr, "[pmp-vst-bridge] openEditor: replaceContent threw unknown exception\n");
+          }
+          host.editorIsPlaceholder = true;
+        }
+      });
       return;
     }
 
