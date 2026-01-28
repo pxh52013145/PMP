@@ -176,6 +176,16 @@ export class DefaultAudioEngineService implements AudioEngineService {
 
         if (this.mode !== 'real') return;
 
+        const isNoTrackLoaded =
+          messageText.includes('No track loaded') &&
+          (code === 'NATIVE_AUDIO_PLAY_FAILED' ||
+            code === 'NATIVE_AUDIO_PAUSE_FAILED' ||
+            code === 'NATIVE_AUDIO_SEEK_FAILED');
+        if (isNoTrackLoaded) {
+          console.warn('[AudioEngine] Native audio transient (no track loaded):', error);
+          return;
+        }
+
         const isTrackPathIssue =
           code === 'NATIVE_TRACK_PATH_MISSING' ||
           code === 'NATIVE_TRACK_PATH_NOT_ABSOLUTE' ||

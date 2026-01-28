@@ -366,19 +366,23 @@ export class NativeAudioService implements IAudioService {
           update.currentIndex = next.currentIndex;
         }
 
-        if (typeof next.trackPath !== 'undefined' && next.trackPath) {
-          const resolved = this.resolveTrackFromPath(next.trackPath);
-          if (resolved) {
-            update.currentTrack = resolved.track;
-            update.currentIndex = resolved.index;
+        if (typeof next.trackPath !== 'undefined') {
+          if (next.trackPath) {
+            const resolved = this.resolveTrackFromPath(next.trackPath);
+            if (resolved) {
+              update.currentTrack = resolved.track;
+              update.currentIndex = resolved.index;
+            } else {
+              update.currentTrack = {
+                id: `native-${next.trackPath}`,
+                title: this.deriveTitleFromPath(next.trackPath),
+                filePath: next.trackPath,
+                path: next.trackPath,
+                originalPath: next.trackPath,
+              };
+            }
           } else {
-            update.currentTrack = {
-              id: `native-${next.trackPath}`,
-              title: this.deriveTitleFromPath(next.trackPath),
-              filePath: next.trackPath,
-              path: next.trackPath,
-              originalPath: next.trackPath,
-            };
+            update.currentTrack = null;
           }
         }
 
@@ -614,55 +618,71 @@ export class NativeAudioService implements IAudioService {
   }
 
   // ===== 播放控制 =====
-  async loadTrack(track: Track): Promise<void> {
+  private async loadTrackInternal(track: Track): Promise<boolean> {
+    this.clearPendingSeek();
+    if (!track) return false;
+
+    const trackPath = this.getTrackPath(track);
+    if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
+      const error = new Error(
+        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+      ) as Error & { code?: string };
+      error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+      this.emitError(error);
+      return false;
+    }
+
+    let queue = this.state.queue;
+    let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
+    if (index === -1) {
+      queue = [...queue, track];
+      index = queue.length - 1;
+    }
+
+    const nextState = this.updateState({
+      currentTrack: track,
+      queue,
+      currentIndex: index,
+      playbackState: 'loading',
+      duration: track.duration ?? 0,
+      currentTime: 0,
+    });
+    this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+
+    this.syncQueueToNative(queue, index);
+
     try {
-      this.clearPendingSeek();
-      if (!track) return;
-
-      const trackPath = this.getTrackPath(track);
-      if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
-        const error = new Error(
-          'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-        ) as Error & { code?: string };
-        error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-        this.emitError(error);
-        return;
-      }
-
-      let queue = this.state.queue;
-      let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
-      if (index === -1) {
-        queue = [...queue, track];
-        index = queue.length - 1;
-      }
-
-      const nextState = this.updateState({
-        currentTrack: track,
-        queue,
-        currentIndex: index,
-        playbackState: 'loading',
-        duration: track.duration ?? 0,
-        currentTime: 0,
-      });
-      this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
-
-      this.syncQueueToNative(queue, index);
-
       await this.applyReplayGainForTrack(track);
       await this.invokeCommand('native_audio_load', { path: trackPath });
-
-      this.updateState({
-        playbackState: 'paused',
-        currentTime: 0,
-      });
     } catch {
-      // invokeCommand already emits error; swallow to avoid unhandled rejections in UI call sites.
+      // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.
+      return false;
+    }
+
+    this.updateState({
+      playbackState: 'paused',
+      currentTime: 0,
+    });
+    return true;
+  }
+
+  async loadTrack(track: Track): Promise<void> {
+    try {
+      await this.loadTrackInternal(track);
+    } catch {
+      // loadTrackInternal avoids rejections; keep this as a final guard for UI call sites.
     }
   }
 
   async play(): Promise<void> {
     try {
-      if (!this.state.currentTrack && this.state.queue.length === 0) {
+      if (!this.state.currentTrack) {
+        const queue = this.state.queue;
+        if (queue.length === 0) return;
+
+        const currentIndex = this.state.currentIndex;
+        const targetIndex = currentIndex >= 0 && currentIndex < queue.length ? currentIndex : 0;
+        await this.playTrackAtIndex(targetIndex);
         return;
       }
       await this.invokeCommand('native_audio_play');
@@ -876,7 +896,8 @@ export class NativeAudioService implements IAudioService {
         return;
       }
 
-      await this.loadTrack(track);
+      const loaded = await this.loadTrackInternal(track);
+      if (!loaded) return;
       await this.play();
     } catch {
       // invokeCommand already emits error; swallow to avoid breaking the coalescing queue.

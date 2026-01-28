@@ -16,6 +16,12 @@ import { listen } from '@tauri-apps/api/event';
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+
+  const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+  invokeMock.mockResolvedValue(undefined);
+
+  const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+  listenMock.mockResolvedValue(() => {});
 });
 
 describe('NativeAudioService', () => {
@@ -99,6 +105,47 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('loads the current queue track when play() is called without a loaded track', async () => {
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    await service.play();
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
+    expect(invoke).toHaveBeenCalledWith('native_audio_play', undefined);
+    service.destroy();
+  });
+
+  it('avoids calling play() when the backend fails to load the selected track', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_load') {
+        return Promise.reject(new Error('load failed'));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    service.addMultipleToQueue([{ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' }]);
+    invokeMock.mockClear();
+
+    await service.playTrackAtIndex(0);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
+    expect(invoke).not.toHaveBeenCalledWith('native_audio_play', undefined);
+    service.destroy();
+  });
+
   it('crossfades to the next track when enabled and switching while playing', async () => {
     localStorage.setItem(
       STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS,
@@ -125,6 +172,25 @@ describe('NativeAudioService', () => {
       durationMs: 1000,
     });
     expect(invoke).not.toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\b.mp3' });
+    service.destroy();
+  });
+
+  it('clears currentTrack when backend reports trackPath as null', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await service.loadTrack({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
+    expect(service.getState().currentTrack).not.toBeNull();
+
+    handlers.native_audio_state?.({ payload: { trackPath: null } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(service.getState().currentTrack).toBeNull();
     service.destroy();
   });
 
