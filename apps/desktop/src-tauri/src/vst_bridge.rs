@@ -302,11 +302,24 @@ fn run_bridge_cli_cancellable_dynamic(
     let mut last_deadman_progress_at = Instant::now();
     let mut saw_deadman = false;
 
-    let mut child = Command::new(bridge)
-        .args(&args)
+    let mut cmd = Command::new(bridge);
+    cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // The bridge sidecar is a console subsystem executable. When spawned from a GUI app without a
+    // parent console, Windows may create a new console window ("black box" popup). Suppress that
+    // by default for all CLI invocations.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn bridge: {e}"))?;
 
@@ -533,6 +546,19 @@ impl BridgeClient {
         let mut cmd = Command::new(bridge);
 
         let compat = crate::vst_compat::effective_rule(plugin_id);
+
+        // The bridge sidecar is a console subsystem executable. When spawned from a GUI app without a
+        // parent console, Windows may create a new console window ("black box" popup). Suppress that
+        // by default unless we're explicitly inheriting stderr for debugging.
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            if !debug_stderr {
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+        }
 
         // Default to the more compatible editor window flow unless explicitly overridden.
         // This avoids Windows popup/temporary window edge cases ("flash then disappear") on some hosts/plugins.
