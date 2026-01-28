@@ -23,6 +23,7 @@ interface EditorOverlayProps {
   pixelPositions: Map<string, { x: number; y: number }>;
   magnets: Magnet[];
   onMagnetMove: (magnetId: string, newAnchors: PixelAnchor[]) => void;
+  onMagnetCtrlClick?: (magnetId: string) => void;
   placementMagnet: Magnet | null;
   onPlacementConfirm: (anchors: PixelAnchor[]) => void;
   onPlacementCancel: () => void;
@@ -124,6 +125,7 @@ export function EditorOverlay({
   pixelPositions,
   magnets,
   onMagnetMove,
+  onMagnetCtrlClick,
   placementMagnet,
   onPlacementConfirm,
   onPlacementCancel,
@@ -304,6 +306,11 @@ export function EditorOverlay({
         // 选中该 Magnet（会自动选中其占用的所有pixels）
         selectMagnet(clickedMagnet.id);
 
+        if ((e.ctrlKey || e.metaKey) && onMagnetCtrlClick) {
+          onMagnetCtrlClick(clickedMagnet.id);
+          return;
+        }
+
         // 进入拖动 Magnet 模式
         const firstAnchor = clickedMagnet.anchors[0];
         const anchorPos = pixelPositions.get(`${firstAnchor.gridX},${firstAnchor.gridY}`);
@@ -328,7 +335,16 @@ export function EditorOverlay({
         startDrag(pixel.x, pixel.y);
       }
     },
-    [editorState, getMagnetAtPosition, getPixelAtPosition, onPlacementConfirm, pixelPositions, startDrag, selectMagnet]
+    [
+      editorState,
+      getMagnetAtPosition,
+      getPixelAtPosition,
+      onMagnetCtrlClick,
+      onPlacementConfirm,
+      pixelPositions,
+      startDrag,
+      selectMagnet,
+    ]
   );
 
   const flushMouseMove = useCallback(() => {

@@ -5,6 +5,7 @@ import {
   memo,
   useEffect,
   useDeferredValue,
+  useRef,
   isValidElement,
   type ReactNode,
 } from 'react';
@@ -133,6 +134,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     magnetId: string;
     action: 'edit' | 'remove';
   } | null>(null);
+  const [pendingFocusMagnetId, setPendingFocusMagnetId] = useState<string | null>(null);
+  const [highlightedMagnetId, setHighlightedMagnetId] = useState<string | null>(null);
+  const lastLibraryFocusRequestIdRef = useRef<string | null>(null);
   const [installedPlugins, setInstalledPlugins] = useState<InstalledPmpmPlugin[]>(() =>
     loadInstalledPmpmPlugins()
   );
@@ -235,6 +239,64 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
       cleanupPromise.then((cleanup) => cleanup());
     };
   }, [reloadPlugins]);
+
+  useEffect(() => {
+    if (!highlightedMagnetId) return;
+    const timer = window.setTimeout(() => setHighlightedMagnetId(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [highlightedMagnetId]);
+
+  useEffect(() => {
+    type MagnetLibraryFocusRequestV1 = { requestId: string; magnetId: string; createdAt: number };
+
+    const focus = () => {
+      const raw = readJson<unknown>(STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1, null);
+      if (!raw || typeof raw !== 'object') return;
+      const record = raw as Partial<MagnetLibraryFocusRequestV1>;
+      if (typeof record.requestId !== 'string' || record.requestId.trim().length === 0) return;
+      if (record.requestId === lastLibraryFocusRequestIdRef.current) return;
+      if (typeof record.magnetId !== 'string' || record.magnetId.trim().length === 0) return;
+      if (typeof record.createdAt !== 'number' || !Number.isFinite(record.createdAt)) return;
+
+      lastLibraryFocusRequestIdRef.current = record.requestId;
+      removeKey(STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1);
+
+      const magnetId = record.magnetId;
+      const magnet = magnetLibrary.find((m) => m.id === magnetId) ?? null;
+      if (!magnet) return;
+
+      const nextViewMode: ViewMode = activeMagnetIds.has(magnetId) ? 'active' : 'inactive';
+      const nextFilterMode: FilterMode = REQUIRED_MAGNET_IDS.has(magnetId)
+        ? 'fixed'
+        : builtInMagnetIds.has(magnetId)
+          ? 'builtin'
+          : 'custom';
+
+      setViewMode(nextViewMode);
+      setFilterMode(nextFilterMode);
+      setSearchQuery('');
+      setPendingFocusMagnetId(magnetId);
+    };
+
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1],
+      [TAURI_EVENTS.MAGNET_LIBRARY_FOCUS_REQUESTED],
+      focus
+    );
+
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [activeMagnetIds, builtInMagnetIds, magnetLibrary]);
+
+  useEffect(() => {
+    if (!pendingFocusMagnetId) return;
+    const element = document.querySelector<HTMLElement>(`[data-magnet-id="${pendingFocusMagnetId}"]`);
+    if (!element) return;
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedMagnetId(pendingFocusMagnetId);
+    setPendingFocusMagnetId(null);
+  }, [displayMagnets, pendingFocusMagnetId]);
 
   // 统计数量
   const counts = useMemo(() => {
@@ -721,7 +783,11 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               }
 
               return (
-                <div key={magnet.id} className="magnet-item">
+                <div
+                  key={magnet.id}
+                  className={`magnet-item ${highlightedMagnetId === magnet.id ? 'magnet-item--focused' : ''}`}
+                  data-magnet-id={magnet.id}
+                >
                   <div
                     className="magnet-preview"
                     style={{

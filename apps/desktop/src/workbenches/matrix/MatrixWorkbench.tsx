@@ -3,6 +3,7 @@ import { appWindow } from '@tauri-apps/api/window';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
+  broadcastDataUpdate,
   setupConfigSync,
   setupTauriListener,
 } from '../../utils/windowCommunication';
@@ -111,6 +112,18 @@ export function MatrixWorkbench({
   const { magnetLibrary, activeMagnetIds, activeSpaceId, updateMagnetAnchors, activateMagnet } =
     useMagnetConfig();
 
+  type MagnetLibraryFocusRequestV1 = { requestId: string; magnetId: string; createdAt: number };
+  const focusCleanupTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (focusCleanupTimerRef.current !== null) {
+        window.clearTimeout(focusCleanupTimerRef.current);
+        focusCleanupTimerRef.current = null;
+      }
+    };
+  }, []);
+
   type MagnetPlacementRequestV1 = { requestId: string; magnetId: string; createdAt: number };
   const [placementRequest, setPlacementRequest] = useState<MagnetPlacementRequestV1 | null>(null);
   const lastPlacementRequestIdRef = useRef<string | null>(null);
@@ -180,6 +193,28 @@ export function MatrixWorkbench({
     },
     [activateMagnet, placementRequest, updateMagnetAnchors]
   );
+
+  const requestMagnetLibraryFocus = useCallback(async (magnetId: string) => {
+    const requestId = `focus-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const payload: MagnetLibraryFocusRequestV1 = { requestId, magnetId, createdAt: Date.now() };
+
+    await broadcastDataUpdate(
+      STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1,
+      payload,
+      TAURI_EVENTS.MAGNET_LIBRARY_FOCUS_REQUESTED
+    );
+
+    if (focusCleanupTimerRef.current !== null) {
+      window.clearTimeout(focusCleanupTimerRef.current);
+    }
+    focusCleanupTimerRef.current = window.setTimeout(() => {
+      const raw = readJson<unknown>(STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1, null);
+      if (!raw || typeof raw !== 'object') return;
+      const record = raw as Partial<MagnetLibraryFocusRequestV1>;
+      if (record.requestId !== requestId) return;
+      removeKey(STORAGE_KEYS.MAGNET_LIBRARY_FOCUS_REQUEST_V1);
+    }, 2000);
+  }, []);
 
   const buildHistorySnapshotLayout = useCallback((): MagnetSpaceLayout => {
     const active = new Set(activeMagnetIds);
@@ -547,6 +582,7 @@ export function MatrixWorkbench({
           pixelPositions={pixelPositions}
           magnets={activeMagnets}
           onMagnetMove={handleMagnetMove}
+          onMagnetCtrlClick={requestMagnetLibraryFocus}
           placementMagnet={placementMagnet}
           onPlacementCancel={cancelPlacement}
           onPlacementConfirm={confirmPlacement}
