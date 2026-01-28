@@ -11,7 +11,17 @@ use std::{
 };
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+use windows_sys::core::BOOL;
+
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HWND, LPARAM},
+    System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION},
+    UI::WindowsAndMessaging::{
+        AllowSetForegroundWindow, EnumWindows, GetClassNameW, GetWindowThreadProcessId,
+        IsWindowVisible, ShowWindow, SW_HIDE,
+    },
+};
 
 pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
 
@@ -28,6 +38,9 @@ pub const MSG_GET_PARAMS: u8 = 8;
 pub const MSG_INSTANTIATE: u8 = 9;
 pub const MSG_DISPOSE: u8 = 10;
 pub const MSG_ERROR: u8 = 255;
+
+#[cfg(target_os = "windows")]
+static WAVES_CONSOLE_SUPPRESSOR_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,6 +203,97 @@ impl Default for BridgeOpenEditorOptions {
 #[allow(dead_code)]
 fn bridge_ping_timeout() -> Duration {
     timeout_from_env_ms("PMP_VST_BRIDGE_PING_TIMEOUT_MS", 5_000)
+}
+
+fn is_waves_plugin(plugin_id: &str, plugin_path: &str) -> bool {
+    if crate::vst_library::plugin_vendor(plugin_id)
+        .map(|vendor| vendor.to_lowercase().contains("waves"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let plugin_path = plugin_path.to_lowercase();
+    plugin_path.contains("waveshell")
+        || plugin_path.contains("\\waves")
+        || plugin_path.contains("/waves")
+}
+
+#[cfg(target_os = "windows")]
+fn maybe_suppress_waves_console_popups(plugin_id: &str, plugin_path: &str) {
+    if !is_waves_plugin(plugin_id, plugin_path) {
+        return;
+    }
+
+    if WAVES_CONSOLE_SUPPRESSOR_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    thread::spawn(|| {
+        struct ResetGuard;
+
+        impl Drop for ResetGuard {
+            fn drop(&mut self) {
+                WAVES_CONSOLE_SUPPRESSOR_RUNNING.store(false, Ordering::Release);
+            }
+        }
+
+        let _guard = ResetGuard;
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+
+            let mut class_buf = [0u16; 64];
+            let class_len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32);
+            if class_len <= 0 {
+                return 1;
+            }
+
+            let class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+            if class != "ConsoleWindowClass" {
+                return 1;
+            }
+
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == 0 {
+                return 1;
+            }
+
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return 1;
+            }
+
+            let mut path_buf = [0u16; 1024];
+            let mut size: u32 = path_buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(handle, 0, path_buf.as_mut_ptr(), &mut size);
+            CloseHandle(handle);
+            if ok == 0 || size == 0 {
+                return 1;
+            }
+
+            let path = String::from_utf16_lossy(&path_buf[..size as usize]).to_lowercase();
+            if !path.contains("waves") {
+                return 1;
+            }
+
+            // Best-effort: hide Waves-owned console windows that may briefly flash when
+            // the plugin boots background helpers (e.g. LocalServer).
+            ShowWindow(hwnd, SW_HIDE);
+            1
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(4_000);
+        while Instant::now() < deadline {
+            unsafe {
+                let _ = EnumWindows(Some(enum_proc), 0);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
 }
 
 fn bridge_executable_path() -> Result<PathBuf, String> {
@@ -544,6 +648,11 @@ impl BridgeClient {
             || matches!(std::env::var("PMP_VST_BRIDGE_DEBUG").as_deref(), Ok("1"))
             || matches!(std::env::var("PMP_VST_BRIDGE_STDERR").as_deref(), Ok("1"));
         let mut cmd = Command::new(bridge);
+
+        #[cfg(target_os = "windows")]
+        {
+            maybe_suppress_waves_console_popups(plugin_id, plugin_path);
+        }
 
         let compat = crate::vst_compat::effective_rule(plugin_id);
 
