@@ -210,6 +210,7 @@ export const KeyboardShortcutsPage: React.FC = () => {
   const kernel = useKernel();
   const t = useT();
   const keybindings = kernel.services.get(KEYBINDINGS_SERVICE_TOKEN);
+  const isMac = isMacPlatform();
 
   const [snapshot, setSnapshot] = useState<KeybindingsSnapshot>(() => keybindings.getSnapshot());
   const [registryRevision, setRegistryRevision] = useState(0);
@@ -448,6 +449,47 @@ export const KeyboardShortcutsPage: React.FC = () => {
       </div>
 
       <div className="keyboard-shortcuts-layout">
+        <section className="keyboard-shortcuts-card">
+          <div className="keyboard-shortcuts-card-header">
+            <h2 className="keyboard-shortcuts-card-title">
+              {t('pages.keyboard-shortcuts.section.gestures.title')}
+            </h2>
+            <div className="keyboard-shortcuts-card-subtitle">
+              {t('pages.keyboard-shortcuts.section.gestures.subtitle')}
+            </div>
+          </div>
+
+          <div className="keyboard-shortcuts-gestures">
+            <div className="keyboard-shortcuts-gesture-row">
+              <div className="keyboard-shortcuts-gesture-key">
+                <span className="kbd-sequence">
+                  <span className="kbd-sequence-inner">
+                    <span className="kbd-part">
+                      <kbd className="kbd-key">
+                        {formatKeycapToken(isMac ? 'meta' : 'ctrl', isMac)}
+                      </kbd>
+                      <span className="kbd-plus">+</span>
+                    </span>
+                    <span className="kbd-part">
+                      <kbd className="kbd-key">
+                        {t('pages.keyboard-shortcuts.gestures.token.leftClick')}
+                      </kbd>
+                    </span>
+                  </span>
+                </span>
+              </div>
+              <div className="keyboard-shortcuts-gesture-body">
+                <div className="keyboard-shortcuts-gesture-title">
+                  {t('pages.keyboard-shortcuts.gestures.focusMagnetInLibrary.title')}
+                </div>
+                <div className="keyboard-shortcuts-gesture-desc">
+                  {t('pages.keyboard-shortcuts.gestures.focusMagnetInLibrary.desc')}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section className="keyboard-shortcuts-card">
           <div className="keyboard-shortcuts-card-header">
             <h2 className="keyboard-shortcuts-card-title">

@@ -199,6 +199,45 @@
   opacity: 0.75;
 }
 
+.keyboard-shortcuts-gestures {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.keyboard-shortcuts-gesture-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.keyboard-shortcuts-gesture-key {
+  flex: 0 0 auto;
+  width: 220px;
+  max-width: 50%;
+}
+
+.keyboard-shortcuts-gesture-body {
+  min-width: 0;
+}
+
+.keyboard-shortcuts-gesture-title {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.92;
+}
+
+.keyboard-shortcuts-gesture-desc {
+  margin-top: 3px;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
 .kbd-code,
 .when-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
