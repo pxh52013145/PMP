@@ -5,7 +5,6 @@ use crate::audio::output::BoxedSource;
 
 mod rodio;
 mod sacd;
-mod cached_pcm;
 mod streaming;
 mod symphonia;
 

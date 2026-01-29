@@ -57,8 +57,6 @@ fn start_symphonia_stream(
         2,
     ));
 
-    let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
-
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
@@ -132,8 +130,6 @@ fn start_symphonia_stream(
 
         let resample_chunk_frames = 1024usize;
         let mut resampler: Option<crate::audio::resample::StreamingResampler> = None;
-        let mut cache_key = cache_key;
-        let mut cache_handle: Option<crate::audio::resample_cache::StreamingCacheHandle> = None;
         let mut channels_usize: usize = 0;
         let mut effective_sample_rate: u32 = 0;
         let mut meta_delivered = false;
@@ -147,8 +143,6 @@ fn start_symphonia_stream(
             if let Some(target) = drained.seek_target {
                 buffer_clone.clear();
                 pending_trim_frames_out = 0;
-                cache_handle = None;
-                cache_key = None;
 
                 let seek_to = SeekTo::Time {
                     time: Time::from(target.max(0.0)),
@@ -197,9 +191,6 @@ fn start_symphonia_stream(
                             *guard = Some(message.clone());
                         }
                         let _ = meta_tx.send(Err(message));
-                    }
-                    if let Some(handle) = cache_handle.take() {
-                        handle.finalize();
                     }
                     buffer_clone.mark_finished();
                     return;
@@ -267,20 +258,6 @@ fn start_symphonia_stream(
                                             err.code, err.message
                                         );
                                     }
-                                }
-                            }
-
-                            if cache_handle.is_none()
-                                && requested_sample_rate == effective_sample_rate
-                            {
-                                if let Some(key) = cache_key.take() {
-                                    cache_handle =
-                                        crate::audio::resample_cache::start_streaming_cache(
-                                            key,
-                                            channels_usize as u16,
-                                            effective_sample_rate,
-                                            bit_depth,
-                                        );
                                 }
                             }
 
@@ -352,8 +329,6 @@ fn start_symphonia_stream(
                                 if let Some(target) = drained.seek_target {
                                     buffer_clone.clear();
                                     pending_trim_frames_out = 0;
-                                    cache_handle = None;
-                                    cache_key = None;
 
                                     let seek_to = SeekTo::Time {
                                         time: Time::from(target.max(0.0)),
@@ -402,13 +377,6 @@ fn start_symphonia_stream(
                                 }
                                 offset += frames_pushed * channels;
                             }
-
-                            if let Some(handle) = cache_handle.as_ref() {
-                                let ok = handle.try_append(out_interleaved);
-                                if !ok {
-                                    cache_handle = None;
-                                }
-                            }
                         }
                     }
                 }
@@ -422,9 +390,6 @@ fn start_symphonia_stream(
                             *guard = Some(message.clone());
                         }
                         let _ = meta_tx.send(Err(message));
-                    }
-                    if let Some(handle) = cache_handle.take() {
-                        handle.finalize();
                     }
                     buffer_clone.mark_finished();
                     return;
@@ -486,20 +451,6 @@ fn start_symphonia_stream(
     ))
 }
 
-fn start_cached_pcm_stream(
-    cached: crate::audio::resample_cache::CachedPcmInfo,
-) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
-    super::cached_pcm::start_cached_pcm_stream(
-        cached,
-        super::cached_pcm::CachedPcmStreamConfig {
-            thread_name: "pmpm-cached-pcm-stream",
-            code_invalid: "AUDIO_INPUT_SYMPHONIA_CACHE_INVALID",
-            code_too_large: "AUDIO_INPUT_SYMPHONIA_CACHE_TOO_LARGE",
-            code_open_failed: "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
-        },
-    )
-}
-
 struct DecodedAudioBuffer {
     samples: Arc<Vec<f32>>,
     channels: u16,
@@ -512,8 +463,6 @@ fn decode_track_to_buffer(
     path: &Path,
     output_sample_rate: Option<u32>,
 ) -> Result<DecodedAudioBuffer, AudioInputError> {
-    let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
-
     let file = File::open(path).map_err(|e| {
         AudioInputError::new(
             "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
@@ -646,15 +595,6 @@ fn decode_track_to_buffer(
     };
 
     let shared = Arc::new(samples);
-    if let Some(key) = cache_key {
-        crate::audio::resample_cache::store_async(
-            key,
-            shared.clone(),
-            channels as u16,
-            sample_rate,
-            bit_depth,
-        );
-    }
     Ok(DecodedAudioBuffer {
         samples: shared,
         channels: channels as u16,
@@ -677,20 +617,6 @@ impl AudioInput for SymphoniaInput {
         path: &Path,
         output_sample_rate: Option<u32>,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
-        let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
-        if let Some(key) = cache_key.as_deref() {
-            if let Some(cached) = crate::audio::resample_cache::try_get_info(key) {
-                if let Ok((source, meta, streaming)) = start_cached_pcm_stream(cached) {
-                    return Ok(AudioInputOpenResult {
-                        input_id: self.id(),
-                        meta,
-                        kind: AudioInputKind::Streaming(streaming),
-                        source: Box::new(source),
-                    });
-                }
-            }
-        }
-
         match start_symphonia_stream(path, output_sample_rate) {
             Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                 input_id: self.id(),
@@ -737,7 +663,7 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use std::io::Write;
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn write_wav_i16_stereo_lcg(path: &Path, sample_rate: u32, frames: usize) {
         let channels = 2u16;
@@ -819,48 +745,5 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn open_prefers_cached_pcm_stream() {
-        let cache_dir = {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let dir = std::env::temp_dir()
-                .join(format!("pmp-resample-cache-symphonia-open-test-{nanos}"));
-            std::fs::create_dir_all(&dir).expect("create cache dir");
-            crate::audio::resample_cache::init_for_tests(dir)
-        };
-
-        let path = cache_dir.join("test.wav");
-        std::fs::write(&path, b"dummy").expect("write dummy file");
-
-        let output_rate = 44_100u32;
-        let key = crate::audio::resample_cache::key_for_resample(&path, Some(output_rate))
-            .expect("cache key");
-
-        let samples = Arc::new(vec![0.0f32; (output_rate as usize) * 2]);
-        crate::audio::resample_cache::store_async(key.clone(), samples, 2, output_rate, Some(16));
-
-        let cache_file = cache_dir.join(format!("{key}.bin"));
-        let started_at = Instant::now();
-        while !cache_file.exists() && started_at.elapsed() < Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(cache_file.exists(), "expected cached PCM file to exist");
-
-        let input = SymphoniaInput::default();
-        let result = input
-            .open(&path, Some(output_rate))
-            .expect("open should succeed");
-
-        match result.kind {
-            AudioInputKind::Streaming(playback) => {
-                let _ = playback.command_tx.send(DecoderCommand::Shutdown);
-            }
-            _ => panic!("expected streaming cached PCM playback"),
-        }
     }
 }

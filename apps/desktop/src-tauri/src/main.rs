@@ -251,28 +251,6 @@ async fn native_audio_sync_queue(
 }
 
 #[tauri::command]
-async fn native_audio_resample_cache_get_status(
-    app: tauri::AppHandle,
-) -> Result<audio::resample_cache::ResampleCacheStatus, String> {
-    audio::resample_cache::get_status(&app)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-async fn native_audio_resample_cache_set_max_bytes(
-    app: tauri::AppHandle,
-    max_bytes: u64,
-) -> Result<audio::resample_cache::ResampleCacheStatus, String> {
-    audio::resample_cache::set_max_bytes(&app, max_bytes)
-}
-
-#[tauri::command]
-async fn native_audio_resample_cache_clear(
-    app: tauri::AppHandle,
-) -> Result<audio::resample_cache::ResampleCacheStatus, String> {
-    audio::resample_cache::clear(&app)
-}
-
-#[tauri::command]
 async fn native_audio_get_dsp_graph(
     app: tauri::AppHandle,
 ) -> Result<dsp_graph::DspGraphConfig, String> {
@@ -1049,9 +1027,6 @@ fn main() {
             native_audio_select_device,
             native_audio_open_asio_control_panel,
             native_audio_sync_queue,
-            native_audio_resample_cache_get_status,
-            native_audio_resample_cache_set_max_bytes,
-            native_audio_resample_cache_clear,
             magnet_layout_store_get_state,
             magnet_layout_store_bootstrap,
             magnet_layout_store_apply_patch

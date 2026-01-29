@@ -16,7 +16,6 @@ use super::streaming::{
 use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
-const SACD_DSD_TO_PCM_CACHE_SALT: &str = "sacd-dsd2pcm-v6";
 const SACD_DSD_TO_PCM_DECIMATOR_TAPS: usize = 255;
 const SACD_DSD_TO_PCM_MAX_CUTOFF_HZ: f32 = 20_000.0;
 const SACD_DSD_TO_PCM_CUTOFF_NYQUIST_RATIO: f32 = 0.45;
@@ -198,11 +197,6 @@ fn start_dsf_stream(
         output_sample_rate,
         2,
     ));
-    let cache_key = crate::audio::resample_cache::key_for_resample_with_salt(
-        path,
-        output_sample_rate,
-        SACD_DSD_TO_PCM_CACHE_SALT,
-    );
 
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
@@ -286,17 +280,6 @@ fn start_dsf_stream(
                 };
                 let _ = meta_tx.send(Ok(meta.clone()));
 
-                let mut cache_handle: Option<crate::audio::resample_cache::StreamingCacheHandle> =
-                    None;
-                if let Some(key) = cache_key {
-                    cache_handle = crate::audio::resample_cache::start_streaming_cache(
-                        key,
-                        channels as u16,
-                        target_pcm_rate,
-                        meta.bit_depth,
-                    );
-                }
-
                 let dsd_byte_rate = if dsd_rate % 8 == 0 { dsd_rate / 8 } else { 0 };
                 if dsd_byte_rate == 0 {
                     if let Ok(mut guard) = error_clone.lock() {
@@ -352,7 +335,6 @@ fn start_dsf_stream(
                 'decode_loop: loop {
                     let drained = drain_decoder_commands(&command_rx);
                     if drained.shutdown {
-                        drop(cache_handle.take());
                         buffer_clone.mark_finished();
                         return;
                     }
@@ -366,7 +348,6 @@ fn start_dsf_stream(
                         if let Some(r) = resampler.as_mut() {
                             r.reset();
                         }
-                        cache_handle = None;
 
                         let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
                         let desired_dsd_sample =
@@ -413,9 +394,6 @@ fn start_dsf_stream(
 
                     if pcm8_chunk.is_empty() {
                         if reached_eof {
-                            if let Some(handle) = cache_handle.take() {
-                                handle.finalize();
-                            }
                             buffer_clone.mark_finished();
                             return;
                         }
@@ -443,9 +421,6 @@ fn start_dsf_stream(
 
                     if out_interleaved.is_empty() {
                         if reached_eof {
-                            if let Some(handle) = cache_handle.take() {
-                                handle.finalize();
-                            }
                             buffer_clone.mark_finished();
                             return;
                         }
@@ -456,7 +431,6 @@ fn start_dsf_stream(
                     while offset < out_interleaved.len() {
                         let drained = drain_decoder_commands(&command_rx);
                         if drained.shutdown {
-                            drop(cache_handle.take());
                             buffer_clone.mark_finished();
                             return;
                         }
@@ -470,7 +444,6 @@ fn start_dsf_stream(
                             if let Some(r) = resampler.as_mut() {
                                 r.reset();
                             }
-                            cache_handle = None;
 
                             let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
                             let desired_dsd_sample =
@@ -494,17 +467,7 @@ fn start_dsf_stream(
                         offset += frames_pushed * channels;
                     }
 
-                    if let Some(handle) = cache_handle.as_ref() {
-                        let ok = handle.try_append(out_interleaved);
-                        if !ok {
-                            cache_handle = None;
-                        }
-                    }
-
                     if reached_eof {
-                        if let Some(handle) = cache_handle.take() {
-                            handle.finalize();
-                        }
                         buffer_clone.mark_finished();
                         return;
                     }
@@ -562,20 +525,6 @@ fn start_dsf_stream(
     ))
 }
 
-fn start_cached_pcm_stream(
-    cached: crate::audio::resample_cache::CachedPcmInfo,
-) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
-    super::cached_pcm::start_cached_pcm_stream(
-        cached,
-        super::cached_pcm::CachedPcmStreamConfig {
-            thread_name: "pmpm-sacd-cached-pcm-stream",
-            code_invalid: "AUDIO_INPUT_SACD_CACHE_INVALID",
-            code_too_large: "AUDIO_INPUT_SACD_CACHE_INVALID",
-            code_open_failed: "AUDIO_INPUT_SACD_OPEN_FAILED",
-        },
-    )
-}
-
 #[derive(Default)]
 pub(crate) struct SacdInput;
 
@@ -602,24 +551,6 @@ impl AudioInput for SacdInput {
             ));
         }
 
-        let cache_key = crate::audio::resample_cache::key_for_resample_with_salt(
-            path,
-            output_sample_rate,
-            SACD_DSD_TO_PCM_CACHE_SALT,
-        );
-        if let Some(key) = cache_key.as_deref() {
-            if let Some(info) = crate::audio::resample_cache::try_get_info(key) {
-                if let Ok((source, meta, streaming)) = start_cached_pcm_stream(info) {
-                    return Ok(AudioInputOpenResult {
-                        input_id: self.id(),
-                        meta,
-                        kind: AudioInputKind::Streaming(streaming),
-                        source: Box::new(source),
-                    });
-                }
-            }
-        }
-
         let (source, meta, streaming) = start_dsf_stream(path, output_sample_rate)?;
 
         Ok(AudioInputOpenResult {
@@ -636,7 +567,6 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use std::time::Instant;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn write_minimal_dsf_stereo(path: &Path, dsd_rate: u32, fill: u8) {
@@ -988,112 +918,4 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[test]
-    fn dsf_open_prefers_cached_pcm_stream() {
-        let cache_dir = {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let dir =
-                std::env::temp_dir().join(format!("pmp-resample-cache-dsf-open-test-{nanos}"));
-            std::fs::create_dir_all(&dir).expect("create cache dir");
-            crate::audio::resample_cache::init_for_tests(dir)
-        };
-
-        let dsf_path = cache_dir.join("test.dsf");
-        write_dsf_stereo_frames(&dsf_path, 2_822_400, 0xAA, 4);
-
-        let output_rate = 44_100u32;
-        let key = crate::audio::resample_cache::key_for_resample_with_salt(
-            &dsf_path,
-            Some(output_rate),
-            SACD_DSD_TO_PCM_CACHE_SALT,
-        )
-        .expect("cache key");
-
-        let samples = Arc::new(vec![0.0f32; (output_rate as usize) * 2]);
-        crate::audio::resample_cache::store_async(key.clone(), samples, 2, output_rate, Some(1));
-
-        let cache_file = cache_dir.join(format!("{key}.bin"));
-        let started_at = Instant::now();
-        while !cache_file.exists() && started_at.elapsed() < Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(cache_file.exists(), "expected cached PCM file to exist");
-
-        let input = SacdInput::default();
-        let result = input
-            .open(&dsf_path, Some(output_rate))
-            .expect("open should succeed");
-
-        match result.kind {
-            AudioInputKind::Streaming(playback) => {
-                let _ = playback.command_tx.send(DecoderCommand::Shutdown);
-            }
-            _ => panic!("expected streaming cached PCM playback"),
-        }
-    }
-
-    #[test]
-    fn dsf_shutdown_does_not_persist_partial_resample_cache() {
-        let cache_dir = {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time ok")
-                .as_nanos();
-            let dir = std::env::temp_dir().join(format!("pmp-resample-cache-dsf-test-{nanos}"));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).expect("create cache dir");
-            crate::audio::resample_cache::init_for_tests(dir)
-        };
-
-        let tmp_dir = std::env::temp_dir();
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time ok")
-            .as_nanos();
-        let path = tmp_dir.join(format!("pmp_test_{nonce}.dsf"));
-
-        write_dsf_stereo_frames(&path, 2_822_400, 0xFF, 1024);
-
-        let output_sample_rate = Some(48_000);
-        let key = crate::audio::resample_cache::key_for_resample_with_salt(
-            &path,
-            output_sample_rate,
-            SACD_DSD_TO_PCM_CACHE_SALT,
-        )
-        .expect("cache key");
-        let cache_file = cache_dir.join(format!("{key}.bin"));
-        let _ = std::fs::remove_file(&cache_file);
-
-        let input = SacdInput::default();
-        let opened = input.open(&path, output_sample_rate).expect("open dsf");
-        let AudioInputKind::Streaming(streaming) = opened.kind else {
-            panic!("expected streaming kind");
-        };
-
-        streaming
-            .buffer
-            .wait_for_samples(1024, Duration::from_millis(800));
-
-        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
-
-        let mut iter = opened.source;
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while std::time::Instant::now() < deadline {
-            if iter.next().is_none() {
-                break;
-            }
-        }
-
-        std::thread::sleep(Duration::from_millis(200));
-
-        assert!(
-            !cache_file.exists(),
-            "shutdown should not finalize partial DSF resample cache entry"
-        );
-
-        let _ = std::fs::remove_file(&path);
-    }
 }

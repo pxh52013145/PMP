@@ -17,7 +17,6 @@ static EMITTER_STOP: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn ensure_started(app_handle: &AppHandle) {
     let _ = APP_HANDLE.set(app_handle.clone());
-    let _ = crate::audio::resample_cache::init_from_app(app_handle);
     if EMITTER_STARTED.set(()).is_err() {
         return;
     }

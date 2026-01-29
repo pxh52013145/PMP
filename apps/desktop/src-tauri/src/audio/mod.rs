@@ -9,11 +9,9 @@ pub mod output;
 pub(crate) mod pipeline;
 pub(crate) mod playback;
 pub(crate) mod resample;
-pub(crate) mod resample_cache;
 pub(crate) mod spectrum;
 pub(crate) mod threading;
 
 pub(crate) fn shutdown() {
     emitter::shutdown();
-    resample_cache::shutdown_worker();
 }

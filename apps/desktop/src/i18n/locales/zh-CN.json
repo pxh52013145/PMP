@@ -169,8 +169,6 @@
   "settings.panels.audio.title": "音频",
   "settings.panels.audioComponents.title": "输出/输入",
   "settings.panels.audioComponents.desc": "选择输出后端/设备与输入解码器（Native Audio）。",
-  "settings.panels.audioCache.title": "音频缓存",
-  "settings.panels.audioCache.desc": "管理解码/重采样后的 PCM 缓存。",
   "settings.panels.plugins.title": "插件",
   "settings.panels.visualizers.title": "可视化",
 
@@ -238,14 +236,6 @@
   "settings.audioComponents.audioInput.active": "当前：{id}",
   "settings.audioComponents.audioInput.active.none": "（未激活）",
   "settings.audioComponents.audioInput.select.ariaLabel": "选择输入/解码器",
-
-  "settings.audioCache.title": "重采样缓存",
-  "settings.audioCache.desc": "缓存解码 + 重采样后的 PCM，减少重复播放时的 CPU 开销（会占用磁盘空间）。",
-  "settings.audioCache.usage": "已使用 {used} / {max} · {entries} 个条目",
-  "settings.audioCache.note.requireNative": "需要在 Tauri 桌面环境运行（Native Audio）。",
-  "settings.audioCache.note.disk": "PCM 缓存增长很快（尤其是 Hi-Res）。建议设置上限或定期清空。",
-  "settings.audioCache.cacheDir": "缓存目录：{path}",
-  "settings.audioCache.configPath": "配置文件：{path}",
 
   "settings.performance.lowPerformance.label": "低性能模式",
   "settings.performance.lowPerformance.desc": "多开 Editor 窗口时推荐开启，减少滚动卡顿。",
