@@ -1224,16 +1224,18 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
         if let Some(streaming) = &streaming {
             let channels = meta.channels.max(1) as usize;
-            let target_frames = if op.output_backend_id == WASAPI_EXCLUSIVE_BACKEND_ID {
-                4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
-            } else {
-                2048usize // ~46ms @ 44.1kHz
-            };
-            let target_samples = target_frames * channels;
+            let (target_samples, timeout) = crate::audio::engine::streaming_prebuffer_target_samples(
+                &op.output_backend_id,
+                op.target_sample_rate,
+                channels,
+                streaming.buffer.capacity_samples(),
+                meta.duration,
+                crate::audio::engine::StreamingPrebufferKind::Crossfade,
+            );
             if streaming.buffer.len_samples() < target_samples {
                 streaming
                     .buffer
-                    .wait_for_samples(target_samples, Duration::from_millis(250));
+                    .wait_for_samples(target_samples, timeout);
             }
         }
 

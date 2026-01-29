@@ -96,6 +96,10 @@ impl AudioRingBuffer {
         (write.saturating_sub(read) as usize).min(self.inner.capacity)
     }
 
+    pub fn capacity_samples(&self) -> usize {
+        self.inner.capacity
+    }
+
     pub fn wait_for_samples(&self, min_samples: usize, timeout: Duration) {
         if min_samples == 0 {
             return;

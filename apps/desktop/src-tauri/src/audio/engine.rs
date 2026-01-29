@@ -26,6 +26,61 @@ pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| {
     Mutex::new(NativeAudioEngine::new())
 });
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StreamingPrebufferKind {
+    StartOrSeek,
+    Crossfade,
+}
+
+pub(crate) fn streaming_prebuffer_target_samples(
+    output_backend_id: &str,
+    sample_rate: u32,
+    channels: usize,
+    capacity_samples: usize,
+    duration_seconds: f64,
+    kind: StreamingPrebufferKind,
+) -> (usize, Duration) {
+    let (env_key, default_seconds) = match kind {
+        StreamingPrebufferKind::StartOrSeek => (
+            "PMP_AUDIO_STREAM_PREBUFFER_SECONDS",
+            if output_backend_id == "wasapi-exclusive" {
+                3.0
+            } else {
+                2.0
+            },
+        ),
+        StreamingPrebufferKind::Crossfade => (
+            "PMP_AUDIO_STREAM_CROSSFADE_PREBUFFER_SECONDS",
+            if output_backend_id == "wasapi-exclusive" {
+                1.0
+            } else {
+                0.5
+            },
+        ),
+    };
+
+    let seconds = std::env::var(env_key)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(default_seconds)
+        .clamp(0.05, 10.0);
+
+    let sample_rate = sample_rate.max(1) as f64;
+    let channels = channels.max(1) as f64;
+    let desired_samples = (sample_rate * seconds * channels).ceil() as usize;
+    let mut target_samples = desired_samples.max(1).min(capacity_samples.max(1));
+
+    if duration_seconds.is_finite() && duration_seconds > 0.0 {
+        let max_samples_by_duration = (sample_rate * duration_seconds * channels).ceil() as usize;
+        target_samples = target_samples.min(max_samples_by_duration.max(1));
+    }
+
+    let timeout = Duration::from_secs_f64((seconds + 0.5).clamp(0.25, 10.0));
+
+    (target_samples, timeout)
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioComponentsStatePayload {
@@ -789,16 +844,18 @@ impl NativeAudioEngine {
         // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
         if let Some(streaming) = &new_streaming {
             let channels = meta.channels.max(1) as usize;
-            let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
-                4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
-            } else {
-                2048usize // ~46ms @ 44.1kHz
-            };
-            let target_samples = target_frames * channels;
+            let (target_samples, timeout) = streaming_prebuffer_target_samples(
+                self.output_backend.id(),
+                meta.sample_rate,
+                channels,
+                streaming.buffer.capacity_samples(),
+                meta.duration,
+                StreamingPrebufferKind::Crossfade,
+            );
             if streaming.buffer.len_samples() < target_samples {
                 streaming
                     .buffer
-                    .wait_for_samples(target_samples, Duration::from_millis(250));
+                    .wait_for_samples(target_samples, timeout);
             }
         }
 
@@ -856,16 +913,18 @@ impl NativeAudioEngine {
             // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
             if let Some(streaming) = &self.streaming {
                 let channels = self.decoded_channels.max(1) as usize;
-                let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
-                    4096usize // ~93ms @ 44.1kHz (exclusive mode tends to need a bit more headroom)
-                } else {
-                    2048usize // ~46ms @ 44.1kHz
-                };
-                let target_samples = target_frames * channels;
+                let (target_samples, timeout) = streaming_prebuffer_target_samples(
+                    self.output_backend.id(),
+                    self.decoded_sample_rate,
+                    channels,
+                    streaming.buffer.capacity_samples(),
+                    self.duration,
+                    StreamingPrebufferKind::StartOrSeek,
+                );
                 if streaming.buffer.len_samples() < target_samples {
                     streaming
                         .buffer
-                        .wait_for_samples(target_samples, Duration::from_millis(250));
+                        .wait_for_samples(target_samples, timeout);
                 }
             }
 
@@ -1358,16 +1417,18 @@ impl NativeAudioEngine {
         if resume_playing {
             if let Some(streaming) = &self.streaming {
                 let channels = self.decoded_channels.max(1) as usize;
-                let target_frames = if self.output_backend.id() == WASAPI_EXCLUSIVE_BACKEND_ID {
-                    4096usize // ~93ms @ 44.1kHz
-                } else {
-                    2048usize // ~46ms @ 44.1kHz
-                };
-                let target_samples = target_frames * channels;
+                let (target_samples, timeout) = streaming_prebuffer_target_samples(
+                    self.output_backend.id(),
+                    self.decoded_sample_rate,
+                    channels,
+                    streaming.buffer.capacity_samples(),
+                    self.duration,
+                    StreamingPrebufferKind::StartOrSeek,
+                );
                 if streaming.buffer.len_samples() < target_samples {
                     streaming
                         .buffer
-                        .wait_for_samples(target_samples, Duration::from_millis(250));
+                        .wait_for_samples(target_samples, timeout);
                 }
             }
 
