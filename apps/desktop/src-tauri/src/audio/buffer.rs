@@ -180,6 +180,10 @@ impl AudioRingBuffer {
         self.inner.finished.load(Ordering::Acquire) && self.len_samples() == 0
     }
 
+    pub fn is_finished(&self) -> bool {
+        self.inner.finished.load(Ordering::Acquire)
+    }
+
     pub fn push_interleaved(&self, samples: &[f32], channels: usize) -> usize {
         if channels == 0 {
             return 0;
@@ -277,4 +281,3 @@ mod tests {
         assert!(out.is_empty());
     }
 }
-

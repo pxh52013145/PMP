@@ -989,12 +989,17 @@ impl NativeAudioEngine {
         if let Some(sink) = &self.sink {
             if let Some(streaming) = &self.streaming {
                 let channels = self.decoded_channels.max(1) as usize;
+                let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
+                    (self.duration - self.current_position).max(0.0)
+                } else {
+                    self.duration
+                };
                 let (target_samples, _timeout) = streaming_prebuffer_target_samples(
                     self.output_backend.id(),
                     self.decoded_sample_rate,
                     channels,
                     streaming.buffer.capacity_samples(),
-                    self.duration,
+                    remaining_duration,
                     StreamingPrebufferKind::StartOrSeek,
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
@@ -1015,7 +1020,7 @@ impl NativeAudioEngine {
 
                     let available = streaming.buffer.len_samples();
                     self.desired_playback_state = PlaybackState::Playing;
-                    if available < min_start_samples {
+                    if available < min_start_samples && !streaming.buffer.is_finished() {
                         sink.pause();
                         self.sync_clock();
                         self.playback_state = PlaybackState::Buffering;
@@ -1319,12 +1324,17 @@ impl NativeAudioEngine {
 
         if let (Some(sink), Some(streaming)) = (&self.sink, &self.streaming) {
             let channels = self.decoded_channels.max(1) as usize;
+            let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
+                (self.duration - self.current_position).max(0.0)
+            } else {
+                self.duration
+            };
             let (target_samples, _timeout) = streaming_prebuffer_target_samples(
                 self.output_backend.id(),
                 self.decoded_sample_rate,
                 channels,
                 streaming.buffer.capacity_samples(),
-                self.duration,
+                remaining_duration,
                 StreamingPrebufferKind::StartOrSeek,
                 self.streaming_prebuffer_start_or_seek_seconds,
             );
@@ -1352,7 +1362,7 @@ impl NativeAudioEngine {
                     && matches!(self.playback_state, PlaybackState::Playing)
                 {
                     let available = streaming.buffer.len_samples();
-                    if available < min_start_samples {
+                    if available < min_start_samples && !streaming.buffer.is_finished() {
                         sink.pause();
                         self.sync_clock();
                         self.playback_state = PlaybackState::Buffering;
@@ -1368,6 +1378,7 @@ impl NativeAudioEngine {
                     && matches!(self.playback_state, PlaybackState::Buffering)
                 {
                     let available = streaming.buffer.len_samples();
+                    let finished = streaming.buffer.is_finished();
                     let now = Instant::now();
                     if available != self.buffering_last_samples {
                         self.buffering_last_samples = available;
@@ -1385,6 +1396,17 @@ impl NativeAudioEngine {
                         return true;
                     }
 
+                    if finished && available > 0 {
+                        sink.play();
+                        self.buffering_started_at = None;
+                        self.buffering_last_progress_at = None;
+                        self.buffering_last_samples = 0;
+                        self.set_state(PlaybackState::Playing);
+                        self.base_position = self.current_position;
+                        self.playback_started_at = Some(now);
+                        return true;
+                    }
+
                     let ready_full = available >= target_samples;
                     let ready_min = available >= min_start_samples;
                     let waited_long_enough = self
@@ -1396,7 +1418,7 @@ impl NativeAudioEngine {
                         .buffering_last_progress_at
                         .map(|instant| now.saturating_duration_since(instant))
                         .unwrap_or(Duration::from_secs(0));
-                    if !ready_min && no_progress_for >= stall_timeout {
+                    if !ready_min && no_progress_for >= stall_timeout && !finished {
                         sink.pause();
                         self.sync_clock();
                         self.buffering_started_at = None;
@@ -1686,12 +1708,17 @@ impl NativeAudioEngine {
         if resume_playing {
             if let Some(streaming) = &self.streaming {
                 let channels = self.decoded_channels.max(1) as usize;
+                let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
+                    (self.duration - target).max(0.0)
+                } else {
+                    self.duration
+                };
                 let (target_samples, timeout) = streaming_prebuffer_target_samples(
                     self.output_backend.id(),
                     self.decoded_sample_rate,
                     channels,
                     streaming.buffer.capacity_samples(),
-                    self.duration,
+                    remaining_duration,
                     StreamingPrebufferKind::StartOrSeek,
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
@@ -1727,6 +1754,7 @@ impl NativeAudioEngine {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicUsize;
 
     struct FailBackend;
 
@@ -1803,5 +1831,131 @@ mod tests {
         assert_eq!(err, "create_sink failed");
         assert!(engine.sink.is_some());
         assert!(!old_sink.stopped.load(Ordering::Acquire));
+    }
+
+    #[derive(Default)]
+    struct CallSink {
+        play_calls: AtomicUsize,
+        pause_calls: AtomicUsize,
+    }
+
+    impl AudioSink for CallSink {
+        fn append(&self, _source: crate::audio::output::BoxedSource) {}
+
+        fn play(&self) {
+            self.play_calls.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn pause(&self) {
+            self.pause_calls.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn stop(&self) {}
+
+        fn empty(&self) -> bool {
+            false
+        }
+
+        fn set_volume(&self, _value: f32) {}
+    }
+
+    struct StaticBackend(&'static str);
+
+    impl AudioOutputBackend for StaticBackend {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+
+        fn list_devices(&self) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+
+        fn default_device_name(&self) -> Option<String> {
+            None
+        }
+
+        fn current_info(&self) -> OutputStreamInfo {
+            OutputStreamInfo::default()
+        }
+
+        fn is_stream_open(&self) -> bool {
+            true
+        }
+
+        fn select_device(&self, _device_name: Option<String>) -> Result<OutputStreamInfo, String> {
+            Ok(OutputStreamInfo::default())
+        }
+
+        fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
+            Err("not supported".into())
+        }
+    }
+
+    fn make_finished_streaming_playback(capacity_samples: usize, channels: usize) -> StreamingPlayback {
+        let buffer = crate::audio::buffer::AudioRingBuffer::new(capacity_samples);
+        let samples = vec![0.1f32; channels * 8];
+        buffer.push_interleaved(&samples, channels);
+        buffer.mark_finished();
+
+        let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
+        StreamingPlayback {
+            buffer,
+            command_tx,
+            error: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn buffering_finished_stream_resumes_instead_of_timeout() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let sink = Arc::new(CallSink::default());
+        engine.sink = Some(sink.clone());
+        engine.streaming = Some(make_finished_streaming_playback(1024, 2));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 10.0;
+        engine.current_position = 9.9;
+        engine.playback_state = PlaybackState::Buffering;
+        engine.desired_playback_state = PlaybackState::Playing;
+        engine.buffering_started_at = Some(Instant::now() - Duration::from_secs(20));
+        engine.buffering_last_progress_at = Some(Instant::now() - Duration::from_secs(20));
+        engine.buffering_last_samples = engine
+            .streaming
+            .as_ref()
+            .expect("streaming")
+            .buffer
+            .len_samples();
+
+        let ticked = engine.tick();
+        assert!(ticked);
+        assert!(matches!(engine.playback_state, PlaybackState::Playing));
+        assert_eq!(sink.pause_calls.load(Ordering::Relaxed), 0);
+        assert!(sink.play_calls.load(Ordering::Relaxed) > 0);
+        assert!(!matches!(engine.playback_state, PlaybackState::Error));
+    }
+
+    #[test]
+    fn playing_finished_stream_does_not_enter_buffering() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let sink = Arc::new(CallSink::default());
+        engine.sink = Some(sink.clone());
+        engine.streaming = Some(make_finished_streaming_playback(1024, 2));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 10.0;
+        engine.current_position = 9.9;
+        engine.base_position = engine.current_position;
+        engine.playback_started_at = Some(Instant::now());
+        engine.playback_state = PlaybackState::Playing;
+        engine.desired_playback_state = PlaybackState::Playing;
+
+        let ticked = engine.tick();
+        assert!(ticked);
+        assert!(matches!(engine.playback_state, PlaybackState::Playing));
+        assert_eq!(sink.pause_calls.load(Ordering::Relaxed), 0);
     }
 }
