@@ -25,7 +25,7 @@ export function usePlaybackLogic(): PlaybackLogic {
   const audioService = useAudioService();
   const togglePlayPause = async () => {
     const state = audioService.getState();
-    if (state.playbackState === 'playing') {
+    if (state.playbackState === 'playing' || state.playbackState === 'buffering') {
       audioService.pause();
     } else if (state.currentTrack || state.queue.length > 0) {
       if (!state.currentTrack && state.queue.length > 0) {
@@ -47,6 +47,7 @@ export function usePlaybackLogic(): PlaybackLogic {
   const getPlayPauseIcon = (playbackState: PlaybackState): string => {
     switch (playbackState) {
       case 'loading':
+      case 'buffering':
         return '○';
       case 'playing':
         return '⏸';
@@ -56,7 +57,7 @@ export function usePlaybackLogic(): PlaybackLogic {
   };
 
   const getPlayPauseTitle = (playbackState: PlaybackState): string => {
-    return playbackState === 'playing' ? '暂停' : '播放';
+    return playbackState === 'playing' || playbackState === 'buffering' ? '暂停' : '播放';
   };
 
   const isPlayPauseDisabled = (playbackState: PlaybackState): boolean => {

@@ -18,12 +18,12 @@ export function usePlaybackState() {
   useEffect(() => {
     const unsubscribe = audioService.onStateChange((state) => {
       setIsPlaying(state.playbackState === 'playing');
-      setIsLoading(state.playbackState === 'loading');
+      setIsLoading(state.playbackState === 'loading' || state.playbackState === 'buffering');
     });
 
     const state = audioService.getState();
     setIsPlaying(state.playbackState === 'playing');
-    setIsLoading(state.playbackState === 'loading');
+    setIsLoading(state.playbackState === 'loading' || state.playbackState === 'buffering');
 
     return unsubscribe;
   }, [audioService]);

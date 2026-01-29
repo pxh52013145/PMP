@@ -152,6 +152,13 @@ describe('NativeAudioService', () => {
       JSON.stringify({ enabled: true, durationMs: 1000 })
     );
 
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
     const service = new NativeAudioService();
     await service.loadTrack({
       id: 't1',
@@ -159,6 +166,8 @@ describe('NativeAudioService', () => {
       filePath: 'C:\\\\Music\\\\a.mp3',
     });
     await service.play();
+
+    handlers['native_audio_state']?.({ payload: { playbackState: 'playing', currentTime: 0, duration: 0 } });
     service.addToQueue({
       id: 't2',
       title: 'B',

@@ -51,6 +51,24 @@ impl RodioCpalBackend {
         }
     }
 
+    fn resolve_host() -> rodio::cpal::Host {
+        #[cfg(target_os = "windows")]
+        {
+            // When CPAL is built with extra backends (e.g. ASIO), `default_host()` may pick a host
+            // that enumerates "drivers" instead of normal Windows output endpoints.
+            // For the "rodio-cpal" backend we want the stable, typical Windows device list.
+            match rodio::cpal::host_from_id(rodio::cpal::HostId::Wasapi) {
+                Ok(host) => host,
+                Err(_) => rodio::cpal::default_host(),
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            rodio::cpal::default_host()
+        }
+    }
+
     fn spawn_output_stream_thread(
         preferred_device_name: Option<String>,
     ) -> Result<(StreamThread, OutputStreamHandle, Option<String>, Option<u32>), String> {
@@ -61,7 +79,7 @@ impl RodioCpalBackend {
 
         let join = thread::spawn(move || {
             let result = (|| -> Result<(OutputStream, OutputStreamHandle, Option<String>, Option<u32>), String> {
-                let host = rodio::cpal::default_host();
+                let host = Self::resolve_host();
 
                 if let Some(preferred) = preferred_device_name.as_deref() {
                     let devices = host
@@ -197,7 +215,7 @@ impl AudioOutputBackend for RodioCpalBackend {
     }
 
     fn list_devices(&self) -> Result<Vec<String>, String> {
-        let host = rodio::cpal::default_host();
+        let host = Self::resolve_host();
         let devices = host
             .output_devices()
             .map_err(|e| format!("Failed to enumerate output devices: {e}"))?;
@@ -214,7 +232,7 @@ impl AudioOutputBackend for RodioCpalBackend {
     }
 
     fn default_device_name(&self) -> Option<String> {
-        rodio::cpal::default_host()
+        Self::resolve_host()
             .default_output_device()
             .and_then(|device| device.name().ok())
     }

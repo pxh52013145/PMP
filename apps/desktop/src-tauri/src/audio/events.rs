@@ -15,6 +15,11 @@ pub struct NativeAudioStatePayload {
     pub track_path: Option<String>,
     pub current_time: f64,
     pub duration: f64,
+    /// Absolute time position (seconds) up to which audio is currently buffered/ready.
+    /// Semantics are "best-effort" and should be treated as a single contiguous range for UI.
+    pub buffered_time: f64,
+    /// How many seconds of audio are currently available ahead of `current_time`.
+    pub buffered_ahead: f64,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
     pub device: Option<String>,

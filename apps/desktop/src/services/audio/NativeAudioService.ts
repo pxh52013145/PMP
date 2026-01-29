@@ -13,6 +13,8 @@ type NativeAudioStatePayload = {
   trackPath?: string | null;
   currentTime?: number;
   duration?: number;
+  bufferedTime?: number;
+  bufferedAhead?: number;
   sampleRate?: number;
   underrunEvents?: number;
   underrunFrames?: number;
@@ -137,6 +139,8 @@ export class NativeAudioService implements IAudioService {
       playbackState: 'idle',
       currentTime: 0,
       duration: 0,
+      bufferedTime: 0,
+      bufferedAhead: 0,
       volume: 0.7,
       muted: false,
       playMode: 'sequence',
@@ -402,6 +406,8 @@ export class NativeAudioService implements IAudioService {
         if (typeof next.muted !== 'undefined') update.muted = next.muted;
         if (typeof next.currentTime !== 'undefined') update.currentTime = next.currentTime;
         if (typeof next.duration !== 'undefined') update.duration = next.duration;
+        if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
+        if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
 
         if (Array.isArray(next.queue)) {
           update.queue = this.resolveQueueFromPaths(next.queue);
@@ -690,6 +696,8 @@ export class NativeAudioService implements IAudioService {
       playbackState: 'loading',
       duration: track.duration ?? 0,
       currentTime: 0,
+      bufferedTime: 0,
+      bufferedAhead: 0,
     });
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
 
@@ -730,11 +738,6 @@ export class NativeAudioService implements IAudioService {
         return;
       }
       await this.invokeCommand('native_audio_play');
-      const nextState = this.updateState({ playbackState: 'playing' });
-      this.fallbackClockBaseTimeSec = nextState.currentTime;
-      this.fallbackClockStartedAtMs = performance.now();
-      this.ensureFallbackTicker();
-      this.applyPlaybackStateSideEffects(nextState.playbackState);
     } catch {
       // invokeCommand already emits error; swallow to avoid unhandled rejections in UI call sites.
     }
@@ -923,6 +926,8 @@ export class NativeAudioService implements IAudioService {
           playbackState: 'loading',
           duration: track.duration ?? 0,
           currentTime: 0,
+          bufferedTime: 0,
+          bufferedAhead: 0,
         });
         this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
 
@@ -931,12 +936,6 @@ export class NativeAudioService implements IAudioService {
           path: trackPath,
           durationMs: crossfade.durationMs,
         });
-
-        const playingState = this.updateState({ playbackState: 'playing', currentTime: 0 });
-        this.fallbackClockBaseTimeSec = playingState.currentTime;
-        this.fallbackClockStartedAtMs = performance.now();
-        this.ensureFallbackTicker();
-        this.applyPlaybackStateSideEffects(playingState.playbackState);
         return;
       }
 

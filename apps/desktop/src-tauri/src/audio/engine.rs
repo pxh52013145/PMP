@@ -126,6 +126,9 @@ pub(crate) struct NativeAudioEngine {
     duration: f64,
     base_position: f64,
     playback_started_at: Option<Instant>,
+    buffering_started_at: Option<Instant>,
+    buffering_last_progress_at: Option<Instant>,
+    buffering_last_samples: usize,
     decoded_samples: Option<Arc<Vec<f32>>>,
     decoded_channels: u16,
     decoded_sample_rate: u32,
@@ -217,6 +220,7 @@ impl PreparedCrossfade {
 pub(crate) enum PlaybackState {
     Idle,
     Loading,
+    Buffering,
     Playing,
     Paused,
     Stopped,
@@ -228,6 +232,7 @@ impl PlaybackState {
         match self {
             PlaybackState::Idle => "idle",
             PlaybackState::Loading => "loading",
+            PlaybackState::Buffering => "buffering",
             PlaybackState::Playing => "playing",
             PlaybackState::Paused => "paused",
             PlaybackState::Stopped => "stopped",
@@ -259,6 +264,9 @@ impl NativeAudioEngine {
             duration: 0.0,
             base_position: 0.0,
             playback_started_at: None,
+            buffering_started_at: None,
+            buffering_last_progress_at: None,
+            buffering_last_samples: 0,
             decoded_samples: None,
             decoded_channels: 0,
             decoded_sample_rate: 0,
@@ -748,6 +756,9 @@ impl NativeAudioEngine {
         self.clear_error();
         self.spectrum_tap.clear();
         self.dsp_runtime.request_reset();
+        self.buffering_started_at = None;
+        self.buffering_last_progress_at = None;
+        self.buffering_last_samples = 0;
         if let Some(old_sink) = self.sink.take() {
             old_sink.stop();
         }
@@ -976,10 +987,9 @@ impl NativeAudioEngine {
 
     pub(crate) fn play(&mut self) -> Result<(), String> {
         if let Some(sink) = &self.sink {
-            // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
             if let Some(streaming) = &self.streaming {
                 let channels = self.decoded_channels.max(1) as usize;
-                let (target_samples, timeout) = streaming_prebuffer_target_samples(
+                let (target_samples, _timeout) = streaming_prebuffer_target_samples(
                     self.output_backend.id(),
                     self.decoded_sample_rate,
                     channels,
@@ -988,14 +998,40 @@ impl NativeAudioEngine {
                     StreamingPrebufferKind::StartOrSeek,
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
-                if streaming.buffer.len_samples() < target_samples {
-                    streaming
-                        .buffer
-                        .wait_for_samples(target_samples, timeout);
+
+                if target_samples > 0 {
+                    let sample_rate = self.decoded_sample_rate.max(1) as f64;
+                    let channels_f64 = channels.max(1) as f64;
+                    let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
+                    let is_exclusive = self.output_backend.id() == "wasapi-exclusive";
+                    let min_seconds_cap = if is_exclusive { 0.75 } else { 0.35 };
+                    let min_seconds_floor = if is_exclusive { 0.25 } else { 0.15 };
+                    let min_start_seconds = target_seconds
+                        .min(min_seconds_cap)
+                        .max(min_seconds_floor)
+                        .min(target_seconds);
+                    let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                        .clamp(1, target_samples);
+
+                    let available = streaming.buffer.len_samples();
+                    self.desired_playback_state = PlaybackState::Playing;
+                    if available < min_start_samples {
+                        sink.pause();
+                        self.sync_clock();
+                        self.playback_state = PlaybackState::Buffering;
+                        let now = Instant::now();
+                        self.buffering_started_at = Some(now);
+                        self.buffering_last_progress_at = Some(now);
+                        self.buffering_last_samples = available;
+                        return Ok(());
+                    }
                 }
             }
 
             sink.play();
+            self.buffering_started_at = None;
+            self.buffering_last_progress_at = None;
+            self.buffering_last_samples = 0;
             self.set_state(PlaybackState::Playing);
             if self.playback_started_at.is_none() {
                 self.base_position = self.current_position;
@@ -1011,6 +1047,9 @@ impl NativeAudioEngine {
         if let Some(sink) = &self.sink {
             sink.pause();
             self.sync_clock();
+            self.buffering_started_at = None;
+            self.buffering_last_progress_at = None;
+            self.buffering_last_samples = 0;
             self.set_state(PlaybackState::Paused);
             Ok(())
         } else {
@@ -1023,6 +1062,9 @@ impl NativeAudioEngine {
         self.sync_clock();
         self.spectrum_tap.clear();
         self.dsp_runtime.request_reset();
+        self.buffering_started_at = None;
+        self.buffering_last_progress_at = None;
+        self.buffering_last_samples = 0;
 
         if let Some(streaming) = &self.streaming {
             streaming.buffer.clear();
@@ -1122,7 +1164,7 @@ impl NativeAudioEngine {
             .clone()
             .ok_or_else(|| "No track loaded".to_string())?;
         let target = seconds.max(0.0);
-        let resume_playing = matches!(self.playback_state, PlaybackState::Playing);
+        let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
 
         if let Some(streaming) = &self.streaming {
             if resume_playing {
@@ -1137,30 +1179,20 @@ impl NativeAudioEngine {
             let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
 
             if resume_playing {
-                let channels = self.decoded_channels.max(1) as usize;
-                let (target_samples, timeout) = streaming_prebuffer_target_samples(
-                    self.output_backend.id(),
-                    self.decoded_sample_rate,
-                    channels,
-                    streaming.buffer.capacity_samples(),
-                    self.duration,
-                    StreamingPrebufferKind::StartOrSeek,
-                    self.streaming_prebuffer_start_or_seek_seconds,
-                );
-                if streaming.buffer.len_samples() < target_samples {
-                    streaming
-                        .buffer
-                        .wait_for_samples(target_samples, timeout);
-                }
-
-                if let Some(sink) = &self.sink {
-                    sink.play();
-                }
                 self.base_position = target;
-                self.playback_started_at = Some(Instant::now());
+                self.playback_started_at = None;
+                self.desired_playback_state = PlaybackState::Playing;
+                self.playback_state = PlaybackState::Buffering;
+                let now = Instant::now();
+                self.buffering_started_at = Some(now);
+                self.buffering_last_progress_at = Some(now);
+                self.buffering_last_samples = streaming.buffer.len_samples();
             } else {
                 self.base_position = target;
                 self.playback_started_at = None;
+                self.buffering_started_at = None;
+                self.buffering_last_progress_at = None;
+                self.buffering_last_samples = 0;
             }
 
             self.current_position = target;
@@ -1253,6 +1285,9 @@ impl NativeAudioEngine {
                 sink.pause();
             }
             self.sync_clock();
+            self.buffering_started_at = None;
+            self.buffering_last_progress_at = None;
+            self.buffering_last_samples = 0;
             self.set_error(
                 "NATIVE_AUDIO_OUTPUT_ERROR",
                 format!("[{}] {}", err.code, err.message),
@@ -1275,13 +1310,138 @@ impl NativeAudioEngine {
                 sink.pause();
             }
             self.sync_clock();
+            self.buffering_started_at = None;
+            self.buffering_last_progress_at = None;
+            self.buffering_last_samples = 0;
             self.set_error("NATIVE_AUDIO_STREAM_ERROR", message);
             return true;
+        }
+
+        if let (Some(sink), Some(streaming)) = (&self.sink, &self.streaming) {
+            let channels = self.decoded_channels.max(1) as usize;
+            let (target_samples, _timeout) = streaming_prebuffer_target_samples(
+                self.output_backend.id(),
+                self.decoded_sample_rate,
+                channels,
+                streaming.buffer.capacity_samples(),
+                self.duration,
+                StreamingPrebufferKind::StartOrSeek,
+                self.streaming_prebuffer_start_or_seek_seconds,
+            );
+
+            if target_samples > 0 {
+                let sample_rate = self.decoded_sample_rate.max(1) as f64;
+                let channels_f64 = channels.max(1) as f64;
+                let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
+                let is_exclusive = self.output_backend.id() == "wasapi-exclusive";
+                let min_seconds_cap = if is_exclusive { 0.75 } else { 0.35 };
+                let min_seconds_floor = if is_exclusive { 0.25 } else { 0.15 };
+                let min_start_seconds = target_seconds
+                    .min(min_seconds_cap)
+                    .max(min_seconds_floor)
+                    .min(target_seconds);
+                let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                    .clamp(1, target_samples);
+                let fallback_after = if is_exclusive {
+                    Duration::from_secs(4)
+                } else {
+                    Duration::from_secs(3)
+                };
+
+                if matches!(self.desired_playback_state, PlaybackState::Playing)
+                    && matches!(self.playback_state, PlaybackState::Playing)
+                {
+                    let available = streaming.buffer.len_samples();
+                    if available < min_start_samples {
+                        sink.pause();
+                        self.sync_clock();
+                        self.playback_state = PlaybackState::Buffering;
+                        let now = Instant::now();
+                        self.buffering_started_at = Some(now);
+                        self.buffering_last_progress_at = Some(now);
+                        self.buffering_last_samples = available;
+                        return true;
+                    }
+                }
+
+                if matches!(self.desired_playback_state, PlaybackState::Playing)
+                    && matches!(self.playback_state, PlaybackState::Buffering)
+                {
+                    let available = streaming.buffer.len_samples();
+                    let now = Instant::now();
+                    if available != self.buffering_last_samples {
+                        self.buffering_last_samples = available;
+                        self.buffering_last_progress_at = Some(now);
+                    }
+
+                    if streaming.buffer.is_finished_and_empty() {
+                        self.buffering_started_at = None;
+                        self.buffering_last_progress_at = None;
+                        self.buffering_last_samples = 0;
+                        self.current_position = self.duration;
+                        self.base_position = self.current_position;
+                        self.playback_started_at = None;
+                        self.set_state(PlaybackState::Stopped);
+                        return true;
+                    }
+
+                    let ready_full = available >= target_samples;
+                    let ready_min = available >= min_start_samples;
+                    let waited_long_enough = self
+                        .buffering_started_at
+                        .is_some_and(|started| started.elapsed() >= fallback_after);
+
+                    let stall_timeout = Duration::from_secs(15);
+                    let no_progress_for = self
+                        .buffering_last_progress_at
+                        .map(|instant| now.saturating_duration_since(instant))
+                        .unwrap_or(Duration::from_secs(0));
+                    if !ready_min && no_progress_for >= stall_timeout {
+                        sink.pause();
+                        self.sync_clock();
+                        self.buffering_started_at = None;
+                        self.buffering_last_progress_at = None;
+                        self.buffering_last_samples = 0;
+                        self.set_error(
+                            "NATIVE_AUDIO_BUFFERING_TIMEOUT",
+                            "Audio buffering stalled (no decoder progress)".to_string(),
+                        );
+                        return true;
+                    }
+
+                    if ready_full || (waited_long_enough && ready_min) {
+                        sink.play();
+                        self.buffering_started_at = None;
+                        self.buffering_last_progress_at = None;
+                        self.buffering_last_samples = 0;
+                        self.set_state(PlaybackState::Playing);
+                        self.base_position = self.current_position;
+                        self.playback_started_at = Some(Instant::now());
+                        return true;
+                    }
+
+                    return true;
+                }
+            }
+
+            if matches!(self.desired_playback_state, PlaybackState::Playing)
+                && matches!(self.playback_state, PlaybackState::Buffering)
+            {
+                sink.play();
+                self.buffering_started_at = None;
+                self.buffering_last_progress_at = None;
+                self.buffering_last_samples = 0;
+                self.set_state(PlaybackState::Playing);
+                self.base_position = self.current_position;
+                self.playback_started_at = Some(Instant::now());
+                return true;
+            }
         }
 
         if !matches!(self.playback_state, PlaybackState::Playing) {
             return false;
         }
+
         self.update_position_from_clock();
         let Some(sink) = &self.sink else {
             return false;
@@ -1351,6 +1511,24 @@ impl NativeAudioEngine {
 
     pub(crate) fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
         let (underrun_events, underrun_frames) = crate::audio::input::streaming_underrun_stats();
+
+        let (buffered_time, buffered_ahead) = if let Some(streaming) = &self.streaming {
+            let channels = self.decoded_channels.max(1) as f64;
+            let sample_rate = self.decoded_sample_rate.max(1) as f64;
+            let buffered_seconds = (streaming.buffer.len_samples() as f64 / channels) / sample_rate;
+            let buffered_time = if self.duration > 0.0 {
+                (self.current_position + buffered_seconds).min(self.duration)
+            } else {
+                self.current_position + buffered_seconds
+            };
+            (buffered_time, buffered_seconds)
+        } else if self.decoded_samples.is_some() && self.duration > 0.0 {
+            let ahead = (self.duration - self.current_position).max(0.0);
+            (self.duration, ahead)
+        } else {
+            (self.current_position, 0.0)
+        };
+
         NativeAudioStatePayload {
             playback_state: self.playback_state.as_str().to_string(),
             volume: self.volume,
@@ -1363,6 +1541,8 @@ impl NativeAudioEngine {
                 .and_then(|path| path.to_str().map(|s| s.to_string())),
             current_time: self.current_position,
             duration: self.duration,
+            buffered_time,
+            buffered_ahead,
             sample_rate: if self.decoded_sample_rate > 0 {
                 Some(self.decoded_sample_rate)
             } else {

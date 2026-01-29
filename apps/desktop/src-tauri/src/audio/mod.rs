@@ -1,4 +1,5 @@
 pub(crate) mod atomic_f32;
+pub(crate) mod buffer;
 pub(crate) mod dsd2pcm;
 pub(crate) mod emitter;
 pub(crate) mod engine;

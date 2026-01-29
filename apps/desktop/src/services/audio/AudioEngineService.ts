@@ -268,7 +268,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
           }
           if (action === 'playPause') {
             const state = service.getState();
-            if (state.playbackState === 'playing') {
+            if (state.playbackState === 'playing' || state.playbackState === 'buffering') {
               try {
                 // Do not extract the method, otherwise `this` is lost for class-based services.
                 const maybePromise = (service as unknown as { pause?: () => unknown }).pause?.call(

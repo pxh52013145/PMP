@@ -21,9 +21,10 @@ use super::{
     SYMPHONIA_INPUT_ID,
 };
 
+use crate::audio::buffer::AudioRingBuffer;
+
 use super::streaming::{
-    drain_decoder_commands, AudioRingBuffer, DecoderCommand, SharedSamplesSource, StreamingPlayback,
-    StreamingSamplesSource,
+    drain_decoder_commands, DecoderCommand, SharedSamplesSource, StreamingPlayback, StreamingSamplesSource,
 };
 
 fn track_is_audio_like(track: &Track) -> bool {

@@ -9,9 +9,10 @@ use dsf::DsfFile;
 
 use crate::audio::dsd2pcm::Dsd2PcmContext;
 
+use crate::audio::buffer::AudioRingBuffer;
+
 use super::streaming::{
-    drain_decoder_commands, AudioRingBuffer, DecoderCommand, StreamingPlayback,
-    StreamingSamplesSource,
+    drain_decoder_commands, DecoderCommand, StreamingPlayback, StreamingSamplesSource,
 };
 use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
 

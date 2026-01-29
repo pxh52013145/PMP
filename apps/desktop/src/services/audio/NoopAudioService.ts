@@ -98,11 +98,15 @@ export class NoopAudioService implements IAudioService {
   }
 
   getState(): AudioState {
+    const bufferedTime = this.duration;
+    const bufferedAhead = Math.max(0, bufferedTime - this.currentTime);
     return {
       currentTrack: this.currentTrack,
       playbackState: this.playbackState,
       currentTime: this.currentTime,
       duration: this.duration,
+      bufferedTime,
+      bufferedAhead,
       volume: this.volume,
       muted: this.muted,
       playMode: this.playMode,
@@ -327,4 +331,3 @@ export class NoopAudioService implements IAudioService {
     this.errorCallbacks.clear();
   }
 }
-

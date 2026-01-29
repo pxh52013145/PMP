@@ -29,6 +29,7 @@ function toMediaSessionPlaybackState(state: AudioState): MediaSessionPlaybackSta
   if (!hasSession) return 'none';
 
   if (state.playbackState === 'playing') return 'playing';
+  if (state.playbackState === 'buffering') return 'paused';
   if (state.playbackState === 'paused') return 'paused';
   if (state.playbackState === 'loading') return 'paused';
   if (state.playbackState === 'stopped') return 'paused';

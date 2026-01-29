@@ -3,7 +3,7 @@
  * 提供统一的音频播放控制 API，便于后续扩展 Native Audio 功能
  */
 
-export type PlaybackState = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'error';
+export type PlaybackState = 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 'stopped' | 'error';
 
 export type PlayMode = 'sequence' | 'loop' | 'single-loop' | 'shuffle';
 
@@ -67,6 +67,8 @@ export interface AudioState {
   playbackState: PlaybackState;
   currentTime: number;
   duration: number;
+  bufferedTime: number;
+  bufferedAhead: number;
   volume: number;
   muted: boolean;
   playMode: PlayMode;

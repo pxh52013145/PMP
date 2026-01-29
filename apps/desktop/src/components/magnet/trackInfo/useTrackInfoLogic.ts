@@ -33,7 +33,7 @@ export function useTrackInfoLogic(): TrackInfoLogic {
 
   const onTogglePlay = useCallback(() => {
     const state = audioService.getState();
-    if (state.playbackState === 'playing') {
+    if (state.playbackState === 'playing' || state.playbackState === 'buffering') {
       audioService.pause();
       return;
     }

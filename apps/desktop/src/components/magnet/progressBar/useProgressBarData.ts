@@ -12,6 +12,11 @@ import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
 export interface ProgressBarData {
   currentTime: number;
   duration: number;
+  /**
+   * Best-effort buffered progress in range [0, 1].
+   * For local decoded tracks this is typically 1, while streaming inputs report how far ahead the
+   * decoder has produced contiguous PCM for the UI.
+   */
   buffered: number;
   coverUrl?: string;
 }
@@ -22,7 +27,7 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const lastTrackKeyRef = useRef<string>('none');
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const buffered = 0;
+  const [buffered, setBuffered] = useState(0);
   const [track, setTrack] = useState<Track | null>(null);
   const coverUrl = useCoverUrlForTrack(track);
   const fallbackRef = useRef<{
@@ -40,6 +45,10 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
         setCurrentTime(state.currentTime);
       }
       setDuration(state.duration);
+      const nextBufferedTime = typeof state.bufferedTime === 'number' && isFinite(state.bufferedTime) ? state.bufferedTime : 0;
+      const nextDuration = typeof state.duration === 'number' && isFinite(state.duration) ? state.duration : 0;
+      const ratio = nextDuration > 0 ? Math.max(0, Math.min(1, nextBufferedTime / nextDuration)) : 0;
+      setBuffered(ratio);
 
       const nextTrack = state.currentTrack;
       const nextKey = trackKey(nextTrack);
@@ -69,6 +78,9 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     const state = audioService.getState();
     setCurrentTime(state.currentTime);
     setDuration(state.duration);
+    const bufferedTime = typeof state.bufferedTime === 'number' && isFinite(state.bufferedTime) ? state.bufferedTime : 0;
+    const ratio = state.duration > 0 ? Math.max(0, Math.min(1, bufferedTime / state.duration)) : 0;
+    setBuffered(ratio);
     setTrack(state.currentTrack);
     lastTrackKeyRef.current = trackKey(state.currentTrack);
 

@@ -105,7 +105,7 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
             const audioEngine = services.get(AUDIO_ENGINE_SERVICE_TOKEN);
             const audioService = audioEngine.getSnapshot().audioService;
             const state = audioService.getState();
-            if (state.playbackState === 'playing') {
+            if (state.playbackState === 'playing' || state.playbackState === 'buffering') {
               audioService.pause();
               return;
             }
