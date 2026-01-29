@@ -13,6 +13,7 @@ import { NativeDebugPage } from '../components/pages/NativeDebugPage';
 import { DspRackPage } from '../components/pages/DspRackPage';
 import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
 import { AudioComponentsSettingsPanel } from '../components/settings-panels/AudioComponentsSettingsPanel';
+import { AudioBufferSettingsPanel } from '../components/settings-panels/AudioBufferSettingsPanel';
 import { DebugSettingsPanel } from '../components/settings-panels/DebugSettingsPanel';
 import { LanguageSettingsPanel } from '../components/settings-panels/LanguageSettingsPanel';
 import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
@@ -161,6 +162,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => <AudioComponentsSettingsPanel />,
           source: 'builtin',
           order: 22,
+          group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'audio-buffer',
+          title: t('settings.panels.audioBuffer.title'),
+          description: t('settings.panels.audioBuffer.desc'),
+          render: () => <AudioBufferSettingsPanel />,
+          source: 'builtin',
+          order: 25,
           group: 'core',
         });
 

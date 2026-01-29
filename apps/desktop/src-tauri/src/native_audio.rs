@@ -23,6 +23,7 @@ use crate::dsp_graph::DspGraphNode;
 use crate::vst_shm::ShmRing;
 
 pub use crate::audio::engine::NativeAudioComponentsStatePayload;
+pub use crate::audio::engine::NativeAudioStreamingBufferSettingsPayload;
 
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
 
@@ -1231,6 +1232,7 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
                 streaming.buffer.capacity_samples(),
                 meta.duration,
                 crate::audio::engine::StreamingPrebufferKind::Crossfade,
+                op.streaming_prebuffer_crossfade_seconds,
             );
             if streaming.buffer.len_samples() < target_samples {
                 streaming
@@ -2104,6 +2106,26 @@ pub fn get_audio_components_state() -> Result<NativeAudioComponentsStatePayload,
         .lock()
         .map_err(|_| "Audio engine is locked".to_string())?;
     Ok(engine.build_components_payload())
+}
+
+pub fn get_streaming_buffer_settings() -> Result<NativeAudioStreamingBufferSettingsPayload, String> {
+    let engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    Ok(engine.streaming_buffer_settings_payload())
+}
+
+pub fn set_streaming_buffer_settings(
+    app_handle: &AppHandle,
+    start_or_seek_seconds: Option<f64>,
+    crossfade_seconds: Option<f64>,
+) -> Result<NativeAudioStreamingBufferSettingsPayload, String> {
+    emitter::ensure_started(app_handle);
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.set_streaming_buffer_settings(start_or_seek_seconds, crossfade_seconds);
+    Ok(engine.streaming_buffer_settings_payload())
 }
 
 pub fn select_output_backend(

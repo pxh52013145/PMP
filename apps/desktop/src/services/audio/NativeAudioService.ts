@@ -66,6 +66,7 @@ export class NativeAudioService implements IAudioService {
   private restoredOutputBackend = false;
   private restoredOutputDevice = false;
   private restoredInputId = false;
+  private restoredStreamingBufferSettings = false;
   private restoredVstEnabled = false;
   private restoredDspGraph = false;
   private restoredDspChain = false;
@@ -153,6 +154,7 @@ export class NativeAudioService implements IAudioService {
     await this.restoreOutputBackendFromStorage();
     await this.restoreOutputDeviceFromStorage();
     await this.restoreAudioInputFromStorage();
+    await this.restoreStreamingBufferSettingsFromStorage();
     await this.restoreVstEnabledFromStorage();
 
     const restoredGraph = await this.restoreDspGraphFromBackend();
@@ -161,6 +163,48 @@ export class NativeAudioService implements IAudioService {
     }
 
     await this.restoreGainDbFromStorage();
+  }
+
+  private readStreamingBufferSettings(): { startOrSeekSeconds: number | null; crossfadeSeconds: number | null } {
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
+      if (!raw) return { startOrSeekSeconds: null, crossfadeSeconds: null };
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return { startOrSeekSeconds: null, crossfadeSeconds: null };
+      const record = parsed as Record<string, unknown>;
+
+      const startRaw = record.startOrSeekSeconds;
+      const crossfadeRaw = record.crossfadeSeconds;
+
+      const start =
+        startRaw === null
+          ? null
+          : typeof startRaw === 'number' && isFinite(startRaw)
+            ? Math.max(0, Math.min(10, startRaw))
+            : null;
+      const crossfade =
+        crossfadeRaw === null
+          ? null
+          : typeof crossfadeRaw === 'number' && isFinite(crossfadeRaw)
+            ? Math.max(0, Math.min(10, crossfadeRaw))
+            : null;
+
+      return { startOrSeekSeconds: start, crossfadeSeconds: crossfade };
+    } catch {
+      return { startOrSeekSeconds: null, crossfadeSeconds: null };
+    }
+  }
+
+  private async restoreStreamingBufferSettingsFromStorage(): Promise<void> {
+    if (this.restoredStreamingBufferSettings) return;
+    this.restoredStreamingBufferSettings = true;
+
+    try {
+      const settings = this.readStreamingBufferSettings();
+      await invoke('native_audio_set_streaming_buffer_settings', settings).catch(() => {});
+    } catch {
+      // ignore
+    }
   }
 
   private async restoreVstEnabledFromStorage(): Promise<void> {

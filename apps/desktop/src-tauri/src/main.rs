@@ -206,6 +206,28 @@ async fn native_audio_get_audio_components_state(
 }
 
 #[tauri::command]
+async fn native_audio_get_streaming_buffer_settings(
+    _app: tauri::AppHandle,
+) -> Result<native_audio::NativeAudioStreamingBufferSettingsPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::get_streaming_buffer_settings())
+        .await
+        .map_err(|e| format!("Native audio get streaming buffer settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn native_audio_set_streaming_buffer_settings(
+    app: tauri::AppHandle,
+    start_or_seek_seconds: Option<f64>,
+    crossfade_seconds: Option<f64>,
+) -> Result<native_audio::NativeAudioStreamingBufferSettingsPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::set_streaming_buffer_settings(&app, start_or_seek_seconds, crossfade_seconds)
+    })
+    .await
+    .map_err(|e| format!("Native audio set streaming buffer settings task failed: {e}"))?
+}
+
+#[tauri::command]
 async fn native_audio_list_devices() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(native_audio::list_output_devices)
         .await
@@ -1022,6 +1044,8 @@ fn main() {
             native_audio_list_audio_inputs,
             native_audio_select_audio_input,
             native_audio_get_audio_components_state,
+            native_audio_get_streaming_buffer_settings,
+            native_audio_set_streaming_buffer_settings,
             native_audio_list_devices,
             native_audio_list_devices_v2,
             native_audio_select_device,
