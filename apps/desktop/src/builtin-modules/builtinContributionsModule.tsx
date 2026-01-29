@@ -8,10 +8,12 @@ import { KeyboardShortcutsPage } from '../components/pages/KeyboardShortcutsPage
 import { MusicLibrary } from '../components/pages/MusicLibrary';
 import { TrackDetailPage } from '../components/pages/TrackDetailPage';
 import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
+import { DebugCenterPage } from '../components/pages/DebugCenterPage';
 import { NativeDebugPage } from '../components/pages/NativeDebugPage';
 import { DspRackPage } from '../components/pages/DspRackPage';
 import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
 import { AudioComponentsSettingsPanel } from '../components/settings-panels/AudioComponentsSettingsPanel';
+import { DebugSettingsPanel } from '../components/settings-panels/DebugSettingsPanel';
 import { LanguageSettingsPanel } from '../components/settings-panels/LanguageSettingsPanel';
 import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
 import { WindowCloseSettingsPanel } from '../components/settings-panels/WindowCloseSettingsPanel';
@@ -128,6 +130,18 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 10,
           group: 'core',
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'debug',
+          title: t('settings.panels.debug.title'),
+          description: t('settings.panels.debug.desc'),
+          render: () => <DebugSettingsPanel />,
+          source: 'builtin',
+          order: 90,
+          group: 'debug',
+          tags: ['debug'],
         });
 
         register<SettingsPanelContribution>({
@@ -265,6 +279,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 80,
           group: 'details',
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'debug-center',
+          title: t('pages.debug-center.title'),
+          render: () => <DebugCenterPage />,
+          source: 'builtin',
+          order: 88,
+          group: 'debug',
+          tags: ['debug'],
         });
 
         register<PageContribution>({

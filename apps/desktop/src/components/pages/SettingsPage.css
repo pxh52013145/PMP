@@ -113,6 +113,9 @@
   color: rgba(0, 255, 255, 0.85);
   font-size: 11px;
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .settings-content {
@@ -218,12 +221,20 @@
 }
 
 .settings-card-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(0, 255, 255, 0.35);
   font-size: 12px;
   color: rgba(0, 255, 255, 0.85);
   background: rgba(0, 255, 255, 0.08);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .settings-toggle {
@@ -234,12 +245,18 @@
 
 .settings-toggle button {
   flex: 1;
+  min-width: 0;
   padding: 10px 16px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.85);
   font-size: 14px;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition: all 0.2s ease;
   backdrop-filter: blur(6px);
@@ -265,6 +282,10 @@
   background: rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.85);
   font-size: 13px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition: all 0.2s ease;
   backdrop-filter: blur(6px);
@@ -287,6 +308,10 @@
   background: rgba(255, 69, 58, 0.12);
   color: rgba(255, 69, 58, 0.95);
   font-size: 13px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition: all 0.2s ease;
 }

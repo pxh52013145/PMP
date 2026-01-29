@@ -17,6 +17,7 @@ mod background_media;
 mod audio;
 mod asio_diag;
 mod audio_smoke;
+mod debug_config;
 mod dsp_graph;
 mod magnet_layout_store;
 mod music_library;
@@ -48,6 +49,26 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 fn app_request_exit(app: tauri::AppHandle) {
     request_app_exit(&app);
+}
+
+#[tauri::command]
+fn app_restart(app: tauri::AppHandle) {
+    tauri::api::process::restart(&app.env());
+}
+
+#[tauri::command]
+fn debug_get_config(app: tauri::AppHandle) -> Result<debug_config::DebugConfig, String> {
+    debug_config::get_config(&app)
+}
+
+#[tauri::command]
+fn debug_set_config(app: tauri::AppHandle, config: debug_config::DebugConfig) -> Result<(), String> {
+    debug_config::set_config(&app, config)
+}
+
+#[tauri::command]
+fn debug_get_env_snapshot() -> std::collections::BTreeMap<String, Option<String>> {
+    debug_config::env_snapshot()
 }
 
 #[cfg(test)]
@@ -892,6 +913,10 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
+            if let Err(error) = debug_config::apply_from_disk(&app.handle()) {
+                eprintln!("[debug] Failed to apply debug config: {error}");
+            }
+
             let magnet_layout_store = magnet_layout_store::MagnetLayoutStore::new(&app.handle())
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
             app.manage(magnet_layout_store);
@@ -945,6 +970,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             greet,
             app_request_exit,
+            app_restart,
+            debug_get_config,
+            debug_set_config,
+            debug_get_env_snapshot,
             background_import_media,
             open_editor_window,
             close_editor_window,

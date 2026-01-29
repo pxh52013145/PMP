@@ -190,6 +190,19 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
 
         register({
           kind: 'command',
+          id: 'app:navigate-debug-center',
+          title: t('commands.app.navigate-debug-center.title'),
+          description: t('commands.app.navigate-debug-center.description'),
+          source: 'builtin',
+          group: 'debug',
+          order: 80,
+          run: async () => {
+            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('debug-center');
+          },
+        });
+
+        register({
+          kind: 'command',
           id: 'app:open-vst3-plugin-manager',
           title: t('commands.app.open-vst3-plugin-manager.title'),
           description: t('commands.app.open-vst3-plugin-manager.description'),

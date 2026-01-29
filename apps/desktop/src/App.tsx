@@ -6,7 +6,7 @@ import { useKernel } from './contexts/KernelContext';
 import { CommandPalette } from './components/commands/CommandPalette';
 import { WorkbenchHost } from './components/workbench/WorkbenchHost';
 import { EditorProvider } from './contexts/EditorContext';
-import { NavigationProvider } from './contexts/NavigationContext';
+import { NavigationProvider, useNavigation } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { MATRIX_CONFIG } from './constants/config';
@@ -21,11 +21,13 @@ import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
+import { getDebugConfig, setDebugConfig } from './modules/debug';
 import './App.css';
 
 function AppContent() {
   const kernel = useKernel();
   const keybindings = kernel.services.get(KEYBINDINGS_SERVICE_TOKEN);
+  const { navigateTo } = useNavigation();
 
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
@@ -37,6 +39,29 @@ function AppContent() {
   useEffect(() => {
     void syncEditorEffectsFromStorage();
   }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let cancelled = false;
+    void getDebugConfig()
+      .then((config) => {
+        if (cancelled) return;
+        if (!config.openDebugCenterOnNextStart) return;
+
+        navigateTo('debug-center');
+        void setDebugConfig({ ...config, openDebugCenterOnNextStart: false }).catch((error) => {
+          console.warn('[DebugCenter] Failed to clear openDebugCenterOnNextStart flag', error);
+        });
+      })
+      .catch(() => {
+        // best-effort: debug center should not block app boot
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isTauri, navigateTo]);
 
   useEffect(() => {
     const run = async () => {

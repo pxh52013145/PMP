@@ -1,0 +1,582 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigation } from '../../contexts/NavigationContext';
+import { useT } from '../../i18n';
+import { usePersistentSetting } from '../../modules/storage';
+import {
+  getDebugConfig,
+  getDebugEnvSnapshot,
+  getDefaultDebugConfig,
+  restartApp,
+  setDebugConfig,
+  type DebugConfig,
+  type DebugEnvSnapshot,
+  type VstSidechainModeOverride,
+} from '../../modules/debug';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { calculateWindowPosition, openEditorWindow } from '../../utils/editorWindows';
+import { openVstManagerWindow } from '../../utils/vstManagerWindows';
+import { ConfirmDialog } from '../magnet/ConfirmDialog';
+
+const WINDOW_COMM_DEBUG_KEY = 'pixel-matrix-debug-window-comm';
+
+type TriBool = boolean | null;
+
+function formatTriBool(value: TriBool): 'auto' | 'on' | 'off' {
+  if (value === null) return 'auto';
+  return value ? 'on' : 'off';
+}
+
+function normalizeTriBool(mode: 'auto' | 'on' | 'off'): TriBool {
+  if (mode === 'auto') return null;
+  return mode === 'on';
+}
+
+function normalizeSidechainMode(
+  value: 'auto' | VstSidechainModeOverride
+): VstSidechainModeOverride | null {
+  return value === 'auto' ? null : value;
+}
+
+function buildPowerShellSnippet(config: DebugConfig): string {
+  const lines: string[] = [];
+
+  if (config.vstBridge.stderr || config.vstBridge.logEditor) {
+    lines.push('$env:PMP_VST_BRIDGE_STDERR="1"');
+  }
+  if (config.vstBridge.logEditor) {
+    lines.push('$env:PMP_VST_BRIDGE_LOG_EDITOR="1"');
+  }
+  if (config.vstBridge.editorSafeMode !== null) {
+    lines.push(`$env:PMP_VST_EDITOR_SAFE_MODE="${config.vstBridge.editorSafeMode ? '1' : '0'}"`);
+  }
+  if (config.vstBridge.sidechainMode) {
+    lines.push(`$env:PMP_VST_SIDECHAIN_MODE="${config.vstBridge.sidechainMode}"`);
+  }
+  if (config.vstBridge.minidump) {
+    lines.push('$env:PMP_VST_BRIDGE_MINIDUMP="1"');
+  }
+  if (config.vstBridge.minidumpDir) {
+    lines.push(`$env:PMP_VST_BRIDGE_MINIDUMP_DIR="${config.vstBridge.minidumpDir}"`);
+  }
+
+  lines.push('pnpm --filter @pixel-matrix/desktop dev');
+  return lines.join('\n');
+}
+
+export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings' }) {
+  const t = useT();
+  const { navigateTo } = useNavigation();
+  const isTauri = useMemo(() => isTauriRuntime(), []);
+  const [config, setConfigState] = useState<DebugConfig>(() => getDefaultDebugConfig());
+  const [envSnapshot, setEnvSnapshot] = useState<DebugEnvSnapshot>({});
+  const [busy, setBusy] = useState(false);
+  const [pendingRestart, setPendingRestart] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  const [confirmRestartIntoDebug, setConfirmRestartIntoDebug] = useState(false);
+  const [minidumpDirDraft, setMinidumpDirDraft] = useState('');
+
+  const [windowCommDebug, setWindowCommDebug] = usePersistentSetting<string>(
+    WINDOW_COMM_DEBUG_KEY,
+    '0',
+    { format: 'string' }
+  );
+  const windowCommDebugEnabled = windowCommDebug === '1';
+
+  const refresh = useCallback(async () => {
+    if (!isTauri) return;
+    const [nextConfig, snapshot] = await Promise.all([getDebugConfig(), getDebugEnvSnapshot()]);
+    setConfigState(nextConfig);
+    setEnvSnapshot(snapshot);
+    setMinidumpDirDraft(nextConfig.vstBridge.minidumpDir ?? '');
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let cancelled = false;
+    setBusy(true);
+    void Promise.all([getDebugConfig(), getDebugEnvSnapshot()])
+      .then(([nextConfig, snapshot]) => {
+        if (cancelled) return;
+        setConfigState(nextConfig);
+        setEnvSnapshot(snapshot);
+        setMinidumpDirDraft(nextConfig.vstBridge.minidumpDir ?? '');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isTauri]);
+
+  const persist = useCallback(
+    async (next: DebugConfig) => {
+      if (!isTauri) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await setDebugConfig(next);
+        setPendingRestart(true);
+        const snapshot = await getDebugEnvSnapshot().catch(() => ({}));
+        setEnvSnapshot(snapshot);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [isTauri]
+  );
+
+  const updateConfig = useCallback(
+    (updater: (prev: DebugConfig) => DebugConfig) => {
+      setConfigState((prev) => {
+        const next = updater(prev);
+        void persist(next);
+        return next;
+      });
+    },
+    [persist]
+  );
+
+  const handlePickMinidumpDir = useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      const { open } = await import('@tauri-apps/api/dialog');
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected !== 'string') return;
+      const trimmed = selected.trim();
+      setMinidumpDirDraft(trimmed);
+      updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, minidumpDir: trimmed || null } }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isTauri, updateConfig]);
+
+  const handleMinidumpDirBlur = useCallback(() => {
+    const trimmed = minidumpDirDraft.trim();
+    updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, minidumpDir: trimmed || null } }));
+  }, [minidumpDirDraft, updateConfig]);
+
+  const handleCopyPowerShell = useCallback(() => {
+    const snippet = buildPowerShellSnippet(config);
+    void navigator.clipboard.writeText(snippet).catch(() => {});
+  }, [config]);
+
+  const handleOpenThemeDebugWindow = useCallback(async () => {
+    try {
+      const position = await calculateWindowPosition('debug');
+      await openEditorWindow({ type: 'debug', ...position });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const handleOpenVstManager = useCallback(async () => {
+    try {
+      await openVstManagerWindow({ title: t('windows.vst-manager.title') });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [t]);
+
+  const requestRestart = useCallback(
+    async (mode: 'normal' | 'debug-center') => {
+      if (!isTauri) return;
+
+      const next: DebugConfig =
+        mode === 'debug-center'
+          ? { ...config, enabled: true, openDebugCenterOnNextStart: true }
+          : config;
+
+      try {
+        await setDebugConfig(next);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+
+      await restartApp();
+    },
+    [config, isTauri]
+  );
+
+  const headerActions = (
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <button type="button" className="settings-action-btn" onClick={() => setConfirmRestart(true)} disabled={!isTauri}>
+        {t('debug.center.actions.restart')}
+      </button>
+      <button
+        type="button"
+        className="settings-action-btn"
+        onClick={() => setConfirmRestartIntoDebug(true)}
+        disabled={!isTauri}
+      >
+        {t('debug.center.actions.restartAndOpen')}
+      </button>
+    </div>
+  );
+
+  const header =
+    variant === 'page' ? (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: 12,
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{t('pages.debug-center.title')}</h1>
+          <p style={{ fontSize: 12, opacity: 0.72, margin: '6px 0 0' }}>{t('pages.debug-center.subtitle')}</p>
+        </div>
+        {headerActions}
+      </div>
+    ) : (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>{headerActions}</div>
+    );
+
+  return (
+    <div style={{ width: '100%', height: '100%', padding: variant === 'page' ? 16 : 0 }}>
+      {header}
+
+      {!isTauri ? (
+        <div className="settings-card-note" style={{ marginTop: variant === 'page' ? 16 : 0 }}>
+          {t('debug.center.note.requireTauri')}
+        </div>
+      ) : null}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: variant === 'page' ? 16 : 0 }}>
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.mode.label')}</p>
+              <p className="settings-card-desc">{t('debug.center.mode.desc')}</p>
+            </div>
+            <span className="settings-card-badge">
+              {config.enabled ? t('common.state.on') : t('common.state.off')}
+            </span>
+          </div>
+
+          <div className="settings-toggle">
+            <button type="button" data-active={!config.enabled} onClick={() => updateConfig((prev) => ({ ...prev, enabled: false }))}>
+              {t('common.state.off')}
+            </button>
+            <button type="button" data-active={config.enabled} onClick={() => updateConfig((prev) => ({ ...prev, enabled: true }))}>
+              {t('common.state.on')}
+            </button>
+          </div>
+
+          {pendingRestart ? <p className="settings-card-note">{t('debug.center.mode.note.restartRequired')}</p> : null}
+          {busy ? <p className="settings-card-note">{t('debug.center.mode.note.saving')}</p> : null}
+          {error ? <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>{error}</p> : null}
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.vstBridge.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.vstBridge.desc')}</p>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button type="button" className="settings-action-btn" onClick={() => void refresh()} disabled={!isTauri}>
+                {t('debug.center.actions.refreshEnv')}
+              </button>
+              <button type="button" className="settings-action-btn" onClick={handleCopyPowerShell}>
+                {t('debug.center.actions.copyPowershell')}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <p className="settings-card-label">{t('debug.center.vstBridge.stderr.label')}</p>
+                  <p className="settings-card-desc">{t('debug.center.vstBridge.stderr.desc')}</p>
+                </div>
+                <span className="settings-card-badge">
+                  {config.vstBridge.stderr ? t('common.state.on') : t('common.state.off')}
+                </span>
+              </div>
+              <div className="settings-toggle">
+                <button
+                  type="button"
+                  data-active={!config.vstBridge.stderr}
+                  onClick={() => updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, stderr: false } }))}
+                >
+                  {t('common.state.off')}
+                </button>
+                <button
+                  type="button"
+                  data-active={config.vstBridge.stderr}
+                  onClick={() => updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, stderr: true } }))}
+                >
+                  {t('common.state.on')}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <p className="settings-card-label">{t('debug.center.vstBridge.logEditor.label')}</p>
+                  <p className="settings-card-desc">{t('debug.center.vstBridge.logEditor.desc')}</p>
+                </div>
+                <span className="settings-card-badge">
+                  {config.vstBridge.logEditor ? t('common.state.on') : t('common.state.off')}
+                </span>
+              </div>
+              <div className="settings-toggle">
+                <button
+                  type="button"
+                  data-active={!config.vstBridge.logEditor}
+                  onClick={() =>
+                    updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, logEditor: false } }))
+                  }
+                >
+                  {t('common.state.off')}
+                </button>
+                <button
+                  type="button"
+                  data-active={config.vstBridge.logEditor}
+                  onClick={() =>
+                    updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, logEditor: true } }))
+                  }
+                >
+                  {t('common.state.on')}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <p className="settings-card-label">{t('debug.center.vstBridge.minidump.label')}</p>
+                  <p className="settings-card-desc">{t('debug.center.vstBridge.minidump.desc')}</p>
+                </div>
+                <span className="settings-card-badge">
+                  {config.vstBridge.minidump ? t('common.state.on') : t('common.state.off')}
+                </span>
+              </div>
+              <div className="settings-toggle">
+                <button
+                  type="button"
+                  data-active={!config.vstBridge.minidump}
+                  onClick={() =>
+                    updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, minidump: false } }))
+                  }
+                >
+                  {t('common.state.off')}
+                </button>
+                <button
+                  type="button"
+                  data-active={config.vstBridge.minidump}
+                  onClick={() =>
+                    updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, minidump: true } }))
+                  }
+                >
+                  {t('common.state.on')}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  value={minidumpDirDraft}
+                  onChange={(e) => setMinidumpDirDraft(e.target.value)}
+                  onBlur={handleMinidumpDirBlur}
+                  placeholder={t('debug.center.vstBridge.minidumpDir.placeholder')}
+                  style={{
+                    flex: 1,
+                    minWidth: 220,
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    background: 'rgba(0,0,0,0.2)',
+                    color: 'rgba(255,255,255,0.92)',
+                    outline: 'none',
+                  }}
+                  disabled={!isTauri}
+                />
+                <button type="button" className="settings-action-btn" onClick={() => void handlePickMinidumpDir()}>
+                  {t('debug.center.vstBridge.minidumpDir.pick')}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <p className="settings-card-label">{t('debug.center.vstBridge.editorSafeMode.label')}</p>
+                  <p className="settings-card-desc">{t('debug.center.vstBridge.editorSafeMode.desc')}</p>
+                </div>
+                <span className="settings-card-badge">
+                  {t(`debug.center.vstBridge.editorSafeMode.badge.${formatTriBool(config.vstBridge.editorSafeMode)}`)}
+                </span>
+              </div>
+
+              <div className="settings-toggle">
+                {(['auto', 'on', 'off'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-active={formatTriBool(config.vstBridge.editorSafeMode) === mode}
+                    onClick={() =>
+                      updateConfig((prev) => ({
+                        ...prev,
+                        vstBridge: { ...prev.vstBridge, editorSafeMode: normalizeTriBool(mode) },
+                      }))
+                    }
+                  >
+                    {t(`debug.center.vstBridge.editorSafeMode.option.${mode}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <p className="settings-card-label">{t('debug.center.vstBridge.sidechainMode.label')}</p>
+                  <p className="settings-card-desc">{t('debug.center.vstBridge.sidechainMode.desc')}</p>
+                </div>
+                <span className="settings-card-badge">
+                  {t(`debug.center.vstBridge.sidechainMode.badge.${config.vstBridge.sidechainMode ?? 'auto'}`)}
+                </span>
+              </div>
+
+              <div className="settings-toggle">
+                {(['auto', 'disabled', 'silence', 'self'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-active={(config.vstBridge.sidechainMode ?? 'auto') === mode}
+                    onClick={() =>
+                      updateConfig((prev) => ({
+                        ...prev,
+                        vstBridge: { ...prev.vstBridge, sidechainMode: normalizeSidechainMode(mode) },
+                      }))
+                    }
+                  >
+                    {t(`debug.center.vstBridge.sidechainMode.option.${mode}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="settings-card-label">{t('debug.center.env.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.env.desc')}</p>
+              <pre
+                style={{
+                  marginTop: 10,
+                  padding: 12,
+                  borderRadius: 10,
+                  background: 'rgba(0,0,0,0.25)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  overflowX: 'auto',
+                  fontSize: 12,
+                  color: 'rgba(255,255,255,0.88)',
+                }}
+              >
+                {Object.keys(envSnapshot).length === 0
+                  ? t('debug.center.env.empty')
+                  : Object.entries(envSnapshot)
+                      .map(([key, value]) => `${key}=${value ?? ''}`)
+                      .join('\n')}
+              </pre>
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.windowComm.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.windowComm.desc')}</p>
+            </div>
+            <span className="settings-card-badge">
+              {windowCommDebugEnabled ? t('common.state.on') : t('common.state.off')}
+            </span>
+          </div>
+          <div className="settings-toggle">
+            <button type="button" data-active={!windowCommDebugEnabled} onClick={() => setWindowCommDebug('0')}>
+              {t('common.state.off')}
+            </button>
+            <button type="button" data-active={windowCommDebugEnabled} onClick={() => setWindowCommDebug('1')}>
+              {t('common.state.on')}
+            </button>
+          </div>
+          <p className="settings-card-note">{t('debug.center.windowComm.note')}</p>
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.shortcuts.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.shortcuts.desc')}</p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button type="button" className="settings-action-btn" onClick={() => navigateTo('native-debug')}>
+              {t('debug.center.shortcuts.nativeDebug')}
+            </button>
+            <button type="button" className="settings-action-btn" onClick={() => navigateTo('dsp-rack')}>
+              {t('debug.center.shortcuts.dspRack')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => void handleOpenVstManager()}
+              disabled={!isTauri}
+            >
+              {t('debug.center.shortcuts.vstManager')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => void handleOpenThemeDebugWindow()}
+              disabled={!isTauri}
+            >
+              {t('debug.center.shortcuts.themeDebug')}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        isOpen={confirmRestart}
+        title={t('debug.center.restart.confirmTitle')}
+        message={t('debug.center.restart.confirmMessage')}
+        confirmText={t('debug.center.actions.restart')}
+        onConfirm={() => {
+          setConfirmRestart(false);
+          void requestRestart('normal');
+        }}
+        onCancel={() => setConfirmRestart(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmRestartIntoDebug}
+        title={t('debug.center.restart.confirmTitle')}
+        message={t('debug.center.restart.confirmMessageIntoDebug')}
+        confirmText={t('debug.center.actions.restartAndOpen')}
+        onConfirm={() => {
+          setConfirmRestartIntoDebug(false);
+          void requestRestart('debug-center');
+        }}
+        onCancel={() => setConfirmRestartIntoDebug(false)}
+      />
+    </div>
+  );
+}
