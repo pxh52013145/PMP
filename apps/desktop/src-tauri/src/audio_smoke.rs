@@ -29,6 +29,9 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
     let mut device_name: Option<String> = None;
     let mut input_id: Option<String> = None;
     let mut play_ms: u64 = 800;
+    let mut stress_cpu_threads: u32 = 0;
+    let mut max_underrun_events: Option<u64> = None;
+    let mut max_underrun_frames: Option<u64> = None;
     let mut switch_backends: Vec<String> = Vec::new();
     let mut switch_interval_ms: u64 = 250;
     let mut switch_tracks: Vec<PathBuf> = Vec::new();
@@ -77,6 +80,37 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
                 play_ms = value
                     .parse::<u64>()
                     .map_err(|_| format!("Invalid --play-ms value: {value}"))?;
+                index += 1;
+            }
+            "--stress-cpu-threads" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --stress-cpu-threads".to_string())?;
+                stress_cpu_threads = value
+                    .parse::<u32>()
+                    .map_err(|_| format!("Invalid --stress-cpu-threads value: {value}"))?;
+                index += 1;
+            }
+            "--max-underrun-events" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --max-underrun-events".to_string())?;
+                max_underrun_events = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("Invalid --max-underrun-events value: {value}"))?,
+                );
+                index += 1;
+            }
+            "--max-underrun-frames" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "Missing value for --max-underrun-frames".to_string())?;
+                max_underrun_frames = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("Invalid --max-underrun-frames value: {value}"))?,
+                );
                 index += 1;
             }
             "--switch-backends" => {
@@ -182,6 +216,9 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
         seek_seconds,
         seek_count,
         seek_interval_ms,
+        stress_cpu_threads,
+        max_underrun_events,
+        max_underrun_frames,
     })
 }
 

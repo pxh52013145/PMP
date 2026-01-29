@@ -5,14 +5,17 @@ use crate::audio::output::BoxedSource;
 
 mod rodio;
 mod sacd;
+mod cached_pcm;
+mod streaming;
 mod symphonia;
 
 pub(crate) use rodio::{open_source_at as open_rodio_source_at, RodioInput};
 pub(crate) use sacd::SacdInput;
-pub(crate) use symphonia::{
+pub(crate) use streaming::{
     streaming_underrun_stats, DecoderCommand, SharedSamplesSource, StreamingPlayback,
-    StreamingSamplesSource, SymphoniaInput,
+    StreamingSamplesSource,
 };
+pub(crate) use symphonia::SymphoniaInput;
 
 pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";
 pub(crate) const RODIO_INPUT_ID: &str = "rodio";

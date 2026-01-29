@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -2370,6 +2370,9 @@ pub(crate) struct AudioSmokeOptions {
     pub seek_seconds: f64,
     pub seek_count: u32,
     pub seek_interval_ms: u64,
+    pub stress_cpu_threads: u32,
+    pub max_underrun_events: Option<u64>,
+    pub max_underrun_frames: Option<u64>,
 }
 
 fn audio_smoke_error_from_state(payload: &NativeAudioStatePayload) -> Option<NativeAudioErrorPayload> {
@@ -2418,6 +2421,65 @@ fn audio_smoke_step_result(
     }
 
     Ok(())
+}
+
+struct CpuStressGuard {
+    stop: Option<Arc<AtomicBool>>,
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl CpuStressGuard {
+    fn start(threads: u32) -> Self {
+        if threads == 0 {
+            return Self {
+                stop: None,
+                handles: Vec::new(),
+            };
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::with_capacity(threads as usize);
+
+        for index in 0..threads {
+            let stop_clone = stop.clone();
+            let name = format!("pmpm-audio-smoke-stress-{index}");
+            let handle = std::thread::Builder::new().name(name).spawn(move || {
+                let mut x: u64 = (index as u64)
+                    .wrapping_add(0x9E37_79B9_7F4A_7C15)
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1);
+                while !stop_clone.load(Ordering::Relaxed) {
+                    for _ in 0..200_000 {
+                        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        x ^= x >> 33;
+                        x ^= x << 17;
+                    }
+                    std::hint::black_box(x);
+                    std::thread::yield_now();
+                }
+            });
+
+            if let Ok(handle) = handle {
+                handles.push(handle);
+            }
+        }
+
+        Self {
+            stop: Some(stop),
+            handles,
+        }
+    }
+}
+
+impl Drop for CpuStressGuard {
+    fn drop(&mut self) {
+        if let Some(stop) = &self.stop {
+            stop.store(true, Ordering::Release);
+        }
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
 }
 
 pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> {
@@ -2561,6 +2623,8 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
         select_input.0,
         select_input.1,
     )?;
+
+    let _cpu_stress = CpuStressGuard::start(options.stress_cpu_threads);
 
     let load_step = {
         let result = {
@@ -2745,6 +2809,7 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
         };
         (Ok(()), payload)
     };
+    let final_payload = stop_step.1.clone();
     audio_smoke_step_result("native_audio_stop", stop_step.0, stop_step.1)?;
 
     // Ensure the output stream thread is terminated so `--audio-smoke` exits cleanly.
@@ -2755,6 +2820,24 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
         engine.output_backend()
     };
     output_backend.close_stream();
+
+    if let Some(max_events) = options.max_underrun_events {
+        if final_payload.underrun_events > max_events {
+            return Err(format!(
+                "Streaming underrun_events exceeded threshold: {} > {}",
+                final_payload.underrun_events, max_events
+            ));
+        }
+    }
+
+    if let Some(max_frames) = options.max_underrun_frames {
+        if final_payload.underrun_frames > max_frames {
+            return Err(format!(
+                "Streaming underrun_frames exceeded threshold: {} > {}",
+                final_payload.underrun_frames, max_frames
+            ));
+        }
+    }
 
     Ok(())
 }
