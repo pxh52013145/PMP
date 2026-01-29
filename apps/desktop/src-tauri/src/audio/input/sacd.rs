@@ -142,15 +142,16 @@ struct StreamingFirDecimator {
 }
 
 impl StreamingFirDecimator {
-    fn new(input_sample_rate: u32, output_sample_rate: u32, channels: usize, decimation: usize) -> Self {
+    fn new(
+        input_sample_rate: u32,
+        output_sample_rate: u32,
+        channels: usize,
+        decimation: usize,
+    ) -> Self {
         let channels = channels.max(1);
         let decimation = decimation.max(1);
         let cutoff = dsd_lowpass_cutoff_hz(output_sample_rate);
-        let taps = design_lowpass_fir(
-            input_sample_rate,
-            cutoff,
-            SACD_DSD_TO_PCM_DECIMATOR_TAPS,
-        );
+        let taps = design_lowpass_fir(input_sample_rate, cutoff, SACD_DSD_TO_PCM_DECIMATOR_TAPS);
         let history = vec![0.0; taps.len().saturating_mul(channels)];
 
         Self {
@@ -224,7 +225,10 @@ fn start_dsf_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
-    let buffer = AudioRingBuffer::new(352_800);
+    let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
+        output_sample_rate,
+        2,
+    ));
     let cache_key = crate::audio::resample_cache::key_for_resample_with_salt(
         path,
         output_sample_rate,
@@ -239,236 +243,144 @@ fn start_dsf_stream(
     let error = Arc::new(Mutex::new(None::<String>));
     let error_clone = error.clone();
 
-    std::thread::spawn(move || {
-        let meta_tx_panic = meta_tx.clone();
-        let buffer_panic = buffer_clone.clone();
-        let error_panic = error_clone.clone();
+    thread::Builder::new()
+        .name("pmpm-sacd-dsf-decoder".into())
+        .spawn(move || {
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_decode();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let init = (|| -> Result<(DsfFile, usize, u32, u64, u32), String> {
-                let file =
-                    DsfFile::open(&path).map_err(|e| format!("Failed to open DSF: {e:?}"))?;
-                let fmt = file.fmt_chunk();
-                let channels = fmt.channel_num() as usize;
-                let dsd_rate = fmt.sampling_frequency();
-                let sample_count_raw = fmt.sample_count();
-                let samples_per_frame = u64::from(fmt.block_size_per_channel())
-                    .saturating_mul(8)
-                    .max(1);
-                // The dsf crate's streaming iterator assumes the sample count is aligned to full frames
-                // (4096 bytes per channel => 32768 1-bit samples per frame). Some files report a
-                // non-aligned count, which can trigger a debug assertion near EOF. Clamp to the last
-                // full frame to avoid panics and stuck playback.
-                let sample_count =
-                    (sample_count_raw / samples_per_frame).saturating_mul(samples_per_frame);
-                if sample_count == 0 {
-                    return Err("Invalid DSF sample count".to_string());
-                }
-                let decimation_factor = pick_decimation_factor(dsd_rate)
-                    .map_err(|e| format!("[{}] {}", e.code, e.message))?;
-                Ok((file, channels, dsd_rate, sample_count, decimation_factor))
-            })();
+            let meta_tx_panic = meta_tx.clone();
+            let buffer_panic = buffer_clone.clone();
+            let error_panic = error_clone.clone();
 
-            let (mut dsf_file, channels, dsd_rate, sample_count, decimation_factor) = match init {
-                Ok(value) => value,
-                Err(err) => {
-                    if let Ok(mut guard) = error_clone.lock() {
-                        *guard = Some(err.clone());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let init = (|| -> Result<(DsfFile, usize, u32, u64, u32), String> {
+                    let file =
+                        DsfFile::open(&path).map_err(|e| format!("Failed to open DSF: {e:?}"))?;
+                    let fmt = file.fmt_chunk();
+                    let channels = fmt.channel_num() as usize;
+                    let dsd_rate = fmt.sampling_frequency();
+                    let sample_count_raw = fmt.sample_count();
+                    let samples_per_frame = u64::from(fmt.block_size_per_channel())
+                        .saturating_mul(8)
+                        .max(1);
+                    // The dsf crate's streaming iterator assumes the sample count is aligned to full frames
+                    // (4096 bytes per channel => 32768 1-bit samples per frame). Some files report a
+                    // non-aligned count, which can trigger a debug assertion near EOF. Clamp to the last
+                    // full frame to avoid panics and stuck playback.
+                    let sample_count =
+                        (sample_count_raw / samples_per_frame).saturating_mul(samples_per_frame);
+                    if sample_count == 0 {
+                        return Err("Invalid DSF sample count".to_string());
                     }
-                    let _ = meta_tx.send(Err(err));
+                    let decimation_factor = pick_decimation_factor(dsd_rate)
+                        .map_err(|e| format!("[{}] {}", e.code, e.message))?;
+                    Ok((file, channels, dsd_rate, sample_count, decimation_factor))
+                })();
+
+                let (mut dsf_file, channels, dsd_rate, sample_count, decimation_factor) = match init
+                {
+                    Ok(value) => value,
+                    Err(err) => {
+                        if let Ok(mut guard) = error_clone.lock() {
+                            *guard = Some(err.clone());
+                        }
+                        let _ = meta_tx.send(Err(err));
+                        buffer_clone.mark_finished();
+                        return;
+                    }
+                };
+
+                if channels == 0 {
+                    let message = "Invalid DSF channel count".to_string();
+                    if let Ok(mut guard) = error_clone.lock() {
+                        *guard = Some(message.clone());
+                    }
+                    let _ = meta_tx.send(Err(message));
                     buffer_clone.mark_finished();
                     return;
                 }
-            };
 
-            if channels == 0 {
-                let message = "Invalid DSF channel count".to_string();
-                if let Ok(mut guard) = error_clone.lock() {
-                    *guard = Some(message.clone());
-                }
-                let _ = meta_tx.send(Err(message));
-                buffer_clone.mark_finished();
-                return;
-            }
+                let base_pcm_rate = dsd_rate / decimation_factor;
+                let target_pcm_rate = output_sample_rate.unwrap_or(base_pcm_rate).max(1);
+                let duration = if dsd_rate > 0 {
+                    (sample_count as f64) / (dsd_rate as f64)
+                } else {
+                    0.0
+                };
 
-            let base_pcm_rate = dsd_rate / decimation_factor;
-            let target_pcm_rate = output_sample_rate.unwrap_or(base_pcm_rate).max(1);
-            let duration = if dsd_rate > 0 {
-                (sample_count as f64) / (dsd_rate as f64)
-            } else {
-                0.0
-            };
+                let meta = AudioInputMeta {
+                    channels: channels as u16,
+                    sample_rate: target_pcm_rate,
+                    bit_depth: Some(1),
+                    duration,
+                };
+                let _ = meta_tx.send(Ok(meta.clone()));
 
-            let meta = AudioInputMeta {
-                channels: channels as u16,
-                sample_rate: target_pcm_rate,
-                bit_depth: Some(1),
-                duration,
-            };
-            let _ = meta_tx.send(Ok(meta.clone()));
-
-            let mut cache_handle: Option<crate::audio::resample_cache::StreamingCacheHandle> = None;
-            if let Some(key) = cache_key {
-                cache_handle = crate::audio::resample_cache::start_streaming_cache(
-                    key,
-                    channels as u16,
-                    target_pcm_rate,
-                    meta.bit_depth,
-                );
-            }
-
-            let dsd_byte_rate = if dsd_rate % 8 == 0 { dsd_rate / 8 } else { 0 };
-            if dsd_byte_rate == 0 {
-                if let Ok(mut guard) = error_clone.lock() {
-                    *guard = Some(format!("Unsupported DSD sample rate: {dsd_rate} Hz"));
-                }
-                buffer_clone.mark_finished();
-                return;
-            }
-
-            let decimation_ratio = (decimation_factor / 8).max(1) as usize;
-            let mut dsd2pcm: Vec<Dsd2PcmContext> =
-                (0..channels).map(|_| Dsd2PcmContext::default()).collect();
-            let mut decimator =
-                StreamingFirDecimator::new(dsd_byte_rate, base_pcm_rate, channels, decimation_ratio);
-
-            let resample_chunk_frames = 256usize;
-            let mut resampler: Option<crate::audio::resample::StreamingResampler> =
-                if target_pcm_rate != base_pcm_rate {
-                    crate::audio::resample::StreamingResampler::new(
-                        base_pcm_rate,
+                let mut cache_handle: Option<crate::audio::resample_cache::StreamingCacheHandle> =
+                    None;
+                if let Some(key) = cache_key {
+                    cache_handle = crate::audio::resample_cache::start_streaming_cache(
+                        key,
+                        channels as u16,
                         target_pcm_rate,
-                        channels,
-                        resample_chunk_frames,
-                    )
-                    .ok()
-                } else {
-                    None
-                };
+                        meta.bit_depth,
+                    );
+                }
 
-            let mut stage1_chunk_frames =
-                SACD_DSD2PCM_MIN_CHUNK_FRAMES.max(resample_chunk_frames * decimation_ratio);
-            stage1_chunk_frames = stage1_chunk_frames.saturating_sub(stage1_chunk_frames % 4);
-            let stage1_chunk_samples = stage1_chunk_frames.saturating_mul(channels);
-
-            let mut iter = match dsf_file.interleaved_u32_samples_iter() {
-                Ok(iter) => iter,
-                Err(err) => {
+                let dsd_byte_rate = if dsd_rate % 8 == 0 { dsd_rate / 8 } else { 0 };
+                if dsd_byte_rate == 0 {
                     if let Ok(mut guard) = error_clone.lock() {
-                        *guard = Some(format!("Failed to read DSF samples: {err:?}"));
+                        *guard = Some(format!("Unsupported DSD sample rate: {dsd_rate} Hz"));
                     }
                     buffer_clone.mark_finished();
                     return;
                 }
-            };
 
-            let mut pcm8_chunk: Vec<f32> = Vec::with_capacity(stage1_chunk_samples);
-            let mut words: Vec<u32> = vec![0u32; channels];
+                let decimation_ratio = (decimation_factor / 8).max(1) as usize;
+                let mut dsd2pcm: Vec<Dsd2PcmContext> =
+                    (0..channels).map(|_| Dsd2PcmContext::default()).collect();
+                let mut decimator = StreamingFirDecimator::new(
+                    dsd_byte_rate,
+                    base_pcm_rate,
+                    channels,
+                    decimation_ratio,
+                );
 
-            'decode_loop: loop {
-                let drained = drain_decoder_commands(&command_rx);
-                if drained.shutdown {
-                    drop(cache_handle.take());
-                    buffer_clone.mark_finished();
-                    return;
-                }
-                if let Some(target) = drained.seek_target {
-                    buffer_clone.clear();
-                    pcm8_chunk.clear();
-                    for ctx in &mut dsd2pcm {
-                        ctx.reset();
-                    }
-                    decimator.reset();
-                    if let Some(r) = resampler.as_mut() {
-                        r.reset();
-                    }
-                    cache_handle = None;
-
-                    let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
-                    let desired_dsd_sample =
-                        desired_dsd_sample.min(sample_count.saturating_sub(1));
-                    let aligned = if decimation_factor > 0 {
-                        decimation_factor as u64
-                            * (desired_dsd_sample / decimation_factor as u64)
+                let resample_chunk_frames = 256usize;
+                let mut resampler: Option<crate::audio::resample::StreamingResampler> =
+                    if target_pcm_rate != base_pcm_rate {
+                        crate::audio::resample::StreamingResampler::new(
+                            base_pcm_rate,
+                            target_pcm_rate,
+                            channels,
+                            resample_chunk_frames,
+                        )
+                        .ok()
                     } else {
-                        0
+                        None
                     };
-                    let _ = iter.set_sample_index(aligned);
-                }
 
-                let mut reached_eof = false;
-                'decode: while pcm8_chunk.len() < stage1_chunk_samples {
-                    if iter.sample_index() >= sample_count {
-                        reached_eof = true;
-                        break 'decode;
-                    }
+                let mut stage1_chunk_frames =
+                    SACD_DSD2PCM_MIN_CHUNK_FRAMES.max(resample_chunk_frames * decimation_ratio);
+                stage1_chunk_frames = stage1_chunk_frames.saturating_sub(stage1_chunk_frames % 4);
+                let stage1_chunk_samples = stage1_chunk_frames.saturating_mul(channels);
 
-                    for channel_index in 0..channels {
-                        let Some(word) = iter.next() else {
-                            reached_eof = true;
-                            break 'decode;
-                        };
-                        words[channel_index] = word;
-                    }
-
-                    // Each u32 represents 4 bytes per channel, i.e. 32 DSD 1-bit samples. The dsd2pcm
-                    // stage consumes bytes and outputs PCM at dsd_rate/8 (one float per byte).
-                    for byte_index in 0..4usize {
-                        for channel_index in 0..channels {
-                            let byte = ((words[channel_index] >> (byte_index * 8)) & 0xFF) as u8;
-                            let value = dsd2pcm[channel_index].translate_byte_msbf(byte);
-                            pcm8_chunk.push(value);
-                        }
-
-                        if pcm8_chunk.len() >= stage1_chunk_samples {
-                            break 'decode;
-                        }
-                    }
-                }
-
-                if pcm8_chunk.is_empty() {
-                    if reached_eof {
-                        if let Some(handle) = cache_handle.take() {
-                            handle.finalize();
+                let mut iter = match dsf_file.interleaved_u32_samples_iter() {
+                    Ok(iter) => iter,
+                    Err(err) => {
+                        if let Ok(mut guard) = error_clone.lock() {
+                            *guard = Some(format!("Failed to read DSF samples: {err:?}"));
                         }
                         buffer_clone.mark_finished();
                         return;
                     }
-                    continue;
-                }
-
-                if reached_eof && pcm8_chunk.len() < stage1_chunk_samples {
-                    let missing_samples = stage1_chunk_samples - pcm8_chunk.len();
-                    let missing_frames = missing_samples / channels;
-                    for _ in 0..missing_frames {
-                        for ch in 0..channels {
-                            pcm8_chunk.push(dsd2pcm[ch].translate_byte_msbf(0x00));
-                        }
-                    }
-                }
-
-                let base_pcm = decimator.process_interleaved(&pcm8_chunk);
-                pcm8_chunk.clear();
-
-                let out_interleaved = if let Some(r) = resampler.as_mut() {
-                    r.process_interleaved(&base_pcm)
-                } else {
-                    base_pcm
                 };
 
-                if out_interleaved.is_empty() {
-                    if reached_eof {
-                        if let Some(handle) = cache_handle.take() {
-                            handle.finalize();
-                        }
-                        buffer_clone.mark_finished();
-                        return;
-                    }
-                    continue;
-                }
+                let mut pcm8_chunk: Vec<f32> = Vec::with_capacity(stage1_chunk_samples);
+                let mut words: Vec<u32> = vec![0u32; channels];
 
-                let mut offset = 0usize;
-                while offset < out_interleaved.len() {
+                'decode_loop: loop {
                     let drained = drain_decoder_commands(&command_rx);
                     if drained.shutdown {
                         drop(cache_handle.take());
@@ -497,51 +409,161 @@ fn start_dsf_stream(
                             0
                         };
                         let _ = iter.set_sample_index(aligned);
-                        continue 'decode_loop;
                     }
 
-                    let remaining = &out_interleaved[offset..];
-                    let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
-                    if frames_pushed == 0 {
-                        std::thread::sleep(Duration::from_millis(5));
+                    let mut reached_eof = false;
+                    'decode: while pcm8_chunk.len() < stage1_chunk_samples {
+                        if iter.sample_index() >= sample_count {
+                            reached_eof = true;
+                            break 'decode;
+                        }
+
+                        for channel_index in 0..channels {
+                            let Some(word) = iter.next() else {
+                                reached_eof = true;
+                                break 'decode;
+                            };
+                            words[channel_index] = word;
+                        }
+
+                        // Each u32 represents 4 bytes per channel, i.e. 32 DSD 1-bit samples. The dsd2pcm
+                        // stage consumes bytes and outputs PCM at dsd_rate/8 (one float per byte).
+                        for byte_index in 0..4usize {
+                            for channel_index in 0..channels {
+                                let byte =
+                                    ((words[channel_index] >> (byte_index * 8)) & 0xFF) as u8;
+                                let value = dsd2pcm[channel_index].translate_byte_msbf(byte);
+                                pcm8_chunk.push(value);
+                            }
+
+                            if pcm8_chunk.len() >= stage1_chunk_samples {
+                                break 'decode;
+                            }
+                        }
+                    }
+
+                    if pcm8_chunk.is_empty() {
+                        if reached_eof {
+                            if let Some(handle) = cache_handle.take() {
+                                handle.finalize();
+                            }
+                            buffer_clone.mark_finished();
+                            return;
+                        }
                         continue;
                     }
-                    offset += frames_pushed * channels;
-                }
 
-                if let Some(handle) = cache_handle.as_ref() {
-                    let ok = handle.try_append(out_interleaved);
-                    if !ok {
-                        cache_handle = None;
+                    if reached_eof && pcm8_chunk.len() < stage1_chunk_samples {
+                        let missing_samples = stage1_chunk_samples - pcm8_chunk.len();
+                        let missing_frames = missing_samples / channels;
+                        for _ in 0..missing_frames {
+                            for ch in 0..channels {
+                                pcm8_chunk.push(dsd2pcm[ch].translate_byte_msbf(0x00));
+                            }
+                        }
+                    }
+
+                    let base_pcm = decimator.process_interleaved(&pcm8_chunk);
+                    pcm8_chunk.clear();
+
+                    let out_interleaved = if let Some(r) = resampler.as_mut() {
+                        r.process_interleaved(&base_pcm)
+                    } else {
+                        base_pcm
+                    };
+
+                    if out_interleaved.is_empty() {
+                        if reached_eof {
+                            if let Some(handle) = cache_handle.take() {
+                                handle.finalize();
+                            }
+                            buffer_clone.mark_finished();
+                            return;
+                        }
+                        continue;
+                    }
+
+                    let mut offset = 0usize;
+                    while offset < out_interleaved.len() {
+                        let drained = drain_decoder_commands(&command_rx);
+                        if drained.shutdown {
+                            drop(cache_handle.take());
+                            buffer_clone.mark_finished();
+                            return;
+                        }
+                        if let Some(target) = drained.seek_target {
+                            buffer_clone.clear();
+                            pcm8_chunk.clear();
+                            for ctx in &mut dsd2pcm {
+                                ctx.reset();
+                            }
+                            decimator.reset();
+                            if let Some(r) = resampler.as_mut() {
+                                r.reset();
+                            }
+                            cache_handle = None;
+
+                            let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
+                            let desired_dsd_sample =
+                                desired_dsd_sample.min(sample_count.saturating_sub(1));
+                            let aligned = if decimation_factor > 0 {
+                                decimation_factor as u64
+                                    * (desired_dsd_sample / decimation_factor as u64)
+                            } else {
+                                0
+                            };
+                            let _ = iter.set_sample_index(aligned);
+                            continue 'decode_loop;
+                        }
+
+                        let remaining = &out_interleaved[offset..];
+                        let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
+                        if frames_pushed == 0 {
+                            std::thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        offset += frames_pushed * channels;
+                    }
+
+                    if let Some(handle) = cache_handle.as_ref() {
+                        let ok = handle.try_append(out_interleaved);
+                        if !ok {
+                            cache_handle = None;
+                        }
+                    }
+
+                    if reached_eof {
+                        if let Some(handle) = cache_handle.take() {
+                            handle.finalize();
+                        }
+                        buffer_clone.mark_finished();
+                        return;
                     }
                 }
+            }));
 
-                if reached_eof {
-                    if let Some(handle) = cache_handle.take() {
-                        handle.finalize();
-                    }
-                    buffer_clone.mark_finished();
-                    return;
+            if let Err(payload) = result {
+                let panic_message = if let Some(message) = payload.downcast_ref::<&str>() {
+                    message.to_string()
+                } else if let Some(message) = payload.downcast_ref::<String>() {
+                    message.clone()
+                } else {
+                    "Unknown panic".to_string()
+                };
+                let message = format!("DSF decoder panicked: {panic_message}");
+                if let Ok(mut guard) = error_panic.lock() {
+                    *guard = Some(message.clone());
                 }
+                let _ = meta_tx_panic.send(Err(message.clone()));
+                buffer_panic.mark_finished();
             }
-        }));
-
-        if let Err(payload) = result {
-            let panic_message = if let Some(message) = payload.downcast_ref::<&str>() {
-                message.to_string()
-            } else if let Some(message) = payload.downcast_ref::<String>() {
-                message.clone()
-            } else {
-                "Unknown panic".to_string()
-            };
-            let message = format!("DSF decoder panicked: {panic_message}");
-            if let Ok(mut guard) = error_panic.lock() {
-                *guard = Some(message.clone());
-            }
-            let _ = meta_tx_panic.send(Err(message.clone()));
-            buffer_panic.mark_finished();
-        }
-    });
+        })
+        .map_err(|e| {
+            AudioInputError::new(
+                "AUDIO_INPUT_SACD_OPEN_FAILED",
+                format!("Failed to spawn DSF decoder thread: {e}"),
+            )
+        })?;
 
     let meta = match meta_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(value) => value
@@ -593,7 +615,10 @@ fn start_cached_pcm_stream(
     let frames_total = total_samples / channels;
     let duration = frames_total as f64 / cached.sample_rate as f64;
 
-    let buffer = AudioRingBuffer::new(352_800);
+    let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
+        Some(cached.sample_rate),
+        cached.channels,
+    ));
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
     let error = Arc::new(Mutex::new(None::<String>));
 
@@ -609,67 +634,27 @@ fn start_cached_pcm_stream(
     let path = cached.path.clone();
     let sample_rate = cached.sample_rate;
 
-    thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            let mut file =
-                fs::File::open(&path).map_err(|e| format!("Failed to open cache file: {e}"))?;
-            let header_bytes = 32u64;
-            file.seek(SeekFrom::Start(header_bytes))
-                .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+    thread::Builder::new()
+        .name("pmpm-sacd-cached-pcm-stream".into())
+        .spawn(move || {
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_decode();
 
-            let mut current_sample: usize = 0;
-            let mut bytes: Vec<u8> = Vec::new();
-            let mut out_interleaved: Vec<f32> = Vec::new();
+            let result = (|| -> Result<(), String> {
+                let mut file =
+                    fs::File::open(&path).map_err(|e| format!("Failed to open cache file: {e}"))?;
+                let header_bytes = 32u64;
+                file.seek(SeekFrom::Start(header_bytes))
+                    .map_err(|e| format!("Failed to seek cache file: {e}"))?;
 
-            const READ_FRAMES_CHUNK: usize = 4_096;
-            let chunk_samples = READ_FRAMES_CHUNK * channels;
+                let mut current_sample: usize = 0;
+                let mut bytes: Vec<u8> = Vec::new();
+                let mut out_interleaved: Vec<f32> = Vec::new();
 
-            loop {
-                let drained = drain_decoder_commands(&command_rx);
-                if drained.shutdown {
-                    buffer_clone.mark_finished();
-                    return Ok(());
-                }
-                if let Some(target) = drained.seek_target {
-                    buffer_clone.clear();
-                    let target = target.max(0.0);
-                    let start_frame = (target * sample_rate as f64) as usize;
-                    let start_frame = start_frame.min(frames_total.saturating_sub(1));
-                    current_sample = start_frame * channels;
-                    let offset = header_bytes + (current_sample as u64).saturating_mul(4);
-                    file.seek(SeekFrom::Start(offset))
-                        .map_err(|e| format!("Failed to seek cache file: {e}"))?;
-                }
+                const READ_FRAMES_CHUNK: usize = 4_096;
+                let chunk_samples = READ_FRAMES_CHUNK * channels;
 
-                if current_sample >= total_samples {
-                    buffer_clone.mark_finished();
-                    return Ok(());
-                }
-
-                let remaining_samples = total_samples - current_sample;
-                let mut read_samples = remaining_samples.min(chunk_samples);
-                read_samples = read_samples.saturating_sub(read_samples % channels);
-                if read_samples == 0 {
-                    buffer_clone.mark_finished();
-                    return Ok(());
-                }
-
-                bytes.resize(read_samples * 4, 0u8);
-                file.read_exact(&mut bytes)
-                    .map_err(|e| format!("Failed to read cache samples: {e}"))?;
-
-                out_interleaved.clear();
-                out_interleaved.reserve(read_samples);
-                for chunk in bytes.chunks_exact(4) {
-                    out_interleaved.push(f32::from_le_bytes(
-                        chunk
-                            .try_into()
-                            .map_err(|_| "Failed to parse cached PCM sample".to_string())?,
-                    ));
-                }
-
-                let mut pushed_samples = 0usize;
-                while pushed_samples < out_interleaved.len() {
+                loop {
                     let drained = drain_decoder_commands(&command_rx);
                     if drained.shutdown {
                         buffer_clone.mark_finished();
@@ -684,31 +669,87 @@ fn start_cached_pcm_stream(
                         let offset = header_bytes + (current_sample as u64).saturating_mul(4);
                         file.seek(SeekFrom::Start(offset))
                             .map_err(|e| format!("Failed to seek cache file: {e}"))?;
-                        break;
                     }
 
-                    let remaining = &out_interleaved[pushed_samples..];
-                    let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
-                    if frames_pushed == 0 {
-                        thread::sleep(Duration::from_millis(5));
-                        continue;
+                    if current_sample >= total_samples {
+                        buffer_clone.mark_finished();
+                        return Ok(());
                     }
-                    pushed_samples += frames_pushed * channels;
-                    current_sample = current_sample.saturating_add(frames_pushed * channels);
+
+                    let remaining_samples = total_samples - current_sample;
+                    let mut read_samples = remaining_samples.min(chunk_samples);
+                    read_samples = read_samples.saturating_sub(read_samples % channels);
+                    if read_samples == 0 {
+                        buffer_clone.mark_finished();
+                        return Ok(());
+                    }
+
+                    bytes.resize(read_samples * 4, 0u8);
+                    file.read_exact(&mut bytes)
+                        .map_err(|e| format!("Failed to read cache samples: {e}"))?;
+
+                    out_interleaved.clear();
+                    out_interleaved.reserve(read_samples);
+                    for chunk in bytes.chunks_exact(4) {
+                        out_interleaved.push(f32::from_le_bytes(
+                            chunk
+                                .try_into()
+                                .map_err(|_| "Failed to parse cached PCM sample".to_string())?,
+                        ));
+                    }
+
+                    let mut pushed_samples = 0usize;
+                    while pushed_samples < out_interleaved.len() {
+                        let drained = drain_decoder_commands(&command_rx);
+                        if drained.shutdown {
+                            buffer_clone.mark_finished();
+                            return Ok(());
+                        }
+                        if let Some(target) = drained.seek_target {
+                            buffer_clone.clear();
+                            let target = target.max(0.0);
+                            let start_frame = (target * sample_rate as f64) as usize;
+                            let start_frame = start_frame.min(frames_total.saturating_sub(1));
+                            current_sample = start_frame * channels;
+                            let offset = header_bytes + (current_sample as u64).saturating_mul(4);
+                            file.seek(SeekFrom::Start(offset))
+                                .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+                            break;
+                        }
+
+                        let remaining = &out_interleaved[pushed_samples..];
+                        let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
+                        if frames_pushed == 0 {
+                            thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        pushed_samples += frames_pushed * channels;
+                        current_sample = current_sample.saturating_add(frames_pushed * channels);
+                    }
                 }
-            }
-        })();
+            })();
 
-        if let Err(err) = result {
-            if let Ok(mut guard) = error_clone.lock() {
-                *guard = Some(err);
+            if let Err(err) = result {
+                if let Ok(mut guard) = error_clone.lock() {
+                    *guard = Some(err);
+                }
+                buffer_clone.mark_finished();
             }
-            buffer_clone.mark_finished();
-        }
-    });
+        })
+        .map_err(|e| {
+            AudioInputError::new(
+                "AUDIO_INPUT_SACD_OPEN_FAILED",
+                format!("Failed to spawn cached PCM stream thread: {e}"),
+            )
+        })?;
 
     Ok((
-        StreamingSamplesSource::new(buffer.clone(), meta.channels, meta.sample_rate, meta.duration),
+        StreamingSamplesSource::new(
+            buffer.clone(),
+            meta.channels,
+            meta.sample_rate,
+            meta.duration,
+        ),
         meta,
         StreamingPlayback {
             buffer,
@@ -1157,7 +1198,8 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            let dir = std::env::temp_dir().join(format!("pmp-resample-cache-dsf-open-test-{nanos}"));
+            let dir =
+                std::env::temp_dir().join(format!("pmp-resample-cache-dsf-open-test-{nanos}"));
             std::fs::create_dir_all(&dir).expect("create cache dir");
             crate::audio::resample_cache::init_for_tests(dir)
         };
@@ -1174,13 +1216,7 @@ mod tests {
         .expect("cache key");
 
         let samples = Arc::new(vec![0.0f32; (output_rate as usize) * 2]);
-        crate::audio::resample_cache::store_async(
-            key.clone(),
-            samples,
-            2,
-            output_rate,
-            Some(1),
-        );
+        crate::audio::resample_cache::store_async(key.clone(), samples, 2, output_rate, Some(1));
 
         let cache_file = cache_dir.join(format!("{key}.bin"));
         let started_at = Instant::now();
@@ -1235,9 +1271,7 @@ mod tests {
         let _ = std::fs::remove_file(&cache_file);
 
         let input = SacdInput::default();
-        let opened = input
-            .open(&path, output_sample_rate)
-            .expect("open dsf");
+        let opened = input.open(&path, output_sample_rate).expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
         };

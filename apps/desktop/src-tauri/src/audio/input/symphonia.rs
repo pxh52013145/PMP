@@ -1,12 +1,11 @@
-use std::collections::VecDeque;
+use std::cell::UnsafeCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::sync::Condvar;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rodio::Source;
@@ -39,14 +38,23 @@ pub(crate) fn streaming_underrun_stats() -> (u64, u64) {
 
 #[derive(Clone)]
 pub(crate) struct AudioRingBuffer {
-    inner: Arc<(Mutex<AudioRingBufferInner>, Condvar, Condvar)>,
+    inner: Arc<AudioRingBufferInner>,
 }
 
 struct AudioRingBufferInner {
-    data: VecDeque<f32>,
     capacity: usize,
-    finished: bool,
+    data_ptr: *mut f32,
+    _data: UnsafeCell<Box<[f32]>>,
+    read_pos: AtomicU64,
+    write_pos: AtomicU64,
+    finished: AtomicBool,
+    wait_lock: Mutex<()>,
+    available: Condvar,
+    space: Condvar,
 }
+
+unsafe impl Send for AudioRingBufferInner {}
+unsafe impl Sync for AudioRingBufferInner {}
 
 #[derive(Clone, Copy, Debug)]
 struct PopChunkResult {
@@ -56,38 +64,55 @@ struct PopChunkResult {
 
 impl AudioRingBuffer {
     pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        let mut data = vec![0.0f32; capacity].into_boxed_slice();
+        let data_ptr = data.as_mut_ptr();
+
         Self {
-            inner: Arc::new((
-                Mutex::new(AudioRingBufferInner {
-                    data: VecDeque::with_capacity(capacity.min(65_536)),
-                    capacity,
-                    finished: false,
-                }),
-                Condvar::new(),
-                Condvar::new(),
-            )),
+            inner: Arc::new(AudioRingBufferInner {
+                capacity,
+                data_ptr,
+                _data: UnsafeCell::new(data),
+                read_pos: AtomicU64::new(0),
+                write_pos: AtomicU64::new(0),
+                finished: AtomicBool::new(false),
+                wait_lock: Mutex::new(()),
+                available: Condvar::new(),
+                space: Condvar::new(),
+            }),
         }
     }
 
+    pub fn recommended_capacity_samples(sample_rate: Option<u32>, channels: u16) -> usize {
+        const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+        const TARGET_SECONDS: u64 = 4;
+        const MIN_SAMPLES: u64 = 32_768;
+        const MAX_SAMPLES: u64 = 8_000_000;
+
+        let sample_rate = sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE).max(1) as u64;
+        let channels = channels.max(1) as u64;
+        sample_rate
+            .saturating_mul(TARGET_SECONDS)
+            .saturating_mul(channels)
+            .clamp(MIN_SAMPLES, MAX_SAMPLES) as usize
+    }
+
     pub fn clear(&self) {
-        let (lock, _available, space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.data.clear();
-        inner.finished = false;
-        space.notify_all();
+        let write = self.inner.write_pos.load(Ordering::Acquire);
+        self.inner.read_pos.store(write, Ordering::Release);
+        self.inner.finished.store(false, Ordering::Release);
+        self.inner.space.notify_all();
     }
 
     pub fn mark_finished(&self) {
-        let (lock, available, _space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.finished = true;
-        available.notify_all();
+        self.inner.finished.store(true, Ordering::Release);
+        self.inner.available.notify_all();
     }
 
     pub fn len_samples(&self) -> usize {
-        let (lock, _available, _space) = &*self.inner;
-        let inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.data.len()
+        let read = self.inner.read_pos.load(Ordering::Acquire);
+        let write = self.inner.write_pos.load(Ordering::Acquire);
+        (write.saturating_sub(read) as usize).min(self.inner.capacity)
     }
 
     pub fn wait_for_samples(&self, min_samples: usize, timeout: Duration) {
@@ -95,15 +120,18 @@ impl AudioRingBuffer {
             return;
         }
 
-        let (lock, available, _space) = &*self.inner;
-        let mut inner = lock.lock().expect("ring buffer lock poisoned");
+        let mut guard = self
+            .inner
+            .wait_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        while inner.data.len() < min_samples && !inner.finished {
-            let (guard, wait_result) = match available.wait_timeout(inner, timeout) {
+        while self.len_samples() < min_samples && !self.inner.finished.load(Ordering::Acquire) {
+            let (next, wait_result) = match self.inner.available.wait_timeout(guard, timeout) {
                 Ok(value) => value,
-                Err(_) => break,
+                Err(poisoned) => poisoned.into_inner(),
             };
-            inner = guard;
+            guard = next;
             if wait_result.timed_out() {
                 break;
             }
@@ -125,59 +153,59 @@ impl AudioRingBuffer {
             };
         }
 
-        let (lock, available, space) = &*self.inner;
-        let mut inner = if wait_timeout.is_zero() {
-            match lock.try_lock() {
-                Ok(inner) => inner,
-                Err(_) => {
-                    return PopChunkResult {
-                        popped: 0,
-                        finished: false,
-                    };
-                }
-            }
-        } else {
-            lock.lock().expect("ring buffer lock poisoned")
-        };
-
-        if !wait_timeout.is_zero() && inner.data.is_empty() && !inner.finished {
-            inner = match available.wait_timeout(inner, wait_timeout) {
-                Ok((guard, _)) => guard,
-                Err(poisoned) => poisoned.into_inner().0,
-            };
+        if !wait_timeout.is_zero()
+            && self.len_samples() == 0
+            && !self.inner.finished.load(Ordering::Acquire)
+        {
+            let guard = self
+                .inner
+                .wait_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = self.inner.available.wait_timeout(guard, wait_timeout);
         }
 
-        let count = inner.data.len().min(max_samples);
-        if count == 0 {
+        let read = self.inner.read_pos.load(Ordering::Acquire);
+        let write = self.inner.write_pos.load(Ordering::Acquire);
+        let available = write.saturating_sub(read) as usize;
+        if available == 0 {
             return PopChunkResult {
                 popped: 0,
-                finished: inner.finished && inner.data.is_empty(),
+                finished: self.inner.finished.load(Ordering::Acquire),
             };
         }
 
+        let count = available.min(max_samples).min(self.inner.capacity);
         if out.capacity() < count {
-            out.reserve(count);
+            out.reserve(count - out.capacity());
         }
 
-        for _ in 0..count {
-            let Some(sample) = inner.data.pop_front() else {
-                break;
-            };
-            out.push(sample);
+        unsafe {
+            out.set_len(count);
+            let dst = out.as_mut_ptr();
+            let start = (read as usize) % self.inner.capacity;
+            let first = (self.inner.capacity - start).min(count);
+            ptr::copy_nonoverlapping(self.inner.data_ptr.add(start), dst, first);
+            if first < count {
+                ptr::copy_nonoverlapping(self.inner.data_ptr, dst.add(first), count - first);
+            }
         }
 
-        space.notify_all();
+        let new_read = read.saturating_add(count as u64);
+        self.inner.read_pos.store(new_read, Ordering::Release);
+        self.inner.space.notify_all();
+
+        let finished = self.inner.finished.load(Ordering::Acquire)
+            && self.inner.write_pos.load(Ordering::Acquire) == new_read;
 
         PopChunkResult {
-            popped: out.len(),
-            finished: inner.finished && inner.data.is_empty(),
+            popped: count,
+            finished,
         }
     }
 
     pub fn is_finished_and_empty(&self) -> bool {
-        let (lock, _available, _space) = &*self.inner;
-        let inner = lock.lock().expect("ring buffer lock poisoned");
-        inner.finished && inner.data.is_empty()
+        self.inner.finished.load(Ordering::Acquire) && self.len_samples() == 0
     }
 
     pub fn push_interleaved(&self, samples: &[f32], channels: usize) -> usize {
@@ -189,36 +217,57 @@ impl AudioRingBuffer {
             return 0;
         }
 
-        let (lock, available, space) = &*self.inner;
-        let mut inner = match lock.lock() {
-            Ok(inner) => inner,
-            Err(_) => return 0,
-        };
+        let mut waited = false;
 
-        let mut free_samples = inner.capacity.saturating_sub(inner.data.len());
-        if free_samples < channels {
-            let (guard, timeout) = match space.wait_timeout(inner, Duration::from_millis(10)) {
-                Ok(value) => value,
-                Err(_) => return 0,
-            };
-            inner = guard;
-            if timeout.timed_out() {
+        loop {
+            let read = self.inner.read_pos.load(Ordering::Acquire);
+            let write = self.inner.write_pos.load(Ordering::Acquire);
+            let used = write.saturating_sub(read) as usize;
+            let free_samples = self.inner.capacity.saturating_sub(used);
+            let free_frames = free_samples / channels;
+            if free_frames == 0 {
+                if waited {
+                    return 0;
+                }
+                waited = true;
+                let guard = self
+                    .inner
+                    .wait_lock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let _ = self
+                    .inner
+                    .space
+                    .wait_timeout(guard, Duration::from_millis(10));
+                continue;
+            }
+
+            let frames_to_push = free_frames.min(total_frames);
+            let samples_to_push = frames_to_push * channels;
+            if samples_to_push == 0 {
                 return 0;
             }
-            free_samples = inner.capacity.saturating_sub(inner.data.len());
-            if free_samples < channels {
-                return 0;
+
+            unsafe {
+                let start = (write as usize) % self.inner.capacity;
+                let first = (self.inner.capacity - start).min(samples_to_push);
+                ptr::copy_nonoverlapping(samples.as_ptr(), self.inner.data_ptr.add(start), first);
+                if first < samples_to_push {
+                    ptr::copy_nonoverlapping(
+                        samples.as_ptr().add(first),
+                        self.inner.data_ptr,
+                        samples_to_push - first,
+                    );
+                }
             }
+
+            self.inner.write_pos.store(
+                write.saturating_add(samples_to_push as u64),
+                Ordering::Release,
+            );
+            self.inner.available.notify_all();
+            return frames_to_push;
         }
-
-        let free_frames = free_samples / channels;
-        let frames_to_push = free_frames.min(total_frames);
-        let samples_to_push = frames_to_push * channels;
-        inner
-            .data
-            .extend(samples.iter().take(samples_to_push).copied());
-        available.notify_all();
-        frames_to_push
     }
 }
 
@@ -272,6 +321,8 @@ pub(crate) struct StreamingSamplesSource {
     duration: f64,
     local: Vec<f32>,
     local_index: usize,
+    last_samples: Vec<f32>,
+    needs_fade_in: bool,
 }
 
 impl StreamingSamplesSource {
@@ -279,13 +330,16 @@ impl StreamingSamplesSource {
     const SILENCE_FRAMES: usize = 64;
 
     pub fn new(buffer: AudioRingBuffer, channels: u16, sample_rate: u32, duration: f64) -> Self {
+        let channels = channels.max(1);
         Self {
             buffer,
-            channels: channels.max(1),
+            channels,
             sample_rate: sample_rate.max(1),
             duration,
             local: Vec::with_capacity(Self::CHUNK_SAMPLES),
             local_index: 0,
+            last_samples: vec![0.0; channels as usize],
+            needs_fade_in: false,
         }
     }
 }
@@ -309,16 +363,46 @@ impl Iterator for StreamingSamplesSource {
                 }
 
                 STREAMING_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
-                STREAMING_UNDERRUN_FRAMES
-                    .fetch_add(Self::SILENCE_FRAMES as u64, Ordering::Relaxed);
+                STREAMING_UNDERRUN_FRAMES.fetch_add(Self::SILENCE_FRAMES as u64, Ordering::Relaxed);
 
-                let silence_samples = (Self::SILENCE_FRAMES * channels).max(1);
+                self.needs_fade_in = true;
+                let silence_frames = Self::SILENCE_FRAMES.max(1);
+                let silence_samples = (silence_frames * channels).max(1);
                 self.local.resize(silence_samples, 0.0);
+
+                let denom = (silence_frames.saturating_sub(1)).max(1) as f32;
+                for frame in 0..silence_frames {
+                    let gain = 1.0 - (frame as f32 / denom);
+                    let base = frame * channels;
+                    for channel in 0..channels {
+                        self.local[base + channel] = self.last_samples[channel] * gain;
+                    }
+                }
+            } else if self.needs_fade_in {
+                let fade_frames = (self.local.len() / channels).min(Self::SILENCE_FRAMES);
+                if fade_frames > 0 {
+                    let denom = (fade_frames.saturating_sub(1)).max(1) as f32;
+                    for frame in 0..fade_frames {
+                        let gain = frame as f32 / denom;
+                        let base = frame * channels;
+                        for channel in 0..channels {
+                            self.local[base + channel] *= gain;
+                        }
+                    }
+                }
+                self.needs_fade_in = false;
             }
         }
 
-        let sample = self.local[self.local_index];
+        let sample_index = self.local_index;
+        let sample = self.local[sample_index];
         self.local_index += 1;
+
+        let channels = self.channels.max(1) as usize;
+        let channel = sample_index % channels;
+        if let Some(last) = self.last_samples.get_mut(channel) {
+            *last = sample;
+        }
         Some(sample)
     }
 }
@@ -431,7 +515,10 @@ fn start_symphonia_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
-    let buffer = AudioRingBuffer::new(352_800);
+    let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
+        output_sample_rate,
+        2,
+    ));
 
     let cache_key = crate::audio::resample_cache::key_for_resample(path, output_sample_rate);
 
@@ -443,7 +530,11 @@ fn start_symphonia_stream(
     let error = Arc::new(Mutex::new(None::<String>));
     let error_clone = error.clone();
 
-    std::thread::spawn(move || {
+    std::thread::Builder::new()
+        .name("pmpm-symphonia-decoder".into())
+        .spawn(move || {
+            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_decode();
+
         let init = (|| -> Result<(Box<dyn FormatReader>, Track), String> {
             let file = File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
             let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
@@ -821,7 +912,13 @@ fn start_symphonia_stream(
                 }
             }
         }
-    });
+        })
+        .map_err(|e| {
+            AudioInputError::new(
+                "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
+                format!("Failed to spawn decoder thread: {e}"),
+            )
+        })?;
 
     let meta = match meta_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(value) => value.map_err(|message| {
@@ -879,7 +976,10 @@ fn start_cached_pcm_stream(
     let frames_total = total_samples / channels;
     let duration = frames_total as f64 / cached.sample_rate as f64;
 
-    let buffer = AudioRingBuffer::new(352_800);
+    let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
+        Some(cached.sample_rate),
+        cached.channels,
+    ));
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
     let error = Arc::new(Mutex::new(None::<String>));
 
@@ -895,66 +995,27 @@ fn start_cached_pcm_stream(
     let path = cached.path.clone();
     let sample_rate = cached.sample_rate;
 
-    std::thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            let mut file = File::open(&path).map_err(|e| format!("Failed to open cache file: {e}"))?;
-            let header_bytes = 32u64;
-            file.seek(SeekFrom::Start(header_bytes))
-                .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+    std::thread::Builder::new()
+        .name("pmpm-cached-pcm-stream".into())
+        .spawn(move || {
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_decode();
 
-            let mut current_sample: usize = 0;
-            let mut bytes: Vec<u8> = Vec::new();
-            let mut out_interleaved: Vec<f32> = Vec::new();
+            let result = (|| -> Result<(), String> {
+                let mut file =
+                    File::open(&path).map_err(|e| format!("Failed to open cache file: {e}"))?;
+                let header_bytes = 32u64;
+                file.seek(SeekFrom::Start(header_bytes))
+                    .map_err(|e| format!("Failed to seek cache file: {e}"))?;
 
-            const READ_FRAMES_CHUNK: usize = 4_096;
-            let chunk_samples = READ_FRAMES_CHUNK * channels;
+                let mut current_sample: usize = 0;
+                let mut bytes: Vec<u8> = Vec::new();
+                let mut out_interleaved: Vec<f32> = Vec::new();
 
-            loop {
-                let drained = drain_decoder_commands(&command_rx);
-                if drained.shutdown {
-                    buffer_clone.mark_finished();
-                    return Ok(());
-                }
-                if let Some(target) = drained.seek_target {
-                    buffer_clone.clear();
-                    let target = target.max(0.0);
-                    let start_frame = (target * sample_rate as f64) as usize;
-                    let start_frame = start_frame.min(frames_total.saturating_sub(1));
-                    current_sample = start_frame * channels;
-                    let offset = header_bytes + (current_sample as u64).saturating_mul(4);
-                    file.seek(SeekFrom::Start(offset))
-                        .map_err(|e| format!("Failed to seek cache file: {e}"))?;
-                }
+                const READ_FRAMES_CHUNK: usize = 4_096;
+                let chunk_samples = READ_FRAMES_CHUNK * channels;
 
-                if current_sample >= total_samples {
-                    buffer_clone.mark_finished();
-                    return Ok(());
-                }
-
-                let remaining_samples = total_samples - current_sample;
-                let mut read_samples = remaining_samples.min(chunk_samples);
-                read_samples = read_samples.saturating_sub(read_samples % channels);
-                if read_samples == 0 {
-                    buffer_clone.mark_finished();
-                    return Ok(());
-                }
-
-                bytes.resize(read_samples * 4, 0u8);
-                file.read_exact(&mut bytes)
-                    .map_err(|e| format!("Failed to read cache samples: {e}"))?;
-
-                out_interleaved.clear();
-                out_interleaved.reserve(read_samples);
-                for chunk in bytes.chunks_exact(4) {
-                    out_interleaved.push(f32::from_le_bytes(
-                        chunk
-                            .try_into()
-                            .map_err(|_| "Failed to parse cached PCM sample".to_string())?,
-                    ));
-                }
-
-                let mut pushed_samples = 0usize;
-                while pushed_samples < out_interleaved.len() {
+                loop {
                     let drained = drain_decoder_commands(&command_rx);
                     if drained.shutdown {
                         buffer_clone.mark_finished();
@@ -969,31 +1030,87 @@ fn start_cached_pcm_stream(
                         let offset = header_bytes + (current_sample as u64).saturating_mul(4);
                         file.seek(SeekFrom::Start(offset))
                             .map_err(|e| format!("Failed to seek cache file: {e}"))?;
-                        break;
                     }
 
-                    let remaining = &out_interleaved[pushed_samples..];
-                    let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
-                    if frames_pushed == 0 {
-                        std::thread::sleep(Duration::from_millis(5));
-                        continue;
+                    if current_sample >= total_samples {
+                        buffer_clone.mark_finished();
+                        return Ok(());
                     }
-                    pushed_samples += frames_pushed * channels;
-                    current_sample = current_sample.saturating_add(frames_pushed * channels);
+
+                    let remaining_samples = total_samples - current_sample;
+                    let mut read_samples = remaining_samples.min(chunk_samples);
+                    read_samples = read_samples.saturating_sub(read_samples % channels);
+                    if read_samples == 0 {
+                        buffer_clone.mark_finished();
+                        return Ok(());
+                    }
+
+                    bytes.resize(read_samples * 4, 0u8);
+                    file.read_exact(&mut bytes)
+                        .map_err(|e| format!("Failed to read cache samples: {e}"))?;
+
+                    out_interleaved.clear();
+                    out_interleaved.reserve(read_samples);
+                    for chunk in bytes.chunks_exact(4) {
+                        out_interleaved.push(f32::from_le_bytes(
+                            chunk
+                                .try_into()
+                                .map_err(|_| "Failed to parse cached PCM sample".to_string())?,
+                        ));
+                    }
+
+                    let mut pushed_samples = 0usize;
+                    while pushed_samples < out_interleaved.len() {
+                        let drained = drain_decoder_commands(&command_rx);
+                        if drained.shutdown {
+                            buffer_clone.mark_finished();
+                            return Ok(());
+                        }
+                        if let Some(target) = drained.seek_target {
+                            buffer_clone.clear();
+                            let target = target.max(0.0);
+                            let start_frame = (target * sample_rate as f64) as usize;
+                            let start_frame = start_frame.min(frames_total.saturating_sub(1));
+                            current_sample = start_frame * channels;
+                            let offset = header_bytes + (current_sample as u64).saturating_mul(4);
+                            file.seek(SeekFrom::Start(offset))
+                                .map_err(|e| format!("Failed to seek cache file: {e}"))?;
+                            break;
+                        }
+
+                        let remaining = &out_interleaved[pushed_samples..];
+                        let frames_pushed = buffer_clone.push_interleaved(remaining, channels);
+                        if frames_pushed == 0 {
+                            std::thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        pushed_samples += frames_pushed * channels;
+                        current_sample = current_sample.saturating_add(frames_pushed * channels);
+                    }
                 }
-            }
-        })();
+            })();
 
-        if let Err(err) = result {
-            if let Ok(mut guard) = error_clone.lock() {
-                *guard = Some(err);
+            if let Err(err) = result {
+                if let Ok(mut guard) = error_clone.lock() {
+                    *guard = Some(err);
+                }
+                buffer_clone.mark_finished();
             }
-            buffer_clone.mark_finished();
-        }
-    });
+        })
+        .map_err(|e| {
+            AudioInputError::new(
+                "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
+                format!("Failed to spawn cached PCM stream thread: {e}"),
+            )
+        })?;
 
     Ok((
-        StreamingSamplesSource::new(buffer.clone(), meta.channels, meta.sample_rate, meta.duration),
+        StreamingSamplesSource::new(
+            buffer.clone(),
+            meta.channels,
+            meta.sample_rate,
+            meta.duration,
+        ),
         meta,
         StreamingPlayback {
             buffer,
@@ -1288,12 +1405,15 @@ mod tests {
             let Some(value) = source.next() else {
                 break;
             };
-            if (value - 0.5).abs() < 1e-6 {
+            if value.abs() > 1e-4 {
                 saw_sample = true;
                 break;
             }
         }
-        assert!(saw_sample, "expected buffered samples to reach the consumer");
+        assert!(
+            saw_sample,
+            "expected buffered samples to reach the consumer"
+        );
 
         buffer.mark_finished();
 
@@ -1304,7 +1424,10 @@ mod tests {
                 break;
             }
         }
-        assert!(finished, "expected stream to finish after buffer is drained");
+        assert!(
+            finished,
+            "expected stream to finish after buffer is drained"
+        );
     }
 
     #[test]
@@ -1334,7 +1457,8 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            let dir = std::env::temp_dir().join(format!("pmp-resample-cache-symphonia-open-test-{nanos}"));
+            let dir = std::env::temp_dir()
+                .join(format!("pmp-resample-cache-symphonia-open-test-{nanos}"));
             std::fs::create_dir_all(&dir).expect("create cache dir");
             crate::audio::resample_cache::init_for_tests(dir)
         };
@@ -1343,7 +1467,8 @@ mod tests {
         std::fs::write(&path, b"dummy").expect("write dummy file");
 
         let output_rate = 44_100u32;
-        let key = crate::audio::resample_cache::key_for_resample(&path, Some(output_rate)).expect("cache key");
+        let key = crate::audio::resample_cache::key_for_resample(&path, Some(output_rate))
+            .expect("cache key");
 
         let samples = Arc::new(vec![0.0f32; (output_rate as usize) * 2]);
         crate::audio::resample_cache::store_async(key.clone(), samples, 2, output_rate, Some(16));
@@ -1356,7 +1481,9 @@ mod tests {
         assert!(cache_file.exists(), "expected cached PCM file to exist");
 
         let input = SymphoniaInput::default();
-        let result = input.open(&path, Some(output_rate)).expect("open should succeed");
+        let result = input
+            .open(&path, Some(output_rate))
+            .expect("open should succeed");
 
         match result.kind {
             AudioInputKind::Streaming(playback) => {
