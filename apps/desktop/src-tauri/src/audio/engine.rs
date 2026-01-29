@@ -299,6 +299,12 @@ impl NativeAudioEngine {
         self.playback_state
     }
 
+    pub(crate) fn is_playing_or_rebuffering(&self) -> bool {
+        matches!(self.playback_state, PlaybackState::Playing)
+            || (matches!(self.playback_state, PlaybackState::Buffering)
+                && matches!(self.desired_playback_state, PlaybackState::Playing))
+    }
+
     pub(crate) fn output_backend(&self) -> Arc<dyn AudioOutputBackend> {
         self.output_backend.clone()
     }

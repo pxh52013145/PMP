@@ -40,7 +40,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
 
             let Some((state_payload, spectrum_snapshot)) = (|| {
                 let mut engine = ENGINE.try_lock().ok()?;
-                let was_playing = matches!(engine.playback_state(), PlaybackState::Playing);
+                let was_playing = engine.is_playing_or_rebuffering();
                 let ticked = engine.tick();
                 if !ticked {
                     return None;
