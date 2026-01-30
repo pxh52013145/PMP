@@ -156,8 +156,8 @@ mod windows_hit_test {
                 y: ((lparam >> 16) & 0xFFFF) as i16 as i32,
             };
 
-            // Editing: allow interaction only in the "skin edit region" (outside the main rect),
-            // and on interactive ornament rects (even when they overlap the main rect).
+            // Editing: only ornaments themselves should be interactive.
+            // The "skin edit region" is a visual guide and must remain click-through.
             // Interactive ornament rects (stored in CSS px, mapped to screen coords here).
             let overlay_x = OVERLAY_SCREEN_X.load(Ordering::SeqCst);
             let overlay_y = OVERLAY_SCREEN_Y.load(Ordering::SeqCst);
@@ -202,8 +202,8 @@ mod windows_hit_test {
                 return HTTRANSPARENT as LRESULT;
             }
 
-            // Outside main: capture events for the edit region (drag to move window, etc.).
-            return HTCLIENT as LRESULT;
+            // Outside main: always click-through (no dragging behavior).
+            return HTTRANSPARENT as LRESULT;
         }
 
         let original = {
