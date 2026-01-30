@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from './tauriRuntime';
+import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from './windowCommunication';
 
 export type EditorWindowType =
   | 'control'
@@ -81,6 +82,21 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
   try {
     // 先关闭所有子窗口
     if (!isTauriRuntime()) return;
+
+    // Ornaments edit mode is transient and must not outlive the Style/Ornaments editor lifecycle.
+    // If Style/Ornaments closes, force-cancel the edit session so the overlay cannot keep capturing input.
+    if (type === 'style' || type === 'ornaments') {
+      void broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
+        false,
+        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
+      );
+      void broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_SELECTED_ID,
+        null,
+        TAURI_EVENTS.ORNAMENTS_SELECTED_ID_UPDATED
+      );
+    }
     const childWindows = WINDOW_HIERARCHY[type] || [];
     for (const childType of childWindows) {
       await closeEditorWindow(childType); // 递归关闭子窗口及其子窗口
@@ -104,6 +120,17 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
 export async function closeAllEditorWindows(): Promise<void> {
   try {
     if (!isTauriRuntime()) return;
+    // Ensure transient overlay editing state is cleared when exiting the editor.
+    void broadcastDataUpdate(
+      STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
+      false,
+      TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
+    );
+    void broadcastDataUpdate(
+      STORAGE_KEYS.ORNAMENTS_SELECTED_ID,
+      null,
+      TAURI_EVENTS.ORNAMENTS_SELECTED_ID_UPDATED
+    );
     await invoke('close_all_editor_windows');
     // 清除所有窗口的位置缓存
     windowPositionCache.clear();

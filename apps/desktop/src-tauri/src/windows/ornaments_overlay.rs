@@ -41,8 +41,9 @@ mod windows_hit_test {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW, GWLP_WNDPROC,
-        HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_MOUSEACTIVATE,
-        WM_NCHITTEST, WNDPROC,
+        GWL_EXSTYLE, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, SetWindowPos, WM_LBUTTONDOWN,
+        WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_RBUTTONDOWN, WNDPROC, HWND_BOTTOM,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     static OVERLAY_EDITING: AtomicBool = AtomicBool::new(false);
@@ -84,12 +85,60 @@ mod windows_hit_test {
     static WNDPROCS: Lazy<Mutex<WndProcRegistry>> =
         Lazy::new(|| Mutex::new(WndProcRegistry::default()));
 
+    fn apply_overlay_window_styles(hwnd: HWND) {
+        unsafe {
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if ex_style == 0 {
+                return;
+            }
+
+            // Ensure the overlay never becomes a topmost window and never steals activation.
+            // This is critical so the "skin edit region" does not interfere with other editor windows.
+            let next =
+                (ex_style & !(WS_EX_TOPMOST as isize)) | (WS_EX_NOACTIVATE as isize) | (WS_EX_TOOLWINDOW as isize);
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+
+            // Keep it at the bottom of the owned-window stack (still above its owner due to ownership),
+            // so it cannot cover editor windows.
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub fn pin_below_owned_windows(hwnd: HWND) {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
     unsafe extern "system" fn wnd_proc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
+            // Some Windows configurations will raise a non-activating owned window above sibling owned
+            // windows when it receives pointer input. We force the overlay to stay *below* other editor
+            // windows (but still above the main window due to ownership).
+            pin_below_owned_windows(hwnd);
+        }
+
         if msg == WM_MOUSEACTIVATE {
             // Never activate the overlay on click: this avoids raising it above editor windows
             // and prevents it from interfering with other applications.
@@ -187,6 +236,8 @@ mod windows_hit_test {
             if registry.original.contains_key(&(hwnd as isize)) {
                 return;
             }
+
+            apply_overlay_window_styles(hwnd);
 
             let original = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
             registry.original.insert(hwnd as isize, original);
@@ -397,6 +448,7 @@ pub fn ensure_ornaments_overlay_window(app: &AppHandle, exit_flag: Arc<AtomicBoo
         #[cfg(target_os = "windows")]
         if let Ok(hwnd) = existing.hwnd() {
             windows_hit_test::install(hwnd.0 as _);
+            windows_hit_test::pin_below_owned_windows(hwnd.0 as _);
         }
 
         #[cfg(target_os = "windows")]
@@ -442,6 +494,7 @@ pub fn ensure_ornaments_overlay_window(app: &AppHandle, exit_flag: Arc<AtomicBoo
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
         windows_hit_test::install(hwnd.0 as _);
+        windows_hit_test::pin_below_owned_windows(hwnd.0 as _);
     }
 
     #[cfg(target_os = "windows")]
@@ -494,6 +547,10 @@ pub fn show_ornaments_overlay_window(app: &AppHandle) {
     if let Some(overlay) = app.get_window(ORNAMENTS_OVERLAY_WINDOW_LABEL) {
         sync_ornaments_overlay_window(app);
         let _ = overlay.show();
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = overlay.hwnd() {
+            windows_hit_test::pin_below_owned_windows(hwnd.0 as _);
+        }
     }
 }
 
