@@ -18,6 +18,14 @@ const OVERLAY_MARGIN_CSS_PX: f64 = 240.0;
 
 static OVERLAY_DESIRED_VISIBLE: AtomicBool = AtomicBool::new(false);
 
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+pub struct OverlayRectInput {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 #[cfg(target_os = "windows")]
 mod windows_hit_test {
     use once_cell::sync::Lazy;
@@ -25,17 +33,29 @@ mod windows_hit_test {
         collections::HashMap,
         mem,
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU32, Ordering},
             Mutex,
         },
     };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{POINT, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW,
-        GWLP_WNDPROC, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST, WNDPROC,
+        CallWindowProcW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+        SetWindowLongPtrW, GWLP_WNDPROC, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST, WNDPROC,
     };
 
     static OVERLAY_EDITING: AtomicBool = AtomicBool::new(false);
+    static OVERLAY_SCALE_X1000: AtomicU32 = AtomicU32::new(1000);
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct HitRect {
+        pub x: f64,
+        pub y: f64,
+        pub width: f64,
+        pub height: f64,
+    }
+
+    static INTERACTIVE_RECTS: Lazy<Mutex<Vec<HitRect>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
     #[derive(Default)]
     struct WndProcRegistry {
@@ -52,13 +72,74 @@ mod windows_hit_test {
         lparam: LPARAM,
     ) -> LRESULT {
         if msg == WM_NCHITTEST {
-            if OVERLAY_EDITING.load(Ordering::SeqCst) {
+            if !OVERLAY_EDITING.load(Ordering::SeqCst) {
+                // Always click-through while not editing.
+                return HTTRANSPARENT as LRESULT;
+            }
+
+            // Editing: allow interaction only in the "skin edit region" (outside the main rect),
+            // and on interactive ornament rects (even when they overlap the main rect).
+            let pt_screen = POINT {
+                x: (lparam & 0xFFFF) as i16 as i32,
+                y: ((lparam >> 16) & 0xFFFF) as i16 as i32,
+            };
+
+            let mut window_rc = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            if unsafe { GetWindowRect(hwnd, &mut window_rc) } == 0 {
                 return HTCLIENT as LRESULT;
             }
-            // Always click-through while not editing.
-            // We intentionally do NOT support "drag ornament to move window" because it can easily
-            // end up blocking clicks on the main UI if coordinates/state get out of sync.
-            return HTTRANSPARENT as LRESULT;
+
+            let x = (pt_screen.x - window_rc.left) as f64;
+            let y = (pt_screen.y - window_rc.top) as f64;
+
+            let mut rc = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            if unsafe { GetClientRect(hwnd, &mut rc) } == 0 {
+                return HTCLIENT as LRESULT;
+            }
+
+            let client_w = (rc.right - rc.left).max(0) as f64;
+            let client_h = (rc.bottom - rc.top).max(0) as f64;
+
+            // Scale CSS px to physical px using the cached Tauri scale factor (best-effort).
+            let scale = OVERLAY_SCALE_X1000.load(Ordering::SeqCst) as f64 / 1000.0;
+            let margin = super::OVERLAY_MARGIN_CSS_PX * scale;
+
+            // Interactive ornament rects (in CSS px, scaled here).
+            if let Ok(guard) = INTERACTIVE_RECTS.lock() {
+                for r in guard.iter() {
+                    let rx = r.x * scale;
+                    let ry = r.y * scale;
+                    let rw = r.width * scale;
+                    let rh = r.height * scale;
+                    if x >= rx && x <= rx + rw && y >= ry && y <= ry + rh {
+                        return HTCLIENT as LRESULT;
+                    }
+                }
+            }
+
+            // Click-through inside main rect so the main UI and other editor windows remain usable.
+            let main_left = margin;
+            let main_top = margin;
+            let main_right = (client_w - margin).max(main_left);
+            let main_bottom = (client_h - margin).max(main_top);
+
+            let in_main = x >= main_left && x <= main_right && y >= main_top && y <= main_bottom;
+            if in_main {
+                return HTTRANSPARENT as LRESULT;
+            }
+
+            // Outside main: capture events for the edit region (drag to move window, etc.).
+            return HTCLIENT as LRESULT;
         }
 
         let original = {
@@ -104,12 +185,40 @@ mod windows_hit_test {
         OVERLAY_EDITING.store(editing, Ordering::SeqCst);
     }
 
+    pub fn set_interactive_rects(rects: Vec<HitRect>) {
+        if let Ok(mut guard) = INTERACTIVE_RECTS.lock() {
+            *guard = rects;
+        }
+    }
+
+    pub fn set_scale_factor(scale_factor: f64) {
+        let v = (scale_factor.max(0.5).min(5.0) * 1000.0).round() as u32;
+        OVERLAY_SCALE_X1000.store(v.max(1), Ordering::SeqCst);
+    }
+
 }
 
 pub fn set_ornaments_overlay_editing(editing: bool) {
     #[cfg(target_os = "windows")]
     windows_hit_test::set_editing(editing);
     let _ = editing;
+}
+
+pub fn set_ornaments_overlay_interactive_rects(rects: Vec<OverlayRectInput>) {
+    #[cfg(target_os = "windows")]
+    windows_hit_test::set_interactive_rects(
+        rects
+            .into_iter()
+            .map(|r| windows_hit_test::HitRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            })
+            .collect(),
+    );
+    #[cfg(not(target_os = "windows"))]
+    let _ = rects;
 }
 
 fn resolve_main_bounds(app: &AppHandle) -> Option<(LogicalPosition<f64>, LogicalSize<f64>, f64)> {
@@ -185,6 +294,9 @@ pub fn ensure_ornaments_overlay_window(app: &AppHandle, exit_flag: Arc<AtomicBoo
             windows_hit_test::install(hwnd.0 as _);
         }
 
+        #[cfg(target_os = "windows")]
+        windows_hit_test::set_scale_factor(existing.scale_factor().unwrap_or(1.0));
+
         sync_ornaments_overlay_window(app);
         // Keep startup clean: the overlay should only become visible once the frontend decides it
         // should be shown (editing mode or enabled ornaments).
@@ -226,6 +338,9 @@ pub fn ensure_ornaments_overlay_window(app: &AppHandle, exit_flag: Arc<AtomicBoo
     if let Ok(hwnd) = window.hwnd() {
         windows_hit_test::install(hwnd.0 as _);
     }
+
+    #[cfg(target_os = "windows")]
+    windows_hit_test::set_scale_factor(window.scale_factor().unwrap_or(1.0));
 
     // Default: click-through. The overlay app toggles this when entering edit mode.
     let _ = window.set_ignore_cursor_events(true);
