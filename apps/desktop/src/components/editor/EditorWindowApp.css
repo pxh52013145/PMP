@@ -35,6 +35,12 @@
   overflow: hidden;
 }
 
+.editor-window-app.editor-window-app--style-bar {
+  /* Docked style bar: keep a tight frame so it feels attached to the main window. */
+  padding: 8px;
+  overflow: hidden;
+}
+
 .editor-window-app.editor-window-app--tauri {
   /* On Windows, prefer OS-level vibrancy; keep panels more translucent and avoid CSS blur. */
   --editor-window-panel-bg: rgba(10, 10, 20, 0.76);

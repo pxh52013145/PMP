@@ -6,6 +6,10 @@ export type EditorWindowType =
   | 'statistics'
   | 'library'
   | 'style'
+  | 'style-pixel'
+  | 'style-cover-color'
+  | 'style-background-effect'
+  | 'style-border-effect'
   | 'ornaments'
   | 'creator'
   | 'background'
@@ -58,7 +62,11 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
-  style: ['ornaments'],
+  style: ['style-pixel', 'style-cover-color', 'style-background-effect', 'style-border-effect', 'ornaments'],
+  'style-pixel': [],
+  'style-cover-color': [],
+  'style-background-effect': [],
+  'style-border-effect': [],
   ornaments: [],
   creator: [],
   'custom-background': [],
@@ -292,7 +300,7 @@ export async function calculateWindowPosition(
 
   // Style window is a docked edit bar under the main window (not a floating panel).
   if (type === 'style') {
-    const barHeight = 72;
+    const barHeight = 96;
     const gap = 8;
     const screenWidth = window.screen.availWidth;
     const screenHeight = window.screen.availHeight;
@@ -314,6 +322,10 @@ export async function calculateWindowPosition(
     statistics: { width: 380, height: 500 },
     library: { width: 520, height: 680 },
     style: { width: 520, height: 720 },
+    'style-pixel': { width: 560, height: 520 },
+    'style-cover-color': { width: 560, height: 520 },
+    'style-background-effect': { width: 560, height: 560 },
+    'style-border-effect': { width: 560, height: 560 },
     ornaments: { width: 420, height: 640 },
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
@@ -343,6 +355,10 @@ export async function calculateWindowPosition(
     statistics: 1,
     library: 2,
     style: 3,
+    'style-pixel': 3,
+    'style-cover-color': 3,
+    'style-background-effect': 3,
+    'style-border-effect': 3,
     ornaments: 4,
     creator: 5,
     background: 6,
@@ -357,6 +373,21 @@ export async function calculateWindowPosition(
   } else if (type === 'custom-background' || type === 'theme' || type === 'debug') {
     offsetX = (screenWidth - size.width) / 2;
     y = (screenHeight - size.height) / 2;
+  } else if (
+    type === 'style-pixel' ||
+    type === 'style-cover-color' ||
+    type === 'style-background-effect' ||
+    type === 'style-border-effect'
+  ) {
+    // Style popups should NOT cover the main window; place them beside the main window by default.
+    offsetX = mainRightX + GAP;
+    y = mainBottomY - size.height - (96 + 8); // above the docked style bar (best-effort)
+
+    if (offsetX + size.width > screenWidth) {
+      offsetX = mainBounds.x - size.width - GAP;
+    }
+
+    if (y < 10) y = 10;
   } else {
     offsetX = mainRightX + GAP;
 

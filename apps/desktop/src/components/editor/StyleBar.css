@@ -1,34 +1,100 @@
 .style-bar-root {
   height: 100%;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 0;
+  background: var(--editor-window-panel-bg, rgba(10, 10, 20, 0.88));
+  border: 2px solid rgba(0, 255, 255, 0.5);
+  box-shadow:
+    0 0 30px rgba(0, 255, 255, 0.6),
+    inset 0 0 20px rgba(0, 255, 255, 0.2);
+  clip-path: polygon(0% 18px, 18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%);
+  contain: layout style paint;
+}
+
+.style-bar-header {
+  height: 18px;
+  width: 100%;
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 18px;
-  border-radius: 16px;
-  background: rgba(0, 0, 0, 0.34);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.25),
-    0 18px 60px rgba(0, 0, 0, 0.35);
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+  color: rgba(0, 255, 255, 0.85);
+}
+
+.style-bar-header-icon {
+  font-size: 12px;
+  opacity: 0.9;
+  letter-spacing: 1px;
+}
+
+.style-bar-header-title {
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+.style-bar-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.style-bar-grip {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(0, 255, 255, 0.06);
+  border: 1px solid rgba(0, 255, 255, 0.22);
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.style-bar-grip::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  background-image: radial-gradient(rgba(0, 255, 255, 0.55) 1px, transparent 1px);
+  background-size: 4px 4px;
+  background-position: 0 0;
+  opacity: 0.85;
 }
 
 .style-bar-btn {
   height: 38px;
   padding: 0 14px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(20, 20, 20, 0.6);
-  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 255, 255, 0.24);
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(0, 255, 255, 0.9);
   font-size: 12px;
   letter-spacing: 0.5px;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
 }
 
 .style-bar-btn:hover {
-  border-color: rgba(0, 255, 136, 0.45);
-  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.15);
+  border-color: rgba(0, 255, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 255, 255, 0.18), 0 0 18px rgba(0, 255, 255, 0.14);
+  background: rgba(0, 255, 255, 0.06);
+  transform: translateY(-1px);
 }
 
 .style-bar-btn:disabled {
@@ -37,11 +103,11 @@
 }
 
 .style-bar-btn.active {
-  border-color: rgba(0, 255, 136, 0.6);
-  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.18), 0 0 18px rgba(0, 255, 136, 0.15);
+  border-color: rgba(0, 255, 255, 0.7);
+  box-shadow: 0 0 0 1px rgba(0, 255, 255, 0.2), 0 0 22px rgba(0, 255, 255, 0.18);
+  background: rgba(0, 255, 255, 0.08);
 }
 
 .style-bar-btn--ornaments {
   margin-left: auto;
 }
-

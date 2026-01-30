@@ -8,6 +8,10 @@ import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { EditorStatistics } from './components/editor/EditorStatistics';
 import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
 import { StyleBar } from './components/editor/StyleBar';
+import { StyleBackgroundEffectPopup } from './components/editor/style/StyleBackgroundEffectPopup';
+import { StyleBorderEffectPopup } from './components/editor/style/StyleBorderEffectPopup';
+import { StyleCoverColorPopup } from './components/editor/style/StyleCoverColorPopup';
+import { StylePixelPopup } from './components/editor/style/StylePixelPopup';
 import { OrnamentsEditorWindow } from './components/editor/OrnamentsEditorWindow';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
@@ -1342,8 +1346,8 @@ export function EditorWindowApp() {
         <NavigationProvider>
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
-              <div
-                className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
+                <div
+                className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
                 ref={rootRef}
               >
                   {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}
@@ -1363,6 +1367,11 @@ export function EditorWindowApp() {
             )}
 
             {windowType === 'style' && <StyleBar onOpenOrnaments={() => void handleOpenOrnamentsEditorFromStyle()} />}
+
+            {windowType === 'style-pixel' && <StylePixelPopup />}
+            {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
+            {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
+            {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
 
             {windowType === 'ornaments' && <OrnamentsEditorWindow />}
 

@@ -20,6 +20,10 @@ pub enum EditorWindowType {
     Statistics,
     Library,
     Style,
+    StylePixel,
+    StyleCoverColor,
+    StyleBackgroundEffect,
+    StyleBorderEffect,
     Ornaments,
     Creator,
     Background,
@@ -35,6 +39,10 @@ impl EditorWindowType {
             "statistics" => Some(Self::Statistics),
             "library" => Some(Self::Library),
             "style" => Some(Self::Style),
+            "style-pixel" => Some(Self::StylePixel),
+            "style-cover-color" => Some(Self::StyleCoverColor),
+            "style-background-effect" => Some(Self::StyleBackgroundEffect),
+            "style-border-effect" => Some(Self::StyleBorderEffect),
             "ornaments" => Some(Self::Ornaments),
             "help" => Some(Self::Debug),
             "creator" => Some(Self::Creator),
@@ -52,6 +60,10 @@ impl EditorWindowType {
             Self::Statistics => "statistics",
             Self::Library => "library",
             Self::Style => "style",
+            Self::StylePixel => "style-pixel",
+            Self::StyleCoverColor => "style-cover-color",
+            Self::StyleBackgroundEffect => "style-background-effect",
+            Self::StyleBorderEffect => "style-border-effect",
             Self::Ornaments => "ornaments",
             Self::Creator => "creator",
             Self::Background => "background",
@@ -67,6 +79,10 @@ pub const ALL_EDITOR_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Statistics,
     EditorWindowType::Library,
     EditorWindowType::Style,
+    EditorWindowType::StylePixel,
+    EditorWindowType::StyleCoverColor,
+    EditorWindowType::StyleBackgroundEffect,
+    EditorWindowType::StyleBorderEffect,
     EditorWindowType::Ornaments,
     EditorWindowType::Creator,
     EditorWindowType::Background,
@@ -79,6 +95,10 @@ pub const CONTROL_CLOSE_HIDE_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Statistics,
     EditorWindowType::Library,
     EditorWindowType::Style,
+    EditorWindowType::StylePixel,
+    EditorWindowType::StyleCoverColor,
+    EditorWindowType::StyleBackgroundEffect,
+    EditorWindowType::StyleBorderEffect,
     EditorWindowType::Ornaments,
     EditorWindowType::Creator,
     EditorWindowType::Background,
@@ -93,6 +113,10 @@ pub fn label(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Statistics => "editor-statistics",
         EditorWindowType::Library => "editor-library",
         EditorWindowType::Style => "editor-style",
+        EditorWindowType::StylePixel => "editor-style-pixel",
+        EditorWindowType::StyleCoverColor => "editor-style-cover-color",
+        EditorWindowType::StyleBackgroundEffect => "editor-style-background-effect",
+        EditorWindowType::StyleBorderEffect => "editor-style-border-effect",
         EditorWindowType::Ornaments => "editor-ornaments",
         EditorWindowType::Creator => "editor-creator",
         EditorWindowType::Background => "editor-background",
@@ -104,16 +128,21 @@ pub fn label(window_type: EditorWindowType) -> &'static str {
 
 pub fn title(window_type: EditorWindowType) -> &'static str {
     match window_type {
-        EditorWindowType::Control => "编辑器控制",
-        EditorWindowType::Statistics => "统计信息",
-        EditorWindowType::Library => "Magnet 库",
-        EditorWindowType::Style => "风格设置",
-        EditorWindowType::Ornaments => "挂件编辑",
-        EditorWindowType::Creator => "创建/导入 Magnet",
-        EditorWindowType::Background => "背景管理",
-        EditorWindowType::CustomBackground => "自定义背景",
-        EditorWindowType::Theme => "主题编辑器",
-        EditorWindowType::Debug => "主题系统调试",
+        // Use ASCII-only titles to avoid encoding issues in source control / toolchains.
+        EditorWindowType::Control => "Editor",
+        EditorWindowType::Statistics => "Statistics",
+        EditorWindowType::Library => "Library",
+        EditorWindowType::Style => "Style",
+        EditorWindowType::StylePixel => "Style - PIXEL",
+        EditorWindowType::StyleCoverColor => "Style - Cover color",
+        EditorWindowType::StyleBackgroundEffect => "Style - Background effect",
+        EditorWindowType::StyleBorderEffect => "Style - Border effect",
+        EditorWindowType::Ornaments => "Ornaments",
+        EditorWindowType::Creator => "Creator",
+        EditorWindowType::Background => "Background",
+        EditorWindowType::CustomBackground => "Custom background",
+        EditorWindowType::Theme => "Theme",
+        EditorWindowType::Debug => "Debug",
     }
 }
 
@@ -124,7 +153,7 @@ pub struct EditorWindowGeometry {
     pub height: f64,
 }
 
-const STYLE_BAR_HEIGHT_CSS_PX: f64 = 72.0;
+const STYLE_BAR_HEIGHT_CSS_PX: f64 = 96.0;
 const STYLE_BAR_GAP_CSS_PX: f64 = 8.0;
 
 fn compute_style_bar_geometry(app: &AppHandle) -> Option<EditorWindowGeometry> {
@@ -248,6 +277,29 @@ fn apply_windows_blur_behind(window: &tauri::Window, enabled: bool) {
 
 #[cfg(not(target_os = "windows"))]
 fn apply_windows_blur_behind(_window: &tauri::Window, _enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_owner(window: &tauri::Window, owner: &tauri::Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
+
+    let Ok(window_hwnd) = window.hwnd() else {
+        return;
+    };
+    let Ok(owner_hwnd) = owner.hwnd() else {
+        return;
+    };
+
+    unsafe {
+        // Setting GWLP_HWNDPARENT makes this an owned window:
+        // - stays above the owner
+        // - follows owner in z-order (covered together)
+        // - hides/minimizes with the owner
+        let _ = SetWindowLongPtrW(window_hwnd.0 as _, GWLP_HWNDPARENT, owner_hwnd.0 as _);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_windows_owner(_window: &tauri::Window, _owner: &tauri::Window) {}
 
 fn apply_geometry(window: &tauri::Window, geometry: &EditorWindowGeometry) {
     // Best-effort: avoid failing to reopen a window just because geometry is invalid.
@@ -387,6 +439,9 @@ pub fn open_editor_window(
     let should_focus = window_type != EditorWindowType::Control;
 
     if let Some(existing_window) = app.get_window(window_label) {
+        if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+            apply_windows_owner(&existing_window, &main);
+        }
         // When the window already exists (possibly hidden/off-screen), always re-apply geometry so the
         // caller can bring it back to a visible location.
         apply_geometry(&existing_window, &geometry);
@@ -417,11 +472,15 @@ pub fn open_editor_window(
         .maximizable(false)
         .decorations(false)
         .transparent(true)
-        .always_on_top(true)
+        .always_on_top(!cfg!(target_os = "windows"))
         .focused(false)
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+
+    if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+        apply_windows_owner(&window, &main);
+    }
 
     // Prefer system backdrop effects over CSS `backdrop-filter` to avoid scroll/paint jank in WebView2.
     //
