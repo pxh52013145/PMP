@@ -74,7 +74,7 @@
 .style-bar-btn {
   height: 38px;
   padding: 0 14px;
-  border-radius: 12px;
+  border-radius: 0;
   border: 1px solid rgba(0, 255, 255, 0.24);
   background: rgba(0, 0, 0, 0.24);
   color: rgba(0, 255, 255, 0.9);
@@ -83,6 +83,7 @@
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  clip-path: polygon(0% 10px, 10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
   transition:
     background 140ms ease,
     box-shadow 140ms ease,
