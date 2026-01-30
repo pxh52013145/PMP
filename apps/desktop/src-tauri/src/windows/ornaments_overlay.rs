@@ -33,19 +33,28 @@ mod windows_hit_test {
         collections::HashMap,
         mem,
         sync::{
-            atomic::{AtomicBool, AtomicU32, Ordering},
+            atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering},
             Mutex,
         },
     };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, GetWindowRect,
-        SetWindowLongPtrW, GWLP_WNDPROC, HTCLIENT, HTTRANSPARENT, WM_NCHITTEST, WNDPROC,
+        CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW, GWLP_WNDPROC,
+        HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_MOUSEACTIVATE,
+        WM_NCHITTEST, WNDPROC,
     };
 
     static OVERLAY_EDITING: AtomicBool = AtomicBool::new(false);
     static OVERLAY_MARGIN_PX_X1000: AtomicU32 = AtomicU32::new(0);
+    static OVERLAY_SCREEN_X: AtomicI32 = AtomicI32::new(0);
+    static OVERLAY_SCREEN_Y: AtomicI32 = AtomicI32::new(0);
+    static OVERLAY_SCALE_X1000: AtomicU32 = AtomicU32::new(1000);
+
+    static MAIN_SCREEN_LEFT: AtomicI32 = AtomicI32::new(0);
+    static MAIN_SCREEN_TOP: AtomicI32 = AtomicI32::new(0);
+    static MAIN_SCREEN_RIGHT: AtomicI32 = AtomicI32::new(0);
+    static MAIN_SCREEN_BOTTOM: AtomicI32 = AtomicI32::new(0);
 
     #[derive(Clone, Copy, Debug)]
     pub struct HitRect {
@@ -81,6 +90,12 @@ mod windows_hit_test {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if msg == WM_MOUSEACTIVATE {
+            // Never activate the overlay on click: this avoids raising it above editor windows
+            // and prevents it from interfering with other applications.
+            return MA_NOACTIVATE as LRESULT;
+        }
+
         if msg == WM_NCHITTEST {
             if !OVERLAY_EDITING.load(Ordering::SeqCst) {
                 // Always click-through while not editing.
@@ -91,6 +106,28 @@ mod windows_hit_test {
                 x: (lparam & 0xFFFF) as i16 as i32,
                 y: ((lparam >> 16) & 0xFFFF) as i16 as i32,
             };
+
+            // Editing: allow interaction only in the "skin edit region" (outside the main rect),
+            // and on interactive ornament rects (even when they overlap the main rect).
+            // Interactive ornament rects (stored in CSS px, mapped to screen coords here).
+            let overlay_x = OVERLAY_SCREEN_X.load(Ordering::SeqCst);
+            let overlay_y = OVERLAY_SCREEN_Y.load(Ordering::SeqCst);
+            let scale = OVERLAY_SCALE_X1000.load(Ordering::SeqCst) as f64 / 1000.0;
+            if let Ok(guard) = INTERACTIVE_RECTS.lock() {
+                for r in guard.iter() {
+                    let rx = overlay_x as f64 + r.x * scale;
+                    let ry = overlay_y as f64 + r.y * scale;
+                    let rw = r.width * scale;
+                    let rh = r.height * scale;
+                    if pt_screen.x as f64 >= rx
+                        && pt_screen.x as f64 <= rx + rw
+                        && pt_screen.y as f64 >= ry
+                        && pt_screen.y as f64 <= ry + rh
+                    {
+                        return HTCLIENT as LRESULT;
+                    }
+                }
+            }
 
             // If the pointer is over an editor window, let that window receive the click.
             if let Ok(guard) = PASS_THROUGH_RECTS.lock() {
@@ -105,63 +142,13 @@ mod windows_hit_test {
                 }
             }
 
-            // Editing: allow interaction only in the "skin edit region" (outside the main rect),
-            // and on interactive ornament rects (even when they overlap the main rect).
-            let mut window_rc = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            if unsafe { GetWindowRect(hwnd, &mut window_rc) } == 0 {
-                return HTCLIENT as LRESULT;
-            }
-
-            let x = (pt_screen.x - window_rc.left) as f64;
-            let y = (pt_screen.y - window_rc.top) as f64;
-
-            let mut rc = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            if unsafe { GetClientRect(hwnd, &mut rc) } == 0 {
-                return HTCLIENT as LRESULT;
-            }
-
-            let client_w = (rc.right - rc.left).max(0) as f64;
-            let client_h = (rc.bottom - rc.top).max(0) as f64;
-
-            let margin_px = OVERLAY_MARGIN_PX_X1000.load(Ordering::SeqCst) as f64 / 1000.0;
-            // Derive CSS->physical scale from the effective margin in pixels (best-effort).
-            let scale = if margin_px > 0.0 {
-                margin_px / super::OVERLAY_MARGIN_CSS_PX
-            } else {
-                1.0
-            };
-            let margin = margin_px.max(0.0);
-
-            // Interactive ornament rects (in CSS px, scaled here).
-            if let Ok(guard) = INTERACTIVE_RECTS.lock() {
-                for r in guard.iter() {
-                    let rx = r.x * scale;
-                    let ry = r.y * scale;
-                    let rw = r.width * scale;
-                    let rh = r.height * scale;
-                    if x >= rx && x <= rx + rw && y >= ry && y <= ry + rh {
-                        return HTCLIENT as LRESULT;
-                    }
-                }
-            }
-
-            // Click-through inside main rect so the main UI and other editor windows remain usable.
-            let main_left = margin;
-            let main_top = margin;
-            let main_right = (client_w - margin).max(main_left);
-            let main_bottom = (client_h - margin).max(main_top);
-
-            let in_main = x >= main_left && x <= main_right && y >= main_top && y <= main_bottom;
+            // Click-through inside main rect so the main UI remains usable.
+            let main_left = MAIN_SCREEN_LEFT.load(Ordering::SeqCst);
+            let main_top = MAIN_SCREEN_TOP.load(Ordering::SeqCst);
+            let main_right = MAIN_SCREEN_RIGHT.load(Ordering::SeqCst);
+            let main_bottom = MAIN_SCREEN_BOTTOM.load(Ordering::SeqCst);
+            let in_main =
+                pt_screen.x >= main_left && pt_screen.x <= main_right && pt_screen.y >= main_top && pt_screen.y <= main_bottom;
             if in_main {
                 return HTTRANSPARENT as LRESULT;
             }
@@ -228,6 +215,20 @@ mod windows_hit_test {
     pub fn set_margin_px(margin_px: f64) {
         let v = (margin_px.max(0.0) * 1000.0).round() as u32;
         OVERLAY_MARGIN_PX_X1000.store(v, Ordering::SeqCst);
+    }
+
+    pub fn set_overlay_geometry(screen_x: i32, screen_y: i32, scale_factor: f64) {
+        OVERLAY_SCREEN_X.store(screen_x, Ordering::SeqCst);
+        OVERLAY_SCREEN_Y.store(screen_y, Ordering::SeqCst);
+        let v = (scale_factor.max(0.5).min(5.0) * 1000.0).round() as u32;
+        OVERLAY_SCALE_X1000.store(v.max(1), Ordering::SeqCst);
+    }
+
+    pub fn set_main_rect(left: i32, top: i32, right: i32, bottom: i32) {
+        MAIN_SCREEN_LEFT.store(left, Ordering::SeqCst);
+        MAIN_SCREEN_TOP.store(top, Ordering::SeqCst);
+        MAIN_SCREEN_RIGHT.store(right, Ordering::SeqCst);
+        MAIN_SCREEN_BOTTOM.store(bottom, Ordering::SeqCst);
     }
 
 }
@@ -360,6 +361,9 @@ fn sync_windows_hit_test_geometry(app: &AppHandle, overlay: &tauri::Window) {
     let Ok(main_pos) = main.outer_position() else {
         return;
     };
+    let Ok(main_size) = main.outer_size() else {
+        return;
+    };
     let Ok(overlay_pos) = overlay.outer_position() else {
         return;
     };
@@ -369,6 +373,14 @@ fn sync_windows_hit_test_geometry(app: &AppHandle, overlay: &tauri::Window) {
     let margin_y = (main_pos.y - overlay_pos.y) as f64;
     let margin_px = ((margin_x.abs() + margin_y.abs()) / 2.0).max(0.0);
     windows_hit_test::set_margin_px(margin_px);
+
+    windows_hit_test::set_overlay_geometry(overlay_pos.x, overlay_pos.y, overlay.scale_factor().unwrap_or(1.0));
+    windows_hit_test::set_main_rect(
+        main_pos.x,
+        main_pos.y,
+        main_pos.x + main_size.width as i32,
+        main_pos.y + main_size.height as i32,
+    );
     sync_windows_pass_through_rects(app);
 }
 
