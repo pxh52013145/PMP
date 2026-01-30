@@ -1,10 +1,11 @@
 import { memo, useState, useCallback, useEffect } from 'react';
 import './StyleEditor.css';
-import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../utils/windowCommunication';
+import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, broadcastSignal } from '../../utils/windowCommunication';
 import { readJson, readString, writeJson, writeString } from '../../modules/storage';
 import { useT } from '../../i18n';
 import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import type { DynamicColorConfig, DynamicColorEffect } from '../../themes/types/theme';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 /**
  * Pixel 形状预设
@@ -180,6 +181,24 @@ function normalizeCoverDynamicSpeed(value: unknown): number {
 export const StyleEditor = memo(function StyleEditor() {
   const t = useT();
   const { theme, applyTheme, getComponentTheme } = useTheme();
+  const isTauri = isTauriRuntime();
+
+  const handleOpenOrnamentsEditor = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
+        true,
+        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
+      );
+
+      const { calculateWindowPosition, openEditorWindow } = await import('../../utils/editorWindows');
+      const position = await calculateWindowPosition('ornaments');
+      await openEditorWindow({ type: 'ornaments', ...position });
+    } catch (error) {
+      console.error('[StyleEditor] Failed to open ornaments editor window:', error);
+    }
+  }, []);
 
   const currentCoverColorConfig: DynamicColorConfig = (() => {
     const trackInfoConfig = getComponentTheme('track-info').dynamicColor;
@@ -697,6 +716,25 @@ export const StyleEditor = memo(function StyleEditor() {
               </svg>
             </button>
           </div>
+        </section>
+
+        <section className="style-section">
+          <h3 className="section-title">
+            <span className="section-icon">◎</span>
+            {t('editor.style-editor.section.ornaments.title')}
+          </h3>
+          <p className="section-description">{t('editor.style-editor.section.ornaments.desc')}</p>
+
+          <button
+            type="button"
+            className="preset-card style-ornaments-entry-btn"
+            onClick={() => void handleOpenOrnamentsEditor()}
+            disabled={!isTauri}
+          >
+            <div className="preset-header">
+              <span className="preset-name">{t('editor.style-editor.ornaments.openEditor')}</span>
+            </div>
+          </button>
         </section>
       </div>
     </div>

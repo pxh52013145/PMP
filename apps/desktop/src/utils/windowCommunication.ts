@@ -147,6 +147,11 @@ export const STORAGE_KEYS = {
   BACKGROUND_THEME_COLOR: 'pixel-matrix-background-theme-color', // 背景效果主题颜色
   BORDER_THEME_COLOR: 'pixel-matrix-border-theme-color', // 边框效果主题颜色
 
+  // === Ornaments (挂件) ===
+  ORNAMENTS_V1: 'pixel-matrix-ornaments-v1',
+  ORNAMENTS_OVERLAY_EDITING: 'pixel-matrix-ornaments-overlay-editing',
+  ORNAMENTS_SELECTED_ID: 'pixel-matrix-ornaments-selected-id',
+
   // === 编辑器临时数据 ===
   MAGNET_EDITOR_DATA: 'magnet-editor-data', // 编辑中的 Magnet 数据
   MAGNET_EDITOR_MODE: 'magnet-editor-mode', // 编辑模式（create/edit）
@@ -277,6 +282,11 @@ export const TAURI_EVENTS = {
 
   // Theme
   THEME_UPDATED: 'theme-config-updated',
+
+  // Ornaments (挂件)
+  ORNAMENTS_UPDATED: 'ornaments-updated',
+  ORNAMENTS_OVERLAY_EDITING_UPDATED: 'ornaments-overlay-editing-updated',
+  ORNAMENTS_SELECTED_ID_UPDATED: 'ornaments-selected-id-updated',
 
   // i18n
   LOCALE_UPDATED: 'locale-updated',

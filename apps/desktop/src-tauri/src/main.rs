@@ -14,6 +14,7 @@ use magnet_layout_store::{
 };
 
 mod background_media;
+mod ornament_media;
 mod audio;
 mod asio_diag;
 mod audio_smoke;
@@ -853,6 +854,33 @@ async fn background_import_media(
     .map_err(|e| format!("Import task failed: {e}"))?
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn ornament_import_media(
+    app: tauri::AppHandle,
+    source_path: String,
+    gif_max_fps: Option<u16>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ornament_media::import_ornament_media(&app, source_path, gif_max_fps)
+    })
+    .await
+    .map_err(|e| format!("Import task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn ornaments_overlay_set_editing(editing: bool) -> Result<(), String> {
+    windows::ornaments_overlay::set_ornaments_overlay_editing(editing);
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn ornaments_overlay_set_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    windows::ornaments_overlay::set_ornaments_overlay_desired_visible(&app, visible);
+    Ok(())
+}
+
+
+
 fn main() {
     if let Some(exit_code) = asio_diag::maybe_run_from_cli() {
         std::process::exit(exit_code);
@@ -863,10 +891,14 @@ fn main() {
 
     let show = CustomMenuItem::new("show".to_string(), "显示窗口");
     let hide = CustomMenuItem::new("hide".to_string(), "隐藏窗口");
+    let ornaments_reset =
+        CustomMenuItem::new("ornaments_reset".to_string(), "重置挂件编辑状态");
     let quit = CustomMenuItem::new("quit".to_string(), "退出");
     let tray_menu = SystemTrayMenu::new()
         .add_item(show)
         .add_item(hide)
+        .add_native_item(tauri::SystemTrayMenuItem::Separator)
+        .add_item(ornaments_reset)
         .add_native_item(tauri::SystemTrayMenuItem::Separator)
         .add_item(quit);
 
@@ -883,10 +915,12 @@ fn main() {
                 if let Some(window) = app.get_window(windows::MAIN_WINDOW_LABEL) {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
+                        windows::ornaments_overlay::hide_ornaments_overlay_window(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_HIDDEN, ());
                     } else {
                         let _ = window.show();
                         let _ = window.set_focus();
+                        windows::ornaments_overlay::apply_ornaments_overlay_desired_visibility(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_SHOWN, ());
                     }
                 }
@@ -896,13 +930,25 @@ fn main() {
                     if let Some(window) = app.get_window(windows::MAIN_WINDOW_LABEL) {
                         let _ = window.show();
                         let _ = window.set_focus();
+                        windows::ornaments_overlay::apply_ornaments_overlay_desired_visibility(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_SHOWN, ());
                     }
                 }
                 "hide" => {
                     if let Some(window) = app.get_window(windows::MAIN_WINDOW_LABEL) {
                         let _ = window.hide();
+                        windows::ornaments_overlay::hide_ornaments_overlay_window(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_HIDDEN, ());
+                    }
+                }
+                "ornaments_reset" => {
+                    // Emergency recovery: if overlay is stuck intercepting clicks (e.g. editing state not cleared),
+                    // force it back to a click-through safe state.
+                    windows::ornaments_overlay::set_ornaments_overlay_editing(false);
+                    if let Some(overlay) =
+                        app.get_window(windows::ornaments_overlay::ORNAMENTS_OVERLAY_WINDOW_LABEL)
+                    {
+                        let _ = overlay.set_ignore_cursor_events(true);
                     }
                 }
                 "quit" => {
@@ -933,6 +979,13 @@ fn main() {
 
             let app_handle = app.handle();
             let exit_flag = app.state::<ExitFlag>().0.clone();
+
+            if let Err(error) = windows::ornaments_overlay::ensure_ornaments_overlay_window(
+                &app_handle,
+                exit_flag.clone(),
+            ) {
+                eprintln!("[ornaments] Failed to init overlay window: {error}");
+            }
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     if exit_flag.load(Ordering::SeqCst) {
@@ -947,6 +1000,15 @@ fn main() {
                         std::thread::sleep(Duration::from_millis(80));
                         let _ = vst_runtime::raise_visible_editors_above_main(&app_handle);
                     });
+                }
+                tauri::WindowEvent::Moved(_) => {
+                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                }
+                tauri::WindowEvent::Resized(_) => {
+                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                }
+                tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                 }
                 _ => {}
             });
@@ -975,6 +1037,9 @@ fn main() {
             debug_set_config,
             debug_get_env_snapshot,
             background_import_media,
+            ornament_import_media,
+            ornaments_overlay_set_editing,
+            ornaments_overlay_set_visible,
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,

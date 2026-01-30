@@ -8,6 +8,7 @@ import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { EditorStatistics } from './components/editor/EditorStatistics';
 import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
 import { StyleEditor } from './components/editor/StyleEditor';
+import { OrnamentsEditorWindow } from './components/editor/OrnamentsEditorWindow';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
@@ -991,6 +992,17 @@ export function EditorWindowApp() {
   const handleExitEditMode = async () => {
     try {
       // 通知主窗口退出编辑模式
+      await broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
+        false,
+        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
+      );
+      await broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_SELECTED_ID,
+        null,
+        TAURI_EVENTS.ORNAMENTS_SELECTED_ID_UPDATED
+      );
+
       await broadcastSignal(TAURI_EVENTS.EDITOR_STYLE_APPLY);
 
       // 关闭所有编辑器窗口
@@ -1335,6 +1347,8 @@ export function EditorWindowApp() {
             )}
 
             {windowType === 'style' && <StyleEditor />}
+
+            {windowType === 'ornaments' && <OrnamentsEditorWindow />}
 
             {windowType === 'creator' && (
               <MagnetCreator

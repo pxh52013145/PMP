@@ -4,6 +4,7 @@ import App from './App';
 import { EditorWindowApp } from './EditorWindowApp';
 import { PluginWindowApp } from './PluginWindowApp';
 import { VstManagerWindowApp } from './VstManagerWindowApp';
+import OrnamentsOverlayApp from './OrnamentsOverlayApp';
 import { KernelProvider } from './contexts/KernelContext';
 import { I18nSync, readPersistedLocale, setLocale } from './i18n';
 import { isTauriRuntime } from './utils/tauriRuntime';
@@ -79,6 +80,7 @@ const hash = window.location.hash;
 const isEditorWindow = hash.startsWith('#/editor/');
 const isPluginWindow = hash.startsWith('#/plugin-window/');
 const isVstManagerWindow = hash.startsWith('#/vst-manager');
+const isOrnamentsOverlayWindow = hash.startsWith('#/ornaments-overlay');
 
 const RootApp = isEditorWindow
   ? EditorWindowApp
@@ -86,7 +88,9 @@ const RootApp = isEditorWindow
     ? PluginWindowApp
     : isVstManagerWindow
       ? VstManagerWindowApp
-      : App;
+      : isOrnamentsOverlayWindow
+        ? OrnamentsOverlayApp
+        : App;
 
 async function bootstrap(): Promise<void> {
   ReactDOM.createRoot(document.getElementById('root')!).render(

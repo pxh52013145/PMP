@@ -19,6 +19,7 @@ pub enum EditorWindowType {
     Statistics,
     Library,
     Style,
+    Ornaments,
     Creator,
     Background,
     CustomBackground,
@@ -33,6 +34,7 @@ impl EditorWindowType {
             "statistics" => Some(Self::Statistics),
             "library" => Some(Self::Library),
             "style" => Some(Self::Style),
+            "ornaments" => Some(Self::Ornaments),
             "help" => Some(Self::Debug),
             "creator" => Some(Self::Creator),
             "background" => Some(Self::Background),
@@ -49,6 +51,7 @@ impl EditorWindowType {
             Self::Statistics => "statistics",
             Self::Library => "library",
             Self::Style => "style",
+            Self::Ornaments => "ornaments",
             Self::Creator => "creator",
             Self::Background => "background",
             Self::CustomBackground => "custom-background",
@@ -63,6 +66,7 @@ pub const ALL_EDITOR_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Statistics,
     EditorWindowType::Library,
     EditorWindowType::Style,
+    EditorWindowType::Ornaments,
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
@@ -74,6 +78,7 @@ pub const CONTROL_CLOSE_HIDE_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Statistics,
     EditorWindowType::Library,
     EditorWindowType::Style,
+    EditorWindowType::Ornaments,
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
@@ -87,6 +92,7 @@ pub fn label(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Statistics => "editor-statistics",
         EditorWindowType::Library => "editor-library",
         EditorWindowType::Style => "editor-style",
+        EditorWindowType::Ornaments => "editor-ornaments",
         EditorWindowType::Creator => "editor-creator",
         EditorWindowType::Background => "editor-background",
         EditorWindowType::CustomBackground => "editor-custom-background",
@@ -101,6 +107,7 @@ pub fn title(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::Statistics => "统计信息",
         EditorWindowType::Library => "Magnet 库",
         EditorWindowType::Style => "风格设置",
+        EditorWindowType::Ornaments => "挂件编辑",
         EditorWindowType::Creator => "创建/导入 Magnet",
         EditorWindowType::Background => "背景管理",
         EditorWindowType::CustomBackground => "自定义背景",
@@ -446,6 +453,9 @@ pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Re
         cache_window_handle(app, &window, window_type)?;
 
         if window_type == EditorWindowType::Control {
+            // Editor session is ending: ensure ornaments overlay exits edit-mode at backend level too
+            // (hit-test/cursor capture) even if the frontend doesn't get a chance to update.
+            crate::windows::ornaments_overlay::set_ornaments_overlay_editing(false);
             let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
             for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
                 destroy_window(app, *wtype);
@@ -467,4 +477,7 @@ pub fn close_all_editor_windows(app: &AppHandle) {
     for window_type in ALL_EDITOR_WINDOWS {
         request_force_close(app, *window_type);
     }
+
+    // Best-effort safety: cancel backend edit-mode latch.
+    crate::windows::ornaments_overlay::set_ornaments_overlay_editing(false);
 }

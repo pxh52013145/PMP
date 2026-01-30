@@ -6,6 +6,7 @@ export type EditorWindowType =
   | 'statistics'
   | 'library'
   | 'style'
+  | 'ornaments'
   | 'creator'
   | 'background'
   | 'custom-background'
@@ -57,7 +58,8 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
-  style: [],
+  style: ['ornaments'],
+  ornaments: [],
   creator: [],
   'custom-background': [],
   theme: ['debug'],
@@ -294,6 +296,7 @@ export async function calculateWindowPosition(
     statistics: { width: 380, height: 500 },
     library: { width: 520, height: 680 },
     style: { width: 520, height: 720 },
+    ornaments: { width: 420, height: 640 },
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
@@ -322,11 +325,12 @@ export async function calculateWindowPosition(
     statistics: 1,
     library: 2,
     style: 3,
-    creator: 4,
-    background: 5,
-    'custom-background': 6,
-    theme: 7,
-    debug: 8, // 调试窗口
+    ornaments: 4,
+    creator: 5,
+    background: 6,
+    'custom-background': 7,
+    theme: 8,
+    debug: 9, // 调试窗口
   };
 
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {

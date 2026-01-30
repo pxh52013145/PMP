@@ -1,0 +1,33 @@
+.ornaments-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.ornaments-layer--background {
+  z-index: 50; /* above PixelMatrixCanvas (10), below magnets (100) */
+}
+
+.ornaments-layer--foreground {
+  z-index: 500; /* above magnets (100), below EditorOverlay (1000) */
+}
+
+.ornament-item {
+  position: absolute;
+}
+
+.ornament-item__content {
+  will-change: transform;
+}
+
+.ornament-item__content img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
