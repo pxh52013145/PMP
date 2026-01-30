@@ -6,7 +6,8 @@ use std::sync::{
 
 use once_cell::sync::Lazy;
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position,
+    Size, WindowBuilder, WindowUrl,
 };
 
 use super::{
@@ -121,6 +122,27 @@ pub struct EditorWindowGeometry {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+const STYLE_BAR_HEIGHT_CSS_PX: f64 = 72.0;
+const STYLE_BAR_GAP_CSS_PX: f64 = 8.0;
+
+fn compute_style_bar_geometry(app: &AppHandle) -> Option<EditorWindowGeometry> {
+    let main = app.get_window(MAIN_WINDOW_LABEL)?;
+    let scale_factor = main.scale_factor().unwrap_or(1.0);
+
+    let position: PhysicalPosition<i32> = main.outer_position().ok()?;
+    let size: PhysicalSize<u32> = main.outer_size().ok()?;
+
+    let logical_pos = position.to_logical(scale_factor);
+    let logical_size = size.to_logical(scale_factor);
+
+    Some(EditorWindowGeometry {
+        x: logical_pos.x,
+        y: logical_pos.y + logical_size.height + STYLE_BAR_GAP_CSS_PX,
+        width: logical_size.width,
+        height: STYLE_BAR_HEIGHT_CSS_PX,
+    })
 }
 
 #[derive(Default)]
@@ -352,6 +374,12 @@ pub fn open_editor_window(
     exit_flag: Arc<AtomicBool>,
     blur_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let geometry = if window_type == EditorWindowType::Style {
+        compute_style_bar_geometry(app).unwrap_or(geometry)
+    } else {
+        geometry
+    };
+
     let window_label = label(window_type);
     // Avoid stealing focus from the main window when entering edit mode: on some Windows setups,
     // rapidly switching focus between two transparent WebView2 windows can cause a visible "flash".
@@ -446,6 +474,18 @@ pub fn set_editor_windows_blur_enabled(app: &AppHandle, enabled: bool) -> Result
     }
 
     Ok(())
+}
+
+pub fn sync_style_bar_window(app: &AppHandle) {
+    let Some(window) = app.get_window(label(EditorWindowType::Style)) else {
+        return;
+    };
+
+    let Some(geometry) = compute_style_bar_geometry(app) else {
+        return;
+    };
+
+    apply_geometry(&window, &geometry);
 }
 
 pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {

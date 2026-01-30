@@ -1003,12 +1003,15 @@ fn main() {
                 }
                 tauri::WindowEvent::Moved(_) => {
                     windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                    windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::Resized(_) => {
                     windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                    windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::ScaleFactorChanged { .. } => {
                     windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                    windows::editor::sync_style_bar_window(&app_handle);
                 }
                 _ => {}
             });

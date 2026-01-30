@@ -1,0 +1,47 @@
+.style-bar-root {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 18px 60px rgba(0, 0, 0, 0.35);
+}
+
+.style-bar-btn {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(20, 20, 20, 0.6);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.style-bar-btn:hover {
+  border-color: rgba(0, 255, 136, 0.45);
+  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.15);
+}
+
+.style-bar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.style-bar-btn.active {
+  border-color: rgba(0, 255, 136, 0.6);
+  box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.18), 0 0 18px rgba(0, 255, 136, 0.15);
+}
+
+.style-bar-btn--ornaments {
+  margin-left: auto;
+}
+

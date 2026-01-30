@@ -7,7 +7,7 @@ import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { EditorStatistics } from './components/editor/EditorStatistics';
 import { EditorMagnetLibrary } from './components/editor/EditorMagnetLibrary';
-import { StyleEditor } from './components/editor/StyleEditor';
+import { StyleBar } from './components/editor/StyleBar';
 import { OrnamentsEditorWindow } from './components/editor/OrnamentsEditorWindow';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
@@ -67,7 +67,6 @@ import { readJson, readString, removeKey, writeJson } from './modules/storage';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
-import './components/editor/StyleEditor.css';
 import './components/editor/EditorWindowApp.css';
 import './components/editor/MagnetCreator.css';
 import './components/editor/BackgroundManager.css';
@@ -1013,6 +1012,23 @@ export function EditorWindowApp() {
     }
   };
 
+  const handleOpenOrnamentsEditorFromStyle = useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
+        true,
+        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
+      );
+
+      const { calculateWindowPosition, openEditorWindow } = await import('./utils/editorWindows');
+      const position = await calculateWindowPosition('ornaments');
+      await openEditorWindow({ type: 'ornaments', ...position });
+    } catch (error) {
+      console.error('[StyleBar] Failed to open ornaments editor window:', error);
+    }
+  }, [isTauri]);
+
   const handleMagnetActivate = async (magnetId: string) => {
     await broadcastDataUpdate(
       STORAGE_KEYS.MAGNET_PLACEMENT_REQUEST_V1,
@@ -1346,7 +1362,7 @@ export function EditorWindowApp() {
               />
             )}
 
-            {windowType === 'style' && <StyleEditor />}
+            {windowType === 'style' && <StyleBar onOpenOrnaments={() => void handleOpenOrnamentsEditorFromStyle()} />}
 
             {windowType === 'ornaments' && <OrnamentsEditorWindow />}
 

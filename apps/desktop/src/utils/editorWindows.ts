@@ -290,6 +290,24 @@ export async function calculateWindowPosition(
   const cached = windowPositionCache.get(type);
   const mainBounds = await getMainWindowBounds();
 
+  // Style window is a docked edit bar under the main window (not a floating panel).
+  if (type === 'style') {
+    const barHeight = 72;
+    const gap = 8;
+    const screenWidth = window.screen.availWidth;
+    const screenHeight = window.screen.availHeight;
+
+    const width = mainBounds.width;
+    const x = clamp(mainBounds.x, 0, Math.max(0, screenWidth - width));
+
+    let y = mainBounds.y + mainBounds.height + gap;
+    if (y + barHeight > screenHeight) {
+      y = Math.max(0, mainBounds.y - barHeight - gap);
+    }
+
+    return { x, y, width, height: barHeight };
+  }
+
   // 默认窗口大小
   const windowSizes: Record<EditorWindowType, { width: number; height: number }> = {
     control: { width: 220, height: 470 }, // 可拖动控制面板 - 撤回/恢复置顶后缩回高度
