@@ -500,6 +500,8 @@ pub fn open_editor_window(
     apply_windows_blur_behind(&window, blur_enabled.load(Ordering::SeqCst));
 
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
+    // Keep ornaments overlay hit-test pass-through rects updated so it doesn't block editor windows.
+    crate::windows::ornaments_overlay::sync_ornaments_overlay_window(app);
 
     let window_for_events = window.clone();
     let app_handle = app.clone();
@@ -518,6 +520,9 @@ pub fn open_editor_window(
                     destroy_window(&app_handle, *wtype);
                 }
             }
+        }
+        tauri::WindowEvent::Moved(_) => {
+            crate::windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
         }
         _ => {}
     });
