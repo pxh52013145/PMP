@@ -20,7 +20,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  cursor: move;
+  cursor: default;
   user-select: none;
   -webkit-user-select: none;
   color: rgba(0, 255, 255, 0.85);
@@ -47,14 +47,16 @@
 }
 
 .style-bar-grip {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
   background: rgba(0, 255, 255, 0.06);
   border: 1px solid rgba(0, 255, 255, 0.22);
   position: relative;
   flex: 0 0 auto;
   margin-left: auto;
+  cursor: move;
+  clip-path: polygon(0% 6px, 6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
 }
 
 .style-bar-grip::before {
@@ -62,11 +64,11 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   transform: translate(-50%, -50%);
-  background-image: radial-gradient(rgba(0, 255, 255, 0.55) 1px, transparent 1px);
-  background-size: 4px 4px;
+  background-image: radial-gradient(rgba(0, 255, 255, 0.6) 1px, transparent 1px);
+  background-size: 3px 3px;
   background-position: 0 0;
   opacity: 0.85;
 }

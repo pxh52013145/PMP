@@ -94,14 +94,14 @@ export const StyleBar = memo(function StyleBar({ onOpenOrnaments }: { onOpenOrna
 
   return (
     <div className="style-bar-root">
-      <div className="style-bar-header" data-tauri-drag-region>
-        <span className="style-bar-header-icon" data-tauri-drag-region>
+      <div className="style-bar-header">
+        <span className="style-bar-header-icon">
           ◥◤
         </span>
-        <span className="style-bar-header-title" data-tauri-drag-region>
+        <span className="style-bar-header-title">
           {t('windows.editor.style.title')}
         </span>
-        <div className="style-bar-grip" data-tauri-drag-region />
+        <div className="style-bar-grip" data-tauri-drag-region aria-label={t('common.drag')} title={t('common.drag')} />
       </div>
 
       <div className="style-bar-actions">
