@@ -5,6 +5,7 @@ import { EditorWindowApp } from './EditorWindowApp';
 import { PluginWindowApp } from './PluginWindowApp';
 import { VstManagerWindowApp } from './VstManagerWindowApp';
 import OrnamentsOverlayApp from './OrnamentsOverlayApp';
+import SkinEditRegionApp from './SkinEditRegionApp';
 import { KernelProvider } from './contexts/KernelContext';
 import { I18nSync, readPersistedLocale, setLocale } from './i18n';
 import { isTauriRuntime } from './utils/tauriRuntime';
@@ -81,6 +82,7 @@ const isEditorWindow = hash.startsWith('#/editor/');
 const isPluginWindow = hash.startsWith('#/plugin-window/');
 const isVstManagerWindow = hash.startsWith('#/vst-manager');
 const isOrnamentsOverlayWindow = hash.startsWith('#/ornaments-overlay');
+const isSkinEditRegionWindow = hash.startsWith('#/skin-edit-region');
 
 const RootApp = isEditorWindow
   ? EditorWindowApp
@@ -90,6 +92,8 @@ const RootApp = isEditorWindow
       ? VstManagerWindowApp
       : isOrnamentsOverlayWindow
         ? OrnamentsOverlayApp
+        : isSkinEditRegionWindow
+          ? SkinEditRegionApp
         : App;
 
 async function bootstrap(): Promise<void> {

@@ -880,6 +880,12 @@ fn ornaments_overlay_set_visible(app: tauri::AppHandle, visible: bool) -> Result
 }
 
 #[tauri::command(rename_all = "camelCase")]
+fn skin_edit_region_set_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    windows::skin_edit_region::set_skin_edit_region_desired_visible(&app, visible);
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
 fn ornaments_overlay_set_interactive_rects(
     rects: Vec<windows::ornaments_overlay::OverlayRectInput>,
 ) -> Result<(), String> {
@@ -924,11 +930,13 @@ fn main() {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                         windows::ornaments_overlay::hide_ornaments_overlay_window(app);
+                        windows::skin_edit_region::hide_skin_edit_region_window(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_HIDDEN, ());
                     } else {
                         let _ = window.show();
                         let _ = window.set_focus();
                         windows::ornaments_overlay::apply_ornaments_overlay_desired_visibility(app);
+                        windows::skin_edit_region::apply_skin_edit_region_desired_visibility(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_SHOWN, ());
                     }
                 }
@@ -939,6 +947,7 @@ fn main() {
                         let _ = window.show();
                         let _ = window.set_focus();
                         windows::ornaments_overlay::apply_ornaments_overlay_desired_visibility(app);
+                        windows::skin_edit_region::apply_skin_edit_region_desired_visibility(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_SHOWN, ());
                     }
                 }
@@ -946,6 +955,7 @@ fn main() {
                     if let Some(window) = app.get_window(windows::MAIN_WINDOW_LABEL) {
                         let _ = window.hide();
                         windows::ornaments_overlay::hide_ornaments_overlay_window(app);
+                        windows::skin_edit_region::hide_skin_edit_region_window(app);
                         let _ = app.emit_all(windows::EVENT_MAIN_WINDOW_HIDDEN, ());
                     }
                 }
@@ -958,6 +968,7 @@ fn main() {
                     {
                         let _ = overlay.set_ignore_cursor_events(true);
                     }
+                    windows::skin_edit_region::set_skin_edit_region_desired_visible(app, false);
                 }
                 "quit" => {
                     request_app_exit(app);
@@ -994,6 +1005,12 @@ fn main() {
             ) {
                 eprintln!("[ornaments] Failed to init overlay window: {error}");
             }
+            if let Err(error) = windows::skin_edit_region::ensure_skin_edit_region_window(
+                &app_handle,
+                exit_flag.clone(),
+            ) {
+                eprintln!("[ornaments] Failed to init skin edit region window: {error}");
+            }
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     if exit_flag.load(Ordering::SeqCst) {
@@ -1011,14 +1028,17 @@ fn main() {
                 }
                 tauri::WindowEvent::Moved(_) => {
                     windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                    windows::skin_edit_region::sync_skin_edit_region_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::Resized(_) => {
                     windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                    windows::skin_edit_region::sync_skin_edit_region_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::ScaleFactorChanged { .. } => {
                     windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
+                    windows::skin_edit_region::sync_skin_edit_region_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 _ => {}
@@ -1052,6 +1072,7 @@ fn main() {
             ornaments_overlay_set_editing,
             ornaments_overlay_set_visible,
             ornaments_overlay_set_interactive_rects,
+            skin_edit_region_set_visible,
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,
