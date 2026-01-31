@@ -869,6 +869,10 @@ async fn ornament_import_media(
 
 #[tauri::command(rename_all = "camelCase")]
 fn ornaments_overlay_set_editing(app: tauri::AppHandle, editing: bool) -> Result<(), String> {
+    if editing {
+        let exit_flag = app.state::<ExitFlag>().0.clone();
+        let _ = windows::ornaments_overlay::ensure_ornaments_overlay_window(&app, exit_flag);
+    }
     windows::ornaments_overlay::set_ornaments_overlay_editing(editing);
     windows::ornaments_overlay::set_overlay_visible(&app, editing);
     Ok(())
@@ -956,13 +960,6 @@ fn main() {
 
             let app_handle = app.handle();
             let exit_flag = app.state::<ExitFlag>().0.clone();
-
-            if let Err(error) = windows::ornaments_overlay::ensure_ornaments_overlay_window(
-                &app_handle,
-                exit_flag.clone(),
-            ) {
-                eprintln!("[ornaments] Failed to init ornaments overlay window: {error}");
-            }
 
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
