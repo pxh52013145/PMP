@@ -41,21 +41,15 @@ mod windows_hit_test {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW, GWLP_WNDPROC,
-        GWL_EXSTYLE, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, SetWindowPos, WM_LBUTTONDOWN,
-        WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_RBUTTONDOWN, WNDPROC, HWND_BOTTOM,
+        GWL_EXSTYLE, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, SetWindowPos, WM_MOUSEACTIVATE,
+        WM_NCHITTEST, WNDPROC, HWND_NOTOPMOST,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     static OVERLAY_EDITING: AtomicBool = AtomicBool::new(false);
-    static OVERLAY_MARGIN_PX_X1000: AtomicU32 = AtomicU32::new(0);
     static OVERLAY_SCREEN_X: AtomicI32 = AtomicI32::new(0);
     static OVERLAY_SCREEN_Y: AtomicI32 = AtomicI32::new(0);
     static OVERLAY_SCALE_X1000: AtomicU32 = AtomicU32::new(1000);
-
-    static MAIN_SCREEN_LEFT: AtomicI32 = AtomicI32::new(0);
-    static MAIN_SCREEN_TOP: AtomicI32 = AtomicI32::new(0);
-    static MAIN_SCREEN_RIGHT: AtomicI32 = AtomicI32::new(0);
-    static MAIN_SCREEN_BOTTOM: AtomicI32 = AtomicI32::new(0);
 
     #[derive(Clone, Copy, Debug)]
     pub struct HitRect {
@@ -66,16 +60,6 @@ mod windows_hit_test {
     }
 
     static INTERACTIVE_RECTS: Lazy<Mutex<Vec<HitRect>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
-    #[derive(Clone, Copy, Debug)]
-    pub struct ScreenRect {
-        pub left: i32,
-        pub top: i32,
-        pub right: i32,
-        pub bottom: i32,
-    }
-
-    static PASS_THROUGH_RECTS: Lazy<Mutex<Vec<ScreenRect>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
     #[derive(Default)]
     struct WndProcRegistry {
@@ -98,25 +82,10 @@ mod windows_hit_test {
                 (ex_style & !(WS_EX_TOPMOST as isize)) | (WS_EX_NOACTIVATE as isize) | (WS_EX_TOOLWINDOW as isize);
             let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
 
-            // Keep it at the bottom of the owned-window stack (still above its owner due to ownership),
-            // so it cannot cover editor windows.
+            // Never keep it in the topmost band.
             let _ = SetWindowPos(
                 hwnd,
-                HWND_BOTTOM,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
-    }
-
-    pub fn pin_below_owned_windows(hwnd: HWND) {
-        unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_BOTTOM,
+                HWND_NOTOPMOST,
                 0,
                 0,
                 0,
@@ -132,13 +101,6 @@ mod windows_hit_test {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN {
-            // Some Windows configurations will raise a non-activating owned window above sibling owned
-            // windows when it receives pointer input. We force the overlay to stay *below* other editor
-            // windows (but still above the main window due to ownership).
-            pin_below_owned_windows(hwnd);
-        }
-
         if msg == WM_MOUSEACTIVATE {
             // Never activate the overlay on click: this avoids raising it above editor windows
             // and prevents it from interfering with other applications.
@@ -178,31 +140,6 @@ mod windows_hit_test {
                 }
             }
 
-            // If the pointer is over an editor window, let that window receive the click.
-            if let Ok(guard) = PASS_THROUGH_RECTS.lock() {
-                for r in guard.iter() {
-                    if pt_screen.x >= r.left
-                        && pt_screen.x <= r.right
-                        && pt_screen.y >= r.top
-                        && pt_screen.y <= r.bottom
-                    {
-                        return HTTRANSPARENT as LRESULT;
-                    }
-                }
-            }
-
-            // Click-through inside main rect so the main UI remains usable.
-            let main_left = MAIN_SCREEN_LEFT.load(Ordering::SeqCst);
-            let main_top = MAIN_SCREEN_TOP.load(Ordering::SeqCst);
-            let main_right = MAIN_SCREEN_RIGHT.load(Ordering::SeqCst);
-            let main_bottom = MAIN_SCREEN_BOTTOM.load(Ordering::SeqCst);
-            let in_main =
-                pt_screen.x >= main_left && pt_screen.x <= main_right && pt_screen.y >= main_top && pt_screen.y <= main_bottom;
-            if in_main {
-                return HTTRANSPARENT as LRESULT;
-            }
-
-            // Outside main: always click-through (no dragging behavior).
             return HTTRANSPARENT as LRESULT;
         }
 
@@ -257,29 +194,11 @@ mod windows_hit_test {
         }
     }
 
-    pub fn set_pass_through_rects(rects: Vec<ScreenRect>) {
-        if let Ok(mut guard) = PASS_THROUGH_RECTS.lock() {
-            *guard = rects;
-        }
-    }
-
-    pub fn set_margin_px(margin_px: f64) {
-        let v = (margin_px.max(0.0) * 1000.0).round() as u32;
-        OVERLAY_MARGIN_PX_X1000.store(v, Ordering::SeqCst);
-    }
-
     pub fn set_overlay_geometry(screen_x: i32, screen_y: i32, scale_factor: f64) {
         OVERLAY_SCREEN_X.store(screen_x, Ordering::SeqCst);
         OVERLAY_SCREEN_Y.store(screen_y, Ordering::SeqCst);
         let v = (scale_factor.max(0.5).min(5.0) * 1000.0).round() as u32;
         OVERLAY_SCALE_X1000.store(v.max(1), Ordering::SeqCst);
-    }
-
-    pub fn set_main_rect(left: i32, top: i32, right: i32, bottom: i32) {
-        MAIN_SCREEN_LEFT.store(left, Ordering::SeqCst);
-        MAIN_SCREEN_TOP.store(top, Ordering::SeqCst);
-        MAIN_SCREEN_RIGHT.store(right, Ordering::SeqCst);
-        MAIN_SCREEN_BOTTOM.store(bottom, Ordering::SeqCst);
     }
 
 }
@@ -307,39 +226,6 @@ pub fn set_ornaments_overlay_interactive_rects(rects: Vec<OverlayRectInput>) {
     let _ = rects;
 }
 
-#[cfg(target_os = "windows")]
-fn sync_windows_pass_through_rects(app: &AppHandle) {
-    let mut rects: Vec<windows_hit_test::ScreenRect> = Vec::new();
-    for (label, window) in app.windows() {
-        if label == ORNAMENTS_OVERLAY_WINDOW_LABEL || label == MAIN_WINDOW_LABEL {
-            continue;
-        }
-        if !label.starts_with("editor-") {
-            continue;
-        }
-        if !window.is_visible().unwrap_or(false) {
-            continue;
-        }
-
-        let Ok(pos) = window.outer_position() else {
-            continue;
-        };
-        let Ok(size) = window.outer_size() else {
-            continue;
-        };
-
-        rects.push(windows_hit_test::ScreenRect {
-            left: pos.x,
-            top: pos.y,
-            right: pos.x + size.width as i32,
-            bottom: pos.y + size.height as i32,
-        });
-    }
-
-    windows_hit_test::set_pass_through_rects(rects);
-}
-
-#[cfg(not(target_os = "windows"))]
 fn sync_windows_pass_through_rects(_app: &AppHandle) {}
 
 fn resolve_main_bounds(app: &AppHandle) -> Option<(LogicalPosition<f64>, LogicalSize<f64>, f64)> {
@@ -383,55 +269,59 @@ fn compute_overlay_geometry(
 }
 
 #[cfg(target_os = "windows")]
-fn apply_windows_owner(overlay: &tauri::Window, owner: &tauri::Window) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
-
-    let Ok(overlay_hwnd) = overlay.hwnd() else {
-        return;
+fn apply_windows_styles_and_z_order_below_main(window: &tauri::Window, main: &tauri::Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_NOTOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
-    let Ok(owner_hwnd) = owner.hwnd() else {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let Ok(main_hwnd) = main.hwnd() else {
         return;
     };
 
     unsafe {
-        // Setting GWLP_HWNDPARENT makes the overlay an owned window:
-        // - stays above the owner
-        // - follows owner in z-order (covered together)
-        // - hides/minimizes with the owner
-        let _ = SetWindowLongPtrW(overlay_hwnd.0 as _, GWLP_HWNDPARENT, owner_hwnd.0 as _);
+        let ex_style = GetWindowLongPtrW(hwnd.0 as _, GWL_EXSTYLE);
+        if ex_style != 0 {
+            let next = (ex_style & !(WS_EX_TOPMOST as isize))
+                | (WS_EX_NOACTIVATE as isize)
+                | (WS_EX_TOOLWINDOW as isize);
+            let _ = SetWindowLongPtrW(hwnd.0 as _, GWL_EXSTYLE, next);
+        }
+
+        let _ = SetWindowPos(
+            hwnd.0 as _,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        // Insert directly behind the main window so it can never cover editor / always-on-top windows.
+        let _ = SetWindowPos(
+            hwnd.0 as _,
+            main_hwnd.0 as _,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn apply_windows_styles_and_z_order_below_main(_window: &tauri::Window, _main: &tauri::Window) {}
+
 #[cfg(target_os = "windows")]
 fn sync_windows_hit_test_geometry(app: &AppHandle, overlay: &tauri::Window) {
-    let Some(main) = app.get_window(MAIN_WINDOW_LABEL) else {
-        return;
-    };
-
-    let Ok(main_pos) = main.outer_position() else {
-        return;
-    };
-    let Ok(main_size) = main.outer_size() else {
-        return;
-    };
     let Ok(overlay_pos) = overlay.outer_position() else {
         return;
     };
-
-    // Overlay is positioned at (main_pos - margin); use that to derive the effective pixel margin.
-    let margin_x = (main_pos.x - overlay_pos.x) as f64;
-    let margin_y = (main_pos.y - overlay_pos.y) as f64;
-    let margin_px = ((margin_x.abs() + margin_y.abs()) / 2.0).max(0.0);
-    windows_hit_test::set_margin_px(margin_px);
-
     windows_hit_test::set_overlay_geometry(overlay_pos.x, overlay_pos.y, overlay.scale_factor().unwrap_or(1.0));
-    windows_hit_test::set_main_rect(
-        main_pos.x,
-        main_pos.y,
-        main_pos.x + main_size.width as i32,
-        main_pos.y + main_size.height as i32,
-    );
     sync_windows_pass_through_rects(app);
 }
 
@@ -442,13 +332,12 @@ pub fn ensure_ornaments_overlay_window(app: &AppHandle, exit_flag: Arc<AtomicBoo
     if let Some(existing) = app.get_window(ORNAMENTS_OVERLAY_WINDOW_LABEL) {
         #[cfg(target_os = "windows")]
         if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
-            apply_windows_owner(&existing, &main);
+            apply_windows_styles_and_z_order_below_main(&existing, &main);
         }
 
         #[cfg(target_os = "windows")]
         if let Ok(hwnd) = existing.hwnd() {
             windows_hit_test::install(hwnd.0 as _);
-            windows_hit_test::pin_below_owned_windows(hwnd.0 as _);
         }
 
         #[cfg(target_os = "windows")]
@@ -488,13 +377,12 @@ pub fn ensure_ornaments_overlay_window(app: &AppHandle, exit_flag: Arc<AtomicBoo
 
     #[cfg(target_os = "windows")]
     if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
-        apply_windows_owner(&window, &main);
+        apply_windows_styles_and_z_order_below_main(&window, &main);
     }
 
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
         windows_hit_test::install(hwnd.0 as _);
-        windows_hit_test::pin_below_owned_windows(hwnd.0 as _);
     }
 
     #[cfg(target_os = "windows")]
@@ -541,6 +429,11 @@ pub fn sync_ornaments_overlay_window(app: &AppHandle) {
 
     #[cfg(target_os = "windows")]
     sync_windows_hit_test_geometry(app, &overlay);
+
+    #[cfg(target_os = "windows")]
+    if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+        apply_windows_styles_and_z_order_below_main(&overlay, &main);
+    }
 }
 
 pub fn show_ornaments_overlay_window(app: &AppHandle) {
@@ -548,8 +441,8 @@ pub fn show_ornaments_overlay_window(app: &AppHandle) {
         sync_ornaments_overlay_window(app);
         let _ = overlay.show();
         #[cfg(target_os = "windows")]
-        if let Ok(hwnd) = overlay.hwnd() {
-            windows_hit_test::pin_below_owned_windows(hwnd.0 as _);
+        if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+            apply_windows_styles_and_z_order_below_main(&overlay, &main);
         }
     }
 }
