@@ -4,9 +4,8 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
 import './StyleBar.css';
 
-export const StyleBar = memo(function StyleBar({ onOpenOrnaments }: { onOpenOrnaments: () => void }) {
+export const StyleBar = memo(function StyleBar() {
   const t = useT();
-  const isTauri = isTauriRuntime();
   const isTauriMemo = useMemo(() => isTauriRuntime(), []);
 
   type StylePopupType =
@@ -145,16 +144,10 @@ export const StyleBar = memo(function StyleBar({ onOpenOrnaments }: { onOpenOrna
           {t('editor.style-bar.borderEffect.label')}
         </button>
 
-        <button
-          type="button"
-          className="style-bar-btn style-bar-btn--ornaments"
-          onClick={onOpenOrnaments}
-          disabled={!isTauri}
-          title={t('editor.style-bar.ornaments.title')}
-          aria-label={t('editor.style-bar.ornaments.title')}
-        >
-          {t('editor.style-bar.ornaments.label')}
-        </button>
+        {/*
+          Ornaments editor removed for now: window z-order issues on Windows.
+          Will be reintroduced with a redesigned architecture.
+        */}
       </div>
     </div>
   );

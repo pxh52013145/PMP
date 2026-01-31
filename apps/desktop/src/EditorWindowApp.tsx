@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+﻿import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useT } from './i18n';
 import { EditorProvider } from './contexts/EditorContext';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
@@ -12,7 +12,6 @@ import { StyleBackgroundEffectPopup } from './components/editor/style/StyleBackg
 import { StyleBorderEffectPopup } from './components/editor/style/StyleBorderEffectPopup';
 import { StyleCoverColorPopup } from './components/editor/style/StyleCoverColorPopup';
 import { StylePixelPopup } from './components/editor/style/StylePixelPopup';
-import { OrnamentsEditorWindow } from './components/editor/OrnamentsEditorWindow';
 import { MagnetCreator } from './components/editor/MagnetCreator';
 import { BackgroundManager } from './components/editor/BackgroundManager';
 import { CustomBackgroundEditor } from './components/editor/CustomBackgroundEditor';
@@ -994,18 +993,6 @@ export function EditorWindowApp() {
   // Handlers
   const handleExitEditMode = async () => {
     try {
-      // 通知主窗口退出编辑模式
-      await broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-        false,
-        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-      );
-      await broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_SELECTED_ID,
-        null,
-        TAURI_EVENTS.ORNAMENTS_SELECTED_ID_UPDATED
-      );
-
       await broadcastSignal(TAURI_EVENTS.EDITOR_STYLE_APPLY);
 
       // 关闭所有编辑器窗口
@@ -1016,22 +1003,6 @@ export function EditorWindowApp() {
     }
   };
 
-  const handleOpenOrnamentsEditorFromStyle = useCallback(async () => {
-    if (!isTauri) return;
-    try {
-      await broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-        true,
-        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-      );
-
-      const { calculateWindowPosition, openEditorWindow } = await import('./utils/editorWindows');
-      const position = await calculateWindowPosition('ornaments');
-      await openEditorWindow({ type: 'ornaments', ...position });
-    } catch (error) {
-      console.error('[StyleBar] Failed to open ornaments editor window:', error);
-    }
-  }, [isTauri]);
 
   const handleMagnetActivate = async (magnetId: string) => {
     await broadcastDataUpdate(
@@ -1366,14 +1337,13 @@ export function EditorWindowApp() {
               />
             )}
 
-            {windowType === 'style' && <StyleBar onOpenOrnaments={() => void handleOpenOrnamentsEditorFromStyle()} />}
+            {windowType === 'style' && <StyleBar />}
 
             {windowType === 'style-pixel' && <StylePixelPopup />}
             {windowType === 'style-cover-color' && <StyleCoverColorPopup />}
             {windowType === 'style-background-effect' && <StyleBackgroundEffectPopup />}
             {windowType === 'style-border-effect' && <StyleBorderEffectPopup />}
 
-            {windowType === 'ornaments' && <OrnamentsEditorWindow />}
 
             {windowType === 'creator' && (
               <MagnetCreator

@@ -1,6 +1,5 @@
-import { invoke } from '@tauri-apps/api/tauri';
+﻿import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from './tauriRuntime';
-import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from './windowCommunication';
 
 export type EditorWindowType =
   | 'control'
@@ -11,7 +10,6 @@ export type EditorWindowType =
   | 'style-cover-color'
   | 'style-background-effect'
   | 'style-border-effect'
-  | 'ornaments'
   | 'creator'
   | 'background'
   | 'custom-background'
@@ -63,12 +61,11 @@ const WINDOW_HIERARCHY: Record<EditorWindowType, EditorWindowType[]> = {
   library: ['creator'], // library 关闭时关闭 creator
   background: ['custom-background'], // background 关闭时关闭 custom-background
   statistics: [],
-  style: ['style-pixel', 'style-cover-color', 'style-background-effect', 'style-border-effect', 'ornaments'],
+  style: ['style-pixel', 'style-cover-color', 'style-background-effect', 'style-border-effect'],
   'style-pixel': [],
   'style-cover-color': [],
   'style-background-effect': [],
   'style-border-effect': [],
-  ornaments: [],
   creator: [],
   'custom-background': [],
   theme: ['debug'],
@@ -83,20 +80,6 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
     // 先关闭所有子窗口
     if (!isTauriRuntime()) return;
 
-    // Ornaments edit mode is transient and must not outlive the Style/Ornaments editor lifecycle.
-    // If Style/Ornaments closes, force-cancel the edit session so the overlay cannot keep capturing input.
-    if (type === 'style' || type === 'ornaments') {
-      void broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-        false,
-        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-      );
-      void broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_SELECTED_ID,
-        null,
-        TAURI_EVENTS.ORNAMENTS_SELECTED_ID_UPDATED
-      );
-    }
     const childWindows = WINDOW_HIERARCHY[type] || [];
     for (const childType of childWindows) {
       await closeEditorWindow(childType); // 递归关闭子窗口及其子窗口
@@ -120,17 +103,6 @@ export async function closeEditorWindow(type: EditorWindowType): Promise<void> {
 export async function closeAllEditorWindows(): Promise<void> {
   try {
     if (!isTauriRuntime()) return;
-    // Ensure transient overlay editing state is cleared when exiting the editor.
-    void broadcastDataUpdate(
-      STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-      false,
-      TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-    );
-    void broadcastDataUpdate(
-      STORAGE_KEYS.ORNAMENTS_SELECTED_ID,
-      null,
-      TAURI_EVENTS.ORNAMENTS_SELECTED_ID_UPDATED
-    );
     await invoke('close_all_editor_windows');
     // 清除所有窗口的位置缓存
     windowPositionCache.clear();
@@ -353,7 +325,6 @@ export async function calculateWindowPosition(
     'style-cover-color': { width: 560, height: 520 },
     'style-background-effect': { width: 560, height: 560 },
     'style-border-effect': { width: 560, height: 560 },
-    ornaments: { width: 420, height: 640 },
     creator: { width: 900, height: 700 },
     background: { width: 480, height: 650 },
     'custom-background': { width: 600, height: 720 },
@@ -386,7 +357,6 @@ export async function calculateWindowPosition(
     'style-cover-color': 3,
     'style-background-effect': 3,
     'style-border-effect': 3,
-    ornaments: 4,
     creator: 5,
     background: 6,
     'custom-background': 7,

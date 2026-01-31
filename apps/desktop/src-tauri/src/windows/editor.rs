@@ -24,7 +24,6 @@ pub enum EditorWindowType {
     StyleCoverColor,
     StyleBackgroundEffect,
     StyleBorderEffect,
-    Ornaments,
     Creator,
     Background,
     CustomBackground,
@@ -43,7 +42,6 @@ impl EditorWindowType {
             "style-cover-color" => Some(Self::StyleCoverColor),
             "style-background-effect" => Some(Self::StyleBackgroundEffect),
             "style-border-effect" => Some(Self::StyleBorderEffect),
-            "ornaments" => Some(Self::Ornaments),
             "help" => Some(Self::Debug),
             "creator" => Some(Self::Creator),
             "background" => Some(Self::Background),
@@ -64,7 +62,6 @@ impl EditorWindowType {
             Self::StyleCoverColor => "style-cover-color",
             Self::StyleBackgroundEffect => "style-background-effect",
             Self::StyleBorderEffect => "style-border-effect",
-            Self::Ornaments => "ornaments",
             Self::Creator => "creator",
             Self::Background => "background",
             Self::CustomBackground => "custom-background",
@@ -83,7 +80,6 @@ pub const ALL_EDITOR_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::StyleCoverColor,
     EditorWindowType::StyleBackgroundEffect,
     EditorWindowType::StyleBorderEffect,
-    EditorWindowType::Ornaments,
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
@@ -99,7 +95,6 @@ pub const CONTROL_CLOSE_HIDE_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::StyleCoverColor,
     EditorWindowType::StyleBackgroundEffect,
     EditorWindowType::StyleBorderEffect,
-    EditorWindowType::Ornaments,
     EditorWindowType::Creator,
     EditorWindowType::Background,
     EditorWindowType::CustomBackground,
@@ -117,7 +112,6 @@ pub fn label(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::StyleCoverColor => "editor-style-cover-color",
         EditorWindowType::StyleBackgroundEffect => "editor-style-background-effect",
         EditorWindowType::StyleBorderEffect => "editor-style-border-effect",
-        EditorWindowType::Ornaments => "editor-ornaments",
         EditorWindowType::Creator => "editor-creator",
         EditorWindowType::Background => "editor-background",
         EditorWindowType::CustomBackground => "editor-custom-background",
@@ -137,7 +131,6 @@ pub fn title(window_type: EditorWindowType) -> &'static str {
         EditorWindowType::StyleCoverColor => "Style - Cover color",
         EditorWindowType::StyleBackgroundEffect => "Style - Background effect",
         EditorWindowType::StyleBorderEffect => "Style - Border effect",
-        EditorWindowType::Ornaments => "Ornaments",
         EditorWindowType::Creator => "Creator",
         EditorWindowType::Background => "Background",
         EditorWindowType::CustomBackground => "Custom background",
@@ -500,8 +493,7 @@ pub fn open_editor_window(
     apply_windows_blur_behind(&window, blur_enabled.load(Ordering::SeqCst));
 
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
-    // Keep ornaments overlay hit-test pass-through rects updated so it doesn't block editor windows.
-    crate::windows::ornaments_overlay::sync_ornaments_overlay_window(app);
+    // (Ornaments editor removed)
 
     let window_for_events = window.clone();
     let app_handle = app.clone();
@@ -521,9 +513,7 @@ pub fn open_editor_window(
                 }
             }
         }
-        tauri::WindowEvent::Moved(_) => {
-            crate::windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
-        }
+        tauri::WindowEvent::Moved(_) => {}
         _ => {}
     });
 
@@ -557,9 +547,6 @@ pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Re
         cache_window_handle(app, &window, window_type)?;
 
         if window_type == EditorWindowType::Control {
-            // Editor session is ending: ensure ornaments overlay exits edit-mode at backend level too
-            // (hit-test/cursor capture) even if the frontend doesn't get a chance to update.
-            crate::windows::ornaments_overlay::set_ornaments_overlay_editing(false);
             let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
             for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
                 destroy_window(app, *wtype);
@@ -582,6 +569,5 @@ pub fn close_all_editor_windows(app: &AppHandle) {
         request_force_close(app, *window_type);
     }
 
-    // Best-effort safety: cancel backend edit-mode latch.
-    crate::windows::ornaments_overlay::set_ornaments_overlay_editing(false);
+    // (Ornaments editor removed)
 }

@@ -1,8 +1,6 @@
-import { memo, useCallback } from 'react';
+import { memo } from 'react';
 import './StyleEditor.css';
 import { useT } from '../../i18n';
-import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate } from '../../utils/windowCommunication';
 import { BackgroundEffectSection, BorderEffectSection, CoverColorSection, PixelSection } from './style/StyleSections';
 import { useStyleEditorModel } from './style/useStyleEditorModel';
 
@@ -13,23 +11,6 @@ import { useStyleEditorModel } from './style/useStyleEditorModel';
 export const StyleEditor = memo(function StyleEditor() {
   const t = useT();
   const model = useStyleEditorModel();
-
-  const handleOpenOrnamentsEditor = useCallback(async () => {
-    if (!isTauriRuntime()) return;
-    try {
-      await broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-        true,
-        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-      );
-
-      const { calculateWindowPosition, openEditorWindow } = await import('../../utils/editorWindows');
-      const position = await calculateWindowPosition('ornaments');
-      await openEditorWindow({ type: 'ornaments', ...position });
-    } catch (error) {
-      console.error('[StyleEditor] Failed to open ornaments editor window:', error);
-    }
-  }, []);
 
   return (
     <div className="editor-style-editor">
@@ -45,13 +26,6 @@ export const StyleEditor = memo(function StyleEditor() {
         <BackgroundEffectSection model={model} />
         <BorderEffectSection model={model} />
 
-        <section className="style-section">
-          <h3 className="section-title">{t('editor.style-editor.section.ornaments.title')}</h3>
-          <p className="section-description">{t('editor.style-editor.section.ornaments.desc')}</p>
-          <button type="button" className="open-ornaments-button" onClick={() => void handleOpenOrnamentsEditor()}>
-            {t('editor.style-bar.ornaments.label')}
-          </button>
-        </section>
       </div>
     </div>
   );

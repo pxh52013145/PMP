@@ -1,6 +1,4 @@
 pub mod editor;
-pub mod ornaments_overlay;
-pub mod skin_edit_region;
 pub mod plugin;
 pub mod vst_manager;
 
