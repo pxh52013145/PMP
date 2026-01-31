@@ -27,8 +27,9 @@ mod windows_hit_test {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW, GWLP_WNDPROC,
         GWL_EXSTYLE, HTTRANSPARENT, MA_NOACTIVATE, WM_MOUSEACTIVATE, WM_NCHITTEST,
-        SetWindowPos, WNDPROC, HWND_NOTOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        EnumChildWindows, SetWindowPos, WNDPROC, HWND_NOTOPMOST, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST,
         WS_EX_TRANSPARENT,
     };
 
@@ -106,24 +107,62 @@ mod windows_hit_test {
         }
     }
 
+    unsafe extern "system" fn enum_child_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
+        if lparam == 0 {
+            return 1;
+        }
+        // SAFETY: caller passes a valid mutable Vec<HWND> pointer.
+        let out = &mut *(lparam as *mut Vec<HWND>);
+        out.push(hwnd);
+        1
+    }
+
+    fn collect_descendants(root: HWND) -> Vec<HWND> {
+        let mut all = Vec::<HWND>::new();
+        let mut queue = vec![root];
+
+        while let Some(parent) = queue.pop() {
+            let mut children = Vec::<HWND>::new();
+            unsafe {
+                let _ = EnumChildWindows(
+                    parent,
+                    Some(enum_child_proc),
+                    &mut children as *mut _ as LPARAM,
+                );
+            }
+            for child in children {
+                all.push(child);
+                queue.push(child);
+            }
+        }
+
+        all
+    }
+
     pub fn install(hwnd: HWND) {
         unsafe {
+            // WebView2 receives mouse hit-testing on its *child* HWND(s), not only the outer Tauri
+            // window. To ensure true click-through we must apply the same styles/subclassing to all
+            // descendants.
+            let mut targets = vec![hwnd];
+            targets.extend(collect_descendants(hwnd));
+
             let mut registry = match WNDPROCS.lock() {
                 Ok(r) => r,
                 Err(_) => return,
             };
 
-            if registry.original.contains_key(&(hwnd as isize)) {
-                return;
+            for target in targets {
+                if registry.original.contains_key(&(target as isize)) {
+                    continue;
+                }
+
+                apply_overlay_window_styles(target);
+
+                let original = GetWindowLongPtrW(target, GWLP_WNDPROC);
+                registry.original.insert(target as isize, original);
+                let _ = SetWindowLongPtrW(target, GWLP_WNDPROC, wnd_proc as isize);
             }
-
-            apply_overlay_window_styles(hwnd);
-
-            let original = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
-            registry.original.insert(hwnd as isize, original);
-            drop(registry);
-
-            let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wnd_proc as isize);
         }
     }
 }
