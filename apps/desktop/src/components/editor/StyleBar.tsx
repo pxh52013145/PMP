@@ -1,7 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
+import { readJson } from '../../modules/storage';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
+import {
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+  broadcastDataUpdate,
+  setupConfigSync,
+  setupTauriListenerWithPayload,
+} from '../../utils/windowCommunication';
 import './StyleBar.css';
 
 export const StyleBar = memo(function StyleBar() {
@@ -25,6 +32,24 @@ export const StyleBar = memo(function StyleBar() {
   );
 
   const [openPopups, setOpenPopups] = useState<Set<string>>(() => new Set());
+  const [ornamentsEditing, setOrnamentsEditing] = useState<boolean>(() =>
+    readJson<boolean>(STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING, false)
+  );
+
+  const reloadOrnamentsEditing = useCallback(() => {
+    setOrnamentsEditing(readJson<boolean>(STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING, false));
+  }, []);
+
+  useEffect(() => {
+    const cleanupPromise = setupConfigSync(
+      [STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING],
+      [TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED],
+      reloadOrnamentsEditing
+    );
+    return () => {
+      cleanupPromise.then((cleanup) => cleanup());
+    };
+  }, [reloadOrnamentsEditing]);
 
   useEffect(() => {
     if (!isTauriMemo) return;
@@ -91,6 +116,60 @@ export const StyleBar = memo(function StyleBar() {
     [openPopups]
   );
 
+  const setOrnamentsEditingState = useCallback(async (next: boolean) => {
+    setOrnamentsEditing(next);
+
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
+        next,
+        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
+      );
+    } catch {
+      // best-effort
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      await invoke('ornaments_overlay_set_editing', { editing: next });
+      if (!next) {
+        await invoke('ornaments_overlay_set_interactive_rects', { rects: [] });
+      }
+    } catch {
+      // best-effort
+    }
+  }, []);
+
+  const toggleOrnamentsEditing = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    await setOrnamentsEditingState(!ornamentsEditing);
+  }, [ornamentsEditing, setOrnamentsEditingState]);
+
+  useEffect(() => {
+    if (!isTauriMemo) return;
+
+    let disposed = false;
+    let unlistenHidden: (() => void) | null = null;
+
+    void setupTauriListenerWithPayload<string>(TAURI_EVENTS.EDITOR_WINDOW_HIDDEN, (payload) => {
+      if (disposed) return;
+      if (payload !== 'style') return;
+      if (!ornamentsEditing) return;
+      void setOrnamentsEditingState(false);
+    }).then((u) => {
+      if (disposed) {
+        u();
+        return;
+      }
+      unlistenHidden = u;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlistenHidden) unlistenHidden();
+    };
+  }, [isTauriMemo, ornamentsEditing, setOrnamentsEditingState]);
+
   return (
     <div className="style-bar-root">
       <div className="style-bar-header">
@@ -144,10 +223,15 @@ export const StyleBar = memo(function StyleBar() {
           {t('editor.style-bar.borderEffect.label')}
         </button>
 
-        {/*
-          Ornaments editor removed for now: window z-order issues on Windows.
-          Will be reintroduced with a redesigned architecture.
-        */}
+        <button
+          type="button"
+          className={`style-bar-btn style-bar-btn--ornaments ${ornamentsEditing ? 'active' : ''}`}
+          onClick={() => void toggleOrnamentsEditing()}
+          title={t('editor.style-bar.ornaments.title')}
+          aria-label={t('editor.style-bar.ornaments.title')}
+        >
+          {t('editor.style-bar.ornaments.label')}
+        </button>
       </div>
     </div>
   );

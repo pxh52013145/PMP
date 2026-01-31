@@ -867,6 +867,21 @@ async fn ornament_import_media(
     .map_err(|e| format!("Import task failed: {e}"))?
 }
 
+#[tauri::command(rename_all = "camelCase")]
+fn ornaments_overlay_set_editing(app: tauri::AppHandle, editing: bool) -> Result<(), String> {
+    windows::ornaments_overlay::set_ornaments_overlay_editing(editing);
+    windows::ornaments_overlay::set_overlay_visible(&app, editing);
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn ornaments_overlay_set_interactive_rects(
+    rects: Vec<windows::ornaments_overlay::OverlayRectInput>,
+) -> Result<(), String> {
+    windows::ornaments_overlay::set_ornaments_overlay_interactive_rects(rects);
+    Ok(())
+}
+
 fn main() {
     if let Some(exit_code) = asio_diag::maybe_run_from_cli() {
         std::process::exit(exit_code);
@@ -948,6 +963,13 @@ fn main() {
             let app_handle = app.handle();
             let exit_flag = app.state::<ExitFlag>().0.clone();
 
+            if let Err(error) = windows::ornaments_overlay::ensure_ornaments_overlay_window(
+                &app_handle,
+                exit_flag.clone(),
+            ) {
+                eprintln!("[ornaments] Failed to init ornaments overlay window: {error}");
+            }
+
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     if exit_flag.load(Ordering::SeqCst) {
@@ -964,12 +986,15 @@ fn main() {
                     });
                 }
                 tauri::WindowEvent::Moved(_) => {
+                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::Resized(_) => {
+                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 _ => {}
@@ -1003,6 +1028,8 @@ fn main() {
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,
+            ornaments_overlay_set_editing,
+            ornaments_overlay_set_interactive_rects,
             open_plugin_window,
             close_plugin_window,
             open_vst_manager_window,
