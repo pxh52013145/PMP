@@ -875,12 +875,6 @@ fn ornaments_overlay_set_editing(app: tauri::AppHandle, editing: bool) -> Result
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn ornaments_overlay_set_interactive_rects(
-    rects: Vec<windows::ornaments_overlay::OverlayRectInput>,
-) -> Result<(), String> {
-    windows::ornaments_overlay::set_ornaments_overlay_interactive_rects(rects);
-    Ok(())
-}
 
 fn main() {
     if let Some(exit_code) = asio_diag::maybe_run_from_cli() {
@@ -1029,7 +1023,6 @@ fn main() {
             close_editor_window,
             close_all_editor_windows,
             ornaments_overlay_set_editing,
-            ornaments_overlay_set_interactive_rects,
             open_plugin_window,
             close_plugin_window,
             open_vst_manager_window,

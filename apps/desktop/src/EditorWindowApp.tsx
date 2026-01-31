@@ -1003,7 +1003,6 @@ export function EditorWindowApp() {
         try {
           const { invoke } = await import('@tauri-apps/api/tauri');
           await invoke('ornaments_overlay_set_editing', { editing: false });
-          await invoke('ornaments_overlay_set_interactive_rects', { rects: [] });
         } catch {
           // best-effort
         }
