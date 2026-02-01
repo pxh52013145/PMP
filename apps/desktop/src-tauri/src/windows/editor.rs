@@ -551,6 +551,15 @@ pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Re
             for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
                 destroy_window(app, *wtype);
             }
+
+            // Best-effort: after hiding the control panel, explicitly reactivate the main window.
+            // On Windows, hiding the currently focused owned window does not always return focus to
+            // the owner, which can make the main window appear "pushed behind" other windows.
+            if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
+                let _ = main_window.show();
+                let _ = main_window.unminimize();
+                let _ = main_window.set_focus();
+            }
         }
     }
 
@@ -570,4 +579,10 @@ pub fn close_all_editor_windows(app: &AppHandle) {
     }
 
     // (Ornaments editor removed)
+
+    if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
+        let _ = main_window.show();
+        let _ = main_window.unminimize();
+        let _ = main_window.set_focus();
+    }
 }
