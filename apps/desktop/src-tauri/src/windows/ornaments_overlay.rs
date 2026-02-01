@@ -139,21 +139,39 @@ mod windows_hit_test {
             let mut targets = vec![hwnd];
             targets.extend(collect_descendants(hwnd));
 
-            let mut registry = match WNDPROCS.lock() {
-                Ok(r) => r,
-                Err(_) => return,
-            };
-
             for target in targets {
-                if registry.original.contains_key(&(target as isize)) {
+                // IMPORTANT: do not hold the WNDPROCS lock while calling Win32 APIs like
+                // SetWindowLongPtrW. WebView2 may synchronously dispatch messages that re-enter our
+                // wnd_proc, which also tries to lock WNDPROCS. Holding the lock would deadlock the
+                // UI thread and "freeze" the whole app.
+                let should_install = {
+                    let Ok(registry) = WNDPROCS.lock() else {
+                        return;
+                    };
+                    !registry.original.contains_key(&(target as isize))
+                };
+                if !should_install {
                     continue;
                 }
 
                 apply_overlay_window_styles(target);
 
                 let original = GetWindowLongPtrW(target, GWLP_WNDPROC);
-                registry.original.insert(target as isize, original);
-                let _ = SetWindowLongPtrW(target, GWLP_WNDPROC, wnd_proc as isize);
+
+                let inserted = {
+                    let Ok(mut registry) = WNDPROCS.lock() else {
+                        return;
+                    };
+                    if registry.original.contains_key(&(target as isize)) {
+                        false
+                    } else {
+                        registry.original.insert(target as isize, original);
+                        true
+                    }
+                };
+                if inserted {
+                    let _ = SetWindowLongPtrW(target, GWLP_WNDPROC, wnd_proc as isize);
+                }
             }
         }
     }
