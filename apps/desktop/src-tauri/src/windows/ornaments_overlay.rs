@@ -118,24 +118,16 @@ mod windows_hit_test {
     }
 
     fn collect_descendants(root: HWND) -> Vec<HWND> {
+        // EnumChildWindows enumerates *all* descendant windows (not only direct children).
+        // Avoid recursive enumeration which can explode in size and hang the UI thread.
         let mut all = Vec::<HWND>::new();
-        let mut queue = vec![root];
-
-        while let Some(parent) = queue.pop() {
-            let mut children = Vec::<HWND>::new();
-            unsafe {
-                let _ = EnumChildWindows(
-                    parent,
-                    Some(enum_child_proc),
-                    &mut children as *mut _ as LPARAM,
-                );
-            }
-            for child in children {
-                all.push(child);
-                queue.push(child);
-            }
+        unsafe {
+            let _ = EnumChildWindows(
+                root,
+                Some(enum_child_proc),
+                &mut all as *mut _ as LPARAM,
+            );
         }
-
         all
     }
 
