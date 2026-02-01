@@ -407,6 +407,11 @@ fn cache_window_handle(
     Ok(())
 }
 
+fn hide_window_best_effort(app: &AppHandle, window: &tauri::Window, window_type: EditorWindowType) {
+    let _ = window.hide();
+    let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
+}
+
 fn destroy_window(app: &AppHandle, window_type: EditorWindowType) {
     clear_cached_window(window_type);
     request_force_close(app, window_type);
@@ -551,19 +556,29 @@ pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Re
         //
         // To keep z-order stable, treat "Done" as "hide all editor windows", not "destroy them".
         if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
-            let _ = main_window.show();
-            let _ = main_window.unminimize();
+            let should_show = main_window.is_visible().ok() == Some(false);
+            if should_show {
+                let _ = main_window.show();
+            }
+
+            let should_unminimize = main_window.is_minimized().ok() == Some(true);
+            if should_unminimize {
+                let _ = main_window.unminimize();
+            }
+
             let _ = main_window.set_focus();
         }
 
-        if let Some(window) = app.get_window(label(window_type)) {
-            cache_window_handle(app, &window, window_type)?;
-        }
-
         let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
+
+        // Hide windows without triggering hidden-window LRU eviction. The eviction path can force-close
+        // windows, which is exactly what we want to avoid during "Done" to keep z-order stable.
+        if let Some(window) = app.get_window(label(window_type)) {
+            hide_window_best_effort(app, &window, window_type);
+        }
         for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
             if let Some(window) = app.get_window(label(*wtype)) {
-                let _ = cache_window_handle(app, &window, *wtype);
+                hide_window_best_effort(app, &window, *wtype);
             }
         }
 
