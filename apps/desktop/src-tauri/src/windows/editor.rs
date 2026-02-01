@@ -543,24 +543,35 @@ pub fn sync_style_bar_window(app: &AppHandle) {
 }
 
 pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
-    if let Some(window) = app.get_window(label(window_type)) {
-        cache_window_handle(app, &window, window_type)?;
+    if window_type == EditorWindowType::Control {
+        // IMPORTANT (Windows): When the user opened an auxiliary editor window (style/library/etc),
+        // it may currently own focus. Destroying/closing multiple owned windows in a tight sequence
+        // can lead to transient activation changes where the main window ends up behind other apps,
+        // and "refocus" attempts cause a visible flicker.
+        //
+        // To keep z-order stable, treat "Done" as "hide all editor windows", not "destroy them".
+        if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
+            let _ = main_window.show();
+            let _ = main_window.unminimize();
+            let _ = main_window.set_focus();
+        }
 
-        if window_type == EditorWindowType::Control {
-            let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
-            for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
-                destroy_window(app, *wtype);
-            }
+        if let Some(window) = app.get_window(label(window_type)) {
+            cache_window_handle(app, &window, window_type)?;
+        }
 
-            // Best-effort: after hiding the control panel, explicitly reactivate the main window.
-            // On Windows, hiding the currently focused owned window does not always return focus to
-            // the owner, which can make the main window appear "pushed behind" other windows.
-            if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
-                let _ = main_window.show();
-                let _ = main_window.unminimize();
-                let _ = main_window.set_focus();
+        let _ = app.emit_all(EVENT_EDITOR_EXIT, ());
+        for wtype in CONTROL_CLOSE_HIDE_WINDOWS {
+            if let Some(window) = app.get_window(label(*wtype)) {
+                let _ = cache_window_handle(app, &window, *wtype);
             }
         }
+
+        return Ok(());
+    }
+
+    if let Some(window) = app.get_window(label(window_type)) {
+        cache_window_handle(app, &window, window_type)?;
     }
 
     Ok(())
@@ -579,10 +590,4 @@ pub fn close_all_editor_windows(app: &AppHandle) {
     }
 
     // (Ornaments editor removed)
-
-    if let Some(main_window) = app.get_window(MAIN_WINDOW_LABEL) {
-        let _ = main_window.show();
-        let _ = main_window.unminimize();
-        let _ = main_window.set_focus();
-    }
 }
