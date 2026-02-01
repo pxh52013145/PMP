@@ -1,5 +1,4 @@
 pub mod editor;
-pub mod ornaments_overlay;
 pub mod plugin;
 pub mod vst_manager;
 

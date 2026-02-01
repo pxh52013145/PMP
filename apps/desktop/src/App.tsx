@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
-import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
+import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useKernel } from './contexts/KernelContext';
 import { CommandPalette } from './components/commands/CommandPalette';
@@ -43,22 +43,6 @@ function AppContent() {
   useEffect(() => {
     if (!isTauri) return;
 
-    // Ornaments overlay editing is session-only. Prevent booting into a stuck edit state when the
-    // previous run crashed or the editor was closed without a cleanup path.
-    void broadcastDataUpdate(
-      STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-      false,
-      TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-    );
-    void (async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/tauri');
-        await invoke('ornaments_overlay_set_editing', { editing: false });
-      } catch {
-        // best-effort
-      }
-    })();
-
     let cancelled = false;
     void getDebugConfig()
       .then((config) => {
@@ -78,45 +62,6 @@ function AppContent() {
       cancelled = true;
     };
   }, [isTauri, navigateTo]);
-
-  useEffect(() => {
-    if (!isTauri) return;
-
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
-    const setup = async () => {
-      const u = await setupTauriListener(TAURI_EVENTS.EDITOR_EXIT, () => {
-        if (disposed) return;
-        void broadcastDataUpdate(
-          STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-          false,
-          TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-        );
-        void (async () => {
-          try {
-            const { invoke } = await import('@tauri-apps/api/tauri');
-            await invoke('ornaments_overlay_set_editing', { editing: false });
-          } catch {
-            // best-effort
-          }
-        })();
-      });
-
-      if (disposed) {
-        u();
-        return;
-      }
-      unlisten = u;
-    };
-
-    void setup();
-
-    return () => {
-      disposed = true;
-      if (unlisten) unlisten();
-    };
-  }, [isTauri]);
 
   useEffect(() => {
     const run = async () => {

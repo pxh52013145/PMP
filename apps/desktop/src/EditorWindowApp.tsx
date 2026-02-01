@@ -993,21 +993,6 @@ export function EditorWindowApp() {
   // Handlers
   const handleExitEditMode = async () => {
     try {
-      // Ensure ornaments edit session is cancelled when leaving editor mode.
-      await broadcastDataUpdate(
-        STORAGE_KEYS.ORNAMENTS_OVERLAY_EDITING,
-        false,
-        TAURI_EVENTS.ORNAMENTS_OVERLAY_EDITING_UPDATED
-      );
-      if (isTauri) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('ornaments_overlay_set_editing', { editing: false });
-        } catch {
-          // best-effort
-        }
-      }
-
       await broadcastSignal(TAURI_EVENTS.EDITOR_STYLE_APPLY);
 
       // 关闭所有编辑器窗口

@@ -2,7 +2,6 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { EditorWindowApp } from './EditorWindowApp';
-import OrnamentsOverlayApp from './OrnamentsOverlayApp';
 import { PluginWindowApp } from './PluginWindowApp';
 import { VstManagerWindowApp } from './VstManagerWindowApp';
 import { KernelProvider } from './contexts/KernelContext';
@@ -78,14 +77,11 @@ function StartupReadyGate({ children }: { children: React.ReactNode }) {
 // 根据 URL 判断渲染哪个应用
 const hash = window.location.hash;
 const isEditorWindow = hash.startsWith('#/editor/');
-const isOrnamentsOverlayWindow = hash.startsWith('#/ornaments-overlay');
 const isPluginWindow = hash.startsWith('#/plugin-window/');
 const isVstManagerWindow = hash.startsWith('#/vst-manager');
 
 const RootApp = isEditorWindow
   ? EditorWindowApp
-  : isOrnamentsOverlayWindow
-    ? OrnamentsOverlayApp
   : isPluginWindow
     ? PluginWindowApp
     : isVstManagerWindow

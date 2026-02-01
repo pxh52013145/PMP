@@ -868,17 +868,6 @@ async fn ornament_import_media(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn ornaments_overlay_set_editing(app: tauri::AppHandle, editing: bool) -> Result<(), String> {
-    if editing {
-        let exit_flag = app.state::<ExitFlag>().0.clone();
-        let _ = windows::ornaments_overlay::ensure_ornaments_overlay_window(&app, exit_flag);
-    }
-    windows::ornaments_overlay::set_ornaments_overlay_editing(editing);
-    windows::ornaments_overlay::set_overlay_visible(&app, editing);
-    Ok(())
-}
-
-#[tauri::command(rename_all = "camelCase")]
 
 fn main() {
     if let Some(exit_code) = asio_diag::maybe_run_from_cli() {
@@ -977,15 +966,12 @@ fn main() {
                     });
                 }
                 tauri::WindowEvent::Moved(_) => {
-                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::Resized(_) => {
-                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 tauri::WindowEvent::ScaleFactorChanged { .. } => {
-                    windows::ornaments_overlay::sync_ornaments_overlay_window(&app_handle);
                     windows::editor::sync_style_bar_window(&app_handle);
                 }
                 _ => {}
@@ -1019,7 +1005,6 @@ fn main() {
             open_editor_window,
             close_editor_window,
             close_all_editor_windows,
-            ornaments_overlay_set_editing,
             open_plugin_window,
             close_plugin_window,
             open_vst_manager_window,
