@@ -46,6 +46,28 @@
   gap: 10px;
 }
 
+.style-bar-chrome {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.style-bar-chrome-title {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  opacity: 0.75;
+  color: rgba(0, 255, 255, 0.85);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.style-bar-chrome-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .style-bar-grip {
   width: 22px;
   height: 22px;
@@ -91,6 +113,12 @@
     box-shadow 140ms ease,
     border-color 140ms ease,
     transform 140ms ease;
+}
+
+.style-bar-btn--chip {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 11px;
 }
 
 .style-bar-btn:hover {

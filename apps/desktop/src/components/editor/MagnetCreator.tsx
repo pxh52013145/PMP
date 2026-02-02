@@ -94,7 +94,7 @@ export function MagnetCreator({
   "width": "36px",
   "height": "36px",
   "backgroundColor": "rgba(0, 0, 0, 0.7)",
-  "borderRadius": "4px",
+  "borderRadius": "2.7px",
   "display": "flex",
   "alignItems": "center",
   "justifyContent": "center",

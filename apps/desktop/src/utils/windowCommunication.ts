@@ -129,6 +129,7 @@ export const STORAGE_KEYS = {
   MAGNET_SPACE_HISTORY: 'pixel-matrix-magnet-space-history-v1', // Per-space layout history (web fallback; Tauri uses layout store)
   MAGNET_PLACEMENT_REQUEST_V1: 'pixel-matrix-magnet-placement-request-v1', // Request placing a magnet into the main matrix (v1)
   MAGNET_LIBRARY_FOCUS_REQUEST_V1: 'pixel-matrix-magnet-library-focus-request-v1', // Request focusing a magnet in the library window (v1)
+  MAGNET_CHROME_OVERRIDE_MODE_V1: 'pixel-matrix-magnet-chrome-override-mode-v1', // Global magnet chrome override mode (v1)
   MAGNET_LIBRARY: 'pixel-matrix-magnet-library', // Magnet 库（兼容旧版）
   ACTIVE_MAGNETS: 'pixel-matrix-active-magnets', // 激活的 Magnet ID
   BUILTIN_MAGNETS: 'pixel-matrix-builtin-magnets', // 内置 Magnet ID
@@ -227,6 +228,7 @@ export const TAURI_EVENTS = {
   MAGNET_LAYOUT_STORE_UPDATED: 'magnet-layout-store-updated',
   MAGNET_PLACEMENT_REQUESTED: 'magnet-placement-requested',
   MAGNET_LIBRARY_FOCUS_REQUESTED: 'magnet-library-focus-requested',
+  MAGNET_CHROME_OVERRIDE_MODE_UPDATED: 'magnet-chrome-override-mode-updated',
 
   // 背景相关
   BACKGROUND_UPDATED: 'background-updated',

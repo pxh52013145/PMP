@@ -114,6 +114,10 @@ export interface MagnetInteractions {
   onHover?: () => void;
 }
 
+export interface MagnetChromeConfig {
+  enabled?: boolean;
+}
+
 /**
  * Magnet（磁性组件）
  * 核心设计：通过锚点（PixelAnchor）吸附到 Pixel 上，实现响应式布局
@@ -147,6 +151,9 @@ export interface Magnet {
 
   // 样式配置（默认/空闲状态）
   style: MagnetStyle;
+
+  // Host-managed outer chrome (frame) configuration.
+  chrome?: MagnetChromeConfig;
 
   // 动画配置（可选）
   animation?: MagnetAnimation;

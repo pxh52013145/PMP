@@ -17,6 +17,7 @@ export const EDITOR_BUTTON_MAGNET: Magnet = {
     height: '36px',
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: '2.7px',
   },
   animation: {
     transition: 'all 0.2s ease',

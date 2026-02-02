@@ -16,7 +16,7 @@ export const NAVIGATION_PAGE_MAGNET: Magnet = {
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.85)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '12px',
+    borderRadius: '2.7px',
     overflow: 'hidden',
     boxShadow: '0 4px 24px rgba(0, 0, 0, 0.4)',
   },

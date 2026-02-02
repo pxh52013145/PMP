@@ -8,13 +8,13 @@ export const MATRIX_CHANGE_MAGNET: Magnet = {
   previewText: 'SPACE',
   description: '管理 Magnet Spaces（点击打开面板）',
   tags: ['space', 'layout'],
-  anchorType: 'single',
+  anchorType: 'horizontal',
   anchors: [],
+  gridFootprint: { width: 3, height: 1 },
   content: '',
   style: {
-    width: '78px',
     height: '36px',
-    borderRadius: '10px',
+    borderRadius: '2.7px',
     overflow: 'hidden',
   },
   animation: {

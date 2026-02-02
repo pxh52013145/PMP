@@ -80,7 +80,10 @@ fn system_required_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>> {
         "btn-minimize" => Some(vec![build_anchor("anchor", 22.0, 0.0, "anchor")]),
         "btn-maximize" => Some(vec![build_anchor("anchor", 24.0, 0.0, "anchor")]),
         "btn-close" => Some(vec![build_anchor("anchor", 26.0, 0.0, "anchor")]),
-        "btn-matrix-change" => Some(vec![build_anchor("anchor", 0.0, 18.0, "anchor")]),
+        "btn-matrix-change" => Some(vec![
+            build_anchor("left", 0.0, 18.0, "anchor"),
+            build_anchor("right", 2.0, 18.0, "boundary"),
+        ]),
         "btn-editor" => Some(vec![build_anchor("anchor", 19.0, 18.0, "anchor")]),
         _ => None,
     }
@@ -112,8 +115,14 @@ fn system_space1_additional_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>>
             build_anchor("left", 6.0, 18.0, "anchor"),
             build_anchor("right", 26.0, 18.0, "boundary"),
         ]),
-        "btn-matrix-change" => Some(vec![build_anchor("anchor", 3.0, 19.0, "anchor")]),
-        "dsp-vst" => Some(vec![build_anchor("anchor", 7.0, 19.0, "anchor")]),
+        "btn-matrix-change" => Some(vec![
+            build_anchor("left", 2.0, 19.0, "anchor"),
+            build_anchor("right", 4.0, 19.0, "boundary"),
+        ]),
+        "dsp-vst" => Some(vec![
+            build_anchor("left", 6.0, 19.0, "anchor"),
+            build_anchor("right", 8.0, 19.0, "boundary"),
+        ]),
         "btn-previous" => Some(vec![build_anchor("anchor", 10.0, 19.0, "anchor")]),
         "btn-play-pause" => Some(vec![build_anchor("anchor", 12.0, 19.0, "anchor")]),
         "btn-next" => Some(vec![build_anchor("anchor", 14.0, 19.0, "anchor")]),
@@ -565,6 +574,44 @@ fn sanitize_layout_for_space(space_id: &str, value: &MagnetSpaceLayout) -> Magne
             continue;
         }
         anchors_by_magnet_id.insert(magnet_id.to_string(), anchors);
+    }
+
+    // Back-compat: "SPACE" and "VST" used to be stored as single-anchor magnets in the Rust store.
+    // They are now 3-wide horizontal magnets, so ensure anchors are {left,right} when loading.
+    for magnet_id in ["btn-matrix-change", "dsp-vst"] {
+        let existing = match anchors_by_magnet_id.get(magnet_id) {
+            Some(value) => value.clone(),
+            None => continue,
+        };
+        if existing.len() != 1 {
+            continue;
+        }
+        let anchor = &existing[0];
+        let y = anchor.grid_y;
+        let mut left_x = (anchor.grid_x.round() as i32) - 1;
+        let mut right_x = left_x + 2;
+        if left_x < 0 {
+            right_x += -left_x;
+            left_x = 0;
+        }
+        if right_x > 26 {
+            let shift = right_x - 26;
+            left_x -= shift;
+            right_x = 26;
+        }
+        if left_x < 0 {
+            left_x = 0;
+        }
+        if right_x < left_x {
+            right_x = left_x;
+        }
+        anchors_by_magnet_id.insert(
+            magnet_id.to_string(),
+            vec![
+                build_anchor("left", left_x as f64, y, "anchor"),
+                build_anchor("right", right_x as f64, y, "boundary"),
+            ],
+        );
     }
 
     let mut layout = MagnetSpaceLayout {
@@ -1134,8 +1181,10 @@ mod tests {
             .anchors_by_magnet_id
             .get("btn-matrix-change")
             .expect("space1 should include system anchors for btn-matrix-change");
-        assert_eq!(matrix_change[0].grid_x, 3.0);
+        assert_eq!(matrix_change[0].grid_x, 2.0);
         assert_eq!(matrix_change[0].grid_y, 19.0);
+        assert_eq!(matrix_change[1].grid_x, 4.0);
+        assert_eq!(matrix_change[1].grid_y, 19.0);
 
         let editor = layout
             .anchors_by_magnet_id

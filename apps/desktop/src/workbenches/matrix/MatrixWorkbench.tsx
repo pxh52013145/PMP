@@ -27,6 +27,7 @@ import {
   type MagnetSpaceHistoryItem,
   type MagnetSpaceLayout,
   useMagnetConfig,
+  useMagnetChromeOverrideMode,
 } from '../../modules/magnets';
 import { readJson, readString, removeKey, writeJson } from '../../modules/storage';
 import { gcOrphanBackgroundMedia } from '../../modules/background/mediaCleanup';
@@ -112,6 +113,7 @@ export function MatrixWorkbench({
   const { editorState, toggleEditMode, exitEditMode, updateOccupancy } = useEditor();
   const { magnetLibrary, activeMagnetIds, activeSpaceId, updateMagnetAnchors, activateMagnet } =
     useMagnetConfig();
+  const chromeOverrideMode = useMagnetChromeOverrideMode();
 
   type MagnetLibraryFocusRequestV1 = { requestId: string; magnetId: string; createdAt: number };
   const focusCleanupTimerRef = useRef<number | null>(null);
@@ -577,7 +579,7 @@ export function MatrixWorkbench({
 
       {/* Magnet 层 */}
       {pixelPositions.size > 0 && (
-        <MagnetLayer magnets={activeMagnets} pixelPositions={pixelPositions} />
+        <MagnetLayer magnets={activeMagnets} pixelPositions={pixelPositions} chromeOverrideMode={chromeOverrideMode} />
       )}
 
       {/* 编辑器覆盖层 */}

@@ -91,4 +91,3 @@ export function resolveMagnetLayoutStorageKey(activeSpaceId: string | null | und
   if (!normalized || normalized === 'space1') return STORAGE_KEYS.MAGNET_SPACE_LAYOUT;
   return `${STORAGE_KEYS.MAGNET_SPACE_LAYOUT}:${normalized}`;
 }
-

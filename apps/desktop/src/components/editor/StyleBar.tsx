@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
+import { setMagnetChromeOverrideMode, useMagnetChromeOverrideMode, type MagnetChromeOverrideMode } from '../../modules/magnets';
 import './StyleBar.css';
 
 export const StyleBar = memo(function StyleBar() {
@@ -25,6 +26,11 @@ export const StyleBar = memo(function StyleBar() {
   );
 
   const [openPopups, setOpenPopups] = useState<Set<string>>(() => new Set());
+  const chromeOverrideMode = useMagnetChromeOverrideMode();
+
+  const applyChromeMode = useCallback((mode: MagnetChromeOverrideMode) => {
+    void setMagnetChromeOverrideMode(mode);
+  }, []);
 
   useEffect(() => {
     if (!isTauriMemo) return;
@@ -143,6 +149,39 @@ export const StyleBar = memo(function StyleBar() {
         >
           {t('editor.style-bar.borderEffect.label')}
         </button>
+
+        <div className="style-bar-chrome">
+          <span className="style-bar-chrome-title">{t('editor.style-bar.chrome.title')}</span>
+          <div className="style-bar-chrome-controls">
+            <button
+              type="button"
+              className={`style-bar-btn style-bar-btn--chip ${chromeOverrideMode === 'force-on' ? 'active' : ''}`}
+              onClick={() => applyChromeMode('force-on')}
+              title={t('editor.style-bar.chrome.mode.forceOn')}
+              aria-label={t('editor.style-bar.chrome.mode.forceOn')}
+            >
+              {t('editor.style-bar.chrome.mode.forceOn')}
+            </button>
+            <button
+              type="button"
+              className={`style-bar-btn style-bar-btn--chip ${chromeOverrideMode === 'force-off' ? 'active' : ''}`}
+              onClick={() => applyChromeMode('force-off')}
+              title={t('editor.style-bar.chrome.mode.forceOff')}
+              aria-label={t('editor.style-bar.chrome.mode.forceOff')}
+            >
+              {t('editor.style-bar.chrome.mode.forceOff')}
+            </button>
+            <button
+              type="button"
+              className={`style-bar-btn style-bar-btn--chip ${chromeOverrideMode === 'maintain' ? 'active' : ''}`}
+              onClick={() => applyChromeMode('maintain')}
+              title={t('editor.style-bar.chrome.mode.maintain')}
+              aria-label={t('editor.style-bar.chrome.mode.maintain')}
+            >
+              {t('editor.style-bar.chrome.mode.maintain')}
+            </button>
+          </div>
+        </div>
 
       </div>
     </div>

@@ -17,7 +17,7 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
     height: '36px', // 固定高度：1个pixel
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     border: '1px solid transparent',
-    borderRadius: '4px',
+    borderRadius: '2.7px',
     fontSize: '16px',
     fontWeight: '600',
     color: 'rgba(255, 255, 255, 0.4)',

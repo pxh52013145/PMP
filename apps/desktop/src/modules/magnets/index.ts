@@ -69,3 +69,9 @@ export {
   type MagnetConfigContextValue,
   type MagnetLibraryProviderProps,
 } from './MagnetLibraryProvider';
+export type { MagnetChromeOverrideMode } from './chromeOverride';
+export {
+  readMagnetChromeOverrideMode,
+  setMagnetChromeOverrideMode,
+  useMagnetChromeOverrideMode,
+} from './chromeOverride';

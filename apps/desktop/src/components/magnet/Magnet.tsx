@@ -2,19 +2,21 @@ import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Magnet } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
 import { getMagnetRenderer } from '../../magnet-system/registry';
+import type { MagnetChromeOverrideMode } from '../../modules/magnets';
 import './Magnet.css';
 
 interface MagnetProps {
   magnet: Magnet;
   pixelPositions: Map<string, { x: number; y: number }>;
   onInteract?: (magnetId: string, event: string) => void;
+  chromeOverrideMode?: MagnetChromeOverrideMode;
 }
 
 /**
  * Magnet 组件
  * 通过锚点吸附到 Pixel 上，实现响应式定位
  */
-export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetProps) {
+export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOverrideMode }: MagnetProps) {
   const [isHovering, setIsHovering] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const { PIXEL_SIZE } = MATRIX_CONFIG;
@@ -58,19 +60,22 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
         if (anchors.length < 2) return null;
         // 水平锚点：宽度自适应，高度固定
         // y 方向也需要垂直居中对齐 Pixel
-        const left = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
-        const right = pixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);
+        const leftAnchor = anchors[0].gridX <= anchors[1].gridX ? anchors[0] : anchors[1];
+        const rightAnchor = leftAnchor === anchors[0] ? anchors[1] : anchors[0];
+        const left = pixelPositions.get(`${leftAnchor.gridX},${leftAnchor.gridY}`);
+        const right = pixelPositions.get(`${rightAnchor.gridX},${rightAnchor.gridY}`);
         if (!left || !right) return null;
 
         const magnetHeight = parseFloat(style.height || '36px');
 
         // 计算 y 方向偏移量，使 Magnet 垂直居中对齐 Pixel
         const offsetY = (PIXEL_SIZE - magnetHeight) / 2;
+        const edgePadding = PIXEL_SIZE / 2;
 
         return {
-          x: left.x,
+          x: left.x - edgePadding,
           y: left.y + offsetY,
-          width: right.x - left.x + PIXEL_SIZE,
+          width: right.x - left.x + PIXEL_SIZE * 2,
           height: magnetHeight,
         };
       }
@@ -79,20 +84,23 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
         if (anchors.length < 2) return null;
         // 垂直锚点：高度自适应，宽度固定
         // x 方向也需要水平居中对齐 Pixel
-        const top = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
-        const bottom = pixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);
+        const topAnchor = anchors[0].gridY <= anchors[1].gridY ? anchors[0] : anchors[1];
+        const bottomAnchor = topAnchor === anchors[0] ? anchors[1] : anchors[0];
+        const top = pixelPositions.get(`${topAnchor.gridX},${topAnchor.gridY}`);
+        const bottom = pixelPositions.get(`${bottomAnchor.gridX},${bottomAnchor.gridY}`);
         if (!top || !bottom) return null;
 
         const magnetWidth = parseFloat(style.width || '36px');
 
         // 计算 x 方向偏移量，使 Magnet 水平居中对齐 Pixel
         const offsetX = (PIXEL_SIZE - magnetWidth) / 2;
+        const edgePadding = PIXEL_SIZE / 2;
 
         return {
           x: top.x + offsetX,
-          y: top.y,
+          y: top.y - edgePadding,
           width: magnetWidth,
-          height: bottom.y - top.y + PIXEL_SIZE,
+          height: bottom.y - top.y + PIXEL_SIZE * 2,
         };
       }
 
@@ -103,11 +111,12 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
         const topRight = pixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);
         const bottomLeft = pixelPositions.get(`${anchors[2].gridX},${anchors[2].gridY}`);
         if (!topLeft || !topRight || !bottomLeft) return null;
+        const edgePadding = PIXEL_SIZE / 2;
         return {
-          x: topLeft.x,
-          y: topLeft.y,
-          width: topRight.x - topLeft.x + PIXEL_SIZE,
-          height: bottomLeft.y - topLeft.y + PIXEL_SIZE,
+          x: topLeft.x - edgePadding,
+          y: topLeft.y - edgePadding,
+          width: topRight.x - topLeft.x + PIXEL_SIZE * 2,
+          height: bottomLeft.y - topLeft.y + PIXEL_SIZE * 2,
         };
       }
 
@@ -215,9 +224,16 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     }
   }, [bounds]);
 
-  // 组合最终样式
-  const finalStyle = useMemo(() => {
+  const transitionValue = useMemo(() => {
+    if (disableTransition) return 'none';
+    return magnet.animation?.transition || 'var(--magnet-transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1))';
+  }, [disableTransition, magnet.animation?.transition]);
+
+  // Shell is layout + hit-testing only (position/size/drag/click). Visual styles live in the optional "chrome" element.
+  const shellStyle = useMemo(() => {
     if (!bounds) return null;
+
+    const cursor = typeof currentStyle.cursor === 'string' ? currentStyle.cursor : undefined;
 
     return {
       position: 'absolute' as const,
@@ -225,13 +241,23 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
       top: `${bounds.y}px`,
       width: `${bounds.width}px`,
       height: `${bounds.height}px`,
-      transition: disableTransition
-        ? 'none' // ✅ 禁用 transition
-        : magnet.animation?.transition ||
-          'var(--magnet-transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1))',
-      ...currentStyle,
+      transition: transitionValue,
+      cursor,
     };
-  }, [bounds, magnet.animation, currentStyle, disableTransition]);
+  }, [bounds, currentStyle.cursor, transitionValue]);
+
+  const chromeStyle = useMemo(() => {
+    const next: Record<string, string | number | undefined> = { ...currentStyle };
+    delete next.width;
+    delete next.height;
+
+    return {
+      width: '100%',
+      height: '100%',
+      transition: transitionValue,
+      ...next,
+    };
+  }, [currentStyle, transitionValue]);
 
   // 渲染自定义组件内容
   const renderContent = () => {
@@ -249,20 +275,36 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract }: MagnetPr
     return magnet.content;
   };
 
-  if (!bounds || !finalStyle) return null;
+  if (!bounds || !shellStyle) return null;
+
+  const chromeEnabled =
+    chromeOverrideMode === 'force-on'
+      ? true
+      : chromeOverrideMode === 'force-off'
+        ? false
+        : magnet.chrome?.enabled !== false;
 
   return (
     <div
-      className={`magnet magnet-${magnet.type} magnet-state-${magnet.state}`}
+      className={`magnet-shell magnet-state-${magnet.state}`}
       data-magnet-id={magnet.id}
-      style={finalStyle}
+      style={shellStyle}
       onClick={handleClick}
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {renderContent()}
+      {chromeEnabled ? (
+        <div
+          className={`magnet magnet-${magnet.type} magnet-state-${magnet.state}`}
+          style={chromeStyle}
+        >
+          {renderContent()}
+        </div>
+      ) : (
+        renderContent()
+      )}
     </div>
   );
 }

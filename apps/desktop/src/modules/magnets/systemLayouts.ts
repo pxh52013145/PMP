@@ -13,7 +13,10 @@ export const SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnchor[]>
   'btn-minimize': [{ id: 'anchor', gridX: 22, gridY: 0, role: 'anchor' }],
   'btn-maximize': [{ id: 'anchor', gridX: 24, gridY: 0, role: 'anchor' }],
   'btn-close': [{ id: 'anchor', gridX: 26, gridY: 0, role: 'anchor' }],
-  'btn-matrix-change': [{ id: 'anchor', gridX: 0, gridY: 18, role: 'anchor' }],
+  'btn-matrix-change': [
+    { id: 'left', gridX: 0, gridY: 18, role: 'anchor' },
+    { id: 'right', gridX: 2, gridY: 18, role: 'boundary' },
+  ],
   'btn-editor': [{ id: 'anchor', gridX: 19, gridY: 18, role: 'anchor' }],
 };
 
@@ -43,8 +46,14 @@ export const SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnc
     { id: 'left', gridX: 6, gridY: 18, role: 'anchor' },
     { id: 'right', gridX: 26, gridY: 18, role: 'boundary' },
   ],
-  'btn-matrix-change': [{ id: 'anchor', gridX: 3, gridY: 19, role: 'anchor' }],
-  'dsp-vst': [{ id: 'anchor', gridX: 7, gridY: 19, role: 'anchor' }],
+  'btn-matrix-change': [
+    { id: 'left', gridX: 2, gridY: 19, role: 'anchor' },
+    { id: 'right', gridX: 4, gridY: 19, role: 'boundary' },
+  ],
+  'dsp-vst': [
+    { id: 'left', gridX: 6, gridY: 19, role: 'anchor' },
+    { id: 'right', gridX: 8, gridY: 19, role: 'boundary' },
+  ],
   'btn-previous': [{ id: 'anchor', gridX: 10, gridY: 19, role: 'anchor' }],
   'btn-play-pause': [{ id: 'anchor', gridX: 12, gridY: 19, role: 'anchor' }],
   'btn-next': [{ id: 'anchor', gridX: 14, gridY: 19, role: 'anchor' }],

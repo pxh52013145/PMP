@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
-import { useNavigation } from '../../contexts/NavigationContext';
+import { useKernel } from '../../contexts/KernelContext';
+import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
 import {
   getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
@@ -14,7 +15,7 @@ import {
   type PmpmPluginRuntime,
 } from './pmpmRuntime';
 import { PmpmSandboxHost } from './PmpmSandboxHost';
-import { createPluginMountApi, type PluginMountApi } from './pluginHostApi';
+import { createPluginMountApi, type PluginMountApi, type PluginNavigationSnapshot } from './pluginHostApi';
 import {
   getPmpmSandboxRevision,
   getPmpmSandboxRuntimeEnabled,
@@ -23,8 +24,9 @@ import {
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
 export function PluginWorkbenchHost({ pluginId, workbenchId }: { pluginId: string; workbenchId: string }) {
+  const kernel = useKernel();
   const audioService = useAudioService();
-  const navigation = useNavigation();
+  const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +60,17 @@ export function PluginWorkbenchHost({ pluginId, workbenchId }: { pluginId: strin
     void pluginStoreRevision;
     return getPmpmPluginEffectivePermissions(pluginId);
   }, [pluginId, pluginStoreRevision]);
+
+  const navigation = useMemo(() => {
+    return {
+      navigateTo: (page: Parameters<typeof navigationService.navigateTo>[0], params?: Record<string, unknown>) =>
+        navigationService.navigateTo(page, params),
+      goBack: () => navigationService.goBack(),
+      getSnapshot: () => navigationService.getSnapshot(),
+      subscribe: (cb: (snapshot: PluginNavigationSnapshot) => void) =>
+        kernel.events.on('navigation/changed', (payload) => cb(payload as PluginNavigationSnapshot)),
+    };
+  }, [kernel.events, navigationService]);
 
   const api = useMemo<PluginMountApi>(() => {
     return createPluginMountApi({

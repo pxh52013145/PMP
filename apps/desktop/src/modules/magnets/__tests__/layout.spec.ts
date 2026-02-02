@@ -66,7 +66,8 @@ describe('ensureMagnetSpaceLayout', () => {
     expect(result.layout.activeMagnetIds).toContain('btn-debug');
     expect(result.layout.activeMagnetIds).toContain('audio-visualizer');
     expect(result.layout.anchorsByMagnetId['btn-matrix-change']).toEqual([
-      { id: 'anchor', gridX: 3, gridY: 19, role: 'anchor' },
+      { id: 'left', gridX: 2, gridY: 19, role: 'anchor' },
+      { id: 'right', gridX: 4, gridY: 19, role: 'boundary' },
     ]);
     expect(result.layout.anchorsByMagnetId['progress-bar']).toEqual([
       { id: 'left', gridX: 6, gridY: 18, role: 'anchor' },

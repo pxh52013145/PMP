@@ -37,4 +37,21 @@ describe('magnetPositionResolver', () => {
     const resolved = resolveMagnetPositions(magnets);
     expect(resolved).toHaveLength(2);
   });
+
+  it('does not crash when anchors are missing', () => {
+    const invalidHorizontal: Magnet = {
+      id: 'wide',
+      type: 'custom',
+      name: 'wide',
+      anchorType: 'horizontal',
+      anchors: [],
+      content: 'wide' as unknown as React.ReactNode,
+      style: {},
+      state: 'idle',
+      interactions: { draggable: false, clickable: true },
+    };
+
+    expect(() => detectConflicts([invalidHorizontal, createMagnet('a', 0)])).not.toThrow();
+    expect(() => resolveMagnetPositions([invalidHorizontal, createMagnet('a', 0)])).not.toThrow();
+  });
 });

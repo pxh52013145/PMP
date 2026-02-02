@@ -5,6 +5,8 @@ import { getPmpmPluginEffectivePermissions, recordPmpmPermissionDenied, recordPm
 import { recordPmpmAuditEvent } from './pmpmGovernance';
 import { readVerifiedPmpmPluginEntryCode } from './pmpmRuntime';
 import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
+import { APP_VERSION, HOST_API_VERSION } from '../../constants/versions';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 type RpcRequest = {
   frameId: string;
@@ -57,6 +59,14 @@ async function runRpc(api: PluginMountApi, request: RpcRequest): Promise<unknown
       return api.audio.setVolume(args[0] as number);
     case 'audio.toggleMute':
       return api.audio.toggleMute();
+    case 'audio.playNext':
+      return await api.audio.playNext();
+    case 'audio.playPrevious':
+      return await api.audio.playPrevious();
+    case 'audio.playTrackAtIndex':
+      return await api.audio.playTrackAtIndex(args[0] as number);
+    case 'audio.setPlayMode':
+      return api.audio.setPlayMode(args[0] as never);
     case 'audio.getCover':
       return await api.audio.getCover();
     case 'navigation.navigateTo':
@@ -88,15 +98,20 @@ let runtime = null;
 let permissions = new Set();
 let pluginId = '';
 let hostLabel = '';
+let hostInfo = null;
 let audioState = null;
 let audioSpectrum = null;
 let configValue = {};
+let navigationSnapshot = null;
 
 const audioStateListeners = new Set();
 const audioTimeListeners = new Set();
 const audioEndedListeners = new Set();
+const audioLoadProgressListeners = new Set();
+const audioErrorListeners = new Set();
 const configListeners = new Set();
 const spectrumListeners = new Set();
+const navigationListeners = new Set();
 
 const post = (msg) => postMessage({ frameId: FRAME_ID, ...msg });
 const warnDenied = (capability, action) => {
@@ -181,6 +196,29 @@ const rpcCall = (method, args = []) => {
 };
 
 const api = {
+  host: {
+    getInfo: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.getInfo()');
+        return null;
+      }
+      return hostInfo;
+    },
+    listPermissions: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.listPermissions()');
+        return [];
+      }
+      return Array.from(permissions);
+    },
+    hasPermission: (capability) => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.hasPermission(capability)');
+        return false;
+      }
+      return hasPermission(String(capability || ''));
+    },
+  },
   audio: {
     getState: () => {
       if (!permissions.has('api:audio-state')) {
@@ -216,12 +254,46 @@ const api = {
       audioEndedListeners.add(cb);
       return () => audioEndedListeners.delete(cb);
     },
+    onLoadProgress: (cb) => {
+      if (!permissions.has('api:audio-state')) {
+        warnDenied('api:audio-state', 'audio.onLoadProgress(cb)');
+        return () => {};
+      }
+      if (typeof cb !== 'function') return () => {};
+      audioLoadProgressListeners.add(cb);
+      return () => audioLoadProgressListeners.delete(cb);
+    },
+    onError: (cb) => {
+      if (!permissions.has('api:audio-state')) {
+        warnDenied('api:audio-state', 'audio.onError(cb)');
+        return () => {};
+      }
+      if (typeof cb !== 'function') return () => {};
+      audioErrorListeners.add(cb);
+      return () => audioErrorListeners.delete(cb);
+    },
     play: () => rpcCall('audio.play'),
     pause: () => rpcCall('audio.pause'),
     stop: () => void rpcCall('audio.stop'),
     seek: (time) => void rpcCall('audio.seek', [time]),
     setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
     toggleMute: () => void rpcCall('audio.toggleMute'),
+    playNext: () => rpcCall('audio.playNext'),
+    playPrevious: () => rpcCall('audio.playPrevious'),
+    playTrackAtIndex: (index) => rpcCall('audio.playTrackAtIndex', [index]),
+    getPlayMode: () => {
+      if (!permissions.has('api:audio-state')) {
+        warnDenied('api:audio-state', 'audio.getPlayMode()');
+        return null;
+      }
+      try {
+        const mode = audioState && typeof audioState === 'object' ? audioState.playMode : null;
+        return typeof mode === 'string' ? mode : null;
+      } catch {
+        return null;
+      }
+    },
+    setPlayMode: (mode) => void rpcCall('audio.setPlayMode', [mode]),
     getCover: () => rpcCall('audio.getCover'),
   },
   visualizer: {
@@ -245,6 +317,37 @@ const api = {
   navigation: {
     navigateTo: (page, params) => void rpcCall('navigation.navigateTo', [page, params]),
     goBack: () => void rpcCall('navigation.goBack'),
+    getSnapshot: () => {
+      if (!permissions.has('api:navigation')) {
+        warnDenied('api:navigation', 'navigation.getSnapshot()');
+        return null;
+      }
+      return navigationSnapshot;
+    },
+    onChange: (cb) => {
+      if (!permissions.has('api:navigation')) {
+        warnDenied('api:navigation', 'navigation.onChange(cb)');
+        return () => {};
+      }
+      if (typeof cb !== 'function') return () => {};
+      navigationListeners.add(cb);
+      return () => navigationListeners.delete(cb);
+    },
+    canGoBack: () => {
+      if (!permissions.has('api:navigation')) {
+        warnDenied('api:navigation', 'navigation.canGoBack()');
+        return false;
+      }
+      try {
+        return Boolean(
+          navigationSnapshot &&
+            typeof navigationSnapshot.currentIndex === 'number' &&
+            navigationSnapshot.currentIndex > 0
+        );
+      } catch {
+        return false;
+      }
+    },
   },
   config: {
     get: () => {
@@ -300,12 +403,14 @@ addEventListener('message', async (event) => {
   if (data.type === 'pmpm:init') {
     pluginId = String(data.pluginId || '');
     hostLabel = String(data.hostLabel || '');
+    hostInfo = data.hostInfo && typeof data.hostInfo === 'object' ? data.hostInfo : null;
     const commandId = String(data.surfaceId || '');
     const commandArgs = data.commandArgs;
     permissions = new Set(Array.isArray(data.permissions) ? data.permissions.filter((p) => typeof p === 'string') : []);
     audioState = data.initialAudioState ?? null;
     audioSpectrum = data.initialAudioSpectrum ?? null;
     configValue = data.initialConfig && typeof data.initialConfig === 'object' ? data.initialConfig : {};
+    navigationSnapshot = data.initialNavigation && typeof data.initialNavigation === 'object' ? data.initialNavigation : null;
 
     try {
       const entryCode = String(data.entryCode || '');
@@ -341,6 +446,20 @@ addEventListener('message', async (event) => {
       }
       return;
     }
+    if (data.name === 'audio.loadProgress') {
+      const progress = typeof data.payload === 'number' ? data.payload : 0;
+      for (const cb of Array.from(audioLoadProgressListeners)) {
+        try { cb(progress); } catch {}
+      }
+      return;
+    }
+    if (data.name === 'audio.error') {
+      const message = typeof data.payload === 'string' ? data.payload : String(data.payload || '');
+      for (const cb of Array.from(audioErrorListeners)) {
+        try { cb(message); } catch {}
+      }
+      return;
+    }
     if (data.name === 'audio.time') {
       const time = typeof data.payload === 'number' ? data.payload : 0;
       for (const cb of Array.from(audioTimeListeners)) {
@@ -365,6 +484,13 @@ addEventListener('message', async (event) => {
       audioSpectrum = data.payload ?? null;
       for (const cb of Array.from(spectrumListeners)) {
         try { cb(audioSpectrum); } catch {}
+      }
+      return;
+    }
+    if (data.name === 'navigation.changed') {
+      navigationSnapshot = data.payload && typeof data.payload === 'object' ? data.payload : null;
+      for (const cb of Array.from(navigationListeners)) {
+        try { cb(navigationSnapshot); } catch {}
       }
       return;
     }
@@ -520,7 +646,7 @@ async function runPmpmSandboxedCommandInWorker(options: {
 
       const data = event.data as FrameMessage;
 
-      if (data.type === 'pmpm:worker-ready') {
+    if (data.type === 'pmpm:worker-ready') {
         if (bootTimer !== null) window.clearTimeout(bootTimer);
         bootTimer = null;
 
@@ -553,12 +679,25 @@ async function runPmpmSandboxedCommandInWorker(options: {
           type: 'pmpm:init',
           pluginId: options.pluginId,
           hostLabel: options.hostLabel,
+          hostInfo: permissions.has('api:host')
+            ? {
+                pluginId: options.pluginId,
+                hostLabel: options.hostLabel,
+                hostApiVersion: HOST_API_VERSION,
+                appVersion: APP_VERSION,
+                runtime: isTauriRuntime() ? 'tauri' : 'web',
+              }
+            : null,
           surface: 'command',
           surfaceId: options.commandId,
           commandArgs: options.args,
           permissions: Array.from(permissions),
           entryCode,
           initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
+          initialNavigation:
+            permissions.has('api:navigation') && typeof options.navigation.getSnapshot === 'function'
+              ? options.navigation.getSnapshot()
+              : null,
           initialConfig,
         });
         return;
@@ -800,18 +939,31 @@ export async function runPmpmSandboxedCommand(options: {
           crashAsUnresponsive(`Plugin command timeout (${elapsed}ms)`, timeoutMs);
         }, timeoutMs);
 
-        postToFrame({
-          type: 'pmpm:init',
-          pluginId: options.pluginId,
-          hostLabel,
-          surface: 'command',
-          surfaceId: options.commandId,
-          commandArgs: options.args,
-          permissions: Array.from(permissions),
-          entryCode,
-          initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
-          initialConfig,
-        });
+    postToFrame({
+      type: 'pmpm:init',
+      pluginId: options.pluginId,
+      hostLabel,
+      hostInfo: permissions.has('api:host')
+        ? {
+            pluginId: options.pluginId,
+            hostLabel,
+            hostApiVersion: HOST_API_VERSION,
+            appVersion: APP_VERSION,
+            runtime: isTauriRuntime() ? 'tauri' : 'web',
+          }
+        : null,
+      surface: 'command',
+      surfaceId: options.commandId,
+      commandArgs: options.args,
+      permissions: Array.from(permissions),
+      entryCode,
+      initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
+      initialNavigation:
+        permissions.has('api:navigation') && typeof options.navigation.getSnapshot === 'function'
+          ? options.navigation.getSnapshot()
+          : null,
+      initialConfig,
+    });
         return;
       }
 

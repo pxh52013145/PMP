@@ -13,6 +13,7 @@ export interface MagnetStateConfig {
   variant?: string;
   variantConfig?: Record<string, unknown>;
   previewText?: string;
+  chromeEnabled?: boolean;
   styleOverride?: {
     style?: Magnet['style'];
     animation?: Magnet['animation'];
@@ -63,6 +64,7 @@ export function saveConfig(
         variant: magnet.variant,
         variantConfig: magnet.variantConfig,
         previewText: magnet.previewText,
+        chromeEnabled: magnet.chrome?.enabled,
       };
 
       // 对于内置 Magnet，检查样式是否被修改
@@ -209,6 +211,7 @@ export function exportConfig(
       variant: magnet.variant,
       variantConfig: magnet.variantConfig,
       previewText: magnet.previewText,
+      chromeEnabled: magnet.chrome?.enabled,
     };
 
     // 对于内置 Magnet，检查样式是否被修改
@@ -397,6 +400,10 @@ export function applyConfig(
       appliedMagnet.variantConfig = savedConfig.variantConfig ?? appliedMagnet.variantConfig;
       appliedMagnet.previewText = savedConfig.previewText ?? appliedMagnet.previewText;
 
+      if (typeof savedConfig.chromeEnabled === 'boolean') {
+        appliedMagnet.chrome = { ...(appliedMagnet.chrome ?? {}), enabled: savedConfig.chromeEnabled };
+      }
+
       magnetLibrary.push(appliedMagnet);
       addedIds.add(defaultMagnet.id);
 
@@ -432,14 +439,20 @@ export function applyConfig(
 
       if (savedConfig) {
         // 使用保存的锚点位置
-        magnetLibrary.push({
+        const nextMagnet: Magnet = {
           ...customMagnet,
           anchors: savedConfig.anchors,
           renderer: savedConfig.renderer ?? customMagnet.renderer,
           variant: savedConfig.variant ?? customMagnet.variant,
           variantConfig: savedConfig.variantConfig ?? customMagnet.variantConfig,
           previewText: savedConfig.previewText ?? customMagnet.previewText,
-        });
+        };
+
+        if (typeof savedConfig.chromeEnabled === 'boolean') {
+          nextMagnet.chrome = { ...(nextMagnet.chrome ?? {}), enabled: savedConfig.chromeEnabled };
+        }
+
+        magnetLibrary.push(nextMagnet);
         addedIds.add(customMagnet.id);
 
         // 恢复激活状态

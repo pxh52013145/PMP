@@ -24,6 +24,7 @@ export const PREVIOUS_BUTTON: Magnet = {
     height: '36px',
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: '2.7px',
   },
   animation: {
     transition: 'all 0.2s ease',
@@ -64,6 +65,7 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
     height: '36px',
     backgroundColor: 'rgba(0, 123, 255, 0.8)', // 主要操作使用醒目的蓝色
     border: '2px solid rgba(255, 255, 255, 0.2)',
+    borderRadius: '2.7px',
   },
   animation: {
     transition: 'all 0.2s ease',
@@ -105,6 +107,7 @@ export const NEXT_BUTTON: Magnet = {
     height: '36px',
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: '2.7px',
   },
   animation: {
     transition: 'all 0.2s ease',
@@ -145,6 +148,7 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
     height: '36px',
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: '2.7px',
   },
   animation: {
     transition: 'all 0.2s ease',
@@ -185,6 +189,7 @@ export const VOLUME_BUTTON: Magnet = {
     height: '36px',
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: '2.7px',
   },
   animation: {
     transition: 'all 0.2s ease',
@@ -225,7 +230,7 @@ export const PROGRESS_BAR: Magnet = {
   style: {
     height: '24px',
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: '12px',
+    borderRadius: '2.7px',
     border: '1px solid rgba(255, 255, 255, 0.1)',
     overflow: 'hidden',
     cursor: 'pointer',
@@ -267,7 +272,7 @@ export const TRACK_INFO: Magnet = {
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '8px',
+    borderRadius: '2.7px',
     padding: '8px',
     overflow: 'hidden',
     display: 'flex',

@@ -42,6 +42,7 @@ interface EditorMagnetLibraryProps {
   activeMagnetIds: Set<string>;
   builtInMagnetIds: Set<string>;
   onMagnetAddToLibrary: (magnet: Magnet) => void;
+  onMagnetUpdate: (magnet: Magnet) => void | Promise<void>;
   onMagnetActivate: (magnetId: string) => void;
   onMagnetDeactivate: (magnetId: string) => void;
   onMagnetDeleteFromLibrary: (magnetId: string) => void;
@@ -107,6 +108,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   activeMagnetIds,
   builtInMagnetIds,
   onMagnetAddToLibrary,
+  onMagnetUpdate,
   onMagnetActivate,
   onMagnetDeactivate,
   onMagnetDeleteFromLibrary,
@@ -759,6 +761,7 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               const isActive = activeMagnetIds.has(magnet.id);
               const isRequired = REQUIRED_MAGNET_IDS.has(magnet.id);
               const pixelCount = estimateMagnetPixelCount(magnet);
+              const chromeEnabled = magnet.chrome?.enabled !== false;
 
               const rendererId = magnet.renderer ?? magnet.id;
               const renderer =
@@ -791,10 +794,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                   <div
                     className="magnet-preview"
                     style={{
-                      backgroundColor: magnet.style.backgroundColor,
-                      color: magnet.style.color,
+                      backgroundColor: chromeEnabled ? magnet.style.backgroundColor : 'transparent',
+                      color: chromeEnabled ? magnet.style.color : undefined,
                       borderRadius: magnet.style.borderRadius,
-                      border: magnet.style.border,
+                      border: chromeEnabled ? magnet.style.border : '1px dashed rgba(255,255,255,0.18)',
                     }}
                   >
                     {previewContent}
@@ -837,6 +840,24 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                       data-text="◈"
                     >
                       ◈
+                    </button>
+
+                    {/* 外框开关 */}
+                    <button
+                      className="magnet-action-btn chrome"
+                      onClick={() =>
+                        void onMagnetUpdate({
+                          ...magnet,
+                          chrome: { ...(magnet.chrome ?? {}), enabled: !chromeEnabled },
+                        })
+                      }
+                      title={
+                        chromeEnabled
+                          ? t('editor.magnet-library.magnet.tooltip.chrome.disable')
+                          : t('editor.magnet-library.magnet.tooltip.chrome.enable')
+                      }
+                    >
+                      {chromeEnabled ? '▣' : '▢'}
                     </button>
 
                     {/* 添加/移除 */}

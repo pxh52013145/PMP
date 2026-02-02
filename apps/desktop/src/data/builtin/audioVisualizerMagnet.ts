@@ -19,7 +19,7 @@ export const AUDIO_VISUALIZER_MAGNET: Magnet = {
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0.35)',
     border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '10px',
+    borderRadius: '2.7px',
     overflow: 'hidden',
     padding: '6px',
     display: 'flex',

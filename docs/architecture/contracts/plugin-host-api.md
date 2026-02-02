@@ -33,6 +33,7 @@
   - `variants?: Array<{ id, label, description?, metadata? }>`（供 Theme Editor / Debug 发现并展示；仅声明，不授予任何“功能权限”）
 - `permissions?: string[]`（R5：deny-by-default 权限 gate + denied audit + per-plugin denylist；sandbox 内网络能力也会按权限 best-effort gate）
 - 常用权限（As-Is）：
+  - `api:host`（宿主信息/权限查询）
   - `api:audio-state` / `api:audio-control` / `api:audio-visual` / `api:audio-cover`
   - `api:navigation`
   - `api:window`
@@ -115,13 +116,15 @@ export function runCommand?(
 
 注入实现：
 - Host API（统一实现）：`apps/desktop/src/magnet-system/plugins/pluginHostApi.ts`（权限 gate + denied audit）
+- Host API（源码位置）：`apps/desktop/src/magnet-system/plugins/host-api/*`（types + createPluginMountApi）
 - Sandbox runtime（R5，默认启用）：`apps/desktop/src/magnet-system/plugins/PmpmSandboxHost.tsx`（iframe + RPC + boot timeout + heartbeat + network gate）+ Commands：`apps/desktop/src/magnet-system/plugins/pmpmSandboxCommandRunner.ts`（worker 优先 + terminate kill + timeout）
 - Runtime restart/kill（R5）：`apps/desktop/src/magnet-system/plugins/pmpmRuntimeSupervisor.ts`（跨窗口同步 + audit `runtime-restart`）
 
 当前 API（最小集）：
-- `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/play/pause/stop/seek/setVolume/toggleMute/getCover`）
+- `host`：宿主信息与权限查询（`getInfo/listPermissions/hasPermission`）
+- `audio`：状态与控制（`getState/onStateChange/onTimeUpdate/onEnded/onLoadProgress/onError/play/pause/stop/seek/setVolume/toggleMute/playNext/playPrevious/playTrackAtIndex/getPlayMode/setPlayMode/getCover`）
 - `visualizer`：频谱（`getSpectrum/onSpectrum`）
-- `navigation`：页面跳转与返回（`navigateTo/goBack`，params 会走统一校验）
+- `navigation`：页面跳转与返回（`navigateTo/goBack/getSnapshot/onChange/canGoBack`，params 会走统一校验）
 - `config`：插件本地配置（`get/set/patch/reset/onChange`，由宿主持久化）
 - `window`：打开/关闭插件窗口（`open/close`，按 label/route 规范）
 
@@ -133,7 +136,7 @@ export function runCommand?(
 - sandbox 内网络访问为 best-effort gate（`net:*` 权限）：覆盖 `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`/`sendBeacon` 等常见入口，但无法保证阻止所有侧信道（例如 `<img src>`）。
 - Host 可能基于用户配置进一步禁用部分权限（per-plugin denied permissions），插件必须处理 API 返回空值/拒绝的情况。
 - `navigation.navigateTo(page, params)` 的 params 需要满足 Navigation 契约（统一校验入口见 `docs/architecture/contracts/navigation.md`）。
-- API 未版本化（建议先在 contracts 中定义 To-Be 的 `apiVersion` 与兼容策略，见 `docs/architecture/contracts/versioning.md`）。
+- API 版本号已存在（`HOST_API_VERSION` + `api.host.getInfo().hostApiVersion`），但插件侧 `manifest.apiVersion` 仍属 To-Be（兼容策略见 `docs/architecture/contracts/versioning.md`）。
 
 ## 5) To-Be（规划：贡献点 + SDK + 治理）
 

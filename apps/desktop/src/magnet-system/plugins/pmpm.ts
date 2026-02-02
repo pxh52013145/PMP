@@ -23,6 +23,8 @@ import {
   type PmpmVerifiedSignature,
 } from './pmpmSignature';
 
+export { recordPmpmPermissionDenied } from './pmpmGovernance';
+
 async function unzipAsync(bytes: Uint8Array): Promise<Unzipped> {
   return await new Promise((resolve, reject) => {
     unzip(bytes, (err, data) => {
@@ -237,28 +239,6 @@ export function getPmpmPluginEffectivePermissions(pluginId: string): Set<string>
   );
 
   return new Set(declared.filter((perm) => !denied.has(perm)));
-}
-
-export function recordPmpmPermissionDenied(options: {
-  pluginId: string;
-  hostLabel: string;
-  capability: string;
-  action: string;
-}): void {
-  console.warn(
-    `[pmpm][permission] denied plugin=${options.pluginId} host=${options.hostLabel} capability=${options.capability} action=${options.action}`
-  );
-  try {
-    recordPmpmAuditEvent({
-      type: 'permission-denied',
-      pluginId: options.pluginId,
-      hostLabel: options.hostLabel,
-      capability: options.capability,
-      action: options.action,
-    });
-  } catch {
-    // ignore
-  }
 }
 
 function toArrayBuffer(data: Uint8Array): ArrayBuffer {
@@ -1430,7 +1410,7 @@ export function createMagnetTemplateFromPlugin(plugin: InstalledPmpmPlugin): Mag
   const style = {
     backgroundColor: 'rgba(0, 0, 0, 0.35)',
     border: '1px solid rgba(255, 255, 255, 0.12)',
-    borderRadius: '10px',
+    borderRadius: '2.7px',
     padding: '8px',
     ...(plugin.manifest.magnet?.defaultStyle ?? {}),
   };

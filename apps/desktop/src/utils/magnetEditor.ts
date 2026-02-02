@@ -64,9 +64,14 @@ export function getMagnetOccupiedPixels(magnet: Magnet): Array<{ x: number; y: n
 
     case 'horizontal': {
       // 水平锚点：占用左右锚点之间的所有 pixel
-      const leftAnchor = anchors[0];
-      const rightAnchor = anchors[1];
-      if (!leftAnchor || !rightAnchor) break;
+      const leftAnchor =
+        anchors.find((a) => a.id === 'left') ?? anchors.find((a) => a.role === 'anchor') ?? anchors[0];
+      const rightAnchor =
+        anchors.find((a) => a.id === 'right') ?? anchors.find((a) => a.role === 'boundary') ?? anchors[1];
+      if (!leftAnchor || !rightAnchor) {
+        if (leftAnchor) pixels.push({ x: leftAnchor.gridX, y: leftAnchor.gridY });
+        break;
+      }
       const minX = Math.min(leftAnchor.gridX, rightAnchor.gridX);
       const maxX = Math.max(leftAnchor.gridX, rightAnchor.gridX);
       const y = leftAnchor.gridY;
@@ -79,9 +84,14 @@ export function getMagnetOccupiedPixels(magnet: Magnet): Array<{ x: number; y: n
 
     case 'vertical': {
       // 垂直锚点：占用顶底锚点之间的所有 pixel
-      const topAnchor = anchors[0];
-      const bottomAnchor = anchors[1];
-      if (!topAnchor || !bottomAnchor) break;
+      const topAnchor =
+        anchors.find((a) => a.id === 'top') ?? anchors.find((a) => a.role === 'anchor') ?? anchors[0];
+      const bottomAnchor =
+        anchors.find((a) => a.id === 'bottom') ?? anchors.find((a) => a.role === 'boundary') ?? anchors[1];
+      if (!topAnchor || !bottomAnchor) {
+        if (topAnchor) pixels.push({ x: topAnchor.gridX, y: topAnchor.gridY });
+        break;
+      }
       const minY = Math.min(topAnchor.gridY, bottomAnchor.gridY);
       const maxY = Math.max(topAnchor.gridY, bottomAnchor.gridY);
       const x = topAnchor.gridX;
@@ -94,15 +104,13 @@ export function getMagnetOccupiedPixels(magnet: Magnet): Array<{ x: number; y: n
 
     case 'rectangular': {
       // 矩形锚点：占用四个角围成的矩形区域内的所有 pixel
-      const topLeft = anchors[0];
-      const topRight = anchors[1];
-      const bottomLeft = anchors[2];
-      if (!topLeft || !topRight || !bottomLeft) break;
-
-      const minX = Math.min(topLeft.gridX, topRight.gridX);
-      const maxX = Math.max(topLeft.gridX, topRight.gridX);
-      const minY = Math.min(topLeft.gridY, bottomLeft.gridY);
-      const maxY = Math.max(topLeft.gridY, bottomLeft.gridY);
+      if (anchors.length === 0) break;
+      const xs = anchors.map((a) => a.gridX);
+      const ys = anchors.map((a) => a.gridY);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
 
       for (let y = minY; y <= maxY; y++) {
         for (let x = minX; x <= maxX; x++) {

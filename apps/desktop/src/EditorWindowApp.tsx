@@ -1331,6 +1331,7 @@ export function EditorWindowApp() {
                 activeMagnetIds={activeMagnetIds}
                 builtInMagnetIds={builtInMagnetIds}
                 onMagnetAddToLibrary={handleMagnetAddToLibrary}
+                onMagnetUpdate={handleMagnetUpdate}
                 onMagnetActivate={handleMagnetActivate}
                 onMagnetDeactivate={handleMagnetDeactivate}
                 onMagnetDeleteFromLibrary={handleMagnetDeleteFromLibrary}

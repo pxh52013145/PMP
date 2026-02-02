@@ -16,7 +16,7 @@ export const NAVIGATOR_MAGNET: Magnet = {
   style: {
     backgroundColor: 'rgba(0, 0, 0, 0)', // 透明，让组件自己处理背景
     border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '12px',
+    borderRadius: '2.7px',
     overflow: 'hidden',
     boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
   },

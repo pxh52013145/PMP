@@ -540,6 +540,13 @@
   box-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
 }
 
+.magnet-action-btn.chrome:hover:not(.disabled):not(:disabled) {
+  background: rgba(175, 82, 222, 0.2);
+  border-color: rgba(175, 82, 222, 0.5);
+  color: rgba(175, 82, 222, 0.95);
+  box-shadow: 0 0 8px rgba(175, 82, 222, 0.3);
+}
+
 .magnet-action-btn.add:hover:not(.disabled):not(:disabled) {
   background: rgba(52, 199, 89, 0.2);
   border-color: rgba(52, 199, 89, 0.5);

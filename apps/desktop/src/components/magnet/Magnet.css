@@ -1,3 +1,17 @@
+/* Magnet layout shell (position/size + hit-testing). */
+.magnet-shell {
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 1; /* Default layer (hover elevates). */
+  overflow: visible; /* Allow glow overflow. */
+}
+
+/* 悬停时提升层级，避免被其他magnet遮挡 */
+.magnet-shell:hover {
+  z-index: 10;
+}
+
 /* Magnet 基础样式 */
 .magnet {
   display: flex;
@@ -9,18 +23,16 @@
   position: relative; /* 确保z-index生效 */
   z-index: 1; /* 默认层级 */
   overflow: visible; /* 允许发光效果溢出 */
+  border-radius: 2.7px;
   /* 注意：过渡动画和 hover/active 效果现在由 Magnet 的 animation 配置控制 */
 }
 
 /* Avoid default browser focus rings inside magnets (can cause white outlines / jank in WebView2). */
+.magnet-shell button:focus,
+.magnet-shell button:focus-visible,
 .magnet button:focus,
 .magnet button:focus-visible {
   outline: none;
-}
-
-/* 悬停时提升层级，避免被其他magnet遮挡 */
-.magnet:hover {
-  z-index: 10;
 }
 
 .magnet-text {
@@ -36,7 +48,7 @@
 
 /* 窗口控制按钮基础样式（动画已迁移到 JSON 配置） */
 .magnet-window-control {
-  border-radius: 4px;
+  border-radius: 2.7px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   cursor: pointer;
@@ -45,7 +57,7 @@
 
 /* 拖动手柄基础样式（动画已迁移到 JSON 配置） */
 .magnet-drag-handle {
-  border-radius: 4px;
+  border-radius: 2.7px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -63,7 +75,7 @@
 
 /* 搜索栏基础样式 */
 .magnet-search-bar {
-  border-radius: 18px;
+  border-radius: 2.7px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }

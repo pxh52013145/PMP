@@ -138,6 +138,28 @@ export function clearPmpmAuditLog(pluginId?: string): void {
   notifyAuditListeners();
 }
 
+export function recordPmpmPermissionDenied(options: {
+  pluginId: string;
+  hostLabel: string;
+  capability: string;
+  action: string;
+}): void {
+  console.warn(
+    `[pmpm][permission] denied plugin=${options.pluginId} host=${options.hostLabel} capability=${options.capability} action=${options.action}`
+  );
+  try {
+    recordPmpmAuditEvent({
+      type: 'permission-denied',
+      pluginId: options.pluginId,
+      hostLabel: options.hostLabel,
+      capability: options.capability,
+      action: options.action,
+    });
+  } catch {
+    // ignore
+  }
+}
+
 export function recordPmpmAuditEvent(event: PmpmAuditEventInput & { at?: number }): void {
   const now = typeof event.at === 'number' ? event.at : Date.now();
   const nextEvent = { ...event, at: now } as PmpmAuditEvent;

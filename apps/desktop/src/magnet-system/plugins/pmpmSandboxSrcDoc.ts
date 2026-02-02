@@ -34,15 +34,20 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       let permissions = new Set();
       let pluginId = '';
       let hostLabel = '';
+      let hostInfo = null;
       let audioState = null;
       let audioSpectrum = null;
       let configValue = {};
+      let navigationSnapshot = null;
 
       const audioStateListeners = new Set();
       const audioTimeListeners = new Set();
       const audioEndedListeners = new Set();
+      const audioLoadProgressListeners = new Set();
+      const audioErrorListeners = new Set();
       const configListeners = new Set();
       const spectrumListeners = new Set();
+      const navigationListeners = new Set();
 
       const post = (msg) => parent.postMessage({ frameId: FRAME_ID, ...msg }, '*');
       const warnDenied = (capability, action) => {
@@ -166,6 +171,29 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       };
 
       const api = {
+        host: {
+          getInfo: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.getInfo()');
+              return null;
+            }
+            return hostInfo;
+          },
+          listPermissions: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.listPermissions()');
+              return [];
+            }
+            return Array.from(permissions);
+          },
+          hasPermission: (capability) => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.hasPermission(capability)');
+              return false;
+            }
+            return hasPermission(String(capability || ''));
+          },
+        },
         audio: {
           getState: () => {
             if (!permissions.has('api:audio-state')) {
@@ -201,12 +229,46 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
             audioEndedListeners.add(cb);
             return () => audioEndedListeners.delete(cb);
           },
+          onLoadProgress: (cb) => {
+            if (!permissions.has('api:audio-state')) {
+              warnDenied('api:audio-state', 'audio.onLoadProgress(cb)');
+              return () => {};
+            }
+            if (typeof cb !== 'function') return () => {};
+            audioLoadProgressListeners.add(cb);
+            return () => audioLoadProgressListeners.delete(cb);
+          },
+          onError: (cb) => {
+            if (!permissions.has('api:audio-state')) {
+              warnDenied('api:audio-state', 'audio.onError(cb)');
+              return () => {};
+            }
+            if (typeof cb !== 'function') return () => {};
+            audioErrorListeners.add(cb);
+            return () => audioErrorListeners.delete(cb);
+          },
           play: () => rpcCall('audio.play'),
           pause: () => rpcCall('audio.pause'),
            stop: () => void rpcCall('audio.stop'),
            seek: (time) => void rpcCall('audio.seek', [time]),
            setVolume: (volume) => void rpcCall('audio.setVolume', [volume]),
            toggleMute: () => void rpcCall('audio.toggleMute'),
+           playNext: () => rpcCall('audio.playNext'),
+           playPrevious: () => rpcCall('audio.playPrevious'),
+           playTrackAtIndex: (index) => rpcCall('audio.playTrackAtIndex', [index]),
+           getPlayMode: () => {
+             if (!permissions.has('api:audio-state')) {
+              warnDenied('api:audio-state', 'audio.getPlayMode()');
+              return null;
+            }
+            try {
+              const mode = audioState && typeof audioState === 'object' ? audioState.playMode : null;
+              return typeof mode === 'string' ? mode : null;
+            } catch {
+              return null;
+            }
+          },
+           setPlayMode: (mode) => void rpcCall('audio.setPlayMode', [mode]),
            getCover: () => rpcCall('audio.getCover'),
          },
          visualizer: {
@@ -230,6 +292,33 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         navigation: {
           navigateTo: (page, params) => void rpcCall('navigation.navigateTo', [page, params]),
           goBack: () => void rpcCall('navigation.goBack'),
+          getSnapshot: () => {
+            if (!permissions.has('api:navigation')) {
+              warnDenied('api:navigation', 'navigation.getSnapshot()');
+              return null;
+            }
+            return navigationSnapshot;
+          },
+          onChange: (cb) => {
+            if (!permissions.has('api:navigation')) {
+              warnDenied('api:navigation', 'navigation.onChange(cb)');
+              return () => {};
+            }
+            if (typeof cb !== 'function') return () => {};
+            navigationListeners.add(cb);
+            return () => navigationListeners.delete(cb);
+          },
+          canGoBack: () => {
+            if (!permissions.has('api:navigation')) {
+              warnDenied('api:navigation', 'navigation.canGoBack()');
+              return false;
+            }
+            try {
+              return Boolean(navigationSnapshot && typeof navigationSnapshot.currentIndex === 'number' && navigationSnapshot.currentIndex > 0);
+            } catch {
+              return false;
+            }
+          },
         },
         config: {
           get: () => {
@@ -349,6 +438,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         if (data.type === 'pmpm:init') {
           pluginId = String(data.pluginId || '');
           hostLabel = String(data.hostLabel || '');
+          hostInfo = data.hostInfo && typeof data.hostInfo === 'object' ? data.hostInfo : null;
           mountedKind = String(data.surface || '');
           mountedId = data.surfaceId == null ? null : String(data.surfaceId);
           mountContext = data.mountContext ?? null;
@@ -357,6 +447,7 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
           audioState = data.initialAudioState ?? null;
           audioSpectrum = data.initialAudioSpectrum ?? null;
           configValue = data.initialConfig && typeof data.initialConfig === 'object' ? data.initialConfig : {};
+          navigationSnapshot = data.initialNavigation && typeof data.initialNavigation === 'object' ? data.initialNavigation : null;
 
           try {
             const entryCode = String(data.entryCode || '');
@@ -417,6 +508,20 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
             }
             return;
           }
+          if (data.name === 'audio.loadProgress') {
+            const progress = typeof data.payload === 'number' ? data.payload : 0;
+            for (const cb of Array.from(audioLoadProgressListeners)) {
+              try { cb(progress); } catch {}
+            }
+            return;
+          }
+          if (data.name === 'audio.error') {
+            const message = typeof data.payload === 'string' ? data.payload : String(data.payload || '');
+            for (const cb of Array.from(audioErrorListeners)) {
+              try { cb(message); } catch {}
+            }
+            return;
+          }
           if (data.name === 'audio.time') {
             const time = typeof data.payload === 'number' ? data.payload : 0;
             for (const cb of Array.from(audioTimeListeners)) {
@@ -441,6 +546,13 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
             audioSpectrum = data.payload ?? null;
             for (const cb of Array.from(spectrumListeners)) {
               try { cb(audioSpectrum); } catch {}
+            }
+            return;
+          }
+          if (data.name === 'navigation.changed') {
+            navigationSnapshot = data.payload && typeof data.payload === 'object' ? data.payload : null;
+            for (const cb of Array.from(navigationListeners)) {
+              try { cb(navigationSnapshot); } catch {}
             }
             return;
           }
