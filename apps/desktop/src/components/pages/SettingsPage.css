@@ -139,6 +139,14 @@
   backdrop-filter: blur(10px);
 }
 
+.settings-tabs-row--sections .settings-tab {
+  flex: 1 0 200px;
+}
+
+.settings-tabs-row--panels .settings-tab {
+  flex: 1 0 170px;
+}
+
 .settings-tab:hover {
   border-color: rgba(255, 255, 255, 0.12);
   background: rgba(26, 36, 48, 0.72);
