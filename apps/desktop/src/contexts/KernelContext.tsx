@@ -14,6 +14,7 @@ import { createBuiltinWorkbenchesModule } from '../builtin-modules/builtinWorkbe
 import { createPmpmContributionsModule } from '../magnet-system/plugins/pmpmContributionsModule';
 import { createPmpmMagnetRenderersModule } from '../magnet-system/plugins/pmpmMagnetRenderersModule';
 import { createKeybindingsModule } from '../services/keybindings';
+import { createMemoryGovernanceModule } from '../services/governance';
 
 type DesktopKernel = Kernel<AppEvents>;
 
@@ -53,6 +54,7 @@ function createRuntime(): KernelRuntime {
   ];
 
   if (!isAuxWindow) {
+    modules.push(createMemoryGovernanceModule());
     modules.push(createBuiltinWorkbenchesModule());
     modules.push(createBuiltinContributionsModule());
   }

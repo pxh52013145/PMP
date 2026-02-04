@@ -742,3 +742,30 @@ pub fn debug_get_editor_windows_state(app: &AppHandle) -> EditorWindowsDebugStat
         cached_hidden,
     }
 }
+
+/// Best-effort memory reclamation: destroy hidden editor windows to release WebView resources.
+///
+/// Safety: only destroys windows that are currently not visible.
+pub fn governance_destroy_hidden_editor_windows(app: &AppHandle) -> usize {
+    // Clear cached hidden window label to avoid stale handles after destruction.
+    if let Ok(mut cache) = HIDDEN_WINDOW_LRU.lock() {
+        cache.cached_hidden = None;
+    }
+
+    let mut destroyed = 0usize;
+    for window_type in ALL_EDITOR_WINDOWS {
+        let Some(window) = app.get_window(label(*window_type)) else {
+            continue;
+        };
+
+        let is_visible = window.is_visible().ok().unwrap_or(false);
+        if is_visible {
+            continue;
+        }
+
+        destroy_window(app, *window_type);
+        destroyed += 1;
+    }
+
+    destroyed
+}

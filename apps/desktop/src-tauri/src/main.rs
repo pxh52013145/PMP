@@ -77,6 +77,11 @@ fn debug_get_editor_windows_state(app: tauri::AppHandle) -> windows::editor::Edi
     windows::editor::debug_get_editor_windows_state(&app)
 }
 
+#[tauri::command]
+fn governance_destroy_hidden_editor_windows(app: tauri::AppHandle) -> usize {
+    windows::editor::governance_destroy_hidden_editor_windows(&app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::greet;
@@ -1007,6 +1012,7 @@ fn main() {
             debug_set_config,
             debug_get_env_snapshot,
             debug_get_editor_windows_state,
+            governance_destroy_hidden_editor_windows,
             background_import_media,
             ornament_import_media,
             open_editor_window,

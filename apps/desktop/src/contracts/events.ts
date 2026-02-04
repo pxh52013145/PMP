@@ -1,6 +1,7 @@
 import type { NavigationPageData } from './navigation';
 import type { AudioState } from '../services/audio';
 import type { KeybindingsSnapshot } from '../services/keybindings/types';
+import type { MemoryGovernanceRunResult } from './memoryGovernance';
 
 export type AppEvents = {
   'navigation/changed': {
@@ -8,6 +9,7 @@ export type AppEvents = {
     history: NavigationPageData[];
     currentIndex: number;
   };
+  'memory-governance/ran': MemoryGovernanceRunResult;
   'keybindings/changed': KeybindingsSnapshot;
   'ui/commandPaletteToggleRequested': null;
   'ui/commandPaletteCloseRequested': null;

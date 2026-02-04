@@ -8,6 +8,7 @@ import {
   type BackgroundRenderPolicy,
   parseBackgroundRenderPolicy,
 } from '../../contracts/performance';
+import { DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED } from '../../contracts/memoryGovernance';
 import { useT } from '../../i18n';
 
 export function PerformanceSettingsPanel() {
@@ -32,6 +33,10 @@ export function PerformanceSettingsPanel() {
   const backgroundRenderPolicy = parseBackgroundRenderPolicy(
     backgroundRenderPolicyRaw,
     DEFAULT_BACKGROUND_RENDER_POLICY
+  );
+  const [autoGovernanceEnabled, setAutoGovernanceEnabled] = usePersistentSetting<boolean>(
+    STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
+    DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED
   );
 
   React.useEffect(() => {
@@ -175,6 +180,29 @@ export function PerformanceSettingsPanel() {
         </div>
 
         <p className="settings-card-note">{t('settings.performance.backgroundRenderPolicy.note')}</p>
+      </div>
+
+      <div className="settings-card" style={{ marginTop: 16 }}>
+        <div className="settings-card-header">
+          <div>
+            <p className="settings-card-label">{t('settings.performance.memoryGovernanceAuto.label')}</p>
+            <p className="settings-card-desc">{t('settings.performance.memoryGovernanceAuto.desc')}</p>
+          </div>
+          <span className="settings-card-badge">
+            {autoGovernanceEnabled ? t('common.state.on') : t('common.state.off')}
+          </span>
+        </div>
+
+        <div className="settings-toggle">
+          <button type="button" data-active={!autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(false)}>
+            {t('common.state.off')}
+          </button>
+          <button type="button" data-active={autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(true)}>
+            {t('common.state.on')}
+          </button>
+        </div>
+
+        <p className="settings-card-note">{t('settings.performance.memoryGovernanceAuto.note')}</p>
       </div>
     </>
   );

@@ -281,7 +281,10 @@
   "settings.performance.backgroundRenderPolicy.option.throttle": "降帧（{fps}fps）",
   "settings.performance.backgroundRenderPolicy.option.pause": "暂停",
   "settings.performance.backgroundRenderPolicy.note": "建议：Pause 可显著降低后台 CPU/GPU；Throttle 保持少量动态效果。",
-  "debug.center.memory.navigation.label": "导航历史",
+    "settings.performance.memoryGovernanceAuto.label": "??????????",
+  "settings.performance.memoryGovernanceAuto.desc": "?????????????????????????????",
+  "settings.performance.memoryGovernanceAuto.note": "????????????????? Editor ?????????",
+"debug.center.memory.navigation.label": "导航历史",
   "debug.center.memory.navigation.desc": "用于观测 navigation history 是否出现异常膨胀。",
   "debug.center.memory.navigation.history.value": "history：{count} 条，约 {kb}KB",
 
