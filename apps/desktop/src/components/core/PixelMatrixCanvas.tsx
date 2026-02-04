@@ -3,6 +3,7 @@ import { PixelMatrixRenderer } from '../../pixelEngine/PixelMatrixRenderer';
 import './PixelMatrixCanvas.css';
 import { STORAGE_KEYS, TAURI_EVENTS, setupTauriListener } from '../../utils/windowCommunication';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
+import { useQuality } from '../../contexts/QualityContext';
 import { readString } from '../../modules/storage';
 
 interface PixelMatrixCanvasProps {
@@ -14,15 +15,26 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   const rendererRef = useRef<PixelMatrixRenderer | null>(null);
   const onPixelPositionsUpdateRef = useRef(onPixelPositionsUpdate);
   const { isActive, renderMode } = useWindowActivity();
+  const { effective } = useQuality();
+  const qualityRef = useRef(effective);
 
   useEffect(() => {
     onPixelPositionsUpdateRef.current = onPixelPositionsUpdate;
   }, [onPixelPositionsUpdate]);
 
   useEffect(() => {
+    qualityRef.current = effective;
+  }, [effective]);
+
+  useEffect(() => {
     if (!containerRef.current) return;
 
-    const renderer = new PixelMatrixRenderer(window.innerWidth, window.innerHeight);
+    const quality = qualityRef.current;
+    const renderer = new PixelMatrixRenderer(window.innerWidth, window.innerHeight, {
+      renderScale: quality.renderScale,
+      fpsCapFull: quality.fpsForeground,
+      fpsCapThrottle: quality.fpsBackground,
+    });
     containerRef.current.appendChild(renderer.getView());
     rendererRef.current = renderer;
 
@@ -107,6 +119,14 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   useEffect(() => {
     rendererRef.current?.setRenderMode(renderMode);
   }, [renderMode]);
+
+  useEffect(() => {
+    rendererRef.current?.setQuality({
+      renderScale: effective.renderScale,
+      fpsCapFull: effective.fpsForeground,
+      fpsCapThrottle: effective.fpsBackground,
+    });
+  }, [effective.fpsBackground, effective.fpsForeground, effective.renderScale]);
 
   return (
     <div

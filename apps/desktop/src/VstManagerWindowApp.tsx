@@ -7,6 +7,7 @@ import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { readJson } from './modules/storage';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
+import { QualityProvider } from './contexts/QualityContext';
 import { STORAGE_KEYS, TAURI_EVENTS, setupDualListener, setupTauriListener } from './utils/windowCommunication';
 import { DEFAULT_BACKGROUND_RENDER_POLICY, type BackgroundRenderPolicy, parseBackgroundRenderPolicy } from './contracts/performance';
 import './VstManagerWindowApp.css';
@@ -241,9 +242,11 @@ export function VstManagerWindowApp() {
     <ThemeProvider>
       <AudioEngineProvider>
         <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}>
-          <div className="vst-manager-window-root">
-            <VstManagerWindow />
-          </div>
+          <QualityProvider>
+            <div className="vst-manager-window-root">
+              <VstManagerWindow />
+            </div>
+          </QualityProvider>
         </WindowActivityProvider>
       </AudioEngineProvider>
     </ThemeProvider>

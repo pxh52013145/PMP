@@ -3,6 +3,7 @@ import { useT } from './i18n';
 import { EditorProvider } from './contexts/EditorContext';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
+import { QualityProvider } from './contexts/QualityContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
@@ -1443,6 +1444,7 @@ export function EditorWindowApp() {
         <NavigationProvider>
           <EditorProvider magnets={activeMagnets}>
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}>
+              <QualityProvider>
                 <div
                 className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
                 ref={rootRef}
@@ -1544,6 +1546,7 @@ export function EditorWindowApp() {
 
                 {windowType === 'debug' && <ThemeDebugPage />}
               </div>
+              </QualityProvider>
             </WindowActivityProvider>
           </EditorProvider>
         </NavigationProvider>

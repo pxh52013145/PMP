@@ -6,6 +6,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
+import { useQuality } from '../../contexts/QualityContext';
 import './AudioVisualizer.css';
 
 interface AudioVisualizerProps {
@@ -20,6 +21,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
   const { renderMode } = useWindowActivity();
+  const { effective: quality } = useQuality();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -29,7 +31,11 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     if (!ctx) return;
 
     let lastFrameAt = 0;
-    const targetFps = renderMode === 'throttle' ? BACKGROUND_RENDER_THROTTLE_FPS : undefined;
+    const baseFps = Math.max(1, Math.min(240, quality.fpsEffects));
+    const targetFps =
+      renderMode === 'throttle'
+        ? Math.min(baseFps, quality.fpsBackground, BACKGROUND_RENDER_THROTTLE_FPS)
+        : Math.min(baseFps, quality.fpsForeground > 0 ? quality.fpsForeground : baseFps);
 
     const draw = (now: number) => {
       if (renderMode === 'pause') {
@@ -67,7 +73,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       ctx.fillRect(0, 0, width, height);
 
       // 计算条形数量和宽度
-      const barCount = 32; // 像素风格：较少的条形
+      const barCount = Math.max(8, Math.min(64, quality.visualizerBars));
       const dataPointsPerBar = Math.floor(frequencyData.length / barCount);
       const barWidth = Math.floor(width / barCount);
       const gap = 2; // 条形之间的间隙
@@ -113,7 +119,15 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [getFrequencyData, isPlaying, renderMode]);
+  }, [
+    getFrequencyData,
+    isPlaying,
+    quality.fpsBackground,
+    quality.fpsEffects,
+    quality.fpsForeground,
+    quality.visualizerBars,
+    renderMode,
+  ]);
 
   return (
     <div className="audio-visualizer">

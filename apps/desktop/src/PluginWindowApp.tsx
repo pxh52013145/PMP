@@ -8,6 +8,7 @@ import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { readJson } from './modules/storage';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
+import { QualityProvider } from './contexts/QualityContext';
 import { STORAGE_KEYS, TAURI_EVENTS, setupDualListener, setupTauriListenerWithPayload } from './utils/windowCommunication';
 import { DEFAULT_BACKGROUND_RENDER_POLICY, type BackgroundRenderPolicy, parseBackgroundRenderPolicy } from './contracts/performance';
 import './PluginWindowApp.css';
@@ -253,9 +254,11 @@ export function PluginWindowApp() {
       <AudioEngineProvider>
         <NavigationProvider>
           <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}>
-            <div className="plugin-window-root">
-              <PluginWindowHost pluginId={parsed.pluginId} windowId={parsed.windowId} />
-            </div>
+            <QualityProvider>
+              <div className="plugin-window-root">
+                <PluginWindowHost pluginId={parsed.pluginId} windowId={parsed.windowId} />
+              </div>
+            </QualityProvider>
           </WindowActivityProvider>
         </NavigationProvider>
       </AudioEngineProvider>

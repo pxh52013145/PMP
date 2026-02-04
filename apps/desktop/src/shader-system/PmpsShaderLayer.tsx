@@ -4,6 +4,7 @@ import { resolvePmpsEntryPoint } from './webgl2ShaderSource';
 import { Webgl2ShaderRuntime, type DetectedUniform, type ShaderRuntimeError } from './webgl2Runtime';
 import { useWindowActivity } from '../contexts/WindowActivityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../contracts/performance';
+import { useQuality } from '../contexts/QualityContext';
 
 export type PmpsShaderLayerProps = {
   shaderId: string;
@@ -40,6 +41,10 @@ export function PmpsShaderLayer({
   const runtimeRef = useRef<Webgl2ShaderRuntime | null>(null);
   const [hasError, setHasError] = useState(false);
   const { isVisible, renderMode } = useWindowActivity();
+  const { effective: quality } = useQuality();
+
+  const effectiveResolutionScale = resolutionScale ?? quality.shaderResolutionScale;
+  const baseFpsLimit = fpsLimit ?? quality.shaderFpsLimit;
 
   const resolvedEntryPoint = useMemo(
     () => resolvePmpsEntryPoint(fragmentCode, entryPoint),
@@ -71,11 +76,11 @@ export function PmpsShaderLayer({
         fragmentCode,
         entryPoint: resolvedEntryPoint,
         shaderId,
-        fpsLimit,
-        resolutionScale,
+        fpsLimit: baseFpsLimit,
+        resolutionScale: effectiveResolutionScale,
         onError: runtimeErrorHandler,
       });
-      runtime.resize(width, height, { resolutionScale });
+      runtime.resize(width, height, { resolutionScale: effectiveResolutionScale });
       onDetectedUniforms?.(runtime.getDetectedUniforms());
       runtimeRef.current = runtime;
     } catch (error) {
@@ -93,19 +98,19 @@ export function PmpsShaderLayer({
     };
   }, [
     fragmentCode,
-    fpsLimit,
+    baseFpsLimit,
     height,
     onDetectedUniforms,
     onError,
     resolvedEntryPoint,
-    resolutionScale,
+    effectiveResolutionScale,
     shaderId,
     width,
   ]);
 
   useEffect(() => {
-    runtimeRef.current?.resize(width, height, { resolutionScale });
-  }, [height, resolutionScale, width]);
+    runtimeRef.current?.resize(width, height, { resolutionScale: effectiveResolutionScale });
+  }, [height, effectiveResolutionScale, width]);
 
   useEffect(() => {
     const shouldRun = isVisible && renderMode !== 'pause' && !hasError && width > 0 && height > 0;
@@ -114,7 +119,7 @@ export function PmpsShaderLayer({
 
   useEffect(() => {
     const base =
-      typeof fpsLimit === 'number' && Number.isFinite(fpsLimit) && fpsLimit > 0 ? fpsLimit : undefined;
+      typeof baseFpsLimit === 'number' && Number.isFinite(baseFpsLimit) && baseFpsLimit > 0 ? baseFpsLimit : undefined;
     const effective =
       renderMode === 'throttle'
         ? base === undefined
@@ -122,7 +127,7 @@ export function PmpsShaderLayer({
           : Math.min(base, BACKGROUND_RENDER_THROTTLE_FPS)
         : base;
     runtimeRef.current?.setFpsLimit(effective);
-  }, [fpsLimit, renderMode]);
+  }, [baseFpsLimit, renderMode]);
 
   useEffect(() => {
     runtimeRef.current?.setFrequencyDataProvider(getFrequencyData);

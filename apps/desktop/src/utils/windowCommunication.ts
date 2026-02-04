@@ -212,6 +212,9 @@ export const STORAGE_KEYS = {
   // === Render Performance ===
   BACKGROUND_RENDER_POLICY: 'pixel-matrix-background-render-policy', // 'full' | 'throttle' | 'pause'
 
+  // === UI Quality ===
+  UI_QUALITY_SETTINGS_V1: 'pixel-matrix-ui-quality-settings-v1', // QualitySettingsV1
+
   // === Music Library Performance ===
   MUSIC_LIBRARY_COVER_MAX_EDGE_PX: 'pixel-matrix-music-library-cover-max-edge-px', // 0 => original image
 
@@ -248,6 +251,7 @@ export const TAURI_EVENTS = {
   PIXEL_SIZE_UPDATED: 'pixel-size-updated',
   PIXEL_OPACITY_UPDATED: 'pixel-opacity-updated',
   BACKGROUND_RENDER_POLICY_UPDATED: 'background-render-policy-updated',
+  UI_QUALITY_SETTINGS_UPDATED: 'ui-quality-settings-updated',
 
   // 窗口效果相关
   BACKGROUND_EFFECT_UPDATED: 'background-effect-updated',

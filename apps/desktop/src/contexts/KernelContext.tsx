@@ -15,6 +15,7 @@ import { createPmpmContributionsModule } from '../magnet-system/plugins/pmpmCont
 import { createPmpmMagnetRenderersModule } from '../magnet-system/plugins/pmpmMagnetRenderersModule';
 import { createKeybindingsModule } from '../services/keybindings';
 import { createMemoryGovernanceModule } from '../services/governance';
+import { createQualityModule } from '../services/quality';
 
 type DesktopKernel = Kernel<AppEvents>;
 
@@ -39,6 +40,7 @@ function createRuntime(): KernelRuntime {
 
   const modules = [
     createLifecycleModule(),
+    createQualityModule(),
     createNavigationModule(),
     createAudioModule({
       mode: isEditorWindow ? 'noop' : 'real',

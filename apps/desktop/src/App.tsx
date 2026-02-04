@@ -4,6 +4,7 @@ import { STORAGE_KEYS, TAURI_EVENTS, setupDualListener, setupTauriListener } fro
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
+import { QualityProvider } from './contexts/QualityContext';
 import { CommandPalette } from './components/commands/CommandPalette';
 import { WorkbenchHost } from './components/workbench/WorkbenchHost';
 import { EditorProvider } from './contexts/EditorContext';
@@ -335,11 +336,13 @@ function AppContent() {
 
   return (
     <WindowActivityProvider value={{ isVisible: isMainWindowVisible, isActive: isWindowActive, renderMode }}>
-      <div className="app-container">
-        <WorkbenchHost />
-      </div>
+      <QualityProvider>
+        <div className="app-container">
+          <WorkbenchHost />
+        </div>
 
-      <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
+        <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
+      </QualityProvider>
     </WindowActivityProvider>
   );
 }

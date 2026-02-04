@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
+import { useQuality } from '../../contexts/QualityContext';
 
 interface MatrixRainEffectProps {
   color: [number, number, number];
@@ -16,10 +17,13 @@ type MatrixRainAnimator = {
 export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRainEffectProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { renderMode } = useWindowActivity();
+  const { effective: quality } = useQuality();
   const colorRef = useRef(color);
   const isRainbowRef = useRef(isRainbow);
   const renderModeRef = useRef(renderMode);
+  const qualityRef = useRef(quality);
   const animatorRef = useRef<MatrixRainAnimator | null>(null);
+  const reconfigureRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     colorRef.current = color;
@@ -45,6 +49,12 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
   }, [renderMode]);
 
   useEffect(() => {
+    qualityRef.current = quality;
+    reconfigureRef.current?.();
+    animatorRef.current?.resetTime();
+  }, [quality]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -52,13 +62,32 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     if (!ctx) return;
 
     // 设置canvas尺寸
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    let cssWidth = window.innerWidth;
+    let cssHeight = window.innerHeight;
+
+    const applyCanvasSize = () => {
+      const q = qualityRef.current;
+      const dpr = window.devicePixelRatio || 1;
+      const resolutionScale = dpr * Math.max(0.25, Math.min(1.0, q.renderScale));
+
+      cssWidth = window.innerWidth;
+      cssHeight = window.innerHeight;
+
+      canvas.width = Math.max(1, Math.floor(cssWidth * resolutionScale));
+      canvas.height = Math.max(1, Math.floor(cssHeight * resolutionScale));
+      try {
+        ctx.setTransform(resolutionScale, 0, 0, resolutionScale, 0, 0);
+      } catch {
+        // ignore
+      }
+    };
+
+    applyCanvasSize();
 
     // 字符集 - 半角片假名（完全按照黑客帝国）
     const chars = 'ｦｱｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ';
-    const fontSize = 14; // 稍微缩小字体
-    const columns = Math.floor(canvas.width / fontSize);
+    let fontSize = 14; // 稍微缩小字体
+    let columns = Math.floor(cssWidth / fontSize);
 
     // 每列的信息
     interface Drop {
@@ -83,6 +112,36 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     // 不初始化黑色背景，保持透明
 
     let lastTime = 0;
+
+    const reconfigure = () => {
+      const q = qualityRef.current;
+      applyCanvasSize();
+
+      const density = Math.max(0.2, Math.min(1.0, q.matrixRainDensity));
+      const baseFontSize = 14;
+      fontSize = Math.max(10, Math.round(baseFontSize * (1 + (1 - density) * 0.8)));
+      columns = Math.max(1, Math.floor(cssWidth / fontSize));
+
+      if (columns > drops.length) {
+        for (let i = drops.length; i < columns; i++) {
+          drops[i] = {
+            y: -Math.random() * 100,
+            speed: 0.25 + Math.random() * 0.35,
+            length: 12 + Math.floor(Math.random() * 15),
+            brightLength: 4 + Math.floor(Math.random() * 9),
+            transitionLength: 2 + Math.floor(Math.random() * 6),
+          };
+        }
+      } else {
+        drops.length = columns;
+      }
+
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      lastTime = 0;
+    };
+
+    reconfigure();
+    reconfigureRef.current = reconfigure;
 
     // 彩虹主题：色相旋转
     let rainbowHue = 0;
@@ -147,7 +206,12 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     const draw = (currentTime: number) => {
       const deltaTime = currentTime - lastTime;
       const mode = renderModeRef.current;
-      const fps = mode === 'throttle' ? BACKGROUND_RENDER_THROTTLE_FPS : 30;
+      const q = qualityRef.current;
+      const baseFps = Math.max(1, Math.min(240, q.fpsEffects));
+      const fps =
+        mode === 'throttle'
+          ? Math.min(baseFps, q.fpsBackground, BACKGROUND_RENDER_THROTTLE_FPS)
+          : Math.min(baseFps, q.fpsForeground > 0 ? q.fpsForeground : baseFps);
       const fpsInterval = 1000 / fps;
 
       // 帧率控制
@@ -158,9 +222,9 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
       lastTime = currentTime - (deltaTime % fpsInterval);
 
       // 使用透明清除产生拖尾效果
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
       ctx.fillStyle = 'rgba(0, 0, 0, 0.06)'; // 降低拖尾透明度，产生更长的尾巴
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
 
       ctx.font = `bold ${fontSize}px Consolas, monospace`;
 
@@ -181,7 +245,7 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
           const x = i * fontSize;
           const y = (drop.y - j) * fontSize;
 
-          if (y > -fontSize && y < canvas.height + fontSize) {
+          if (y > -fontSize && y < cssHeight + fontSize) {
             // 计算渐变效果
             const progress = j / drop.length;
 
@@ -242,7 +306,7 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
         drop.y += drop.speed;
 
         // 重置条件
-        if (drop.y > canvas.height / fontSize + drop.length) {
+        if (drop.y > cssHeight / fontSize + drop.length) {
           drop.y = -drop.length - Math.random() * 30;
           drop.speed = 0.25 + Math.random() * 0.35;
           drop.length = 12 + Math.floor(Math.random() * 15);
@@ -287,9 +351,9 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
 
     // 窗口大小变化时重新计算
     const handleResize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      const newColumns = Math.floor(canvas.width / fontSize);
+      reconfigure();
+      applyCanvasSize();
+      const newColumns = Math.floor(cssWidth / fontSize);
 
       // 调整列数
       if (newColumns > drops.length) {
@@ -307,7 +371,7 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
       }
 
       // 清除canvas，保持透明
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
       lastTime = 0; // 重置时间
     };
 

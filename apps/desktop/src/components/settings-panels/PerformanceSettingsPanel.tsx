@@ -9,10 +9,13 @@ import {
   parseBackgroundRenderPolicy,
 } from '../../contracts/performance';
 import { DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED } from '../../contracts/memoryGovernance';
+import { DEFAULT_QUALITY_SETTINGS_V1, parseQualityLevel, parseQualitySettings, QUALITY_LEVELS } from '../../contracts/quality';
 import { useT } from '../../i18n';
+import { useQuality } from '../../contexts/QualityContext';
 
 export function PerformanceSettingsPanel() {
   const t = useT();
+  const qualitySnapshot = useQuality();
   const [lowPerformanceMode, setLowPerformanceMode] = usePersistentSetting<boolean>(
     STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
     false
@@ -38,6 +41,11 @@ export function PerformanceSettingsPanel() {
     STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
     DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED
   );
+  const [uiQualitySettingsRaw] = usePersistentSetting<unknown>(
+    STORAGE_KEYS.UI_QUALITY_SETTINGS_V1,
+    DEFAULT_QUALITY_SETTINGS_V1
+  );
+  const uiQualitySettings = parseQualitySettings(uiQualitySettingsRaw, DEFAULT_QUALITY_SETTINGS_V1);
 
   React.useEffect(() => {
     void applyEditorLowPerformanceMode(lowPerformanceMode);
@@ -50,6 +58,18 @@ export function PerformanceSettingsPanel() {
       TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED
     );
   }, []);
+
+  const updateUiQualitySettings = React.useCallback(
+    (next: typeof uiQualitySettings | ((prev: typeof uiQualitySettings) => typeof uiQualitySettings)) => {
+      const resolved = typeof next === 'function' ? next(uiQualitySettings) : next;
+      void broadcastDataUpdate(
+        STORAGE_KEYS.UI_QUALITY_SETTINGS_V1,
+        resolved,
+        TAURI_EVENTS.UI_QUALITY_SETTINGS_UPDATED
+      );
+    },
+    [uiQualitySettings]
+  );
 
   return (
     <>
@@ -203,6 +223,162 @@ export function PerformanceSettingsPanel() {
         </div>
 
         <p className="settings-card-note">{t('settings.performance.memoryGovernanceAuto.note')}</p>
+      </div>
+
+      <div className="settings-card" style={{ marginTop: 16 }}>
+        <div className="settings-card-header">
+          <div>
+            <p className="settings-card-label">{t('settings.performance.quality.label')}</p>
+            <p className="settings-card-desc">{t('settings.performance.quality.desc')}</p>
+          </div>
+          <span className="settings-card-badge">
+            {uiQualitySettings.mode === 'auto'
+              ? t('settings.performance.quality.badge.auto', {
+                  level: t(`settings.performance.quality.level.${qualitySnapshot.effective.level}`),
+                })
+              : t('settings.performance.quality.badge.fixed', {
+                  level: t(`settings.performance.quality.level.${uiQualitySettings.fixedLevel}`),
+                })}
+          </span>
+        </div>
+
+        <div className="settings-toggle">
+          <button
+            type="button"
+            data-active={uiQualitySettings.mode === 'auto'}
+            onClick={() =>
+              updateUiQualitySettings((prev) => ({
+                ...prev,
+                mode: 'auto',
+              }))
+            }
+          >
+            {t('settings.performance.quality.mode.auto')}
+          </button>
+          <button
+            type="button"
+            data-active={uiQualitySettings.mode === 'fixed'}
+            onClick={() =>
+              updateUiQualitySettings((prev) => ({
+                ...prev,
+                mode: 'fixed',
+              }))
+            }
+          >
+            {t('settings.performance.quality.mode.fixed')}
+          </button>
+        </div>
+
+        {uiQualitySettings.mode === 'fixed' ? (
+          <div className="settings-toggle" style={{ marginTop: 10 }}>
+            {QUALITY_LEVELS.map((level) => (
+              <button
+                key={level}
+                type="button"
+                data-active={uiQualitySettings.fixedLevel === level}
+                onClick={() =>
+                  updateUiQualitySettings((prev) => ({
+                    ...prev,
+                    fixedLevel: parseQualityLevel(level, prev.fixedLevel),
+                  }))
+                }
+              >
+                {t(`settings.performance.quality.level.${level}`)}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div style={{ marginTop: 10 }}>
+            <p className="settings-card-desc" style={{ marginBottom: 8 }}>
+              {t('settings.performance.quality.auto.range')}
+            </p>
+            <div className="settings-toggle">
+              {QUALITY_LEVELS.map((level) => (
+                <button
+                  key={`min-${level}`}
+                  type="button"
+                  data-active={uiQualitySettings.auto.minLevel === level}
+                  onClick={() =>
+                    updateUiQualitySettings((prev) => {
+                      const minLevel = parseQualityLevel(level, prev.auto.minLevel);
+                      const maxLevel = prev.auto.maxLevel;
+                      return {
+                        ...prev,
+                        auto: {
+                          ...prev.auto,
+                          minLevel,
+                          maxLevel: QUALITY_LEVELS.indexOf(maxLevel) < QUALITY_LEVELS.indexOf(minLevel) ? minLevel : maxLevel,
+                        },
+                      };
+                    })
+                  }
+                >
+                  {t(`settings.performance.quality.level.${level}`)}
+                </button>
+              ))}
+            </div>
+            <p className="settings-card-desc" style={{ marginTop: 10, marginBottom: 8 }}>
+              {t('settings.performance.quality.auto.rangeMax')}
+            </p>
+            <div className="settings-toggle">
+              {QUALITY_LEVELS.map((level) => (
+                <button
+                  key={`max-${level}`}
+                  type="button"
+                  data-active={uiQualitySettings.auto.maxLevel === level}
+                  onClick={() =>
+                    updateUiQualitySettings((prev) => {
+                      const maxLevel = parseQualityLevel(level, prev.auto.maxLevel);
+                      const minLevel = prev.auto.minLevel;
+                      return {
+                        ...prev,
+                        auto: {
+                          ...prev.auto,
+                          maxLevel,
+                          minLevel: QUALITY_LEVELS.indexOf(minLevel) > QUALITY_LEVELS.indexOf(maxLevel) ? maxLevel : minLevel,
+                        },
+                      };
+                    })
+                  }
+                >
+                  {t(`settings.performance.quality.level.${level}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="settings-card-note">
+          {t('settings.performance.quality.effective', {
+            scale: qualitySnapshot.effective.renderScale.toFixed(2),
+            fps: qualitySnapshot.effective.fpsForeground,
+            bgFps: qualitySnapshot.effective.fpsBackground,
+            fxFps: qualitySnapshot.effective.fpsEffects,
+          })}
+        </p>
+
+        {qualitySnapshot.lastDecision ? (
+          <p className="settings-card-note" style={{ marginTop: 6 }}>
+            {t('settings.performance.quality.lastDecision', {
+              from: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.from}`),
+              to: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.to}`),
+              detail:
+                qualitySnapshot.lastDecision.reason.kind === 'manual'
+                  ? t('settings.performance.quality.reason.manual')
+                  : qualitySnapshot.lastDecision.reason.kind === 'auto-init'
+                    ? t('settings.performance.quality.reason.autoInit', {
+                        detail: qualitySnapshot.lastDecision.reason.detail ?? '',
+                      })
+                    : qualitySnapshot.lastDecision.reason.kind === 'auto-upgrade'
+                      ? t('settings.performance.quality.reason.autoUpgrade', {
+                          detail: qualitySnapshot.lastDecision.reason.detail,
+                        })
+                      : t('settings.performance.quality.reason.autoDowngrade', {
+                          detail: qualitySnapshot.lastDecision.reason.detail,
+                        }),
+            })}
+          </p>
+        ) : null}
       </div>
     </>
   );

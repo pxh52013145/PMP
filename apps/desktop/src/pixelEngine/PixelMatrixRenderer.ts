@@ -17,20 +17,45 @@ export class PixelMatrixRenderer {
   private pixelOpacity: number = 1.0; // Pixel 透明度 (0.0-1.0)
   private isActive: boolean = true;
   private renderMode: RenderMode = 'full';
+  private width: number;
+  private height: number;
+  private renderScale: number = 1.0;
+  private fpsCapFull: number = 0;
+  private fpsCapThrottle: number = BACKGROUND_RENDER_THROTTLE_FPS;
   private layout: PixelGridLayout;
   private hoveredIndex: number | null = null;
   private hoveredBaseTint: PIXI.ColorSource | null = null;
   private pointerMoveRaf: number | null = null;
   private pendingPointerMove: { x: number; y: number } | null = null;
 
-  constructor(width: number, height: number) {
+  constructor(
+    width: number,
+    height: number,
+    options: { renderScale?: number; fpsCapFull?: number; fpsCapThrottle?: number } = {}
+  ) {
+    this.width = width;
+    this.height = height;
+    if (typeof options.renderScale === 'number' && Number.isFinite(options.renderScale)) {
+      this.renderScale = Math.max(0.25, Math.min(1.0, options.renderScale));
+    }
+    if (typeof options.fpsCapFull === 'number' && Number.isFinite(options.fpsCapFull)) {
+      this.fpsCapFull = Math.max(0, Math.min(240, options.fpsCapFull));
+    }
+    if (
+      typeof options.fpsCapThrottle === 'number' &&
+      Number.isFinite(options.fpsCapThrottle) &&
+      options.fpsCapThrottle > 0
+    ) {
+      this.fpsCapThrottle = Math.max(1, Math.min(240, options.fpsCapThrottle));
+    }
+
     // 初始化 PixiJS 应用
     this.app = new PIXI.Application({
       width,
       height,
       backgroundAlpha: 0, // 完全透明的背景
       antialias: true,
-      resolution: window.devicePixelRatio || 1,
+      resolution: (window.devicePixelRatio || 1) * this.renderScale,
       autoDensity: true,
     });
 
@@ -244,6 +269,8 @@ export class PixelMatrixRenderer {
   public updateLayout(windowWidth: number, windowHeight: number): void {
     const { COLUMNS, ROWS, EDGE_PADDING } = MATRIX_CONFIG;
 
+    this.width = windowWidth;
+    this.height = windowHeight;
     this.layout = computePixelGridLayout(windowWidth, windowHeight);
     const { stepX, stepY } = this.layout;
 
@@ -263,6 +290,55 @@ export class PixelMatrixRenderer {
     // 更新 canvas 尺寸
     this.app.renderer.resize(windowWidth, windowHeight);
     this.app.stage.hitArea = this.app.screen;
+  }
+
+  public setQuality(options: { renderScale?: number; fpsCapFull?: number; fpsCapThrottle?: number }): void {
+    let changed = false;
+
+    if (typeof options.renderScale === 'number' && Number.isFinite(options.renderScale)) {
+      const next = Math.max(0.25, Math.min(1.0, options.renderScale));
+      if (next !== this.renderScale) {
+        this.renderScale = next;
+        changed = true;
+      }
+    }
+
+    if (typeof options.fpsCapFull === 'number' && Number.isFinite(options.fpsCapFull)) {
+      const next = Math.max(0, Math.min(240, options.fpsCapFull));
+      if (next !== this.fpsCapFull) {
+        this.fpsCapFull = next;
+        changed = true;
+      }
+    }
+
+    if (
+      typeof options.fpsCapThrottle === 'number' &&
+      Number.isFinite(options.fpsCapThrottle) &&
+      options.fpsCapThrottle > 0
+    ) {
+      const next = Math.max(1, Math.min(240, options.fpsCapThrottle));
+      if (next !== this.fpsCapThrottle) {
+        this.fpsCapThrottle = next;
+        changed = true;
+      }
+    }
+
+    if (!changed) return;
+
+    try {
+      this.app.renderer.resolution = (window.devicePixelRatio || 1) * this.renderScale;
+      this.app.renderer.resize(this.width, this.height);
+    } catch {
+      // best-effort
+    }
+
+    this.applyFpsCapForCurrentMode();
+
+    try {
+      this.app.render();
+    } catch {
+      // ignore
+    }
   }
 
   /**
@@ -358,6 +434,21 @@ export class PixelMatrixRenderer {
     }
   }
 
+  private applyFpsCapForCurrentMode(): void {
+    try {
+      const ticker = this.app.ticker;
+      if (!ticker) return;
+      if (this.renderMode === 'pause') return;
+      if (this.renderMode === 'throttle') {
+        ticker.maxFPS = this.fpsCapThrottle;
+        return;
+      }
+      ticker.maxFPS = this.fpsCapFull > 0 ? this.fpsCapFull : 0;
+    } catch {
+      // ignore
+    }
+  }
+
   public setRenderMode(mode: RenderMode): void {
     if (this.renderMode === mode) return;
     this.renderMode = mode;
@@ -375,13 +466,7 @@ export class PixelMatrixRenderer {
       return;
     }
 
-    try {
-      if (this.app.ticker) {
-        this.app.ticker.maxFPS = mode === 'throttle' ? BACKGROUND_RENDER_THROTTLE_FPS : 0;
-      }
-    } catch {
-      // ignore
-    }
+    this.applyFpsCapForCurrentMode();
 
     try {
       this.app.start();
