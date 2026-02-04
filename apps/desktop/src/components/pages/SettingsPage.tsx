@@ -12,6 +12,12 @@ function sortPanels(a: SettingsPanelContribution, b: SettingsPanelContribution):
   return a.title.localeCompare(b.title);
 }
 
+function resolveSettingsSectionId(panel: SettingsPanelContribution): 'system' | 'plugins' | 'visualizers' {
+  if (panel.id === 'plugins' || panel.source === 'plugin' || panel.id.startsWith('pmpm:')) return 'plugins';
+  if (panel.id === 'visualizers') return 'visualizers';
+  return 'system';
+}
+
 type SettingsSection = {
   id: string;
   title: string;
@@ -25,6 +31,7 @@ export const SettingsPage: React.FC = () => {
   const t = useT();
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
 
   useEffect(() => {
     return kernel.contributions.subscribe(() => setRevision((v) => v + 1));
@@ -36,18 +43,17 @@ export const SettingsPage: React.FC = () => {
   }, [kernel.contributions, revision]);
 
   const sections = useMemo(() => {
-    const resolveSection = (
-      panel: SettingsPanelContribution
-    ): Omit<SettingsSection, 'panels'> => {
-      if (panel.id === 'plugins' || panel.source === 'plugin' || panel.id.startsWith('pmpm:')) {
-        return { id: 'plugins', title: t('settings.sections.plugins'), order: 20 };
+    const resolveSection = (panel: SettingsPanelContribution): Omit<SettingsSection, 'panels'> => {
+      const id = resolveSettingsSectionId(panel);
+      switch (id) {
+        case 'plugins':
+          return { id, title: t('settings.sections.plugins'), order: 20 };
+        case 'visualizers':
+          return { id, title: t('settings.sections.visualizers'), order: 30 };
+        case 'system':
+        default:
+          return { id: 'system', title: t('settings.sections.system'), order: 10 };
       }
-
-      if (panel.id === 'visualizers') {
-        return { id: 'visualizers', title: t('settings.sections.visualizers'), order: 30 };
-      }
-
-      return { id: 'system', title: t('settings.sections.system'), order: 10 };
     };
 
     const buckets = new Map<string, SettingsSection>();
@@ -76,17 +82,39 @@ export const SettingsPage: React.FC = () => {
   useEffect(() => {
     if (panels.length === 0) {
       if (activePanelId !== null) setActivePanelId(null);
+      if (activeSectionId !== null) setActiveSectionId(null);
       return;
     }
 
-    if (activePanelId && panels.some((panel) => panel.id === activePanelId)) return;
-    setActivePanelId(panels[0].id);
-  }, [activePanelId, panels]);
+    const validSectionId = activeSectionId && sections.some((section) => section.id === activeSectionId);
+    const nextSectionId = validSectionId ? activeSectionId : sections[0]?.id ?? null;
+
+    let nextPanelId = activePanelId && panels.some((panel) => panel.id === activePanelId) ? activePanelId : null;
+    if (!nextPanelId) {
+      const targetSection = nextSectionId ? sections.find((section) => section.id === nextSectionId) : null;
+      nextPanelId = targetSection?.panels[0]?.id ?? panels[0].id;
+    }
+
+    const derivedSectionId =
+      sections.find((section) => section.panels.some((panel) => panel.id === nextPanelId))?.id ?? nextSectionId;
+
+    if (nextPanelId !== activePanelId) setActivePanelId(nextPanelId);
+    if (derivedSectionId && derivedSectionId !== activeSectionId) setActiveSectionId(derivedSectionId);
+  }, [activePanelId, activeSectionId, panels, sections]);
 
   const activePanel = useMemo(() => {
     if (!activePanelId) return null;
     return panels.find((panel) => panel.id === activePanelId) ?? null;
   }, [activePanelId, panels]);
+
+  const activeSection = useMemo(() => {
+    if (!activeSectionId) return null;
+    return sections.find((section) => section.id === activeSectionId) ?? null;
+  }, [activeSectionId, sections]);
+
+  const visiblePanels = useMemo(() => {
+    return activeSection?.panels ?? panels;
+  }, [activeSection, panels]);
 
   return (
     <div className="page-settings">
@@ -110,29 +138,58 @@ export const SettingsPage: React.FC = () => {
         <div className="settings-card-note">{t('pages.settings.empty')}</div>
       ) : (
         <div className="settings-layout">
-          <aside className="settings-sidebar">
-            {sections.map((section) => (
-              <div key={section.id} className="settings-sidebar-section">
-                <div className="settings-sidebar-section-title">{section.title}</div>
-                <div className="settings-sidebar-section-items">
-                  {section.panels.map((panel) => (
-                    <button
-                      key={panel.id}
-                      type="button"
-                      className="settings-sidebar-item"
-                      data-active={panel.id === activePanelId}
-                      onClick={() => setActivePanelId(panel.id)}
-                    >
-                      <span className="settings-sidebar-item-title">{panel.title}</span>
-                      {panel.source === 'plugin' && (
-                        <span className="settings-sidebar-item-tag">{t('common.source.plugin')}</span>
-                      )}
-                    </button>
-                  ))}
+          <div className="settings-tabs-area">
+            {sections.length > 1 && (
+              <div className="settings-tabs-row settings-tabs-row--sections">
+                <div className="settings-tabs-scroll">
+                  {sections.map((section) => {
+                    const isActive = section.id === activeSectionId;
+                    return (
+                      <button
+                        key={section.id}
+                        type="button"
+                        className="settings-tab"
+                        data-active={isActive}
+                        onClick={() => {
+                          setActiveSectionId(section.id);
+                          const panelInSection =
+                            section.panels.find((panel) => panel.id === activePanelId)?.id ??
+                            section.panels[0]?.id ??
+                            null;
+                          if (panelInSection) setActivePanelId(panelInSection);
+                        }}
+                      >
+                        <span className="settings-tab-label">{section.title}</span>
+                        <span className="settings-tab-count">{section.panels.length}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            ))}
-          </aside>
+            )}
+
+            <div className="settings-tabs-row settings-tabs-row--panels">
+              <div className="settings-tabs-scroll">
+                {visiblePanels.map((panel) => (
+                  <button
+                    key={panel.id}
+                    type="button"
+                    className="settings-tab settings-tab--panel"
+                    data-active={panel.id === activePanelId}
+                    onClick={() => {
+                      setActivePanelId(panel.id);
+                      setActiveSectionId(resolveSettingsSectionId(panel));
+                    }}
+                  >
+                    <span className="settings-tab-label">{panel.title}</span>
+                    {panel.source === 'plugin' && (
+                      <span className="settings-tab-tag">{t('common.source.plugin')}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           <main className="settings-content">
             {activePanel ? (
