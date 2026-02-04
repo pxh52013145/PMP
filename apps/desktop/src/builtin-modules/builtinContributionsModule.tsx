@@ -230,7 +230,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
               <AlbumDetailPage
                 albumName={params?.albumName}
                 artist={params?.artist}
-                tracks={params?.tracks}
               />
             );
           },

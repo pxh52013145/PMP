@@ -49,6 +49,52 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
     }
   }, [initialTracks]);
 
+  useEffect(() => {
+    if (initialTracks && initialTracks.length > 0) return;
+    if (!albumName) return;
+
+    let cancelled = false;
+
+    void musicLibraryService
+      .getTracksByAlbum(albumName)
+      .then((result) => {
+        if (cancelled) return;
+        const filtered =
+          artist && artist.trim()
+            ? result.filter((track) => String(track.artist || '').trim() === artist.trim())
+            : result;
+        setTracks(filtered);
+
+        const candidate = filtered[0];
+        if (!candidate) {
+          setAlbumCover(undefined);
+          return;
+        }
+
+        const url = typeof candidate.coverUrl === 'string' ? candidate.coverUrl : undefined;
+        const lower = (url || '').toLowerCase();
+        const isDisplayable =
+          !!url &&
+          (lower.startsWith('data:') ||
+            lower.startsWith('blob:') ||
+            lower.startsWith('http:') ||
+            lower.startsWith('https:'));
+        setAlbumCover(isDisplayable ? url : undefined);
+
+        void musicLibraryService.getCoverUrlForTrack(candidate).then((coverUrl) => {
+          if (cancelled) return;
+          if (coverUrl) setAlbumCover(coverUrl);
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setTracks([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [albumName, artist, initialTracks]);
+
   // 双击播放：添加整个专辑，从选中的歌曲开始播放
   const handlePlayTrack = async (track: Track, index: number) => {
     console.log('🎵 Playing track:', track.title, 'from album');

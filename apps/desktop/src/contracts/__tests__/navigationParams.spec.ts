@@ -14,7 +14,7 @@ describe('parseNavigationParams', () => {
     expect(legacyParsed).toEqual({ trackId: 't1' });
   });
 
-  it('parses album params and filters invalid tracks', () => {
+  it('parses album params', () => {
     expect(parseNavigationParams('album', undefined)).toBeUndefined();
     expect(parseNavigationParams('album', { artist: 'A' })).toBeUndefined();
 
@@ -25,7 +25,7 @@ describe('parseNavigationParams', () => {
     });
     expect(parsed?.albumName).toBe('Album');
     expect(parsed?.artist).toBe('Artist');
-    expect(parsed?.tracks?.map((t) => t.id)).toEqual(['1']);
+    expect(parsed && 'tracks' in parsed).toBe(false);
   });
 
   it('parses plugin page params with safe ids', () => {
