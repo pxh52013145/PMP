@@ -72,6 +72,11 @@ fn debug_get_env_snapshot() -> std::collections::BTreeMap<String, Option<String>
     debug_config::env_snapshot()
 }
 
+#[tauri::command]
+fn debug_get_editor_windows_state(app: tauri::AppHandle) -> windows::editor::EditorWindowsDebugState {
+    windows::editor::debug_get_editor_windows_state(&app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::greet;
@@ -819,9 +824,10 @@ async fn music_library_get_cover(
     app: tauri::AppHandle,
     path: String,
     max_bytes: Option<u64>,
+    max_edge_px: Option<u32>,
 ) -> Result<Option<music_library::CachedCover>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_library::get_or_create_cover(&app, path, max_bytes)
+        music_library::get_or_create_cover(&app, path, max_bytes, max_edge_px)
     })
     .await
     .map_err(|e| format!("Cover task failed: {e}"))?
@@ -1000,6 +1006,7 @@ fn main() {
             debug_get_config,
             debug_set_config,
             debug_get_env_snapshot,
+            debug_get_editor_windows_state,
             background_import_media,
             ornament_import_media,
             open_editor_window,

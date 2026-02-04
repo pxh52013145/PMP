@@ -635,6 +635,77 @@ fn media_type_from_cover_path(path: &Path) -> Option<String> {
     }
 }
 
+fn cover_variant_key(base_key: &str, max_edge_px: u32) -> String {
+    if max_edge_px > 0 {
+        format!("{base_key}-thumb-{max_edge_px}px")
+    } else {
+        base_key.to_string()
+    }
+}
+
+fn create_cover_thumbnail_jpeg(source_bytes: &[u8], max_edge_px: u32) -> Result<Vec<u8>, String> {
+    if max_edge_px == 0 {
+        return Err("max_edge_px must be > 0".to_string());
+    }
+
+    let decoded =
+        image::load_from_memory(source_bytes).map_err(|e| format!("Failed to decode cover: {e}"))?;
+
+    let resized = decoded.resize(
+        max_edge_px,
+        max_edge_px,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85);
+    encoder
+        .encode_image(&resized)
+        .map_err(|e| format!("Failed to encode cover thumbnail: {e}"))?;
+
+    Ok(out)
+}
+
+fn cache_cover_variant(
+    dir: &Path,
+    base_key: String,
+    bytes: Vec<u8>,
+    media_type: String,
+    max_bytes: u64,
+    max_edge_px: u32,
+) -> Result<Option<CachedCover>, String> {
+    let (key, out_bytes, out_media_type, ext) = if max_edge_px > 0 {
+        let thumbnail = create_cover_thumbnail_jpeg(&bytes, max_edge_px)?;
+        if thumbnail.len() > max_bytes as usize {
+            return Ok(None);
+        }
+        (
+            cover_variant_key(&base_key, max_edge_px),
+            thumbnail,
+            "image/jpeg".to_string(),
+            "jpg".to_string(),
+        )
+    } else {
+        if bytes.len() > max_bytes as usize {
+            return Ok(None);
+        }
+        let ext = cover_extension_from_media_type(&media_type).to_string();
+        (base_key, bytes, media_type, ext)
+    };
+
+    let out_path = dir.join(format!("{key}.{ext}"));
+    fs::write(&out_path, &out_bytes).map_err(|e| format!("Failed to write cover: {e}"))?;
+    let bytes_base64 = general_purpose::STANDARD.encode(&out_bytes);
+
+    Ok(Some(CachedCover {
+        key,
+        path: out_path.to_string_lossy().to_string(),
+        size: out_bytes.len() as u64,
+        media_type: Some(out_media_type),
+        bytes_base64: Some(bytes_base64),
+    }))
+}
+
 fn find_sidecar_cover(audio_path: &Path) -> Option<PathBuf> {
     let dir = audio_path.parent()?;
     let candidates = [
@@ -685,6 +756,7 @@ pub fn get_or_create_cover(
     app: &AppHandle,
     audio_path: String,
     max_bytes: Option<u64>,
+    max_edge_px: Option<u32>,
 ) -> Result<Option<CachedCover>, String> {
     let meta = fs::metadata(&audio_path).map_err(|e| format!("Failed to stat audio file: {e}"))?;
     if !meta.is_file() {
@@ -693,7 +765,7 @@ pub fn get_or_create_cover(
     let size = meta.len();
     let mtime_ms = meta.modified().map(system_time_to_millis).unwrap_or(0);
 
-    let key = format!(
+    let base_key = format!(
         "cover-{:08x}-{}-{}",
         stable_hash_for_path(&audio_path),
         mtime_ms,
@@ -702,6 +774,9 @@ pub fn get_or_create_cover(
     let dir = cover_cache_dir(app)?;
 
     let max_bytes = max_bytes.unwrap_or(256 * 1024);
+
+    let max_edge_px = max_edge_px.unwrap_or(0);
+    let key = cover_variant_key(&base_key, max_edge_px);
 
     if let Some(existing) = find_cached_cover_file(&dir, &key) {
         let existing_meta =
@@ -732,17 +807,14 @@ pub fn get_or_create_cover(
         let file = fs::File::open(&audio_path).map_err(|e| format!("Failed to open file: {e}"))?;
         let mut reader = std::io::BufReader::new(file);
         if let Ok(Some(pic)) = parse_flac_picture_from_reader(&mut reader, max_bytes) {
-            let ext = cover_extension_from_media_type(&pic.media_type);
-            let out_path = dir.join(format!("{key}.{ext}"));
-            fs::write(&out_path, &pic.data).map_err(|e| format!("Failed to write cover: {e}"))?;
-            let bytes_base64 = general_purpose::STANDARD.encode(&pic.data);
-            return Ok(Some(CachedCover {
-                key,
-                path: out_path.to_string_lossy().to_string(),
-                size: pic.data.len() as u64,
-                media_type: Some(pic.media_type),
-                bytes_base64: Some(bytes_base64),
-            }));
+            return cache_cover_variant(
+                &dir,
+                base_key.clone(),
+                pic.data,
+                pic.media_type,
+                max_bytes,
+                max_edge_px,
+            );
         }
     }
 
@@ -762,18 +834,14 @@ pub fn get_or_create_cover(
                     fs::read(&sidecar).map_err(|e| format!("Failed to read sidecar cover: {e}"))?;
                 let media_type = media_type_from_cover_path(&sidecar)
                     .unwrap_or_else(|| "image/jpeg".to_string());
-                let ext = cover_extension_from_media_type(&media_type);
-                let out_path = dir.join(format!("{key}.{ext}"));
-                fs::write(&out_path, &bytes).map_err(|e| format!("Failed to write cover: {e}"))?;
-                let bytes_base64 = general_purpose::STANDARD.encode(&bytes);
-
-                return Ok(Some(CachedCover {
-                    key,
-                    path: out_path.to_string_lossy().to_string(),
-                    size: bytes.len() as u64,
-                    media_type: Some(media_type),
-                    bytes_base64: Some(bytes_base64),
-                }));
+                return cache_cover_variant(
+                    &dir,
+                    base_key.clone(),
+                    bytes,
+                    media_type,
+                    max_bytes,
+                    max_edge_px,
+                );
             }
         }
 
@@ -815,7 +883,6 @@ pub fn get_or_create_cover(
                         if let Ok(bytes) = fs::read(&sidecar) {
                             let media_type = media_type_from_cover_path(&sidecar)
                                 .unwrap_or_else(|| "image/jpeg".to_string());
-                            let bytes_base64 = general_purpose::STANDARD.encode(&bytes);
                             let mtime_ms = meta.modified().map(system_time_to_millis).unwrap_or(0);
                             let sidecar_key = format!(
                                 "cover-sidecar-{:08x}-{}-{}",
@@ -823,16 +890,15 @@ pub fn get_or_create_cover(
                                 mtime_ms,
                                 meta.len()
                             );
-                            let ext = cover_extension_from_media_type(&media_type);
-                            let out_path = dir.join(format!("{sidecar_key}.{ext}"));
-                            let _ = fs::write(&out_path, &bytes);
-                            return Ok(Some(CachedCover {
-                                key: sidecar_key,
-                                path: out_path.to_string_lossy().to_string(),
-                                size: bytes.len() as u64,
-                                media_type: Some(media_type),
-                                bytes_base64: Some(bytes_base64),
-                            }));
+
+                            return cache_cover_variant(
+                                &dir,
+                                sidecar_key,
+                                bytes,
+                                media_type,
+                                max_bytes,
+                                max_edge_px,
+                            );
                         }
                     }
                 }
@@ -917,39 +983,26 @@ pub fn get_or_create_cover(
 
             let media_type =
                 media_type_from_cover_path(&sidecar).unwrap_or_else(|| "image/jpeg".to_string());
-            let bytes_base64 = general_purpose::STANDARD.encode(&bytes);
 
-            let ext = cover_extension_from_media_type(&media_type);
-            let out_path = dir.join(format!("{sidecar_key}.{ext}"));
-            let _ = fs::write(&out_path, &bytes);
-
-            return Ok(Some(CachedCover {
-                key: sidecar_key,
-                path: out_path.to_string_lossy().to_string(),
-                size: bytes.len() as u64,
-                media_type: Some(media_type),
-                bytes_base64: Some(bytes_base64),
-            }));
+            return cache_cover_variant(
+                &dir,
+                sidecar_key,
+                bytes,
+                media_type,
+                max_bytes,
+                max_edge_px,
+            );
         }
     };
 
-    if chosen_data.len() > max_bytes as usize {
-        return Ok(None);
-    }
-
-    let bytes_base64 = general_purpose::STANDARD.encode(&chosen_data);
-
-    let ext = cover_extension_from_media_type(&chosen_media_type);
-    let out_path = dir.join(format!("{key}.{ext}"));
-    fs::write(&out_path, &chosen_data).map_err(|e| format!("Failed to write cover: {e}"))?;
-
-    Ok(Some(CachedCover {
-        key,
-        path: out_path.to_string_lossy().to_string(),
-        size: chosen_data.len() as u64,
-        media_type: Some(chosen_media_type),
-        bytes_base64: Some(bytes_base64),
-    }))
+    cache_cover_variant(
+        &dir,
+        base_key,
+        chosen_data,
+        chosen_media_type,
+        max_bytes,
+        max_edge_px,
+    )
 }
 
 pub fn remove_cached_cover(app: &AppHandle, key: String) -> Result<u64, String> {

@@ -3,6 +3,9 @@ import { parseAudioFile } from '../../utils/audioMetadata';
 import { open } from '@tauri-apps/api/dialog';
 import { readDir, exists } from '@tauri-apps/api/fs';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { readJson } from '../../modules/storage';
+import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 // 音乐库数据库版本
 const DB_VERSION = 4;
@@ -72,8 +75,9 @@ export class MusicLibraryService {
   private albumCoverUrlCache: Map<string, string> = new Map();
   private albumCoverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
   private COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024; // 80MB
-  private COVER_MAX_IMAGE_BYTES = 1024 * 1024; // 1MB per cover (many embedded covers exceed 256KB)
+  private COVER_MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB max for cover extraction (thumbnails keep return sizes small)
   private COVER_BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024; // 32MB in-memory blob URL cache
+  private coverMaxEdgePx: number = 256;
 
   // 缓存 - 减少数据库查询
   private cachedStats: LibraryStats | null = null;
@@ -84,7 +88,33 @@ export class MusicLibraryService {
     void this.initDB().catch((error) => {
       console.warn('[MusicLibraryService] initDB failed:', error);
     });
+    this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
+    this.setupCoverSettingsListener();
     this.scheduleStartupRefresh();
+  }
+
+  private readCoverMaxEdgePxSetting(): number {
+    try {
+      const value = readJson<number>(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, 256);
+      const resolved = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 256;
+      if (resolved <= 0) return 0;
+      return resolved;
+    } catch {
+      return 256;
+    }
+  }
+
+  private setupCoverSettingsListener(): void {
+    if (typeof window === 'undefined') return;
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<PmpStorageChangeDetail>).detail;
+      if (!detail || detail.key !== STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX) return;
+
+      this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
+    };
+
+    window.addEventListener(PMP_STORAGE_CHANGE_EVENT, handler as EventListener);
   }
 
   private stableIdFromPath(path: string): string {
@@ -111,6 +141,14 @@ export class MusicLibraryService {
     if (!album) return null;
     const artist = String(track.artist || '').trim();
     return `${album}::${artist}`;
+  }
+
+  private coverKeyMatchesVariant(coverKey: string, maxEdgePx: number): boolean {
+    const hasThumbSuffix = coverKey.includes('-thumb-');
+    if (maxEdgePx > 0) {
+      return coverKey.endsWith(`-thumb-${maxEdgePx}px`);
+    }
+    return !hasThumbSuffix;
   }
 
   private sanitizeCoverUrl(raw: unknown): string | undefined {
@@ -383,10 +421,13 @@ export class MusicLibraryService {
   ): Promise<string | undefined> {
     const allowAlbumFallback = options?.allowAlbumFallback !== false;
     const existingUrl = track.coverUrl;
-    if (existingUrl && (String(existingUrl).startsWith('data:') || String(existingUrl).startsWith('blob:'))) {
-      if (track.coverKey) {
-        void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
-      }
+    if (
+      existingUrl &&
+      (String(existingUrl).startsWith('data:') || String(existingUrl).startsWith('blob:')) &&
+      track.coverKey &&
+      this.coverKeyMatchesVariant(track.coverKey, this.coverMaxEdgePx)
+    ) {
+      void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
       return existingUrl;
     }
 
@@ -396,16 +437,17 @@ export class MusicLibraryService {
     if (!audioPath || !this.isLikelyAbsolutePath(audioPath)) return existingUrl;
 
     const normalized = this.normalizePathForCompare(audioPath);
-    const cached = this.coverUrlCache.get(normalized);
+    const cacheKey = `${normalized}|edge=${this.coverMaxEdgePx}`;
+    const cached = this.coverUrlCache.get(cacheKey);
     if (cached) {
       if (track.coverKey) {
         void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
       }
-      this.touchCoverBlobCache(normalized);
+      this.touchCoverBlobCache(cacheKey);
       return cached;
     }
 
-    const inflight = this.coverUrlInflight.get(normalized);
+    const inflight = this.coverUrlInflight.get(cacheKey);
     if (inflight) return inflight;
 
     const promise = (async () => {
@@ -423,6 +465,7 @@ export class MusicLibraryService {
       >('music_library_get_cover', {
         path: audioPath,
         maxBytes: this.COVER_MAX_IMAGE_BYTES,
+        maxEdgePx: this.coverMaxEdgePx > 0 ? this.coverMaxEdgePx : undefined,
       });
 
       if (!result) return undefined;
@@ -439,12 +482,12 @@ export class MusicLibraryService {
 
       const blob = new Blob([buffer], { type: mime });
       const url = URL.createObjectURL(blob);
-      this.coverUrlCache.set(normalized, url);
-      this.addCoverBlobUrlToCache(normalized, url, result.size);
+      this.coverUrlCache.set(cacheKey, url);
+      this.addCoverBlobUrlToCache(cacheKey, url, result.size);
 
       const albumKey = this.albumKeyForTrack(track);
       if (albumKey) {
-        this.albumCoverUrlCache.set(albumKey, url);
+        this.albumCoverUrlCache.set(`${albumKey}|edge=${this.coverMaxEdgePx}`, url);
       }
 
       const now = Date.now();
@@ -465,10 +508,10 @@ export class MusicLibraryService {
         return undefined;
       })
       .finally(() => {
-        this.coverUrlInflight.delete(normalized);
+        this.coverUrlInflight.delete(cacheKey);
       });
 
-    this.coverUrlInflight.set(normalized, promise);
+    this.coverUrlInflight.set(cacheKey, promise);
     const direct = await promise;
     if (direct) return direct;
 
@@ -476,11 +519,12 @@ export class MusicLibraryService {
 
     const albumKey = this.albumKeyForTrack(track);
     if (!albumKey) return undefined;
+    const albumCacheKey = `${albumKey}|edge=${this.coverMaxEdgePx}`;
 
-    const cachedAlbum = this.albumCoverUrlCache.get(albumKey);
+    const cachedAlbum = this.albumCoverUrlCache.get(albumCacheKey);
     if (cachedAlbum) return cachedAlbum;
 
-    const inflightAlbum = this.albumCoverUrlInflight.get(albumKey);
+    const inflightAlbum = this.albumCoverUrlInflight.get(albumCacheKey);
     if (inflightAlbum) return inflightAlbum;
 
     const albumPromise = (async () => {
@@ -498,7 +542,7 @@ export class MusicLibraryService {
         if (candidate.id === track.id) continue;
         const url = await this.getCoverUrlForTrack(candidate, { allowAlbumFallback: false });
         if (url) {
-          this.albumCoverUrlCache.set(albumKey, url);
+          this.albumCoverUrlCache.set(albumCacheKey, url);
           return url;
         }
       }
@@ -510,11 +554,46 @@ export class MusicLibraryService {
         return undefined;
       })
       .finally(() => {
-        this.albumCoverUrlInflight.delete(albumKey);
+        this.albumCoverUrlInflight.delete(albumCacheKey);
       });
 
-    this.albumCoverUrlInflight.set(albumKey, albumPromise);
+    this.albumCoverUrlInflight.set(albumCacheKey, albumPromise);
     return albumPromise;
+  }
+
+  getCoverRuntimeCacheStats(): {
+    coverUrlCacheEntries: number;
+    coverBlobUrlCacheEntries: number;
+    coverBlobUrlTotalBytes: number;
+    coverUrlInflight: number;
+    albumCoverUrlCacheEntries: number;
+    albumCoverUrlInflight: number;
+  } {
+    return {
+      coverUrlCacheEntries: this.coverUrlCache.size,
+      coverBlobUrlCacheEntries: this.coverBlobUrlCache.size,
+      coverBlobUrlTotalBytes: this.coverBlobUrlTotalBytes,
+      coverUrlInflight: this.coverUrlInflight.size,
+      albumCoverUrlCacheEntries: this.albumCoverUrlCache.size,
+      albumCoverUrlInflight: this.albumCoverUrlInflight.size,
+    };
+  }
+
+  clearCoverRuntimeCaches(): void {
+    for (const entry of this.coverBlobUrlCache.values()) {
+      try {
+        URL.revokeObjectURL(entry.url);
+      } catch {
+        // best-effort
+      }
+    }
+
+    this.coverUrlCache.clear();
+    this.coverBlobUrlCache.clear();
+    this.coverUrlInflight.clear();
+    this.albumCoverUrlCache.clear();
+    this.albumCoverUrlInflight.clear();
+    this.coverBlobUrlTotalBytes = 0;
   }
 
   static getInstance(): MusicLibraryService {

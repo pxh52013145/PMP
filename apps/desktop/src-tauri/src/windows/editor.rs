@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
+use serde::Serialize;
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position,
     Size, WindowBuilder, WindowUrl,
@@ -86,6 +88,21 @@ pub const ALL_EDITOR_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Theme,
     EditorWindowType::Debug,
 ];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorWindowDebugInfo {
+    pub window_type: String,
+    pub exists: bool,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorWindowsDebugState {
+    pub windows: Vec<EditorWindowDebugInfo>,
+    pub cached_hidden: Option<String>,
+}
 
 pub const CONTROL_CLOSE_HIDE_WINDOWS: &[EditorWindowType] = &[
     EditorWindowType::Statistics,
@@ -174,6 +191,13 @@ struct HiddenWindowLru {
 
 static HIDDEN_WINDOW_LRU: Lazy<Mutex<HiddenWindowLru>> =
     Lazy::new(|| Mutex::new(HiddenWindowLru::default()));
+
+static HIDDEN_WINDOW_DESTROY_REVISION: Lazy<Mutex<HashMap<EditorWindowType, u64>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static EDITOR_WINDOWS_REVISION: AtomicU64 = AtomicU64::new(0);
+const CONTROL_DONE_DESTROY_DELAY_MS: u64 = 5_000;
+const HIDDEN_WINDOW_DESTROY_DELAY_MS: u64 = 10_000;
 
 static FORCE_CLOSE_WINDOWS: Lazy<Mutex<HashSet<EditorWindowType>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
@@ -396,6 +420,51 @@ fn take_force_close(window_type: EditorWindowType) -> bool {
     set.remove(&window_type)
 }
 
+fn bump_hidden_destroy_revision(window_type: EditorWindowType) -> u64 {
+    let mut revisions = match HIDDEN_WINDOW_DESTROY_REVISION.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let next = revisions.get(&window_type).copied().unwrap_or(0).saturating_add(1);
+    revisions.insert(window_type, next);
+    next
+}
+
+fn hidden_destroy_revision(window_type: EditorWindowType) -> u64 {
+    let revisions = match HIDDEN_WINDOW_DESTROY_REVISION.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    revisions.get(&window_type).copied().unwrap_or(0)
+}
+
+fn schedule_destroy_if_still_hidden(app: &AppHandle, window_type: EditorWindowType) {
+    let scheduled_revision = bump_hidden_destroy_revision(window_type);
+    let app_handle = app.clone();
+
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(HIDDEN_WINDOW_DESTROY_DELAY_MS));
+
+        if hidden_destroy_revision(window_type) != scheduled_revision {
+            return;
+        }
+
+        let Some(window) = app_handle.get_window(label(window_type)) else {
+            return;
+        };
+
+        // Only destroy if still hidden. Never close a visible window.
+        let is_visible = window.is_visible().ok().unwrap_or(true);
+        if is_visible {
+            return;
+        }
+
+        destroy_window(&app_handle, window_type);
+    });
+}
+
 fn cache_window_handle(
     app: &AppHandle,
     window: &tauri::Window,
@@ -404,6 +473,7 @@ fn cache_window_handle(
     window.hide().map_err(|e| e.to_string())?;
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_HIDDEN, window_type.as_str());
     evict_previous_cached_window(app, window_type);
+    schedule_destroy_if_still_hidden(app, window_type);
     Ok(())
 }
 
@@ -454,6 +524,10 @@ pub fn open_editor_window(
                 let _ = main_window.set_focus();
             }
         }
+        // Successful (re)open should cancel pending delayed destroys scheduled by "Done".
+        EDITOR_WINDOWS_REVISION.fetch_add(1, Ordering::SeqCst);
+        // Cancel pending delayed destroy scheduled when the window was hidden.
+        bump_hidden_destroy_revision(window_type);
         apply_windows_blur_behind(&existing_window, blur_enabled.load(Ordering::SeqCst));
         let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
         clear_cached_window(window_type);
@@ -495,6 +569,10 @@ pub fn open_editor_window(
         }
     }
 
+    // Successful open should cancel pending delayed destroys scheduled by "Done".
+    EDITOR_WINDOWS_REVISION.fetch_add(1, Ordering::SeqCst);
+    // Cancel pending delayed destroy scheduled when the window was hidden.
+    bump_hidden_destroy_revision(window_type);
     apply_windows_blur_behind(&window, blur_enabled.load(Ordering::SeqCst));
 
     let _ = app.emit_all(EVENT_EDITOR_WINDOW_SHOWN, window_type.as_str());
@@ -549,6 +627,9 @@ pub fn sync_style_bar_window(app: &AppHandle) {
 
 pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Result<(), String> {
     if window_type == EditorWindowType::Control {
+        // Bump revision so any previously scheduled delayed destroys become no-ops.
+        let destroy_revision = EDITOR_WINDOWS_REVISION.fetch_add(1, Ordering::SeqCst) + 1;
+
         // IMPORTANT (Windows): When the user opened an auxiliary editor window (style/library/etc),
         // it may currently own focus. Destroying/closing multiple owned windows in a tight sequence
         // can lead to transient activation changes where the main window ends up behind other apps,
@@ -582,6 +663,31 @@ pub fn close_editor_window(app: &AppHandle, window_type: EditorWindowType) -> Re
             }
         }
 
+        // After "Done" we still want to reclaim WebView2 memory. Closing hidden windows is much less
+        // likely to disturb z-order/focus than closing visible/owned windows immediately.
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(CONTROL_DONE_DESTROY_DELAY_MS));
+
+            // If the editor was reopened meanwhile, skip destroying windows to preserve UX/state.
+            if EDITOR_WINDOWS_REVISION.load(Ordering::SeqCst) != destroy_revision {
+                return;
+            }
+
+            for wtype in ALL_EDITOR_WINDOWS {
+                let Some(window) = app_handle.get_window(label(*wtype)) else {
+                    continue;
+                };
+
+                let is_visible = window.is_visible().ok().unwrap_or(false);
+                if is_visible {
+                    continue;
+                }
+
+                destroy_window(&app_handle, *wtype);
+            }
+        });
+
         return Ok(());
     }
 
@@ -605,4 +711,34 @@ pub fn close_all_editor_windows(app: &AppHandle) {
     }
 
     // (Ornaments editor removed)
+}
+
+pub fn debug_get_editor_windows_state(app: &AppHandle) -> EditorWindowsDebugState {
+    let cached_hidden = {
+        let cache = match HIDDEN_WINDOW_LRU.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        cache.cached_hidden.map(|value| value.as_str().to_string())
+    };
+
+    let mut windows: Vec<EditorWindowDebugInfo> = Vec::new();
+    for window_type in ALL_EDITOR_WINDOWS {
+        let window = app.get_window(label(*window_type));
+        let exists = window.is_some();
+        let visible = window
+            .and_then(|w| w.is_visible().ok())
+            .unwrap_or(false);
+
+        windows.push(EditorWindowDebugInfo {
+            window_type: window_type.as_str().to_string(),
+            exists,
+            visible,
+        });
+    }
+
+    EditorWindowsDebugState {
+        windows,
+        cached_hidden,
+    }
 }
