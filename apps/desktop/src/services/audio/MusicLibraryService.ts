@@ -74,6 +74,8 @@ export class MusicLibraryService {
   private coverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
   private albumCoverUrlCache: Map<string, string> = new Map();
   private albumCoverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
+  private COVER_URL_CACHE_MAX_ENTRIES = 1024;
+  private ALBUM_COVER_URL_CACHE_MAX_ENTRIES = 256;
   private COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024; // 80MB
   private COVER_MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB max for cover extraction (thumbnails keep return sizes small)
   private COVER_BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024; // 32MB in-memory blob URL cache
@@ -347,19 +349,44 @@ export class MusicLibraryService {
       if (!oldestKey) break;
       const oldest = this.coverBlobUrlCache.get(oldestKey);
         this.coverBlobUrlCache.delete(oldestKey);
-        if (oldest) {
-          this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - oldest.bytes);
-          try {
-            URL.revokeObjectURL(oldest.url);
-          } catch (err) {
-            void err;
-          }
+      if (oldest) {
+        this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - oldest.bytes);
+        try {
+          URL.revokeObjectURL(oldest.url);
+        } catch (err) {
+          void err;
+        }
 
-          const cached = this.coverUrlCache.get(oldestKey);
-          if (cached === oldest.url) {
-            this.coverUrlCache.delete(oldestKey);
-          }
+        const cached = this.coverUrlCache.get(oldestKey);
+        if (cached === oldest.url) {
+          this.coverUrlCache.delete(oldestKey);
+        }
+
+        this.removeAlbumCoverUrlCacheEntriesByUrl(oldest.url);
       }
+    }
+  }
+
+  private removeAlbumCoverUrlCacheEntriesByUrl(url: string): void {
+    if (!url) return;
+    for (const [key, value] of this.albumCoverUrlCache.entries()) {
+      if (value === url) {
+        this.albumCoverUrlCache.delete(key);
+      }
+    }
+  }
+
+  private pruneUrlCaches(): void {
+    while (this.coverUrlCache.size > this.COVER_URL_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.coverUrlCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.coverUrlCache.delete(oldestKey);
+    }
+
+    while (this.albumCoverUrlCache.size > this.ALBUM_COVER_URL_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.albumCoverUrlCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.albumCoverUrlCache.delete(oldestKey);
     }
   }
 
@@ -484,10 +511,12 @@ export class MusicLibraryService {
       const url = URL.createObjectURL(blob);
       this.coverUrlCache.set(cacheKey, url);
       this.addCoverBlobUrlToCache(cacheKey, url, result.size);
+      this.pruneUrlCaches();
 
       const albumKey = this.albumKeyForTrack(track);
       if (albumKey) {
         this.albumCoverUrlCache.set(`${albumKey}|edge=${this.coverMaxEdgePx}`, url);
+        this.pruneUrlCaches();
       }
 
       const now = Date.now();
@@ -543,6 +572,7 @@ export class MusicLibraryService {
         const url = await this.getCoverUrlForTrack(candidate, { allowAlbumFallback: false });
         if (url) {
           this.albumCoverUrlCache.set(albumCacheKey, url);
+          this.pruneUrlCaches();
           return url;
         }
       }
