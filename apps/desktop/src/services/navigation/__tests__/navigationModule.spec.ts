@@ -24,4 +24,23 @@ describe('navigationModule', () => {
     unsubscribe();
     loader.deactivateAll();
   });
+
+  it('caps navigation history length', () => {
+    const kernel = createKernel<AppEvents>();
+    const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
+    loader.activate([createNavigationModule()]);
+
+    const service = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
+
+    for (let i = 0; i < 120; i += 1) {
+      service.navigateTo(i % 2 === 0 ? 'music-library' : 'settings');
+    }
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.currentPage.type).toBe('settings');
+    expect(snapshot.history.length).toBe(50);
+    expect(snapshot.currentIndex).toBe(49);
+
+    loader.deactivateAll();
+  });
 });

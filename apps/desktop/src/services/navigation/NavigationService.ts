@@ -19,6 +19,8 @@ export interface NavigationService {
 export const NAVIGATION_SERVICE_TOKEN = createServiceToken<NavigationService>('service.navigation');
 
 export class InMemoryNavigationService implements NavigationService {
+  private static readonly MAX_HISTORY_LENGTH = 50;
+
   private history: NavigationPageData[] = [{ type: 'home' }];
   private currentIndex = 0;
 
@@ -61,6 +63,12 @@ export class InMemoryNavigationService implements NavigationService {
 
     const nextHistory = this.history.slice(0, this.currentIndex + 1);
     nextHistory.push(nextPage);
+
+    const overflow = nextHistory.length - InMemoryNavigationService.MAX_HISTORY_LENGTH;
+    if (overflow > 0) {
+      nextHistory.splice(0, overflow);
+    }
+
     this.history = nextHistory;
     this.currentIndex = nextHistory.length - 1;
     this.emitChanged();

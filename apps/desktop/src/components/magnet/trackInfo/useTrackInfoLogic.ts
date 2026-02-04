@@ -53,8 +53,8 @@ export function useTrackInfoLogic(): TrackInfoLogic {
   );
 
   const onNavigateToTrack = useCallback(
-    (track: Track) => {
-      navigateTo('track', { track });
+    (_track: Track) => {
+      navigateTo('track');
     },
     [navigateTo]
   );

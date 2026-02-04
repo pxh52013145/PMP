@@ -9,17 +9,15 @@ import './AlbumDetailPage.css';
 interface AlbumDetailPageProps {
   albumName?: string;
   artist?: string;
-  tracks?: Track[];
 }
 
 export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   albumName,
   artist,
-  tracks: initialTracks,
 }) => {
   const t = useT();
   const audioService = useAudioService();
-  const [tracks, setTracks] = useState<Track[]>(initialTracks || []);
+  const [tracks, setTracks] = useState<Track[]>([]);
   const [albumCover, setAlbumCover] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -28,12 +26,30 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   } | null>(null);
 
   useEffect(() => {
-    if (initialTracks && initialTracks.length > 0) {
-      setTracks(initialTracks);
+    let cancelled = false;
+
+    if (!albumName) {
+      setTracks([]);
+      setAlbumCover(undefined);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      const nextTracks = await musicLibraryService.getTracksByAlbum(albumName);
+      if (cancelled) return;
+
+      setTracks(nextTracks);
 
       // 使用第一首歌的封面作为专辑封面（Desktop/Tauri 下优先走磁盘缓存懒加载）
-      const candidate = initialTracks[0];
-      const url = typeof candidate?.coverUrl === 'string' ? candidate.coverUrl : undefined;
+      const candidate = nextTracks[0];
+      if (!candidate) {
+        setAlbumCover(undefined);
+        return;
+      }
+
+      const url = typeof candidate.coverUrl === 'string' ? candidate.coverUrl : undefined;
       const lower = (url || '').toLowerCase();
       const isDisplayable =
         !!url &&
@@ -44,10 +60,18 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
       setAlbumCover(isDisplayable ? url : undefined);
 
       void musicLibraryService.getCoverUrlForTrack(candidate).then((coverUrl) => {
-        if (coverUrl) setAlbumCover(coverUrl);
+        if (!cancelled && coverUrl) setAlbumCover(coverUrl);
       });
-    }
-  }, [initialTracks]);
+    })().catch((error) => {
+      if (!cancelled) {
+        console.warn('[AlbumDetailPage] Failed to load album tracks:', error);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [albumName]);
 
   useEffect(() => {
     if (initialTracks && initialTracks.length > 0) return;

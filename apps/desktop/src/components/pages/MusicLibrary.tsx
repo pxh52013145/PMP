@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Track } from '../../services/audio';
 import {
@@ -876,7 +876,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   };
 
   // 应用排序到数组
-  const applySorting = <T extends Track | { album: string; artist: string }>(items: T[]): T[] => {
+  const applySorting = useCallback(<T extends Track | { album: string; artist: string }>(items: T[]): T[] => {
     if (sortBy === 'default') return items;
 
     const sorted = [...items];
@@ -917,11 +917,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
 
     return sorted;
-  };
+  }, [sortBy, sortOrder]);
 
   // 获取过滤和排序后的轨道
-  const getFilteredTracks = () => {
-    let filtered = [...tracks];
+  const filteredTracks = useMemo(() => {
+    let filtered = tracks;
 
     if (selectedArtist) {
       filtered = filtered.filter((t) => t.artist === selectedArtist);
@@ -934,19 +934,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
 
     return applySorting(filtered);
-  };
+  }, [applySorting, selectedAlbum, selectedArtist, selectedGenre, tracks]);
 
   // 获取排序后的专辑列表
-  const getSortedAlbums = () => {
-    return applySorting(albums);
-  };
+  const sortedAlbums = useMemo(() => applySorting(albums), [albums, applySorting]);
 
   // 单击专辑 - 导航到专辑详情页
-  const handleAlbumClick = async (albumName: string, artist: string) => {
+  const handleAlbumClick = (albumName: string, artist: string) => {
     if (embedded) {
       // 在embedded模式下，导航到专辑页面
-      const albumTracks = await musicLibraryService.getTracksByAlbum(albumName);
-      navigateTo('album', { albumName, artist, tracks: albumTracks });
+      navigateTo('album', { albumName, artist });
     }
   };
 
@@ -980,7 +977,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       console.log('Play track:', track.title, '(embedded mode - no playback)');
       return;
     }
-    const filteredTracks = getFilteredTracks();
     console.log(`🎵 Playing from track ${index + 1}/${filteredTracks.length}`);
     onPlayNow(filteredTracks, index);
   };
@@ -1012,7 +1008,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     e.preventDefault();
     e.stopPropagation();
 
-    const filteredTracks = getFilteredTracks();
+    const playTracks = filteredTracks;
 
     const menuItems: ContextMenuItem[] = [
       {
@@ -1028,7 +1024,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {
         label: t('pages.music-library.contextMenu.playAllFromHere'),
         icon: '🎵',
-        onClick: () => onPlayNow?.(filteredTracks, index),
+        onClick: () => onPlayNow?.(playTracks, index),
       },
       { divider: true } as ContextMenuItem,
       {
@@ -1320,7 +1316,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             <>
               {viewMode === 'albums' && (
                 <div className="music-library-grid">
-                  {getSortedAlbums().map(({ album, artist, cover }) => {
+                  {sortedAlbums.map(({ album, artist, cover }) => {
                     const key = albumKey(album, artist);
                     return (
                       <div
@@ -1358,7 +1354,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                     <div>{t('pages.music-library.tracks.header.duration')}</div>
                     <div>{t('pages.music-library.tracks.header.actions')}</div>
                   </div>
-                  {getFilteredTracks().map((track, index) => (
+                  {filteredTracks.map((track, index) => (
                     <div
                       key={track.id}
                       data-track-id={track.id}

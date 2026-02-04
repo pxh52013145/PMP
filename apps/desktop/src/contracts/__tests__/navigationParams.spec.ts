@@ -14,7 +14,7 @@ describe('parseNavigationParams', () => {
     expect(legacyParsed).toEqual({ trackId: 't1' });
   });
 
-  it('parses album params', () => {
+  it('parses album params and ignores tracks payload', () => {
     expect(parseNavigationParams('album', undefined)).toBeUndefined();
     expect(parseNavigationParams('album', { artist: 'A' })).toBeUndefined();
 
