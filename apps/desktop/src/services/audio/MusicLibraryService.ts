@@ -2095,41 +2095,6 @@ export class MusicLibraryService {
     this.cacheTimestamp = 0;
   }
 
-  getCoverRuntimeCacheStats(): {
-    coverBlobUrlCacheEntries: number;
-    coverBlobUrlTotalBytes: number;
-    coverUrlCacheEntries: number;
-    coverUrlInflight: number;
-    albumCoverUrlCacheEntries: number;
-  } {
-    return {
-      coverBlobUrlCacheEntries: this.coverBlobUrlCache.size,
-      coverBlobUrlTotalBytes: this.coverBlobUrlTotalBytes,
-      coverUrlCacheEntries: this.coverUrlCache.size,
-      coverUrlInflight: this.coverUrlInflight.size,
-      albumCoverUrlCacheEntries: this.albumCoverUrlCache.size,
-    };
-  }
-
-  clearCoverRuntimeCaches(): void {
-    for (const entry of this.coverBlobUrlCache.values()) {
-      try {
-        URL.revokeObjectURL(entry.url);
-      } catch {
-        // ignore
-      }
-    }
-
-    this.coverBlobUrlCache.clear();
-    this.coverBlobUrlTotalBytes = 0;
-    this.coverUrlCache.clear();
-    this.coverUrlInflight.clear();
-    this.albumCoverUrlCache.clear();
-    this.albumCoverUrlInflight.clear();
-  }
-
-  // 搜索轨道
-  // 清空库
   async clearLibrary(): Promise<void> {
     const db = await this.ensureDB();
     const transaction = db.transaction(['tracks'], 'readwrite');
