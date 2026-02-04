@@ -299,10 +299,7 @@ export class Webgl2ShaderRuntime {
     }
     this.gl = gl;
 
-    this.fpsLimit =
-      typeof options.fpsLimit === 'number' && Number.isFinite(options.fpsLimit)
-        ? Math.max(1, Math.min(240, options.fpsLimit))
-        : undefined;
+    this.setFpsLimit(options.fpsLimit);
     this.resolutionScale = clampNumber(options.resolutionScale, 0.1, 2.0, 1.0);
 
     options.canvas.addEventListener('webglcontextlost', this.onContextLost);
@@ -618,6 +615,14 @@ export class Webgl2ShaderRuntime {
 
   setFrequencyDataProvider(provider?: () => Uint8Array | null): void {
     this.getFrequencyData = provider;
+  }
+
+  setFpsLimit(limit?: number): void {
+    if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) {
+      this.fpsLimit = undefined;
+      return;
+    }
+    this.fpsLimit = Math.max(1, Math.min(240, limit));
   }
 
   setActive(active: boolean): void {

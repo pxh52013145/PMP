@@ -1777,6 +1777,25 @@ export class MusicLibraryService {
     return results;
   }
 
+  async getTrackById(trackId: string): Promise<Track | null> {
+    const db = await this.ensureDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readonly');
+      const store = transaction.objectStore('tracks');
+      const request = store.get(trackId);
+
+      request.onsuccess = () => {
+        const raw = request.result;
+        if (!raw) {
+          resolve(null);
+          return;
+        }
+        resolve(this.restoreTrackForPlayback(raw as unknown as StoredTrackRecord));
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   // 按艺术家获取轨道
   async getTracksByArtist(artist: string): Promise<Track[]> {
     const db = await this.ensureDB();

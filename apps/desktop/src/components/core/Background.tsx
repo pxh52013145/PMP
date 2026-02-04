@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { BackgroundConfig } from '../../types/background';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import './Background.css';
 
 interface BackgroundProps {
@@ -18,6 +19,7 @@ function isLikelyGifUrl(url: string): boolean {
  */
 export default function Background({ config }: BackgroundProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const { renderMode } = useWindowActivity();
 
   const imageConfig = config.type === 'image' ? config.image : undefined;
   const shouldForceOpaqueBaseForGif =
@@ -26,13 +28,30 @@ export default function Background({ config }: BackgroundProps) {
     !!imageConfig && !!imageConfig.url && !imageConfig.crop && imageConfig.repeat === 'no-repeat';
 
   useEffect(() => {
-    // 如果是视频背景，自动播放
-    if (config.type === 'video' && videoRef.current) {
-      videoRef.current.play().catch((err) => {
-        console.warn('Video autoplay failed:', err);
-      });
+    const video = videoRef.current;
+    if (!video) return;
+    if (config.type !== 'video') return;
+
+    if (renderMode !== 'full') {
+      try {
+        video.pause();
+      } catch {
+        // ignore
+      }
+      return;
     }
-  }, [config]);
+
+    try {
+      const p = video.play();
+      if (p && typeof (p as Promise<void>).catch === 'function') {
+        (p as Promise<void>).catch((err) => {
+          console.warn('Video autoplay failed:', err);
+        });
+      }
+    } catch (err) {
+      console.warn('Video autoplay failed:', err);
+    }
+  }, [config.type, config.video?.url, config.video?.loop, config.video?.muted, renderMode]);
 
   const getBackgroundStyle = (): React.CSSProperties => {
     const baseStyle: React.CSSProperties = {

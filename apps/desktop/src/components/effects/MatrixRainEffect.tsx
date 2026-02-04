@@ -1,14 +1,48 @@
 import { useEffect, useRef } from 'react';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
+import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
 
 interface MatrixRainEffectProps {
   color: [number, number, number];
   isRainbow?: boolean; // 是否是彩虹主题
 }
 
+type MatrixRainAnimator = {
+  start: () => void;
+  stop: () => void;
+  resetTime: () => void;
+};
+
 export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRainEffectProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { isActive } = useWindowActivity();
+  const { renderMode } = useWindowActivity();
+  const colorRef = useRef(color);
+  const isRainbowRef = useRef(isRainbow);
+  const renderModeRef = useRef(renderMode);
+  const animatorRef = useRef<MatrixRainAnimator | null>(null);
+
+  useEffect(() => {
+    colorRef.current = color;
+  }, [color]);
+
+  useEffect(() => {
+    isRainbowRef.current = isRainbow;
+  }, [isRainbow]);
+
+  useEffect(() => {
+    renderModeRef.current = renderMode;
+
+    const animator = animatorRef.current;
+    if (!animator) return;
+
+    if (renderMode === 'pause') {
+      animator.stop();
+      return;
+    }
+
+    animator.resetTime();
+    animator.start();
+  }, [renderMode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -49,8 +83,6 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     // 不初始化黑色背景，保持透明
 
     let lastTime = 0;
-    const fps = 30; // 限制为30fps
-    const fpsInterval = 1000 / fps;
 
     // 彩虹主题：色相旋转
     let rainbowHue = 0;
@@ -114,6 +146,9 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
 
     const draw = (currentTime: number) => {
       const deltaTime = currentTime - lastTime;
+      const mode = renderModeRef.current;
+      const fps = mode === 'throttle' ? BACKGROUND_RENDER_THROTTLE_FPS : 30;
+      const fpsInterval = 1000 / fps;
 
       // 帧率控制
       if (deltaTime < fpsInterval) {
@@ -134,7 +169,8 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
 
     const drawChars = () => {
       // 获取当前颜色（彩虹主题会动态改变）
-      const currentColor = isRainbow ? applyHueRotation(color, rainbowHue) : color;
+      const baseColor = colorRef.current;
+      const currentColor = isRainbowRef.current ? applyHueRotation(baseColor, rainbowHue) : baseColor;
 
       for (let i = 0; i < drops.length; i++) {
         const drop = drops[i];
@@ -218,20 +254,36 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
 
     let animationId: number | null = null;
     const animate = (currentTime: number) => {
-      if (!isActive) return;
+      if (renderModeRef.current === 'pause') {
+        animationId = null;
+        return;
+      }
       const shouldDraw = draw(currentTime);
       if (shouldDraw) {
         // 彩虹主题：更新色相
-        if (isRainbow) {
+        if (isRainbowRef.current) {
           rainbowHue = (rainbowHue + 2) % 360; // 每帧旋转2度
         }
         drawChars(); // 绘制字符
       }
       animationId = requestAnimationFrame(animate);
     };
-    if (isActive) {
-      animationId = requestAnimationFrame(animate);
-    }
+
+    const animator: MatrixRainAnimator = {
+      start: () => {
+        if (animationId !== null) return;
+        animationId = requestAnimationFrame(animate);
+      },
+      stop: () => {
+        if (animationId === null) return;
+        cancelAnimationFrame(animationId);
+        animationId = null;
+      },
+      resetTime: () => {
+        lastTime = 0;
+      },
+    };
+    animatorRef.current = animator;
 
     // 窗口大小变化时重新计算
     const handleResize = () => {
@@ -262,10 +314,11 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     window.addEventListener('resize', handleResize);
 
     return () => {
-      if (animationId !== null) cancelAnimationFrame(animationId);
+      animatorRef.current = null;
+      animator.stop();
       window.removeEventListener('resize', handleResize);
     };
-  }, [color, isRainbow, isActive]);
+  }, []);
 
   return (
     <canvas

@@ -6,6 +6,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../contexts/EditorContext';
+import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
 import { calculateNewAnchors, checkMagnetCollision, getMagnetOccupiedPixels } from '../../utils/magnetEditor';
@@ -132,6 +133,7 @@ export function EditorOverlay({
 }: EditorOverlayProps) {
   const { editorState, occupancyMap, startDrag, updateDrag, endDrag, setHoverPixel, selectMagnet } =
     useEditor();
+  const { renderMode } = useWindowActivity();
 
   const overlayRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -145,6 +147,9 @@ export function EditorOverlay({
   const lastDragKeyRef = useRef<string | null>(null);
   const lastMagnetDeltaRef = useRef<{ dx: number; dy: number } | null>(null);
   const drawRafRef = useRef<number | null>(null);
+  const pendingDrawRef = useRef(false);
+  const renderModeRef = useRef(renderMode);
+  renderModeRef.current = renderMode;
   const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
     readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true)
   );
@@ -429,6 +434,7 @@ export function EditorOverlay({
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
       if (!editorState.isEditing) return;
+      if (renderModeRef.current === 'pause') return;
 
       const rect = overlayRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -493,6 +499,7 @@ export function EditorOverlay({
 
   const drawOverlay = useCallback(() => {
     drawRafRef.current = null;
+    if (renderModeRef.current === 'pause') return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -694,6 +701,10 @@ export function EditorOverlay({
   }, [pixelHintsVisible]);
 
   const scheduleDraw = useCallback(() => {
+    if (renderModeRef.current === 'pause') {
+      pendingDrawRef.current = true;
+      return;
+    }
     if (drawRafRef.current !== null) return;
     drawRafRef.current = window.requestAnimationFrame(drawOverlay);
   }, [drawOverlay]);
@@ -701,6 +712,28 @@ export function EditorOverlay({
   useEffect(() => {
     scheduleDraw();
   }, [scheduleDraw, editorState, occupancyMap, pixelPositions, draggingMagnet, placementMagnet]);
+
+  useEffect(() => {
+    if (renderMode !== 'pause') {
+      if (pendingDrawRef.current) {
+        pendingDrawRef.current = false;
+        scheduleDraw();
+      }
+      return;
+    }
+
+    pendingDrawRef.current = false;
+
+    if (moveRafRef.current !== null) {
+      window.cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = null;
+    }
+    if (drawRafRef.current !== null) {
+      window.cancelAnimationFrame(drawRafRef.current);
+      drawRafRef.current = null;
+    }
+    pendingMoveRef.current = null;
+  }, [renderMode, scheduleDraw]);
 
   useEffect(() => {
     return () => {

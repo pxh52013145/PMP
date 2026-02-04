@@ -5,11 +5,13 @@ describe('parseNavigationParams', () => {
   it('parses track params', () => {
     expect(parseNavigationParams('track', undefined)).toBeUndefined();
     expect(parseNavigationParams('track', {})).toBeUndefined();
+    expect(parseNavigationParams('track', { trackId: 'Bad_ID' })).toBeUndefined();
     expect(parseNavigationParams('track', { track: { id: 1, title: 'x' } })).toBeUndefined();
 
-    const parsed = parseNavigationParams('track', { track: { id: 't1', title: 'Song' } });
-    expect(parsed?.track.id).toBe('t1');
-    expect(parsed?.track.title).toBe('Song');
+    expect(parseNavigationParams('track', { trackId: 't1' })).toEqual({ trackId: 't1' });
+
+    const legacyParsed = parseNavigationParams('track', { track: { id: 't1', title: 'Song' } });
+    expect(legacyParsed).toEqual({ trackId: 't1' });
   });
 
   it('parses album params and filters invalid tracks', () => {

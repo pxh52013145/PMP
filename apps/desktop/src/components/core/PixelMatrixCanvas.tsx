@@ -13,7 +13,7 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PixelMatrixRenderer | null>(null);
   const onPixelPositionsUpdateRef = useRef(onPixelPositionsUpdate);
-  const { isActive } = useWindowActivity();
+  const { isActive, renderMode } = useWindowActivity();
 
   useEffect(() => {
     onPixelPositionsUpdateRef.current = onPixelPositionsUpdate;
@@ -101,8 +101,12 @@ export default function PixelMatrixCanvas({ onPixelPositionsUpdate }: PixelMatri
   }, []);
 
   useEffect(() => {
-    rendererRef.current?.setActive(isActive);
+    rendererRef.current?.setInteractionEnabled(isActive);
   }, [isActive]);
+
+  useEffect(() => {
+    rendererRef.current?.setRenderMode(renderMode);
+  }, [renderMode]);
 
   return (
     <div

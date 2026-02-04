@@ -2,6 +2,7 @@
 import { useT } from './i18n';
 import { EditorProvider } from './contexts/EditorContext';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
+import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
@@ -67,6 +68,11 @@ import {
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import { readJson, readString, removeKey, writeJson } from './modules/storage';
+import {
+  DEFAULT_BACKGROUND_RENDER_POLICY,
+  type BackgroundRenderPolicy,
+  parseBackgroundRenderPolicy,
+} from './contracts/performance';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
@@ -567,10 +573,18 @@ export function EditorWindowApp() {
   const [isWindowVisible, setIsWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isWindowFocused, setIsWindowFocused] = useState(() => document.hasFocus());
+  const [isWindowMinimized, setIsWindowMinimized] = useState(false);
+  const [isPageFrozen, setIsPageFrozen] = useState(false);
   const [editorLowPerformanceMode, setEditorLowPerformanceMode] = useState(() =>
     readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false)
   );
-  const isWindowActive = isWindowVisible && isDocumentVisible && isWindowFocused;
+  const [backgroundRenderPolicy, setBackgroundRenderPolicy] = useState<BackgroundRenderPolicy>(() =>
+    parseBackgroundRenderPolicy(
+      readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
+      DEFAULT_BACKGROUND_RENDER_POLICY
+    )
+  );
+  const isWindowActive = isWindowVisible && isDocumentVisible && !isWindowMinimized && !isPageFrozen && isWindowFocused;
   const activityRef = useRef({ isWindowActive });
   activityRef.current.isWindowActive = isWindowActive;
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -586,8 +600,29 @@ export function EditorWindowApp() {
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, []);
 
+  useEffect(() => {
+    const onFreeze = () => setIsPageFrozen(true);
+    const onResume = () => setIsPageFrozen(false);
+
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('resume', onResume);
+    return () => {
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('resume', onResume);
+    };
+  }, []);
+
   const refreshEditorLowPerformanceMode = useCallback(() => {
     setEditorLowPerformanceMode(readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false));
+  }, []);
+
+  const refreshBackgroundRenderPolicy = useCallback(() => {
+    setBackgroundRenderPolicy(
+      parseBackgroundRenderPolicy(
+        readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
+        DEFAULT_BACKGROUND_RENDER_POLICY
+      )
+    );
   }, []);
 
   useEffect(() => {
@@ -619,6 +654,36 @@ export function EditorWindowApp() {
       if (unlistenTauri) unlistenTauri();
     };
   }, [refreshEditorLowPerformanceMode]);
+
+  useEffect(() => {
+    let disposed = false;
+    refreshBackgroundRenderPolicy();
+
+    const teardownStorage = setupStorageListener(
+      [STORAGE_KEYS.BACKGROUND_RENDER_POLICY],
+      refreshBackgroundRenderPolicy
+    );
+
+    let unlistenTauri: (() => void) | null = null;
+    const setup = async () => {
+      const unlisten = await setupTauriListener(
+        TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED,
+        refreshBackgroundRenderPolicy
+      );
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenTauri = unlisten;
+    };
+    void setup();
+
+    return () => {
+      disposed = true;
+      teardownStorage();
+      if (unlistenTauri) unlistenTauri();
+    };
+  }, [refreshBackgroundRenderPolicy]);
 
   useEffect(() => {
     let disposed = false;
@@ -675,6 +740,58 @@ export function EditorWindowApp() {
       disposed = true;
       if (blurTimer !== null) window.clearTimeout(blurTimer);
       if (unlisten) unlisten();
+    };
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let disposed = false;
+    let unlistenResize: (() => void) | null = null;
+    let pollTimer: number | null = null;
+    let lastMinimized: boolean | null = null;
+
+    const setup = async () => {
+      try {
+        const { appWindow } = await import('@tauri-apps/api/window');
+
+        const refresh = async () => {
+          try {
+            const minimized = await appWindow.isMinimized();
+            if (disposed) return;
+            if (lastMinimized === minimized) return;
+            lastMinimized = minimized;
+            setIsWindowMinimized(minimized);
+          } catch {
+            // ignore
+          }
+        };
+
+        await refresh();
+        pollTimer = window.setInterval(() => {
+          if (document.hidden || !document.hasFocus()) {
+            void refresh();
+          }
+        }, 2000);
+
+        try {
+          unlistenResize = await appWindow.onResized(() => {
+            void refresh();
+          });
+        } catch {
+          // ignore
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      if (unlistenResize) unlistenResize();
+      if (pollTimer !== null) window.clearInterval(pollTimer);
     };
   }, [isTauri]);
 
@@ -1311,12 +1428,21 @@ export function EditorWindowApp() {
     return magnetLibrary.filter((magnet) => activeMagnetIds.has(magnet.id));
   }, [magnetLibrary, activeMagnetIds]);
 
+  const renderMode = useAdaptiveRenderMode({
+    isWindowVisible,
+    isDocumentVisible,
+    isWindowFocused,
+    isWindowMinimized,
+    isPageFrozen,
+    backgroundRenderPolicy,
+  });
+
   return (
     <ThemeProvider>
       <AudioEngineProvider>
         <NavigationProvider>
           <EditorProvider magnets={activeMagnets}>
-            <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive }}>
+            <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}>
                 <div
                 className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
                 ref={rootRef}

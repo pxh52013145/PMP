@@ -213,7 +213,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           title: t('pages.track.title'),
           render: (page) => {
             const params = parseNavigationParams('track', page.params);
-            return <TrackDetailPage initialTrack={params?.track} />;
+            return <TrackDetailPage trackId={params?.trackId} />;
           },
           source: 'builtin',
           order: 40,

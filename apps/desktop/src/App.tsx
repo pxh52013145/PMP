@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
-import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
+import { STORAGE_KEYS, TAURI_EVENTS, setupDualListener, setupTauriListener } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
+import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
 import { CommandPalette } from './components/commands/CommandPalette';
 import { WorkbenchHost } from './components/workbench/WorkbenchHost';
@@ -12,6 +13,7 @@ import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { MATRIX_CONFIG } from './constants/config';
 import { Magnet } from './types/pixel';
 import { syncEditorEffectsFromStorage } from './utils/editorWindowEffects';
+import { readJson } from './modules/storage';
 import {
   createDefaultMagnetLibrary,
   createInitialMagnetState,
@@ -22,6 +24,11 @@ import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
+import {
+  DEFAULT_BACKGROUND_RENDER_POLICY,
+  type BackgroundRenderPolicy,
+  parseBackgroundRenderPolicy,
+} from './contracts/performance';
 import './App.css';
 
 function AppContent() {
@@ -32,13 +39,55 @@ function AppContent() {
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isMainWindowFocused, setIsMainWindowFocused] = useState(() => document.hasFocus());
-  const isWindowActive = isMainWindowVisible && isDocumentVisible && isMainWindowFocused;
+  const [isMainWindowMinimized, setIsMainWindowMinimized] = useState(false);
+  const [isPageFrozen, setIsPageFrozen] = useState(false);
+  const isWindowActive =
+    isMainWindowVisible && isDocumentVisible && !isMainWindowMinimized && !isPageFrozen && isMainWindowFocused;
+  const [backgroundRenderPolicy, setBackgroundRenderPolicy] = useState<BackgroundRenderPolicy>(() =>
+    parseBackgroundRenderPolicy(
+      readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
+      DEFAULT_BACKGROUND_RENDER_POLICY
+    )
+  );
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
 
   useEffect(() => {
     void syncEditorEffectsFromStorage();
   }, []);
+
+  const refreshBackgroundRenderPolicy = useCallback(() => {
+    setBackgroundRenderPolicy(
+      parseBackgroundRenderPolicy(
+        readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
+        DEFAULT_BACKGROUND_RENDER_POLICY
+      )
+    );
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    refreshBackgroundRenderPolicy();
+
+    const setup = async () => {
+      const teardown = await setupDualListener(
+        [STORAGE_KEYS.BACKGROUND_RENDER_POLICY],
+        [TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED],
+        refreshBackgroundRenderPolicy
+      );
+      if (disposed) {
+        teardown();
+        return () => {};
+      }
+      return teardown;
+    };
+
+    const teardownPromise = setup();
+    return () => {
+      disposed = true;
+      teardownPromise.then((teardown) => teardown());
+    };
+  }, [refreshBackgroundRenderPolicy]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -108,6 +157,18 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    const onFreeze = () => setIsPageFrozen(true);
+    const onResume = () => setIsPageFrozen(false);
+
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('resume', onResume);
+    return () => {
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('resume', onResume);
+    };
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
     let blurTimer: number | null = null;
     let unlisten: (() => void) | null = null;
@@ -165,6 +226,53 @@ function AppContent() {
   }, [isTauri]);
 
   useEffect(() => {
+    if (!isTauri) return;
+
+    let disposed = false;
+    let unlistenResize: (() => void) | null = null;
+    let pollTimer: number | null = null;
+    let lastMinimized: boolean | null = null;
+
+    const refresh = async () => {
+      try {
+        const minimized = await appWindow.isMinimized();
+        if (disposed) return;
+        if (lastMinimized === minimized) return;
+        lastMinimized = minimized;
+        setIsMainWindowMinimized(minimized);
+      } catch {
+        // ignore
+      }
+    };
+
+    const setup = async () => {
+      await refresh();
+
+      try {
+        unlistenResize = await appWindow.onResized(() => {
+          void refresh();
+        });
+      } catch {
+        // ignore
+      }
+
+      pollTimer = window.setInterval(() => {
+        if (document.hidden || !document.hasFocus()) {
+          void refresh();
+        }
+      }, 2000);
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      if (unlistenResize) unlistenResize();
+      if (pollTimer !== null) window.clearInterval(pollTimer);
+    };
+  }, [isTauri]);
+
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const handled = keybindings.handleKeyboardEvent(e);
       if (handled) {
@@ -216,8 +324,17 @@ function AppContent() {
     };
   }, []);
 
+  const renderMode = useAdaptiveRenderMode({
+    isWindowVisible: isMainWindowVisible,
+    isDocumentVisible,
+    isWindowFocused: isMainWindowFocused,
+    isWindowMinimized: isMainWindowMinimized,
+    isPageFrozen,
+    backgroundRenderPolicy,
+  });
+
   return (
-    <WindowActivityProvider value={{ isVisible: isMainWindowVisible, isActive: isWindowActive }}>
+    <WindowActivityProvider value={{ isVisible: isMainWindowVisible, isActive: isWindowActive, renderMode }}>
       <div className="app-container">
         <WorkbenchHost />
       </div>

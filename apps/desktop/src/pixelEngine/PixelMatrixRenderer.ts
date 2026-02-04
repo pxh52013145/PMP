@@ -1,4 +1,5 @@
 import * as PIXI from 'pixi.js';
+import { BACKGROUND_RENDER_THROTTLE_FPS, type RenderMode } from '../contracts/performance';
 import { MATRIX_CONFIG, PIXEL_COLORS } from '../constants/config';
 import { readString } from '../modules/storage';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
@@ -15,6 +16,7 @@ export class PixelMatrixRenderer {
   private pixelSizeScale: number = 1.0; // Pixel 尺寸缩放比例 (0.5-1.0)
   private pixelOpacity: number = 1.0; // Pixel 透明度 (0.0-1.0)
   private isActive: boolean = true;
+  private renderMode: RenderMode = 'full';
   private layout: PixelGridLayout;
   private hoveredIndex: number | null = null;
   private hoveredBaseTint: PIXI.ColorSource | null = null;
@@ -340,39 +342,61 @@ export class PixelMatrixRenderer {
   }
 
   /**
-   * Pause/resume Pixi's render loop to reduce CPU/GPU usage when the window is hidden.
+   * Backward compatible: pause/resume Pixi's render loop using a boolean flag.
    */
   public setActive(active: boolean): void {
+    this.setInteractionEnabled(active);
+    this.setRenderMode(active ? 'full' : 'pause');
+  }
+
+  public setInteractionEnabled(active: boolean): void {
     if (this.isActive === active) return;
     this.isActive = active;
 
-    if (active) {
+    if (!active) {
+      this.handlePointerOut();
+    }
+  }
+
+  public setRenderMode(mode: RenderMode): void {
+    if (this.renderMode === mode) return;
+    this.renderMode = mode;
+
+    if (mode === 'pause') {
       try {
-        this.app.start();
+        this.app.stop();
       } catch {
         try {
-          this.app.ticker?.start();
+          this.app.ticker?.stop();
         } catch {
           // ignore
         }
-      }
-
-      try {
-        this.app.render();
-      } catch {
-        // ignore
       }
       return;
     }
 
     try {
-      this.app.stop();
+      if (this.app.ticker) {
+        this.app.ticker.maxFPS = mode === 'throttle' ? BACKGROUND_RENDER_THROTTLE_FPS : 0;
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      this.app.start();
     } catch {
       try {
-        this.app.ticker?.stop();
+        this.app.ticker?.start();
       } catch {
         // ignore
       }
+    }
+
+    try {
+      this.app.render();
+    } catch {
+      // ignore
     }
   }
 

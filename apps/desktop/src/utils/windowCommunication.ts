@@ -209,6 +209,11 @@ export const STORAGE_KEYS = {
   EDITOR_LOW_PERFORMANCE_MODE: 'pixel-matrix-editor-low-performance-mode',
   EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE: 'pixel-matrix-editor-overlay-pixel-hints-visible',
 
+  // === Render Performance ===
+  BACKGROUND_RENDER_POLICY: 'pixel-matrix-background-render-policy', // 'full' | 'throttle' | 'pause'
+
+  // === Music Library Performance ===
+  MUSIC_LIBRARY_COVER_MAX_EDGE_PX: 'pixel-matrix-music-library-cover-max-edge-px', // 0 => original image
   // === Background GIF Optimization ===
   BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',
 
@@ -237,6 +242,7 @@ export const TAURI_EVENTS = {
   PIXEL_SHAPE_UPDATED: 'pixel-shape-updated',
   PIXEL_SIZE_UPDATED: 'pixel-size-updated',
   PIXEL_OPACITY_UPDATED: 'pixel-opacity-updated',
+  BACKGROUND_RENDER_POLICY_UPDATED: 'background-render-policy-updated',
 
   // 窗口效果相关
   BACKGROUND_EFFECT_UPDATED: 'background-effect-updated',

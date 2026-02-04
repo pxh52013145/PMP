@@ -5,6 +5,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
+import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
 import './AudioVisualizer.css';
 
 interface AudioVisualizerProps {
@@ -18,7 +19,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
-  const { isActive: isWindowActive } = useWindowActivity();
+  const { renderMode } = useWindowActivity();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -27,19 +28,32 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const draw = () => {
-      if (!isWindowActive) {
+    let lastFrameAt = 0;
+    const targetFps = renderMode === 'throttle' ? BACKGROUND_RENDER_THROTTLE_FPS : undefined;
+
+    const draw = (now: number) => {
+      if (renderMode === 'pause') {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         return;
       }
+
+      if (targetFps) {
+        const minDeltaMs = 1000 / targetFps;
+        const sinceLast = now - lastFrameAt;
+        if (sinceLast < minDeltaMs) {
+          animationRef.current = requestAnimationFrame(draw);
+          return;
+        }
+        lastFrameAt = now - (sinceLast % minDeltaMs);
+      }
+
       const frequencyData = getFrequencyData();
 
       if (!frequencyData || !isPlaying) {
-        // 清空画布
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        if (isPlaying && isWindowActive) {
+        if (isPlaying) {
           animationRef.current = requestAnimationFrame(draw);
         }
         return;
@@ -86,8 +100,8 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       animationRef.current = requestAnimationFrame(draw);
     };
 
-    if (isPlaying && isWindowActive) {
-      draw();
+    if (isPlaying && renderMode !== 'pause') {
+      animationRef.current = requestAnimationFrame(draw);
     } else {
       // 停止时显示静态状态
       ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
@@ -99,7 +113,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [getFrequencyData, isPlaying, isWindowActive]);
+  }, [getFrequencyData, isPlaying, renderMode]);
 
   return (
     <div className="audio-visualizer">

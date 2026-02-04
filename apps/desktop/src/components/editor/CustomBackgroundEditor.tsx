@@ -21,7 +21,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 }: CustomBackgroundEditorProps) {
   const t = useT();
 
-  const { isActive } = useWindowActivity();
+  const { renderMode } = useWindowActivity();
   const [customType, setCustomType] = useState<CustomType>(
     initialConfig?.type === 'image' ||
       initialConfig?.type === 'video' ||
@@ -399,7 +399,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     const videos = Array.from(document.querySelectorAll<HTMLVideoElement>('video.preview-video'));
     if (videos.length === 0) return;
 
-    if (!isActive) {
+    if (renderMode !== 'full') {
       for (const video of videos) {
         try {
           video.pause();
@@ -420,7 +420,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         // ignore
       }
     }
-  }, [isActive]);
+  }, [renderMode]);
 
   // 保存配置
   const handleSave = useCallback(() => {

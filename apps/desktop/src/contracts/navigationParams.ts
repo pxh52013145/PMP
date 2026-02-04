@@ -1,8 +1,7 @@
-import type { Track } from '../services/audio';
 import type { NavigationPageType, NavigationParamsFor } from './navigation';
 
-export type TrackPageParams = { track: Track };
-export type AlbumPageParams = { albumName: string; artist?: string; tracks?: Track[] };
+export type TrackPageParams = { trackId: string };
+export type AlbumPageParams = { albumName: string; artist?: string };
 export type ArtistPageParams = { artist: string };
 export type PluginPageParams = { pluginId: string; pageId: string };
 export type PluginVisualizerParams = { pluginId: string; visualizerId: string };
@@ -15,11 +14,6 @@ function isSafeId(value: string): boolean {
   return /^[a-z0-9-]{1,48}$/.test(value);
 }
 
-export function isTrack(value: unknown): value is Track {
-  if (!isRecord(value)) return false;
-  return typeof value.id === 'string' && typeof value.title === 'string';
-}
-
 export function parseNavigationParams<K extends NavigationPageType>(
   type: K,
   params: unknown
@@ -27,17 +21,29 @@ export function parseNavigationParams<K extends NavigationPageType>(
   switch (type) {
     case 'track': {
       if (!isRecord(params)) return undefined;
+
+      const trackId = typeof params.trackId === 'string' ? params.trackId : undefined;
+      if (trackId && isSafeId(trackId)) {
+        return { trackId } as NavigationParamsFor<K>;
+      }
+
+      // Backward compatible: allow passing a Track-like payload but keep only the id to avoid retaining large objects.
       const track = params.track;
-      if (!isTrack(track)) return undefined;
-      return { track } as NavigationParamsFor<K>;
+      if (isRecord(track)) {
+        const legacyId = typeof track.id === 'string' ? track.id : undefined;
+        if (legacyId && isSafeId(legacyId)) {
+          return { trackId: legacyId } as NavigationParamsFor<K>;
+        }
+      }
+
+      return undefined;
     }
     case 'album': {
       if (!isRecord(params)) return undefined;
       const albumName = typeof params.albumName === 'string' ? params.albumName : undefined;
       if (!albumName) return undefined;
       const artist = typeof params.artist === 'string' ? params.artist : undefined;
-      const tracks = Array.isArray(params.tracks) ? params.tracks.filter(isTrack) : undefined;
-      return { albumName, artist, tracks } as NavigationParamsFor<K>;
+      return { albumName, artist } as NavigationParamsFor<K>;
     }
     case 'artist': {
       if (!isRecord(params)) return undefined;

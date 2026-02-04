@@ -6,20 +6,41 @@ import { useT } from '../../i18n';
 import './TrackDetailPage.css';
 
 interface TrackDetailPageProps {
-  initialTrack?: Track;
+  trackId?: string;
 }
 
 /**
  * 歌曲详情页组件
  * 显示当前播放歌曲的详细信息、歌词等
  */
-export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }) => {
+export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ trackId }) => {
   const t = useT();
   const audioService = useAudioService();
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(initialTrack || null);
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [dominantColor, setDominantColor] = useState<string>('#1a1a1a');
   const [accentColor, setAccentColor] = useState<string>('rgba(255, 255, 255, 0.1)');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!trackId) return;
+
+    setCurrentTrack((prev) => (prev && prev.id === trackId ? prev : null));
+    void musicLibraryService
+      .getTrackById(trackId)
+      .then((track) => {
+        if (cancelled) return;
+        if (!track) return;
+        setCurrentTrack(track);
+      })
+      .catch((error) => {
+        console.warn('[TrackDetail] Failed to resolve trackId:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trackId]);
 
   // 从图片提取主色调
   const extractColorFromImage = useCallback((imageUrl: string) => {
@@ -105,19 +126,28 @@ export const TrackDetailPage: React.FC<TrackDetailPageProps> = ({ initialTrack }
 
   // 监听音频状态变化
   useEffect(() => {
-    const unsubscribe = audioService.onStateChange((state) => {
+    const applyState = (state: { currentTrack: Track | null; playbackState: string }) => {
+      if (trackId) {
+        const playing =
+          state.playbackState === 'playing' && Boolean(state.currentTrack && state.currentTrack.id === trackId);
+        setIsPlaying(playing);
+        if (state.currentTrack && state.currentTrack.id === trackId) {
+          setCurrentTrack(state.currentTrack);
+        }
+        return;
+      }
+
       setCurrentTrack(state.currentTrack);
       setIsPlaying(state.playbackState === 'playing');
+    };
+
+    const unsubscribe = audioService.onStateChange((state) => {
+      applyState(state as unknown as { currentTrack: Track | null; playbackState: string });
     });
 
-    const state = audioService.getState();
-    if (!initialTrack) {
-      setCurrentTrack(state.currentTrack);
-    }
-    setIsPlaying(state.playbackState === 'playing');
-
+    applyState(audioService.getState() as unknown as { currentTrack: Track | null; playbackState: string });
     return unsubscribe;
-  }, [audioService, initialTrack]);
+  }, [audioService, trackId]);
 
   // 尝试从磁盘缓存中懒加载封面（Desktop/Tauri）
   useEffect(() => {

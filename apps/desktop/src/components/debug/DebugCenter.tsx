@@ -15,11 +15,19 @@ import {
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { calculateWindowPosition, openEditorWindow } from '../../utils/editorWindows';
 import { openVstManagerWindow } from '../../utils/vstManagerWindows';
+import { MusicLibraryService } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 
 const WINDOW_COMM_DEBUG_KEY = 'pixel-matrix-debug-window-comm';
 
 type TriBool = boolean | null;
+
+type EditorWindowsDebugState = {
+  windows: Array<{ windowType: string; exists: boolean; visible: boolean }>;
+  cachedHidden?: string | null;
+};
+
+type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats']>;
 
 function formatTriBool(value: TriBool): 'auto' | 'on' | 'off' {
   if (value === null) return 'auto';
@@ -65,15 +73,19 @@ function buildPowerShellSnippet(config: DebugConfig): string {
 
 export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings' }) {
   const t = useT();
-  const { navigateTo } = useNavigation();
+  const { navigateTo, history } = useNavigation();
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const [config, setConfigState] = useState<DebugConfig>(() => getDefaultDebugConfig());
   const [envSnapshot, setEnvSnapshot] = useState<DebugEnvSnapshot>({});
+  const [editorWindowsState, setEditorWindowsState] = useState<EditorWindowsDebugState | null>(null);
+  const [coverCacheStats, setCoverCacheStats] = useState<CoverCacheStats | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmRestartIntoDebug, setConfirmRestartIntoDebug] = useState(false);
+  const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
+  const [confirmClearCoverCaches, setConfirmClearCoverCaches] = useState(false);
   const [minidumpDirDraft, setMinidumpDirDraft] = useState('');
 
   const [windowCommDebug, setWindowCommDebug] = usePersistentSetting<string>(
@@ -82,6 +94,38 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     { format: 'string' }
   );
   const windowCommDebugEnabled = windowCommDebug === '1';
+
+  const navigationHistoryStats = useMemo(() => {
+    let bytes = 0;
+    try {
+      const serialized = JSON.stringify(history);
+      bytes =
+        typeof TextEncoder !== 'undefined'
+          ? new TextEncoder().encode(serialized).length
+          : serialized.length * 2;
+    } catch {
+      // ignore
+    }
+    return { count: history.length, bytes };
+  }, [history]);
+
+  const refreshMemory = useCallback(async () => {
+    const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
+    setCoverCacheStats(coverStats);
+
+    if (!isTauri) {
+      setEditorWindowsState(null);
+      return;
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const state = await invoke<EditorWindowsDebugState>('debug_get_editor_windows_state');
+      setEditorWindowsState(state);
+    } catch {
+      setEditorWindowsState(null);
+    }
+  }, [isTauri]);
 
   const refresh = useCallback(async () => {
     if (!isTauri) return;
@@ -115,6 +159,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       cancelled = true;
     };
   }, [isTauri]);
+
+  useEffect(() => {
+    void refreshMemory();
+  }, [refreshMemory]);
 
   const persist = useCallback(
     async (next: DebugConfig) => {
@@ -522,6 +570,90 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         <div className="settings-card">
           <div className="settings-card-header">
             <div>
+              <p className="settings-card-label">{t('debug.center.memory.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.memory.desc')}</p>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button type="button" className="settings-action-btn" onClick={() => void refreshMemory()}>
+                {t('common.action.refresh')}
+              </button>
+              <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
+                {t('debug.center.memory.actions.clearCoverCaches')}
+              </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => setConfirmDestroyEditorWindows(true)}
+                disabled={!isTauri}
+              >
+                {t('debug.center.memory.actions.destroyEditorWindows')}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <p className="settings-card-label">{t('debug.center.memory.editorWindows.label')}</p>
+              <p className="settings-card-desc">
+                {t('debug.center.memory.editorWindows.stats', {
+                  alive: editorWindowsState?.windows.filter((w) => w.exists).length ?? 0,
+                  visible:
+                    editorWindowsState?.windows.filter((w) => w.exists && w.visible).length ?? 0,
+                  hidden:
+                    (editorWindowsState?.windows.filter((w) => w.exists).length ?? 0) -
+                    (editorWindowsState?.windows.filter((w) => w.exists && w.visible).length ?? 0),
+                })}
+              </p>
+              <p className="settings-card-note">
+                {t('debug.center.memory.editorWindows.cachedHidden', {
+                  type: editorWindowsState?.cachedHidden ?? '-',
+                })}
+              </p>
+            </div>
+
+            <div>
+              <p className="settings-card-label">{t('debug.center.memory.coverCaches.label')}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <p className="settings-card-desc">
+                  {t('debug.center.memory.coverCaches.blobUrls.value', {
+                    count: coverCacheStats?.coverBlobUrlCacheEntries ?? 0,
+                    mb: ((coverCacheStats?.coverBlobUrlTotalBytes ?? 0) / 1024 / 1024).toFixed(1),
+                  })}
+                </p>
+                <p className="settings-card-desc">
+                  {t('debug.center.memory.coverCaches.urls.value', {
+                    count: coverCacheStats?.coverUrlCacheEntries ?? 0,
+                  })}
+                </p>
+                <p className="settings-card-desc">
+                  {t('debug.center.memory.coverCaches.inflight.value', {
+                    count: coverCacheStats?.coverUrlInflight ?? 0,
+                  })}
+                </p>
+                <p className="settings-card-desc">
+                  {t('debug.center.memory.coverCaches.album.value', {
+                    count: coverCacheStats?.albumCoverUrlCacheEntries ?? 0,
+                  })}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <p className="settings-card-label">{t('debug.center.memory.navigation.label')}</p>
+              <p className="settings-card-desc">{t('debug.center.memory.navigation.desc')}</p>
+              <p className="settings-card-note">
+                {t('debug.center.memory.navigation.history.value', {
+                  count: navigationHistoryStats.count,
+                  kb: (navigationHistoryStats.bytes / 1024).toFixed(1),
+                })}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
               <p className="settings-card-label">{t('debug.center.shortcuts.title')}</p>
               <p className="settings-card-desc">{t('debug.center.shortcuts.desc')}</p>
             </div>
@@ -576,6 +708,35 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           void requestRestart('debug-center');
         }}
         onCancel={() => setConfirmRestartIntoDebug(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmDestroyEditorWindows}
+        title={t('debug.center.memory.confirm.destroyEditorWindows.title')}
+        message={t('debug.center.memory.confirm.destroyEditorWindows.message')}
+        confirmText={t('common.action.confirm')}
+        onConfirm={() => {
+          setConfirmDestroyEditorWindows(false);
+          if (!isTauri) return;
+          void import('@tauri-apps/api/tauri')
+            .then(({ invoke }) => invoke('close_all_editor_windows'))
+            .then(() => refreshMemory())
+            .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+        }}
+        onCancel={() => setConfirmDestroyEditorWindows(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmClearCoverCaches}
+        title={t('debug.center.memory.confirm.clearCoverCaches.title')}
+        message={t('debug.center.memory.confirm.clearCoverCaches.message')}
+        confirmText={t('common.action.confirm')}
+        onConfirm={() => {
+          setConfirmClearCoverCaches(false);
+          MusicLibraryService.getInstance().clearCoverRuntimeCaches();
+          void refreshMemory();
+        }}
+        onCancel={() => setConfirmClearCoverCaches(false)}
       />
     </div>
   );

@@ -3,6 +3,7 @@ import type { PmpsEntryPoint } from './pmps';
 import { resolvePmpsEntryPoint } from './webgl2ShaderSource';
 import { Webgl2ShaderRuntime, type DetectedUniform, type ShaderRuntimeError } from './webgl2Runtime';
 import { useWindowActivity } from '../contexts/WindowActivityContext';
+import { BACKGROUND_RENDER_THROTTLE_FPS } from '../contracts/performance';
 
 export type PmpsShaderLayerProps = {
   shaderId: string;
@@ -38,7 +39,7 @@ export function PmpsShaderLayer({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<Webgl2ShaderRuntime | null>(null);
   const [hasError, setHasError] = useState(false);
-  const { isVisible, isActive } = useWindowActivity();
+  const { isVisible, renderMode } = useWindowActivity();
 
   const resolvedEntryPoint = useMemo(
     () => resolvePmpsEntryPoint(fragmentCode, entryPoint),
@@ -107,9 +108,21 @@ export function PmpsShaderLayer({
   }, [height, resolutionScale, width]);
 
   useEffect(() => {
-    const shouldRun = isVisible && isActive && !hasError && width > 0 && height > 0;
+    const shouldRun = isVisible && renderMode !== 'pause' && !hasError && width > 0 && height > 0;
     runtimeRef.current?.setActive(shouldRun);
-  }, [hasError, height, isActive, isVisible, width]);
+  }, [hasError, height, isVisible, renderMode, width]);
+
+  useEffect(() => {
+    const base =
+      typeof fpsLimit === 'number' && Number.isFinite(fpsLimit) && fpsLimit > 0 ? fpsLimit : undefined;
+    const effective =
+      renderMode === 'throttle'
+        ? base === undefined
+          ? BACKGROUND_RENDER_THROTTLE_FPS
+          : Math.min(base, BACKGROUND_RENDER_THROTTLE_FPS)
+        : base;
+    runtimeRef.current?.setFpsLimit(effective);
+  }, [fpsLimit, renderMode]);
 
   useEffect(() => {
     runtimeRef.current?.setFrequencyDataProvider(getFrequencyData);
