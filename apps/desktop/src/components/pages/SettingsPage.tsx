@@ -117,39 +117,24 @@ export const SettingsPage: React.FC = () => {
   }, [activeSection, panels]);
 
   return (
-    <div className="page-settings">
-      <div className="settings-header">
-        <div>
-          <h1 className="settings-title">{t('pages.settings.title')}</h1>
-          <p className="settings-subtitle">{t('pages.settings.subtitle')}</p>
-        </div>
-        <div className="settings-header-actions">
-          <button
-            type="button"
-            className="settings-action-btn"
-            onClick={() => navigateTo('keyboard-shortcuts')}
-          >
-            {t('pages.keyboard-shortcuts.title')}
-          </button>
-        </div>
-      </div>
-
+    <div className="page-settings page-settings--deltaforce">
       {panels.length === 0 ? (
         <div className="settings-card-note">{t('pages.settings.empty')}</div>
       ) : (
-        <div className="settings-layout">
-          <div className="settings-tabs-area">
-            {sections.length > 1 && (
-              <div className="settings-tabs-row settings-tabs-row--sections">
-                <div className="settings-tabs-scroll">
-                  {sections.map((section) => {
+        <div className="settings-shell">
+          <header className="settings-topbar">
+            <div className="settings-topbar-left">
+              {sections.length > 1 ? (
+                <div className="settings-main-tabs" role="tablist" aria-label={t('pages.settings.title')}>
+                  {sections.map((section, index) => {
                     const isActive = section.id === activeSectionId;
                     return (
                       <button
                         key={section.id}
                         type="button"
-                        className="settings-tab"
+                        className="settings-main-tab"
                         data-active={isActive}
+                        data-has-separator={index < sections.length - 1}
                         onClick={() => {
                           setActiveSectionId(section.id);
                           const panelInSection =
@@ -159,37 +144,58 @@ export const SettingsPage: React.FC = () => {
                           if (panelInSection) setActivePanelId(panelInSection);
                         }}
                       >
-                        <span className="settings-tab-label">{section.title}</span>
-                        <span className="settings-tab-count">{section.panels.length}</span>
+                        <span className="settings-main-tab-label">{section.title}</span>
+                        <span className="settings-main-tab-count">{section.panels.length}</span>
                       </button>
                     );
                   })}
                 </div>
-              </div>
-            )}
-
-            <div className="settings-tabs-row settings-tabs-row--panels">
-              <div className="settings-tabs-scroll">
-                {visiblePanels.map((panel) => (
-                  <button
-                    key={panel.id}
-                    type="button"
-                    className="settings-tab settings-tab--panel"
-                    data-active={panel.id === activePanelId}
-                    onClick={() => {
-                      setActivePanelId(panel.id);
-                      setActiveSectionId(resolveSettingsSectionId(panel));
-                    }}
-                  >
-                    <span className="settings-tab-label">{panel.title}</span>
-                    {panel.source === 'plugin' && (
-                      <span className="settings-tab-tag">{t('common.source.plugin')}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
+              ) : (
+                <div className="settings-topbar-title">
+                  <div className="settings-title">{t('pages.settings.title')}</div>
+                  <div className="settings-subtitle">{t('pages.settings.subtitle')}</div>
+                </div>
+              )}
             </div>
-          </div>
+
+            <div className="settings-topbar-actions">
+              <button
+                type="button"
+                className="settings-action-btn settings-action-btn--topbar"
+                onClick={() => navigateTo('keyboard-shortcuts')}
+              >
+                {t('pages.keyboard-shortcuts.title')}
+              </button>
+            </div>
+          </header>
+
+          <div className="settings-divider" />
+
+          <nav className="settings-subbar" aria-label={t('pages.settings.title')}>
+            <div className="settings-sub-tabs">
+              {visiblePanels.map((panel, index) => (
+                <button
+                  key={panel.id}
+                  type="button"
+                  className="settings-sub-tab"
+                  data-active={panel.id === activePanelId}
+                  data-has-separator={index < visiblePanels.length - 1}
+                  onClick={() => {
+                    setActivePanelId(panel.id);
+                    setActiveSectionId(resolveSettingsSectionId(panel));
+                  }}
+                  title={panel.title}
+                >
+                  <span className="settings-sub-tab-label">{panel.title}</span>
+                  {panel.source === 'plugin' && (
+                    <span className="settings-sub-tab-tag">{t('common.source.plugin')}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </nav>
+
+          <div className="settings-divider" />
 
           <main className="settings-content">
             {activePanel ? (

@@ -26,6 +26,327 @@
     var(--settings-bg);
 }
 
+.page-settings--deltaforce {
+  --settings-bg: #0b1117;
+  --settings-surface: rgba(14, 21, 29, 0.72);
+  --settings-surface-strong: rgba(14, 21, 29, 0.86);
+  --settings-surface-muted: rgba(0, 0, 0, 0);
+  --settings-border: rgba(255, 255, 255, 0.14);
+  --settings-border-strong: rgba(255, 255, 255, 0.18);
+  --settings-text: rgba(230, 238, 247, 0.95);
+  --settings-text-muted: rgba(184, 195, 206, 0.72);
+  --settings-text-dim: rgba(127, 138, 150, 0.9);
+  --settings-accent-rgb: 43, 216, 137;
+
+  padding: 0;
+  gap: 0;
+  background:
+    radial-gradient(1100px circle at 18% -10%, rgba(43, 216, 137, 0.12), transparent 60%),
+    radial-gradient(900px circle at 112% 8%, rgba(74, 123, 216, 0.1), transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0) 38%),
+    var(--settings-bg);
+}
+
+.page-settings--deltaforce .settings-shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-settings--deltaforce .settings-divider {
+  width: 100%;
+  height: 1px;
+  background: #1f2b35;
+  flex: 0 0 auto;
+}
+
+.page-settings--deltaforce .settings-topbar {
+  height: 64px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0e151d;
+  flex: 0 0 auto;
+}
+
+.page-settings--deltaforce .settings-topbar-left {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+}
+
+.page-settings--deltaforce .settings-topbar-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-settings--deltaforce .settings-title {
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.page-settings--deltaforce .settings-subtitle {
+  font-size: 12px;
+  color: var(--settings-text-muted);
+}
+
+.page-settings--deltaforce .settings-main-tabs {
+  height: 100%;
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.page-settings--deltaforce .settings-main-tab {
+  position: relative;
+  height: 100%;
+  flex: 1 0 140px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  color: rgba(184, 195, 206, 0.92);
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+  white-space: nowrap;
+}
+
+.page-settings--deltaforce .settings-main-tab[data-has-separator='true']::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1px;
+  height: 26px;
+  transform: translateY(-50%);
+  background: #23303b;
+}
+
+.page-settings--deltaforce .settings-main-tab::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: transparent;
+}
+
+.page-settings--deltaforce .settings-main-tab:hover {
+  background: rgba(17, 27, 36, 0.55);
+  color: rgba(230, 238, 247, 0.92);
+}
+
+.page-settings--deltaforce .settings-main-tab[data-active='true'] {
+  background: #111b24;
+  color: rgba(230, 238, 247, 0.98);
+}
+
+.page-settings--deltaforce .settings-main-tab[data-active='true']::before {
+  background: rgba(var(--settings-accent-rgb), 0.95);
+}
+
+.page-settings--deltaforce .settings-main-tab-label {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.page-settings--deltaforce .settings-main-tab-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(184, 195, 206, 0.82);
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+.page-settings--deltaforce .settings-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.page-settings--deltaforce .settings-subbar {
+  height: 52px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  background: #0b1117;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.page-settings--deltaforce .settings-sub-tabs {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
+.page-settings--deltaforce .settings-sub-tab {
+  position: relative;
+  height: 100%;
+  flex: 1 0 150px;
+  min-width: 140px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: rgba(184, 195, 206, 0.9);
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+  white-space: nowrap;
+}
+
+.page-settings--deltaforce .settings-sub-tab[data-has-separator='true']::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1px;
+  height: 18px;
+  transform: translateY(-50%);
+  background: #1f2b35;
+}
+
+.page-settings--deltaforce .settings-sub-tab::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: transparent;
+}
+
+.page-settings--deltaforce .settings-sub-tab:hover {
+  background: rgba(17, 27, 36, 0.45);
+  color: rgba(230, 238, 247, 0.92);
+}
+
+.page-settings--deltaforce .settings-sub-tab[data-active='true'] {
+  background: #111b24;
+  color: rgba(230, 238, 247, 0.98);
+}
+
+.page-settings--deltaforce .settings-sub-tab[data-active='true']::before {
+  background: rgba(var(--settings-accent-rgb), 0.95);
+}
+
+.page-settings--deltaforce .settings-sub-tab-label {
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.page-settings--deltaforce .settings-sub-tab-tag {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--settings-accent-rgb), 0.28);
+  background: rgba(var(--settings-accent-rgb), 0.08);
+  color: rgba(var(--settings-accent-rgb), 0.9);
+  font-size: 11px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.page-settings--deltaforce .settings-content {
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  background: #0b1117;
+  overflow: auto;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.page-settings--deltaforce .settings-content-panel {
+  width: min(980px, 100%);
+}
+
+.page-settings--deltaforce .settings-content-header {
+  margin-bottom: 18px;
+}
+
+.page-settings--deltaforce .settings-content-title {
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.page-settings--deltaforce .settings-content-desc {
+  font-size: 12px;
+}
+
+.page-settings--deltaforce .settings-action-btn--topbar {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #111b24;
+  box-shadow: none;
+  backdrop-filter: none;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.page-settings--deltaforce .settings-action-btn--topbar:hover:not(:disabled) {
+  border-color: rgba(var(--settings-accent-rgb), 0.4);
+  background: rgba(17, 27, 36, 0.9);
+}
+
+.page-settings--deltaforce .settings-card {
+  border-radius: 10px;
+  background: rgba(14, 21, 29, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
+}
+
+.page-settings--deltaforce .settings-card-badge {
+  border-radius: 8px;
+}
+
+.page-settings--deltaforce .settings-toggle {
+  gap: 8px;
+}
+
+.page-settings--deltaforce .settings-toggle button {
+  border-radius: 4px;
+  background: #0e151d;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.page-settings--deltaforce .settings-toggle button[data-active='true'] {
+  border-color: rgba(var(--settings-accent-rgb), 0.6);
+  background: #111b24;
+  color: rgba(230, 238, 247, 0.98);
+  box-shadow: inset 0 0 0 1px rgba(var(--settings-accent-rgb), 0.12);
+}
+
 .settings-header {
   width: 100%;
   display: flex;
@@ -217,26 +538,30 @@
 }
 
 .settings-tabs-scroll,
-.settings-content {
+.settings-content,
+.page-settings--deltaforce .settings-sub-tabs {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.18) rgba(0, 0, 0, 0.22);
 }
 
 .settings-tabs-scroll::-webkit-scrollbar,
-.settings-content::-webkit-scrollbar {
+.settings-content::-webkit-scrollbar,
+.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-track,
-.settings-content::-webkit-scrollbar-track {
+.settings-content::-webkit-scrollbar-track,
+.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.16);
   border-radius: 999px;
   margin: 4px;
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-thumb,
-.settings-content::-webkit-scrollbar-thumb {
+.settings-content::-webkit-scrollbar-thumb,
+.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.18);
   border-radius: 999px;
   border: 2px solid transparent;
@@ -247,13 +572,15 @@
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-thumb:hover,
-.settings-content::-webkit-scrollbar-thumb:hover {
+.settings-content::-webkit-scrollbar-thumb:hover,
+.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-thumb:hover {
   background: rgba(var(--settings-accent-rgb), 0.3);
   box-shadow: 0 0 8px rgba(var(--settings-accent-rgb), 0.16);
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-thumb:active,
-.settings-content::-webkit-scrollbar-thumb:active {
+.settings-content::-webkit-scrollbar-thumb:active,
+.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-thumb:active {
   background: rgba(var(--settings-accent-rgb), 0.42);
 }
 
