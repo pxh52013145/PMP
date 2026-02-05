@@ -25,6 +25,7 @@ import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
+import { musicLibraryService } from './services/audio/MusicLibraryService';
 import {
   DEFAULT_BACKGROUND_RENDER_POLICY,
   type BackgroundRenderPolicy,
@@ -55,6 +56,26 @@ function AppContent() {
 
   useEffect(() => {
     void syncEditorEffectsFromStorage();
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) return;
+      if (target.naturalWidth <= 0 || target.naturalHeight <= 0) return;
+
+      const parent = target.closest(
+        '.music-library-album-cover, .album-cover-large, .card-cover, .track-cover-image'
+      );
+      if (!parent) return;
+
+      const src = target.currentSrc || target.src;
+      if (!src) return;
+      musicLibraryService.reportCoverDecoded(src, target.naturalWidth, target.naturalHeight);
+    };
+
+    document.addEventListener('load', handler, true);
+    return () => document.removeEventListener('load', handler, true);
   }, []);
 
   const refreshBackgroundRenderPolicy = useCallback(() => {

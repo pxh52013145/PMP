@@ -627,6 +627,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   })}
                 </p>
                 <p className="settings-card-desc">
+                  {t('debug.center.memory.coverCaches.decoded.value', {
+                    count: coverCacheStats?.coverDecodedEstimateEntries ?? 0,
+                    mb: ((coverCacheStats?.coverDecodedEstimateTotalBytes ?? 0) / 1024 / 1024).toFixed(1),
+                  })}
+                </p>
+                <p className="settings-card-desc">
                   {t('debug.center.memory.coverCaches.urls.value', {
                     count: coverCacheStats?.coverUrlCacheEntries ?? 0,
                   })}

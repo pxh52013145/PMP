@@ -130,6 +130,8 @@ export function PerfMonitorPage() {
           </div>
         </div>
 
+        <p className="settings-card-note">{t('pages.perf-monitor.note.metrics')}</p>
+
         {error ? (
           <p className="settings-card-note" style={{ color: 'rgba(255, 140, 140, 0.92)' }}>
             {error}

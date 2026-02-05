@@ -1331,7 +1331,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       >
                         <div className="music-library-album-cover">
                           {cover ? (
-                            <img src={cover} alt={album} loading="lazy" decoding="async" />
+                            <img
+                              src={cover}
+                              alt={album}
+                              loading="lazy"
+                              decoding="async"
+                              onLoad={(event) => {
+                                musicLibraryService.reportCoverDecoded(
+                                  cover,
+                                  event.currentTarget.naturalWidth,
+                                  event.currentTarget.naturalHeight
+                                );
+                              }}
+                            />
                           ) : (
                             '◉'
                           )}

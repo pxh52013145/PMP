@@ -71,6 +71,8 @@ export class MusicLibraryService {
   private coverUrlCache: Map<string, string> = new Map();
   private coverBlobUrlCache: Map<string, { url: string; bytes: number }> = new Map();
   private coverBlobUrlTotalBytes: number = 0;
+  private coverDecodedEstimateBytes: Map<string, number> = new Map();
+  private coverDecodedEstimateTotalBytes: number = 0;
   private coverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
   private albumCoverUrlCache: Map<string, string> = new Map();
   private albumCoverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
@@ -79,6 +81,7 @@ export class MusicLibraryService {
   private COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024; // 80MB
   private COVER_MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB max for cover extraction (thumbnails keep return sizes small)
   private COVER_BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024; // 32MB in-memory blob URL cache
+  private COVER_DECODED_ESTIMATE_MAX_ENTRIES = 512;
   private coverMaxEdgePx: number = 256;
 
   // 缓存 - 减少数据库查询
@@ -356,6 +359,7 @@ export class MusicLibraryService {
         } catch (err) {
           void err;
         }
+        this.forgetCoverDecodedEstimate(oldest.url);
 
         const cached = this.coverUrlCache.get(oldestKey);
         if (cached === oldest.url) {
@@ -595,6 +599,8 @@ export class MusicLibraryService {
     coverUrlCacheEntries: number;
     coverBlobUrlCacheEntries: number;
     coverBlobUrlTotalBytes: number;
+    coverDecodedEstimateEntries: number;
+    coverDecodedEstimateTotalBytes: number;
     coverUrlInflight: number;
     albumCoverUrlCacheEntries: number;
     albumCoverUrlInflight: number;
@@ -603,6 +609,8 @@ export class MusicLibraryService {
       coverUrlCacheEntries: this.coverUrlCache.size,
       coverBlobUrlCacheEntries: this.coverBlobUrlCache.size,
       coverBlobUrlTotalBytes: this.coverBlobUrlTotalBytes,
+      coverDecodedEstimateEntries: this.coverDecodedEstimateBytes.size,
+      coverDecodedEstimateTotalBytes: this.coverDecodedEstimateTotalBytes,
       coverUrlInflight: this.coverUrlInflight.size,
       albumCoverUrlCacheEntries: this.albumCoverUrlCache.size,
       albumCoverUrlInflight: this.albumCoverUrlInflight.size,
@@ -624,6 +632,54 @@ export class MusicLibraryService {
     this.albumCoverUrlCache.clear();
     this.albumCoverUrlInflight.clear();
     this.coverBlobUrlTotalBytes = 0;
+    this.coverDecodedEstimateBytes.clear();
+    this.coverDecodedEstimateTotalBytes = 0;
+  }
+
+  reportCoverDecoded(coverUrl: string, naturalWidth: number, naturalHeight: number): void {
+    if (!coverUrl) return;
+    if (!Number.isFinite(naturalWidth) || !Number.isFinite(naturalHeight)) return;
+    const width = Math.round(naturalWidth);
+    const height = Math.round(naturalHeight);
+    if (width <= 0 || height <= 0) return;
+    if (width > 16384 || height > 16384) return;
+
+    const bytes = width * height * 4;
+    if (!Number.isFinite(bytes) || bytes <= 0) return;
+    if (bytes > 512 * 1024 * 1024) return;
+
+    const existing = this.coverDecodedEstimateBytes.get(coverUrl);
+    if (existing === bytes) {
+      this.coverDecodedEstimateBytes.delete(coverUrl);
+      this.coverDecodedEstimateBytes.set(coverUrl, bytes);
+      return;
+    }
+
+    if (existing !== undefined) {
+      this.coverDecodedEstimateBytes.delete(coverUrl);
+      this.coverDecodedEstimateTotalBytes = Math.max(0, this.coverDecodedEstimateTotalBytes - existing);
+    }
+
+    this.coverDecodedEstimateBytes.set(coverUrl, bytes);
+    this.coverDecodedEstimateTotalBytes += bytes;
+
+    while (this.coverDecodedEstimateBytes.size > this.COVER_DECODED_ESTIMATE_MAX_ENTRIES) {
+      const oldestKey = this.coverDecodedEstimateBytes.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      const oldestBytes = this.coverDecodedEstimateBytes.get(oldestKey);
+      this.coverDecodedEstimateBytes.delete(oldestKey);
+      if (typeof oldestBytes === 'number') {
+        this.coverDecodedEstimateTotalBytes = Math.max(0, this.coverDecodedEstimateTotalBytes - oldestBytes);
+      }
+    }
+  }
+
+  private forgetCoverDecodedEstimate(coverUrl: string): void {
+    if (!coverUrl) return;
+    const existing = this.coverDecodedEstimateBytes.get(coverUrl);
+    if (existing === undefined) return;
+    this.coverDecodedEstimateBytes.delete(coverUrl);
+    this.coverDecodedEstimateTotalBytes = Math.max(0, this.coverDecodedEstimateTotalBytes - existing);
   }
 
   static getInstance(): MusicLibraryService {
