@@ -38,6 +38,7 @@ import {
 import { resolveMagnetLayoutStorageKey, type MagnetSpaceLayout } from './layout';
 import {
   magnetLayoutStoreApplyPatch,
+  magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreBootstrapFromLegacy,
   magnetLayoutStoreGetState,
   type MagnetLayoutStorePatch,
@@ -46,6 +47,7 @@ import {
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { usePersistentSetting } from '../storage';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
+import { getSystemAnchorsByMagnetId } from './systemLayouts';
 
 export interface MagnetLibraryProviderProps {
   children: ReactNode;
@@ -72,6 +74,42 @@ export interface MagnetConfigContextValue {
 }
 
 const MagnetConfigContext = createContext<MagnetConfigContextValue | null>(null);
+
+async function migrateProcessPerfMonitorInLayoutStore(
+  store: MagnetLayoutStoreState
+): Promise<MagnetLayoutStoreState> {
+  const spaceId = 'space1';
+  const layout = store.layoutsBySpaceId[spaceId];
+  if (!layout) return store;
+
+  const magnetId = 'process-perf-monitor';
+  const active = new Set(layout.activeMagnetIds);
+  const anchors = layout.anchorsByMagnetId[magnetId];
+  const needsActive = !active.has(magnetId);
+  const needsAnchors = !Array.isArray(anchors) || anchors.length === 0;
+  if (!needsActive && !needsAnchors) return store;
+
+  const patches: MagnetLayoutStorePatch[] = [];
+  if (needsActive) {
+    patches.push({ kind: 'setMagnetActive', spaceId, magnetId, active: true });
+  }
+  if (needsAnchors) {
+    const systemAnchors = getSystemAnchorsByMagnetId(spaceId)[magnetId] ?? [];
+    if (systemAnchors.length > 0) {
+      patches.push({ kind: 'updateMagnetAnchors', spaceId, magnetId, anchors: systemAnchors });
+    }
+  }
+  if (patches.length === 0) return store;
+
+  const response = await magnetLayoutStoreApplyPatchWithRetry({
+    expectedRevision: store.revision,
+    patches,
+    reason: 'migration:process-perf-monitor',
+  });
+
+  if (!response || !response.ok) return store;
+  return response.state;
+}
 
 export function MagnetLibraryProvider({
   children,
@@ -317,8 +355,10 @@ export function MagnetLibraryProvider({
 
     void (async () => {
       const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
-      const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+      let store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (!store) return;
+
+      store = await migrateProcessPerfMonitorInLayoutStore(store);
 
       layoutStoreRevisionRef.current = store.revision;
       setLayoutStoreState(store);
