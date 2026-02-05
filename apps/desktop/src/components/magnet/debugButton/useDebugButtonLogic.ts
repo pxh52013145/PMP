@@ -4,6 +4,7 @@
  */
 
 import { useNavigation } from '../../../contexts/NavigationContext';
+import { useT } from '../../../i18n';
 
 export interface DebugButtonLogic {
   toggleDebugWindow: (isOpen: boolean, setIsOpen: (value: boolean) => void) => Promise<void>;
@@ -13,6 +14,7 @@ export interface DebugButtonLogic {
 
 export function useDebugButtonLogic(): DebugButtonLogic {
   const navigation = useNavigation();
+  const t = useT();
 
   const toggleDebugWindow = async (isOpen: boolean, setIsOpen: (value: boolean) => void) => {
     try {
@@ -22,7 +24,7 @@ export function useDebugButtonLogic(): DebugButtonLogic {
         return;
       }
 
-      navigation.navigateTo('settings');
+      navigation.navigateTo('debug');
       setIsOpen(true);
     } catch (error) {
       console.error('Failed to toggle settings:', error);
@@ -31,7 +33,7 @@ export function useDebugButtonLogic(): DebugButtonLogic {
   };
 
   const getButtonTitle = (isOpen: boolean): string => {
-    return isOpen ? '返回上一页' : '打开设置';
+    return isOpen ? t('magnet.debugButton.title.back') : t('magnet.debugButton.title.open');
   };
 
   const getButtonIcon = (): string => {

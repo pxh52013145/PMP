@@ -11,6 +11,7 @@ export type PmpmPluginPageType = `pmpm:${string}:page:${string}`;
 export type NavigationPageType =
   | 'home'
   | 'settings'
+  | 'debug'
   | 'debug-center'
   | 'perf-monitor'
   | 'keyboard-shortcuts'
@@ -29,6 +30,7 @@ export type NavigationPageType =
 export type NavigationParamsMap = {
   home: undefined;
   settings: undefined;
+  debug: undefined;
   'debug-center': undefined;
   'perf-monitor': undefined;
   'keyboard-shortcuts': undefined;

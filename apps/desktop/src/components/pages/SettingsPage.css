@@ -47,6 +47,16 @@
     var(--settings-bg);
 }
 
+.page-settings--debug {
+  --settings-accent-rgb: 244, 194, 69;
+
+  background:
+    radial-gradient(1100px circle at 18% -10%, rgba(244, 194, 69, 0.14), transparent 60%),
+    radial-gradient(900px circle at 112% 8%, rgba(74, 123, 216, 0.1), transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0) 38%),
+    var(--settings-bg);
+}
+
 .page-settings--deltaforce .settings-shell {
   width: 100%;
   height: 100%;

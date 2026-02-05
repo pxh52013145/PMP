@@ -17,10 +17,10 @@ export function useDebugButtonData(): DebugButtonData & {
   setIsOpen: (value: boolean) => void;
 } {
   const navigation = useNavigation();
-  const [isOpen, setIsOpen] = useState(() => navigation.currentPage.type === 'settings');
+  const [isOpen, setIsOpen] = useState(() => navigation.currentPage.type === 'debug');
 
   useEffect(() => {
-    setIsOpen(navigation.currentPage.type === 'settings');
+    setIsOpen(navigation.currentPage.type === 'debug');
   }, [navigation.currentPage.type]);
 
   return {
