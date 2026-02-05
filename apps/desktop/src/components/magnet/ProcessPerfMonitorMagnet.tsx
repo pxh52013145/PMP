@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { getProcessPerfTotalsSnapshot, type ProcessPerfTotalsSnapshot } from '../../modules/debug';
@@ -42,6 +43,7 @@ function buildSnapshotHash(snapshot: DisplaySnapshot): string {
 
 export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet() {
   const t = useT();
+  const navigation = useNavigation();
   const { renderMode, isVisible } = useWindowActivity();
   const pollIntervalMs = useMemo(() => getPollIntervalMs(renderMode), [renderMode]);
   const [snapshot, setSnapshot] = useState<DisplaySnapshot | null>(null);
@@ -110,6 +112,15 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={() => navigation.navigateTo('perf-monitor')}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          navigation.navigateTo('perf-monitor');
+        }
+      }}
       style={{
         width: '100%',
         height: '100%',
@@ -123,6 +134,8 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
         lineHeight: 1.15,
         fontVariantNumeric: 'tabular-nums',
         contain: 'content',
+        cursor: 'pointer',
+        userSelect: 'none',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>

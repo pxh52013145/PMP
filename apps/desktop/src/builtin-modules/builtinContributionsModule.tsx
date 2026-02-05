@@ -10,6 +10,7 @@ import { TrackDetailPage } from '../components/pages/TrackDetailPage';
 import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
 import { DebugCenterPage } from '../components/pages/DebugCenterPage';
 import { NativeDebugPage } from '../components/pages/NativeDebugPage';
+import { PerfMonitorPage } from '../components/pages/PerfMonitorPage';
 import { DspRackPage } from '../components/pages/DspRackPage';
 import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
 import { AudioComponentsSettingsPanel } from '../components/settings-panels/AudioComponentsSettingsPanel';
@@ -289,6 +290,17 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           order: 88,
           group: 'debug',
           tags: ['debug'],
+        });
+
+        register<PageContribution>({
+          kind: 'page',
+          id: 'perf-monitor',
+          title: t('pages.perf-monitor.title'),
+          render: () => <PerfMonitorPage />,
+          source: 'builtin',
+          order: 89,
+          group: 'debug',
+          tags: ['debug', 'perf', 'webview2'],
         });
 
         register<PageContribution>({

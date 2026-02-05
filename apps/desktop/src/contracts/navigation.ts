@@ -12,6 +12,7 @@ export type NavigationPageType =
   | 'home'
   | 'settings'
   | 'debug-center'
+  | 'perf-monitor'
   | 'keyboard-shortcuts'
   | 'music-library'
   | 'playlists'
@@ -29,6 +30,7 @@ export type NavigationParamsMap = {
   home: undefined;
   settings: undefined;
   'debug-center': undefined;
+  'perf-monitor': undefined;
   'keyboard-shortcuts': undefined;
   'music-library': undefined;
   playlists: undefined;
