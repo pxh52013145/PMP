@@ -202,12 +202,14 @@
   align-items: stretch;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-gutter: stable;
   scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar {
-  display: none;
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
 }
 
 .page-settings--deltaforce .settings-subbar {
@@ -662,30 +664,26 @@
 }
 
 .settings-tabs-scroll,
-.settings-content,
-.page-settings--deltaforce .settings-sub-tabs {
+.settings-content {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.18) rgba(0, 0, 0, 0.22);
 }
 
 .settings-tabs-scroll::-webkit-scrollbar,
-.settings-content::-webkit-scrollbar,
-.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar {
+.settings-content::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-track,
-.settings-content::-webkit-scrollbar-track,
-.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-track {
+.settings-content::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.16);
   border-radius: 999px;
   margin: 4px;
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-thumb,
-.settings-content::-webkit-scrollbar-thumb,
-.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-thumb {
+.settings-content::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.18);
   border-radius: 999px;
   border: 2px solid transparent;
@@ -696,15 +694,13 @@
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-thumb:hover,
-.settings-content::-webkit-scrollbar-thumb:hover,
-.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-thumb:hover {
+.settings-content::-webkit-scrollbar-thumb:hover {
   background: rgba(var(--settings-accent-rgb), 0.3);
   box-shadow: 0 0 8px rgba(var(--settings-accent-rgb), 0.16);
 }
 
 .settings-tabs-scroll::-webkit-scrollbar-thumb:active,
-.settings-content::-webkit-scrollbar-thumb:active,
-.page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar-thumb:active {
+.settings-content::-webkit-scrollbar-thumb:active {
   background: rgba(var(--settings-accent-rgb), 0.42);
 }
 
