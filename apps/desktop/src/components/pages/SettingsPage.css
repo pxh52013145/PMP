@@ -212,40 +212,6 @@
   display: none !important;
 }
 
-.page-settings--deltaforce .settings-subbar {
-  position: relative;
-}
-
-.page-settings--deltaforce .settings-sub-scroll {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 4px;
-  height: 3px;
-  pointer-events: none;
-  opacity: 0.9;
-}
-
-.page-settings--deltaforce .settings-sub-scroll-track {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 3px;
-  background: rgba(31, 43, 53, 0.65);
-}
-
-.page-settings--deltaforce .settings-sub-scroll-thumb {
-  position: absolute;
-  top: 0;
-  height: 3px;
-  background: rgba(184, 195, 206, 0.4);
-}
-
-.page-settings--deltaforce .settings-sub-scroll-thumb[data-active='true'] {
-  background: rgba(var(--settings-accent-rgb), 0.75);
-}
-
 .page-settings--deltaforce .settings-sub-tab {
   position: relative;
   height: 100%;
