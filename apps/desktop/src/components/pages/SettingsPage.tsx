@@ -32,6 +32,8 @@ export const SettingsPage: React.FC = () => {
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const subTabsRef = React.useRef<HTMLDivElement | null>(null);
+  const [subTabsMetrics, setSubTabsMetrics] = useState({ left: 0, width: 0, scrollWidth: 0 });
 
   useEffect(() => {
     return kernel.contributions.subscribe(() => setRevision((v) => v + 1));
@@ -116,6 +118,41 @@ export const SettingsPage: React.FC = () => {
     return activeSection?.panels ?? panels;
   }, [activeSection, panels]);
 
+  useEffect(() => {
+    const el = subTabsRef.current;
+    if (!el) return;
+
+    let raf = 0;
+    const update = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        setSubTabsMetrics({
+          left: el.scrollLeft,
+          width: el.clientWidth,
+          scrollWidth: el.scrollWidth,
+        });
+      });
+    };
+
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(update);
+      ro.observe(el);
+    } else {
+      window.addEventListener('resize', update);
+    }
+
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      el.removeEventListener('scroll', update);
+      if (ro) ro.disconnect();
+      else window.removeEventListener('resize', update);
+    };
+  }, [activeSectionId, activePanelId, visiblePanels.length]);
+
   return (
     <div className="page-settings page-settings--deltaforce">
       {panels.length === 0 ? (
@@ -172,7 +209,20 @@ export const SettingsPage: React.FC = () => {
           <div className="settings-divider" />
 
           <nav className="settings-subbar" aria-label={t('pages.settings.title')}>
-            <div className="settings-sub-tabs">
+            <div
+              ref={subTabsRef}
+              className="settings-sub-tabs"
+              onWheel={(e) => {
+                const el = subTabsRef.current;
+                if (!el) return;
+                const hasOverflow = el.scrollWidth > el.clientWidth + 1;
+                if (!hasOverflow) return;
+                if (e.shiftKey) return;
+                if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+                el.scrollLeft += e.deltaY;
+                e.preventDefault();
+              }}
+            >
               {visiblePanels.map((panel, index) => (
                 <button
                   key={panel.id}
@@ -193,6 +243,25 @@ export const SettingsPage: React.FC = () => {
                 </button>
               ))}
             </div>
+            {subTabsMetrics.scrollWidth > subTabsMetrics.width + 1 ? (() => {
+              const width = subTabsMetrics.width;
+              const scrollWidth = subTabsMetrics.scrollWidth;
+              const ratio = width > 0 && scrollWidth > 0 ? width / scrollWidth : 1;
+              const thumbWidth = Math.max(56, Math.floor(width * ratio));
+              const maxLeft = Math.max(0, width - thumbWidth);
+              const maxScroll = Math.max(1, scrollWidth - width);
+              const thumbLeft = maxLeft * (subTabsMetrics.left / maxScroll);
+              return (
+                <div className="settings-sub-scroll" aria-hidden="true">
+                  <div className="settings-sub-scroll-track" />
+                  <div
+                    className="settings-sub-scroll-thumb"
+                    data-active="true"
+                    style={{ width: `${thumbWidth}px`, left: `${thumbLeft}px` }}
+                  />
+                </div>
+              );
+            })() : null}
           </nav>
 
           <div className="settings-divider" />
