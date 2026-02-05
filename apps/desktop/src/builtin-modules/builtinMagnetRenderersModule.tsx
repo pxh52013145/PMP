@@ -15,6 +15,7 @@ import { DebugButton } from '../components/magnet/DebugButton';
 import { AudioVisualizerMagnet } from '../components/magnet/AudioVisualizerMagnet';
 import { MatrixChangeMagnet } from '../components/magnet/MatrixChangeMagnet';
 import { DspVstMagnet } from '../components/magnet/DspVstMagnet';
+import { ProcessPerfMonitorMagnet } from '../components/magnet/ProcessPerfMonitorMagnet';
 import {
   getMagnetRenderer,
   registerMagnetRenderer,
@@ -36,6 +37,14 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
       preview: () => createTextPreview(t('magnet.renderers.navigation-page.preview')),
       description: t('magnet.renderers.navigation-page.description'),
       group: 'layout',
+      source: 'builtin',
+    },
+    {
+      id: 'process-perf-monitor',
+      render: () => <ProcessPerfMonitorMagnet />,
+      preview: () => createTextPreview(t('magnet.renderers.process-perf-monitor.preview')),
+      description: t('magnet.renderers.process-perf-monitor.description'),
+      group: 'debug',
       source: 'builtin',
     },
     {

@@ -46,6 +46,15 @@ export type ProcessPerfSnapshot = {
   processes: ProcessPerfRow[];
 };
 
+export type ProcessPerfTotalsSnapshot = {
+  timestampMs: number;
+  sampleIntervalMs: number | null;
+  cpuCount: number;
+  rootPid: number;
+  systemMemory: SystemMemorySnapshot | null;
+  totals: ProcessPerfTotals;
+};
+
 const EMPTY_TOTALS: ProcessPerfTotals = {
   workingSetBytes: 0,
   privateBytes: 0,
@@ -69,6 +78,15 @@ const EMPTY_SNAPSHOT: ProcessPerfSnapshot = {
   systemMemory: null,
   totals: EMPTY_TOTALS,
   processes: [],
+};
+
+const EMPTY_TOTALS_SNAPSHOT: ProcessPerfTotalsSnapshot = {
+  timestampMs: 0,
+  sampleIntervalMs: null,
+  cpuCount: 1,
+  rootPid: 0,
+  systemMemory: null,
+  totals: EMPTY_TOTALS,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -154,6 +172,18 @@ export function ensureProcessPerfSnapshot(value: unknown): ProcessPerfSnapshot {
   };
 }
 
+export function ensureProcessPerfTotalsSnapshot(value: unknown): ProcessPerfTotalsSnapshot {
+  if (!isRecord(value)) return EMPTY_TOTALS_SNAPSHOT;
+  return {
+    timestampMs: readNumber(value.timestampMs, 0),
+    sampleIntervalMs: readOptionalNumber(value.sampleIntervalMs),
+    cpuCount: readNumber(value.cpuCount, 1),
+    rootPid: readNumber(value.rootPid, 0),
+    systemMemory: ensureSystemMemory(value.systemMemory),
+    totals: ensureTotals(value.totals),
+  };
+}
+
 export async function getProcessPerfSnapshot(): Promise<ProcessPerfSnapshot | null> {
   if (!isTauriRuntime()) return null;
   const raw = await invoke<unknown>('debug_get_process_perf_snapshot').catch(() => null);
@@ -161,3 +191,9 @@ export async function getProcessPerfSnapshot(): Promise<ProcessPerfSnapshot | nu
   return ensureProcessPerfSnapshot(raw);
 }
 
+export async function getProcessPerfTotalsSnapshot(): Promise<ProcessPerfTotalsSnapshot | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('debug_get_process_perf_totals').catch(() => null);
+  if (!raw) return null;
+  return ensureProcessPerfTotalsSnapshot(raw);
+}

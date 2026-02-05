@@ -55,13 +55,24 @@ pub struct ProcessPerfTotals {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessPerfSnapshot {
+  pub timestamp_ms: u64,
+  pub sample_interval_ms: Option<u64>,
+  pub cpu_count: usize,
+  pub root_pid: u32,
+  pub system_memory: Option<SystemMemorySnapshot>,
+  pub totals: ProcessPerfTotals,
+  pub processes: Vec<ProcessPerfRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessPerfTotalsSnapshot {
     pub timestamp_ms: u64,
     pub sample_interval_ms: Option<u64>,
     pub cpu_count: usize,
     pub root_pid: u32,
     pub system_memory: Option<SystemMemorySnapshot>,
     pub totals: ProcessPerfTotals,
-    pub processes: Vec<ProcessPerfRow>,
 }
 
 #[derive(Debug, Default)]
@@ -94,7 +105,18 @@ impl PerfMonitor {
     pub fn snapshot(&self) -> Result<ProcessPerfSnapshot, String> {
         #[cfg(target_os = "windows")]
         {
-            snapshot_windows(&self.inner)
+            snapshot_windows(&self.inner, true).map(|out| out.snapshot)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err("Process performance snapshot is only supported on Windows.".to_string())
+        }
+    }
+
+    pub fn snapshot_totals(&self) -> Result<ProcessPerfTotalsSnapshot, String> {
+        #[cfg(target_os = "windows")]
+        {
+            snapshot_windows(&self.inner, false).map(|out| out.totals)
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -112,7 +134,13 @@ struct ProcessEntry {
 }
 
 #[cfg(target_os = "windows")]
-fn snapshot_windows(inner: &Mutex<PerfMonitorInner>) -> Result<ProcessPerfSnapshot, String> {
+struct SnapshotOut {
+    snapshot: ProcessPerfSnapshot,
+    totals: ProcessPerfTotalsSnapshot,
+}
+
+#[cfg(target_os = "windows")]
+fn snapshot_windows(inner: &Mutex<PerfMonitorInner>, include_processes: bool) -> Result<SnapshotOut, String> {
     use std::cmp::Reverse;
 
     let root_pid = std::process::id();
@@ -143,6 +171,7 @@ fn snapshot_windows(inner: &Mutex<PerfMonitorInner>) -> Result<ProcessPerfSnapsh
 
     let mut next_cpu_times_by_pid_100ns: HashMap<u32, CpuTimes100ns> = HashMap::new();
     let mut rows: Vec<ProcessPerfRow> = Vec::with_capacity(tree_pids.len());
+    let mut totals_builder = TotalsBuilder::default();
     for pid in tree_pids {
         let entry = by_pid.get(&pid).cloned().unwrap_or(ProcessEntry {
             pid,
@@ -174,43 +203,70 @@ fn snapshot_windows(inner: &Mutex<PerfMonitorInner>) -> Result<ProcessPerfSnapsh
             _ => None,
         };
 
-        rows.push(ProcessPerfRow {
-            pid,
-            ppid: entry.ppid,
-            name: entry.exe_name,
+        if include_processes {
+            rows.push(ProcessPerfRow {
+                pid,
+                ppid: entry.ppid,
+                name: entry.exe_name.clone(),
+                kind,
+                cpu_percent,
+                working_set_bytes: metrics.working_set_bytes,
+                private_bytes: metrics.private_bytes,
+            });
+        }
+
+        totals_builder.add_metrics(
             kind,
+            metrics.working_set_bytes,
+            metrics.private_bytes,
             cpu_percent,
-            working_set_bytes: metrics.working_set_bytes,
-            private_bytes: metrics.private_bytes,
+        );
+    }
+
+    if include_processes {
+        rows.sort_by_key(|row| {
+            let private_bytes = row.private_bytes.unwrap_or(0);
+            let working_set_bytes = row.working_set_bytes.unwrap_or(0);
+            (
+                Reverse(private_bytes),
+                Reverse(working_set_bytes),
+                row.name.clone(),
+                row.pid,
+            )
         });
     }
 
-    rows.sort_by_key(|row| {
-        let private_bytes = row.private_bytes.unwrap_or(0);
-        let working_set_bytes = row.working_set_bytes.unwrap_or(0);
-        (
-            Reverse(private_bytes),
-            Reverse(working_set_bytes),
-            row.name.clone(),
-            row.pid,
-        )
-    });
-
-    let totals = calculate_totals(&rows);
+    let totals = totals_builder.finish();
 
     guard.last_sample = Some(LastSample {
         instant: now,
         cpu_times_by_pid_100ns: next_cpu_times_by_pid_100ns,
     });
 
-    Ok(ProcessPerfSnapshot {
+    let system_memory = read_system_memory_snapshot();
+
+    let snapshot = ProcessPerfSnapshot {
         timestamp_ms,
         sample_interval_ms: sample_interval.map(|d| d.as_millis() as u64),
         cpu_count,
         root_pid: root_pid as u32,
-        system_memory: read_system_memory_snapshot(),
-        totals,
+        system_memory: system_memory.clone(),
+        totals: totals.clone(),
         processes: rows,
+    };
+
+    let totals_snapshot = ProcessPerfTotalsSnapshot {
+        timestamp_ms,
+        sample_interval_ms: snapshot.sample_interval_ms,
+        cpu_count,
+        root_pid: root_pid as u32,
+        system_memory,
+        totals,
+    };
+
+    Ok(SnapshotOut {
+        snapshot,
+        totals: totals_snapshot,
     })
 }
 
@@ -225,15 +281,6 @@ fn classify_process(pid: u32, exe_name: &str, root_pid: u32) -> ProcessPerfKind 
         return ProcessPerfKind::WebView2;
     }
     ProcessPerfKind::Child
-}
-
-#[cfg(target_os = "windows")]
-fn calculate_totals(rows: &[ProcessPerfRow]) -> ProcessPerfTotals {
-    let mut totals = TotalsBuilder::default();
-    for row in rows {
-        totals.add(row);
-    }
-    totals.finish()
 }
 
 #[cfg(target_os = "windows")]
@@ -259,10 +306,16 @@ struct TotalsBuilder {
 
 #[cfg(target_os = "windows")]
 impl TotalsBuilder {
-    fn add(&mut self, row: &ProcessPerfRow) {
-        if let Some(ws) = row.working_set_bytes {
+    fn add_metrics(
+        &mut self,
+        kind: ProcessPerfKind,
+        working_set_bytes: Option<u64>,
+        private_bytes: Option<u64>,
+        cpu_percent: Option<f64>,
+    ) {
+        if let Some(ws) = working_set_bytes {
             self.working_set_bytes = self.working_set_bytes.saturating_add(ws);
-            match row.kind {
+            match kind {
                 ProcessPerfKind::App => {
                     self.app_working_set_bytes = self.app_working_set_bytes.saturating_add(ws);
                 }
@@ -276,9 +329,9 @@ impl TotalsBuilder {
             }
         }
 
-        if let Some(private) = row.private_bytes {
+        if let Some(private) = private_bytes {
             self.private_bytes = self.private_bytes.saturating_add(private);
-            match row.kind {
+            match kind {
                 ProcessPerfKind::App => {
                     self.app_private_bytes = self.app_private_bytes.saturating_add(private);
                 }
@@ -291,10 +344,10 @@ impl TotalsBuilder {
             }
         }
 
-        if let Some(cpu) = row.cpu_percent {
+        if let Some(cpu) = cpu_percent {
             self.cpu_percent_sum += cpu;
             self.cpu_percent_count += 1;
-            match row.kind {
+            match kind {
                 ProcessPerfKind::App => {
                     self.app_cpu_percent_sum += cpu;
                     self.app_cpu_percent_count += 1;

@@ -13,10 +13,13 @@ export {
 
 export {
   ensureProcessPerfSnapshot,
+  ensureProcessPerfTotalsSnapshot,
   getProcessPerfSnapshot,
+  getProcessPerfTotalsSnapshot,
   type ProcessPerfKind,
   type ProcessPerfRow,
   type ProcessPerfSnapshot,
+  type ProcessPerfTotalsSnapshot,
   type ProcessPerfTotals,
   type SystemMemorySnapshot,
 } from './processPerf';

@@ -24,6 +24,12 @@ export const SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnc
   ...SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID,
   'btn-debug': [{ id: 'anchor', gridX: 18, gridY: 0, role: 'anchor' }],
   'btn-back': [{ id: 'anchor', gridX: 6, gridY: 0, role: 'anchor' }],
+  'process-perf-monitor': [
+    { id: 'top-left', gridX: 0, gridY: 0, role: 'anchor' },
+    { id: 'top-right', gridX: 5, gridY: 0, role: 'boundary' },
+    { id: 'bottom-left', gridX: 0, gridY: 7, role: 'boundary' },
+    { id: 'bottom-right', gridX: 5, gridY: 7, role: 'boundary' },
+  ],
   'navigation-page': [
     { id: 'top-left', gridX: 6, gridY: 1, role: 'anchor' },
     { id: 'top-right', gridX: 26, gridY: 1, role: 'boundary' },

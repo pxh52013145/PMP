@@ -14,6 +14,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-close',
   'btn-window-pin',
   'btn-matrix-change',
+  'process-perf-monitor',
   'btn-play-pause',
   'btn-previous',
   'btn-next',
@@ -57,6 +58,7 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-matrix-change',
   'btn-editor',
   'btn-debug',
+  'process-perf-monitor',
   // DSP / VST
   'dsp-vst',
   // 导航页面

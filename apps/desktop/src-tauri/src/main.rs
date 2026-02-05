@@ -93,6 +93,16 @@ async fn debug_get_process_perf_snapshot(
         .map_err(|e| format!("Process perf snapshot task failed: {e}"))?
 }
 
+#[tauri::command]
+async fn debug_get_process_perf_totals(
+    perf_monitor: tauri::State<'_, Arc<perf_monitor::PerfMonitor>>,
+) -> Result<perf_monitor::ProcessPerfTotalsSnapshot, String> {
+    let monitor = perf_monitor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || monitor.snapshot_totals())
+        .await
+        .map_err(|e| format!("Process perf totals task failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::greet;
@@ -1026,6 +1036,7 @@ fn main() {
             debug_get_editor_windows_state,
             governance_destroy_hidden_editor_windows,
             debug_get_process_perf_snapshot,
+            debug_get_process_perf_totals,
             background_import_media,
             ornament_import_media,
             open_editor_window,

@@ -10,6 +10,7 @@ import { DSP_VST_MAGNET } from '../../data/builtin/dspVstMagnet';
 import { NAVIGATION_PAGE_MAGNET } from '../../data/builtin/navigationPageMagnet';
 import { BACK_BUTTON_MAGNET } from '../../data/builtin/backButtonMagnet';
 import { AUDIO_VISUALIZER_MAGNET } from '../../data/builtin/audioVisualizerMagnet';
+import { PROCESS_PERF_MONITOR_MAGNET } from '../../data/builtin/processPerfMonitorMagnet';
 import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
@@ -28,6 +29,7 @@ export function createDefaultMagnetLibrary(): Magnet[] {
     WINDOW_PIN_MAGNET,
     ...MUSIC_PLAYER_MAGNETS,
     AUDIO_VISUALIZER_MAGNET,
+    PROCESS_PERF_MONITOR_MAGNET,
     EDITOR_BUTTON_MAGNET,
     DEBUG_BUTTON_MAGNET,
     MATRIX_CHANGE_MAGNET,
