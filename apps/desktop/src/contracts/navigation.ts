@@ -30,7 +30,7 @@ export type NavigationPageType =
 export type NavigationParamsMap = {
   home: undefined;
   settings: undefined;
-  debug: undefined;
+  debug: { tab?: 'debug-center' | 'perf-monitor' | 'native-debug' } | undefined;
   'debug-center': undefined;
   'perf-monitor': undefined;
   'keyboard-shortcuts': undefined;

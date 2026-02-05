@@ -114,11 +114,11 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
     <div
       role="button"
       tabIndex={0}
-      onClick={() => navigation.navigateTo('perf-monitor')}
+      onClick={() => navigation.navigateTo('debug', { tab: 'perf-monitor' })}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          navigation.navigateTo('perf-monitor');
+          navigation.navigateTo('debug', { tab: 'perf-monitor' });
         }
       }}
       style={{

@@ -672,10 +672,18 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button type="button" className="settings-action-btn" onClick={() => navigateTo('perf-monitor')}>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => navigateTo('debug', { tab: 'perf-monitor' })}
+            >
               {t('debug.center.shortcuts.perfMonitor')}
             </button>
-            <button type="button" className="settings-action-btn" onClick={() => navigateTo('native-debug')}>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => navigateTo('debug', { tab: 'native-debug' })}
+            >
               {t('debug.center.shortcuts.nativeDebug')}
             </button>
             <button type="button" className="settings-action-btn" onClick={() => navigateTo('dsp-rack')}>

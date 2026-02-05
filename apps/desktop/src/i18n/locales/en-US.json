@@ -143,6 +143,8 @@
   "magnet.processPerf.row.treeCpu": "Tree CPU",
   "magnet.debugButton.title.open": "Open Debug",
   "magnet.debugButton.title.back": "Back",
+  "magnet.settingsButton.title.open": "Open Settings",
+  "magnet.settingsButton.title.back": "Back",
   "magnet.processPerf.line.system": "SYS {load}% · {avail}/{total}",
   "magnet.processPerf.error.unavailable": "Unavailable",
   "magnet.dsp-vst.contextMenu.openRack": "Open DSP Rack",

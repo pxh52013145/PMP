@@ -143,6 +143,8 @@
   "magnet.processPerf.row.treeCpu": "总 CPU",
   "magnet.debugButton.title.open": "打开调试",
   "magnet.debugButton.title.back": "返回上一页",
+  "magnet.settingsButton.title.open": "打开设置",
+  "magnet.settingsButton.title.back": "返回上一页",
   "magnet.processPerf.line.system": "系统 {load}% · {avail}/{total}",
   "magnet.processPerf.error.unavailable": "不可用",
   "magnet.dsp-vst.contextMenu.openRack": "打开 DSP Rack",

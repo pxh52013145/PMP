@@ -14,7 +14,7 @@ function sortPages(a: PageContribution, b: PageContribution): number {
 
 export const DebugPage: React.FC = () => {
   const kernel = useKernel();
-  const { navigateTo } = useNavigation();
+  const { navigateTo, currentPage } = useNavigation();
   const t = useT();
   const [revision, setRevision] = useState(0);
   const [activePageId, setActivePageId] = useState<string | null>(null);
@@ -38,9 +38,17 @@ export const DebugPage: React.FC = () => {
       if (activePageId !== null) setActivePageId(null);
       return;
     }
-    const nextId = activePageId && pages.some((page) => page.id === activePageId) ? activePageId : pages[0].id;
+    const requestedTab =
+      currentPage.type === 'debug' && currentPage.params && typeof currentPage.params === 'object'
+        ? (currentPage.params as { tab?: string }).tab
+        : undefined;
+    const requestedValid =
+      typeof requestedTab === 'string' && pages.some((page) => page.id === requestedTab);
+    const nextId =
+      (requestedValid ? requestedTab : null) ??
+      (activePageId && pages.some((page) => page.id === activePageId) ? activePageId : pages[0].id);
     if (nextId !== activePageId) setActivePageId(nextId);
-  }, [activePageId, pages]);
+  }, [activePageId, currentPage, pages]);
 
   const activePage = useMemo(() => {
     if (!activePageId) return null;

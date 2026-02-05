@@ -120,7 +120,7 @@ function AppContent() {
         if (cancelled) return;
         if (!config.openDebugCenterOnNextStart) return;
 
-        navigateTo('debug-center');
+        navigateTo('debug', { tab: 'debug-center' });
         void setDebugConfig({ ...config, openDebugCenterOnNextStart: false }).catch((error) => {
           console.warn('[DebugCenter] Failed to clear openDebugCenterOnNextStart flag', error);
         });

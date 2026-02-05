@@ -24,7 +24,7 @@ export function useDebugButtonLogic(): DebugButtonLogic {
         return;
       }
 
-      navigation.navigateTo('debug');
+      navigation.navigateTo('settings');
       setIsOpen(true);
     } catch (error) {
       console.error('Failed to toggle settings:', error);
@@ -33,7 +33,7 @@ export function useDebugButtonLogic(): DebugButtonLogic {
   };
 
   const getButtonTitle = (isOpen: boolean): string => {
-    return isOpen ? t('magnet.debugButton.title.back') : t('magnet.debugButton.title.open');
+    return isOpen ? t('magnet.settingsButton.title.back') : t('magnet.settingsButton.title.open');
   };
 
   const getButtonIcon = (): string => {

@@ -184,7 +184,7 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'debug',
           order: 90,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('native-debug');
+            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('debug', { tab: 'native-debug' });
           },
         });
 
@@ -197,7 +197,7 @@ export function createBuiltinCommandsModule(): KernelModule<AppEvents> {
           group: 'debug',
           order: 80,
           run: async () => {
-            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('debug-center');
+            services.get(NAVIGATION_SERVICE_TOKEN).navigateTo('debug', { tab: 'debug-center' });
           },
         });
 

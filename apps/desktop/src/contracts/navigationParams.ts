@@ -5,6 +5,7 @@ export type AlbumPageParams = { albumName: string; artist?: string };
 export type ArtistPageParams = { artist: string };
 export type PluginPageParams = { pluginId: string; pageId: string };
 export type PluginVisualizerParams = { pluginId: string; visualizerId: string };
+export type DebugPageParams = { tab?: 'debug-center' | 'perf-monitor' | 'native-debug' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -19,6 +20,15 @@ export function parseNavigationParams<K extends NavigationPageType>(
   params: unknown
 ): NavigationParamsFor<K> | undefined {
   switch (type) {
+    case 'debug': {
+      if (params === undefined || params === null) return undefined;
+      if (!isRecord(params)) return undefined;
+      const tab = typeof params.tab === 'string' ? params.tab : undefined;
+      if (tab === 'debug-center' || tab === 'perf-monitor' || tab === 'native-debug') {
+        return { tab } as NavigationParamsFor<K>;
+      }
+      return undefined;
+    }
     case 'track': {
       if (!isRecord(params)) return undefined;
 
