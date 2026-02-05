@@ -1,5 +1,5 @@
 import './SettingsPage.css';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PageContribution } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -19,6 +19,7 @@ export const DebugPage: React.FC = () => {
   const [revision, setRevision] = useState(0);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const subTabsRef = React.useRef<HTMLDivElement | null>(null);
+  const lastRequestedTabRef = useRef<string | null>(null);
 
   useEffect(() => {
     return kernel.contributions.subscribe(() => setRevision((v) => v + 1));
@@ -44,10 +45,22 @@ export const DebugPage: React.FC = () => {
         : undefined;
     const requestedValid =
       typeof requestedTab === 'string' && pages.some((page) => page.id === requestedTab);
-    const nextId =
-      (requestedValid ? requestedTab : null) ??
-      (activePageId && pages.some((page) => page.id === activePageId) ? activePageId : pages[0].id);
-    if (nextId !== activePageId) setActivePageId(nextId);
+
+    const requestedChanged =
+      (requestedValid ? requestedTab : null) !== lastRequestedTabRef.current;
+
+    if (requestedValid && requestedChanged) {
+      lastRequestedTabRef.current = requestedTab ?? null;
+      if (requestedTab !== activePageId) setActivePageId(requestedTab);
+      return;
+    }
+
+    lastRequestedTabRef.current = requestedValid ? requestedTab ?? null : null;
+    const activeValid = activePageId && pages.some((page) => page.id === activePageId);
+    if (!activeValid) {
+      const nextId = pages[0].id;
+      if (nextId !== activePageId) setActivePageId(nextId);
+    }
   }, [activePageId, currentPage, pages]);
 
   const activePage = useMemo(() => {
@@ -104,7 +117,10 @@ export const DebugPage: React.FC = () => {
                   className="settings-sub-tab"
                   data-active={page.id === activePageId}
                   data-has-separator={index < pages.length - 1}
-                  onClick={() => setActivePageId(page.id)}
+                  onClick={() => {
+                    navigateTo('debug', { tab: page.id });
+                    setActivePageId(page.id);
+                  }}
                   title={page.title}
                 >
                   <span className="settings-sub-tab-label">{page.title}</span>
