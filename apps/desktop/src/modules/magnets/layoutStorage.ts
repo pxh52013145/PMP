@@ -189,13 +189,22 @@ export function ensureMagnetSpaceLayout(
   const storageKey = resolveMagnetLayoutStorageKey(spaceId);
   const existing = loadMagnetSpaceLayout(storageKey);
   if (existing) {
+    const normalized = spaceId.trim();
     const active = new Set(existing.activeMagnetIds);
-    const systemAnchors = getSystemAnchorsForActiveMagnets(spaceId, active);
+
+    // Migration: enable the built-in process perf monitor magnet in space1 by default.
+    // This is intentionally scoped to a single magnet id (does not auto-enable all new defaults).
+    let changed = false;
+    if (normalized === 'space1' && !active.has('process-perf-monitor')) {
+      active.add('process-perf-monitor');
+      changed = true;
+    }
+
+    const systemAnchors = getSystemAnchorsForActiveMagnets(normalized, active);
     if (Object.keys(systemAnchors).length === 0) {
       return { layout: existing, storageKey, didCreate: false };
     }
 
-    let changed = false;
     const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = { ...existing.anchorsByMagnetId };
     for (const [magnetId, anchors] of Object.entries(systemAnchors)) {
       if (Array.isArray(nextAnchorsByMagnetId[magnetId]) && nextAnchorsByMagnetId[magnetId]!.length > 0) continue;
@@ -204,7 +213,11 @@ export function ensureMagnetSpaceLayout(
     }
     if (!changed) return { layout: existing, storageKey, didCreate: false };
 
-    const nextLayout: MagnetSpaceLayout = { ...existing, anchorsByMagnetId: nextAnchorsByMagnetId };
+    const nextLayout: MagnetSpaceLayout = {
+      ...existing,
+      activeMagnetIds: [...active],
+      anchorsByMagnetId: nextAnchorsByMagnetId,
+    };
     saveMagnetSpaceLayout(nextLayout, storageKey);
     return { layout: nextLayout, storageKey, didCreate: false };
   }
