@@ -20,6 +20,7 @@ mod asio_diag;
 mod audio_smoke;
 mod debug_config;
 mod dsp_graph;
+mod perf_monitor;
 mod magnet_layout_store;
 mod music_library;
 mod native_audio;
@@ -80,6 +81,16 @@ fn debug_get_editor_windows_state(app: tauri::AppHandle) -> windows::editor::Edi
 #[tauri::command]
 fn governance_destroy_hidden_editor_windows(app: tauri::AppHandle) -> usize {
     windows::editor::governance_destroy_hidden_editor_windows(&app)
+}
+
+#[tauri::command]
+async fn debug_get_process_perf_snapshot(
+    perf_monitor: tauri::State<'_, Arc<perf_monitor::PerfMonitor>>,
+) -> Result<perf_monitor::ProcessPerfSnapshot, String> {
+    let monitor = perf_monitor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || monitor.snapshot())
+        .await
+        .map_err(|e| format!("Process perf snapshot task failed: {e}"))?
 }
 
 #[cfg(test)]
@@ -904,6 +915,7 @@ fn main() {
         .manage(EditorEffectsState {
             blur_enabled: Arc::new(AtomicBool::new(true)),
         })
+        .manage(Arc::new(perf_monitor::PerfMonitor::new()))
         .system_tray(system_tray)
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
@@ -1013,6 +1025,7 @@ fn main() {
             debug_get_env_snapshot,
             debug_get_editor_windows_state,
             governance_destroy_hidden_editor_windows,
+            debug_get_process_perf_snapshot,
             background_import_media,
             ornament_import_media,
             open_editor_window,

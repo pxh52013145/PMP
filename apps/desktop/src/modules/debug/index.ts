@@ -11,3 +11,13 @@ export {
   type VstSidechainModeOverride,
 } from './debugConfig';
 
+export {
+  ensureProcessPerfSnapshot,
+  getProcessPerfSnapshot,
+  type ProcessPerfKind,
+  type ProcessPerfRow,
+  type ProcessPerfSnapshot,
+  type ProcessPerfTotals,
+  type SystemMemorySnapshot,
+} from './processPerf';
+

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { usePersistentSetting } from '../../modules/storage';
@@ -6,10 +6,12 @@ import {
   getDebugConfig,
   getDebugEnvSnapshot,
   getDefaultDebugConfig,
+  getProcessPerfSnapshot,
   restartApp,
   setDebugConfig,
   type DebugConfig,
   type DebugEnvSnapshot,
+  type ProcessPerfSnapshot,
   type VstSidechainModeOverride,
 } from '../../modules/debug';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -32,6 +34,16 @@ type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats
 function formatTriBool(value: TriBool): 'auto' | 'on' | 'off' {
   if (value === null) return 'auto';
   return value ? 'on' : 'off';
+}
+
+function formatBytesMb(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '-';
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function formatCpuPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '-';
+  return `${value.toFixed(1)}%`;
 }
 
 function normalizeTriBool(mode: 'auto' | 'on' | 'off'): TriBool {
@@ -79,6 +91,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [envSnapshot, setEnvSnapshot] = useState<DebugEnvSnapshot>({});
   const [editorWindowsState, setEditorWindowsState] = useState<EditorWindowsDebugState | null>(null);
   const [coverCacheStats, setCoverCacheStats] = useState<CoverCacheStats | null>(null);
+  const [processPerf, setProcessPerf] = useState<ProcessPerfSnapshot | null>(null);
+  const [processPerfError, setProcessPerfError] = useState<string | null>(null);
+  const [processPerfAutoRefresh, setProcessPerfAutoRefresh] = useState(false);
+  const [processPerfBusy, setProcessPerfBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +103,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
   const [confirmClearCoverCaches, setConfirmClearCoverCaches] = useState(false);
   const [minidumpDirDraft, setMinidumpDirDraft] = useState('');
+  const processPerfBusyRef = useRef(false);
 
   const [windowCommDebug, setWindowCommDebug] = usePersistentSetting<string>(
     WINDOW_COMM_DEBUG_KEY,
@@ -127,6 +144,32 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
   }, [isTauri]);
 
+  const refreshProcessPerf = useCallback(async () => {
+    if (!isTauri) {
+      setProcessPerf(null);
+      return;
+    }
+
+    if (processPerfBusyRef.current) return;
+    processPerfBusyRef.current = true;
+
+    setProcessPerfBusy(true);
+    setProcessPerfError(null);
+    try {
+      const snapshot = await getProcessPerfSnapshot();
+      setProcessPerf(snapshot);
+      if (!snapshot) {
+        setProcessPerfError(t('debug.center.memory.processPerf.error.unavailable'));
+      }
+    } catch (err) {
+      setProcessPerf(null);
+      setProcessPerfError(err instanceof Error ? err.message : String(err));
+    } finally {
+      processPerfBusyRef.current = false;
+      setProcessPerfBusy(false);
+    }
+  }, [isTauri, t]);
+
   const refresh = useCallback(async () => {
     if (!isTauri) return;
     const [nextConfig, snapshot] = await Promise.all([getDebugConfig(), getDebugEnvSnapshot()]);
@@ -163,6 +206,21 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   useEffect(() => {
     void refreshMemory();
   }, [refreshMemory]);
+
+  useEffect(() => {
+    void refreshProcessPerf();
+  }, [refreshProcessPerf]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    if (!processPerfAutoRefresh) return;
+
+    const interval = window.setInterval(() => {
+      void refreshProcessPerf();
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isTauri, processPerfAutoRefresh, refreshProcessPerf]);
 
   const persist = useCallback(
     async (next: DebugConfig) => {
@@ -574,7 +632,14 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               <p className="settings-card-desc">{t('debug.center.memory.desc')}</p>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <button type="button" className="settings-action-btn" onClick={() => void refreshMemory()}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void refreshMemory();
+                  void refreshProcessPerf();
+                }}
+              >
                 {t('common.action.refresh')}
               </button>
               <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
@@ -636,6 +701,142 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   })}
                 </p>
               </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <div style={{ flex: '1 1 260px', minWidth: 240 }}>
+                  <p className="settings-card-label">{t('debug.center.memory.processPerf.label')}</p>
+                  <p className="settings-card-desc">{t('debug.center.memory.processPerf.desc')}</p>
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="settings-action-btn"
+                    onClick={() => void refreshProcessPerf()}
+                    disabled={!isTauri || processPerfBusy}
+                  >
+                    {t('common.action.refresh')}
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-toggle" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  data-active={!processPerfAutoRefresh}
+                  onClick={() => setProcessPerfAutoRefresh(false)}
+                >
+                  {t('common.state.off')}
+                </button>
+                <button
+                  type="button"
+                  data-active={processPerfAutoRefresh}
+                  onClick={() => setProcessPerfAutoRefresh(true)}
+                >
+                  {t('common.state.on')}
+                </button>
+              </div>
+              <p className="settings-card-note">{t('debug.center.memory.processPerf.autoRefresh.note')}</p>
+
+              {processPerfError ? (
+                <p className="settings-card-note" style={{ color: 'rgba(255, 140, 140, 0.92)' }}>
+                  {processPerfError}
+                </p>
+              ) : null}
+
+              {processPerf ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                  <p className="settings-card-note">
+                    {t('debug.center.memory.processPerf.sample', {
+                      intervalSec: processPerf.sampleIntervalMs
+                        ? (processPerf.sampleIntervalMs / 1000).toFixed(2)
+                        : '-',
+                      cpuCount: processPerf.cpuCount,
+                    })}
+                  </p>
+                  {processPerf.systemMemory ? (
+                    <p className="settings-card-note">
+                      {t('debug.center.memory.processPerf.systemMemory', {
+                        load: processPerf.systemMemory.memoryLoadPercent,
+                        total: formatBytesMb(processPerf.systemMemory.totalPhysicalBytes),
+                        avail: formatBytesMb(processPerf.systemMemory.availablePhysicalBytes),
+                      })}
+                    </p>
+                  ) : null}
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <p className="settings-card-desc">
+                      {t('debug.center.memory.processPerf.totals.all', {
+                        ws: formatBytesMb(processPerf.totals.workingSetBytes),
+                        private: formatBytesMb(processPerf.totals.privateBytes),
+                        cpu: formatCpuPercent(processPerf.totals.cpuPercent),
+                      })}
+                    </p>
+                    <p className="settings-card-desc">
+                      {t('debug.center.memory.processPerf.totals.app', {
+                        ws: formatBytesMb(processPerf.totals.appWorkingSetBytes),
+                        private: formatBytesMb(processPerf.totals.appPrivateBytes),
+                        cpu: formatCpuPercent(processPerf.totals.appCpuPercent),
+                      })}
+                    </p>
+                    <p className="settings-card-desc">
+                      {t('debug.center.memory.processPerf.totals.webview2', {
+                        ws: formatBytesMb(processPerf.totals.webview2WorkingSetBytes),
+                        private: formatBytesMb(processPerf.totals.webview2PrivateBytes),
+                        cpu: formatCpuPercent(processPerf.totals.webview2CpuPercent),
+                      })}
+                    </p>
+                    <p className="settings-card-desc">
+                      {t('debug.center.memory.processPerf.totals.other', {
+                        ws: formatBytesMb(processPerf.totals.otherWorkingSetBytes),
+                        private: formatBytesMb(processPerf.totals.otherPrivateBytes),
+                        cpu: formatCpuPercent(processPerf.totals.otherCpuPercent),
+                      })}
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                    {processPerf.processes.map((process) => {
+                      const kindLabel =
+                        process.kind === 'app'
+                          ? t('debug.center.memory.processPerf.kind.app')
+                          : process.kind === 'webview2'
+                            ? t('debug.center.memory.processPerf.kind.webview2')
+                            : t('debug.center.memory.processPerf.kind.child');
+
+                      return (
+                        <div
+                          key={process.pid}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 12,
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            background: 'rgba(0,0,0,0.22)',
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.92)' }}>
+                              {process.name}
+                            </span>
+                            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>
+                              {t('debug.center.memory.processPerf.processPid', { pid: process.pid })}
+                            </span>
+                          </div>
+                          <p className="settings-card-note" style={{ marginTop: 6 }}>
+                            {t('debug.center.memory.processPerf.processLine', {
+                              kind: kindLabel,
+                              cpu: formatCpuPercent(process.cpuPercent),
+                              private: formatBytesMb(process.privateBytes),
+                              ws: formatBytesMb(process.workingSetBytes),
+                            })}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div>
