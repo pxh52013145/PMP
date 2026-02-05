@@ -35,52 +35,39 @@ export function LanguageSettingsPanel() {
   );
 
   return (
-    <div className="settings-card">
-      <div className="settings-card-header">
-        <div>
-          <p className="settings-card-label">{t('settings.language.title')}</p>
-          <p className="settings-card-desc">{t('settings.language.desc')}</p>
+    <div className="settings-rows">
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.language.title')}</div>
+          <div className="settings-row-desc">{t('settings.language.desc')}</div>
         </div>
-        <span className="settings-card-badge">{locale}</span>
-      </div>
-
-      <div className="settings-plugin-list" style={{ marginTop: 14 }}>
-        {options.map((option) => {
-          const isActive = option.id === locale;
-          return (
-            <label
-              key={option.id}
-              className="settings-plugin-item"
-              style={{
-                cursor: busy ? 'not-allowed' : 'pointer',
-                opacity: busy ? 0.6 : 1,
-              }}
-            >
-              <div className="settings-plugin-meta">
-                <div className="settings-plugin-title">
-                  {t(option.titleKey)} <span className="settings-plugin-subtitle">({option.id})</span>
-                </div>
-                <div className="settings-plugin-tags">
-                  {isActive && <span className="settings-plugin-tag">{t('common.tag.current')}</span>}
-                </div>
-              </div>
-
-              <div className="settings-plugin-actions">
-                <input
-                  type="radio"
-                  name="locale"
-                  checked={isActive}
+        <div className="settings-row-right">
+          <span className="settings-row-badge">{locale}</span>
+          <div className="settings-toggle settings-toggle--compact" aria-disabled={busy}>
+            {options.map((option) => {
+              const isActive = option.id === locale;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  data-active={isActive}
                   disabled={busy}
-                  onChange={() => void handleSelect(option.id)}
-                />
-              </div>
-            </label>
-          );
-        })}
+                  onClick={() => void handleSelect(option.id)}
+                  title={t(option.titleKey)}
+                >
+                  {t(option.titleKey)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
-      <p className="settings-card-note">{t('settings.language.note')}</p>
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-desc">{t('settings.language.note')}</div>
+        </div>
+      </div>
     </div>
   );
 }
-

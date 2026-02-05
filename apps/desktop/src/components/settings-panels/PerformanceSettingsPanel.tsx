@@ -72,97 +72,86 @@ export function PerformanceSettingsPanel() {
   );
 
   return (
-    <>
-      <div className="settings-card">
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.performance.lowPerformance.label')}</p>
-            <p className="settings-card-desc">{t('settings.performance.lowPerformance.desc')}</p>
-          </div>
-          <span className="settings-card-badge">
+    <div className="settings-rows">
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.lowPerformance.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.lowPerformance.desc')}</div>
+        </div>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">
             {lowPerformanceMode ? t('common.state.on') : t('common.state.off')}
           </span>
+          <div className="settings-toggle settings-toggle--compact">
+            <button type="button" data-active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
+              {t('settings.performance.lowPerformance.option.standard')}
+            </button>
+            <button type="button" data-active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
+              {t('settings.performance.lowPerformance.option.low')}
+            </button>
+          </div>
         </div>
-
-        <div className="settings-toggle">
-          <button type="button" data-active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
-            {t('settings.performance.lowPerformance.option.standard')}
-          </button>
-          <button type="button" data-active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
-            {t('settings.performance.lowPerformance.option.low')}
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.performance.lowPerformance.note')}</p>
       </div>
 
-      <div className="settings-card" style={{ marginTop: 16 }}>
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.performance.gifImportFps.label')}</p>
-            <p className="settings-card-desc">{t('settings.performance.gifImportFps.desc')}</p>
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.gifImportFps.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.gifImportFps.desc')}</div>
+        </div>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">{gifImportMaxFps <= 0 ? t('common.state.off') : `${gifImportMaxFps}fps`}</span>
+          <div className="settings-toggle settings-toggle--compact">
+            <button type="button" data-active={gifImportMaxFps <= 0} onClick={() => setGifImportMaxFps(0)}>
+              {t('settings.performance.gifImportFps.option.original')}
+            </button>
+            <button type="button" data-active={gifImportMaxFps === 30} onClick={() => setGifImportMaxFps(30)}>
+              30fps
+            </button>
+            <button type="button" data-active={gifImportMaxFps === 24} onClick={() => setGifImportMaxFps(24)}>
+              24fps
+            </button>
+            <button type="button" data-active={gifImportMaxFps === 15} onClick={() => setGifImportMaxFps(15)}>
+              15fps
+            </button>
           </div>
-          <span className="settings-card-badge">
-            {gifImportMaxFps <= 0 ? t('common.state.off') : `${gifImportMaxFps}fps`}
-          </span>
         </div>
-
-        <div className="settings-toggle">
-          <button type="button" data-active={gifImportMaxFps <= 0} onClick={() => setGifImportMaxFps(0)}>
-            {t('settings.performance.gifImportFps.option.original')}
-          </button>
-          <button type="button" data-active={gifImportMaxFps === 30} onClick={() => setGifImportMaxFps(30)}>
-            30fps
-          </button>
-          <button type="button" data-active={gifImportMaxFps === 24} onClick={() => setGifImportMaxFps(24)}>
-            24fps
-          </button>
-          <button type="button" data-active={gifImportMaxFps === 15} onClick={() => setGifImportMaxFps(15)}>
-            15fps
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.performance.gifImportFps.note')}</p>
       </div>
 
-      <div className="settings-card" style={{ marginTop: 16 }}>
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.performance.coverThumbnails.label')}</p>
-            <p className="settings-card-desc">{t('settings.performance.coverThumbnails.desc')}</p>
-          </div>
-          <span className="settings-card-badge">
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.coverThumbnails.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.coverThumbnails.desc')}</div>
+        </div>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">
             {coverMaxEdgePx <= 0
               ? t('settings.performance.coverThumbnails.badge.original')
               : t('settings.performance.coverThumbnails.badge.px', { px: coverMaxEdgePx })}
           </span>
+          <div className="settings-toggle settings-toggle--compact">
+            <button type="button" data-active={coverMaxEdgePx === 128} onClick={() => setCoverMaxEdgePx(128)}>
+              {t('settings.performance.coverThumbnails.option.low', { px: 128 })}
+            </button>
+            <button type="button" data-active={coverMaxEdgePx === 256} onClick={() => setCoverMaxEdgePx(256)}>
+              {t('settings.performance.coverThumbnails.option.balanced', { px: 256 })}
+            </button>
+            <button type="button" data-active={coverMaxEdgePx === 512} onClick={() => setCoverMaxEdgePx(512)}>
+              {t('settings.performance.coverThumbnails.option.high', { px: 512 })}
+            </button>
+            <button type="button" data-active={coverMaxEdgePx <= 0} onClick={() => setCoverMaxEdgePx(0)}>
+              {t('settings.performance.coverThumbnails.option.original')}
+            </button>
+          </div>
         </div>
-
-        <div className="settings-toggle">
-          <button type="button" data-active={coverMaxEdgePx === 128} onClick={() => setCoverMaxEdgePx(128)}>
-            {t('settings.performance.coverThumbnails.option.low', { px: 128 })}
-          </button>
-          <button type="button" data-active={coverMaxEdgePx === 256} onClick={() => setCoverMaxEdgePx(256)}>
-            {t('settings.performance.coverThumbnails.option.balanced', { px: 256 })}
-          </button>
-          <button type="button" data-active={coverMaxEdgePx === 512} onClick={() => setCoverMaxEdgePx(512)}>
-            {t('settings.performance.coverThumbnails.option.high', { px: 512 })}
-          </button>
-          <button type="button" data-active={coverMaxEdgePx <= 0} onClick={() => setCoverMaxEdgePx(0)}>
-            {t('settings.performance.coverThumbnails.option.original')}
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.performance.coverThumbnails.note')}</p>
       </div>
 
-      <div className="settings-card" style={{ marginTop: 16 }}>
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.performance.backgroundRenderPolicy.label')}</p>
-            <p className="settings-card-desc">{t('settings.performance.backgroundRenderPolicy.desc')}</p>
-          </div>
-          <span className="settings-card-badge">
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.backgroundRenderPolicy.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.backgroundRenderPolicy.desc')}</div>
+        </div>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">
             {backgroundRenderPolicy === 'full'
               ? t('settings.performance.backgroundRenderPolicy.badge.full')
               : backgroundRenderPolicy === 'throttle'
@@ -171,67 +160,49 @@ export function PerformanceSettingsPanel() {
                   })
                 : t('settings.performance.backgroundRenderPolicy.badge.pause')}
           </span>
+          <div className="settings-toggle settings-toggle--compact">
+            <button type="button" data-active={backgroundRenderPolicy === 'full'} onClick={() => setBackgroundRenderPolicy('full')}>
+              {t('settings.performance.backgroundRenderPolicy.option.full')}
+            </button>
+            <button
+              type="button"
+              data-active={backgroundRenderPolicy === 'throttle'}
+              onClick={() => setBackgroundRenderPolicy('throttle')}
+            >
+              {t('settings.performance.backgroundRenderPolicy.option.throttle', { fps: BACKGROUND_RENDER_THROTTLE_FPS })}
+            </button>
+            <button type="button" data-active={backgroundRenderPolicy === 'pause'} onClick={() => setBackgroundRenderPolicy('pause')}>
+              {t('settings.performance.backgroundRenderPolicy.option.pause')}
+            </button>
+          </div>
         </div>
-
-        <div className="settings-toggle">
-          <button
-            type="button"
-            data-active={backgroundRenderPolicy === 'full'}
-            onClick={() => setBackgroundRenderPolicy('full')}
-          >
-            {t('settings.performance.backgroundRenderPolicy.option.full')}
-          </button>
-          <button
-            type="button"
-            data-active={backgroundRenderPolicy === 'throttle'}
-            onClick={() => setBackgroundRenderPolicy('throttle')}
-          >
-            {t('settings.performance.backgroundRenderPolicy.option.throttle', {
-              fps: BACKGROUND_RENDER_THROTTLE_FPS,
-            })}
-          </button>
-          <button
-            type="button"
-            data-active={backgroundRenderPolicy === 'pause'}
-            onClick={() => setBackgroundRenderPolicy('pause')}
-          >
-            {t('settings.performance.backgroundRenderPolicy.option.pause')}
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.performance.backgroundRenderPolicy.note')}</p>
       </div>
 
-      <div className="settings-card" style={{ marginTop: 16 }}>
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.performance.memoryGovernanceAuto.label')}</p>
-            <p className="settings-card-desc">{t('settings.performance.memoryGovernanceAuto.desc')}</p>
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.memoryGovernanceAuto.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.memoryGovernanceAuto.desc')}</div>
+        </div>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">{autoGovernanceEnabled ? t('common.state.on') : t('common.state.off')}</span>
+          <div className="settings-toggle settings-toggle--compact">
+            <button type="button" data-active={!autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(false)}>
+              {t('common.state.off')}
+            </button>
+            <button type="button" data-active={autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(true)}>
+              {t('common.state.on')}
+            </button>
           </div>
-          <span className="settings-card-badge">
-            {autoGovernanceEnabled ? t('common.state.on') : t('common.state.off')}
-          </span>
         </div>
-
-        <div className="settings-toggle">
-          <button type="button" data-active={!autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(false)}>
-            {t('common.state.off')}
-          </button>
-          <button type="button" data-active={autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(true)}>
-            {t('common.state.on')}
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.performance.memoryGovernanceAuto.note')}</p>
       </div>
 
-      <div className="settings-card" style={{ marginTop: 16 }}>
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.performance.quality.label')}</p>
-            <p className="settings-card-desc">{t('settings.performance.quality.desc')}</p>
-          </div>
-          <span className="settings-card-badge">
+      <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.quality.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.quality.desc')}</div>
+        </div>
+        <div className="settings-row-right" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <span className="settings-row-badge">
             {uiQualitySettings.mode === 'auto'
               ? t('settings.performance.quality.badge.auto', {
                   level: t(`settings.performance.quality.level.${qualitySnapshot.effective.level}`),
@@ -240,146 +211,148 @@ export function PerformanceSettingsPanel() {
                   level: t(`settings.performance.quality.level.${uiQualitySettings.fixedLevel}`),
                 })}
           </span>
-        </div>
 
-        <div className="settings-toggle">
-          <button
-            type="button"
-            data-active={uiQualitySettings.mode === 'auto'}
-            onClick={() =>
-              updateUiQualitySettings((prev) => ({
-                ...prev,
-                mode: 'auto',
-              }))
-            }
-          >
-            {t('settings.performance.quality.mode.auto')}
-          </button>
-          <button
-            type="button"
-            data-active={uiQualitySettings.mode === 'fixed'}
-            onClick={() =>
-              updateUiQualitySettings((prev) => ({
-                ...prev,
-                mode: 'fixed',
-              }))
-            }
-          >
-            {t('settings.performance.quality.mode.fixed')}
-          </button>
-        </div>
-
-        {uiQualitySettings.mode === 'fixed' ? (
-          <div className="settings-toggle" style={{ marginTop: 10 }}>
-            {QUALITY_LEVELS.map((level) => (
-              <button
-                key={level}
-                type="button"
-                data-active={uiQualitySettings.fixedLevel === level}
-                onClick={() =>
-                  updateUiQualitySettings((prev) => ({
-                    ...prev,
-                    fixedLevel: parseQualityLevel(level, prev.fixedLevel),
-                  }))
-                }
-              >
-                {t(`settings.performance.quality.level.${level}`)}
-              </button>
-            ))}
+          <div className="settings-toggle settings-toggle--compact">
+            <button
+              type="button"
+              data-active={uiQualitySettings.mode === 'auto'}
+              onClick={() => updateUiQualitySettings((prev) => ({ ...prev, mode: 'auto' }))}
+            >
+              {t('settings.performance.quality.mode.auto')}
+            </button>
+            <button
+              type="button"
+              data-active={uiQualitySettings.mode === 'fixed'}
+              onClick={() => updateUiQualitySettings((prev) => ({ ...prev, mode: 'fixed' }))}
+            >
+              {t('settings.performance.quality.mode.fixed')}
+            </button>
           </div>
-        ) : (
-          <div style={{ marginTop: 10 }}>
-            <p className="settings-card-desc" style={{ marginBottom: 8 }}>
-              {t('settings.performance.quality.auto.range')}
-            </p>
-            <div className="settings-toggle">
+
+          {uiQualitySettings.mode === 'fixed' ? (
+            <div className="settings-toggle settings-toggle--compact">
               {QUALITY_LEVELS.map((level) => (
                 <button
-                  key={`min-${level}`}
+                  key={level}
                   type="button"
-                  data-active={uiQualitySettings.auto.minLevel === level}
-                  onClick={() =>
-                    updateUiQualitySettings((prev) => {
-                      const minLevel = parseQualityLevel(level, prev.auto.minLevel);
-                      const maxLevel = prev.auto.maxLevel;
-                      return {
-                        ...prev,
-                        auto: {
-                          ...prev.auto,
-                          minLevel,
-                          maxLevel: QUALITY_LEVELS.indexOf(maxLevel) < QUALITY_LEVELS.indexOf(minLevel) ? minLevel : maxLevel,
-                        },
-                      };
-                    })
-                  }
+                  data-active={uiQualitySettings.fixedLevel === level}
+                  onClick={() => updateUiQualitySettings((prev) => ({ ...prev, fixedLevel: parseQualityLevel(level, prev.fixedLevel) }))}
                 >
                   {t(`settings.performance.quality.level.${level}`)}
                 </button>
               ))}
             </div>
-            <p className="settings-card-desc" style={{ marginTop: 10, marginBottom: 8 }}>
-              {t('settings.performance.quality.auto.rangeMax')}
-            </p>
-            <div className="settings-toggle">
-              {QUALITY_LEVELS.map((level) => (
-                <button
-                  key={`max-${level}`}
-                  type="button"
-                  data-active={uiQualitySettings.auto.maxLevel === level}
-                  onClick={() =>
-                    updateUiQualitySettings((prev) => {
-                      const maxLevel = parseQualityLevel(level, prev.auto.maxLevel);
-                      const minLevel = prev.auto.minLevel;
-                      return {
-                        ...prev,
-                        auto: {
-                          ...prev.auto,
-                          maxLevel,
-                          minLevel: QUALITY_LEVELS.indexOf(minLevel) > QUALITY_LEVELS.indexOf(maxLevel) ? maxLevel : minLevel,
-                        },
-                      };
-                    })
-                  }
-                >
-                  {t(`settings.performance.quality.level.${level}`)}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <p className="settings-card-note">
-          {t('settings.performance.quality.effective', {
-            scale: qualitySnapshot.effective.renderScale.toFixed(2),
-            fps: qualitySnapshot.effective.fpsForeground,
-            bgFps: qualitySnapshot.effective.fpsBackground,
-            fxFps: qualitySnapshot.effective.fpsEffects,
-          })}
-        </p>
-
-        {qualitySnapshot.lastDecision ? (
-          <p className="settings-card-note" style={{ marginTop: 6 }}>
-            {t('settings.performance.quality.lastDecision', {
-              from: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.from}`),
-              to: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.to}`),
-              detail:
-                qualitySnapshot.lastDecision.reason.kind === 'manual'
-                  ? t('settings.performance.quality.reason.manual')
-                  : qualitySnapshot.lastDecision.reason.kind === 'auto-init'
-                    ? t('settings.performance.quality.reason.autoInit', {
-                        detail: qualitySnapshot.lastDecision.reason.detail ?? '',
+          ) : (
+            <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
+              <div className="settings-row-desc">{t('settings.performance.quality.auto.range')}</div>
+              <div className="settings-toggle settings-toggle--compact">
+                {QUALITY_LEVELS.map((level) => (
+                  <button
+                    key={`min-${level}`}
+                    type="button"
+                    data-active={uiQualitySettings.auto.minLevel === level}
+                    onClick={() =>
+                      updateUiQualitySettings((prev) => {
+                        const minLevel = parseQualityLevel(level, prev.auto.minLevel);
+                        const maxLevel = prev.auto.maxLevel;
+                        return {
+                          ...prev,
+                          auto: {
+                            ...prev.auto,
+                            minLevel,
+                            maxLevel: QUALITY_LEVELS.indexOf(maxLevel) < QUALITY_LEVELS.indexOf(minLevel) ? minLevel : maxLevel,
+                          },
+                        };
                       })
-                    : qualitySnapshot.lastDecision.reason.kind === 'auto-upgrade'
-                      ? t('settings.performance.quality.reason.autoUpgrade', {
-                          detail: qualitySnapshot.lastDecision.reason.detail,
-                        })
-                      : t('settings.performance.quality.reason.autoDowngrade', {
-                          detail: qualitySnapshot.lastDecision.reason.detail,
-                        }),
-            })}
-          </p>
-        ) : null}
+                    }
+                  >
+                    {t(`settings.performance.quality.level.${level}`)}
+                  </button>
+                ))}
+              </div>
+              <div className="settings-row-desc">{t('settings.performance.quality.auto.rangeMax')}</div>
+              <div className="settings-toggle settings-toggle--compact">
+                {QUALITY_LEVELS.map((level) => (
+                  <button
+                    key={`max-${level}`}
+                    type="button"
+                    data-active={uiQualitySettings.auto.maxLevel === level}
+                    onClick={() =>
+                      updateUiQualitySettings((prev) => {
+                        const maxLevel = parseQualityLevel(level, prev.auto.maxLevel);
+                        const minLevel = prev.auto.minLevel;
+                        return {
+                          ...prev,
+                          auto: {
+                            ...prev.auto,
+                            maxLevel,
+                            minLevel: QUALITY_LEVELS.indexOf(minLevel) > QUALITY_LEVELS.indexOf(maxLevel) ? maxLevel : minLevel,
+                          },
+                        };
+                      })
+                    }
+                  >
+                    {t(`settings.performance.quality.level.${level}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-    </>
+
+      <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+        <div className="settings-row-left">
+          <div className="settings-row-desc">
+            {t('settings.performance.quality.effective', {
+              scale: qualitySnapshot.effective.renderScale.toFixed(2),
+              fps: qualitySnapshot.effective.fpsForeground,
+              bgFps: qualitySnapshot.effective.fpsBackground,
+              fxFps: qualitySnapshot.effective.fpsEffects,
+            })}
+          </div>
+          {qualitySnapshot.lastDecision ? (
+            <div className="settings-row-desc" style={{ marginTop: 6 }}>
+              {t('settings.performance.quality.lastDecision', {
+                from: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.from}`),
+                to: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.to}`),
+                detail:
+                  qualitySnapshot.lastDecision.reason.kind === 'manual'
+                    ? t('settings.performance.quality.reason.manual')
+                    : qualitySnapshot.lastDecision.reason.kind === 'auto-init'
+                      ? t('settings.performance.quality.reason.autoInit', {
+                          detail: qualitySnapshot.lastDecision.reason.detail ?? '',
+                        })
+                      : qualitySnapshot.lastDecision.reason.kind === 'auto-upgrade'
+                        ? t('settings.performance.quality.reason.autoUpgrade', {
+                            detail: qualitySnapshot.lastDecision.reason.detail,
+                          })
+                        : t('settings.performance.quality.reason.autoDowngrade', {
+                            detail: qualitySnapshot.lastDecision.reason.detail,
+                          }),
+              })}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-desc">{t('settings.performance.lowPerformance.note')}</div>
+          <div className="settings-row-desc" style={{ marginTop: 6 }}>
+            {t('settings.performance.gifImportFps.note')}
+          </div>
+          <div className="settings-row-desc" style={{ marginTop: 6 }}>
+            {t('settings.performance.coverThumbnails.note')}
+          </div>
+          <div className="settings-row-desc" style={{ marginTop: 6 }}>
+            {t('settings.performance.backgroundRenderPolicy.note')}
+          </div>
+          <div className="settings-row-desc" style={{ marginTop: 6 }}>
+            {t('settings.performance.memoryGovernanceAuto.note')}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
