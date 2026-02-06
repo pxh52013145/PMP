@@ -4,6 +4,7 @@ import { EditorProvider } from './contexts/EditorContext';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { QualityProvider } from './contexts/QualityContext';
+import { useKernel } from './contexts/KernelContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
@@ -70,10 +71,12 @@ import {
 } from './utils/windowCommunication';
 import { readJson, readString, removeKey, writeJson } from './modules/storage';
 import {
-  DEFAULT_BACKGROUND_RENDER_POLICY,
-  type BackgroundRenderPolicy,
-  parseBackgroundRenderPolicy,
-} from './contracts/performance';
+  resolveEditorSkinVariant,
+  shouldMinimizeEditorSkinEffects,
+  shouldPauseEditorSkinMotion,
+} from './contracts/editorQualitySkin';
+import { QUALITY_SERVICE_TOKEN, type QualityService } from './services/quality';
+import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import './index.css';
 import './components/editor/EditorStatistics.css';
 import './components/editor/EditorMagnetLibrary.css';
@@ -570,21 +573,21 @@ const getWindowTypeFromHash = (): string => {
 };
 
 export function EditorWindowApp() {
+  const kernel = useKernel();
+  const qualityService = useMemo(
+    () => kernel.services.get(QUALITY_SERVICE_TOKEN) as QualityService,
+    [kernel]
+  );
+  const { settings: performanceSettings } = usePerformanceControlSettings();
   const [windowType, setWindowType] = useState<string>(getWindowTypeFromHash());
   const [isWindowVisible, setIsWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isWindowFocused, setIsWindowFocused] = useState(() => document.hasFocus());
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
   const [isPageFrozen, setIsPageFrozen] = useState(false);
-  const [editorLowPerformanceMode, setEditorLowPerformanceMode] = useState(() =>
-    readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false)
-  );
-  const [backgroundRenderPolicy, setBackgroundRenderPolicy] = useState<BackgroundRenderPolicy>(() =>
-    parseBackgroundRenderPolicy(
-      readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-      DEFAULT_BACKGROUND_RENDER_POLICY
-    )
-  );
+  const editorLowPerformanceMode = performanceSettings.editorLowPerformanceMode;
+  const backgroundRenderPolicy = performanceSettings.backgroundRenderPolicy;
+  const [qualityLevel, setQualityLevel] = useState(() => qualityService.getSnapshot().effective.level);
   const isWindowActive = isWindowVisible && isDocumentVisible && !isWindowMinimized && !isPageFrozen && isWindowFocused;
   const activityRef = useRef({ isWindowActive });
   activityRef.current.isWindowActive = isWindowActive;
@@ -602,6 +605,13 @@ export function EditorWindowApp() {
   }, []);
 
   useEffect(() => {
+    setQualityLevel(qualityService.getSnapshot().effective.level);
+    return kernel.events.on('quality/changed', (next) => {
+      setQualityLevel(next.effective.level);
+    });
+  }, [kernel.events, qualityService]);
+
+  useEffect(() => {
     const onFreeze = () => setIsPageFrozen(true);
     const onResume = () => setIsPageFrozen(false);
 
@@ -612,79 +622,6 @@ export function EditorWindowApp() {
       document.removeEventListener('resume', onResume);
     };
   }, []);
-
-  const refreshEditorLowPerformanceMode = useCallback(() => {
-    setEditorLowPerformanceMode(readJson<boolean>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false));
-  }, []);
-
-  const refreshBackgroundRenderPolicy = useCallback(() => {
-    setBackgroundRenderPolicy(
-      parseBackgroundRenderPolicy(
-        readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-        DEFAULT_BACKGROUND_RENDER_POLICY
-      )
-    );
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    refreshEditorLowPerformanceMode();
-
-    const teardownStorage = setupStorageListener(
-      [STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE],
-      refreshEditorLowPerformanceMode
-    );
-
-    let unlistenTauri: (() => void) | null = null;
-    const setup = async () => {
-      const unlisten = await setupTauriListener(
-        TAURI_EVENTS.EDITOR_LOW_PERFORMANCE_MODE_UPDATED,
-        refreshEditorLowPerformanceMode
-      );
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      unlistenTauri = unlisten;
-    };
-    void setup();
-
-    return () => {
-      disposed = true;
-      teardownStorage();
-      if (unlistenTauri) unlistenTauri();
-    };
-  }, [refreshEditorLowPerformanceMode]);
-
-  useEffect(() => {
-    let disposed = false;
-    refreshBackgroundRenderPolicy();
-
-    const teardownStorage = setupStorageListener(
-      [STORAGE_KEYS.BACKGROUND_RENDER_POLICY],
-      refreshBackgroundRenderPolicy
-    );
-
-    let unlistenTauri: (() => void) | null = null;
-    const setup = async () => {
-      const unlisten = await setupTauriListener(
-        TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED,
-        refreshBackgroundRenderPolicy
-      );
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      unlistenTauri = unlisten;
-    };
-    void setup();
-
-    return () => {
-      disposed = true;
-      teardownStorage();
-      if (unlistenTauri) unlistenTauri();
-    };
-  }, [refreshBackgroundRenderPolicy]);
 
   useEffect(() => {
     let disposed = false;
@@ -1438,6 +1375,13 @@ export function EditorWindowApp() {
     backgroundRenderPolicy,
   });
 
+  const editorSkinVariant = resolveEditorSkinVariant(qualityLevel, editorLowPerformanceMode);
+  const editorSkinMotionPaused = shouldPauseEditorSkinMotion(renderMode);
+  const editorSkinEffectsReduced = shouldMinimizeEditorSkinEffects(
+    qualityLevel,
+    editorLowPerformanceMode
+  );
+
   return (
     <ThemeProvider>
       <AudioEngineProvider>
@@ -1446,7 +1390,7 @@ export function EditorWindowApp() {
             <WindowActivityProvider value={{ isVisible: isWindowVisible, isActive: isWindowActive, renderMode }}>
               <QualityProvider>
                 <div
-                className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''}`}
+                className={`editor-window-app ${windowType === 'control' ? 'editor-window-app--control' : ''} ${windowType === 'style' ? 'editor-window-app--style-bar' : ''} ${isTauri ? 'editor-window-app--tauri' : ''} ${editorLowPerformanceMode ? 'editor-window-app--low-performance' : ''} editor-window-app--skin-${editorSkinVariant} ${editorSkinMotionPaused ? 'editor-window-app--motion-paused' : ''} ${editorSkinEffectsReduced ? 'editor-window-app--effects-reduced' : ''}`}
                 ref={rootRef}
               >
                   {windowType === 'control' && <EditorControlPanel onExitEditMode={handleExitEditMode} />}

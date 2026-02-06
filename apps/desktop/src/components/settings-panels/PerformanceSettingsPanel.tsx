@@ -9,30 +9,13 @@ import {
 } from '../../contracts/quality';
 import { useT } from '../../i18n';
 import { useQuality } from '../../contexts/QualityContext';
-import { useKernel } from '../../contexts/KernelContext';
-import {
-  PERFORMANCE_CONTROL_SERVICE_TOKEN,
-  type PerformanceControlService,
-} from '../../services/performance-control';
+import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 import { PerformanceControlOverview } from './PerformanceControlOverview';
 
 export function PerformanceSettingsPanel() {
   const t = useT();
-  const kernel = useKernel();
-  const service = React.useMemo(
-    () => kernel.services.get(PERFORMANCE_CONTROL_SERVICE_TOKEN) as PerformanceControlService,
-    [kernel]
-  );
+  const { service, settings } = usePerformanceControlSettings();
   const qualitySnapshot = useQuality();
-
-  const [settings, setSettings] = React.useState(() => service.getSettingsSnapshot());
-
-  React.useEffect(() => {
-    setSettings(service.refreshSettingsFromStorage());
-    return kernel.events.on('performance-control/changed', (snapshot) => {
-      setSettings(snapshot.settings);
-    });
-  }, [kernel.events, service]);
 
   const setLowPerformanceMode = React.useCallback(
     (enabled: boolean) => {

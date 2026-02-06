@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
-import { STORAGE_KEYS, TAURI_EVENTS, setupDualListener, setupTauriListener } from './utils/windowCommunication';
+import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
@@ -13,8 +13,6 @@ import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { MATRIX_CONFIG } from './constants/config';
 import { Magnet } from './types/pixel';
-import { syncEditorEffectsFromStorage } from './utils/editorWindowEffects';
-import { readJson } from './modules/storage';
 import {
   createDefaultMagnetLibrary,
   createInitialMagnetState,
@@ -26,11 +24,7 @@ import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
 import { musicLibraryService } from './services/audio/MusicLibraryService';
-import {
-  DEFAULT_BACKGROUND_RENDER_POLICY,
-  type BackgroundRenderPolicy,
-  parseBackgroundRenderPolicy,
-} from './contracts/performance';
+import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import './App.css';
 
 function AppContent() {
@@ -43,20 +37,16 @@ function AppContent() {
   const [isMainWindowFocused, setIsMainWindowFocused] = useState(() => document.hasFocus());
   const [isMainWindowMinimized, setIsMainWindowMinimized] = useState(false);
   const [isPageFrozen, setIsPageFrozen] = useState(false);
+  const { service: performanceControlService, settings: performanceSettings } =
+    usePerformanceControlSettings();
   const isWindowActive =
     isMainWindowVisible && isDocumentVisible && !isMainWindowMinimized && !isPageFrozen && isMainWindowFocused;
-  const [backgroundRenderPolicy, setBackgroundRenderPolicy] = useState<BackgroundRenderPolicy>(() =>
-    parseBackgroundRenderPolicy(
-      readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-      DEFAULT_BACKGROUND_RENDER_POLICY
-    )
-  );
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const isTauri = useMemo(() => isTauriRuntime(), []);
 
   useEffect(() => {
-    void syncEditorEffectsFromStorage();
-  }, []);
+    void performanceControlService.syncEditorEffectsFromSettings();
+  }, [performanceControlService, performanceSettings.editorLowPerformanceMode]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -77,39 +67,6 @@ function AppContent() {
     document.addEventListener('load', handler, true);
     return () => document.removeEventListener('load', handler, true);
   }, []);
-
-  const refreshBackgroundRenderPolicy = useCallback(() => {
-    setBackgroundRenderPolicy(
-      parseBackgroundRenderPolicy(
-        readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-        DEFAULT_BACKGROUND_RENDER_POLICY
-      )
-    );
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    refreshBackgroundRenderPolicy();
-
-    const setup = async () => {
-      const teardown = await setupDualListener(
-        [STORAGE_KEYS.BACKGROUND_RENDER_POLICY],
-        [TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED],
-        refreshBackgroundRenderPolicy
-      );
-      if (disposed) {
-        teardown();
-        return () => {};
-      }
-      return teardown;
-    };
-
-    const teardownPromise = setup();
-    return () => {
-      disposed = true;
-      teardownPromise.then((teardown) => teardown());
-    };
-  }, [refreshBackgroundRenderPolicy]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -352,7 +309,7 @@ function AppContent() {
     isWindowFocused: isMainWindowFocused,
     isWindowMinimized: isMainWindowMinimized,
     isPageFrozen,
-    backgroundRenderPolicy,
+    backgroundRenderPolicy: performanceSettings.backgroundRenderPolicy,
   });
 
   return (

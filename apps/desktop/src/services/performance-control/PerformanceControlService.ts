@@ -38,6 +38,7 @@ export interface PerformanceControlService {
   getSettingsSnapshot(): PerformanceControlSettingsSnapshot;
   refreshSettingsFromStorage(): PerformanceControlSettingsSnapshot;
   refreshNow(): Promise<PerformanceControlSnapshot>;
+  syncEditorEffectsFromSettings(): Promise<void>;
   setEditorLowPerformanceMode(enabled: boolean): Promise<void>;
   setGifImportMaxFps(value: number): Promise<void>;
   setCoverMaxEdgePx(value: number): Promise<void>;
@@ -192,6 +193,10 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
     };
     this.events.emit('performance-control/changed', this.snapshot);
     return this.snapshot;
+  }
+
+  async syncEditorEffectsFromSettings(): Promise<void> {
+    await applyEditorLowPerformanceMode(this.snapshot.settings.editorLowPerformanceMode);
   }
 
   applyQualitySnapshot(snapshot: AppEvents['quality/changed']): void {

@@ -1,16 +1,15 @@
 import { appWindow } from '@tauri-apps/api/window';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavigationProvider } from './contexts/NavigationContext';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { PluginWindowHost } from './magnet-system/plugins/PluginWindowHost';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
-import { readJson } from './modules/storage';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { QualityProvider } from './contexts/QualityContext';
-import { STORAGE_KEYS, TAURI_EVENTS, setupDualListener, setupTauriListenerWithPayload } from './utils/windowCommunication';
-import { DEFAULT_BACKGROUND_RENDER_POLICY, type BackgroundRenderPolicy, parseBackgroundRenderPolicy } from './contracts/performance';
+import { TAURI_EVENTS, setupTauriListenerWithPayload } from './utils/windowCommunication';
+import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import './PluginWindowApp.css';
 
 function parsePluginWindowHash(): { pluginId: string; windowId: string } | null {
@@ -24,29 +23,15 @@ export function PluginWindowApp() {
   const parsed = useMemo(() => parsePluginWindowHash(), []);
   const expectedPayload = parsed ? `${parsed.pluginId}/${parsed.windowId}` : null;
   const isTauri = useMemo(() => isTauriRuntime(), []);
+  const { settings: performanceSettings } = usePerformanceControlSettings();
 
   const [isWindowVisible, setIsWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isWindowFocused, setIsWindowFocused] = useState(() => document.hasFocus());
   const [isWindowMinimized, setIsWindowMinimized] = useState(false);
   const [isPageFrozen, setIsPageFrozen] = useState(false);
-  const [backgroundRenderPolicy, setBackgroundRenderPolicy] = useState<BackgroundRenderPolicy>(() =>
-    parseBackgroundRenderPolicy(
-      readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-      DEFAULT_BACKGROUND_RENDER_POLICY
-    )
-  );
 
   const isWindowActive = isWindowVisible && isDocumentVisible && !isWindowMinimized && !isPageFrozen && isWindowFocused;
-
-  const refreshBackgroundRenderPolicy = useCallback(() => {
-    setBackgroundRenderPolicy(
-      parseBackgroundRenderPolicy(
-        readJson(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-        DEFAULT_BACKGROUND_RENDER_POLICY
-      )
-    );
-  }, []);
 
   useEffect(() => {
     const onVisibilityChange = () => setIsDocumentVisible(!document.hidden);
@@ -170,30 +155,6 @@ export function PluginWindowApp() {
   }, [isTauri]);
 
   useEffect(() => {
-    let disposed = false;
-    refreshBackgroundRenderPolicy();
-
-    const setup = async () => {
-      const teardown = await setupDualListener(
-        [STORAGE_KEYS.BACKGROUND_RENDER_POLICY],
-        [TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED],
-        refreshBackgroundRenderPolicy
-      );
-      if (disposed) {
-        teardown();
-        return () => {};
-      }
-      return teardown;
-    };
-
-    const teardownPromise = setup();
-    return () => {
-      disposed = true;
-      teardownPromise.then((teardown) => teardown());
-    };
-  }, [refreshBackgroundRenderPolicy]);
-
-  useEffect(() => {
     if (!isTauri) return;
 
     let disposed = false;
@@ -238,7 +199,7 @@ export function PluginWindowApp() {
     isWindowFocused,
     isWindowMinimized,
     isPageFrozen,
-    backgroundRenderPolicy,
+    backgroundRenderPolicy: performanceSettings.backgroundRenderPolicy,
   });
 
   if (!parsed) {
