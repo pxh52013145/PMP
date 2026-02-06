@@ -2,7 +2,7 @@
 
 本文档用于指导人类开发者与自动化工具（Codex / Agent）在仓库内协作开发，目标是让项目在“高性能桌面应用 + 插件生态 + 微内核解耦”的前提下，保持一致的：目录结构、模块边界、命名方式、契约规范与质量门禁。
 
-适用范围：本仓库根目录与 `apps/*`、`packages/*`、`scripts/*`、`docs/*`、`logs/*`、`Mannuals/*`（包含 `apps/desktop/src-tauri` 的 Rust 代码）。
+适用范围：本仓库根目录与 `apps/*`、`packages/*`、`scripts/*`、`docs/*`、`documents/*`、`logs/*`、`Mannuals/*`（包含 `apps/desktop/src-tauri` 的 Rust 代码）。
 
 约束等级：
 - **必须/禁止**：强约束，违反即视为不合规。
@@ -13,6 +13,7 @@
 - 文档索引：`DOCUMENTATION.md`
 - 微内核重构总规划（Single Source of Truth）：`docs/refactor.md`
 - 技术架构（现状/目标/契约/算法/接口/状态矩阵）：`docs/architecture/`
+- 新模块架构与开发基线（持续维护）：`documents/`
 - UI 设计（Editor / NavigationPage / MusicLibrary）：`docs/ui/`
 - 测试与验收（按模块解耦）：`docs/qa/`
 
@@ -91,6 +92,8 @@
 │  └─ magnet-devkit/            # PMPM 开发工具链（create/lint/pack/sign）
 ├─ scripts/                     # 构建/诊断脚本（node/mjs）
 ├─ docs/                        # 重构/架构/UI/验收（本轮新增）
+├─ documents/                   # 新模块开发基线（按模块独立管理）
+│  └─ modules/                  # 每个模块独立目录（README + CSV）
 ├─ logs/                        # 阶段日志/审计记录（按日期）
 ├─ Mannuals/                    # 手册/落地说明（历史/长期沉淀）
 ├─ package.json                 # 根脚本入口（pnpm --filter）
@@ -98,6 +101,8 @@
 ```
 
 阶段日志/审计记录统一放 `logs/`（根目录）；请勿新增 `docs/logs/`。
+
+模块基线统一放 `documents/modules/`；每个模块目录内必须同时维护 Markdown 与 CSV。
 
 禁止修改/提交的目录（必须遵守）：
 - `**/node_modules/`
@@ -143,6 +148,19 @@ apps/desktop/src-tauri/src/
 约束（必须遵守）：
 - packages 的公共 API 必须从 `index.ts`（或等价入口）导出；内部实现不对外承诺稳定性。
 - 若要对插件作者提供 SDK/类型定义，必须独立成包（规划见 `docs/architecture/interface-plan.md`），禁止直接复用应用内部类型。
+
+## 2.5 `documents/`（新增：模块架构与 phase 基线）
+
+目录约定（必须遵守）：
+- `documents/README.md`：文档入口与治理规则（格式规范/字段定义/更新流程）。
+- `documents/modules/index.md`：模块总览与依赖关系。
+- `documents/modules/<module>/README.md`：单模块架构设计（背景/目标/边界/契约/phase/验收/风险）。
+- `documents/modules/<module>/*.csv`：单模块 phase/dependency/risk 基线（严谨开发规划）。
+
+维护规则（必须遵守）：
+- 每个模块目录内 Markdown 架构文档与 CSV 基线必须同步更新，禁止只改其一。
+- CSV 作为开发基线，新增/删减 phase 必须记录变更原因与日期。
+- 涉及跨模块依赖调整时，必须同步更新 `documents/modules/index.md` 的依赖关系。
 
 ---
 
@@ -283,6 +301,8 @@ apps/desktop/src-tauri/src/
 - 调整插件 Host API / manifest → `docs/architecture/contracts/plugin-host-api.md`
 - 调整版本/迁移策略 → `docs/architecture/contracts/versioning.md`
 - 实现/推进重构阶段 → 更新 `docs/architecture/status.md` 与 `docs/qa/acceptance-matrix.md`
+- 新增/调整模块架构方案 → 更新 `documents/modules/<module>/README.md` 与 `documents/modules/index.md`
+- 调整开发阶段计划（phase）→ 更新 `documents/modules/<module>/*.csv`（作为开发基线）
 
 ---
 
