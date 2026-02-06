@@ -81,6 +81,7 @@ export class NativeAudioService implements IAudioService {
   private lastBackendTimeUpdateAtMs: number = 0;
   private pendingSeekTime: number | null = null;
   private pendingSeekTimer: number | null = null;
+  private seekInvokeInFlight = false;
   private desiredPlayIndex: number | null = null;
   private playIndexQueue: Promise<void> = Promise.resolve();
 
@@ -98,27 +99,50 @@ export class NativeAudioService implements IAudioService {
     this.pendingSeekTimer = null;
   }
 
+  private flushPendingSeekCommand(): void {
+    if (this.seekInvokeInFlight) return;
+
+    const target = this.pendingSeekTime;
+    this.pendingSeekTime = null;
+    if (typeof target !== 'number' || !isFinite(target)) return;
+
+    this.seekInvokeInFlight = true;
+    void this.invokeCommand('native_audio_seek', { time: target })
+      .catch(() => {
+        // invokeCommand already emits structured error.
+      })
+      .finally(() => {
+        this.seekInvokeInFlight = false;
+        if (typeof this.pendingSeekTime !== 'number') return;
+
+        if (typeof window !== 'undefined') {
+          if (this.pendingSeekTimer !== null) {
+            window.clearTimeout(this.pendingSeekTimer);
+          }
+          this.pendingSeekTimer = window.setTimeout(() => {
+            this.pendingSeekTimer = null;
+            this.flushPendingSeekCommand();
+          }, 0);
+          return;
+        }
+
+        this.flushPendingSeekCommand();
+      });
+  }
+
   private scheduleSeekFlush(): void {
     if (this.pendingSeekTimer !== null) return;
     const scheduled =
       typeof window !== 'undefined'
         ? window.setTimeout(() => {
             this.pendingSeekTimer = null;
-            const target = this.pendingSeekTime;
-            this.pendingSeekTime = null;
-            if (typeof target === 'number' && isFinite(target)) {
-              this.fireAndForgetCommand('native_audio_seek', { time: target });
-            }
+            this.flushPendingSeekCommand();
           }, NativeAudioService.SEEK_COALESCE_MS)
         : null;
 
     // Non-browser (tests) fallback: flush immediately.
     if (scheduled === null) {
-      const target = this.pendingSeekTime;
-      this.pendingSeekTime = null;
-      if (typeof target === 'number' && isFinite(target)) {
-        this.fireAndForgetCommand('native_audio_seek', { time: target });
-      }
+      this.flushPendingSeekCommand();
       return;
     }
 
@@ -369,12 +393,17 @@ export class NativeAudioService implements IAudioService {
   }
 
   private resolveQueueFromPaths(queuePaths: string[]): Track[] {
-    const previousQueue = this.state.queue;
-    return queuePaths.map((trackPath) => {
-      const resolved = this.resolveTrackFromPath(trackPath);
-      if (resolved) return resolved.track;
+    const pathToTrack = new Map<string, Track>();
+    for (const track of this.state.queue) {
+      const path = this.getTrackPath(track);
+      if (!path) continue;
+      if (!pathToTrack.has(path)) {
+        pathToTrack.set(path, track);
+      }
+    }
 
-      const existing = previousQueue.find((track) => this.getTrackPath(track) === trackPath);
+    return queuePaths.map((trackPath) => {
+      const existing = pathToTrack.get(trackPath);
       if (existing) return existing;
 
       return {
@@ -385,6 +414,19 @@ export class NativeAudioService implements IAudioService {
         originalPath: trackPath,
       };
     });
+  }
+
+  private isSameQueuePaths(queuePaths: string[]): boolean {
+    const queue = this.state.queue;
+    if (queuePaths.length !== queue.length) return false;
+
+    for (let index = 0; index < queuePaths.length; index += 1) {
+      if (this.getTrackPath(queue[index]) !== queuePaths[index]) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private emitError(error: Error) {
@@ -409,7 +451,7 @@ export class NativeAudioService implements IAudioService {
         if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
         if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
 
-        if (Array.isArray(next.queue)) {
+        if (Array.isArray(next.queue) && !this.isSameQueuePaths(next.queue)) {
           update.queue = this.resolveQueueFromPaths(next.queue);
         }
         if (typeof next.currentIndex === 'number') {
@@ -417,7 +459,11 @@ export class NativeAudioService implements IAudioService {
         }
 
         if (typeof next.trackPath !== 'undefined') {
-          if (next.trackPath) {
+          const currentTrackPath = this.state.currentTrack
+            ? this.getTrackPath(this.state.currentTrack)
+            : null;
+
+          if (next.trackPath && next.trackPath !== currentTrackPath) {
             const resolved = this.resolveTrackFromPath(next.trackPath);
             if (resolved) {
               update.currentTrack = resolved.track;
@@ -431,7 +477,7 @@ export class NativeAudioService implements IAudioService {
                 originalPath: next.trackPath,
               };
             }
-          } else {
+          } else if (!next.trackPath && currentTrackPath) {
             update.currentTrack = null;
           }
         }

@@ -317,4 +317,90 @@ describe('NativeAudioService', () => {
     vi.useRealTimers();
     service.destroy();
   });
+
+  it('keeps only latest seek while backend seek is in-flight', async () => {
+    vi.useFakeTimers();
+
+    const firstSeekGate: { release: (() => void) | null } = { release: null };
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_seek') {
+        return new Promise<void>((resolve) => {
+          if (!firstSeekGate.release) {
+            firstSeekGate.release = () => resolve();
+          } else {
+            resolve();
+          }
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    (service as unknown as { state: { duration: number } }).state.duration = 200;
+
+    service.seek(10);
+    await vi.advanceTimersByTimeAsync(80);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_seek', { time: 10 });
+
+    service.seek(50);
+    service.seek(80);
+    await vi.advanceTimersByTimeAsync(80);
+
+    const seekCallsBeforeResolve = invokeMock.mock.calls.filter((call) => call[0] === 'native_audio_seek');
+    expect(seekCallsBeforeResolve).toHaveLength(1);
+
+    if (firstSeekGate.release) {
+      firstSeekGate.release();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+
+    const seekCallsAfterResolve = invokeMock.mock.calls.filter((call) => call[0] === 'native_audio_seek');
+    expect(seekCallsAfterResolve).toHaveLength(2);
+    expect(seekCallsAfterResolve[1]).toEqual(['native_audio_seek', { time: 80 }]);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('does not rebuild queue/currentTrack when native state payload is unchanged', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    await service.playTrackAtIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const before = service.getState();
+    const beforeQueueRef = before.queue;
+    const beforeTrackRef = before.currentTrack;
+
+    handlers.native_audio_state?.({
+      payload: {
+        queue: ['C:\\\\Music\\\\a.mp3', 'C:\\\\Music\\\\b.mp3'],
+        currentIndex: 0,
+        trackPath: 'C:\\\\Music\\\\a.mp3',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const after = service.getState();
+    expect(after.queue).toBe(beforeQueueRef);
+    expect(after.currentTrack).toBe(beforeTrackRef);
+
+    service.destroy();
+  });
 });
