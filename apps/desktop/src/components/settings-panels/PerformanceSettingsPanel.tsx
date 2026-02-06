@@ -1,78 +1,92 @@
 import React from 'react';
-import { usePersistentSetting } from '../../modules/storage';
-import { applyEditorLowPerformanceMode } from '../../utils/editorWindowEffects';
-import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import {
   BACKGROUND_RENDER_THROTTLE_FPS,
-  DEFAULT_BACKGROUND_RENDER_POLICY,
-  type BackgroundRenderPolicy,
-  parseBackgroundRenderPolicy,
 } from '../../contracts/performance';
-import { DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED } from '../../contracts/memoryGovernance';
-import { DEFAULT_QUALITY_SETTINGS_V1, parseQualityLevel, parseQualitySettings, QUALITY_LEVELS } from '../../contracts/quality';
+import {
+  parseQualityLevel,
+  QUALITY_LEVELS,
+  type QualitySettingsV1,
+} from '../../contracts/quality';
 import { useT } from '../../i18n';
 import { useQuality } from '../../contexts/QualityContext';
+import { useKernel } from '../../contexts/KernelContext';
+import {
+  PERFORMANCE_CONTROL_SERVICE_TOKEN,
+  type PerformanceControlService,
+} from '../../services/performance-control';
+import { PerformanceControlOverview } from './PerformanceControlOverview';
 
 export function PerformanceSettingsPanel() {
   const t = useT();
+  const kernel = useKernel();
+  const service = React.useMemo(
+    () => kernel.services.get(PERFORMANCE_CONTROL_SERVICE_TOKEN) as PerformanceControlService,
+    [kernel]
+  );
   const qualitySnapshot = useQuality();
-  const [lowPerformanceMode, setLowPerformanceMode] = usePersistentSetting<boolean>(
-    STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
-    false
-  );
-  const [gifImportMaxFps, setGifImportMaxFps] = usePersistentSetting<number>(
-    STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS,
-    30
-  );
-  const [coverMaxEdgePx, setCoverMaxEdgePx] = usePersistentSetting<number>(
-    STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX,
-    256
-  );
-  const [backgroundRenderPolicyRaw] = usePersistentSetting<string>(
-    STORAGE_KEYS.BACKGROUND_RENDER_POLICY,
-    DEFAULT_BACKGROUND_RENDER_POLICY,
-    { format: 'json' }
-  );
-  const backgroundRenderPolicy = parseBackgroundRenderPolicy(
-    backgroundRenderPolicyRaw,
-    DEFAULT_BACKGROUND_RENDER_POLICY
-  );
-  const [autoGovernanceEnabled, setAutoGovernanceEnabled] = usePersistentSetting<boolean>(
-    STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
-    DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED
-  );
-  const [uiQualitySettingsRaw] = usePersistentSetting<unknown>(
-    STORAGE_KEYS.UI_QUALITY_SETTINGS_V1,
-    DEFAULT_QUALITY_SETTINGS_V1
-  );
-  const uiQualitySettings = parseQualitySettings(uiQualitySettingsRaw, DEFAULT_QUALITY_SETTINGS_V1);
+
+  const [settings, setSettings] = React.useState(() => service.getSettingsSnapshot());
 
   React.useEffect(() => {
-    void applyEditorLowPerformanceMode(lowPerformanceMode);
-  }, [lowPerformanceMode]);
+    setSettings(service.refreshSettingsFromStorage());
+    return kernel.events.on('performance-control/changed', (snapshot) => {
+      setSettings(snapshot.settings);
+    });
+  }, [kernel.events, service]);
 
-  const setBackgroundRenderPolicy = React.useCallback((policy: BackgroundRenderPolicy) => {
-    void broadcastDataUpdate(
-      STORAGE_KEYS.BACKGROUND_RENDER_POLICY,
-      policy,
-      TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED
-    );
-  }, []);
+  const setLowPerformanceMode = React.useCallback(
+    (enabled: boolean) => {
+      void service.setEditorLowPerformanceMode(enabled);
+    },
+    [service]
+  );
+
+  const setGifImportMaxFps = React.useCallback(
+    (value: number) => {
+      void service.setGifImportMaxFps(value);
+    },
+    [service]
+  );
+
+  const setCoverMaxEdgePx = React.useCallback(
+    (value: number) => {
+      void service.setCoverMaxEdgePx(value);
+    },
+    [service]
+  );
+
+  const setBackgroundRenderPolicy = React.useCallback(
+    (policy: 'full' | 'throttle' | 'pause') => {
+      void service.setBackgroundRenderPolicy(policy);
+    },
+    [service]
+  );
+
+  const setAutoGovernanceEnabled = React.useCallback(
+    (enabled: boolean) => {
+      void service.setMemoryGovernanceAutoEnabled(enabled);
+    },
+    [service]
+  );
 
   const updateUiQualitySettings = React.useCallback(
-    (next: typeof uiQualitySettings | ((prev: typeof uiQualitySettings) => typeof uiQualitySettings)) => {
-      const resolved = typeof next === 'function' ? next(uiQualitySettings) : next;
-      void broadcastDataUpdate(
-        STORAGE_KEYS.UI_QUALITY_SETTINGS_V1,
-        resolved,
-        TAURI_EVENTS.UI_QUALITY_SETTINGS_UPDATED
-      );
+    (next: QualitySettingsV1 | ((prev: QualitySettingsV1) => QualitySettingsV1)) => {
+      void service.updateUiQualitySettings(next);
     },
-    [uiQualitySettings]
+    [service]
   );
+
+  const lowPerformanceMode = settings.editorLowPerformanceMode;
+  const gifImportMaxFps = settings.gifImportMaxFps;
+  const coverMaxEdgePx = settings.coverMaxEdgePx;
+  const backgroundRenderPolicy = settings.backgroundRenderPolicy;
+  const autoGovernanceEnabled = settings.memoryGovernanceAutoEnabled;
+  const uiQualitySettings = settings.uiQualitySettings;
 
   return (
     <div className="settings-rows">
+      <PerformanceControlOverview />
+
       <div className="settings-row">
         <div className="settings-row-left">
           <div className="settings-row-title">{t('settings.performance.lowPerformance.label')}</div>
