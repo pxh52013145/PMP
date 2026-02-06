@@ -84,6 +84,16 @@ fn governance_destroy_hidden_editor_windows(app: tauri::AppHandle) -> usize {
 }
 
 #[tauri::command]
+fn governance_destroy_hidden_plugin_windows(app: tauri::AppHandle) -> usize {
+    windows::plugin::governance_destroy_hidden_plugin_windows(&app)
+}
+
+#[tauri::command]
+fn governance_destroy_hidden_vst_manager_windows(app: tauri::AppHandle) -> usize {
+    windows::vst_manager::governance_destroy_hidden_vst_manager_windows(&app)
+}
+
+#[tauri::command]
 async fn debug_get_process_perf_snapshot(
     perf_monitor: tauri::State<'_, Arc<perf_monitor::PerfMonitor>>,
 ) -> Result<perf_monitor::ProcessPerfSnapshot, String> {
@@ -1035,6 +1045,8 @@ fn main() {
             debug_get_env_snapshot,
             debug_get_editor_windows_state,
             governance_destroy_hidden_editor_windows,
+            governance_destroy_hidden_plugin_windows,
+            governance_destroy_hidden_vst_manager_windows,
             debug_get_process_perf_snapshot,
             debug_get_process_perf_totals,
             background_import_media,

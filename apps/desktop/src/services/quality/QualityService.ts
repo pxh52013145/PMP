@@ -157,11 +157,34 @@ export class DefaultQualityService implements QualityService {
 
   setLastMemoryTier(tier: number | undefined): void {
     this.lastMemoryTier = tier;
+
+    if (this.settings.mode === 'auto' && (tier ?? 0) >= 2) {
+      const next = clampQualityLevel(
+        nextLowerQuality(this.level),
+        this.settings.auto.minLevel,
+        this.settings.auto.maxLevel
+      );
+      if (next !== this.level) {
+        const nowMs = Date.now();
+        const from = this.level;
+        this.level = next;
+        this.lastDecision = {
+          atMs: nowMs,
+          from,
+          to: next,
+          reason: { kind: 'auto-downgrade', detail: `memoryTier=${tier} (immediate)` },
+        };
+        this.nextDowngradeAllowedAtMs = nowMs + this.settings.auto.downgradeCooldownMs;
+        this.nextUpgradeAllowedAtMs = nowMs + this.settings.auto.upgradeCooldownMs;
+      }
+    }
+
     if (this.telemetry) {
       this.telemetry = { ...this.telemetry, lastMemoryTier: tier };
-      this.updatedAtMs = Date.now();
-      this.emitChanged();
     }
+
+    this.updatedAtMs = Date.now();
+    this.emitChanged();
   }
 
   private startSampling(): void {

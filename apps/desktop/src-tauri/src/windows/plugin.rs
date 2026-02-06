@@ -226,3 +226,33 @@ pub fn close_all_plugin_windows(app: &AppHandle) {
         request_force_close(app, label.as_str());
     }
 }
+
+/// Best-effort memory reclamation: destroy hidden plugin windows to release WebView resources.
+///
+/// Safety: only destroys windows that are currently not visible.
+pub fn governance_destroy_hidden_plugin_windows(app: &AppHandle) -> usize {
+    let labels = {
+        let set = match OPEN_PLUGIN_WINDOW_LABELS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.iter().cloned().collect::<Vec<_>>()
+    };
+
+    let mut destroyed = 0usize;
+    for label in labels {
+        let Some(window) = app.get_window(label.as_str()) else {
+            continue;
+        };
+
+        let is_visible = window.is_visible().ok().unwrap_or(false);
+        if is_visible {
+            continue;
+        }
+
+        request_force_close(app, label.as_str());
+        destroyed += 1;
+    }
+
+    destroyed
+}

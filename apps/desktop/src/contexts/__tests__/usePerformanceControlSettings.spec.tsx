@@ -86,6 +86,7 @@ describe('usePerformanceControlSettings', () => {
     });
 
     expect(renders.at(-1)?.settings.backgroundRenderPolicy).toBe('pause');
+    expect(renders.at(-1)?.snapshot.updatedAtMs).toBe(10);
 
     const nextSnapshot: PerformanceControlSnapshot = {
       ...baseSnapshot,
@@ -101,6 +102,7 @@ describe('usePerformanceControlSettings', () => {
     });
 
     expect(renders.at(-1)?.settings.backgroundRenderPolicy).toBe('throttle');
+    expect(renders.at(-1)?.snapshot.updatedAtMs).toBe(11);
 
     await act(async () => {
       root.unmount();
@@ -108,4 +110,3 @@ describe('usePerformanceControlSettings', () => {
     container.remove();
   });
 });
-

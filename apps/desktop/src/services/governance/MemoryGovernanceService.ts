@@ -4,6 +4,7 @@ import type { AppEvents } from '../../contracts/events';
 import {
   computeJsonSizeBytes,
   decideMemoryGovernancePlan,
+  type MemoryGovernanceWebview2Snapshot,
   type MemoryGovernanceAction,
   type MemoryGovernanceReason,
   type MemoryGovernanceRunResult,
@@ -15,6 +16,7 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson, writeJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES } from '../../contracts/memoryGovernance';
+import { getProcessPerfTotalsSnapshot } from '../../modules/debug';
 
 export type MemoryGovernanceAuditEntry = {
   atMs: number;
@@ -46,7 +48,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   }
 
   async runOnce(reason: MemoryGovernanceReason): Promise<MemoryGovernanceRunResult> {
-    const snapshot = this.collectSnapshot();
+    const snapshot = await this.collectSnapshot();
     const plan = decideMemoryGovernancePlan(snapshot);
 
     const executed: MemoryGovernanceAction[] = [];
@@ -73,6 +75,33 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
         }
         continue;
       }
+
+      if (action === 'destroy-hidden-plugin-windows') {
+        if (!snapshot.isTauri) continue;
+        try {
+          const { invoke } = await import('@tauri-apps/api/tauri');
+          await invoke('governance_destroy_hidden_plugin_windows');
+          executed.push(action);
+        } catch (error) {
+          console.warn('[memory-governance] failed to destroy hidden plugin windows', error);
+        }
+        continue;
+      }
+
+      if (action === 'destroy-hidden-vst-manager-windows') {
+        if (!snapshot.isTauri) continue;
+        try {
+          const { invoke } = await import('@tauri-apps/api/tauri');
+          await invoke('governance_destroy_hidden_vst_manager_windows');
+          executed.push(action);
+        } catch (error) {
+          console.warn(
+            '[memory-governance] failed to destroy hidden vst-manager windows',
+            error
+          );
+        }
+        continue;
+      }
     }
 
     const result: MemoryGovernanceRunResult = { snapshot, plan, executed };
@@ -90,7 +119,7 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
     return result;
   }
 
-  private collectSnapshot(): MemoryGovernanceSnapshot {
+  private async collectSnapshot(): Promise<MemoryGovernanceSnapshot> {
     const atMs = Date.now();
     const isTauri = isTauriRuntime();
 
@@ -109,6 +138,8 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       }
     })();
 
+    const webview2 = await this.collectWebview2Snapshot(isTauri);
+
     return {
       atMs,
       isTauri,
@@ -119,7 +150,34 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       coverUrlCacheEntries: coverStats.coverUrlCacheEntries,
       coverUrlInflight: coverStats.coverUrlInflight,
       albumCoverUrlCacheEntries: coverStats.albumCoverUrlCacheEntries,
+      webview2,
     };
+  }
+
+  private async collectWebview2Snapshot(
+    isTauri: boolean
+  ): Promise<MemoryGovernanceWebview2Snapshot | undefined> {
+    if (!isTauri) return undefined;
+
+    try {
+      const totals = await getProcessPerfTotalsSnapshot();
+      if (!totals) return undefined;
+
+      return {
+        processSampleAtMs: totals.timestampMs,
+        sampleIntervalMs: totals.sampleIntervalMs,
+        cpuCount: totals.cpuCount,
+        webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
+        webview2PrivateBytes: totals.totals.webview2PrivateBytes,
+        webview2CpuPercent: totals.totals.webview2CpuPercent,
+        treeWorkingSetBytes: totals.totals.workingSetBytes,
+        treePrivateBytes: totals.totals.privateBytes,
+        treeCpuPercent: totals.totals.cpuPercent,
+      };
+    } catch (error) {
+      console.warn('[memory-governance] failed to collect webview2 snapshot', error);
+      return undefined;
+    }
   }
 
   private appendAuditEntry(entry: MemoryGovernanceAuditEntry): void {

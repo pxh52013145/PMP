@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { PerformanceControlSnapshot } from '../contracts/performanceControl';
 import type { PerformanceControlSettingsSnapshot } from '../contracts/performanceControl';
 import { useKernel } from './KernelContext';
 import {
@@ -8,6 +9,7 @@ import {
 
 export function usePerformanceControlSettings(): {
   service: PerformanceControlService;
+  snapshot: PerformanceControlSnapshot;
   settings: PerformanceControlSettingsSnapshot;
 } {
   const kernel = useKernel();
@@ -16,17 +18,16 @@ export function usePerformanceControlSettings(): {
     [kernel]
   );
 
-  const [settings, setSettings] = useState<PerformanceControlSettingsSnapshot>(() =>
-    service.getSettingsSnapshot()
+  const [snapshot, setSnapshot] = useState<PerformanceControlSnapshot>(() =>
+    service.getSnapshot()
   );
 
   useEffect(() => {
-    setSettings(service.refreshSettingsFromStorage());
+    setSnapshot(service.getSnapshot());
     return kernel.events.on('performance-control/changed', (snapshot) => {
-      setSettings(snapshot.settings);
+      setSnapshot(snapshot);
     });
   }, [kernel.events, service]);
 
-  return { service, settings };
+  return { service, snapshot, settings: snapshot.settings };
 }
-

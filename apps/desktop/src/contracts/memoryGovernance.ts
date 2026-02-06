@@ -8,7 +8,23 @@ export type MemoryGovernanceReason =
   | 'tauri-window-hidden'
   | 'manual';
 
-export type MemoryGovernanceAction = 'clear-cover-runtime-caches' | 'destroy-hidden-editor-windows';
+export type MemoryGovernanceAction =
+  | 'clear-cover-runtime-caches'
+  | 'destroy-hidden-editor-windows'
+  | 'destroy-hidden-plugin-windows'
+  | 'destroy-hidden-vst-manager-windows';
+
+export type MemoryGovernanceWebview2Snapshot = {
+  processSampleAtMs: number;
+  sampleIntervalMs: number | null;
+  cpuCount: number;
+  webview2WorkingSetBytes: number;
+  webview2PrivateBytes: number;
+  webview2CpuPercent: number | null;
+  treeWorkingSetBytes: number;
+  treePrivateBytes: number;
+  treeCpuPercent: number | null;
+};
 
 export type MemoryGovernanceSnapshot = {
   atMs: number;
@@ -20,6 +36,7 @@ export type MemoryGovernanceSnapshot = {
   coverUrlCacheEntries: number;
   coverUrlInflight: number;
   albumCoverUrlCacheEntries: number;
+  webview2?: MemoryGovernanceWebview2Snapshot;
 };
 
 export type MemoryGovernancePlan = {
@@ -60,14 +77,44 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   const heap = snapshot.jsHeapUsedBytes ?? 0;
   const navBytes = snapshot.navigationHistoryBytes;
+  const webview2Private = snapshot.webview2?.webview2PrivateBytes ?? 0;
+  const webview2WorkingSet = snapshot.webview2?.webview2WorkingSetBytes ?? 0;
+  const webview2Cpu = snapshot.webview2?.webview2CpuPercent ?? 0;
+  const treePrivate = snapshot.webview2?.treePrivateBytes ?? 0;
 
   // Heuristic tiers (best-effort): we avoid aggressive actions by default and only reclaim when
   // multiple signals indicate pressure.
   let tier: MemoryGovernanceTier = 0;
 
-  if (heap >= 1_200_000_000 || navBytes >= 2_000_000 || coverBlobRatio >= 0.98) tier = 3;
-  else if (heap >= 900_000_000 || navBytes >= 1_000_000 || coverBlobRatio >= 0.92) tier = 2;
-  else if (heap >= 700_000_000 || navBytes >= 512_000 || coverBlobRatio >= 0.85) tier = 1;
+  if (
+    heap >= 1_200_000_000 ||
+    navBytes >= 2_000_000 ||
+    coverBlobRatio >= 0.98 ||
+    webview2Private >= 1_200_000_000 ||
+    webview2WorkingSet >= 1_600_000_000 ||
+    treePrivate >= 2_200_000_000
+  ) {
+    tier = 3;
+  } else if (
+    heap >= 900_000_000 ||
+    navBytes >= 1_000_000 ||
+    coverBlobRatio >= 0.92 ||
+    webview2Private >= 850_000_000 ||
+    webview2WorkingSet >= 1_100_000_000 ||
+    treePrivate >= 1_700_000_000 ||
+    webview2Cpu >= 55
+  ) {
+    tier = 2;
+  } else if (
+    heap >= 700_000_000 ||
+    navBytes >= 512_000 ||
+    coverBlobRatio >= 0.85 ||
+    webview2Private >= 650_000_000 ||
+    webview2WorkingSet >= 800_000_000 ||
+    webview2Cpu >= 35
+  ) {
+    tier = 1;
+  }
 
   const actions: MemoryGovernanceAction[] = [];
 
@@ -77,6 +124,8 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   if (tier >= 2 && snapshot.isTauri) {
     actions.push('destroy-hidden-editor-windows');
+    actions.push('destroy-hidden-plugin-windows');
+    actions.push('destroy-hidden-vst-manager-windows');
   }
 
   return { tier, actions };

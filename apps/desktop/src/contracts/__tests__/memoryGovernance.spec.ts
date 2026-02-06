@@ -45,6 +45,62 @@ describe('decideMemoryGovernancePlan', () => {
     });
     expect(plan.tier).toBeGreaterThanOrEqual(2);
     expect(plan.actions).toContain('destroy-hidden-editor-windows');
+    expect(plan.actions).toContain('destroy-hidden-plugin-windows');
+    expect(plan.actions).toContain('destroy-hidden-vst-manager-windows');
+  });
+
+  it('promotes tier when webview2 private bytes is high', () => {
+    const plan = decideMemoryGovernancePlan({
+      atMs: Date.now(),
+      isTauri: true,
+      navigationHistoryBytes: 10_000,
+      coverBlobUrlTotalBytes: 2 * 1024 * 1024,
+      coverBlobUrlCacheEntries: 10,
+      coverUrlCacheEntries: 10,
+      coverUrlInflight: 0,
+      albumCoverUrlCacheEntries: 2,
+      webview2: {
+        processSampleAtMs: Date.now(),
+        sampleIntervalMs: 1000,
+        cpuCount: 8,
+        webview2WorkingSetBytes: 920 * 1024 * 1024,
+        webview2PrivateBytes: 900 * 1024 * 1024,
+        webview2CpuPercent: 18,
+        treeWorkingSetBytes: 1300 * 1024 * 1024,
+        treePrivateBytes: 1500 * 1024 * 1024,
+        treeCpuPercent: 22,
+      },
+    });
+
+    expect(plan.tier).toBeGreaterThanOrEqual(2);
+    expect(plan.actions).toContain('destroy-hidden-editor-windows');
+    expect(plan.actions).toContain('destroy-hidden-plugin-windows');
+    expect(plan.actions).toContain('destroy-hidden-vst-manager-windows');
+  });
+
+  it('promotes tier when webview2 cpu pressure is high', () => {
+    const plan = decideMemoryGovernancePlan({
+      atMs: Date.now(),
+      isTauri: true,
+      navigationHistoryBytes: 10_000,
+      coverBlobUrlTotalBytes: 2 * 1024 * 1024,
+      coverBlobUrlCacheEntries: 10,
+      coverUrlCacheEntries: 10,
+      coverUrlInflight: 0,
+      albumCoverUrlCacheEntries: 2,
+      webview2: {
+        processSampleAtMs: Date.now(),
+        sampleIntervalMs: 1000,
+        cpuCount: 8,
+        webview2WorkingSetBytes: 500 * 1024 * 1024,
+        webview2PrivateBytes: 400 * 1024 * 1024,
+        webview2CpuPercent: 58,
+        treeWorkingSetBytes: 900 * 1024 * 1024,
+        treePrivateBytes: 1000 * 1024 * 1024,
+        treeCpuPercent: 40,
+      },
+    });
+
+    expect(plan.tier).toBeGreaterThanOrEqual(2);
   });
 });
-

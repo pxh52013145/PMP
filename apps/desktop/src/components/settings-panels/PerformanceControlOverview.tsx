@@ -1,5 +1,4 @@
 import React from 'react';
-import { useKernel } from '../../contexts/KernelContext';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 import { useT } from '../../i18n';
 
@@ -11,17 +10,7 @@ function formatMemoryMB(bytes: number): string {
 
 export function PerformanceControlOverview() {
   const t = useT();
-  const kernel = useKernel();
-  const { service } = usePerformanceControlSettings();
-
-  const [snapshot, setSnapshot] = React.useState(() => service.getSnapshot());
-
-  React.useEffect(() => {
-    setSnapshot(service.getSnapshot());
-    return kernel.events.on('performance-control/changed', (next) => {
-      setSnapshot(next);
-    });
-  }, [kernel.events, service]);
+  const { service, snapshot } = usePerformanceControlSettings();
 
   React.useEffect(() => {
     void service.refreshNow();

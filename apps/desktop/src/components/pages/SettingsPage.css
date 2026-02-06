@@ -804,6 +804,29 @@
   box-shadow: inset 0 0 20px rgba(var(--settings-accent-rgb), 0.08);
 }
 
+.performance-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.performance-overview-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+@media (max-width: 900px) {
+  .performance-overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-card-note {
   margin: 14px 0 0;
   font-size: 12px;

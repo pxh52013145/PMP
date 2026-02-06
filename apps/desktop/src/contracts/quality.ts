@@ -1,4 +1,4 @@
-export const QUALITY_LEVELS = ['ultra', 'high', 'balanced', 'low', 'potato'] as const;
+export const QUALITY_LEVELS = ['potato', 'low', 'balanced', 'high', 'ultra'] as const;
 
 export type QualityLevel = (typeof QUALITY_LEVELS)[number];
 

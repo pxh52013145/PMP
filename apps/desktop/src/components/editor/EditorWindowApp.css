@@ -85,6 +85,49 @@
   --editor-window-glass-blur: 0px;
 }
 
+.editor-window-app.editor-window-app--skin-balanced {
+  --editor-window-panel-bg: rgba(10, 12, 22, 0.88);
+  --editor-window-glass-blur: 2px;
+}
+
+.editor-window-app.editor-window-app--skin-minimal {
+  --editor-window-panel-bg: rgba(10, 10, 20, 0.94);
+  --editor-window-glass-blur: 0px;
+}
+
+.editor-window-app.editor-window-app--skin-minimal .editor-statistics::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-magnet-library::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-style-editor::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-help::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-theme::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-debug::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-creator::before,
+.editor-window-app.editor-window-app--skin-minimal .background-manager::before,
+.editor-window-app.editor-window-app--skin-minimal .editor-custom-background::before {
+  border-color: rgba(0, 255, 255, 0.28);
+  box-shadow: inset 0 0 8px rgba(0, 255, 255, 0.12);
+}
+
+.editor-window-app.editor-window-app--effects-reduced .editor-statistics::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-magnet-library::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-style-editor::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-help::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-theme::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-debug::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-creator::before,
+.editor-window-app.editor-window-app--effects-reduced .background-manager::before,
+.editor-window-app.editor-window-app--effects-reduced .editor-custom-background::before {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: inset 0 0 8px rgba(0, 255, 255, 0.12);
+}
+
+.editor-window-app.editor-window-app--motion-paused *,
+.editor-window-app.editor-window-app--motion-paused *::before,
+.editor-window-app.editor-window-app--motion-paused *::after {
+  animation-play-state: paused !important;
+}
+
 /* 通用编辑器窗口样式 - 半透明玻璃效果 */
 .editor-statistics,
 .editor-magnet-library,

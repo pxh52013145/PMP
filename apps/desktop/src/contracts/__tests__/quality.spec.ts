@@ -3,6 +3,8 @@ import {
   clampQualityLevel,
   DEFAULT_QUALITY_SETTINGS_V1,
   guessInitialAutoQualityLevel,
+  nextHigherQuality,
+  nextLowerQuality,
   parseQualitySettings,
   resolveQualityProfile,
 } from '../quality';
@@ -48,6 +50,13 @@ describe('quality contracts', () => {
     expect(clampQualityLevel('potato', 'balanced', 'ultra')).toBe('balanced');
   });
 
+  it('navigates levels in expected direction', () => {
+    expect(nextLowerQuality('ultra')).toBe('high');
+    expect(nextLowerQuality('potato')).toBe('potato');
+    expect(nextHigherQuality('potato')).toBe('low');
+    expect(nextHigherQuality('ultra')).toBe('ultra');
+  });
+
   it('resolves profile deterministically', () => {
     const profile = resolveQualityProfile('balanced');
     expect(profile.renderScale).toBeGreaterThan(0);
@@ -60,4 +69,3 @@ describe('quality contracts', () => {
     expect(guess.detail.length).toBeGreaterThan(0);
   });
 });
-

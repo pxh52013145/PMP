@@ -23,6 +23,7 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
         service.applyGovernanceSnapshot(result);
       });
 
+      service.refreshSettingsFromStorage();
       void service.refreshNow();
 
       let timer: number | null = null;
