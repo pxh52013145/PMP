@@ -1,0 +1,30 @@
+{
+  "build": {
+    "beforeDevCommand": "pnpm --filter @pixel-matrix/desktop-next dev:vite",
+    "beforeBuildCommand": "pnpm --filter @pixel-matrix/desktop-next build:vite",
+    "devPath": "http://localhost:1421",
+    "distDir": "../../desktop-next/dist",
+    "withGlobalTauri": false
+  },
+  "package": {
+    "productName": "Pixel Matrix Player Next Blank"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "label": "main",
+        "fullscreen": false,
+        "resizable": true,
+        "title": "Pixel Matrix Player Next Blank",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 360,
+        "transparent": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "fileDropEnabled": false
+      }
+    ]
+  }
+}

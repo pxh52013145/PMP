@@ -1,0 +1,191 @@
+use crate::native_audio;
+
+#[tauri::command]
+pub async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::load(&app, path))
+        .await
+        .map_err(|e| format!("Native audio load task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_play(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::play(&app))
+        .await
+        .map_err(|e| format!("Native audio play task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_crossfade_to(
+    app: tauri::AppHandle,
+    path: String,
+    duration_ms: u64,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::crossfade_to(&app, path, duration_ms))
+        .await
+        .map_err(|e| format!("Native audio crossfade task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_pause(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::pause(&app))
+        .await
+        .map_err(|e| format!("Native audio pause task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_stop(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::stop(&app))
+        .await
+        .map_err(|e| format!("Native audio stop task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_seek(app: tauri::AppHandle, time: f64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::seek(&app, time))
+        .await
+        .map_err(|e| format!("Native audio seek task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_set_volume(app: tauri::AppHandle, volume: f32) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_volume(&app, volume))
+        .await
+        .map_err(|e| format!("Native audio set volume task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_set_mute(app: tauri::AppHandle, muted: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_mute(&app, muted))
+        .await
+        .map_err(|e| format!("Native audio set mute task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_gain(app: tauri::AppHandle, db: f32) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_gain(&app, db))
+        .await
+        .map_err(|e| format!("Native audio set gain task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_replay_gain(
+    app: tauri::AppHandle,
+    db: Option<f32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_replay_gain(&app, db))
+        .await
+        .map_err(|e| format!("Native audio set replay gain task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_dsp_chain(
+    app: tauri::AppHandle,
+    chain: Vec<native_audio::DspNodeConfig>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_dsp_chain(&app, chain))
+        .await
+        .map_err(|e| format!("Native audio set DSP chain task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_list_output_backends() -> Result<Vec<String>, String> {
+    native_audio::list_output_backends()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_select_output_backend(
+    app: tauri::AppHandle,
+    backend_id: Option<String>,
+) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::select_output_backend(&app, backend_id))
+        .await
+        .map_err(|e| format!("Native audio select output backend task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_list_audio_inputs() -> Result<Vec<String>, String> {
+    native_audio::list_audio_inputs()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_select_audio_input(
+    app: tauri::AppHandle,
+    input_id: Option<String>,
+) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::select_audio_input(&app, input_id))
+        .await
+        .map_err(|e| format!("Native audio select audio input task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_get_audio_components_state(
+) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
+    native_audio::get_audio_components_state()
+}
+
+#[tauri::command]
+pub async fn native_audio_get_streaming_buffer_settings(
+    _app: tauri::AppHandle,
+) -> Result<native_audio::NativeAudioStreamingBufferSettingsPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::get_streaming_buffer_settings())
+        .await
+        .map_err(|e| format!("Native audio get streaming buffer settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_streaming_buffer_settings(
+    app: tauri::AppHandle,
+    start_or_seek_seconds: Option<f64>,
+    crossfade_seconds: Option<f64>,
+) -> Result<native_audio::NativeAudioStreamingBufferSettingsPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::set_streaming_buffer_settings(&app, start_or_seek_seconds, crossfade_seconds)
+    })
+    .await
+    .map_err(|e| format!("Native audio set streaming buffer settings task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_list_devices() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(native_audio::list_output_devices)
+        .await
+        .map_err(|e| format!("Native audio list devices task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn native_audio_list_devices_v2() -> Result<Vec<native_audio::NativeAudioOutputDevicePayload>, String> {
+    tauri::async_runtime::spawn_blocking(native_audio::list_output_devices_v2)
+        .await
+        .map_err(|e| format!("Native audio list devices v2 task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_select_device(
+    app: tauri::AppHandle,
+    device_id: Option<String>,
+    device_name: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::select_output_device(&app, device_id, device_name)
+    })
+    .await
+    .map_err(|e| format!("Native audio select device task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_open_asio_control_panel(device_name: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::open_asio_control_panel(device_name))
+        .await
+        .map_err(|e| format!("Native audio open ASIO control panel task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_sync_queue(
+    app: tauri::AppHandle,
+    queue: Vec<String>,
+    current_index: i32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::sync_queue(&app, queue, current_index))
+        .await
+        .map_err(|e| format!("Native audio sync queue task failed: {e}"))?
+}

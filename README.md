@@ -21,13 +21,26 @@ pnpm install
 pnpm dev
 ```
 
+并行前端模式：
+
+```bash
+# legacy 前端 + 现有 tauri
+pnpm dev:legacy
+
+# next 前端（apps/desktop-next）+ 现有 tauri backend
+pnpm dev:next
+
+# 仅 next 前端（不启动 tauri）
+pnpm dev:next:web
+```
+
 （可选）启用 ASIO 输出后端的构建（Windows，SDK gate）：
 
 ```bash
 pnpm dev:asio
 ```
 
-> 需要手动准备 Steinberg ASIO SDK 并设置 `CPAL_ASIO_DIR`，详见 `docs/guides/asio-sdk.md`。
+> 需要手动准备 Steinberg ASIO SDK 并设置 `CPAL_ASIO_DIR`，详见 `legacy/docs/guides/asio-sdk.md`。
 
 仅启动前端（不启动 Tauri）：
 
@@ -58,16 +71,14 @@ cargo test
 
 ## 文档入口
 
-- 文档索引：`DOCUMENTATION.md`
-- 微内核重构总规划（Single Source of Truth）：`docs/refactor.md`
-- 技术架构（As-Is/To-Be、契约、算法、接口规划）：`docs/architecture/`
-- UI 设计（Editor / NavigationPage / MusicLibrary）：`docs/ui/`
-- 测试与验收（按模块解耦）：`docs/qa/`
+- 当前阶段采用源码优先；历史文档已归档：`legacy/`
+- 归档索引：`legacy/README.md`
 
 ## 工程结构
 
 - `apps/desktop/`：桌面应用（React + Tauri）
-- `packages/magnet-devkit/`：插件开发工具链（`.pmpm`）
+- `apps/desktop-next/`：并行 next 前端（性能重构试验轨道）
+- `packages/app-contracts/`：跨前端/后端共享契约（command/event/perf profile key）
 
 ## 开发协作规范
 

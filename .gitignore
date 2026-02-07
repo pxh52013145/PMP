@@ -52,8 +52,15 @@ lerna-debug.log*
 community/supabase/.branches/
 community/supabase/.temp/
 
-# Community (local-only)
-community/
+# Community (local-only, except shared resource packs)
+community/*
+!community/resource/
+!community/resource/**
+
+# New source-first phase: archive and local package experiments
+legacy/
+packages/
+scripts/
 
 # Local scratch
 problem_test/
