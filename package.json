@@ -21,6 +21,8 @@
     "dev:asio": "pnpm --filter @pixel-matrix/desktop dev:asio",
     "dev:web": "pnpm --filter @pixel-matrix/desktop dev:vite",
     "dev:tauri": "pnpm --filter @pixel-matrix/desktop tauri dev",
+    "perf:snapshot:4rounds": "powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartNext",
+    "perf:snapshot:4rounds:quick": "powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartNext -Quick",
     "build": "pnpm --filter @pixel-matrix/desktop build",
     "build:asio": "pnpm --filter @pixel-matrix/desktop build:asio",
     "build:web": "pnpm --filter @pixel-matrix/desktop build:vite",

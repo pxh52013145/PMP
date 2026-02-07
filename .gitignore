@@ -61,6 +61,7 @@ community/*
 legacy/
 packages/
 scripts/
+snapshots/
 
 # Local scratch
 problem_test/
