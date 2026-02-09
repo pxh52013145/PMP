@@ -16,7 +16,10 @@
   "scripts": {
     "dev": "pnpm --filter @pixel-matrix/desktop dev",
     "dev:legacy": "pnpm --filter @pixel-matrix/desktop dev",
-    "dev:next": "pnpm --filter @pixel-matrix/desktop tauri dev --config src-tauri/tauri.next.conf.json",
+    "dev:next": "node scripts/dev-next.mjs",
+    "dev:next:minimal": "node scripts/dev-next.mjs --profile minimal",
+    "dev:next:balanced": "node scripts/dev-next.mjs --profile balanced",
+    "dev:next:boosted": "node scripts/dev-next.mjs --profile boosted",
     "dev:next:web": "pnpm --filter @pixel-matrix/desktop-next dev:vite",
     "dev:asio": "pnpm --filter @pixel-matrix/desktop dev:asio",
     "dev:web": "pnpm --filter @pixel-matrix/desktop dev:vite",

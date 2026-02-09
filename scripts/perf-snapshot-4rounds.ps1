@@ -28,11 +28,22 @@ Param(
   [string]$PeakMetric = "taskMgrMB",
 
   [Parameter(Mandatory = $false)]
-  [int]$PeakTopN = 8
+  [int]$PeakTopN = 8,
+
+  [Parameter(Mandatory = $false)]
+  [switch]$StrictHostExe,
+
+  [Parameter(Mandatory = $false)]
+  [switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {
+  # best effort for terminals that don't allow changing output encoding
+}
 
 function Get-RepoRoot() {
   return (Split-Path -Parent $PSScriptRoot)
@@ -72,6 +83,43 @@ function Build-Rounds([bool]$IsQuickMode) {
   )
 }
 
+function Show-PerfSuiteHelp() {
+  $helpText = @'
+性能快照脚本（四轮套件）- scripts/perf-snapshot-4rounds.ps1
+
+用途：一键执行四轮性能采样，并按文件夹归档。
+
+四轮默认场景：
+  1) baseline-app-only        仅主进程（不含 WebView2）
+  2) baseline-with-webview2   主进程 + WebView2
+  3) peak-auto-stress         压力峰值场景
+  4) recovery-after-stress    压力后恢复场景
+
+关键参数：
+  -AutoStartNext              自动启动 pnpm dev:next
+  -Quick                      快速模式（每轮时长更短）
+  -SuiteName [name]           套件目录名（默认 suite-日期时间）
+  -MainWindowTitleLike [pat]  按窗口标题定位
+  -AppProcessName [pat]       按进程名定位（标题匹配失败时可用）
+  -PeakMetric / -PeakTopN     峰值度量与 TopN
+
+输出结构：
+  snapshots/[SuiteName]/[RoundName]/[RoundName].md
+  snapshots/[SuiteName]/[RoundName]/[RoundName].csv
+
+示例：
+  pnpm run perf:snapshot:4rounds
+  pnpm run perf:snapshot:4rounds:quick
+  powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartNext -SuiteName my-baseline-2026-02-08
+'@
+  Write-Host $helpText
+}
+
+if ($Help.IsPresent) {
+  Show-PerfSuiteHelp
+  exit 0
+}
+
 $repoRoot = Get-RepoRoot
 $perfScript = Join-Path $PSScriptRoot "perf-snapshot.ps1"
 $suiteOutDir = Get-SuiteOutDir -RepoRoot $repoRoot -InputSuiteName $SuiteName
@@ -81,6 +129,7 @@ Write-Host "[perf-suite] Repo: $repoRoot"
 Write-Host "[perf-suite] SuiteOutDir: $suiteOutDir"
 Write-Host "[perf-suite] Rounds: $($rounds.Count)"
 Write-Host "[perf-suite] QuickMode: $($Quick.IsPresent)"
+Write-Host "[perf-suite] StrictHostExe: $($StrictHostExe.IsPresent)"
 
 $devProcess = $null
 if ($AutoStartNext.IsPresent) {
@@ -121,6 +170,10 @@ try {
       $args += "-IncludeWebView2"
     }
 
+    if ($StrictHostExe.IsPresent) {
+      $args += "-StrictHostExe"
+    }
+
     & powershell @args
     if ($LASTEXITCODE -ne 0) {
       throw "Round '$($round.Scenario)' failed with exit code $LASTEXITCODE"
@@ -135,4 +188,3 @@ try {
     cmd /c taskkill /PID $($devProcess.Id) /T /F | Out-Null
   }
 }
-
