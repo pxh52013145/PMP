@@ -74,6 +74,7 @@ Thumbs.db
 *.tmp
 *.temp
 *.log
+*.flac
 tmp/
 %TEMP%/
 
