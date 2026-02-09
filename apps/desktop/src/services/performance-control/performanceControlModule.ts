@@ -7,6 +7,17 @@ import {
 } from './PerformanceControlService';
 
 const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS = 5_000;
+const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_THROTTLE = 12_000;
+const PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE = 20_000;
+
+function resolveRefreshIntervalMs(
+  renderMode: 'full' | 'throttle' | 'pause',
+  visible: boolean
+): number {
+  if (!visible || renderMode === 'pause') return PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_PAUSE;
+  if (renderMode === 'throttle') return PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS_THROTTLE;
+  return PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS;
+}
 
 export function createPerformanceControlModule(): KernelModule<AppEvents> {
   return {
@@ -27,11 +38,45 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
       void service.refreshNow();
 
       let timer: number | null = null;
+      let activeIntervalMs = PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS;
       let teardown: null | (() => void) = null;
+      let onVisibilityOrFocusChanged: (() => void) | null = null;
       let disposed = false;
       if (typeof window !== 'undefined') {
+        const getRuntimeActivity = () => {
+          const isVisible = !document.hidden;
+          const isFocused = document.hasFocus();
+          const policy = service.getSettingsSnapshot().backgroundRenderPolicy;
+          const renderMode: 'full' | 'throttle' | 'pause' =
+            isVisible && isFocused ? 'full' : policy === 'pause' ? 'pause' : policy;
+          return { isVisible, renderMode };
+        };
+
+        const applyInterval = () => {
+          if (disposed) return;
+          const { isVisible, renderMode } = getRuntimeActivity();
+          const nextIntervalMs = resolveRefreshIntervalMs(renderMode, isVisible);
+          if (timer !== null && nextIntervalMs === activeIntervalMs) {
+            return;
+          }
+          if (timer !== null) {
+            window.clearInterval(timer);
+            timer = null;
+          }
+          activeIntervalMs = nextIntervalMs;
+          timer = window.setInterval(() => {
+            void service.refreshNow();
+          }, activeIntervalMs);
+        };
+
+        onVisibilityOrFocusChanged = () => {
+          applyInterval();
+          void service.refreshNow();
+        };
+
         void setupDualListener(
           [
+            STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE,
             STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
             STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS,
             STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX,
@@ -46,6 +91,7 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
           ],
           () => {
             service.refreshSettingsFromStorage();
+            applyInterval();
           }
         ).then((fn) => {
           if (disposed) {
@@ -55,9 +101,11 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
           teardown = fn;
         });
 
-        timer = window.setInterval(() => {
-          void service.refreshNow();
-        }, PERFORMANCE_CONTROL_REFRESH_INTERVAL_MS);
+        document.addEventListener('visibilitychange', onVisibilityOrFocusChanged);
+        window.addEventListener('focus', onVisibilityOrFocusChanged);
+        window.addEventListener('blur', onVisibilityOrFocusChanged);
+
+        applyInterval();
       }
 
       return () => {
@@ -69,6 +117,13 @@ export function createPerformanceControlModule(): KernelModule<AppEvents> {
         }
         if (timer !== null && typeof window !== 'undefined') {
           window.clearInterval(timer);
+        }
+        if (typeof window !== 'undefined') {
+          if (onVisibilityOrFocusChanged) {
+            document.removeEventListener('visibilitychange', onVisibilityOrFocusChanged);
+            window.removeEventListener('focus', onVisibilityOrFocusChanged);
+            window.removeEventListener('blur', onVisibilityOrFocusChanged);
+          }
         }
         unsubscribeGovernance();
         unsubscribeQuality();

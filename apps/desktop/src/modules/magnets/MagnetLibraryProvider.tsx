@@ -1,5 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BUILTIN_MAGNET_IDS, DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../../constants/magnets';
+import {
+  BUILTIN_MAGNET_IDS,
+  DEFAULT_ACTIVE_MAGNET_IDS,
+  MINIMAL_ACTIVE_MAGNET_IDS,
+  REQUIRED_MAGNET_IDS,
+} from '../../constants/magnets';
 import {
   STORAGE_KEYS,
   TAURI_EVENTS,
@@ -38,16 +43,15 @@ import {
 import { resolveMagnetLayoutStorageKey, type MagnetSpaceLayout } from './layout';
 import {
   magnetLayoutStoreApplyPatch,
-  magnetLayoutStoreApplyPatchWithRetry,
   magnetLayoutStoreBootstrapFromLegacy,
   magnetLayoutStoreGetState,
   type MagnetLayoutStorePatch,
   type MagnetLayoutStoreState,
 } from './layoutStore';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
-import { usePersistentSetting } from '../storage';
+import { readJson, usePersistentSetting } from '../storage';
 import { createDefaultMagnetSpacesState, sanitizeMagnetSpacesState } from './spaces';
-import { getSystemAnchorsByMagnetId } from './systemLayouts';
+import { parsePerformanceRuntimeProfile } from '../../contracts/performanceControl';
 
 export interface MagnetLibraryProviderProps {
   children: ReactNode;
@@ -75,40 +79,14 @@ export interface MagnetConfigContextValue {
 
 const MagnetConfigContext = createContext<MagnetConfigContextValue | null>(null);
 
-async function migrateProcessPerfMonitorInLayoutStore(
-  store: MagnetLayoutStoreState
-): Promise<MagnetLayoutStoreState> {
-  const spaceId = 'space1';
-  const layout = store.layoutsBySpaceId[spaceId];
-  if (!layout) return store;
-
-  const magnetId = 'process-perf-monitor';
-  const active = new Set(layout.activeMagnetIds);
-  const anchors = layout.anchorsByMagnetId[magnetId];
-  const needsActive = !active.has(magnetId);
-  const needsAnchors = !Array.isArray(anchors) || anchors.length === 0;
-  if (!needsActive && !needsAnchors) return store;
-
-  const patches: MagnetLayoutStorePatch[] = [];
-  if (needsActive) {
-    patches.push({ kind: 'setMagnetActive', spaceId, magnetId, active: true });
-  }
-  if (needsAnchors) {
-    const systemAnchors = getSystemAnchorsByMagnetId(spaceId)[magnetId] ?? [];
-    if (systemAnchors.length > 0) {
-      patches.push({ kind: 'updateMagnetAnchors', spaceId, magnetId, anchors: systemAnchors });
-    }
-  }
-  if (patches.length === 0) return store;
-
-  const response = await magnetLayoutStoreApplyPatchWithRetry({
-    expectedRevision: store.revision,
-    patches,
-    reason: 'migration:process-perf-monitor',
-  });
-
-  if (!response || !response.ok) return store;
-  return response.state;
+function resolveRuntimeDefaultActiveMagnetIds(
+  fallback: ReadonlySet<string>
+): ReadonlySet<string> {
+  const runtimeProfile = parsePerformanceRuntimeProfile(
+    readJson<unknown>(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, 'minimal'),
+    'minimal'
+  );
+  return runtimeProfile === 'minimal' ? MINIMAL_ACTIVE_MAGNET_IDS : fallback;
 }
 
 export function MagnetLibraryProvider({
@@ -118,6 +96,10 @@ export function MagnetLibraryProvider({
   autoSaveDebounceMs = 500,
   registerFlushHandler,
 }: MagnetLibraryProviderProps) {
+  const runtimeDefaultActiveMagnetIds = useMemo(
+    () => resolveRuntimeDefaultActiveMagnetIds(defaultActiveMagnetIds),
+    [defaultActiveMagnetIds]
+  );
   const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
   const builtInMagnetIds = useMemo(() => new Set(BUILTIN_MAGNET_IDS), []);
   const isTauri = useMemo(() => isTauriRuntime(), []);
@@ -151,11 +133,11 @@ export function MagnetLibraryProvider({
   const loadedLayoutKeyRef = useRef(magnetLayoutStorageKey);
 
   const resolvedDefaultActiveMagnetIds = useMemo(() => {
-    const seed = activeSpaceId === 'space1' ? defaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
+    const seed = activeSpaceId === 'space1' ? runtimeDefaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
     const next = new Set(seed);
     for (const id of REQUIRED_MAGNET_IDS) next.add(id);
     return next;
-  }, [activeSpaceId, defaultActiveMagnetIds]);
+  }, [activeSpaceId, runtimeDefaultActiveMagnetIds]);
 
   const defaultCatalogState = useMemo(() => createDefaultMagnetCatalogState(), []);
   const [catalogRaw] = usePersistentSetting(STORAGE_KEYS.MAGNET_CATALOG, defaultCatalogState, {
@@ -170,7 +152,7 @@ export function MagnetLibraryProvider({
     let disposed = false;
 
     const run = async () => {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
+      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy(runtimeDefaultActiveMagnetIds);
       const state = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (disposed || !state) return;
       layoutStoreRevisionRef.current = state.revision;
@@ -182,7 +164,7 @@ export function MagnetLibraryProvider({
     return () => {
       disposed = true;
     };
-  }, [isTauri]);
+  }, [isTauri, runtimeDefaultActiveMagnetIds]);
 
   const initialRef = useRef<{
     magnetLibrary: Magnet[];
@@ -354,11 +336,9 @@ export function MagnetLibraryProvider({
     }
 
     void (async () => {
-      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy();
-      let store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
+      const bootstrapped = await magnetLayoutStoreBootstrapFromLegacy(runtimeDefaultActiveMagnetIds);
+      const store = bootstrapped?.state ?? (await magnetLayoutStoreGetState());
       if (!store) return;
-
-      store = await migrateProcessPerfMonitorInLayoutStore(store);
 
       layoutStoreRevisionRef.current = store.revision;
       setLayoutStoreState(store);
@@ -368,7 +348,7 @@ export function MagnetLibraryProvider({
       const spaceIds = storeSpaces.spaces.map((s) => s.id);
 
       const defaultActiveSeed =
-        storeActiveSpaceId === 'space1' ? defaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
+        storeActiveSpaceId === 'space1' ? runtimeDefaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
       const resolvedActive = new Set(defaultActiveSeed);
       for (const id of REQUIRED_MAGNET_IDS) resolvedActive.add(id);
 
@@ -380,10 +360,10 @@ export function MagnetLibraryProvider({
   }, [
     activeSpaceId,
     defaultMagnetLibrary,
-    defaultActiveMagnetIds,
     gridSize,
     magnetSpaces.spaces,
     resolvedDefaultActiveMagnetIds,
+    runtimeDefaultActiveMagnetIds,
     isTauri,
   ]);
 

@@ -27,11 +27,9 @@ pnpm dev
 # legacy 前端 + 现有 tauri
 pnpm dev:legacy
 
-# next 前端（apps/desktop-next）+ 现有 tauri backend
+# next 模式（apps/desktop）+ 现有 tauri backend
 pnpm dev:next
 
-# 仅 next 前端（不启动 tauri）
-pnpm dev:next:web
 ```
 
 （可选）启用 ASIO 输出后端的构建（Windows，SDK gate）：
@@ -77,7 +75,6 @@ cargo test
 ## 工程结构
 
 - `apps/desktop/`：桌面应用（React + Tauri）
-- `apps/desktop-next/`：并行 next 前端（性能重构试验轨道）
 - `packages/app-contracts/`：跨前端/后端共享契约（command/event/perf profile key）
 
 ## 开发协作规范

@@ -14,6 +14,7 @@ export interface WindowPinData {
  */
 export interface WindowPinLogic {
   togglePin: (e: React.MouseEvent) => Promise<void>;
+  getButtonTitle: (isPinned: boolean) => string;
 }
 
 /**

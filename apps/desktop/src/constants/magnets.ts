@@ -79,6 +79,25 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-music-library',
 ]);
 
+export const MINIMAL_ACTIVE_MAGNET_IDS = new Set<string>([
+  'drag-handle',
+  'btn-minimize',
+  'btn-maximize',
+  'btn-close',
+  'btn-window-pin',
+  'btn-matrix-change',
+  'btn-editor',
+  'navigation-page',
+  'btn-back',
+  'btn-play-pause',
+  'btn-previous',
+  'btn-next',
+  'btn-mode',
+  'btn-volume',
+  'progress-bar',
+  'track-info',
+]);
+
 /**
  * Required magnets (cannot be removed from matrix).
  *

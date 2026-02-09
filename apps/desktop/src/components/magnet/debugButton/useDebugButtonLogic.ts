@@ -1,15 +1,9 @@
-/**
- * DebugButton 逻辑层 Hook
- * 历史为调试按钮（id: btn-debug），现用于 Settings 页面切换
- */
-
 import { useNavigation } from '../../../contexts/NavigationContext';
 import { useT } from '../../../i18n';
 
 export interface DebugButtonLogic {
   toggleDebugWindow: (isOpen: boolean, setIsOpen: (value: boolean) => void) => Promise<void>;
   getButtonTitle: (isOpen: boolean) => string;
-  getButtonIcon: () => string;
 }
 
 export function useDebugButtonLogic(): DebugButtonLogic {
@@ -36,14 +30,8 @@ export function useDebugButtonLogic(): DebugButtonLogic {
     return isOpen ? t('magnet.settingsButton.title.back') : t('magnet.settingsButton.title.open');
   };
 
-  const getButtonIcon = (): string => {
-    return 'SET';
-  };
-
   return {
     toggleDebugWindow,
     getButtonTitle,
-    getButtonIcon,
   };
 }
-

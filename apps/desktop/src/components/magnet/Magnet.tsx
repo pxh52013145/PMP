@@ -17,6 +17,7 @@ interface MagnetProps {
  * 通过锚点吸附到 Pixel 上，实现响应式定位
  */
 export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOverrideMode }: MagnetProps) {
+  const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
   const [isHovering, setIsHovering] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const { PIXEL_SIZE } = MATRIX_CONFIG;
@@ -176,6 +177,12 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
 
   // ✅ 检测大幅度位置变化（窗口大小变化），禁用 transition
   useEffect(() => {
+    if (lowRenderMode) {
+      setDisableTransition(true);
+      lastBoundsRef.current = bounds;
+      return;
+    }
+
     if (!bounds) {
       return;
     }
@@ -222,12 +229,12 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
       // 小幅度变化，正常更新位置
       lastBoundsRef.current = bounds;
     }
-  }, [bounds]);
+  }, [bounds, lowRenderMode]);
 
   const transitionValue = useMemo(() => {
-    if (disableTransition) return 'none';
+    if (lowRenderMode || disableTransition) return 'none';
     return magnet.animation?.transition || 'var(--magnet-transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1))';
-  }, [disableTransition, magnet.animation?.transition]);
+  }, [lowRenderMode, disableTransition, magnet.animation?.transition]);
 
   // Shell is layout + hit-testing only (position/size/drag/click). Visual styles live in the optional "chrome" element.
   const shellStyle = useMemo(() => {

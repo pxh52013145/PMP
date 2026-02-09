@@ -1,32 +1,36 @@
-/**
- * WindowPin 逻辑层
- * 负责处理窗口置顶交互
- */
-
 import { appWindow } from '@tauri-apps/api/window';
+import { useT } from '../../../i18n';
 import { WindowPinLogic } from './WindowPinTypes';
-import { useWindowPinDataWithSetter } from './useWindowPinData';
 
-export function useWindowPinLogic(): WindowPinLogic {
-  const [{ isPinned }, setIsPinned] = useWindowPinDataWithSetter();
+export function useWindowPinLogic(
+  isPinned: boolean,
+  setIsPinned: React.Dispatch<React.SetStateAction<boolean>>
+): WindowPinLogic {
+  const t = useT();
 
   const togglePin = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
+    const nextPinned = !isPinned;
+    setIsPinned(nextPinned);
+
     try {
-      const newPinState = !isPinned;
-
-      await appWindow.setAlwaysOnTop(newPinState);
-
-      // 更新状态
-      setIsPinned(newPinState);
+      await appWindow.setAlwaysOnTop(nextPinned);
     } catch (error) {
+      setIsPinned(isPinned);
       console.error('Failed to toggle window pin state:', error);
     }
   };
 
+  const getButtonTitle = (pinned: boolean): string => {
+    return pinned
+      ? t('editor.control-panel.pin.title.unpin')
+      : t('editor.control-panel.pin.title.pin');
+  };
+
   return {
     togglePin,
+    getButtonTitle,
   };
 }

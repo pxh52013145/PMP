@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 import type { KernelModule } from '../kernel';
 import type { AppEvents } from '../contracts/events';
 import type {
@@ -8,11 +8,36 @@ import type {
   WorkbenchPageContainerContribution,
 } from '../contracts/contributions';
 import { subscribeLocale, t } from '../i18n/core';
-import { NavigationPage } from '../components/magnet/NavigationPage';
-import { DefaultWorkbench } from '../workbenches/default/DefaultWorkbench';
-import { MinimalWorkbench } from '../workbenches/minimal/MinimalWorkbench';
-import { MatrixWorkbench } from '../workbenches/matrix/MatrixWorkbench';
-import { WorkbenchPagesNavigation } from '../workbenches/navigation/WorkbenchPagesNavigation';
+
+const NavigationPageLazy = React.lazy(async () => ({
+  default: (await import('../components/magnet/NavigationPage')).NavigationPage,
+}));
+const DefaultWorkbenchLazy = React.lazy(async () => ({
+  default: (await import('../workbenches/default/DefaultWorkbench')).DefaultWorkbench,
+}));
+const MinimalWorkbenchLazy = React.lazy(async () => ({
+  default: (await import('../workbenches/minimal/MinimalWorkbench')).MinimalWorkbench,
+}));
+const MatrixWorkbenchLazy = React.lazy(async () => ({
+  default: (await import('../workbenches/matrix/MatrixWorkbench')).MatrixWorkbench,
+}));
+const WorkbenchPagesNavigationLazy = React.lazy(async () => ({
+  default: (await import('../workbenches/navigation/WorkbenchPagesNavigation')).WorkbenchPagesNavigation,
+}));
+
+function renderWithLazyBoundary(node: React.ReactNode) {
+  return (
+    <React.Suspense
+      fallback={
+        <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,0.75)' }}>
+          {t('common.state.loading')}
+        </div>
+      }
+    >
+      {node}
+    </React.Suspense>
+  );
+}
 
 export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
   return {
@@ -132,7 +157,7 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
           kind: 'workbench-navigation',
           id: 'pages-list',
           title: t('workbench.navigations.pagesList.title'),
-          render: () => <WorkbenchPagesNavigation />,
+          render: () => renderWithLazyBoundary(<WorkbenchPagesNavigationLazy />),
           source: 'builtin',
           order: 20,
           group: 'core',
@@ -146,7 +171,10 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
           kind: 'workbench-page-container',
           id: 'matrix',
           title: t('workbench.pageContainers.matrix.title'),
-          render: () => <MatrixWorkbench showEditorOverlay showEditorPanel showWindowBorder />,
+          render: () =>
+            renderWithLazyBoundary(
+              <MatrixWorkbenchLazy showEditorOverlay showEditorPanel showWindowBorder />
+            ),
           source: 'builtin',
           order: 10,
           group: 'core',
@@ -160,9 +188,10 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
           kind: 'workbench-page-container',
           id: 'matrix-minimal',
           title: t('workbench.pageContainers.matrixMinimal.title'),
-          render: () => (
-            <MatrixWorkbench showEditorOverlay={false} showEditorPanel={false} showWindowBorder />
-          ),
+          render: () =>
+            renderWithLazyBoundary(
+              <MatrixWorkbenchLazy showEditorOverlay={false} showEditorPanel={false} showWindowBorder />
+            ),
           source: 'builtin',
           order: 20,
           group: 'core',
@@ -177,7 +206,7 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
           kind: 'workbench-page-container',
           id: 'navigation-page',
           title: t('workbench.pageContainers.navigationPage.title'),
-          render: () => <NavigationPage />,
+          render: () => renderWithLazyBoundary(<NavigationPageLazy />),
           source: 'builtin',
           order: 30,
           group: 'core',
@@ -192,7 +221,7 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
           kind: 'workbench',
           id: 'default',
           title: t('workbench.workbenches.default.title'),
-          render: () => <DefaultWorkbench />,
+          render: () => renderWithLazyBoundary(<DefaultWorkbenchLazy />),
           source: 'builtin',
           order: 10,
           group: 'core',
@@ -206,7 +235,7 @@ export function createBuiltinWorkbenchesModule(): KernelModule<AppEvents> {
           kind: 'workbench',
           id: 'minimal',
           title: t('workbench.workbenches.minimal.title'),
-          render: () => <MinimalWorkbench />,
+          render: () => renderWithLazyBoundary(<MinimalWorkbenchLazy />),
           source: 'builtin',
           order: 20,
           group: 'core',

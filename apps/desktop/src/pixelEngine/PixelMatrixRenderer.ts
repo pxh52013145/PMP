@@ -27,6 +27,7 @@ export class PixelMatrixRenderer {
   private hoveredBaseTint: PIXI.ColorSource | null = null;
   private pointerMoveRaf: number | null = null;
   private pendingPointerMove: { x: number; y: number } | null = null;
+  private readonly roundPixels: boolean;
 
   constructor(
     width: number,
@@ -50,14 +51,19 @@ export class PixelMatrixRenderer {
     }
 
     // 初始化 PixiJS 应用
+    this.roundPixels = import.meta.env.VITE_PERF_ROUND_PIXELS === '1';
+    const useAntialias = import.meta.env.VITE_PERF_PIXEL_ANTIALIAS !== '0';
+
     this.app = new PIXI.Application({
       width,
       height,
       backgroundAlpha: 0, // 完全透明的背景
-      antialias: true,
+      antialias: useAntialias,
       resolution: (window.devicePixelRatio || 1) * this.renderScale,
       autoDensity: true,
     });
+
+    (this.app.stage as PIXI.Container & { roundPixels?: boolean }).roundPixels = this.roundPixels;
 
     // 创建像素容器
     this.pixelContainer = new PIXI.Container();
@@ -280,8 +286,10 @@ export class PixelMatrixRenderer {
       for (let col = 0; col < COLUMNS; col++) {
         const pixel = this.pixels[index];
         if (pixel) {
-          pixel.x = EDGE_PADDING + col * stepX;
-          pixel.y = EDGE_PADDING + row * stepY;
+          const nextX = EDGE_PADDING + col * stepX;
+          const nextY = EDGE_PADDING + row * stepY;
+          pixel.x = this.roundPixels ? Math.round(nextX) : nextX;
+          pixel.y = this.roundPixels ? Math.round(nextY) : nextY;
         }
         index++;
       }

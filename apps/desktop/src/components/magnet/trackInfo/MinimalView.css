@@ -1,0 +1,75 @@
+.track-info-minimal {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: rgba(26, 26, 46, 0.8);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.track-info-minimal:hover {
+  background: rgba(26, 26, 46, 0.95);
+}
+
+.minimal-text {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow: hidden;
+}
+
+.minimal-title {
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+}
+
+.minimal-artist {
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+}
+
+.minimal-separator {
+  color: rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+/* 文本内层 - 始终启用GPU加速避免抖动 */
+.minimal-text-inner {
+  display: inline-block;
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* 溢出时添加padding */
+.overflow .minimal-text-inner {
+  padding-right: 30px;
+}
+
+/* Hover时启用滚动动画（仅当文本溢出时） */
+.track-info-minimal:hover .minimal-title.overflow .minimal-text-inner {
+  animation: marqueeScroll 10s linear infinite;
+}
+
+.track-info-minimal:hover .minimal-artist.overflow .minimal-text-inner {
+  animation: marqueeScroll 10s linear infinite;
+}
+
+/* 跑马灯滚动动画 */
+@keyframes marqueeScroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}

@@ -80,13 +80,15 @@ export type MagnetLayoutStoreApplyPatchResponse = {
   error: null | { code: string; message: string };
 };
 
-export function buildLegacyMagnetLayoutStoreBootstrapRequest(): MagnetLayoutStoreBootstrapRequest {
+export function buildLegacyMagnetLayoutStoreBootstrapRequest(
+  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
+): MagnetLayoutStoreBootstrapRequest {
   const spacesRaw = readJson<unknown>(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState());
   const spaces = sanitizeMagnetSpacesState(spacesRaw);
 
   const layoutsBySpaceId: Record<string, MagnetSpaceLayout> = {};
   for (const space of spaces.spaces) {
-    const { layout } = ensureMagnetSpaceLayout(space.id, { defaultActiveMagnetIds: DEFAULT_ACTIVE_MAGNET_IDS });
+    const { layout } = ensureMagnetSpaceLayout(space.id, { defaultActiveMagnetIds });
     layoutsBySpaceId[space.id] = layout;
   }
 
@@ -103,11 +105,13 @@ export async function magnetLayoutStoreGetState(): Promise<MagnetLayoutStoreStat
   }
 }
 
-export async function magnetLayoutStoreBootstrapFromLegacy(): Promise<MagnetLayoutStoreBootstrapResponse | null> {
+export async function magnetLayoutStoreBootstrapFromLegacy(
+  defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
+): Promise<MagnetLayoutStoreBootstrapResponse | null> {
   if (!isTauriRuntime()) return null;
 
   try {
-    const request = buildLegacyMagnetLayoutStoreBootstrapRequest();
+    const request = buildLegacyMagnetLayoutStoreBootstrapRequest(defaultActiveMagnetIds);
     return (await invoke('magnet_layout_store_bootstrap', { request })) as MagnetLayoutStoreBootstrapResponse;
   } catch (error) {
     console.warn('[magnets] Failed to bootstrap magnet layout store', error);

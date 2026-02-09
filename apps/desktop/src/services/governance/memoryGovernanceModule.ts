@@ -8,6 +8,11 @@ import {
   MEMORY_GOVERNANCE_INTERVAL_MS,
   type MemoryGovernanceReason,
 } from '../../contracts/memoryGovernance';
+import {
+  DEFAULT_PERFORMANCE_CONTROL_SETTINGS,
+  parsePerformanceRuntimeProfile,
+  resolvePerformanceRuntimePresetSettings,
+} from '../../contracts/performanceControl';
 import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
 import {
@@ -18,7 +23,20 @@ import {
 
 function readEnabledSetting(): boolean {
   try {
-    return readJson<boolean>(STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED, DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED);
+    const runtimeProfile = parsePerformanceRuntimeProfile(
+      readJson<unknown>(
+        STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE,
+        DEFAULT_PERFORMANCE_CONTROL_SETTINGS.runtimeProfile
+      ),
+      DEFAULT_PERFORMANCE_CONTROL_SETTINGS.runtimeProfile
+    );
+
+    const fallbackEnabled =
+      runtimeProfile === 'custom'
+        ? DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED
+        : resolvePerformanceRuntimePresetSettings(runtimeProfile).memoryGovernanceAutoEnabled;
+
+    return readJson<boolean>(STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED, fallbackEnabled);
   } catch {
     return DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED;
   }
@@ -98,4 +116,3 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
     },
   };
 }
-

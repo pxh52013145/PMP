@@ -1,0 +1,213 @@
+/**
+ * 标准播放队列按钮变体
+ */
+
+import React from 'react';
+import { createPortal } from 'react-dom';
+import { PlayQueueVariantProps } from './PlayQueueTypes';
+import './StandardPlayQueue.css';
+
+const QueueIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" className="play-queue-icon" aria-hidden="true">
+    <path d="M4 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1Zm0 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1Zm0 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1Z" />
+  </svg>
+);
+
+const NoteIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" className="queue-empty-icon" aria-hidden="true">
+    <path d="M17 4a1 1 0 0 1 1 1v9.5a3.5 3.5 0 1 1-2-3.15V8.3l-5 1.25v7.95a3.5 3.5 0 1 1-2-3.15V8.8a1 1 0 0 1 .76-.97l7-1.75A1 1 0 0 1 17 4Z" />
+  </svg>
+);
+
+export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic }) => {
+  const { queue, currentIndex, queueLength } = data;
+  const {
+    showQueue,
+    editMode,
+    dragState,
+    toggleQueue,
+    closeQueue,
+    toggleEditMode,
+    playTrack,
+    removeTrack,
+    clearQueue,
+    addFiles,
+    handleDragStart,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+    handleDragEnd,
+    formatTime,
+  } = logic;
+
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+  const activeItemRef = React.useRef<HTMLDivElement | null>(null);
+  const didAutoScrollRef = React.useRef(false);
+
+  React.useLayoutEffect(() => {
+    if (!showQueue) {
+      didAutoScrollRef.current = false;
+      return;
+    }
+
+    if (didAutoScrollRef.current) return;
+
+    const list = listRef.current;
+    if (!list) return;
+
+    if (queueLength === 0) return;
+
+    if (currentIndex < 0) {
+      list.scrollTop = 0;
+      return;
+    }
+
+    if (currentIndex === 0) {
+      list.scrollTop = 0;
+      didAutoScrollRef.current = true;
+      return;
+    }
+
+    const active = activeItemRef.current;
+    if (!active) return;
+
+    const listRect = list.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    const activeTop = activeRect.top - listRect.top + list.scrollTop;
+
+    const desiredOffset = active.offsetHeight;
+    const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    list.scrollTop = Math.min(Math.max(0, activeTop - desiredOffset), maxScrollTop);
+    didAutoScrollRef.current = true;
+  }, [showQueue, currentIndex, queueLength]);
+
+  const modal = showQueue
+    ? createPortal(
+        <div className="queue-modal-overlay" onClick={closeQueue}>
+          <div className="queue-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="queue-modal-header">
+              <span className="queue-modal-title">☰ 播放列表 ({queueLength})</span>
+              <div className="queue-header-actions">
+                <button
+                  className={`queue-header-btn ${editMode ? 'queue-header-btn-active' : ''}`}
+                  onClick={toggleEditMode}
+                  title={editMode ? '完成编辑' : '编辑排序'}
+                >
+                  {editMode ? '✓' : '⚙'}
+                </button>
+                <button className="queue-header-btn" onClick={addFiles} title="添加文件到列表">
+                  +
+                </button>
+                <button
+                  className="queue-header-btn"
+                  onClick={clearQueue}
+                  disabled={queueLength === 0}
+                  title="清空播放列表"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <div className="queue-list" ref={listRef}>
+              {queueLength === 0 ? (
+                <div className="queue-empty">
+                  <NoteIcon />
+                  <div className="queue-empty-text">播放列表为空</div>
+                  <button className="queue-empty-btn" onClick={addFiles}>
+                    添加音乐文件
+                  </button>
+                </div>
+              ) : (
+                queue.map((track, index) => (
+                  <div
+                    key={track.id}
+                    ref={index === currentIndex ? activeItemRef : undefined}
+                    className={`queue-item ${index === currentIndex ? 'queue-item-active' : ''} ${
+                      editMode ? 'queue-item-edit-mode' : ''
+                    } ${dragState.dragIndex === index ? 'queue-item-dragging' : ''} ${
+                      dragState.dragOverIndex === index ? 'queue-item-drag-over' : ''
+                    }`}
+                    draggable={editMode}
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'move';
+                      handleDragStart(index);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      handleDragOver(index);
+                    }}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleDrop(index);
+                    }}
+                    onDragEnd={handleDragEnd}
+                    onDoubleClick={() => !editMode && playTrack(index)}
+                  >
+                    <div className="queue-item-index">{String(index + 1).padStart(2, '0')}</div>
+                    <div className="queue-item-info">
+                      <div className="queue-item-title" title={track.title}>
+                        {track.title}
+                      </div>
+                      <div className="queue-item-artist" title={track.artist || '未知艺术家'}>
+                        {track.artist || '未知艺术家'}
+                      </div>
+                    </div>
+                    <div className="queue-item-duration">
+                      {track.duration ? formatTime(track.duration) : '-'}
+                    </div>
+                    <div
+                      className={`queue-item-actions ${editMode ? 'queue-item-actions-hidden' : ''}`}
+                    >
+                      <button
+                        className="queue-item-action-btn queue-item-play"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          playTrack(index);
+                        }}
+                        title="播放"
+                        disabled={editMode}
+                      >
+                        ▶
+                      </button>
+                      <button
+                        className="queue-item-action-btn queue-item-remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeTrack(index);
+                        }}
+                        title="从播放列表移除"
+                        disabled={editMode}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <>
+      <button
+        className="play-queue-button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleQueue();
+        }}
+        title="播放列表"
+      >
+        <QueueIcon />
+        {queueLength > 0 && <span className="play-queue-count">{queueLength}</span>}
+      </button>
+      {modal}
+    </>
+  );
+};

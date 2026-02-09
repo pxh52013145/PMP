@@ -1,35 +1,79 @@
+﻿import React from 'react';
 import type { KernelModule } from '../kernel';
 import type { AppEvents } from '../contracts/events';
 import type { PageContribution, SettingsPanelContribution, WindowContribution } from '../contracts/contributions';
 import { parseNavigationParams } from '../contracts/navigationParams';
-import { HomePage } from '../components/pages/HomePage';
-import { SettingsPage } from '../components/pages/SettingsPage';
-import { KeyboardShortcutsPage } from '../components/pages/KeyboardShortcutsPage';
-import { MusicLibrary } from '../components/pages/MusicLibrary';
-import { TrackDetailPage } from '../components/pages/TrackDetailPage';
-import { AlbumDetailPage } from '../components/pages/AlbumDetailPage';
-import { DebugCenterPage } from '../components/pages/DebugCenterPage';
-import { NativeDebugPage } from '../components/pages/NativeDebugPage';
-import { PerfMonitorPage } from '../components/pages/PerfMonitorPage';
-import { DebugPage } from '../components/pages/DebugPage';
-import { DspRackPage } from '../components/pages/DspRackPage';
-import { AudioSettingsPanel } from '../components/settings-panels/AudioSettingsPanel';
-import { AudioComponentsSettingsPanel } from '../components/settings-panels/AudioComponentsSettingsPanel';
-import { AudioBufferSettingsPanel } from '../components/settings-panels/AudioBufferSettingsPanel';
-import { LanguageSettingsPanel } from '../components/settings-panels/LanguageSettingsPanel';
-import { WorkbenchSettingsPanel } from '../components/settings-panels/WorkbenchSettingsPanel';
-import { WindowCloseSettingsPanel } from '../components/settings-panels/WindowCloseSettingsPanel';
-import { PerformanceSettingsPanel } from '../components/settings-panels/PerformanceSettingsPanel';
-import { PluginsSettingsPanel } from '../components/settings-panels/PluginsSettingsPanel';
-import { VisualizersSettingsPanel } from '../components/settings-panels/VisualizersSettingsPanel';
-import { PluginPageHost } from '../magnet-system/plugins/PluginPageHost';
-import { PluginVisualizerHost } from '../magnet-system/plugins/PluginVisualizerHost';
 import type { Track } from '../services/audio';
 import { useAudioService } from '../contexts/AudioEngineContext';
 import { calculateWindowPosition, openEditorWindow, type EditorWindowType } from '../utils/editorWindows';
 import { closeVstManagerWindow, openVstManagerWindow } from '../utils/vstManagerWindows';
 import { subscribeLocale, t } from '../i18n/core';
 import { NAVIGATION_SERVICE_TOKEN } from '../services/navigation';
+
+const HomePageLazy = React.lazy(async () => ({ default: (await import('../components/pages/HomePage')).HomePage }));
+const SettingsPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/SettingsPage')).SettingsPage }));
+const KeyboardShortcutsPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/KeyboardShortcutsPage')).KeyboardShortcutsPage,
+}));
+const MusicLibraryLazy = React.lazy(async () => ({ default: (await import('../components/pages/MusicLibrary')).MusicLibrary }));
+const TrackDetailPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/TrackDetailPage')).TrackDetailPage,
+}));
+const AlbumDetailPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/AlbumDetailPage')).AlbumDetailPage,
+}));
+const DebugCenterPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/DebugCenterPage')).DebugCenterPage,
+}));
+const NativeDebugPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/NativeDebugPage')).NativeDebugPage,
+}));
+const PerfMonitorPageLazy = React.lazy(async () => ({
+  default: (await import('../components/pages/PerfMonitorPage')).PerfMonitorPage,
+}));
+const DebugPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/DebugPage')).DebugPage }));
+const DspRackPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/DspRackPage')).DspRackPage }));
+const AudioSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/AudioSettingsPanel')).AudioSettingsPanel,
+}));
+const AudioComponentsSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/AudioComponentsSettingsPanel')).AudioComponentsSettingsPanel,
+}));
+const AudioBufferSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/AudioBufferSettingsPanel')).AudioBufferSettingsPanel,
+}));
+const LanguageSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/LanguageSettingsPanel')).LanguageSettingsPanel,
+}));
+const WorkbenchSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/WorkbenchSettingsPanel')).WorkbenchSettingsPanel,
+}));
+const WindowCloseSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/WindowCloseSettingsPanel')).WindowCloseSettingsPanel,
+}));
+const PerformanceSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/PerformanceSettingsPanel')).PerformanceSettingsPanel,
+}));
+const PluginsSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/PluginsSettingsPanel')).PluginsSettingsPanel,
+}));
+const VisualizersSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/VisualizersSettingsPanel')).VisualizersSettingsPanel,
+}));
+const PluginPageHostLazy = React.lazy(async () => ({
+  default: (await import('../magnet-system/plugins/PluginPageHost')).PluginPageHost,
+}));
+const PluginVisualizerHostLazy = React.lazy(async () => ({
+  default: (await import('../magnet-system/plugins/PluginVisualizerHost')).PluginVisualizerHost,
+}));
+
+function LazyLoadingFallback() {
+  return <PlaceholderPage icon="..." text={t('common.state.loading')} cssClass="page-loading" />;
+}
+
+function renderWithLazyBoundary(node: React.ReactNode) {
+  return <React.Suspense fallback={<LazyLoadingFallback />}>{node}</React.Suspense>;
+}
 
 export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
   return {
@@ -64,7 +108,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'home',
           title: t('pages.home.title'),
-          render: () => <HomePage />,
+          render: () => renderWithLazyBoundary(<HomePageLazy />),
           source: 'builtin',
           order: 10,
           group: 'core',
@@ -74,7 +118,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'settings',
           title: t('pages.settings.title'),
-          render: () => <SettingsPage />,
+          render: () => renderWithLazyBoundary(<SettingsPageLazy />),
           source: 'builtin',
           order: 20,
           group: 'core',
@@ -84,7 +128,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'keyboard-shortcuts',
           title: t('pages.keyboard-shortcuts.title'),
-          render: () => <KeyboardShortcutsPage />,
+          render: () => renderWithLazyBoundary(<KeyboardShortcutsPageLazy />),
           source: 'builtin',
           order: 25,
           group: 'core',
@@ -96,7 +140,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'settings-panel',
           id: 'language',
           title: t('settings.panels.language.title'),
-          render: () => <LanguageSettingsPanel />,
+          render: () => renderWithLazyBoundary(<LanguageSettingsPanelLazy />),
           source: 'builtin',
           order: 1,
           group: 'core',
@@ -106,7 +150,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'settings-panel',
           id: 'workbench',
           title: t('settings.panels.workbench.title'),
-          render: () => <WorkbenchSettingsPanel />,
+          render: () => renderWithLazyBoundary(<WorkbenchSettingsPanelLazy />),
           source: 'builtin',
           order: 5,
           group: 'core',
@@ -117,7 +161,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           id: 'window-close',
           title: t('settings.panels.windowClose.title'),
           description: t('settings.panels.windowClose.desc'),
-          render: () => <WindowCloseSettingsPanel />,
+          render: () => renderWithLazyBoundary(<WindowCloseSettingsPanelLazy />),
           source: 'builtin',
           order: 7,
           group: 'core',
@@ -127,7 +171,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'settings-panel',
           id: 'performance',
           title: t('settings.panels.performance.title'),
-          render: () => <PerformanceSettingsPanel />,
+          render: () => renderWithLazyBoundary(<PerformanceSettingsPanelLazy />),
           source: 'builtin',
           order: 10,
           group: 'core',
@@ -137,7 +181,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'settings-panel',
           id: 'audio',
           title: t('settings.panels.audio.title'),
-          render: () => <AudioSettingsPanel />,
+          render: () => renderWithLazyBoundary(<AudioSettingsPanelLazy />),
           source: 'builtin',
           order: 20,
           group: 'core',
@@ -148,7 +192,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           id: 'audio-components',
           title: t('settings.panels.audioComponents.title'),
           description: t('settings.panels.audioComponents.desc'),
-          render: () => <AudioComponentsSettingsPanel />,
+          render: () => renderWithLazyBoundary(<AudioComponentsSettingsPanelLazy />),
           source: 'builtin',
           order: 22,
           group: 'core',
@@ -159,7 +203,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           id: 'audio-buffer',
           title: t('settings.panels.audioBuffer.title'),
           description: t('settings.panels.audioBuffer.desc'),
-          render: () => <AudioBufferSettingsPanel />,
+          render: () => renderWithLazyBoundary(<AudioBufferSettingsPanelLazy />),
           source: 'builtin',
           order: 25,
           group: 'core',
@@ -169,7 +213,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'settings-panel',
           id: 'plugins',
           title: t('settings.panels.plugins.title'),
-          render: () => <PluginsSettingsPanel />,
+          render: () => renderWithLazyBoundary(<PluginsSettingsPanelLazy />),
           source: 'builtin',
           order: 30,
           group: 'plugin',
@@ -179,7 +223,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'settings-panel',
           id: 'visualizers',
           title: t('settings.panels.visualizers.title'),
-          render: () => <VisualizersSettingsPanel />,
+          render: () => renderWithLazyBoundary(<VisualizersSettingsPanelLazy />),
           source: 'builtin',
           order: 40,
           group: 'visualizer',
@@ -189,7 +233,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'music-library',
           title: t('pages.music-library.title'),
-          render: () => <BuiltinMusicLibraryPage />,
+          render: () => renderWithLazyBoundary(<BuiltinMusicLibraryPage />),
           source: 'builtin',
           order: 30,
           group: 'core',
@@ -202,7 +246,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           title: t('pages.track.title'),
           render: (page) => {
             const params = parseNavigationParams('track', page.params);
-            return <TrackDetailPage trackId={params?.trackId} />;
+            return renderWithLazyBoundary(<TrackDetailPageLazy trackId={params?.trackId} />);
           },
           source: 'builtin',
           order: 40,
@@ -215,11 +259,8 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           title: t('pages.album.title'),
           render: (page) => {
             const params = parseNavigationParams('album', page.params);
-            return (
-              <AlbumDetailPage
-                albumName={params?.albumName}
-                artist={params?.artist}
-              />
+            return renderWithLazyBoundary(
+              <AlbumDetailPageLazy albumName={params?.albumName} artist={params?.artist} />
             );
           },
           source: 'builtin',
@@ -273,7 +314,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'debug-center',
           title: t('pages.debug-center.title'),
-          render: () => <DebugCenterPage />,
+          render: () => renderWithLazyBoundary(<DebugCenterPageLazy />),
           source: 'builtin',
           order: 88,
           group: 'debug',
@@ -284,7 +325,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'debug',
           title: t('pages.debug.title'),
-          render: () => <DebugPage />,
+          render: () => renderWithLazyBoundary(<DebugPageLazy />),
           source: 'builtin',
           order: 89,
           group: 'core',
@@ -295,7 +336,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'perf-monitor',
           title: t('pages.perf-monitor.title'),
-          render: () => <PerfMonitorPage />,
+          render: () => renderWithLazyBoundary(<PerfMonitorPageLazy />),
           source: 'builtin',
           order: 90,
           group: 'debug',
@@ -306,7 +347,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'native-debug',
           title: t('pages.native-debug.title'),
-          render: () => <NativeDebugPage />,
+          render: () => renderWithLazyBoundary(<NativeDebugPageLazy />),
           source: 'builtin',
           order: 90,
           group: 'debug',
@@ -317,7 +358,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           kind: 'page',
           id: 'dsp-rack',
           title: t('pages.dsp-rack.title'),
-          render: () => <DspRackPage />,
+          render: () => renderWithLazyBoundary(<DspRackPageLazy />),
           source: 'builtin',
           order: 95,
           group: 'plugin',
@@ -362,7 +403,9 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
                 <PlaceholderPage icon="?" text={t('pages.plugin-page.invalidParams')} cssClass="page-plugin" />
               );
             }
-            return <PluginPageHost pluginId={params.pluginId} pageId={params.pageId} />;
+            return renderWithLazyBoundary(
+              <PluginPageHostLazy pluginId={params.pluginId} pageId={params.pageId} />
+            );
           },
           source: 'builtin',
           order: 100,
@@ -384,7 +427,9 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
                 />
               );
             }
-            return <PluginVisualizerHost pluginId={params.pluginId} visualizerId={params.visualizerId} />;
+            return renderWithLazyBoundary(
+              <PluginVisualizerHostLazy pluginId={params.pluginId} visualizerId={params.visualizerId} />
+            );
           },
           source: 'builtin',
           order: 110,
@@ -446,6 +491,8 @@ function PlaceholderPage({
 function BuiltinMusicLibraryPage() {
   const audioService = useAudioService();
 
+  const Library = MusicLibraryLazy;
+
   const handlePlayNow = async (tracks: Track[], startIndex: number = 0) => {
     if (tracks.length === 0) return;
     audioService.clearQueue();
@@ -458,5 +505,5 @@ function BuiltinMusicLibraryPage() {
     audioService.addMultipleToQueue(tracks);
   };
 
-  return <MusicLibrary embedded onPlayNow={handlePlayNow} onAddToQueue={handleAddToQueue} />;
+  return <Library embedded onPlayNow={handlePlayNow} onAddToQueue={handleAddToQueue} />;
 }

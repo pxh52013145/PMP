@@ -3,7 +3,12 @@ import type { ScopedEventBus } from '../../kernel';
 import type { AppEvents } from '../../contracts/events';
 import {
   DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT,
+  inferPerformanceRuntimeProfile,
+  PERFORMANCE_RUNTIME_PRESETS,
+  parsePerformanceRuntimeProfile,
   type PerformanceControlSettingsSnapshot,
+  type PerformanceRuntimeProfile,
+  resolvePerformanceRuntimePresetSettings,
   resolvePerformancePressureLevel,
   type PerformanceControlSnapshot,
 } from '../../contracts/performanceControl';
@@ -12,13 +17,11 @@ import {
   parseBackgroundRenderPolicy,
   type BackgroundRenderPolicy,
 } from '../../contracts/performance';
-import { DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED } from '../../contracts/memoryGovernance';
 import {
-  DEFAULT_QUALITY_SETTINGS_V1,
   parseQualitySettings,
   type QualitySettingsV1,
 } from '../../contracts/quality';
-import { readJson } from '../../modules/storage';
+import { readJson, readString } from '../../modules/storage';
 import { getProcessPerfTotalsSnapshot } from '../../modules/debug';
 import { applyEditorLowPerformanceMode } from '../../utils/editorWindowEffects';
 import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
@@ -33,12 +36,88 @@ function clampInteger(value: unknown, min: number, max: number, fallback: number
   return Math.max(min, Math.min(max, normalized));
 }
 
+function mergeRuntimeProfileSettings(
+  profile: PerformanceRuntimeProfile,
+  fallback: PerformanceControlSettingsSnapshot
+): PerformanceControlSettingsSnapshot {
+  const parsedProfile = parsePerformanceRuntimeProfile(profile, fallback.runtimeProfile);
+  if (parsedProfile === 'custom') {
+    const normalized = {
+      editorLowPerformanceMode: fallback.editorLowPerformanceMode,
+      gifImportMaxFps: fallback.gifImportMaxFps,
+      coverMaxEdgePx: fallback.coverMaxEdgePx,
+      backgroundRenderPolicy: fallback.backgroundRenderPolicy,
+      memoryGovernanceAutoEnabled: fallback.memoryGovernanceAutoEnabled,
+      uiQualitySettings: parseQualitySettings(fallback.uiQualitySettings, fallback.uiQualitySettings),
+    };
+
+    return {
+      runtimeProfile: inferPerformanceRuntimeProfile(normalized),
+      ...normalized,
+    };
+  }
+
+  if (!PERFORMANCE_RUNTIME_PRESETS.includes(parsedProfile)) {
+    const normalizedQuality = parseQualitySettings(
+      fallback.uiQualitySettings,
+      fallback.uiQualitySettings
+    );
+    return {
+      runtimeProfile: inferPerformanceRuntimeProfile({
+        editorLowPerformanceMode: fallback.editorLowPerformanceMode,
+        gifImportMaxFps: fallback.gifImportMaxFps,
+        coverMaxEdgePx: fallback.coverMaxEdgePx,
+        backgroundRenderPolicy: fallback.backgroundRenderPolicy,
+        memoryGovernanceAutoEnabled: fallback.memoryGovernanceAutoEnabled,
+        uiQualitySettings: normalizedQuality,
+      }),
+      editorLowPerformanceMode: fallback.editorLowPerformanceMode,
+      gifImportMaxFps: fallback.gifImportMaxFps,
+      coverMaxEdgePx: fallback.coverMaxEdgePx,
+      backgroundRenderPolicy: fallback.backgroundRenderPolicy,
+      memoryGovernanceAutoEnabled: fallback.memoryGovernanceAutoEnabled,
+      uiQualitySettings: normalizedQuality,
+    };
+  }
+
+  const presetSettings = resolvePerformanceRuntimePresetSettings(parsedProfile);
+  return {
+    runtimeProfile: parsedProfile,
+    ...presetSettings,
+  };
+}
+
+function sanitizeRuntimeProfileByFieldOverrides(
+  next: PerformanceControlSettingsSnapshot
+): PerformanceControlSettingsSnapshot {
+  if (next.runtimeProfile === 'custom') return next;
+
+  const inferred = inferPerformanceRuntimeProfile({
+    editorLowPerformanceMode: next.editorLowPerformanceMode,
+    gifImportMaxFps: next.gifImportMaxFps,
+    coverMaxEdgePx: next.coverMaxEdgePx,
+    backgroundRenderPolicy: next.backgroundRenderPolicy,
+    memoryGovernanceAutoEnabled: next.memoryGovernanceAutoEnabled,
+    uiQualitySettings: next.uiQualitySettings,
+  });
+
+  if (inferred !== next.runtimeProfile) {
+    return {
+      ...next,
+      runtimeProfile: 'custom',
+    };
+  }
+
+  return next;
+}
+
 export interface PerformanceControlService {
   getSnapshot(): PerformanceControlSnapshot;
   getSettingsSnapshot(): PerformanceControlSettingsSnapshot;
   refreshSettingsFromStorage(): PerformanceControlSettingsSnapshot;
   refreshNow(): Promise<PerformanceControlSnapshot>;
   syncEditorEffectsFromSettings(): Promise<void>;
+  setRuntimeProfile(profile: PerformanceRuntimeProfile): Promise<void>;
   setEditorLowPerformanceMode(enabled: boolean): Promise<void>;
   setGifImportMaxFps(value: number): Promise<void>;
   setCoverMaxEdgePx(value: number): Promise<void>;
@@ -68,47 +147,106 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
   }
 
   refreshSettingsFromStorage(): PerformanceControlSettingsSnapshot {
+    const baseFallback = DEFAULT_PERFORMANCE_CONTROL_SNAPSHOT.settings;
+    const hasRuntimeProfile = readString(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE) !== null;
+    const runtimeProfile = parsePerformanceRuntimeProfile(
+      readJson<unknown>(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, baseFallback.runtimeProfile),
+      baseFallback.runtimeProfile
+    );
+    const profileBaseline = mergeRuntimeProfileSettings(runtimeProfile, baseFallback);
+
+    if (!hasRuntimeProfile) {
+      this.snapshot = {
+        ...this.snapshot,
+        updatedAtMs: Date.now(),
+        settings: profileBaseline,
+      };
+      this.events.emit('performance-control/changed', this.snapshot);
+      return profileBaseline;
+    }
+
     const nextSettings: PerformanceControlSettingsSnapshot = {
+      runtimeProfile,
       editorLowPerformanceMode: parseBoolean(
-        readJson<unknown>(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, false),
-        false
+        readJson<unknown>(
+          STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE,
+          profileBaseline.editorLowPerformanceMode
+        ),
+        profileBaseline.editorLowPerformanceMode
       ),
       gifImportMaxFps: clampInteger(
-        readJson<unknown>(STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS, 30),
+        readJson<unknown>(
+          STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS,
+          profileBaseline.gifImportMaxFps
+        ),
         0,
         60,
-        30
+        profileBaseline.gifImportMaxFps
       ),
       coverMaxEdgePx: clampInteger(
-        readJson<unknown>(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, 256),
+        readJson<unknown>(
+          STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX,
+          profileBaseline.coverMaxEdgePx
+        ),
         0,
         4096,
-        256
+        profileBaseline.coverMaxEdgePx
       ),
       backgroundRenderPolicy: parseBackgroundRenderPolicy(
-        readJson<unknown>(STORAGE_KEYS.BACKGROUND_RENDER_POLICY, DEFAULT_BACKGROUND_RENDER_POLICY),
-        DEFAULT_BACKGROUND_RENDER_POLICY
+        readJson<unknown>(
+          STORAGE_KEYS.BACKGROUND_RENDER_POLICY,
+          profileBaseline.backgroundRenderPolicy
+        ),
+        profileBaseline.backgroundRenderPolicy
       ),
       memoryGovernanceAutoEnabled: parseBoolean(
         readJson<unknown>(
           STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
-          DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED
+          profileBaseline.memoryGovernanceAutoEnabled
         ),
-        DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED
+        profileBaseline.memoryGovernanceAutoEnabled
       ),
       uiQualitySettings: parseQualitySettings(
-        readJson<unknown>(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1, DEFAULT_QUALITY_SETTINGS_V1),
-        DEFAULT_QUALITY_SETTINGS_V1
+        readJson<unknown>(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1, profileBaseline.uiQualitySettings),
+        profileBaseline.uiQualitySettings
       ),
     };
+
+    const normalizedSettings = sanitizeRuntimeProfileByFieldOverrides(nextSettings);
 
     this.snapshot = {
       ...this.snapshot,
       updatedAtMs: Date.now(),
-      settings: nextSettings,
+      settings: normalizedSettings,
     };
     this.events.emit('performance-control/changed', this.snapshot);
-    return nextSettings;
+    return normalizedSettings;
+  }
+
+  async setRuntimeProfile(profile: PerformanceRuntimeProfile): Promise<void> {
+    const parsed = parsePerformanceRuntimeProfile(profile, this.snapshot.settings.runtimeProfile);
+    const merged = mergeRuntimeProfileSettings(parsed, this.snapshot.settings);
+
+    await Promise.all([
+      broadcastDataUpdate(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, merged.runtimeProfile),
+      broadcastDataUpdate(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, merged.editorLowPerformanceMode),
+      broadcastDataUpdate(STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS, merged.gifImportMaxFps),
+      broadcastDataUpdate(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, merged.coverMaxEdgePx),
+      broadcastDataUpdate(
+        STORAGE_KEYS.BACKGROUND_RENDER_POLICY,
+        merged.backgroundRenderPolicy,
+        TAURI_EVENTS.BACKGROUND_RENDER_POLICY_UPDATED
+      ),
+      broadcastDataUpdate(STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED, merged.memoryGovernanceAutoEnabled),
+      broadcastDataUpdate(
+        STORAGE_KEYS.UI_QUALITY_SETTINGS_V1,
+        merged.uiQualitySettings,
+        TAURI_EVENTS.UI_QUALITY_SETTINGS_UPDATED
+      ),
+    ]);
+
+    await applyEditorLowPerformanceMode(merged.editorLowPerformanceMode);
+    this.refreshSettingsFromStorage();
   }
 
   async setEditorLowPerformanceMode(enabled: boolean): Promise<void> {
@@ -146,7 +284,7 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
   }
 
   async setUiQualitySettings(settings: QualitySettingsV1): Promise<void> {
-    const next = parseQualitySettings(settings, DEFAULT_QUALITY_SETTINGS_V1);
+    const next = parseQualitySettings(settings, this.snapshot.settings.uiQualitySettings);
     await broadcastDataUpdate(
       STORAGE_KEYS.UI_QUALITY_SETTINGS_V1,
       next,
@@ -175,6 +313,12 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
           webview2PrivateBytes: totals.totals.webview2PrivateBytes,
           webview2WorkingSetBytes: totals.totals.webview2WorkingSetBytes,
           webview2CpuPercent: totals.totals.webview2CpuPercent,
+          treePrivateBytes: totals.totals.privateBytes,
+          treeWorkingSetBytes: totals.totals.workingSetBytes,
+          treeCpuPercent: totals.totals.cpuPercent,
+          systemMemoryLoadPercent: totals.systemMemory?.memoryLoadPercent ?? null,
+          systemMemoryTotalBytes: totals.systemMemory?.totalPhysicalBytes ?? null,
+          systemMemoryAvailableBytes: totals.systemMemory?.availablePhysicalBytes ?? null,
         };
       }
     } catch {
@@ -231,6 +375,9 @@ export class DefaultPerformanceControlService implements PerformanceControlServi
             webview2PrivateBytes: result.snapshot.webview2.webview2PrivateBytes,
             webview2WorkingSetBytes: result.snapshot.webview2.webview2WorkingSetBytes,
             webview2CpuPercent: result.snapshot.webview2.webview2CpuPercent,
+            treePrivateBytes: result.snapshot.webview2.treePrivateBytes,
+            treeWorkingSetBytes: result.snapshot.webview2.treeWorkingSetBytes,
+            treeCpuPercent: result.snapshot.webview2.treeCpuPercent,
           }
         : this.snapshot.webview2,
     };

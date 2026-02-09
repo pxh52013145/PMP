@@ -12,7 +12,7 @@ Param(
   [switch]$Quick,
 
   [Parameter(Mandatory = $false)]
-  [string]$MainWindowTitleLike = "*Pixel Matrix Player Next*",
+  [string]$MainWindowTitleLike = "*Pixel Matrix Player*",
 
   [Parameter(Mandatory = $false)]
   [string]$AppProcessName = "*pixel*",

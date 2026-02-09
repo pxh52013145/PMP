@@ -55,6 +55,7 @@ describe('usePerformanceControlSettings', () => {
       refreshSettingsFromStorage: vi.fn(() => baseSnapshot.settings),
       refreshNow: vi.fn(async () => baseSnapshot),
       syncEditorEffectsFromSettings: vi.fn(async () => {}),
+      setRuntimeProfile: vi.fn(async () => {}),
       setEditorLowPerformanceMode: vi.fn(async () => {}),
       setGifImportMaxFps: vi.fn(async () => {}),
       setCoverMaxEdgePx: vi.fn(async () => {}),

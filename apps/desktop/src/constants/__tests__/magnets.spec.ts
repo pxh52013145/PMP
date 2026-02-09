@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BUILTIN_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../magnets';
+import { BUILTIN_MAGNET_IDS, MINIMAL_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from '../magnets';
 
 describe('magnets constants', () => {
   it('keeps required magnets stable and builtin', () => {
@@ -18,5 +18,10 @@ describe('magnets constants', () => {
       expect(BUILTIN_MAGNET_IDS.has(id)).toBe(true);
     }
   });
-});
 
+  it('minimal defaults always include required magnets', () => {
+    for (const id of REQUIRED_MAGNET_IDS) {
+      expect(MINIMAL_ACTIVE_MAGNET_IDS.has(id)).toBe(true);
+    }
+  });
+});

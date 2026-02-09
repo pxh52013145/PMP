@@ -3,13 +3,29 @@ import { EventBus } from '../../../kernel';
 import type { AppEvents } from '../../../contracts/events';
 import { DefaultQualityService } from '../QualityService';
 
+const readJsonMock = vi.fn((_key: string, fallback: unknown) => fallback);
+const readStringMock = vi.fn<[string], string | null>((_key: string) => null);
+
 vi.mock('../../../modules/storage', () => ({
-  readJson: vi.fn((_key: string, fallback: unknown) => fallback),
+  readJson: (key: string, fallback: unknown) => readJsonMock(key, fallback),
+  readString: (key: string) => readStringMock(key),
+}));
+
+vi.mock('../../../utils/windowCommunication', () => ({
+  STORAGE_KEYS: {
+    UI_QUALITY_SETTINGS_V1: 'pixel-matrix-ui-quality-settings-v1',
+    PERFORMANCE_RUNTIME_PROFILE: 'pixel-matrix-performance-runtime-profile',
+  },
 }));
 
 describe('DefaultQualityService', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    readJsonMock.mockReset();
+    readJsonMock.mockImplementation((_key: string, fallback: unknown) => fallback);
+    readStringMock.mockReset();
+    readStringMock.mockImplementation((key: string) =>
+      key === 'pixel-matrix-ui-quality-settings-v1' ? 'persisted' : null
+    );
   });
 
   it('immediately downgrades one level on high memory tier in auto mode', () => {
@@ -35,5 +51,21 @@ describe('DefaultQualityService', () => {
     service.setLastMemoryTier(2);
 
     expect(service.getSnapshot().effective.level).toBe('potato');
+  });
+
+  it('uses runtime profile fallback when quality key is absent', () => {
+    readJsonMock.mockImplementation((key: string, fallback: unknown) => {
+      if (key === 'pixel-matrix-performance-runtime-profile') return 'minimal';
+      return fallback;
+    });
+    readStringMock.mockImplementation((_key: string) => null);
+
+    const bus = new EventBus<AppEvents>();
+    const service = new DefaultQualityService(bus.withSource('test'));
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.settings.mode).toBe('fixed');
+    expect(snapshot.settings.fixedLevel).toBe('potato');
+    expect(snapshot.effective.level).toBe('potato');
   });
 });

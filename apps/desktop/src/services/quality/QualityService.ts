@@ -15,8 +15,13 @@ import {
   type QualitySettingsV1,
   type QualitySnapshot,
 } from '../../contracts/quality';
+import {
+  DEFAULT_PERFORMANCE_CONTROL_SETTINGS,
+  parsePerformanceRuntimeProfile,
+  resolvePerformanceRuntimePresetSettings,
+} from '../../contracts/performanceControl';
 import type { RenderMode } from '../../contracts/performance';
-import { readJson } from '../../modules/storage';
+import { readJson, readString } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 export type QualityWindowActivity = {
@@ -56,6 +61,22 @@ function readJsHeapUsedBytes(): number | undefined {
   }
 }
 
+function resolveQualitySettingsFallbackFromRuntimeProfile(): QualitySettingsV1 {
+  const runtimeProfile = parsePerformanceRuntimeProfile(
+    readJson<unknown>(
+      STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE,
+      DEFAULT_PERFORMANCE_CONTROL_SETTINGS.runtimeProfile
+    ),
+    DEFAULT_PERFORMANCE_CONTROL_SETTINGS.runtimeProfile
+  );
+
+  if (runtimeProfile === 'custom') {
+    return DEFAULT_QUALITY_SETTINGS_V1;
+  }
+
+  return resolvePerformanceRuntimePresetSettings(runtimeProfile).uiQualitySettings;
+}
+
 export class DefaultQualityService implements QualityService {
   private settings: QualitySettingsV1 = DEFAULT_QUALITY_SETTINGS_V1;
   private activity: QualityWindowActivity = { renderMode: 'full', isVisible: true, isActive: true };
@@ -92,8 +113,12 @@ export class DefaultQualityService implements QualityService {
 
   refreshSettingsFromStorage(): void {
     const prevMode = this.settings.mode;
-    const raw = readJson<unknown>(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1, DEFAULT_QUALITY_SETTINGS_V1);
-    this.settings = parseQualitySettings(raw, DEFAULT_QUALITY_SETTINGS_V1);
+    const hasExplicitUiQualitySettings = readString(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1) !== null;
+    const fallback = hasExplicitUiQualitySettings
+      ? DEFAULT_QUALITY_SETTINGS_V1
+      : resolveQualitySettingsFallbackFromRuntimeProfile();
+    const raw = readJson<unknown>(STORAGE_KEYS.UI_QUALITY_SETTINGS_V1, fallback);
+    this.settings = parseQualitySettings(raw, fallback);
 
     if (this.settings.mode === 'fixed') {
       const next = this.settings.fixedLevel;

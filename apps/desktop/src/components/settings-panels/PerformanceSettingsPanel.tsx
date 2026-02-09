@@ -3,6 +3,10 @@ import {
   BACKGROUND_RENDER_THROTTLE_FPS,
 } from '../../contracts/performance';
 import {
+  PERFORMANCE_RUNTIME_PROFILES,
+  type PerformanceRuntimeProfile,
+} from '../../contracts/performanceControl';
+import {
   parseQualityLevel,
   QUALITY_LEVELS,
   type QualitySettingsV1,
@@ -52,6 +56,13 @@ export function PerformanceSettingsPanel() {
     [service]
   );
 
+  const setRuntimeProfile = React.useCallback(
+    (profile: PerformanceRuntimeProfile) => {
+      void service.setRuntimeProfile(profile);
+    },
+    [service]
+  );
+
   const updateUiQualitySettings = React.useCallback(
     (next: QualitySettingsV1 | ((prev: QualitySettingsV1) => QualitySettingsV1)) => {
       void service.updateUiQualitySettings(next);
@@ -65,10 +76,35 @@ export function PerformanceSettingsPanel() {
   const backgroundRenderPolicy = settings.backgroundRenderPolicy;
   const autoGovernanceEnabled = settings.memoryGovernanceAutoEnabled;
   const uiQualitySettings = settings.uiQualitySettings;
+  const runtimeProfile = settings.runtimeProfile;
 
   return (
     <div className="settings-rows">
       <PerformanceControlOverview />
+
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.performance.runtimeProfile.label')}</div>
+          <div className="settings-row-desc">{t('settings.performance.runtimeProfile.desc')}</div>
+        </div>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">
+            {t(`settings.performance.runtimeProfile.option.${runtimeProfile}`)}
+          </span>
+          <div className="settings-toggle settings-toggle--compact">
+            {PERFORMANCE_RUNTIME_PROFILES.map((profile) => (
+              <button
+                key={profile}
+                type="button"
+                data-active={runtimeProfile === profile}
+                onClick={() => setRuntimeProfile(profile)}
+              >
+                {t(`settings.performance.runtimeProfile.option.${profile}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
       <div className="settings-row">
         <div className="settings-row-left">

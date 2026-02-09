@@ -1,0 +1,130 @@
+.minimal-play-mode-btn {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: visible;
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.3));
+}
+
+.play-mode-icon {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: block;
+}
+
+.minimal-play-mode-btn.mode-sequence {
+  color: rgba(255, 209, 122, 0.98);
+}
+
+.minimal-play-mode-btn.mode-loop {
+  color: rgba(140, 220, 170, 0.98);
+}
+
+.minimal-play-mode-btn.mode-shuffle {
+  color: rgba(127, 221, 255, 0.98);
+}
+
+.minimal-play-mode-btn.mode-single-loop {
+  color: rgba(162, 132, 255, 0.98);
+}
+
+.minimal-play-mode-btn::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: rgba(255, 100, 100, 0.6);
+  border-right-color: rgba(100, 255, 100, 0.6);
+  border-bottom-color: rgba(100, 100, 255, 0.6);
+  border-left-color: rgba(255, 255, 100, 0.6);
+  opacity: 0;
+  transform: rotate(0deg) scale(0.5);
+  transition: all 0.4s ease;
+}
+
+.minimal-play-mode-btn:hover::before {
+  opacity: 1;
+  transform: rotate(360deg) scale(1);
+  animation: playmode-rotate-ring 2s linear infinite;
+}
+
+@keyframes playmode-rotate-ring {
+  from {
+    transform: rotate(0deg) scale(1);
+  }
+  to {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+.minimal-play-mode-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.8) 0%,
+    rgba(255, 100, 255, 0.4) 30%,
+    transparent 70%
+  );
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.minimal-play-mode-btn:hover::after {
+  opacity: 0;
+  transform: scale(0.8);
+  animation: none;
+}
+
+.minimal-play-mode-btn.click-pulse::after {
+  opacity: 1;
+  transform: scale(1);
+  animation: playmode-pulse-wave 1.15s cubic-bezier(0.16, 0.84, 0.44, 1) 1;
+}
+
+@keyframes playmode-pulse-wave {
+  0% {
+    transform: scale(0.78);
+    opacity: 0.95;
+  }
+  38% {
+    transform: scale(1.35);
+    opacity: 0.62;
+  }
+  100% {
+    transform: scale(2.25);
+    opacity: 0;
+  }
+}
+
+.minimal-play-mode-btn:hover {
+  transform: scale(1.25) translateY(-2px);
+  filter: drop-shadow(0 0 5px rgba(255, 100, 255, 0.8))
+    drop-shadow(0 0 10px rgba(100, 255, 255, 0.6));
+  text-shadow:
+    0 0 10px rgba(255, 255, 255, 0.8),
+    0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.minimal-play-mode-btn:active {
+  transform: scale(0.9) translateY(1px);
+  color: rgba(255, 200, 100, 1);
+  filter: drop-shadow(0 0 15px rgba(255, 200, 100, 1));
+}

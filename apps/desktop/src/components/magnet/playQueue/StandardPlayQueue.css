@@ -1,0 +1,377 @@
+.play-queue-button {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: rgba(255, 255, 255, 0.92);
+  transition: color 120ms ease, opacity 120ms ease;
+}
+
+.play-queue-button:hover {
+  color: rgba(255, 255, 255, 1);
+}
+
+.play-queue-button:active {
+  opacity: 0.8;
+}
+
+.play-queue-icon {
+  width: 21px;
+  height: 21px;
+  fill: currentColor;
+  display: block;
+}
+
+.play-queue-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  background: rgba(255, 59, 48, 0.9);
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 4px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* 弹窗样式 -右侧侧边栏 */
+.queue-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: transparent;
+  z-index: 10000;
+}
+
+@keyframes queueFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.queue-modal-content {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  width: 30%;
+  max-width: 400px;
+  height: 70vh;
+  background: rgba(20, 20, 30, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: queueFadeIn 0.15s ease-out;
+}
+
+.queue-modal-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px 8px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.queue-modal-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 0.5px;
+}
+
+.queue-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-header-btn {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.queue-header-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.queue-header-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.queue-header-btn-active {
+  background: rgba(70, 130, 180, 0.2);
+  color: rgba(70, 130, 180, 0.9);
+}
+
+.queue-modal-close {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.queue-modal-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.queue-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.queue-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.queue-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.queue-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.queue-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.queue-empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 14px;
+  border-radius: 0 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.queue-empty-icon {
+  width: 44px;
+  height: 44px;
+  fill: currentColor;
+  opacity: 0.3;
+}
+
+.queue-empty-text {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.queue-empty-btn {
+  margin-top: 8px;
+  padding: 8px 16px;
+  background: rgba(70, 130, 180, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.queue-empty-btn:hover {
+  background: rgba(70, 130, 180, 1);
+  box-shadow: 0 2px 8px rgba(70, 130, 180, 0.3);
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  background: transparent;
+  transition: all 0.25s ease;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  position: relative;
+}
+
+.queue-item-edit-mode {
+  cursor: grab;
+}
+
+.queue-item-edit-mode:hover {
+  background: rgba(70, 130, 180, 0.08);
+  border-left-color: rgba(70, 130, 180, 0.9);
+}
+
+.queue-item-edit-mode:active {
+  cursor: grabbing;
+}
+
+.queue-item-dragging {
+  opacity: 0.5;
+  background: rgba(70, 130, 180, 0.15);
+  transform: scale(0.98);
+}
+
+.queue-item-drag-over {
+  border-top: 2px solid rgba(70, 130, 180, 0.8);
+  margin-top: 2px;
+}
+
+.queue-item:last-child {
+  border-bottom-right-radius: 8px;
+}
+
+.queue-item:first-child:last-child {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.queue-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.queue-item-active {
+  background: rgba(255, 255, 255, 0.08);
+  border-left-color: rgba(236, 65, 65, 0.9);
+}
+
+.queue-item-active.queue-item-edit-mode {
+  border-left-color: rgba(236, 65, 65, 0.9);
+}
+
+.queue-item-active.queue-item-edit-mode:hover {
+  border-left-color: rgba(236, 65, 65, 0.9);
+}
+
+.queue-item-index {
+  width: 24px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  flex-shrink: 0;
+}
+
+.queue-item-active .queue-item-index {
+  color: rgba(236, 65, 65, 0.9);
+}
+
+.queue-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.queue-item-title {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-active .queue-item-title {
+  color: rgba(236, 65, 65, 0.9);
+}
+
+.queue-item-artist {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-item-duration {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  flex-shrink: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+}
+
+.queue-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  width: 52px;
+  justify-content: flex-end;
+  transition: opacity 0.25s ease;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.queue-item-actions-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.queue-item-action-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
+  font-size: 12px;
+  padding: 4px 6px;
+  color: rgba(255, 255, 255, 0.5);
+  border-radius: 4px;
+}
+
+.queue-item:hover .queue-item-action-btn {
+  opacity: 1;
+}
+
+.queue-item-play:hover {
+  color: rgba(70, 130, 180, 0.9);
+  background: rgba(70, 130, 180, 0.1);
+}
+
+.queue-item-remove:hover {
+  color: rgba(236, 65, 65, 0.9);
+  background: rgba(236, 65, 65, 0.1);
+}
+
+/* 当前播放的歌曲始终显示播放按钮 */
+.queue-item-active .queue-item-play {
+  opacity: 0.6;
+  color: rgba(236, 65, 65, 0.9);
+}

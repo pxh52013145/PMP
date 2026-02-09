@@ -1,15 +1,15 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
-import { EditorWindowApp } from './EditorWindowApp';
-import { PluginWindowApp } from './PluginWindowApp';
-import { VstManagerWindowApp } from './VstManagerWindowApp';
 import { KernelProvider } from './contexts/KernelContext';
 import { I18nSync, readPersistedLocale, setLocale } from './i18n';
 import { isTauriRuntime } from './utils/tauriRuntime';
+import { readString } from './modules/storage';
+import { STORAGE_KEYS } from './utils/windowCommunication';
+import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
 import './index.css';
 
 setLocale(readPersistedLocale());
+bootstrapPerformanceRuntimeProfileStorage();
 
 function runAfterNextPaint(task: () => void): void {
   window.requestAnimationFrame(() => {
@@ -74,21 +74,40 @@ function StartupReadyGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// 根据 URL 判断渲染哪个应用
-const hash = window.location.hash;
-const isEditorWindow = hash.startsWith('#/editor/');
-const isPluginWindow = hash.startsWith('#/plugin-window/');
-const isVstManagerWindow = hash.startsWith('#/vst-manager');
+function shouldRunStartupBackgroundMigration(): boolean {
+  const migrationState = readString(STORAGE_KEYS.BACKGROUND_MEDIA_MIGRATION_V1);
+  return migrationState !== 'done';
+}
 
-const RootApp = isEditorWindow
-  ? EditorWindowApp
-  : isPluginWindow
-    ? PluginWindowApp
-    : isVstManagerWindow
-      ? VstManagerWindowApp
-      : App;
+type RootAppResolveResult = {
+  component: React.ComponentType;
+  kind: 'main' | 'editor' | 'plugin' | 'vst-manager';
+};
+
+async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult> {
+  if (hash.startsWith('#/editor/')) {
+    const mod = await import('./EditorWindowApp');
+    return { component: mod.EditorWindowApp, kind: 'editor' };
+  }
+
+  if (hash.startsWith('#/plugin-window/')) {
+    const mod = await import('./PluginWindowApp');
+    return { component: mod.PluginWindowApp, kind: 'plugin' };
+  }
+
+  if (hash.startsWith('#/vst-manager')) {
+    const mod = await import('./VstManagerWindowApp');
+    return { component: mod.VstManagerWindowApp, kind: 'vst-manager' };
+  }
+
+  const mod = await import('./App');
+  return { component: mod.default, kind: 'main' };
+}
 
 async function bootstrap(): Promise<void> {
+  const rootApp = await resolveRootAppByHash(window.location.hash);
+  const RootApp = rootApp.component;
+
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <I18nSync />
@@ -100,7 +119,7 @@ async function bootstrap(): Promise<void> {
     </React.StrictMode>
   );
 
-  if (RootApp !== App || !isTauriRuntime()) return;
+  if (rootApp.kind !== 'main' || !isTauriRuntime()) return;
 
   // Avoid blocking first paint (dev cold-start is dominated by Vite transform anyway).
   runAfterNextPaint(() => {
@@ -129,21 +148,24 @@ async function bootstrap(): Promise<void> {
       { timeoutMs: 4_000, delayMs: 2_500 }
     );
 
-    // Migration may touch filesystem and copy media; delay it to avoid fighting initial UI/Pixi.
-    scheduleIdle(
-      async () => {
-        try {
-          const { migrateBackgroundStorageToManagedMedia } = await import(
-            './modules/background/backgroundMediaMigration'
-          );
-          await migrateBackgroundStorageToManagedMedia();
-        } catch (error) {
-          console.warn('[background] migration failed:', error);
-        }
-      },
-      { timeoutMs: 8_000, delayMs: 4_000 }
-    );
+    if (shouldRunStartupBackgroundMigration()) {
+      // Migration may touch filesystem and copy media; delay it to avoid fighting initial UI/Pixi.
+      scheduleIdle(
+        async () => {
+          try {
+            const { migrateBackgroundStorageToManagedMedia } = await import(
+              './modules/background/backgroundMediaMigration'
+            );
+            await migrateBackgroundStorageToManagedMedia();
+          } catch (error) {
+            console.warn('[background] migration failed:', error);
+          }
+        },
+        { timeoutMs: 8_000, delayMs: 4_000 }
+      );
+    }
   });
 }
 
 void bootstrap();
+

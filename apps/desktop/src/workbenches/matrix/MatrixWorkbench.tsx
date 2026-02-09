@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import {
   STORAGE_KEYS,
@@ -13,13 +13,12 @@ import WindowBorder from '../../components/core/WindowBorder';
 import MatrixRainEffect from '../../components/effects/MatrixRainEffect';
 import { OrnamentsLayer } from '../../components/ornaments/OrnamentsLayer';
 import { MagnetLayer } from '../../components/magnet/MagnetLayer';
-import { EditorOverlay } from '../../components/core/EditorOverlay';
-import { EditorPanel } from '../../components/core/EditorPanel';
 import { useEditor } from '../../contexts/EditorContext';
 import { PixelAnchor } from '../../types/pixel';
 import { BackgroundSettings } from '../../types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
-import { calculateWindowPosition } from '../../utils/editorWindows';
+import { MATRIX_CONFIG } from '../../constants/config';
+import { computePixelGridLayout } from '../../utils/pixelGrid';
 import { REQUIRED_MAGNET_IDS } from '../../constants/magnets';
 import {
   magnetLayoutStoreApplyPatch,
@@ -30,12 +29,19 @@ import {
   useMagnetChromeOverrideMode,
 } from '../../modules/magnets';
 import { readJson, readString, removeKey, writeJson } from '../../modules/storage';
-import { gcOrphanBackgroundMedia } from '../../modules/background/mediaCleanup';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useWindowClose } from '../../contexts/WindowCloseContext';
 
 type BackgroundThemeColor = { id: string; rgb: [number, number, number] };
 const DEFAULT_BACKGROUND_THEME_COLOR: BackgroundThemeColor = { id: 'cyan', rgb: [0, 255, 136] };
+
+const EditorOverlayLazy = lazy(async () => ({
+  default: (await import('../../components/core/EditorOverlay')).EditorOverlay,
+}));
+
+const EditorPanelLazy = lazy(async () => ({
+  default: (await import('../../components/core/EditorPanel')).EditorPanel,
+}));
 
 export type MatrixWorkbenchProps = {
   showEditorOverlay: boolean;
@@ -43,11 +49,26 @@ export type MatrixWorkbenchProps = {
   showWindowBorder: boolean;
 };
 
+export function shouldRenderEditorOverlay(
+  showEditorOverlay: boolean,
+  isEditing: boolean,
+  pixelPositionsSize: number
+): boolean {
+  return showEditorOverlay && isEditing && pixelPositionsSize > 0;
+}
+
+export function shouldRenderEditorPanel(showEditorPanel: boolean, isEditing: boolean): boolean {
+  return showEditorPanel && isEditing;
+}
+
 export function MatrixWorkbench({
   showEditorOverlay,
   showEditorPanel,
   showWindowBorder,
 }: MatrixWorkbenchProps) {
+  const disablePixelCanvasForPerf = import.meta.env.VITE_PERF_DISABLE_MATRIX_CANVAS === '1';
+  const disableMagnetLayerForPerf = import.meta.env.VITE_PERF_DISABLE_MAGNET_LAYER === '1';
+  const disableBackgroundLayerForPerf = import.meta.env.VITE_PERF_DISABLE_BACKGROUND_LAYER === '1';
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const { requestMainWindowClose } = useWindowClose();
 
@@ -179,6 +200,34 @@ export function MatrixWorkbench({
     if (activeMagnetIds.has(magnet.id)) return null;
     return magnet;
   }, [activeMagnetIds, magnetLibrary, placementRequest]);
+
+  useEffect(() => {
+    if (!disablePixelCanvasForPerf) return;
+
+    const updateStaticPixelPositions = () => {
+      const layout = computePixelGridLayout(window.innerWidth, window.innerHeight);
+      const { COLUMNS, ROWS, EDGE_PADDING } = MATRIX_CONFIG;
+      const positions = new Map<string, { x: number; y: number }>();
+
+      for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLUMNS; col++) {
+          positions.set(`${col},${row}`, {
+            x: EDGE_PADDING + col * layout.stepX,
+            y: EDGE_PADDING + row * layout.stepY,
+          });
+        }
+      }
+
+      setPixelPositions(positions);
+    };
+
+    updateStaticPixelPositions();
+    window.addEventListener('resize', updateStaticPixelPositions);
+
+    return () => {
+      window.removeEventListener('resize', updateStaticPixelPositions);
+    };
+  }, [disablePixelCanvasForPerf]);
 
   useEffect(() => {
     if (placementRequest && !placementMagnet) {
@@ -340,22 +389,6 @@ export function MatrixWorkbench({
     // 监听 resize 事件（窗口大小改变时触发）
     if (isTauri) {
       window.addEventListener('resize', handleResize);
-
-      // 预热：预先计算编辑器窗口位置
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => {
-          calculateWindowPosition('control').catch(() => {
-            // 忽略错误，这只是预热
-          });
-        });
-      } else {
-        // 降级方案
-        setTimeout(() => {
-          calculateWindowPosition('control').catch(() => {
-            // 忽略错误，这只是预热
-          });
-        }, 1000);
-      }
     }
 
     return () => {
@@ -372,6 +405,7 @@ export function MatrixWorkbench({
   useEffect(() => {
     const run = async () => {
       try {
+        const { gcOrphanBackgroundMedia } = await import('../../modules/background/mediaCleanup');
         const result = await gcOrphanBackgroundMedia();
         if (result.removed > 0) {
           console.log(`[background] GC removed ${result.removed}/${result.scanned} orphan files`);
@@ -455,6 +489,10 @@ export function MatrixWorkbench({
 
   // 获取当前激活的 Magnet（显示在点阵上的）
   const activeMagnets = useMemo(() => {
+    if (disableMagnetLayerForPerf) {
+      return [];
+    }
+
     const filtered = magnetLibrary
       .filter((m) => activeMagnetIds.has(m.id))
       .map((m) => {
@@ -528,7 +566,14 @@ export function MatrixWorkbench({
         return m;
       });
     return filtered;
-  }, [activeMagnetIds, isTauri, magnetLibrary, requestMainWindowClose, toggleEditMode]);
+  }, [
+    activeMagnetIds,
+    disableMagnetLayerForPerf,
+    isTauri,
+    magnetLibrary,
+    requestMainWindowClose,
+    toggleEditMode,
+  ]);
 
   // 更新占用信息
   useEffect(() => {
@@ -557,14 +602,20 @@ export function MatrixWorkbench({
 
   // 根据窗口状态选择背景配置
   const currentBackground = isMaximized ? backgroundSettings.maximized : backgroundSettings.windowed;
+  const shouldShowEditorOverlay = shouldRenderEditorOverlay(
+    showEditorOverlay,
+    editorState.isEditing,
+    pixelPositions.size
+  );
+  const shouldShowEditorPanel = shouldRenderEditorPanel(showEditorPanel, editorState.isEditing);
 
   return (
     <>
       {/* 背景层 - 根据窗口状态显示不同背景 */}
-      <Background config={currentBackground} />
+      {!disableBackgroundLayerForPerf && <Background config={currentBackground} />}
 
       {/* 字符雨背景效果层 - 独立渲染在低层级 */}
-      {backgroundEffect === 'matrix-rain' && (
+      {!disableBackgroundLayerForPerf && backgroundEffect === 'matrix-rain' && (
         <MatrixRainEffect
           color={backgroundThemeColor.rgb}
           isRainbow={backgroundThemeColor.id === 'rainbow'}
@@ -572,31 +623,37 @@ export function MatrixWorkbench({
       )}
 
       {/* Pixel Grid 层 */}
-      <PixelMatrixCanvas onPixelPositionsUpdate={setPixelPositions} />
+      {!disablePixelCanvasForPerf && <PixelMatrixCanvas onPixelPositionsUpdate={setPixelPositions} />}
 
       {/* Ornaments overlay window renders in Tauri (supports extending outside main window). */}
       {!isTauri && <OrnamentsLayer />}
 
       {/* Magnet 层 */}
-      {pixelPositions.size > 0 && (
+      {!disableMagnetLayerForPerf && pixelPositions.size > 0 && (
         <MagnetLayer magnets={activeMagnets} pixelPositions={pixelPositions} chromeOverrideMode={chromeOverrideMode} />
       )}
 
       {/* 编辑器覆盖层 */}
-      {showEditorOverlay && pixelPositions.size > 0 && (
-        <EditorOverlay
-          pixelPositions={pixelPositions}
-          magnets={activeMagnets}
-          onMagnetMove={handleMagnetMove}
-          onMagnetCtrlClick={requestMagnetLibraryFocus}
-          placementMagnet={placementMagnet}
-          onPlacementCancel={cancelPlacement}
-          onPlacementConfirm={confirmPlacement}
-        />
+      {shouldShowEditorOverlay && (
+        <Suspense fallback={null}>
+          <EditorOverlayLazy
+            pixelPositions={pixelPositions}
+            magnets={activeMagnets}
+            onMagnetMove={handleMagnetMove}
+            onMagnetCtrlClick={requestMagnetLibraryFocus}
+            placementMagnet={placementMagnet}
+            onPlacementCancel={cancelPlacement}
+            onPlacementConfirm={confirmPlacement}
+          />
+        </Suspense>
       )}
 
       {/* 编辑器面板 */}
-      {showEditorPanel && <EditorPanel />}
+      {shouldShowEditorPanel && (
+        <Suspense fallback={null}>
+          <EditorPanelLazy />
+        </Suspense>
+      )}
 
       {/* 窗口边框 */}
       {showWindowBorder && <WindowBorder />}

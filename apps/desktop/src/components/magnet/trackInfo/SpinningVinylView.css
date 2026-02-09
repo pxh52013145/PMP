@@ -1,0 +1,584 @@
+.track-info-container {
+  /* Defaults (overridden by dynamic cover extraction via inline vars) */
+  --vinyl-color: #1a1a1a;
+  --vinyl-glow: rgba(255, 255, 255, 0.6);
+  --vinyl-glow-secondary: rgba(255, 255, 255, 0.6);
+  --text-color: rgba(255, 255, 255, 0.9);
+
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start; /* 固定从左侧开始布局 */
+  gap: 12px;
+  padding: 6px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  user-select: none;
+  min-width: 0; /* 允许flex子元素缩小 */
+  max-width: 100%; /* 确保不超出边界 */
+}
+
+/* Hover时唱片微妙的高亮效果 - 仅在暂停时生效 */
+.track-info-container.has-track:hover .track-vinyl:not(.spinning) {
+  /* Hover时轻微光效 - 避免与播放状态冲突（保持4层结构） */
+  box-shadow:
+    /* 第1层：轻微光效 */
+    0 0 15px var(--vinyl-glow),
+    /* 第2层：光效扩散 */ 0 0 30px
+      color-mix(in srgb, var(--vinyl-glow-secondary, var(--vinyl-glow)) 60%, transparent),
+    /* 第3层：基础阴影 */ 0 2px 6px rgba(0, 0, 0, 0.3),
+    /* 第4层：微妙的高光 */ inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* 圆形唱片设计 - 响应式 */
+.track-vinyl {
+  --vinyl-duration: 4.11s;
+
+  position: relative;
+  width: clamp(48px, 12vw, 80px); /* 响应式尺寸，最大值增加到80px */
+  height: clamp(48px, 12vw, 80px);
+  flex-shrink: 0;
+  border-radius: 50%;
+  /* 初始无旋转 */
+  transform: translateZ(0);
+  will-change: transform, box-shadow;
+  /* 强制高质量渲染 */
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  /* 平滑的唱片纹理 */
+  background: 
+    /* 基础黑胶材质 */ radial-gradient(
+    circle at center,
+    var(--vinyl-color) 0%,
+    color-mix(in srgb, var(--vinyl-color) 85%, #000) 50%,
+    color-mix(in srgb, var(--vinyl-color) 110%, #222) 100%
+  );
+  /* 平滑的光效 - 暂停时的基础阴影（与播放时相同层数，确保过渡平滑） */
+  box-shadow:
+    /* 第1层：外发光（暂停时透明） */
+    0 0 40px transparent,
+    /* 第2层：外发光扩散（暂停时透明） */ 0 0 80px transparent,
+    /* 第3层：基础阴影 */ 0 2px 6px rgba(0, 0, 0, 0.3),
+    /* 第4层：微妙的高光 */ inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+  /* 增加光效过渡时间，让切换更平滑和明显 */
+  will-change: box-shadow;
+  transition: box-shadow 2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 大屏幕优化 */
+@media (min-width: 800px) {
+  .track-info-container {
+    gap: 20px;
+    padding: 10px;
+  }
+
+  .track-info-text {
+    padding: 0 16px; /* 大屏幕时增加更多间距 */
+  }
+}
+
+/* 小尺寸适配 */
+@media (max-width: 400px) {
+  .track-vinyl {
+    width: 40px;
+    height: 40px;
+  }
+
+  .track-info-container {
+    gap: 6px;
+    padding: 4px;
+  }
+
+  .track-info-text {
+    padding: 0 4px; /* 小屏幕时减少间距 */
+  }
+}
+
+/* 极小尺寸适配 */
+@container (max-width: 150px) {
+  .track-vinyl {
+    width: 36px;
+    height: 36px;
+  }
+
+  .track-info-text {
+    padding: 0 2px; /* 极小屏幕时最小间距 */
+  }
+
+  .track-title-compact {
+    font-size: 10px;
+  }
+
+  .track-artist-compact {
+    font-size: 8px;
+  }
+}
+
+/* 唱片反光效果 - 随外圈一起旋转 */
+.track-vinyl::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    color-mix(in srgb, var(--vinyl-glow) 10%, transparent) 45%,
+    color-mix(in srgb, var(--vinyl-glow) 15%, transparent) 50%,
+    transparent 55%
+  );
+  pointer-events: none;
+  /* 跟随外圈旋转（继承父元素的旋转） */
+  transform: translateZ(1px);
+  /* 伪元素抗锯齿 */
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* 唱片纹理层 - 使用伪元素创建平滑的同心圆 */
+.track-vinyl::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  /* 更精细的纹理，模拟真实唱片 */
+  background-image: repeating-radial-gradient(
+    circle at center,
+    transparent 0,
+    transparent 2.5px,
+    rgba(0, 0, 0, 0.03) 2.5px,
+    rgba(0, 0, 0, 0.03) 3px
+  );
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  opacity: 0.25;
+  /* 抗锯齿优化 */
+  transform: translateZ(2px);
+  image-rendering: -webkit-optimize-contrast;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+.track-vinyl.spinning {
+  /* 播放时的多层渐进光效（与暂停时相同层数，确保过渡平滑） */
+  box-shadow:
+    /* 第1层：外发光（播放时显示） */
+    0 0 40px var(--vinyl-glow),
+    /* 第2层：外发光扩散（播放时显示） */ 0 0 80px
+      color-mix(in srgb, var(--vinyl-glow-secondary, var(--vinyl-glow)) 70%, transparent),
+    /* 第3层：基础阴影（与暂停时稍有不同） */ 0 3px 10px rgba(0, 0, 0, 0.4),
+    /* 第4层：微妙的高光 */ inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* 保留平滑过渡，与暂停状态一致 */
+  will-change: box-shadow;
+  transition: box-shadow 2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 确保伪元素的z-index层级正确 */
+.track-vinyl > * {
+  position: relative;
+  z-index: 3;
+}
+
+/* 唱片旋转动画 - 外圈旋转 */
+@keyframes spin {
+  from {
+    transform: rotate(0deg) translateZ(0);
+  }
+  to {
+    transform: rotate(360deg) translateZ(0);
+  }
+}
+
+@keyframes pmp-vinyl-glow-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(
+      0 0 8px color-mix(in srgb, var(--vinyl-glow) 40%, transparent)
+    );
+  }
+  50% {
+    filter: drop-shadow(
+      0 0 18px color-mix(in srgb, var(--vinyl-glow) 75%, transparent)
+    );
+  }
+}
+
+/* 封面图片 - 中心标签样式（跟随父元素旋转，无需独立动画） */
+.track-cover-image {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 55%;
+  height: 55%;
+  border-radius: 50%;
+  object-fit: cover;
+  z-index: 2;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  /* 封面图片抗锯齿 */
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  /* 跟随父元素旋转，不需要独立动画 */
+}
+
+/* 默认封面 - 中心标签样式（跟随父元素旋转，无需独立动画） */
+.track-cover-placeholder {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 55%;
+  height: 55%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  background: radial-gradient(circle, rgba(40, 40, 40, 0.9) 0%, rgba(20, 20, 20, 0.9) 100%);
+  border-radius: 50%;
+  /* 跟随父元素旋转，不需要独立动画 */
+  z-index: 2;
+  color: rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  /* 占位符抗锯齿 */
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 歌曲信息文本 - 响应式 */
+.track-info-text {
+  flex: 1; /* 占据剩余空间 */
+  min-width: 0; /* 关键：允许缩小 */
+  display: flex;
+  flex-direction: column;
+  justify-content: center; /* 垂直方向居中 */
+  align-items: center; /* 水平方向居中 */
+  gap: 3px;
+  overflow: hidden; /* 防止内容溢出 */
+  padding: 0 8px; /* 左右对称的内边距 */
+}
+
+/* 当有主题色时应用到文字 */
+.track-info-container.has-track .track-info-text {
+  color: var(--text-color, rgba(255, 255, 255, 0.9));
+  text-shadow: 0 0 10px color-mix(in srgb, var(--vinyl-glow) 30%, transparent);
+}
+
+.track-title-compact {
+  font-size: clamp(11px, 2.2vw, 15px); /* 响应式字体，最大值增加到15px */
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  line-height: 1.3;
+  position: relative;
+  width: 100%; /* 确保占满容器宽度 */
+  text-align: center; /* 文本居中对齐 */
+}
+
+.track-artist-compact {
+  font-size: clamp(9px, 1.8vw, 13px); /* 响应式字体，最大值增加到13px */
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  line-height: 1.3;
+  position: relative;
+  width: 100%; /* 确保占满容器宽度 */
+  text-align: center; /* 文本居中对齐 */
+}
+
+.track-info-container.cover-color-gradient .track-title-compact .track-text-inner,
+.track-info-container.cover-color-dynamic .track-title-compact .track-text-inner {
+  background: var(
+    --cover-gradient,
+    linear-gradient(90deg, var(--vinyl-color), var(--vinyl-glow))
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 滚动文本内层 - 始终启用GPU加速避免抖动 */
+.track-text-inner {
+  display: inline-block;
+  will-change: transform; /* 始终启用，避免hover时GPU加速激活导致抖动 */
+  transform: translateZ(0); /* 强制GPU加速 */
+}
+
+/* 只有溢出时才添加padding */
+.overflow .track-text-inner {
+  padding-right: 30px; /* 为循环留出空间 */
+}
+
+/* Hover时启用滚动动画（仅当文本溢出时） */
+.track-info-container:hover .track-title-compact.overflow .track-text-inner {
+  animation: marqueeScroll 10s linear infinite;
+}
+
+.track-info-container:hover .track-artist-compact.overflow .track-text-inner {
+  animation: marqueeScroll 10s linear infinite;
+}
+
+/* 跑马灯滚动动画 */
+@keyframes marqueeScroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+/* 详情弹窗 - 响应式 */
+.track-detail-popup {
+  position: fixed;
+  width: min(320px, calc(100vw - 24px)); /* 响应式宽度 */
+  max-height: min(600px, calc(100vh - 24px)); /* 响应式高度 */
+  background: rgba(15, 15, 25, 0.95);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  z-index: 99999;
+  overflow: hidden;
+  animation: slideIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.track-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.track-detail-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.track-detail-close {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+  transition: all 0.2s ease;
+}
+
+.track-detail-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.95);
+  transform: scale(1.05);
+}
+
+.track-detail-body {
+  max-height: 536px;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.track-detail-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.track-detail-body::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.track-detail-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.track-detail-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 详情封面 */
+.track-detail-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.track-detail-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 详情区块 */
+.track-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.track-detail-section h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.track-detail-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.track-detail-item:last-child {
+  border-bottom: none;
+}
+
+.track-detail-item .label {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.track-detail-item .value {
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.9);
+  text-align: right;
+  word-break: break-word;
+}
+
+/* 歌曲信息悬停弹窗 */
+.track-info-popup {
+  position: fixed;
+  min-width: 260px;
+  max-width: 280px;
+  z-index: 10000;
+  border-radius: 12px;
+  background: rgba(20, 20, 20, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+  animation: infoFadeIn 0.2s ease;
+  pointer-events: none;
+}
+
+.track-info-popup-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.track-info-popup-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.track-info-popup-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 350px;
+  overflow-y: auto;
+}
+
+.track-info-popup-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.track-info-popup-body::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.track-info-popup-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
+.track-info-popup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.track-info-popup-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.track-info-popup-item .label {
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 500;
+  flex-shrink: 0;
+  min-width: 60px;
+}
+
+.track-info-popup-item .value {
+  color: rgba(255, 255, 255, 0.9);
+  text-align: right;
+  word-break: break-word;
+}
+
+@keyframes infoFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

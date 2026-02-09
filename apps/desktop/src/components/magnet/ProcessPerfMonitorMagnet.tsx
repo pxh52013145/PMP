@@ -2,14 +2,19 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
-import { getProcessPerfTotalsSnapshot, type ProcessPerfTotalsSnapshot } from '../../modules/debug';
+import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 
 type DisplaySnapshot = {
   updatedAtMs: number;
   systemMemoryLoadPercent: number | null;
   systemMemoryTotalBytes: number | null;
   systemMemoryAvailableBytes: number | null;
-  totals: ProcessPerfTotalsSnapshot['totals'];
+  totals: {
+    privateBytes: number;
+    webview2PrivateBytes: number;
+    cpuPercent: number | null;
+    webview2CpuPercent: number | null;
+  };
 };
 
 function toMb(value: number | null | undefined): string {
@@ -20,12 +25,6 @@ function toMb(value: number | null | undefined): string {
 function toCpu(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
   return `${value.toFixed(1)}%`;
-}
-
-function getPollIntervalMs(renderMode: 'full' | 'throttle' | 'pause'): number {
-  if (renderMode === 'pause') return 0;
-  if (renderMode === 'throttle') return 2000;
-  return 1000;
 }
 
 function buildSnapshotHash(snapshot: DisplaySnapshot): string {
@@ -45,60 +44,52 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
   const t = useT();
   const navigation = useNavigation();
   const { renderMode, isVisible } = useWindowActivity();
-  const pollIntervalMs = useMemo(() => getPollIntervalMs(renderMode), [renderMode]);
+  const { service, snapshot: perfSnapshot } = usePerformanceControlSettings();
   const [snapshot, setSnapshot] = useState<DisplaySnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const busyRef = useRef(false);
   const lastHashRef = useRef<string>('');
 
   useEffect(() => {
+    const webview2 = perfSnapshot.webview2;
+    if (!webview2) {
+      setError(t('magnet.processPerf.error.unavailable'));
+      return;
+    }
+
+    const display: DisplaySnapshot = {
+      updatedAtMs: perfSnapshot.updatedAtMs || Date.now(),
+      systemMemoryLoadPercent: webview2.systemMemoryLoadPercent ?? null,
+      systemMemoryTotalBytes: webview2.systemMemoryTotalBytes ?? null,
+      systemMemoryAvailableBytes: webview2.systemMemoryAvailableBytes ?? null,
+      totals: {
+        privateBytes: webview2.treePrivateBytes ?? webview2.webview2PrivateBytes,
+        webview2PrivateBytes: webview2.webview2PrivateBytes,
+        cpuPercent: webview2.treeCpuPercent ?? webview2.webview2CpuPercent,
+        webview2CpuPercent: webview2.webview2CpuPercent,
+      },
+    };
+
+    const hash = buildSnapshotHash(display);
+    if (hash !== lastHashRef.current) {
+      lastHashRef.current = hash;
+      setSnapshot(display);
+    }
+    setError(null);
+  }, [perfSnapshot, t]);
+
+  useEffect(() => {
     if (!isVisible) return;
-    if (pollIntervalMs <= 0) return;
 
     let cancelled = false;
-    const poll = async () => {
-      if (busyRef.current) return;
-      busyRef.current = true;
-      try {
-        const result = await getProcessPerfTotalsSnapshot();
-        if (cancelled) return;
-        if (!result) {
-          setError(t('magnet.processPerf.error.unavailable'));
-          setSnapshot(null);
-          return;
-        }
-
-        const display: DisplaySnapshot = {
-          updatedAtMs: Date.now(),
-          systemMemoryLoadPercent: result.systemMemory?.memoryLoadPercent ?? null,
-          systemMemoryTotalBytes: result.systemMemory?.totalPhysicalBytes ?? null,
-          systemMemoryAvailableBytes: result.systemMemory?.availablePhysicalBytes ?? null,
-          totals: result.totals,
-        };
-
-        const hash = buildSnapshotHash(display);
-        if (hash !== lastHashRef.current) {
-          lastHashRef.current = hash;
-          setSnapshot(display);
-        }
-        setError(null);
-      } catch (err) {
-        if (cancelled) return;
+    void service.refreshNow().catch((err) => {
+      if (!cancelled) {
         setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        busyRef.current = false;
       }
-    };
-
-    void poll();
-    const handle = window.setInterval(() => {
-      void poll();
-    }, pollIntervalMs);
+    });
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
     };
-  }, [isVisible, pollIntervalMs, t]);
+  }, [isVisible, renderMode, service]);
 
   const systemLine = useMemo(() => {
     if (!snapshot) return '-';

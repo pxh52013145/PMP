@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePerformancePressureLevel } from '../performanceControl';
+import {
+  inferPerformanceRuntimeProfile,
+  resolvePerformancePressureLevel,
+  resolvePerformanceRuntimePresetSettings,
+} from '../performanceControl';
 
 describe('performanceControl contract', () => {
   it('returns high on severe tier/cpu/private pressure', () => {
@@ -55,5 +59,26 @@ describe('performanceControl contract', () => {
       })
     ).toBe('normal');
   });
-});
 
+  it('infers preset profile from resolved preset settings', () => {
+    expect(inferPerformanceRuntimeProfile(resolvePerformanceRuntimePresetSettings('minimal'))).toBe(
+      'minimal'
+    );
+    expect(inferPerformanceRuntimeProfile(resolvePerformanceRuntimePresetSettings('balanced'))).toBe(
+      'balanced'
+    );
+    expect(inferPerformanceRuntimeProfile(resolvePerformanceRuntimePresetSettings('boosted'))).toBe(
+      'boosted'
+    );
+  });
+
+  it('marks profile as custom when settings drift from any preset', () => {
+    const minimal = resolvePerformanceRuntimePresetSettings('minimal');
+    const custom = {
+      ...minimal,
+      coverMaxEdgePx: minimal.coverMaxEdgePx + 1,
+    };
+
+    expect(inferPerformanceRuntimeProfile(custom)).toBe('custom');
+  });
+});

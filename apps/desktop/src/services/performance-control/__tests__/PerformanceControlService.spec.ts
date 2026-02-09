@@ -5,6 +5,7 @@ import { DefaultPerformanceControlService } from '../PerformanceControlService';
 import { STORAGE_KEYS, TAURI_EVENTS } from '../../../utils/windowCommunication';
 
 const readJsonMock = vi.fn((_key: string, fallback: unknown) => fallback);
+const readStringMock = vi.fn<[string], string | null>((_key: string) => null);
 const broadcastDataUpdateMock = vi.fn(async (..._args: unknown[]) => {});
 const applyEditorLowPerformanceModeMock = vi.fn(async (_enabled: boolean) => {});
 
@@ -34,10 +35,12 @@ vi.mock('../../../modules/debug', () => ({
 
 vi.mock('../../../modules/storage', () => ({
   readJson: (key: string, fallback: unknown) => readJsonMock(key, fallback),
+  readString: (key: string) => readStringMock(key),
 }));
 
 vi.mock('../../../utils/windowCommunication', () => ({
   STORAGE_KEYS: {
+    PERFORMANCE_RUNTIME_PROFILE: 'pixel-matrix-performance-runtime-profile',
     EDITOR_LOW_PERFORMANCE_MODE: 'pixel-matrix-editor-low-performance-mode',
     BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',
     MUSIC_LIBRARY_COVER_MAX_EDGE_PX: 'pixel-matrix-music-library-cover-max-edge-px',
@@ -60,6 +63,8 @@ describe('DefaultPerformanceControlService', () => {
   beforeEach(() => {
     readJsonMock.mockReset();
     readJsonMock.mockImplementation((_key: string, fallback: unknown) => fallback);
+    readStringMock.mockReset();
+    readStringMock.mockImplementation((_key: string) => null);
     broadcastDataUpdateMock.mockReset();
     applyEditorLowPerformanceModeMock.mockReset();
   });
@@ -134,9 +139,15 @@ describe('DefaultPerformanceControlService', () => {
     expect(snapshot.governance.tier).toBe(2);
     expect(snapshot.pressure).toBe('high');
     expect(snapshot.webview2?.webview2PrivateBytes).toBeGreaterThan(900 * 1024 * 1024 - 1);
+    expect(snapshot.webview2?.treePrivateBytes).toBe(0);
+    expect(snapshot.webview2?.systemMemoryLoadPercent).toBeNull();
   });
 
   it('reads centralized settings snapshot from storage boundary', () => {
+    readStringMock.mockImplementation((key: string) =>
+      key === STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE ? 'minimal' : null
+    );
+
     readJsonMock.mockImplementation((key: string, fallback: unknown) => {
       if (key === STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE) return true;
       if (key === STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS) return 15;
@@ -174,6 +185,7 @@ describe('DefaultPerformanceControlService', () => {
     expect(settings.coverMaxEdgePx).toBe(512);
     expect(settings.backgroundRenderPolicy).toBe('throttle');
     expect(settings.memoryGovernanceAutoEnabled).toBe(true);
+    expect(settings.runtimeProfile).toBe('custom');
     expect(settings.uiQualitySettings.mode).toBe('fixed');
     expect(settings.uiQualitySettings.fixedLevel).toBe('low');
   });
@@ -181,6 +193,16 @@ describe('DefaultPerformanceControlService', () => {
   it('routes mutators via single performance control plane', async () => {
     const bus = new EventBus<AppEvents>();
     const service = new DefaultPerformanceControlService(bus.withSource('test'));
+
+    await service.setRuntimeProfile('boosted');
+    expect(broadcastDataUpdateMock).toHaveBeenCalledWith(STORAGE_KEYS.PERFORMANCE_RUNTIME_PROFILE, 'boosted');
+    expect(broadcastDataUpdateMock).toHaveBeenCalledWith(STORAGE_KEYS.BACKGROUND_GIF_IMPORT_MAX_FPS, 30);
+    expect(broadcastDataUpdateMock).toHaveBeenCalledWith(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, 512);
+    expect(broadcastDataUpdateMock).toHaveBeenCalledWith(
+      STORAGE_KEYS.MEMORY_GOVERNANCE_AUTO_ENABLED,
+      false
+    );
+    expect(applyEditorLowPerformanceModeMock).toHaveBeenCalledWith(false);
 
     await service.setEditorLowPerformanceMode(true);
     expect(broadcastDataUpdateMock).toHaveBeenCalledWith(STORAGE_KEYS.EDITOR_LOW_PERFORMANCE_MODE, true);

@@ -13,7 +13,7 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot.ps1 \
-  -MainWindowTitleLike '*Pixel Matrix Player Next*' \
+  -MainWindowTitleLike '*Pixel Matrix Player*' \
   -Scenario baseline \
   -DurationSeconds 60 \
   -IntervalSeconds 0.5
@@ -23,7 +23,7 @@ powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot.ps1 \
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot.ps1 \
-  -MainWindowTitleLike '*Pixel Matrix Player Next*' \
+  -MainWindowTitleLike '*Pixel Matrix Player*' \
   -Scenario stress \
   -IncludeWebView2 \
   -WarmupSeconds 20 \
@@ -48,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot.ps1 \
 `Top Processes At Peak` 表新增：
 
 - `Role`：`browser / renderer / gpu-process / utility / crashpad-handler`
-- `HostExe`：该 WebView2 实例归属的宿主进程（例如 `Pixel Matrix Player Next.exe`）
+- `HostExe`：该 WebView2 实例归属的宿主进程（例如 `Pixel Matrix Player.exe`）
 
 ## 3. 四轮脚本（perf-snapshot-4rounds.ps1）
 
@@ -102,7 +102,7 @@ snapshots/
 
 ## 4.1 运行档位（Runtime Profile）对结果的影响（重要）
 
-当前 `desktop-next` 的运行档位以“你上次在设置里保存的档位”为准（持久化）。
+当前 `desktop` 的运行档位以“你上次在设置里保存的档位”为准（持久化）。
 
 - `minimal`：更激进省内存/省渲染（封面边长、背景策略、质量档位更低）。
 - `balanced`：折中模式。

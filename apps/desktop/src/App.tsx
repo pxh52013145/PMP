@@ -23,9 +23,42 @@ import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
 import { KEYBINDINGS_SERVICE_TOKEN } from './services/keybindings';
 import { getDebugConfig, setDebugConfig } from './modules/debug';
-import { musicLibraryService } from './services/audio/MusicLibraryService';
+import {
+  shouldRunDurableStorageMigrations,
+  shouldRunPmpmDurableMigration,
+  shouldRunPmpsDurableMigration,
+} from './modules/startup/durableMigrationGuards';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
 import './App.css';
+
+let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
+let coverDecodeReporterLoading: Promise<void> | null = null;
+
+function reportCoverDecoded(src: string, width: number, height: number): void {
+  if (coverDecodeReporter) {
+    coverDecodeReporter(src, width, height);
+    return;
+  }
+
+  if (!coverDecodeReporterLoading) {
+    coverDecodeReporterLoading = import('./services/audio/MusicLibraryService')
+      .then(({ musicLibraryService }) => {
+        coverDecodeReporter = (reportSrc, reportWidth, reportHeight) => {
+          musicLibraryService.reportCoverDecoded(reportSrc, reportWidth, reportHeight);
+        };
+      })
+      .catch(() => {
+        coverDecodeReporter = () => {};
+      })
+      .finally(() => {
+        coverDecodeReporterLoading = null;
+      });
+  }
+
+  void coverDecodeReporterLoading.then(() => {
+    coverDecodeReporter?.(src, width, height);
+  });
+}
 
 function AppContent() {
   const kernel = useKernel();
@@ -61,7 +94,7 @@ function AppContent() {
 
       const src = target.currentSrc || target.src;
       if (!src) return;
-      musicLibraryService.reportCoverDecoded(src, target.naturalWidth, target.naturalHeight);
+      reportCoverDecoded(src, target.naturalWidth, target.naturalHeight);
     };
 
     document.addEventListener('load', handler, true);
@@ -92,22 +125,33 @@ function AppContent() {
   }, [isTauri, navigateTo]);
 
   useEffect(() => {
+    if (!shouldRunDurableStorageMigrations()) {
+      return;
+    }
+
     const run = async () => {
       try {
-        const [
-          { migrateInstalledPmpmPluginsToDurableStorage },
-          { migrateInstalledPmpsShaderPacksToDurableStorage },
-        ] = await Promise.all([
-          import('./magnet-system/plugins/pmpm'),
-          import('./shader-system/pmps'),
-        ]);
+        let pmpm: { migrated: number; failed: number; skipped?: boolean } | null = null;
+        let pmps: { migrated: number; failed: number; skipped?: boolean } | null = null;
 
-        const [pmpm, pmps] = await Promise.all([
-          migrateInstalledPmpmPluginsToDurableStorage(),
-          migrateInstalledPmpsShaderPacksToDurableStorage(),
-        ]);
+        if (shouldRunPmpmDurableMigration()) {
+          const { migrateInstalledPmpmPluginsToDurableStorage } = await import(
+            './magnet-system/plugins/pmpm'
+          );
+          pmpm = await migrateInstalledPmpmPluginsToDurableStorage();
+        }
 
-        if (pmpm.migrated || pmps.migrated || pmpm.failed || pmps.failed) {
+        if (shouldRunPmpsDurableMigration()) {
+          const { migrateInstalledPmpsShaderPacksToDurableStorage } = await import(
+            './shader-system/pmps'
+          );
+          pmps = await migrateInstalledPmpsShaderPacksToDurableStorage();
+        }
+
+        if (
+          (pmpm && (pmpm.migrated || pmpm.failed)) ||
+          (pmps && (pmps.migrated || pmps.failed))
+        ) {
           console.info('[storage] migration result', { pmpm, pmps });
         }
       } catch {

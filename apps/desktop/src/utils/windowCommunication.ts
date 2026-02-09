@@ -210,6 +210,7 @@ export const STORAGE_KEYS = {
   EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE: 'pixel-matrix-editor-overlay-pixel-hints-visible',
 
   // === Render Performance ===
+  PERFORMANCE_RUNTIME_PROFILE: 'pixel-matrix-performance-runtime-profile', // 'minimal' | 'balanced' | 'boosted' | 'custom'
   BACKGROUND_RENDER_POLICY: 'pixel-matrix-background-render-policy', // 'full' | 'throttle' | 'pause'
 
   // === UI Quality ===
