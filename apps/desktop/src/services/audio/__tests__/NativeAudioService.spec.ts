@@ -403,4 +403,188 @@ describe('NativeAudioService', () => {
 
     service.destroy();
   });
+
+  it('applies temporary streaming recovery settings on underrun spikes', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        underrunEvents: 2,
+        currentTime: 1,
+        duration: 10,
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_streaming_buffer_settings', {
+      startOrSeekSeconds: 3.2,
+      crossfadeSeconds: 1.4,
+    });
+
+    service.destroy();
+  });
+
+  it('auto switches output backend after repeated underrun spikes', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_list_output_backends') {
+        return Promise.resolve(['rodio-cpal', 'wasapi']);
+      }
+      if (cmd === 'native_audio_get_audio_components_state') {
+        return Promise.resolve({ outputBackendId: 'rodio-cpal' });
+      }
+      if (cmd === 'native_audio_select_output_backend') {
+        if (payload?.backendId === 'wasapi') {
+          return Promise.resolve({ outputBackendId: 'wasapi' });
+        }
+        return Promise.resolve({ outputBackendId: 'rodio-cpal' });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    invokeMock.mockClear();
+
+    handlers.native_audio_state?.({ payload: { playbackState: 'playing', underrunEvents: 1 } });
+    handlers.native_audio_state?.({ payload: { playbackState: 'playing', underrunEvents: 2 } });
+    handlers.native_audio_state?.({ payload: { playbackState: 'playing', underrunEvents: 3, underrunFrames: 2048 } });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_select_output_backend', {
+      backendId: 'wasapi',
+    });
+
+    service.destroy();
+  });
+
+  it('keeps protection window active and then releases after timeout', async () => {
+    vi.useFakeTimers();
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_list_output_backends') {
+        return Promise.resolve(['rodio-cpal']);
+      }
+      if (cmd === 'native_audio_get_audio_components_state') {
+        return Promise.resolve({ outputBackendId: 'rodio-cpal' });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    invokeMock.mockClear();
+    const release = service.enterProtectionWindow?.({ reason: 'scan', durationMs: 2_000 });
+    const during = service.getRobustnessSnapshot?.();
+    expect(during?.protectionWindowActive).toBe(true);
+    expect(during?.protectionRefCount).toBe(1);
+    expect(during?.protectionReason).toBe('scan');
+
+    release?.();
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    const after = service.getRobustnessSnapshot?.();
+    expect(after?.protectionWindowActive).toBe(false);
+    expect(after?.protectionRefCount).toBe(0);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('hydrates engine policy into robustness snapshot', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_list_output_backends') {
+        return Promise.resolve(['rodio-cpal']);
+      }
+      if (cmd === 'native_audio_get_audio_components_state') {
+        return Promise.resolve({ outputBackendId: 'rodio-cpal' });
+      }
+      if (cmd === 'native_audio_get_engine_policy') {
+        return Promise.resolve({
+          transportMode: 'transport-exact',
+          hqSrcEnabled: true,
+          hqSrcPhaseMode: 'linear',
+          hqSrcStopbandDb: 140,
+          transportExactInt32Container: true,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const snapshot = service.getRobustnessSnapshot?.();
+    expect(snapshot?.transportMode).toBe('transport-exact');
+    expect(snapshot?.hqSrcPhaseMode).toBe('linear');
+    expect(snapshot?.hqSrcStopbandDb).toBe(140);
+    expect(snapshot?.transportExactInt32Container).toBe(true);
+
+    service.destroy();
+  });
+
+  it('marks output callback metrics unavailable for non-exclusive backend', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_list_output_backends') {
+        return Promise.resolve(['wasapi', 'rodio-cpal']);
+      }
+      if (cmd === 'native_audio_get_audio_components_state') {
+        return Promise.resolve({ outputBackendId: 'wasapi' });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    handlers.native_audio_state?.({
+      payload: {
+        outputCallbackMetricsValid: false,
+        outputCallbackP99Us: 321,
+        outputWaitTimeoutCount: 7,
+        outputRenderUnderrunEvents: 3,
+        outputRenderUnderrunFrames: 128,
+      },
+    });
+
+    const snapshot = service.getRobustnessSnapshot?.();
+    expect(snapshot?.outputCallbackMetricsValid).toBe(false);
+    expect(snapshot?.outputCallbackP99Us).toBe(0);
+    expect(snapshot?.outputWaitTimeoutCount).toBe(0);
+    expect(snapshot?.outputRenderUnderrunEvents).toBe(0);
+    expect(snapshot?.outputRenderUnderrunFrames).toBe(0);
+
+    service.destroy();
+  });
 });

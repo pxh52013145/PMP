@@ -1,6 +1,7 @@
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+use crate::audio::policy::NativeAudioHqSrcPhaseMode;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResampleError {
@@ -27,11 +28,59 @@ fn default_sinc_params() -> SincInterpolationParameters {
     }
 }
 
+fn sinc_params_for_hq_mode(enabled: bool, phase_mode: NativeAudioHqSrcPhaseMode) -> SincInterpolationParameters {
+    if !enabled {
+        return default_sinc_params();
+    }
+
+    match phase_mode {
+        NativeAudioHqSrcPhaseMode::Linear => SincInterpolationParameters {
+            sinc_len: 384,
+            f_cutoff: 0.97,
+            interpolation: SincInterpolationType::Cubic,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        },
+        NativeAudioHqSrcPhaseMode::Intermediate => SincInterpolationParameters {
+            sinc_len: 320,
+            f_cutoff: 0.965,
+            interpolation: SincInterpolationType::Cubic,
+            oversampling_factor: 192,
+            window: WindowFunction::BlackmanHarris2,
+        },
+        NativeAudioHqSrcPhaseMode::Minimum => SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Quadratic,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        },
+    }
+}
+
 pub(crate) fn resample_interleaved_f32(
     samples: &[f32],
     input_sample_rate: u32,
     output_sample_rate: u32,
     channels: usize,
+) -> Result<Vec<f32>, ResampleError> {
+    resample_interleaved_f32_with_policy(
+        samples,
+        input_sample_rate,
+        output_sample_rate,
+        channels,
+        true,
+        NativeAudioHqSrcPhaseMode::Linear,
+    )
+}
+
+pub(crate) fn resample_interleaved_f32_with_policy(
+    samples: &[f32],
+    input_sample_rate: u32,
+    output_sample_rate: u32,
+    channels: usize,
+    hq_enabled: bool,
+    hq_phase_mode: NativeAudioHqSrcPhaseMode,
 ) -> Result<Vec<f32>, ResampleError> {
     if channels == 0 {
         return Err(ResampleError::new(
@@ -51,7 +100,7 @@ pub(crate) fn resample_interleaved_f32(
         return Ok(Vec::new());
     }
 
-    let params = default_sinc_params();
+    let params = sinc_params_for_hq_mode(hq_enabled, hq_phase_mode);
 
     let ratio = output_sample_rate as f64 / input_sample_rate as f64;
     let chunk_size = 2048usize;
@@ -348,5 +397,39 @@ mod tests {
             delta <= 4,
             "frames_out={frames_out} expected={expected_without_flush} (unflushed)"
         );
+    }
+
+    #[test]
+    fn hq_mode_variants_produce_finite_output() {
+        let channels = 2usize;
+        let in_sr = 44_100u32;
+        let out_sr = 48_000u32;
+        let frames_in = 2_048usize;
+
+        let mut input = vec![0.0f32; frames_in * channels];
+        for frame in 0..frames_in {
+            let t = frame as f32 / in_sr as f32;
+            let sample = (2.0 * std::f32::consts::PI * 880.0 * t).sin();
+            input[frame * channels] = sample;
+            input[frame * channels + 1] = sample;
+        }
+
+        for phase in [
+            NativeAudioHqSrcPhaseMode::Linear,
+            NativeAudioHqSrcPhaseMode::Intermediate,
+            NativeAudioHqSrcPhaseMode::Minimum,
+        ] {
+            let out = resample_interleaved_f32_with_policy(
+                &input,
+                in_sr,
+                out_sr,
+                channels,
+                true,
+                phase,
+            )
+            .expect("hq resample");
+            assert!(!out.is_empty());
+            assert!(out.iter().all(|sample| sample.is_finite()));
+        }
     }
 }

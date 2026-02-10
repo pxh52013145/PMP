@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useLocale, useT } from '../../i18n';
-import { Track } from '../../services/audio';
+import { AudioRobustnessSnapshot, Track } from '../../services/audio';
 import { AudioVisualizer } from '../magnet/AudioVisualizer';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 
@@ -100,6 +100,25 @@ type CrossfadeSettings = {
   durationMs: number;
 };
 
+const EMPTY_ROBUSTNESS: AudioRobustnessSnapshot = {
+  outputBackendId: null,
+  outputBackends: [],
+  underrunEvents: 0,
+  underrunFrames: 0,
+  underrunEventsWindow: 0,
+  underrunRecoveryActive: false,
+  protectionWindowActive: false,
+  protectionRefCount: 0,
+  protectionReason: null,
+  autoSwitchCount: 0,
+  lastAutoSwitchAtMs: null,
+  lastAutoSwitchReason: null,
+  bufferedAheadSeconds: 0,
+  bufferedAheadMinSeconds: null,
+  bufferedAheadAvgSeconds: null,
+  rebufferCount: 0,
+};
+
 const DEFAULT_EQ_BANDS: NativeDspEqBand[] = [
   { kind: 'low-shelf', frequencyHz: 120, q: 1, gainDb: 0 },
   { kind: 'peaking', frequencyHz: 1000, q: 1, gainDb: 0 },
@@ -146,6 +165,9 @@ export const NativeDebugPage: React.FC = () => {
     enabled: false,
     durationMs: 1200,
   });
+  const [robustness, setRobustness] = useState<AudioRobustnessSnapshot>(() =>
+    audioService.getRobustnessSnapshot?.() ?? EMPTY_ROBUSTNESS
+  );
 
   const getFrequencyData = useCallback(() => audioService.getFrequencyData?.() ?? null, [audioService]);
 
@@ -160,6 +182,8 @@ export const NativeDebugPage: React.FC = () => {
   useEffect(() => {
     setState(audioService.getState());
     const unsubscribeState = audioService.onStateChange((next) => setState(next));
+    const unsubscribeRobustness =
+      audioService.onRobustnessSnapshot?.((next) => setRobustness(next)) ?? (() => {});
     const unsubscribeError = audioService.onError((error) => {
       const message = error?.message ?? String(error);
       setLastError(message);
@@ -167,6 +191,7 @@ export const NativeDebugPage: React.FC = () => {
     });
     return () => {
       unsubscribeState();
+      unsubscribeRobustness();
       unsubscribeError();
     };
   }, [audioService, appendLog, t]);
@@ -327,7 +352,7 @@ export const NativeDebugPage: React.FC = () => {
   const currentTrackLabel = useMemo(() => {
     if (!state.currentTrack) return t('pages.native-debug.currentTrack.none');
     const { title, artist } = state.currentTrack;
-    return artist ? `${title} – ${artist}` : title;
+    return artist ? `${title} — ${artist}` : title;
   }, [state.currentTrack, t]);
 
   const handleRefreshAudioComponents = useCallback(async () => {
@@ -760,6 +785,27 @@ export const NativeDebugPage: React.FC = () => {
   }, [audioService, appendLog, t]);
 
   const displayedState = useMemo(() => JSON.stringify(state, null, 2), [state]);
+  const displayedRobustness = useMemo(() => JSON.stringify(robustness, null, 2), [robustness]);
+
+  const lastAutoSwitchLabel = useMemo(() => {
+    if (!robustness.lastAutoSwitchAtMs) {
+      return t('pages.native-debug.robustness.lastAutoSwitch.none');
+    }
+
+    const timestamp = new Date(robustness.lastAutoSwitchAtMs).toLocaleTimeString(locale);
+    const reason = robustness.lastAutoSwitchReason || t('common.state.unknown');
+    return t('pages.native-debug.robustness.lastAutoSwitch.value', { timestamp, reason });
+  }, [locale, robustness.lastAutoSwitchAtMs, robustness.lastAutoSwitchReason, t]);
+
+  const formatSeconds = useCallback(
+    (value: number | null): string => {
+      if (typeof value !== 'number' || !isFinite(value)) {
+        return t('common.state.unknown');
+      }
+      return `${value.toFixed(2)}s`;
+    },
+    [t]
+  );
 
   if (!isNativeEngine) {
     return (
@@ -803,16 +849,16 @@ export const NativeDebugPage: React.FC = () => {
             </button>
             <div className="transport-buttons">
               <button type="button" onClick={handlePrev} disabled={!state.queue.length}>
-                ◀︎
+                鈼€锔?
               </button>
               <button type="button" onClick={() => void handleTogglePlayPause()}>
-                {state.playbackState === 'playing' ? '❚❚' : '▶︎'}
+                {state.playbackState === 'playing' ? '鉂氣潥' : '鈻讹笌'}
               </button>
               <button type="button" onClick={handleStop}>
-                ■
+                鈻?
               </button>
               <button type="button" onClick={handleNext} disabled={!state.queue.length}>
-                ▶︎
+                鈻讹笌
               </button>
             </div>
           </div>
@@ -903,7 +949,7 @@ export const NativeDebugPage: React.FC = () => {
                       ? `${state.currentTrack.replayGainTrackGainDb.toFixed(1)} dB`
                       : '—',
                 })}{' '}
-                ·{' '}
+                路{' '}
                 {t('pages.native-debug.replayGain.albumTag', {
                   value:
                     typeof state.currentTrack?.replayGainAlbumGainDb === 'number'
@@ -1104,7 +1150,7 @@ export const NativeDebugPage: React.FC = () => {
               <p className="device-label">{t('pages.native-debug.outputDevice.title')}</p>
               <p className="device-value">{nativeMeta.device ?? t('pages.native-debug.outputDevice.default')}</p>
               <p className="device-hint">
-                {nativeMeta.sampleRate ? `${nativeMeta.sampleRate} Hz` : '—'} ·{' '}
+                {nativeMeta.sampleRate ? `${nativeMeta.sampleRate} Hz` : '—'} {'·'}{' '}
                 {nativeMeta.bitDepth ? `${nativeMeta.bitDepth} bit` : '—'}
               </p>
             </div>
@@ -1134,6 +1180,194 @@ export const NativeDebugPage: React.FC = () => {
             getFrequencyData={getFrequencyData}
             isPlaying={state.playbackState === 'playing'}
           />
+
+          <div className="native-debug-robustness-panel">
+            <div className="queue-actions">
+              <div>
+                <p className="section-label">{t('pages.native-debug.robustness.title')}</p>
+                <h3>{t('pages.native-debug.robustness.subtitle')}</h3>
+              </div>
+            </div>
+            <div className="native-debug-robustness-grid">
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.backend.current')}</p>
+                <p className="device-value">
+                  {robustness.outputBackendId ?? t('pages.native-debug.outputBackend.default')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.backend.available')}</p>
+                <p className="device-value">
+                  {robustness.outputBackends.length > 0
+                    ? robustness.outputBackends.join(', ')
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.underrun.events')}</p>
+                <p className="device-value">{robustness.underrunEvents}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.underrun.frames')}</p>
+                <p className="device-value">{robustness.underrunFrames}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.underrun.window')}</p>
+                <p className="device-value">{robustness.underrunEventsWindow}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.recovery')}</p>
+                <p className="device-value">
+                  {robustness.underrunRecoveryActive ? t('common.state.on') : t('common.state.off')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.transport.mode')}</p>
+                <p className="device-value">{robustness.transportMode ?? t('common.state.unknown')}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.hq.phase')}</p>
+                <p className="device-value">{robustness.hqSrcPhaseMode ?? t('common.state.unknown')}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.hq.stopband')}</p>
+                <p className="device-value">
+                  {typeof robustness.hqSrcStopbandDb === 'number'
+                    ? `${robustness.hqSrcStopbandDb} dB`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.transport.int32')}</p>
+                <p className="device-value">
+                  {typeof robustness.transportExactInt32Container === 'boolean'
+                    ? robustness.transportExactInt32Container
+                      ? t('common.state.on')
+                      : t('common.state.off')
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.protection.active')}</p>
+                <p className="device-value">
+                  {robustness.protectionWindowActive ? t('common.state.on') : t('common.state.off')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.protection.reason')}</p>
+                <p className="device-value">
+                  {robustness.protectionReason ?? t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.protection.refCount')}</p>
+                <p className="device-value">{robustness.protectionRefCount}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.buffer.now')}</p>
+                <p className="device-value">{formatSeconds(robustness.bufferedAheadSeconds)}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.buffer.min')}</p>
+                <p className="device-value">{formatSeconds(robustness.bufferedAheadMinSeconds)}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.buffer.avg')}</p>
+                <p className="device-value">{formatSeconds(robustness.bufferedAheadAvgSeconds)}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.rebuffer')}</p>
+                <p className="device-value">{robustness.rebufferCount}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.autoSwitch.count')}</p>
+                <p className="device-value">{robustness.autoSwitchCount}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.autoSwitch.last')}</p>
+                <p className="device-value">{lastAutoSwitchLabel}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.callbackP99')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputCallbackP99Us === 'number'
+                    ? `${robustness.outputCallbackP99Us} μs`
+                    : robustness.outputCallbackMetricsValid === false
+                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.waitTimeout')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputWaitTimeoutCount === 'number'
+                    ? robustness.outputWaitTimeoutCount
+                    : robustness.outputCallbackMetricsValid === false
+                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.renderUnderrunEvents')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputRenderUnderrunEvents === 'number'
+                    ? robustness.outputRenderUnderrunEvents
+                    : robustness.outputCallbackMetricsValid === false
+                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.renderUnderrunFrames')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputRenderUnderrunFrames === 'number'
+                    ? robustness.outputRenderUnderrunFrames
+                    : robustness.outputCallbackMetricsValid === false
+                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.transfer.lowWatermark')}</p>
+                <p className="device-value">
+                  {typeof robustness.transferLowWatermarkSamples === 'number'
+                    ? robustness.transferLowWatermarkSamples
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.transfer.renderLowHits')}</p>
+                <p className="device-value">
+                  {typeof robustness.transferRenderLowHitCount === 'number'
+                    ? robustness.transferRenderLowHitCount
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.transfer.decodeLowHits')}</p>
+                <p className="device-value">
+                  {typeof robustness.transferDecodeLowHitCount === 'number'
+                    ? robustness.transferDecodeLowHitCount
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.transfer.pageLock')}</p>
+                <p className="device-value">
+                  {typeof robustness.renderQueuePageLocked === 'boolean'
+                    ? robustness.renderQueuePageLocked
+                      ? t('common.state.on')
+                      : t('common.state.off')
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+            </div>
+            <pre className="native-debug-state">{displayedRobustness}</pre>
+          </div>
 
           <div className="queue-actions">
             <div>
@@ -1190,3 +1424,5 @@ export const NativeDebugPage: React.FC = () => {
     </div>
   );
 };
+
+

@@ -3,7 +3,15 @@
  * 提供全局音频服务实例
  */
 
-export type { Track, AudioState, PlaybackState, PlayMode, Playlist } from './types';
+export type {
+  AudioProtectionWindowOptions,
+  AudioRobustnessSnapshot,
+  Track,
+  AudioState,
+  PlaybackState,
+  PlayMode,
+  Playlist,
+} from './types';
 export type { IAudioService } from './types';
 export { NativeAudioService } from './NativeAudioService';
 export type { AudioEngineService, AudioEngineSnapshot, AudioEngineType } from './AudioEngineService';

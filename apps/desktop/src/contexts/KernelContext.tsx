@@ -6,11 +6,9 @@ import { createNavigationModule } from '../services/navigation';
 import { createAudioModule } from '../services/audio';
 import { createCommandsModule } from '../services/commands';
 import { createMediaSessionModule } from '../services/media-session';
-import { createBuiltinContributionsModule } from '../builtin-modules/builtinContributionsModule';
 import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMagnetRenderersModule';
 import { createBuiltinCommandsModule } from '../builtin-modules/builtinCommandsModule';
 import { createBuiltinKeybindingsModule } from '../builtin-modules/builtinKeybindingsModule';
-import { createBuiltinWorkbenchesModule } from '../builtin-modules/builtinWorkbenchesModule';
 import { createKeybindingsModule } from '../services/keybindings';
 import { createMemoryGovernanceModule } from '../services/governance';
 import { createQualityModule } from '../services/quality';
@@ -76,6 +74,16 @@ async function loadPmpmRuntimeModules(): Promise<KernelModule<AppEvents>[]> {
   ];
 }
 
+async function loadBuiltinContributionsModule(): Promise<KernelModule<AppEvents>> {
+  const mod = await import('../builtin-modules/builtinContributionsModule');
+  return mod.createBuiltinContributionsModule();
+}
+
+async function loadBuiltinWorkbenchesModule(): Promise<KernelModule<AppEvents>> {
+  const mod = await import('../builtin-modules/builtinWorkbenchesModule');
+  return mod.createBuiltinWorkbenchesModule();
+}
+
 function createRuntime(): KernelRuntime {
   const kernel = createKernel<AppEvents>();
   const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
@@ -90,6 +98,10 @@ function createRuntime(): KernelRuntime {
   let runtimeDisposed = false;
   let pluginModulesActivated = false;
   let pluginActivationPromise: Promise<void> | null = null;
+  let builtinContributionsActivated = false;
+  let builtinContributionsActivationPromise: Promise<void> | null = null;
+  let builtinWorkbenchesActivated = false;
+  let builtinWorkbenchesActivationPromise: Promise<void> | null = null;
 
   const activatePluginModules = async (): Promise<void> => {
     if (!canUsePluginModules) return;
@@ -109,6 +121,44 @@ function createRuntime(): KernelRuntime {
     });
 
     await pluginActivationPromise;
+  };
+
+  const activateBuiltinContributions = async (): Promise<void> => {
+    if (runtimeDisposed || builtinContributionsActivated) return;
+    if (builtinContributionsActivationPromise) {
+      await builtinContributionsActivationPromise;
+      return;
+    }
+
+    builtinContributionsActivationPromise = (async () => {
+      const module = await loadBuiltinContributionsModule();
+      if (runtimeDisposed || builtinContributionsActivated) return;
+      loader.activate([module]);
+      builtinContributionsActivated = true;
+    })().finally(() => {
+      builtinContributionsActivationPromise = null;
+    });
+
+    await builtinContributionsActivationPromise;
+  };
+
+  const activateBuiltinWorkbenches = async (): Promise<void> => {
+    if (runtimeDisposed || builtinWorkbenchesActivated) return;
+    if (builtinWorkbenchesActivationPromise) {
+      await builtinWorkbenchesActivationPromise;
+      return;
+    }
+
+    builtinWorkbenchesActivationPromise = (async () => {
+      const module = await loadBuiltinWorkbenchesModule();
+      if (runtimeDisposed || builtinWorkbenchesActivated) return;
+      loader.activate([module]);
+      builtinWorkbenchesActivated = true;
+    })().finally(() => {
+      builtinWorkbenchesActivationPromise = null;
+    });
+
+    await builtinWorkbenchesActivationPromise;
   };
 
   const shouldActivatePluginModules = (): boolean => {
@@ -136,11 +186,18 @@ function createRuntime(): KernelRuntime {
 
   if (!isAuxWindow) {
     modules.push(createMemoryGovernanceModule());
-    modules.push(createBuiltinWorkbenchesModule());
-    modules.push(createBuiltinContributionsModule());
   }
 
   loader.activate(modules);
+
+  if (!isAuxWindow) {
+    window.requestAnimationFrame(() => {
+      void activateBuiltinWorkbenches();
+      window.setTimeout(() => {
+        void activateBuiltinContributions();
+      }, 600);
+    });
+  }
 
   if (shouldActivatePluginModules()) {
     void activatePluginModules();

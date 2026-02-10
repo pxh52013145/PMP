@@ -146,6 +146,31 @@ pub async fn native_audio_set_streaming_buffer_settings(
 }
 
 #[tauri::command]
+pub async fn native_audio_get_engine_policy(
+) -> Result<native_audio::NativeAudioEnginePolicyPayload, String> {
+    native_audio::get_engine_policy()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_engine_policy(
+    app: tauri::AppHandle,
+    transport_mode: Option<native_audio::NativeAudioTransportMode>,
+    hq_src_enabled: Option<bool>,
+    hq_src_phase_mode: Option<native_audio::NativeAudioHqSrcPhaseMode>,
+) -> Result<native_audio::NativeAudioEnginePolicyPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let patch = native_audio::NativeAudioEnginePolicyPatch {
+            transport_mode,
+            hq_src_enabled,
+            hq_src_phase_mode,
+        };
+        native_audio::set_engine_policy(&app, patch)
+    })
+    .await
+    .map_err(|e| format!("Native audio set engine policy task failed: {e}"))?
+}
+
+#[tauri::command]
 pub async fn native_audio_list_devices() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(native_audio::list_output_devices)
         .await

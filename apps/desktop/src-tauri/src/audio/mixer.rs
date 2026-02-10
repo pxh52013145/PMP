@@ -3,13 +3,13 @@ use std::sync::mpsc;
 use rodio::source::UniformSourceIterator;
 use rodio::Source;
 
-use crate::audio::input::DecoderCommand;
+use crate::audio::input::StreamingShutdownTx;
 use crate::audio::output::BoxedSource;
 
 pub(crate) enum MixerCommand {
     CrossfadeTo {
         next: BoxedSource,
-        old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+        old_shutdown_tx: Option<StreamingShutdownTx>,
         duration_frames: u64,
     },
     CancelCrossfade,
@@ -24,7 +24,7 @@ impl PlaybackMixerController {
     pub(crate) fn crossfade_to(
         &self,
         next: BoxedSource,
-        old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+        old_shutdown_tx: Option<StreamingShutdownTx>,
         duration_frames: u64,
     ) -> Result<(), String> {
         self.tx
@@ -65,7 +65,7 @@ pub(crate) fn coerce_source_format(
 
 struct ActiveCrossfade {
     next: BoxedSource,
-    old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+    old_shutdown_tx: Option<StreamingShutdownTx>,
     frames_total: u64,
     frame_pos: u64,
 }
@@ -150,7 +150,7 @@ impl PlaybackMixerSource {
         }
 
         if let Some(tx) = crossfade.old_shutdown_tx.take() {
-            let _ = tx.send(DecoderCommand::Shutdown);
+            tx.shutdown();
         }
 
         self.frame_channel = 0;

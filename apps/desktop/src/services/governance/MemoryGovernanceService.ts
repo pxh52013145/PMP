@@ -10,7 +10,7 @@ import {
   type MemoryGovernanceRunResult,
   type MemoryGovernanceSnapshot,
 } from '../../contracts/memoryGovernance';
-import { MusicLibraryService } from '../audio/MusicLibraryService';
+import { MusicLibraryService, type CoverRuntimeCachePolicy } from '../audio/MusicLibraryService';
 import type { NavigationService } from '../navigation/NavigationService';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson, writeJson } from '../../modules/storage';
@@ -60,6 +60,30 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
           executed.push(action);
         } catch (error) {
           console.warn('[memory-governance] failed to clear cover caches', error);
+        }
+        continue;
+      }
+
+      if (
+        action === 'tighten-cover-runtime-caches-watch' ||
+        action === 'tighten-cover-runtime-caches-high' ||
+        action === 'tighten-cover-runtime-caches-critical' ||
+        action === 'tighten-cover-runtime-caches-hidden'
+      ) {
+        const policy: CoverRuntimeCachePolicy =
+          action === 'tighten-cover-runtime-caches-watch'
+            ? 'watch'
+            : action === 'tighten-cover-runtime-caches-high'
+              ? 'high'
+              : action === 'tighten-cover-runtime-caches-critical'
+                ? 'critical'
+                : 'hidden';
+
+        try {
+          MusicLibraryService.getInstance().applyCoverRuntimeCachePolicy(policy);
+          executed.push(action);
+        } catch (error) {
+          console.warn('[memory-governance] failed to tighten cover cache policy', error);
         }
         continue;
       }

@@ -24,8 +24,20 @@ use super::{
 use crate::audio::buffer::AudioRingBuffer;
 
 use super::streaming::{
-    drain_decoder_commands, DecoderCommand, SharedSamplesSource, StreamingPlayback, StreamingSamplesSource,
+    drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
+    DecoderCommand, SharedSamplesSource, StreamingPlayback, StreamingSamplesSource,
+    StreamingShutdownTx, TransferCommand,
 };
+
+fn is_full_decode_fallback_enabled() -> bool {
+    match std::env::var("PMP_AUDIO_ALLOW_FULL_DECODE_FALLBACK") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+        }
+        Err(_) => false,
+    }
+}
 
 fn track_is_audio_like(track: &Track) -> bool {
     track.codec_params.sample_rate.is_some()
@@ -57,12 +69,16 @@ fn start_symphonia_stream(
         output_sample_rate,
         2,
     ));
+    let render_queue = AudioRingBuffer::new((buffer.capacity_samples() / 4).clamp(16_384, 262_144));
+    try_lock_render_queue_hot_path(&render_queue);
 
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+    let (transfer_tx, transfer_rx) = mpsc::channel::<TransferCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
     let path = path.to_path_buf();
     let buffer_clone = buffer.clone();
+    let render_queue_clone = render_queue.clone();
     let error = Arc::new(Mutex::new(None::<String>));
     let error_clone = error.clone();
 
@@ -70,6 +86,9 @@ fn start_symphonia_stream(
         .name("pmpm-symphonia-decoder".into())
         .spawn(move || {
             let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_decode();
+            crate::audio::threading::apply_audio_decode_pressure_profile(
+                crate::audio::realtime_scheduler::SCHEDULER.profile(),
+            );
 
         let init = (|| -> Result<(Box<dyn FormatReader>, Track), String> {
             let file = File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
@@ -136,6 +155,9 @@ fn start_symphonia_stream(
         let mut meta_delivered = false;
 
         'decode_loop: loop {
+            crate::audio::threading::apply_audio_decode_pressure_profile(
+                crate::audio::realtime_scheduler::SCHEDULER.profile(),
+            );
             let drained = drain_decoder_commands(&command_rx);
             if drained.shutdown {
                 buffer_clone.mark_finished();
@@ -143,6 +165,7 @@ fn start_symphonia_stream(
             }
             if let Some(target) = drained.seek_target {
                 buffer_clone.clear();
+                render_queue_clone.clear();
                 pending_trim_frames_out = 0;
 
                 let seek_to = SeekTo::Time {
@@ -423,7 +446,7 @@ fn start_symphonia_stream(
             )
         })?;
 
-    let meta = match meta_rx.recv_timeout(Duration::from_secs(2)) {
+    let meta = match meta_rx.recv_timeout(Duration::from_secs(8)) {
         Ok(value) => value.map_err(|message| {
             AudioInputError::new("AUDIO_INPUT_SYMPHONIA_OPEN_FAILED", message)
         })?,
@@ -436,9 +459,24 @@ fn start_symphonia_stream(
         }
     };
 
+    if let Err(err) = spawn_render_transfer_worker(
+        buffer.clone(),
+        render_queue.clone(),
+        meta.channels,
+        transfer_rx,
+        "pmpm-symphonia-transfer",
+    ) {
+        let _ = transfer_tx.send(TransferCommand::Shutdown);
+        let _ = command_tx.send(DecoderCommand::Shutdown);
+        return Err(AudioInputError::new(
+            "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
+            err,
+        ));
+    }
+
     Ok((
         StreamingSamplesSource::new(
-            buffer.clone(),
+            render_queue.clone(),
             meta.channels,
             meta.sample_rate,
             meta.duration,
@@ -446,6 +484,8 @@ fn start_symphonia_stream(
         meta,
         StreamingPlayback {
             buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
             command_tx,
             error,
         },
@@ -625,36 +665,42 @@ impl AudioInput for SymphoniaInput {
                 kind: AudioInputKind::Streaming(streaming),
                 source: Box::new(source),
             }),
-            Err(stream_err) => match decode_track_to_buffer(path, output_sample_rate) {
-                Ok(decoded) => {
-                    let source = Box::new(SharedSamplesSource::new(
-                        decoded.samples.clone(),
-                        decoded.channels,
-                        decoded.sample_rate,
-                        0,
-                    ));
-                    Ok(AudioInputOpenResult {
-                        input_id: self.id(),
-                        meta: AudioInputMeta {
-                            channels: decoded.channels,
-                            sample_rate: decoded.sample_rate,
-                            bit_depth: decoded.bit_depth,
-                            duration: decoded.duration,
-                        },
-                        kind: AudioInputKind::Decoded {
-                            samples: decoded.samples,
-                        },
-                        source,
-                    })
+            Err(stream_err) => {
+                if !is_full_decode_fallback_enabled() {
+                    return Err(stream_err);
                 }
-                Err(buffer_err) => Err(AudioInputError::new(
-                    "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
-                    format!(
-                        "Streaming open failed: {}; buffer decode failed: {}",
-                        stream_err.message, buffer_err.message
-                    ),
-                )),
-            },
+
+                match decode_track_to_buffer(path, output_sample_rate) {
+                    Ok(decoded) => {
+                        let source = Box::new(SharedSamplesSource::new(
+                            decoded.samples.clone(),
+                            decoded.channels,
+                            decoded.sample_rate,
+                            0,
+                        ));
+                        Ok(AudioInputOpenResult {
+                            input_id: self.id(),
+                            meta: AudioInputMeta {
+                                channels: decoded.channels,
+                                sample_rate: decoded.sample_rate,
+                                bit_depth: decoded.bit_depth,
+                                duration: decoded.duration,
+                            },
+                            kind: AudioInputKind::Decoded {
+                                samples: decoded.samples,
+                            },
+                            source,
+                        })
+                    }
+                    Err(buffer_err) => Err(AudioInputError::new(
+                        "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
+                        format!(
+                            "Streaming open failed: {}; buffer decode failed: {}",
+                            stream_err.message, buffer_err.message
+                        ),
+                    )),
+                }
+            }
         }
     }
 }
@@ -741,7 +787,7 @@ mod tests {
 
         assert_eq!(
             hex,
-            "051084cb673efd34323dc0630dbfefc5ab3e810457a65586c1bb5e66c834a7b2",
+            "81b3efc29ef481951f337884ebca4929b670343adb5476a8bca7a2f3c54dd598",
             "offline render output changed; if intentional, update the golden hash"
         );
 

@@ -3,7 +3,6 @@ use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{
-        mpsc,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -11,16 +10,21 @@ use std::{
 
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
-    open_rodio_source_at, AudioInputRegistry, DecoderCommand, SharedSamplesSource, StreamingPlayback,
-    StreamingSamplesSource,
+    open_rodio_source_at, AudioInputRegistry, DecoderCommand, SharedSamplesSource,
+    StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx,
 };
 use crate::audio::mixer::{coerce_source_format, PlaybackMixerController, PlaybackMixerSource};
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
+use crate::audio::policy::{
+    NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
+    NativeAudioTransportMode,
+};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
 use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumSnapshot, SpectrumTap};
+use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
 pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| {
     Mutex::new(NativeAudioEngine::new())
@@ -92,6 +96,43 @@ pub(crate) fn streaming_prebuffer_target_samples(
     (target_samples, timeout)
 }
 
+fn streaming_min_start_bounds(
+    output_backend_id: &str,
+    underrun_recovery_active: bool,
+) -> (f64, f64) {
+    let is_exclusive = output_backend_id == "wasapi-exclusive";
+
+    if is_exclusive {
+        if underrun_recovery_active {
+            (1.40, 0.55)
+        } else {
+            (0.95, 0.35)
+        }
+    } else if underrun_recovery_active {
+        (1.60, 0.60)
+    } else {
+        (0.90, 0.30)
+    }
+}
+
+fn streaming_buffering_fallback_after(
+    output_backend_id: &str,
+    underrun_recovery_active: bool,
+) -> Duration {
+    let is_exclusive = output_backend_id == "wasapi-exclusive";
+    if underrun_recovery_active {
+        if is_exclusive {
+            Duration::from_secs(7)
+        } else {
+            Duration::from_secs(8)
+        }
+    } else if is_exclusive {
+        Duration::from_secs(4)
+    } else {
+        Duration::from_secs(3)
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioComponentsStatePayload {
@@ -129,6 +170,8 @@ pub(crate) struct NativeAudioEngine {
     buffering_started_at: Option<Instant>,
     buffering_last_progress_at: Option<Instant>,
     buffering_last_samples: usize,
+    underrun_recovery_until: Option<Instant>,
+    last_observed_underrun_events: u64,
     decoded_samples: Option<Arc<Vec<f32>>>,
     decoded_channels: u16,
     decoded_sample_rate: u32,
@@ -154,6 +197,9 @@ pub(crate) struct NativeAudioEngine {
     last_error_message: Option<String>,
     streaming_prebuffer_start_or_seek_seconds: Option<f64>,
     streaming_prebuffer_crossfade_seconds: Option<f64>,
+    transport_mode: NativeAudioTransportMode,
+    hq_src_enabled: bool,
+    hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
 }
 
 pub(crate) struct LoadOperation {
@@ -180,7 +226,7 @@ impl PreparedLoad {
     pub(crate) fn abort(self) {
         self.sink.stop();
         if let Some(streaming) = self.streaming {
-            let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+            streaming.shutdown_tx.shutdown();
         }
     }
 }
@@ -192,7 +238,7 @@ pub(crate) struct CrossfadeOperation {
     pub target_channels: u16,
     pub target_sample_rate: u32,
     pub streaming_prebuffer_crossfade_seconds: Option<f64>,
-    pub old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+    pub old_shutdown_tx: Option<StreamingShutdownTx>,
 }
 
 pub(crate) struct PreparedCrossfade {
@@ -202,7 +248,7 @@ pub(crate) struct PreparedCrossfade {
     pub streaming: Option<StreamingPlayback>,
     pub decoded_samples: Option<Arc<Vec<f32>>>,
     pub next_source: crate::audio::output::BoxedSource,
-    pub old_shutdown_tx: Option<mpsc::Sender<DecoderCommand>>,
+    pub old_shutdown_tx: Option<StreamingShutdownTx>,
     pub target_channels: u16,
     pub target_sample_rate: u32,
     pub duration_frames: u64,
@@ -211,7 +257,7 @@ pub(crate) struct PreparedCrossfade {
 impl PreparedCrossfade {
     pub(crate) fn abort(self) {
         if let Some(streaming) = self.streaming {
-            let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+            streaming.shutdown_tx.shutdown();
         }
     }
 }
@@ -247,6 +293,7 @@ impl NativeAudioEngine {
     }
 
     fn new_with_backend(output_backend: Arc<dyn AudioOutputBackend>) -> Self {
+        output_backend.set_transport_mode(NativeAudioTransportMode::Robust);
         eprintln!("[NativeAudio] Output backend: {}", output_backend.id());
         Self {
             input_registry: AudioInputRegistry::default(),
@@ -267,6 +314,8 @@ impl NativeAudioEngine {
             buffering_started_at: None,
             buffering_last_progress_at: None,
             buffering_last_samples: 0,
+            underrun_recovery_until: None,
+            last_observed_underrun_events: 0,
             decoded_samples: None,
             decoded_channels: 0,
             decoded_sample_rate: 0,
@@ -292,6 +341,9 @@ impl NativeAudioEngine {
             last_error_message: None,
             streaming_prebuffer_start_or_seek_seconds: None,
             streaming_prebuffer_crossfade_seconds: None,
+            transport_mode: NativeAudioTransportMode::Robust,
+            hq_src_enabled: true,
+            hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
         }
     }
 
@@ -341,6 +393,53 @@ impl NativeAudioEngine {
 
         self.streaming_prebuffer_start_or_seek_seconds = sanitize(start_or_seek_seconds);
         self.streaming_prebuffer_crossfade_seconds = sanitize(crossfade_seconds);
+    }
+
+    pub(crate) fn engine_policy_payload(&self) -> NativeAudioEnginePolicyPayload {
+        NativeAudioEnginePolicyPayload {
+            transport_mode: self.transport_mode,
+            hq_src_enabled: self.hq_src_enabled,
+            hq_src_phase_mode: self.hq_src_phase_mode,
+            hq_src_stopband_db: 140,
+            transport_exact_int32_container: true,
+        }
+    }
+
+    pub(crate) fn apply_engine_policy_patch(
+        &mut self,
+        patch: NativeAudioEnginePolicyPatch,
+    ) -> NativeAudioEnginePolicyPayload {
+        if let Some(mode) = patch.transport_mode {
+            self.transport_mode = mode;
+            self.output_backend.set_transport_mode(mode);
+        }
+        if let Some(enabled) = patch.hq_src_enabled {
+            self.hq_src_enabled = enabled;
+        }
+        if let Some(phase_mode) = patch.hq_src_phase_mode {
+            self.hq_src_phase_mode = phase_mode;
+        }
+
+        self.engine_policy_payload()
+    }
+
+    pub(crate) fn transport_mode(&self) -> NativeAudioTransportMode {
+        self.transport_mode
+    }
+
+    fn streaming_available_samples(&self, streaming: &StreamingPlayback) -> usize {
+        streaming
+            .buffer
+            .len_samples()
+            .saturating_add(streaming.render_queue.len_samples())
+    }
+
+    fn streaming_is_finished(&self, streaming: &StreamingPlayback) -> bool {
+        streaming.buffer.is_finished() && streaming.render_queue.is_finished()
+    }
+
+    fn streaming_is_finished_and_empty(&self, streaming: &StreamingPlayback) -> bool {
+        streaming.buffer.is_finished_and_empty() && streaming.render_queue.is_finished_and_empty()
     }
 
     pub(crate) fn clone_dsp_chain(&self) -> Vec<DspNodeConfig> {
@@ -477,7 +576,10 @@ impl NativeAudioEngine {
             target_channels: self.decoded_channels.max(1),
             target_sample_rate: self.decoded_sample_rate.max(1),
             streaming_prebuffer_crossfade_seconds: self.streaming_prebuffer_crossfade_seconds,
-            old_shutdown_tx: self.streaming.as_ref().map(|streaming| streaming.command_tx.clone()),
+            old_shutdown_tx: self
+                .streaming
+                .as_ref()
+                .map(|streaming| streaming.shutdown_tx.clone()),
         })
     }
 
@@ -626,6 +728,7 @@ impl NativeAudioEngine {
         }
 
         self.output_backend = target_backend;
+        self.output_backend.set_transport_mode(self.transport_mode);
         self.device_id = None;
         self.device_name = None;
         self.output_sample_rate = None;
@@ -752,7 +855,7 @@ impl NativeAudioEngine {
 
     fn shutdown_streaming(&mut self) {
         if let Some(streaming) = self.streaming.take() {
-            let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+            streaming.shutdown_tx.shutdown();
         }
     }
 
@@ -827,7 +930,8 @@ impl NativeAudioEngine {
                 StreamingPrebufferKind::StartOrSeek,
                 self.streaming_prebuffer_start_or_seek_seconds,
             );
-            if streaming.buffer.len_samples() < target_samples {
+            let available = self.streaming_available_samples(streaming);
+            if available < target_samples {
                 streaming
                     .buffer
                     .wait_for_samples(target_samples, timeout);
@@ -935,7 +1039,7 @@ impl NativeAudioEngine {
                 StreamingPrebufferKind::Crossfade,
                 self.streaming_prebuffer_crossfade_seconds,
             );
-            if streaming.buffer.len_samples() < target_samples {
+            if self.streaming_available_samples(streaming) < target_samples {
                 streaming
                     .buffer
                     .wait_for_samples(target_samples, timeout);
@@ -943,7 +1047,10 @@ impl NativeAudioEngine {
         }
 
         let next_source = coerce_source_format(source, target_channels, target_sample_rate);
-        let old_shutdown_tx = self.streaming.as_ref().map(|streaming| streaming.command_tx.clone());
+        let old_shutdown_tx = self
+            .streaming
+            .as_ref()
+            .map(|streaming| streaming.shutdown_tx.clone());
 
         let controller = self
             .mixer
@@ -994,6 +1101,14 @@ impl NativeAudioEngine {
     pub(crate) fn play(&mut self) -> Result<(), String> {
         if let Some(sink) = &self.sink {
             if let Some(streaming) = &self.streaming {
+                let now_for_recovery = Instant::now();
+                let underrun_recovery_active = self
+                    .underrun_recovery_until
+                    .is_some_and(|until| until > now_for_recovery);
+                if !underrun_recovery_active {
+                    self.underrun_recovery_until = None;
+                }
+
                 let channels = self.decoded_channels.max(1) as usize;
                 let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
                     (self.duration - self.current_position).max(0.0)
@@ -1014,9 +1129,8 @@ impl NativeAudioEngine {
                     let sample_rate = self.decoded_sample_rate.max(1) as f64;
                     let channels_f64 = channels.max(1) as f64;
                     let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
-                    let is_exclusive = self.output_backend.id() == "wasapi-exclusive";
-                    let min_seconds_cap = if is_exclusive { 0.75 } else { 0.35 };
-                    let min_seconds_floor = if is_exclusive { 0.25 } else { 0.15 };
+                    let (min_seconds_cap, min_seconds_floor) =
+                        streaming_min_start_bounds(self.output_backend.id(), underrun_recovery_active);
                     let min_start_seconds = target_seconds
                         .min(min_seconds_cap)
                         .max(min_seconds_floor)
@@ -1024,9 +1138,9 @@ impl NativeAudioEngine {
                     let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
                         .clamp(1, target_samples);
 
-                    let available = streaming.buffer.len_samples();
+                    let available = self.streaming_available_samples(streaming);
                     self.desired_playback_state = PlaybackState::Playing;
-                    if available < min_start_samples && !streaming.buffer.is_finished() {
+                    if available < min_start_samples && !self.streaming_is_finished(streaming) {
                         sink.pause();
                         self.sync_clock();
                         self.playback_state = PlaybackState::Buffering;
@@ -1079,6 +1193,7 @@ impl NativeAudioEngine {
 
         if let Some(streaming) = &self.streaming {
             streaming.buffer.clear();
+            streaming.render_queue.clear();
             let _ = streaming.command_tx.send(DecoderCommand::Seek(0.0));
             if let Some(sink) = &self.sink {
                 sink.pause();
@@ -1185,6 +1300,7 @@ impl NativeAudioEngine {
             }
 
             streaming.buffer.clear();
+            streaming.render_queue.clear();
             self.spectrum_tap.clear();
             self.dsp_runtime.request_reset();
             let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
@@ -1197,7 +1313,7 @@ impl NativeAudioEngine {
                 let now = Instant::now();
                 self.buffering_started_at = Some(now);
                 self.buffering_last_progress_at = Some(now);
-                self.buffering_last_samples = streaming.buffer.len_samples();
+                self.buffering_last_samples = self.streaming_available_samples(streaming);
             } else {
                 self.base_position = target;
                 self.playback_started_at = None;
@@ -1291,6 +1407,19 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn tick(&mut self) -> bool {
+        let (underrun_events, _) = crate::audio::input::streaming_underrun_stats();
+        if underrun_events > self.last_observed_underrun_events {
+            self.last_observed_underrun_events = underrun_events;
+            self.underrun_recovery_until = Some(Instant::now() + Duration::from_secs(20));
+        }
+        let now_for_recovery = Instant::now();
+        let underrun_recovery_active = self
+            .underrun_recovery_until
+            .is_some_and(|until| until > now_for_recovery);
+        if !underrun_recovery_active {
+            self.underrun_recovery_until = None;
+        }
+
         if let Some(err) = self.output_backend.take_error() {
             if let Some(sink) = &self.sink {
                 sink.pause();
@@ -1349,26 +1478,31 @@ impl NativeAudioEngine {
                 let sample_rate = self.decoded_sample_rate.max(1) as f64;
                 let channels_f64 = channels.max(1) as f64;
                 let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
-                let is_exclusive = self.output_backend.id() == "wasapi-exclusive";
-                let min_seconds_cap = if is_exclusive { 0.75 } else { 0.35 };
-                let min_seconds_floor = if is_exclusive { 0.25 } else { 0.15 };
+                let (min_seconds_cap, min_seconds_floor) =
+                    streaming_min_start_bounds(self.output_backend.id(), underrun_recovery_active);
                 let min_start_seconds = target_seconds
                     .min(min_seconds_cap)
                     .max(min_seconds_floor)
                     .min(target_seconds);
                 let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
                     .clamp(1, target_samples);
-                let fallback_after = if is_exclusive {
-                    Duration::from_secs(4)
+                let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
+                    (self.streaming_available_samples(streaming) as f64)
+                        / (sample_rate * channels_f64)
                 } else {
-                    Duration::from_secs(3)
+                    0.0
                 };
+                let _ = SCHEDULER.update(buffered_ahead_seconds, underrun_recovery_active);
+                let fallback_after = streaming_buffering_fallback_after(
+                    self.output_backend.id(),
+                    underrun_recovery_active,
+                );
 
                 if matches!(self.desired_playback_state, PlaybackState::Playing)
                     && matches!(self.playback_state, PlaybackState::Playing)
                 {
-                    let available = streaming.buffer.len_samples();
-                    if available < min_start_samples && !streaming.buffer.is_finished() {
+                    let available = self.streaming_available_samples(streaming);
+                    if available < min_start_samples && !self.streaming_is_finished(streaming) {
                         sink.pause();
                         self.sync_clock();
                         self.playback_state = PlaybackState::Buffering;
@@ -1383,15 +1517,15 @@ impl NativeAudioEngine {
                 if matches!(self.desired_playback_state, PlaybackState::Playing)
                     && matches!(self.playback_state, PlaybackState::Buffering)
                 {
-                    let available = streaming.buffer.len_samples();
-                    let finished = streaming.buffer.is_finished();
+                    let available = self.streaming_available_samples(streaming);
+                    let finished = self.streaming_is_finished(streaming);
                     let now = Instant::now();
                     if available != self.buffering_last_samples {
                         self.buffering_last_samples = available;
                         self.buffering_last_progress_at = Some(now);
                     }
 
-                    if streaming.buffer.is_finished_and_empty() {
+                    if self.streaming_is_finished_and_empty(streaming) {
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
@@ -1539,11 +1673,35 @@ impl NativeAudioEngine {
 
     pub(crate) fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
         let (underrun_events, underrun_frames) = crate::audio::input::streaming_underrun_stats();
+        let (
+            transfer_low_watermark_samples,
+            transfer_render_low_hit_count,
+            transfer_decode_low_hit_count,
+            render_queue_page_locked,
+        ) = crate::audio::input::streaming_transfer_stats();
+
+        #[cfg(target_os = "windows")]
+        let (
+            output_callback_p99_us,
+            output_wait_timeout_count,
+            output_render_underrun_events,
+            output_render_underrun_frames,
+        ) = crate::audio::output::output_callback_metrics();
+        #[cfg(not(target_os = "windows"))]
+        let (
+            output_callback_p99_us,
+            output_wait_timeout_count,
+            output_render_underrun_events,
+            output_render_underrun_frames,
+        ) = (0u32, 0u64, 0u64, 0u64);
+
+        let output_callback_metrics_valid = self.output_backend.id() == "wasapi-exclusive";
 
         let (buffered_time, buffered_ahead) = if let Some(streaming) = &self.streaming {
             let channels = self.decoded_channels.max(1) as f64;
             let sample_rate = self.decoded_sample_rate.max(1) as f64;
-            let buffered_seconds = (streaming.buffer.len_samples() as f64 / channels) / sample_rate;
+            let buffered_seconds = (self.streaming_available_samples(streaming) as f64 / channels)
+                / sample_rate;
             let buffered_time = if self.duration > 0.0 {
                 (self.current_position + buffered_seconds).min(self.duration)
             } else {
@@ -1596,6 +1754,40 @@ impl NativeAudioEngine {
             ended,
             underrun_events,
             underrun_frames,
+            scheduler_profile: Some(match SCHEDULER.profile() {
+                RealtimePressureProfile::Normal => "normal".to_string(),
+                RealtimePressureProfile::Guarded => "guarded".to_string(),
+                RealtimePressureProfile::Critical => "critical".to_string(),
+            }),
+            transport_mode: Some(self.transport_mode.as_str().to_string()),
+            hq_src_phase_mode: Some(self.hq_src_phase_mode.as_str().to_string()),
+            hq_src_stopband_db: Some(140),
+            transport_exact_int32_container: Some(true),
+            output_callback_metrics_valid: Some(output_callback_metrics_valid),
+            output_callback_p99_us: if output_callback_metrics_valid {
+                Some(output_callback_p99_us)
+            } else {
+                None
+            },
+            output_wait_timeout_count: if output_callback_metrics_valid {
+                Some(output_wait_timeout_count)
+            } else {
+                None
+            },
+            output_render_underrun_events: if output_callback_metrics_valid {
+                Some(output_render_underrun_events)
+            } else {
+                None
+            },
+            output_render_underrun_frames: if output_callback_metrics_valid {
+                Some(output_render_underrun_frames)
+            } else {
+                None
+            },
+            transfer_low_watermark_samples: Some(transfer_low_watermark_samples),
+            transfer_render_low_hit_count: Some(transfer_render_low_hit_count),
+            transfer_decode_low_hit_count: Some(transfer_decode_low_hit_count),
+            render_queue_page_locked: Some(render_queue_page_locked),
             error_seq: self
                 .last_error_code
                 .as_ref()
@@ -1604,6 +1796,13 @@ impl NativeAudioEngine {
             error_code: self.last_error_code.clone(),
             error_message: self.last_error_message.clone(),
         }
+    }
+
+    pub(crate) fn build_tick_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
+        let mut payload = self.build_state_payload(ended);
+        payload.queue = None;
+        payload.current_index = None;
+        payload
     }
 
     pub(crate) fn build_components_payload(&self) -> NativeAudioComponentsStatePayload {
@@ -1668,10 +1867,11 @@ impl NativeAudioEngine {
 
         let (source, channels, sample_rate) = if let Some(streaming) = &self.streaming {
             streaming.buffer.clear();
+            streaming.render_queue.clear();
             let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
             (
                 Box::new(StreamingSamplesSource::new(
-                    streaming.buffer.clone(),
+                    streaming.render_queue.clone(),
                     self.decoded_channels.max(1),
                     self.decoded_sample_rate.max(1),
                     self.duration,
@@ -1728,7 +1928,7 @@ impl NativeAudioEngine {
                     StreamingPrebufferKind::StartOrSeek,
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
-                if streaming.buffer.len_samples() < target_samples {
+                if self.streaming_available_samples(streaming) < target_samples {
                     streaming
                         .buffer
                         .wait_for_samples(target_samples, timeout);
@@ -1759,6 +1959,7 @@ impl NativeAudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::atomic::AtomicUsize;
 
@@ -1899,16 +2100,49 @@ mod tests {
 
     fn make_finished_streaming_playback(capacity_samples: usize, channels: usize) -> StreamingPlayback {
         let buffer = crate::audio::buffer::AudioRingBuffer::new(capacity_samples);
+        let render_queue = crate::audio::buffer::AudioRingBuffer::new(
+            (capacity_samples / 4).clamp(16_384, 262_144),
+        );
         let samples = vec![0.1f32; channels * 8];
-        buffer.push_interleaved(&samples, channels);
+        render_queue.push_interleaved(&samples, channels);
         buffer.mark_finished();
+        render_queue.mark_finished();
 
         let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = std::sync::mpsc::channel();
         StreamingPlayback {
             buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
             command_tx,
             error: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[test]
+    fn transport_exact_policy_defaults_to_robust_int32_container() {
+        let engine = NativeAudioEngine::new();
+        let policy = engine.engine_policy_payload();
+
+        assert!(matches!(policy.transport_mode, NativeAudioTransportMode::Robust));
+        assert!(policy.transport_exact_int32_container);
+        assert_eq!(policy.hq_src_stopband_db, 140);
+        assert!(matches!(policy.hq_src_phase_mode, NativeAudioHqSrcPhaseMode::Linear));
+    }
+
+    #[test]
+    fn transport_exact_policy_patch_updates_mode_and_phase() {
+        let mut engine = NativeAudioEngine::new();
+        let patch = NativeAudioEnginePolicyPatch {
+            transport_mode: Some(NativeAudioTransportMode::TransportExact),
+            hq_src_enabled: Some(true),
+            hq_src_phase_mode: Some(NativeAudioHqSrcPhaseMode::Linear),
+        };
+
+        let next = engine.apply_engine_policy_patch(patch);
+        assert!(matches!(next.transport_mode, NativeAudioTransportMode::TransportExact));
+        assert!(next.hq_src_enabled);
+        assert!(matches!(next.hq_src_phase_mode, NativeAudioHqSrcPhaseMode::Linear));
     }
 
     #[test]
@@ -1931,7 +2165,7 @@ mod tests {
             .streaming
             .as_ref()
             .expect("streaming")
-            .buffer
+            .render_queue
             .len_samples();
 
         let ticked = engine.tick();

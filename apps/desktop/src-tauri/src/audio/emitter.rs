@@ -48,7 +48,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 let is_stopped = matches!(engine.playback_state(), PlaybackState::Stopped);
                 let ended = was_playing && is_stopped;
                 Some((
-                    engine.build_state_payload(ended),
+                    engine.build_tick_state_payload(ended),
                     engine.snapshot_for_spectrum(),
                 ))
             })() else {

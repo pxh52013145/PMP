@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::thread;
 
 use rodio::Source;
 
@@ -9,6 +10,12 @@ use crate::audio::buffer::AudioRingBuffer;
 
 static STREAMING_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
 static STREAMING_UNDERRUN_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+static TRANSFER_LOW_WATERMARK_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_RENDER_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_DECODE_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
+static RENDER_QUEUE_PAGE_LOCK_SUCCESS: AtomicU64 = AtomicU64::new(0);
+static RENDER_QUEUE_PAGE_LOCK_FAILURE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn streaming_underrun_stats() -> (u64, u64) {
     (
@@ -19,12 +26,177 @@ pub(crate) fn streaming_underrun_stats() -> (u64, u64) {
 
 pub(crate) struct StreamingPlayback {
     pub buffer: AudioRingBuffer,
+    pub render_queue: AudioRingBuffer,
     pub command_tx: mpsc::Sender<DecoderCommand>,
+    pub shutdown_tx: StreamingShutdownTx,
     pub error: Arc<Mutex<Option<String>>>,
+}
+
+pub(crate) fn streaming_transfer_stats() -> (u64, u64, u64, bool) {
+    (
+        TRANSFER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed),
+        TRANSFER_RENDER_LOW_HIT_COUNT.load(Ordering::Relaxed),
+        TRANSFER_DECODE_LOW_HIT_COUNT.load(Ordering::Relaxed),
+        RENDER_QUEUE_PAGE_LOCK_SUCCESS.load(Ordering::Relaxed)
+            > RENDER_QUEUE_PAGE_LOCK_FAILURE.load(Ordering::Relaxed),
+    )
+}
+
+#[derive(Clone)]
+pub(crate) struct StreamingShutdownTx {
+    decoder_tx: mpsc::Sender<DecoderCommand>,
+    transfer_tx: mpsc::Sender<TransferCommand>,
+}
+
+impl StreamingShutdownTx {
+    pub fn new(
+        decoder_tx: mpsc::Sender<DecoderCommand>,
+        transfer_tx: mpsc::Sender<TransferCommand>,
+    ) -> Self {
+        Self {
+            decoder_tx,
+            transfer_tx,
+        }
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.transfer_tx.send(TransferCommand::Shutdown);
+        let _ = self.decoder_tx.send(DecoderCommand::Shutdown);
+    }
+}
+
+fn env_bool(name: &str, default_value: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => default_value,
+    }
+}
+
+pub(crate) fn try_lock_render_queue_hot_path(render_queue: &AudioRingBuffer) {
+    if !env_bool("PMP_AUDIO_LOCK_RENDER_QUEUE", true) {
+        return;
+    }
+
+    if render_queue.try_lock_memory_pages() {
+        RENDER_QUEUE_PAGE_LOCK_SUCCESS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        RENDER_QUEUE_PAGE_LOCK_FAILURE.fetch_add(1, Ordering::Relaxed);
+        if env_bool("PMP_AUDIO_LOG_PAGE_LOCK_FAILURE", false) {
+            eprintln!(
+                "[NativeAudio][buffer] Failed to page-lock render queue (best effort)."
+            );
+        }
+    }
+}
+
+pub(crate) fn spawn_render_transfer_worker(
+    decode_reservoir: AudioRingBuffer,
+    render_queue: AudioRingBuffer,
+    channels: u16,
+    command_rx: mpsc::Receiver<TransferCommand>,
+    thread_name: &str,
+) -> Result<(), String> {
+    const TRANSFER_CHUNK_SAMPLES: usize = 8_192;
+    const TRANSFER_WAIT: Duration = Duration::from_millis(4);
+
+    let channels = channels.max(1) as usize;
+    let capacity = render_queue.capacity_samples().max(channels);
+    let low_watermark = ((capacity * 3) / 10).max(channels * 128).min(capacity);
+    let high_watermark = ((capacity * 8) / 10).max(low_watermark).min(capacity);
+    TRANSFER_LOW_WATERMARK_SAMPLES.store(low_watermark as u64, Ordering::Relaxed);
+
+    thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || {
+            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_transfer();
+            let mut transfer_block: Vec<f32> = Vec::with_capacity(TRANSFER_CHUNK_SAMPLES);
+
+            loop {
+                match command_rx.try_recv() {
+                    Ok(TransferCommand::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
+                        render_queue.mark_finished();
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+
+                crate::audio::threading::apply_audio_transfer_pressure_profile(
+                    crate::audio::realtime_scheduler::SCHEDULER.profile(),
+                );
+
+                if decode_reservoir.is_finished_and_empty() {
+                    render_queue.mark_finished();
+                    break;
+                }
+
+                let render_len = render_queue.len_samples();
+                if render_len >= high_watermark {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+
+                if render_len <= low_watermark {
+                    TRANSFER_RENDER_LOW_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
+                }
+
+                if decode_reservoir.len_samples() <= low_watermark {
+                    TRANSFER_DECODE_LOW_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
+                }
+
+                let target_samples = if render_len <= low_watermark {
+                    high_watermark.saturating_sub(render_len)
+                } else {
+                    low_watermark.saturating_sub(render_len)
+                }
+                .max(channels)
+                .min(TRANSFER_CHUNK_SAMPLES);
+
+                let transfer = decode_reservoir.pop_chunk_into(
+                    &mut transfer_block,
+                    target_samples,
+                    TRANSFER_WAIT,
+                );
+
+                if transfer.popped > 0 {
+                    let frames = transfer.popped / channels;
+                    if frames > 0 {
+                        let samples_to_push = frames * channels;
+                        let mut start = 0usize;
+                        while start < samples_to_push {
+                            let pushed_frames =
+                                render_queue.push_interleaved(&transfer_block[start..samples_to_push], channels);
+                            if pushed_frames == 0 {
+                                thread::sleep(Duration::from_millis(1));
+                                continue;
+                            }
+                            start = start.saturating_add(pushed_frames * channels);
+                        }
+                    }
+                }
+
+                if transfer.finished && decode_reservoir.is_finished_and_empty() {
+                    render_queue.mark_finished();
+                    break;
+                }
+
+                if transfer.popped == 0 {
+                    thread::yield_now();
+                }
+            }
+        })
+        .map(|_| ())
+        .map_err(|err| format!("Failed to spawn transfer worker: {err}"))
 }
 
 pub(crate) enum DecoderCommand {
     Seek(f64),
+    Shutdown,
+}
+
+pub(crate) enum TransferCommand {
     Shutdown,
 }
 
@@ -61,7 +233,7 @@ pub(crate) fn drain_decoder_commands(command_rx: &mpsc::Receiver<DecoderCommand>
 
 #[derive(Clone)]
 pub(crate) struct StreamingSamplesSource {
-    buffer: AudioRingBuffer,
+    render_queue: AudioRingBuffer,
     channels: u16,
     sample_rate: u32,
     duration: f64,
@@ -75,10 +247,15 @@ impl StreamingSamplesSource {
     const CHUNK_SAMPLES: usize = 8192;
     const SILENCE_FRAMES: usize = 64;
 
-    pub fn new(buffer: AudioRingBuffer, channels: u16, sample_rate: u32, duration: f64) -> Self {
+    pub fn new(
+        render_queue: AudioRingBuffer,
+        channels: u16,
+        sample_rate: u32,
+        duration: f64,
+    ) -> Self {
         let channels = channels.max(1);
         Self {
-            buffer,
+            render_queue,
             channels,
             sample_rate: sample_rate.max(1),
             duration,
@@ -96,7 +273,7 @@ impl Iterator for StreamingSamplesSource {
     fn next(&mut self) -> Option<Self::Item> {
         if self.local_index >= self.local.len() {
             let channels = self.channels.max(1) as usize;
-            let result = self.buffer.pop_chunk_into(
+            let result = self.render_queue.pop_chunk_into(
                 &mut self.local,
                 Self::CHUNK_SAMPLES,
                 Duration::from_millis(0),
@@ -242,7 +419,22 @@ mod tests {
     #[test]
     fn streaming_samples_source_emits_silence_until_samples_arrive_then_finishes() {
         let buffer = AudioRingBuffer::new(512);
-        let mut source = StreamingSamplesSource::new(buffer.clone(), 2, 48_000, 0.0);
+        let render_queue = AudioRingBuffer::new(512);
+        let (_transfer_tx, transfer_rx) = mpsc::channel::<TransferCommand>();
+        spawn_render_transfer_worker(
+            buffer.clone(),
+            render_queue.clone(),
+            2,
+            transfer_rx,
+            "test-transfer-worker",
+        )
+        .expect("transfer worker should start");
+        let mut source = StreamingSamplesSource::new(
+            render_queue.clone(),
+            2,
+            48_000,
+            0.0,
+        );
 
         for _ in 0..8 {
             assert_eq!(source.next(), Some(0.0));
@@ -251,6 +443,7 @@ mod tests {
         let samples = vec![0.5f32, 0.5, 0.6, 0.6];
         let pushed = buffer.push_interleaved(&samples, 2);
         assert_eq!(pushed, 2);
+        render_queue.wait_for_samples(2, Duration::from_millis(50));
 
         let mut saw_sample = false;
         for _ in 0..1024 {

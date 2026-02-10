@@ -1,7 +1,16 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { AudioState, IAudioService, PlayMode, Playlist, Track, PlaybackState } from './types';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import {
+  AudioProtectionWindowOptions,
+  AudioRobustnessSnapshot,
+  AudioState,
+  IAudioService,
+  PlayMode,
+  Playlist,
+  Track,
+  PlaybackState,
+} from './types';
+import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { readString } from '../../modules/storage';
 
 type StateListener = (state: AudioState) => void;
@@ -18,9 +27,37 @@ type NativeAudioStatePayload = {
   sampleRate?: number;
   underrunEvents?: number;
   underrunFrames?: number;
+  schedulerProfile?: 'normal' | 'guarded' | 'critical';
+  transportMode?: 'robust' | 'transport-exact';
+  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  hqSrcStopbandDb?: number;
+  transportExactInt32Container?: boolean;
+  outputCallbackMetricsValid?: boolean;
+  outputCallbackP99Us?: number;
+  outputWaitTimeoutCount?: number;
+  outputRenderUnderrunEvents?: number;
+  outputRenderUnderrunFrames?: number;
+  transferLowWatermarkSamples?: number;
+  transferRenderLowHitCount?: number;
+  transferDecodeLowHitCount?: number;
+  renderQueuePageLocked?: boolean;
   queue?: string[];
   currentIndex?: number;
   ended?: boolean;
+};
+
+type NativeAudioEnginePolicyPayload = {
+  transportMode?: 'robust' | 'transport-exact';
+  hqSrcEnabled?: boolean;
+  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  hqSrcStopbandDb?: number;
+  transportExactInt32Container?: boolean;
+};
+
+type NativeAudioEnginePolicyPatch = {
+  transportMode?: 'robust' | 'transport-exact';
+  hqSrcEnabled?: boolean;
+  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
 };
 
 type NativeAudioSpectrumPayload = {
@@ -31,6 +68,12 @@ type NativeAudioErrorPayload = {
   seq?: number;
   code?: string;
   message?: string;
+};
+
+type NativeAudioComponentsStatePayload = {
+  outputBackendId?: string | null;
+  preferredInputId?: string | null;
+  activeInputId?: string | null;
 };
 
 type ReplayGainMode = 'track' | 'album';
@@ -45,6 +88,13 @@ type CrossfadeSettings = {
   enabled: boolean;
   durationMs: number;
 };
+
+type StreamingBufferSettings = {
+  startOrSeekSeconds: number | null;
+  crossfadeSeconds: number | null;
+};
+
+type RobustnessListener = (snapshot: AudioRobustnessSnapshot) => void;
 
 /**
  * NativeAudioService
@@ -61,6 +111,7 @@ export class NativeAudioService implements IAudioService {
   private stateChangeCallbacks: Set<StateListener> = new Set();
   private loadProgressCallbacks: Set<(progress: number) => void> = new Set();
   private errorCallbacks: Set<(error: Error) => void> = new Set();
+  private robustnessCallbacks: Set<RobustnessListener> = new Set();
   private stateListener?: UnlistenFn;
   private spectrumListener?: UnlistenFn;
   private errorListener?: UnlistenFn;
@@ -74,18 +125,67 @@ export class NativeAudioService implements IAudioService {
   private restoredDspChain = false;
   private restoredDspChainApplied = false;
   private restoredGainDb = false;
+  private visibilityListenerAttached = false;
+  private visibilityListenerCleanup: (() => void) | null = null;
   private lastNativeErrorSeq = 0;
   private fallbackTicker: number | null = null;
   private fallbackClockStartedAtMs: number | null = null;
   private fallbackClockBaseTimeSec: number = 0;
   private lastBackendTimeUpdateAtMs: number = 0;
+  private lastUnderrunEvents: number = 0;
+  private lastUnderrunFrames: number = 0;
+  private underrunRecoveryUntilMs: number = 0;
+  private underrunSpikeTimestampsMs: number[] = [];
   private pendingSeekTime: number | null = null;
   private pendingSeekTimer: number | null = null;
   private seekInvokeInFlight = false;
   private desiredPlayIndex: number | null = null;
   private playIndexQueue: Promise<void> = Promise.resolve();
+  private bufferedAheadRollingWindow: number[] = [];
+  private bufferedAheadRollingSum: number = 0;
+  private bufferedAheadMinSeconds: number | null = null;
+  private rebufferCount = 0;
+  private lastPlaybackStateForMetrics: PlaybackState = 'idle';
+  private storedStreamingBufferSettings: StreamingBufferSettings = {
+    startOrSeekSeconds: null,
+    crossfadeSeconds: null,
+  };
+  private lastAppliedStreamingBufferSettings: StreamingBufferSettings | null = null;
+  private protectionWindowRefCount = 0;
+  private protectionWindowReason: string | null = null;
+  private protectionWindowUntilMs = 0;
+  private protectionWindowTimer: ReturnType<typeof setTimeout> | null = null;
+  private availableOutputBackends: string[] = [];
+  private currentOutputBackendId: string | null = null;
+  private backendSwitchInFlight = false;
+  private autoBackendSwitchCount = 0;
+  private lastAutoBackendSwitchAtMs: number | null = null;
+  private lastAutoBackendSwitchReason: string | null = null;
+  private lastEmittedRobustnessSignature: string | null = null;
+  private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
+  private transportMode: 'robust' | 'transport-exact' = 'robust';
+  private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
+  private hqSrcStopbandDb: number = 140;
+  private transportExactInt32Container = true;
+  private outputCallbackMetricsValid = false;
+  private outputCallbackP99Us = 0;
+  private outputWaitTimeoutCount = 0;
+  private outputRenderUnderrunEvents = 0;
+  private outputRenderUnderrunFrames = 0;
+  private transferLowWatermarkSamples = 0;
+  private transferRenderLowHitCount = 0;
+  private transferDecodeLowHitCount = 0;
+  private renderQueuePageLocked = false;
 
   private static readonly SEEK_COALESCE_MS = 60;
+  private static readonly UNDERRUN_RECOVERY_WINDOW_MS = 20_000;
+  private static readonly AUTO_BACKEND_UNDERRUN_WINDOW_MS = 15_000;
+  private static readonly AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT = 3;
+  private static readonly AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER = 1024;
+  private static readonly AUTO_BACKEND_SWITCH_COOLDOWN_MS = 45_000;
+  private static readonly PROTECTION_WINDOW_DEFAULT_MS = 20_000;
+  private static readonly PROTECTION_WINDOW_MAX_MS = 120_000;
+  private static readonly ROBUSTNESS_BUFFER_WINDOW_SIZE = 48;
 
   private fireAndForgetCommand(cmd: string, payload?: Record<string, unknown>): void {
     void this.invokeCommand(cmd, payload).catch(() => {});
@@ -175,6 +275,9 @@ export class NativeAudioService implements IAudioService {
     };
 
     this.setupNativeListeners();
+    void this.refreshOutputBackendInventory().finally(() => {
+      this.emitRobustnessSnapshot(true);
+    });
     void this.restoreFromStorage().catch(() => {});
   }
 
@@ -193,7 +296,7 @@ export class NativeAudioService implements IAudioService {
     await this.restoreGainDbFromStorage();
   }
 
-  private readStreamingBufferSettings(): { startOrSeekSeconds: number | null; crossfadeSeconds: number | null } {
+  private readStreamingBufferSettings(): StreamingBufferSettings {
     try {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
       if (!raw) return { startOrSeekSeconds: null, crossfadeSeconds: null };
@@ -208,13 +311,13 @@ export class NativeAudioService implements IAudioService {
         startRaw === null
           ? null
           : typeof startRaw === 'number' && isFinite(startRaw)
-            ? Math.max(0, Math.min(10, startRaw))
+            ? Math.max(0, Math.min(4, startRaw))
             : null;
       const crossfade =
         crossfadeRaw === null
           ? null
           : typeof crossfadeRaw === 'number' && isFinite(crossfadeRaw)
-            ? Math.max(0, Math.min(10, crossfadeRaw))
+            ? Math.max(0, Math.min(3, crossfadeRaw))
             : null;
 
       return { startOrSeekSeconds: start, crossfadeSeconds: crossfade };
@@ -229,10 +332,29 @@ export class NativeAudioService implements IAudioService {
 
     try {
       const settings = this.readStreamingBufferSettings();
-      await invoke('native_audio_set_streaming_buffer_settings', settings).catch(() => {});
+      this.storedStreamingBufferSettings = settings;
+      this.attachVisibilityAwareStreamingBufferPolicy();
+      this.applyStreamingBufferPolicy();
     } catch {
       // ignore
     }
+  }
+
+  private attachVisibilityAwareStreamingBufferPolicy(): void {
+    if (this.visibilityListenerAttached) return;
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+
+    this.visibilityListenerAttached = true;
+
+    const sync = () => {
+      this.applyStreamingBufferPolicy();
+    };
+
+    document.addEventListener('visibilitychange', sync);
+    this.visibilityListenerCleanup = () => {
+      document.removeEventListener('visibilitychange', sync);
+    };
+    sync();
   }
 
   private async restoreVstEnabledFromStorage(): Promise<void> {
@@ -334,10 +456,511 @@ export class NativeAudioService implements IAudioService {
     await this.invokeCommand('native_audio_set_replay_gain', { db: clamped });
   }
 
+  private sanitizeBackendId(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private parseComponentsStatePayload(payload: unknown): NativeAudioComponentsStatePayload {
+    if (!payload || typeof payload !== 'object') {
+      return { outputBackendId: null, preferredInputId: null, activeInputId: null };
+    }
+
+    const record = payload as Record<string, unknown>;
+    return {
+      outputBackendId: this.sanitizeBackendId(record.outputBackendId),
+      preferredInputId: this.sanitizeBackendId(record.preferredInputId),
+      activeInputId: this.sanitizeBackendId(record.activeInputId),
+    };
+  }
+
+  private normalizeOutputBackends(payload: unknown): string[] {
+    if (!Array.isArray(payload)) return [];
+    const unique = new Set<string>();
+    for (const candidate of payload) {
+      const backendId = this.sanitizeBackendId(candidate);
+      if (!backendId) continue;
+      unique.add(backendId);
+    }
+    return Array.from(unique);
+  }
+
+  private async refreshOutputBackendInventory(): Promise<void> {
+    try {
+      const backendsPayload = await invoke<unknown>('native_audio_list_output_backends');
+      const backends = this.normalizeOutputBackends(backendsPayload);
+      if (backends.length > 0) {
+        this.availableOutputBackends = backends;
+      }
+    } catch {
+      // best-effort
+    }
+
+    try {
+      const componentsPayload = await invoke<unknown>('native_audio_get_audio_components_state');
+      const components = this.parseComponentsStatePayload(componentsPayload);
+      const backendId = this.sanitizeBackendId(components.outputBackendId);
+      if (backendId) {
+        this.currentOutputBackendId = backendId;
+        if (!this.availableOutputBackends.includes(backendId)) {
+          this.availableOutputBackends = [...this.availableOutputBackends, backendId];
+        }
+      }
+    } catch {
+      // best-effort
+    }
+
+    try {
+      const policyPayload = await invoke<unknown>('native_audio_get_engine_policy');
+      this.applyEnginePolicyPayload(policyPayload);
+    } catch {
+      // best-effort
+    }
+  }
+
+  private applyEnginePolicyPayload(payload: unknown): void {
+    if (!payload || typeof payload !== 'object') return;
+    const policy = payload as NativeAudioEnginePolicyPayload;
+
+    if (policy.transportMode === 'robust' || policy.transportMode === 'transport-exact') {
+      this.transportMode = policy.transportMode;
+    }
+
+    if (
+      policy.hqSrcPhaseMode === 'linear' ||
+      policy.hqSrcPhaseMode === 'minimum' ||
+      policy.hqSrcPhaseMode === 'intermediate'
+    ) {
+      this.hqSrcPhaseMode = policy.hqSrcPhaseMode;
+    }
+
+    if (typeof policy.hqSrcStopbandDb === 'number' && Number.isFinite(policy.hqSrcStopbandDb)) {
+      this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(policy.hqSrcStopbandDb)));
+    }
+
+    if (typeof policy.transportExactInt32Container === 'boolean') {
+      this.transportExactInt32Container = policy.transportExactInt32Container;
+    }
+  }
+
+  async setEnginePolicy(patch: NativeAudioEnginePolicyPatch): Promise<void> {
+    const normalized: NativeAudioEnginePolicyPatch = {};
+    if (patch.transportMode === 'robust' || patch.transportMode === 'transport-exact') {
+      normalized.transportMode = patch.transportMode;
+    }
+    if (typeof patch.hqSrcEnabled === 'boolean') {
+      normalized.hqSrcEnabled = patch.hqSrcEnabled;
+    }
+    if (
+      patch.hqSrcPhaseMode === 'linear' ||
+      patch.hqSrcPhaseMode === 'minimum' ||
+      patch.hqSrcPhaseMode === 'intermediate'
+    ) {
+      normalized.hqSrcPhaseMode = patch.hqSrcPhaseMode;
+    }
+
+    const response = await invoke<unknown>('native_audio_set_engine_policy', normalized);
+    this.applyEnginePolicyPayload(response);
+    this.emitRobustnessSnapshot(true);
+  }
+
+  private getAutoBackendChain(): string[] {
+    const backends = [...this.availableOutputBackends];
+    if (this.currentOutputBackendId && !backends.includes(this.currentOutputBackendId)) {
+      backends.unshift(this.currentOutputBackendId);
+    }
+
+    const unique = Array.from(new Set(backends.filter((value) => value.length > 0)));
+    if (unique.length <= 1) return unique;
+
+    const platform =
+      typeof navigator !== 'undefined'
+        ? `${(navigator as Navigator & { platform?: string }).platform ?? ''} ${navigator.userAgent ?? ''}`
+        : '';
+    const isWindows = /win/i.test(platform);
+    if (!isWindows) return unique;
+
+    const preferredOrder = ['wasapi-exclusive', 'wasapi', 'rodio-cpal'];
+    const ordered: string[] = [];
+    for (const preferred of preferredOrder) {
+      if (unique.includes(preferred)) ordered.push(preferred);
+    }
+    for (const backend of unique) {
+      if (!ordered.includes(backend)) ordered.push(backend);
+    }
+    return ordered;
+  }
+
+  private pruneUnderrunSpikeWindow(nowMs: number): void {
+    this.underrunSpikeTimestampsMs = this.underrunSpikeTimestampsMs.filter(
+      (timestamp) => nowMs - timestamp <= NativeAudioService.AUTO_BACKEND_UNDERRUN_WINDOW_MS
+    );
+  }
+
+  private shouldAutoSwitchNow(reason: string, nowMs: number): boolean {
+    if (this.backendSwitchInFlight) return false;
+
+    if (
+      this.lastAutoBackendSwitchAtMs !== null &&
+      nowMs - this.lastAutoBackendSwitchAtMs < NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS
+    ) {
+      return false;
+    }
+
+    if (reason.startsWith('underrun')) {
+      if (this.lastUnderrunFrames >= NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER) {
+        return true;
+      }
+      this.pruneUnderrunSpikeWindow(nowMs);
+      return (
+        this.underrunSpikeTimestampsMs.length >= NativeAudioService.AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT
+      );
+    }
+
+    return true;
+  }
+
+  private maybeAutoSwitchOutputBackend(reason: string, options?: { force?: boolean }): void {
+    const nowMs = Date.now();
+    if (!options?.force && !this.shouldAutoSwitchNow(reason, nowMs)) {
+      return;
+    }
+
+    void this.tryAutoSwitchOutputBackend(reason);
+  }
+
+  private async tryAutoSwitchOutputBackend(reason: string): Promise<void> {
+    if (this.backendSwitchInFlight) return;
+
+    const nowMs = Date.now();
+    if (
+      this.lastAutoBackendSwitchAtMs !== null &&
+      nowMs - this.lastAutoBackendSwitchAtMs < NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    this.backendSwitchInFlight = true;
+
+    try {
+      await this.refreshOutputBackendInventory();
+
+      const chain = this.getAutoBackendChain();
+      if (chain.length <= 1) return;
+
+      const current = this.currentOutputBackendId;
+      const currentIndex = current ? chain.indexOf(current) : -1;
+      const targetBackend =
+        currentIndex >= 0 ? chain[(currentIndex + 1) % chain.length] ?? null : chain[0] ?? null;
+      if (!targetBackend) return;
+      if (targetBackend === current) return;
+
+      const switched = await this.selectOutputBackendInternal(targetBackend, {
+        persist: true,
+        clearDevice: true,
+      });
+      if (!switched) return;
+
+      this.autoBackendSwitchCount += 1;
+      this.lastAutoBackendSwitchAtMs = Date.now();
+      this.lastAutoBackendSwitchReason = reason;
+      this.emitRobustnessSnapshot(true);
+    } finally {
+      this.backendSwitchInFlight = false;
+    }
+  }
+
+  private async selectOutputBackendInternal(
+    backendId: string | null,
+    options?: { persist?: boolean; clearDevice?: boolean }
+  ): Promise<boolean> {
+    try {
+      const payload = await invoke<unknown>('native_audio_select_output_backend', {
+        backendId,
+      });
+      const parsed = this.parseComponentsStatePayload(payload);
+      const resolvedBackendId = this.sanitizeBackendId(parsed.outputBackendId) ?? backendId;
+      this.currentOutputBackendId = resolvedBackendId;
+
+      if (resolvedBackendId && !this.availableOutputBackends.includes(resolvedBackendId)) {
+        this.availableOutputBackends = [...this.availableOutputBackends, resolvedBackendId];
+      }
+
+      if (options?.persist !== false) {
+        await broadcastDataUpdate(
+          STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND,
+          resolvedBackendId,
+          TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
+        );
+
+        if (options?.clearDevice !== false) {
+          await broadcastDataUpdate(
+            STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
+            null,
+            TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
+          );
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.warn('[NativeAudio] Failed to select output backend:', error);
+      return false;
+    }
+  }
+
+  private normalizeStreamingBufferSettings(settings: StreamingBufferSettings): StreamingBufferSettings {
+    const normalize = (value: number | null, min: number, max: number): number | null => {
+      if (typeof value !== 'number' || !isFinite(value)) return null;
+      return Math.max(min, Math.min(max, value));
+    };
+
+    return {
+      startOrSeekSeconds: normalize(settings.startOrSeekSeconds, 0, 4),
+      crossfadeSeconds: normalize(settings.crossfadeSeconds, 0, 3),
+    };
+  }
+
+  private buildBackgroundStreamingBufferSettings(base: StreamingBufferSettings): StreamingBufferSettings {
+    return {
+      startOrSeekSeconds:
+        typeof base.startOrSeekSeconds === 'number'
+          ? Math.min(3.2, Math.max(1.2, base.startOrSeekSeconds))
+          : 2.4,
+      crossfadeSeconds:
+        typeof base.crossfadeSeconds === 'number'
+          ? Math.min(1.8, Math.max(0.4, base.crossfadeSeconds))
+          : 1.0,
+    };
+  }
+
+  private buildRecoveryStreamingBufferSettings(base: StreamingBufferSettings): StreamingBufferSettings {
+    const background = this.buildBackgroundStreamingBufferSettings(base);
+    return {
+      startOrSeekSeconds: Math.min(4, Math.max(background.startOrSeekSeconds ?? 2.4, 3.2)),
+      crossfadeSeconds: Math.min(3, Math.max(background.crossfadeSeconds ?? 1.0, 1.4)),
+    };
+  }
+
+  private buildProtectionStreamingBufferSettings(base: StreamingBufferSettings): StreamingBufferSettings {
+    const recovery = this.buildRecoveryStreamingBufferSettings(base);
+    return {
+      startOrSeekSeconds: Math.min(4, Math.max(recovery.startOrSeekSeconds ?? 3.2, 3.8)),
+      crossfadeSeconds: Math.min(3, Math.max(recovery.crossfadeSeconds ?? 1.4, 1.8)),
+    };
+  }
+
+  private hasActiveProtectionWindow(nowMs: number = Date.now()): boolean {
+    if (this.protectionWindowRefCount > 0) return true;
+    return this.protectionWindowUntilMs > nowMs;
+  }
+
+  private getStreamingBufferPolicyTarget(nowMs: number = Date.now()): StreamingBufferSettings {
+    let target = this.normalizeStreamingBufferSettings(this.storedStreamingBufferSettings);
+
+    if (typeof document !== 'undefined' && document.hidden) {
+      target = this.buildBackgroundStreamingBufferSettings(target);
+    }
+
+    if (this.underrunRecoveryUntilMs > nowMs) {
+      target = this.buildRecoveryStreamingBufferSettings(target);
+    }
+
+    if (this.hasActiveProtectionWindow(nowMs)) {
+      target = this.buildProtectionStreamingBufferSettings(target);
+    }
+
+    return this.normalizeStreamingBufferSettings(target);
+  }
+
+  private isSameStreamingBufferSettings(
+    left: StreamingBufferSettings | null,
+    right: StreamingBufferSettings | null
+  ): boolean {
+    if (!left || !right) return false;
+    return (
+      left.startOrSeekSeconds === right.startOrSeekSeconds &&
+      left.crossfadeSeconds === right.crossfadeSeconds
+    );
+  }
+
+  private applyStreamingBufferPolicy(force: boolean = false): void {
+    const nowMs = Date.now();
+
+    if (this.protectionWindowRefCount === 0 && this.protectionWindowUntilMs > 0 && nowMs >= this.protectionWindowUntilMs) {
+      this.protectionWindowUntilMs = 0;
+      this.protectionWindowReason = null;
+    }
+
+    const target = this.getStreamingBufferPolicyTarget(nowMs);
+    if (!force && this.isSameStreamingBufferSettings(this.lastAppliedStreamingBufferSettings, target)) {
+      return;
+    }
+
+    this.lastAppliedStreamingBufferSettings = target;
+    void invoke('native_audio_set_streaming_buffer_settings', target).catch(() => {});
+  }
+
+  private recordBufferedAheadSample(value: number): void {
+    if (!Number.isFinite(value)) return;
+    const normalized = Math.max(0, Math.min(600, value));
+    this.bufferedAheadRollingWindow.push(normalized);
+    this.bufferedAheadRollingSum += normalized;
+
+    if (this.bufferedAheadRollingWindow.length > NativeAudioService.ROBUSTNESS_BUFFER_WINDOW_SIZE) {
+      const removed = this.bufferedAheadRollingWindow.shift();
+      if (typeof removed === 'number') {
+        this.bufferedAheadRollingSum -= removed;
+      }
+    }
+
+    if (this.bufferedAheadMinSeconds === null) {
+      this.bufferedAheadMinSeconds = normalized;
+    } else {
+      this.bufferedAheadMinSeconds = Math.min(this.bufferedAheadMinSeconds, normalized);
+    }
+  }
+
+  private trackPlaybackStateForMetrics(nextPlaybackState: PlaybackState): void {
+    if (this.lastPlaybackStateForMetrics === 'playing' && nextPlaybackState === 'buffering') {
+      this.rebufferCount += 1;
+    }
+    this.lastPlaybackStateForMetrics = nextPlaybackState;
+  }
+
+  private handleUnderrunSpike(nextUnderrunEvents: number, nextUnderrunFrames?: number): void {
+    const nowMs = Date.now();
+    this.lastUnderrunEvents = Math.max(0, Math.floor(nextUnderrunEvents));
+    if (typeof nextUnderrunFrames === 'number' && Number.isFinite(nextUnderrunFrames)) {
+      this.lastUnderrunFrames = Math.max(0, Math.floor(nextUnderrunFrames));
+    }
+
+    this.underrunSpikeTimestampsMs.push(nowMs);
+    this.pruneUnderrunSpikeWindow(nowMs);
+    this.underrunRecoveryUntilMs = nowMs + NativeAudioService.UNDERRUN_RECOVERY_WINDOW_MS;
+    this.applyStreamingBufferPolicy(true);
+    this.maybeAutoSwitchOutputBackend('underrun-spike');
+  }
+
+  private maybeReleaseUnderrunRecovery(playbackState: PlaybackState): void {
+    if (this.underrunRecoveryUntilMs <= 0) return;
+    const nowMs = Date.now();
+    if (nowMs < this.underrunRecoveryUntilMs) return;
+    if (playbackState === 'buffering') return;
+
+    this.underrunRecoveryUntilMs = 0;
+    this.applyStreamingBufferPolicy(true);
+  }
+
+  private clearProtectionWindowTimer(): void {
+    if (this.protectionWindowTimer === null) return;
+    clearTimeout(this.protectionWindowTimer);
+    this.protectionWindowTimer = null;
+  }
+
+  private scheduleProtectionWindowExpiry(): void {
+    this.clearProtectionWindowTimer();
+    if (this.protectionWindowRefCount > 0) return;
+
+    const nowMs = Date.now();
+    if (this.protectionWindowUntilMs <= nowMs) {
+      this.protectionWindowUntilMs = 0;
+      this.protectionWindowReason = null;
+      this.applyStreamingBufferPolicy(true);
+      this.emitRobustnessSnapshot(true);
+      return;
+    }
+
+    const delayMs = Math.max(0, this.protectionWindowUntilMs - nowMs);
+    this.protectionWindowTimer = setTimeout(() => {
+      this.protectionWindowTimer = null;
+      if (this.protectionWindowRefCount > 0) return;
+      this.protectionWindowUntilMs = 0;
+      this.protectionWindowReason = null;
+      this.applyStreamingBufferPolicy(true);
+      this.emitRobustnessSnapshot(true);
+    }, delayMs);
+  }
+
+  private buildRobustnessSnapshot(nowMs: number = Date.now()): AudioRobustnessSnapshot {
+    this.pruneUnderrunSpikeWindow(nowMs);
+
+    const bufferedAheadNow =
+      typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
+        ? Math.max(0, this.state.bufferedAhead)
+        : 0;
+    const bufferedAheadAvg =
+      this.bufferedAheadRollingWindow.length > 0
+        ? this.bufferedAheadRollingSum / this.bufferedAheadRollingWindow.length
+        : null;
+    const recoveryActive = this.underrunRecoveryUntilMs > nowMs;
+    const protectionActive = this.hasActiveProtectionWindow(nowMs);
+
+    return {
+      outputBackendId: this.currentOutputBackendId,
+      outputBackends: [...this.availableOutputBackends],
+      schedulerProfile: this.lastSchedulerProfile,
+      transportMode: this.transportMode,
+      hqSrcPhaseMode: this.hqSrcPhaseMode,
+      hqSrcStopbandDb: this.hqSrcStopbandDb,
+      transportExactInt32Container: this.transportExactInt32Container,
+      outputCallbackMetricsValid: this.outputCallbackMetricsValid,
+      underrunEvents: this.lastUnderrunEvents,
+      underrunFrames: this.lastUnderrunFrames,
+      underrunEventsWindow: this.underrunSpikeTimestampsMs.length,
+      underrunRecoveryActive: recoveryActive,
+      protectionWindowActive: protectionActive,
+      protectionRefCount: this.protectionWindowRefCount,
+      protectionReason: protectionActive ? this.protectionWindowReason : null,
+      autoSwitchCount: this.autoBackendSwitchCount,
+      lastAutoSwitchAtMs: this.lastAutoBackendSwitchAtMs,
+      lastAutoSwitchReason: this.lastAutoBackendSwitchReason,
+      bufferedAheadSeconds: bufferedAheadNow,
+      bufferedAheadMinSeconds: this.bufferedAheadMinSeconds,
+      bufferedAheadAvgSeconds: bufferedAheadAvg,
+      rebufferCount: this.rebufferCount,
+      outputCallbackP99Us: this.outputCallbackP99Us,
+      outputWaitTimeoutCount: this.outputWaitTimeoutCount,
+      outputRenderUnderrunEvents: this.outputRenderUnderrunEvents,
+      outputRenderUnderrunFrames: this.outputRenderUnderrunFrames,
+      transferLowWatermarkSamples: this.transferLowWatermarkSamples,
+      transferRenderLowHitCount: this.transferRenderLowHitCount,
+      transferDecodeLowHitCount: this.transferDecodeLowHitCount,
+      renderQueuePageLocked: this.renderQueuePageLocked,
+    };
+  }
+
+  private emitRobustnessSnapshot(force: boolean = false): void {
+    if (this.robustnessCallbacks.size === 0) return;
+    const snapshot = this.buildRobustnessSnapshot();
+    const signature = JSON.stringify(snapshot);
+    if (!force && signature === this.lastEmittedRobustnessSignature) {
+      return;
+    }
+    this.lastEmittedRobustnessSignature = signature;
+    this.robustnessCallbacks.forEach((callback) => callback(snapshot));
+  }
+
   // ===== Helpers =====
-  private updateState(partial: Partial<AudioState>) {
-    this.state = { ...this.state, ...partial };
-    this.stateChangeCallbacks.forEach((cb) => cb(this.state));
+  private updateState(partial: Partial<AudioState>, options?: { emitStateChange?: boolean }) {
+    const nextState: AudioState = { ...this.state };
+    let changed = false;
+
+    for (const [rawKey, value] of Object.entries(partial)) {
+      const key = rawKey as keyof AudioState;
+      if (typeof value === 'undefined') continue;
+      if (nextState[key] === value) continue;
+      (nextState as unknown as Record<string, unknown>)[key as string] = value;
+      changed = true;
+    }
+
+    if (!changed) return this.state;
+
+    this.state = nextState;
+    if (options?.emitStateChange !== false) {
+      this.stateChangeCallbacks.forEach((cb) => cb(this.state));
+    }
     return this.state;
   }
 
@@ -432,6 +1055,14 @@ export class NativeAudioService implements IAudioService {
   private emitError(error: Error) {
     this.updateState({ playbackState: 'error' });
     this.errorCallbacks.forEach((cb) => cb(error));
+
+    const coded = error as Error & { code?: string };
+    const code = typeof coded.code === 'string' ? coded.code : '';
+    if (code === 'NATIVE_AUDIO_OUTPUT_ERROR' || code === 'NATIVE_AUDIO_REBUILD_SINK_FAILED') {
+      this.maybeAutoSwitchOutputBackend(`output-error:${code}`);
+    }
+
+    this.emitRobustnessSnapshot(true);
   }
 
   private async setupNativeListeners() {
@@ -450,6 +1081,117 @@ export class NativeAudioService implements IAudioService {
         if (typeof next.duration !== 'undefined') update.duration = next.duration;
         if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
         if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
+
+        if (typeof next.underrunEvents === 'number' && Number.isFinite(next.underrunEvents)) {
+          if (next.underrunEvents > this.lastUnderrunEvents) {
+            this.handleUnderrunSpike(next.underrunEvents, next.underrunFrames);
+          } else {
+            this.lastUnderrunEvents = Math.max(this.lastUnderrunEvents, Math.floor(next.underrunEvents));
+          }
+        }
+
+        if (typeof next.underrunFrames === 'number' && Number.isFinite(next.underrunFrames)) {
+          this.lastUnderrunFrames = Math.max(this.lastUnderrunFrames, Math.floor(next.underrunFrames));
+        }
+
+        if (
+          next.schedulerProfile === 'normal' ||
+          next.schedulerProfile === 'guarded' ||
+          next.schedulerProfile === 'critical'
+        ) {
+          this.lastSchedulerProfile = next.schedulerProfile;
+        }
+
+        if (next.transportMode === 'robust' || next.transportMode === 'transport-exact') {
+          this.transportMode = next.transportMode;
+        }
+
+        if (
+          next.hqSrcPhaseMode === 'linear' ||
+          next.hqSrcPhaseMode === 'minimum' ||
+          next.hqSrcPhaseMode === 'intermediate'
+        ) {
+          this.hqSrcPhaseMode = next.hqSrcPhaseMode;
+        }
+
+        if (typeof next.hqSrcStopbandDb === 'number' && Number.isFinite(next.hqSrcStopbandDb)) {
+          this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(next.hqSrcStopbandDb)));
+        }
+
+        if (typeof next.transportExactInt32Container === 'boolean') {
+          this.transportExactInt32Container = next.transportExactInt32Container;
+        }
+
+        if (typeof next.outputCallbackMetricsValid === 'boolean') {
+          this.outputCallbackMetricsValid = next.outputCallbackMetricsValid;
+          if (!this.outputCallbackMetricsValid) {
+            this.outputCallbackP99Us = 0;
+            this.outputWaitTimeoutCount = 0;
+            this.outputRenderUnderrunEvents = 0;
+            this.outputRenderUnderrunFrames = 0;
+          }
+        }
+
+        if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputCallbackP99Us === 'number' &&
+          Number.isFinite(next.outputCallbackP99Us)
+        ) {
+          this.outputCallbackP99Us = Math.max(0, Math.floor(next.outputCallbackP99Us));
+        }
+
+        if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputWaitTimeoutCount === 'number' &&
+          Number.isFinite(next.outputWaitTimeoutCount)
+        ) {
+          this.outputWaitTimeoutCount = Math.max(0, Math.floor(next.outputWaitTimeoutCount));
+        }
+
+        if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputRenderUnderrunEvents === 'number' &&
+          Number.isFinite(next.outputRenderUnderrunEvents)
+        ) {
+          this.outputRenderUnderrunEvents = Math.max(0, Math.floor(next.outputRenderUnderrunEvents));
+        }
+
+        if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputRenderUnderrunFrames === 'number' &&
+          Number.isFinite(next.outputRenderUnderrunFrames)
+        ) {
+          this.outputRenderUnderrunFrames = Math.max(0, Math.floor(next.outputRenderUnderrunFrames));
+        }
+
+        if (
+          typeof next.transferLowWatermarkSamples === 'number' &&
+          Number.isFinite(next.transferLowWatermarkSamples)
+        ) {
+          this.transferLowWatermarkSamples = Math.max(0, Math.floor(next.transferLowWatermarkSamples));
+        }
+
+        if (
+          typeof next.transferRenderLowHitCount === 'number' &&
+          Number.isFinite(next.transferRenderLowHitCount)
+        ) {
+          this.transferRenderLowHitCount = Math.max(0, Math.floor(next.transferRenderLowHitCount));
+        }
+
+        if (
+          typeof next.transferDecodeLowHitCount === 'number' &&
+          Number.isFinite(next.transferDecodeLowHitCount)
+        ) {
+          this.transferDecodeLowHitCount = Math.max(0, Math.floor(next.transferDecodeLowHitCount));
+        }
+
+        if (typeof next.renderQueuePageLocked === 'boolean') {
+          this.renderQueuePageLocked = next.renderQueuePageLocked;
+        }
+
+        if (typeof next.bufferedAhead === 'number' && Number.isFinite(next.bufferedAhead)) {
+          this.recordBufferedAheadSample(next.bufferedAhead);
+        }
 
         if (Array.isArray(next.queue) && !this.isSameQueuePaths(next.queue)) {
           update.queue = this.resolveQueueFromPaths(next.queue);
@@ -482,8 +1224,15 @@ export class NativeAudioService implements IAudioService {
           }
         }
 
-        const merged = this.updateState(update);
+        const transientOnlyStateUpdate =
+          Object.keys(update).length > 0 &&
+          Object.keys(update).every(
+            (key) => key === 'currentTime' || key === 'bufferedTime' || key === 'bufferedAhead'
+          );
+
+        const merged = this.updateState(update, { emitStateChange: !transientOnlyStateUpdate });
         if (typeof next.playbackState !== 'undefined') {
+          this.trackPlaybackStateForMetrics(merged.playbackState);
           this.applyPlaybackStateSideEffects(merged.playbackState);
         }
         if (typeof next.currentTime !== 'undefined') {
@@ -502,19 +1251,26 @@ export class NativeAudioService implements IAudioService {
           this.endedCallbacks.forEach((cb) => cb());
           void this.handleTrackEnded();
         }
+
+        this.maybeReleaseUnderrunRecovery(merged.playbackState);
+        this.emitRobustnessSnapshot();
       });
 
       this.spectrumListener = await listen('native_audio_spectrum', (event) => {
         const payload = event.payload as NativeAudioSpectrumPayload;
         if (!payload?.bins || !Array.isArray(payload.bins)) return;
         const bins = payload.bins;
-        const next = new Uint8Array(bins.length);
+
+        if (!this.spectrumData || this.spectrumData.length !== bins.length) {
+          this.spectrumData = new Uint8Array(bins.length);
+        }
+        const next = this.spectrumData;
+
         for (let i = 0; i < bins.length; i++) {
           const value = typeof bins[i] === 'number' ? bins[i] : 0;
           const clamped = Math.max(0, Math.min(1, value));
           next[i] = Math.round(clamped * 255);
         }
-        this.spectrumData = next;
       });
 
       this.errorListener = await listen('native_audio_error', (event) => {
@@ -546,10 +1302,11 @@ export class NativeAudioService implements IAudioService {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
-      const backendId = typeof parsed === 'string' ? parsed : null;
+      const backendId = this.sanitizeBackendId(parsed);
       if (!backendId) return;
 
-      return invoke('native_audio_select_output_backend', { backendId })
+      this.currentOutputBackendId = backendId;
+      return this.selectOutputBackendInternal(backendId, { persist: false, clearDevice: false })
         .then(() => {})
         .catch(() => {});
     } catch {
@@ -649,6 +1406,48 @@ export class NativeAudioService implements IAudioService {
     const normalized = filePath.replace(/\\/g, '/');
     const segments = normalized.split('/');
     return segments[segments.length - 1] || 'Unknown Track';
+  }
+
+  enterProtectionWindow(options?: AudioProtectionWindowOptions): () => void {
+    const nowMs = Date.now();
+    const durationMsRaw =
+      typeof options?.durationMs === 'number' && isFinite(options.durationMs)
+        ? Math.max(1_000, Math.min(NativeAudioService.PROTECTION_WINDOW_MAX_MS, options.durationMs))
+        : NativeAudioService.PROTECTION_WINDOW_DEFAULT_MS;
+    const reasonRaw = typeof options?.reason === 'string' ? options.reason.trim() : '';
+    const reason = reasonRaw.length > 0 ? reasonRaw : 'general';
+
+    this.protectionWindowRefCount += 1;
+    this.protectionWindowReason = reason;
+    this.protectionWindowUntilMs = Math.max(this.protectionWindowUntilMs, nowMs + durationMsRaw);
+    this.applyStreamingBufferPolicy(true);
+    this.emitRobustnessSnapshot(true);
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+
+      this.protectionWindowRefCount = Math.max(0, this.protectionWindowRefCount - 1);
+      if (this.protectionWindowRefCount === 0) {
+        this.scheduleProtectionWindowExpiry();
+      }
+
+      this.applyStreamingBufferPolicy(true);
+      this.emitRobustnessSnapshot(true);
+    };
+  }
+
+  getRobustnessSnapshot(): AudioRobustnessSnapshot {
+    return this.buildRobustnessSnapshot();
+  }
+
+  onRobustnessSnapshot(callback: (snapshot: AudioRobustnessSnapshot) => void): () => void {
+    this.robustnessCallbacks.add(callback);
+    callback(this.buildRobustnessSnapshot());
+    return () => {
+      this.robustnessCallbacks.delete(callback);
+    };
   }
 
   private resolveTrackFromPath(trackPath: string): { track: Track; index: number } | null {
@@ -1175,18 +1974,26 @@ export class NativeAudioService implements IAudioService {
 
   // ===== 音频可视化 (placeholder) =====
   getFrequencyData(): Uint8Array | null {
-    return this.spectrumData ? new Uint8Array(this.spectrumData) : null;
+    return this.spectrumData;
   }
 
   // ===== 清理 =====
   destroy(): void {
     this.stop();
     this.stopFallbackTicker();
+    this.clearProtectionWindowTimer();
+    this.protectionWindowUntilMs = 0;
+    this.protectionWindowRefCount = 0;
+    this.protectionWindowReason = null;
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();
     this.loadProgressCallbacks.clear();
     this.errorCallbacks.clear();
+    this.robustnessCallbacks.clear();
+    this.visibilityListenerCleanup?.();
+    this.visibilityListenerCleanup = null;
+    this.visibilityListenerAttached = false;
     if (this.stateListener) {
       this.stateListener();
       this.stateListener = undefined;

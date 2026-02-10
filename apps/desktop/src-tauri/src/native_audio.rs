@@ -24,6 +24,10 @@ use crate::vst_shm::ShmRing;
 
 pub use crate::audio::engine::NativeAudioComponentsStatePayload;
 pub use crate::audio::engine::NativeAudioStreamingBufferSettingsPayload;
+pub use crate::audio::policy::{
+    NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
+    NativeAudioTransportMode,
+};
 
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
 
@@ -2126,6 +2130,28 @@ pub fn set_streaming_buffer_settings(
         .map_err(|_| "Audio engine is locked".to_string())?;
     engine.set_streaming_buffer_settings(start_or_seek_seconds, crossfade_seconds);
     Ok(engine.streaming_buffer_settings_payload())
+}
+
+pub fn get_engine_policy() -> Result<NativeAudioEnginePolicyPayload, String> {
+    let engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    Ok(engine.engine_policy_payload())
+}
+
+pub fn set_engine_policy(
+    app_handle: &AppHandle,
+    patch: NativeAudioEnginePolicyPatch,
+) -> Result<NativeAudioEnginePolicyPayload, String> {
+    emitter::ensure_started(app_handle);
+    if patch.is_noop() {
+        return get_engine_policy();
+    }
+
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    Ok(engine.apply_engine_policy_patch(patch))
 }
 
 pub fn select_output_backend(

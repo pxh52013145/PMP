@@ -78,6 +78,44 @@ export interface AudioState {
   currentPlaylist: Playlist | null;
 }
 
+export interface AudioProtectionWindowOptions {
+  reason?: string;
+  durationMs?: number;
+}
+
+export interface AudioRobustnessSnapshot {
+  outputBackendId: string | null;
+  outputBackends: string[];
+  schedulerProfile?: 'normal' | 'guarded' | 'critical';
+  transportMode?: 'robust' | 'transport-exact';
+  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  hqSrcStopbandDb?: number;
+  transportExactInt32Container?: boolean;
+  outputCallbackMetricsValid?: boolean;
+  underrunEvents: number;
+  underrunFrames: number;
+  underrunEventsWindow: number;
+  underrunRecoveryActive: boolean;
+  protectionWindowActive: boolean;
+  protectionRefCount: number;
+  protectionReason: string | null;
+  autoSwitchCount: number;
+  lastAutoSwitchAtMs: number | null;
+  lastAutoSwitchReason: string | null;
+  bufferedAheadSeconds: number;
+  bufferedAheadMinSeconds: number | null;
+  bufferedAheadAvgSeconds: number | null;
+  rebufferCount: number;
+  outputCallbackP99Us?: number;
+  outputWaitTimeoutCount?: number;
+  outputRenderUnderrunEvents?: number;
+  outputRenderUnderrunFrames?: number;
+  transferLowWatermarkSamples?: number;
+  transferRenderLowHitCount?: number;
+  transferDecodeLowHitCount?: number;
+  renderQueuePageLocked?: boolean;
+}
+
 /**
  * 音频服务接口
  * 定义了音乐播放器的核心功能
@@ -168,6 +206,12 @@ export interface IAudioService {
    * 监听错误
    */
   onError(callback: (error: Error) => void): () => void;
+
+  enterProtectionWindow?(options?: AudioProtectionWindowOptions): () => void;
+
+  getRobustnessSnapshot?(): AudioRobustnessSnapshot;
+
+  onRobustnessSnapshot?(callback: (snapshot: AudioRobustnessSnapshot) => void): () => void;
 
   // ===== 播放队列 =====
   /**

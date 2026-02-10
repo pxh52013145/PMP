@@ -6,6 +6,7 @@ import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
   DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED,
   MEMORY_GOVERNANCE_INTERVAL_MS,
+  MEMORY_GOVERNANCE_PLAYBACK_INTERVAL_MS,
   type MemoryGovernanceReason,
 } from '../../contracts/memoryGovernance';
 import {
@@ -20,6 +21,7 @@ import {
   MEMORY_GOVERNANCE_SERVICE_TOKEN,
   type MemoryGovernanceService,
 } from './MemoryGovernanceService';
+import { AUDIO_ENGINE_SERVICE_TOKEN } from '../audio';
 
 function readEnabledSetting(): boolean {
   try {
@@ -48,6 +50,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
     activate: ({ services, events }) => {
       const navigation = services.get(NAVIGATION_SERVICE_TOKEN);
       const lifecycle = services.get(APP_LIFECYCLE_SERVICE_TOKEN) as AppLifecycleService;
+      const audioEngine = services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN);
 
       const service: MemoryGovernanceService = new DefaultMemoryGovernanceService(navigation, events);
       const unregister = services.register(MEMORY_GOVERNANCE_SERVICE_TOKEN, service);
@@ -58,6 +61,38 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
 
       let enabled = readEnabledSetting();
       let timer: number | null = null;
+      let playbackTimer: number | null = null;
+
+      const stopPlaybackWatch = () => {
+        if (playbackTimer === null) return;
+        window.clearInterval(playbackTimer);
+        playbackTimer = null;
+      };
+
+      const startPlaybackWatch = () => {
+        if (!audioEngine) return;
+        if (playbackTimer !== null) return;
+        playbackTimer = window.setInterval(() => {
+          try {
+            const state = audioEngine.getSnapshot().audioService.getState();
+            if (state.playbackState !== 'playing') return;
+
+            const hidden = typeof document !== 'undefined' ? document.hidden : false;
+            const bufferedAhead =
+              typeof state.bufferedAhead === 'number' && Number.isFinite(state.bufferedAhead)
+                ? state.bufferedAhead
+                : 0;
+
+            // Avoid fighting playback path too often while foreground is healthy;
+            // run aggressively when hidden or rebuffer risk appears.
+            if (!hidden && bufferedAhead >= 0.8) return;
+
+            void service.runOnce('playback-active');
+          } catch {
+            // best-effort
+          }
+        }, MEMORY_GOVERNANCE_PLAYBACK_INTERVAL_MS);
+      };
 
       const start = () => {
         if (timer !== null) return;
@@ -76,15 +111,28 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
         enabled = next;
         if (enabled) {
           start();
+          startPlaybackWatch();
           void service.runOnce(reason);
         } else {
           stop();
+          stopPlaybackWatch();
         }
       };
 
-      if (enabled) start();
+      if (enabled) {
+        start();
+        startPlaybackWatch();
+      }
 
       const unregisterFlush = lifecycle.registerFlushHandler((reason) => {
+        if (reason === 'visibility-hidden') {
+          try {
+            service.runOnce('visibility-hidden').catch(() => {});
+          } catch {
+            // best-effort
+          }
+        }
+
         if (!enabled) return;
         if (
           reason === 'beforeunload' ||
@@ -105,6 +153,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
 
       return () => {
         stop();
+        stopPlaybackWatch();
         try {
           unregisterFlush();
         } catch {

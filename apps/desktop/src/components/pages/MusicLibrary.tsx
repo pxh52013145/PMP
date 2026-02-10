@@ -8,10 +8,12 @@ import {
   ViewMode,
   LibraryPath,
   AlbumSummary,
+  CoverRuntimeCachePolicy,
 } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './MusicLibrary.css';
@@ -21,19 +23,23 @@ interface MusicLibraryProps {
   onClose?: () => void;
   onAddToQueue?: (tracks: Track[]) => void;
   onPlayNow?: (tracks: Track[], startIndex?: number) => void;
-  embedded?: boolean; // 是否嵌入模式（在NavigationPage中）
+  embedded?: boolean; // 閺勵垰鎯佸畵灞藉弳濡€崇础閿涘牆婀狽avigationPage娑擃叏绱?
 }
 
-// ✅ 模块级缓存：跨组件实例共享，不会因为组件卸载而丢失
-let moduleCache: {
+// 閴?濡€虫健缁狙呯处鐎涙﹫绱扮捄銊х矋娴犺泛鐤勬笟瀣彙娴滎偓绱濇稉宥勭窗閸ョ姳璐熺紒鍕閸楁瓕娴囬懓灞兼丢婢?
+type ModuleCacheSnapshot = {
   tracks: Track[];
   artists: string[];
   albums: AlbumSummary[];
   genres: string[];
+  trackNextOffset: number;
+  hasMoreTracks: boolean;
   timestamp: number;
-} | null = null;
+};
 
-// ? 模块级滚动位置缓存：按 viewMode 记忆主滚动条位置与锚点（跨页面跳转/组件卸载保持）
+let moduleCache: ModuleCacheSnapshot | null = null;
+
+// ? 濡€虫健缁狙勭泊閸斻劋缍呯純顔剧处鐎涙﹫绱伴幐?viewMode 鐠佹澘绻傛稉缁樼泊閸斻劍娼担宥囩枂娑撳酣鏁嬮悙鐧哥礄鐠恒劑銆夐棃銏ｇ儲鏉?缂佸嫪娆㈤崡姝屾祰娣囨繃瀵旈敍?
 type MainScrollAnchor =
   | { kind: 'track'; id: string; offset: number }
   | { kind: 'album'; key: string; offset: number };
@@ -55,9 +61,85 @@ type SidebarScrollMemory = { scrollTop: number; anchor?: SidebarScrollAnchor };
 type SidebarViewScrollMemory = Partial<Record<SidebarViewMode, SidebarScrollMemory>>;
 const moduleSidebarScrollMemory: SidebarViewScrollMemory = {};
 
-const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
+const CACHE_DURATION = 5 * 60 * 1000; // 5閸掑棝鎸撶紓鎾崇摠
+const INITIAL_TRACK_LOAD_LIMIT = 180;
+const TRACK_LOAD_CHUNK_SIZE = 120;
+const TRACK_RENDER_CHUNK_SIZE = 160;
+const TRACK_SCROLL_LOAD_TRIGGER_PX = 320;
+const MODULE_CACHE_TRACK_CAP = 300;
+const TRACK_TEXT_MAX_CHARS = 200;
+const TRACK_TEXT_INTERN_POOL_MAX = 4096;
 
-// 清除模块缓存
+const trackTextInternPool = new Map<string, string>();
+
+function trimTracksForModuleCache(tracks: Track[]): Track[] {
+  if (tracks.length <= MODULE_CACHE_TRACK_CAP) return tracks;
+  return tracks.slice(0, MODULE_CACHE_TRACK_CAP);
+}
+
+function trimTrackText(value: unknown, maxChars: number = TRACK_TEXT_MAX_CHARS): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
+}
+
+function internTrackText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const existing = trackTextInternPool.get(value);
+  if (existing) return existing;
+  trackTextInternPool.set(value, value);
+  if (trackTextInternPool.size > TRACK_TEXT_INTERN_POOL_MAX) {
+    const oldestKey = trackTextInternPool.keys().next().value as string | undefined;
+    if (oldestKey) trackTextInternPool.delete(oldestKey);
+  }
+  return value;
+}
+
+function compactTrackForLibrary(track: Track): Track {
+  const safePath = typeof track.filePath === 'string' && track.filePath ? track.filePath : track.path;
+  const normalizedCoverUrl = typeof track.coverUrl === 'string' ? track.coverUrl.trim() : '';
+  const normalizedCoverLower = normalizedCoverUrl.toLowerCase();
+  const safeCoverUrl =
+    normalizedCoverLower.startsWith('blob:') ||
+    normalizedCoverLower.startsWith('http://') ||
+    normalizedCoverLower.startsWith('https://')
+      ? normalizedCoverUrl
+      : undefined;
+  const safeTitle = internTrackText(trimTrackText(track.title) || track.id) || track.id;
+  const safeArtist = internTrackText(trimTrackText(track.artist));
+  const safeAlbum = internTrackText(trimTrackText(track.album));
+  const safeGenre = internTrackText(trimTrackText(track.genre));
+  const safeCoverKey = internTrackText(trimTrackText(track.coverKey, 256));
+  const safeOriginalPath = internTrackText(trimTrackText(track.originalPath, 512));
+
+  return {
+    id: track.id,
+    title: safeTitle,
+    artist: safeArtist,
+    album: safeAlbum,
+    genre: safeGenre,
+    duration: typeof track.duration === 'number' ? track.duration : undefined,
+    year: typeof track.year === 'number' ? track.year : undefined,
+    filePath: typeof safePath === 'string' && safePath ? safePath : track.filePath,
+    path: safePath,
+    originalPath: safeOriginalPath,
+    fileHandle: safePath ? undefined : track.fileHandle,
+    coverKey: safeCoverKey,
+    coverUrl: safeCoverUrl,
+    replayGainTrackGainDb:
+      typeof track.replayGainTrackGainDb === 'number' ? track.replayGainTrackGainDb : undefined,
+    replayGainAlbumGainDb:
+      typeof track.replayGainAlbumGainDb === 'number' ? track.replayGainAlbumGainDb : undefined,
+  };
+}
+
+function compactTracksForLibrary(tracks: Track[]): Track[] {
+  if (tracks.length === 0) return tracks;
+  return tracks.map(compactTrackForLibrary);
+}
+
+// 濞撳懘娅庡Ο鈥虫健缂傛挸鐡?
 export function clearModuleCache() {
   moduleCache = null;
 }
@@ -73,6 +155,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   onPlayNow,
   embedded = false,
 }) => {
+  const audioService = useAudioService();
   const { navigateTo } = useNavigation();
   const t = useT();
   const locale = useLocale();
@@ -100,6 +183,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [libraryPaths, setLibraryPaths] = useState<LibraryPath[]>([]);
   const [showPathsManager, setShowPathsManager] = useState(false);
   const [isRefreshingPermissions, setIsRefreshingPermissions] = useState(false);
+  const [hasMoreTracks, setHasMoreTracks] = useState(false);
+  const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
+  const [renderedTrackLimit, setRenderedTrackLimit] = useState(TRACK_RENDER_CHUNK_SIZE);
+  const trackNextOffsetRef = useRef(0);
+  const trackChunkLoadingRef = useRef(false);
+  const searchTokenRef = useRef(0);
+  const libraryLoadTokenRef = useRef(0);
+  const facetLoadingRef = useRef<{ artists: boolean; albums: boolean; genres: boolean }>({
+    artists: false,
+    albums: false,
+    genres: false,
+  });
+  const currentCoverPolicyRef = useRef<CoverRuntimeCachePolicy>('default');
   const requestedAlbumCoversRef = useRef<Set<string>>(new Set());
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
@@ -114,7 +210,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const albumInfoByKeyRef = useRef<Map<string, AlbumSummary>>(new Map());
   const albumCoverGenerationRef = useRef<number>(0);
 
-  // ? 记忆滚动位置：按 viewMode 维护主滚动条 scrollTop + 锚点，避免跨页面/切换 tab 丢失位置
+  const beginAudioProtection = useCallback(
+    (reason: string, durationMs: number = 20_000): (() => void) => {
+      return audioService.enterProtectionWindow?.({ reason, durationMs }) ?? (() => {});
+    },
+    [audioService]
+  );
+
+  const bumpAudioProtection = useCallback(
+    (reason: string, durationMs: number = 20_000) => {
+      const release = beginAudioProtection(reason, durationMs);
+      release();
+    },
+    [beginAudioProtection]
+  );
+
+  // ? 鐠佹澘绻傚姘З娴ｅ秶鐤嗛敍姘瘻 viewMode 缂佸瓨濮㈡稉缁樼泊閸斻劍娼?scrollTop + 闁挎氨鍋ｉ敍宀勪缉閸忓秷娉曟い鐢告桨/閸掑洦宕?tab 娑撱垹銇戞担宥囩枂
   const isRestoringMainScrollRef = useRef(false);
   const mainScrollUserDirtyRef = useRef(false);
   const mainScrollRestoreStateRef = useRef<{ viewMode: ViewMode | null; done: boolean }>({
@@ -190,19 +301,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     },
     [computeMainScrollAnchor, getMainScrollRoot]
   );
-
-  const handleMainScroll = useCallback(() => {
-    if (isRestoringMainScrollRef.current) return;
-    const root = getMainScrollRoot();
-    if (!root) return;
-    mainScrollUserDirtyRef.current = true;
-
-    const previous = moduleScrollMemory[viewMode];
-    moduleScrollMemory[viewMode] = {
-      ...(previous ?? { scrollTop: 0 }),
-      scrollTop: root.scrollTop,
-    };
-  }, [getMainScrollRoot, viewMode]);
 
   useEffect(() => {
     moduleLastViewMode = viewMode;
@@ -303,7 +401,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [captureMainScrollMemory, getMainScrollRoot, isOpen, viewMode]);
 
-  // ? Artists/Genres sidebar: 独立滚动记忆（锚点式恢复）
+  // ? Artists/Genres sidebar: 閻欘剛鐝涘姘З鐠佹澘绻傞敍鍫ユ晪閻愮懓绱￠幁銏狀槻閿?
   const isRestoringSidebarScrollRef = useRef(false);
   const sidebarScrollUserDirtyRef = useRef(false);
   const sidebarScrollRestoreStateRef = useRef<{ viewMode: SidebarViewMode | null; done: boolean }>({
@@ -456,20 +554,191 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [captureSidebarScrollMemory, getSidebarScrollRoot, isOpen, viewMode]);
 
-  // 排序状态
+  // 閹烘帒绨悩鑸碘偓?
   const [sortBy, setSortBy] = useState<
     'title' | 'artist' | 'album' | 'duration' | 'year' | 'default'
   >('default');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // 右键菜单状态
+  // 閸欐娊鏁懣婊冨礋閻樿埖鈧?
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
 
-  // 切换视图模式时清除筛选状态
+  const updateCoverRuntimePolicy = useCallback((policy: CoverRuntimeCachePolicy) => {
+    if (currentCoverPolicyRef.current === policy) return;
+    currentCoverPolicyRef.current = policy;
+    musicLibraryService.applyCoverRuntimeCachePolicy(policy);
+  }, []);
+
+  const loadFacetCollections = useCallback(
+    async (mode: ViewMode, trackSource?: Track[]) => {
+      if (mode === 'artists') {
+        if (artists.length > 0 || facetLoadingRef.current.artists) return;
+        facetLoadingRef.current.artists = true;
+        try {
+          if (trackSource && trackSource.length > 0) {
+            const uniqueArtists = Array.from(
+              new Set(trackSource.map((track) => track.artist).filter(Boolean))
+            ).sort();
+            setArtists(uniqueArtists as string[]);
+            return;
+          }
+          setArtists(await musicLibraryService.getAllArtists());
+        } catch (error) {
+          console.warn('[MusicLibrary] Failed to load artists facet:', error);
+        } finally {
+          facetLoadingRef.current.artists = false;
+        }
+        return;
+      }
+
+      if (mode === 'genres') {
+        if (genres.length > 0 || facetLoadingRef.current.genres) return;
+        facetLoadingRef.current.genres = true;
+        try {
+          if (trackSource && trackSource.length > 0) {
+            const uniqueGenres = Array.from(
+              new Set(trackSource.map((track) => track.genre).filter(Boolean))
+            ).sort();
+            setGenres(uniqueGenres as string[]);
+            return;
+          }
+          setGenres(await musicLibraryService.getAllGenres());
+        } catch (error) {
+          console.warn('[MusicLibrary] Failed to load genres facet:', error);
+        } finally {
+          facetLoadingRef.current.genres = false;
+        }
+        return;
+      }
+
+      if (mode === 'albums') {
+        if (albums.length > 0 || facetLoadingRef.current.albums) return;
+        facetLoadingRef.current.albums = true;
+        try {
+          if (trackSource && trackSource.length > 0) {
+            const albumMap = new Map<string, AlbumSummary>();
+            for (const track of trackSource) {
+              if (!track.album) continue;
+              const artist = track.artist || t('common.unknown.artist');
+              const key = albumKey(track.album, artist);
+              if (albumMap.has(key)) continue;
+
+              albumMap.set(key, {
+                album: track.album,
+                artist,
+                cover:
+                  typeof track.coverUrl === 'string' &&
+                  (track.coverUrl.startsWith('blob:') ||
+                    track.coverUrl.startsWith('data:') ||
+                    track.coverUrl.startsWith('http://') ||
+                    track.coverUrl.startsWith('https://'))
+                    ? track.coverUrl
+                    : undefined,
+                coverTrackPath: track.filePath || track.path,
+                coverTrackId: track.id,
+              });
+            }
+            setAlbums(Array.from(albumMap.values()));
+            return;
+          }
+          setAlbums(await musicLibraryService.getAllAlbums({ includeStoredCover: false }));
+        } catch (error) {
+          console.warn('[MusicLibrary] Failed to load albums facet:', error);
+        } finally {
+          facetLoadingRef.current.albums = false;
+        }
+      }
+    },
+    [albums.length, artists.length, genres.length, t]
+  );
+
+  const scheduleTrackChunkLoad = useCallback(async (): Promise<boolean> => {
+    if (trackChunkLoadingRef.current) return false;
+    if (!hasMoreTracks) return false;
+    const offset = trackNextOffsetRef.current;
+    if (!Number.isFinite(offset) || offset < 0) return false;
+
+    trackChunkLoadingRef.current = true;
+    setIsTrackChunkLoading(true);
+    const releaseProtection = beginAudioProtection('music-library-track-chunk', 18_000);
+
+    try {
+      const nextChunk = await musicLibraryService.getAllTracks(TRACK_LOAD_CHUNK_SIZE, offset);
+      if (nextChunk.length === 0) {
+        setHasMoreTracks(false);
+        return false;
+      }
+
+      const compactChunk = compactTracksForLibrary(nextChunk);
+      const chunkHasMore = nextChunk.length >= TRACK_LOAD_CHUNK_SIZE;
+
+      trackNextOffsetRef.current = offset + nextChunk.length;
+      setTracks((prev) => {
+        const merged = [...prev, ...compactChunk];
+        if (moduleCache) {
+          moduleCache = {
+            ...moduleCache,
+            tracks: trimTracksForModuleCache(merged),
+            trackNextOffset: trackNextOffsetRef.current,
+            hasMoreTracks: chunkHasMore,
+            timestamp: Date.now(),
+          };
+        }
+        return merged;
+      });
+
+      if (!chunkHasMore) {
+        setHasMoreTracks(false);
+      }
+
+      return true;
+    } catch (error) {
+      console.warn('[MusicLibrary] Failed to load next track chunk:', error);
+      setHasMoreTracks(false);
+      return false;
+    } finally {
+      trackChunkLoadingRef.current = false;
+      setIsTrackChunkLoading(false);
+      releaseProtection();
+    }
+  }, [beginAudioProtection, hasMoreTracks]);
+
+  const maybeLoadTrackChunkFromScroll = useCallback(() => {
+    if (!hasMoreTracks) return;
+    const root = getMainScrollRoot();
+    if (!root) return;
+    const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
+    if (remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
+      void scheduleTrackChunkLoad();
+    }
+  }, [getMainScrollRoot, hasMoreTracks, scheduleTrackChunkLoad]);
+
+  const handleMainScroll = useCallback(() => {
+    if (isRestoringMainScrollRef.current) return;
+    const root = getMainScrollRoot();
+    if (!root) return;
+    mainScrollUserDirtyRef.current = true;
+
+    const previous = moduleScrollMemory[viewMode];
+    moduleScrollMemory[viewMode] = {
+      ...(previous ?? { scrollTop: 0 }),
+      scrollTop: root.scrollTop,
+    };
+
+    if (viewMode !== 'albums') {
+      const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
+      if (remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
+        setRenderedTrackLimit((prev) => prev + TRACK_RENDER_CHUNK_SIZE);
+      }
+      maybeLoadTrackChunkFromScroll();
+    }
+  }, [getMainScrollRoot, maybeLoadTrackChunkFromScroll, viewMode]);
+
+  // 鍒囨崲瑙嗗浘妯″紡鏃舵竻闄ょ瓫閫夌姸鎬?
   const handleViewModeChange = (
     newMode: ViewMode,
     options?: { artist?: string; genre?: string }
@@ -478,79 +747,102 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     captureSidebarScrollMemory(viewMode);
     moduleLastViewMode = newMode;
     setViewMode(newMode);
-    // 清除所有筛选条件，让每个视图独立
+    // 濞撳懘娅庨幍鈧張澶岀摣闁娼禒璁圭礉鐠佲晜鐦℃稉顏囶潒閸ュ墽瀚粩?
     setSelectedArtist(options?.artist || null);
     setSelectedAlbum(null);
     setSelectedGenre(options?.genre || null);
   };
 
-  // 加载库数据
-  const loadLibraryData = async () => {
+  // 閸旂姾娴囨惔鎾存殶閹?
+  const loadLibraryData = useCallback(async () => {
+    const token = ++libraryLoadTokenRef.current;
     console.log('Loading library data...');
+    const releaseProtection = beginAudioProtection('music-library-load', 25_000);
 
-    // ✅ 立即显示模块缓存数据（如果有效）
+    // 閴?缁斿宓嗛弰鍓с仛濡€虫健缂傛挸鐡ㄩ弫鐗堝祦閿涘牆顩ч弸婊勬箒閺佸牞绱?
     const now = Date.now();
     if (moduleCache && now - moduleCache.timestamp < CACHE_DURATION) {
-      console.log('✅ Using module cache for instant display');
+      console.log('Using module cache for instant display');
       setTracks(moduleCache.tracks);
       setArtists(moduleCache.artists);
       requestedAlbumCoversRef.current.clear();
       setAlbums(moduleCache.albums);
       setGenres(moduleCache.genres);
+      trackNextOffsetRef.current = moduleCache.trackNextOffset;
+      setHasMoreTracks(moduleCache.hasMoreTracks);
+      setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
 
-      // 在后台异步更新统计信息
+      if (viewMode === 'albums' || viewMode === 'artists' || viewMode === 'genres') {
+        void loadFacetCollections(viewMode, moduleCache.tracks);
+      }
+
+      // 閸︺劌鎮楅崣鏉跨磽濮濄儲娲块弬鎵埠鐠佲€蹭繆閹?
       musicLibraryService.getLibraryStats().then((stats) => {
+        if (token !== libraryLoadTokenRef.current) return;
         setLibraryStats(stats);
       });
-      return; // ✅ 直接返回，不重新加载
+      return; // 閴?閻╁瓨甯存潻鏂挎礀閿涘奔绗夐柌宥嗘煀閸旂姾娴?
     }
 
-    // 没有缓存或缓存过期，从 IndexedDB 加载
+    // 濞屸剝婀佺紓鎾崇摠閹存牜绱︾€涙绻冮張鐕傜礉娴?IndexedDB 閸旂姾娴?
     console.log('Loading from IndexedDB...');
 
     try {
-      // ✅ 优化：直接加载数据，限制为 1000 首（避免重复读取）
-      const [allTracks, allArtists, allAlbums, allGenres] = await Promise.all([
-        musicLibraryService.getAllTracks(1000), // 最多加载 1000 首
-        musicLibraryService.getAllArtists(),
-        musicLibraryService.getAllAlbums(),
-        musicLibraryService.getAllGenres(),
-      ]);
+      // 閴?娴兼ê瀵查敍姘辨纯閹恒儱濮炴潪鑺ユ殶閹诡噯绱濋梽鎰煑娑?1000 妫ｆ牭绱欓柆鍨帳闁插秴顦茬拠璇插絿閿?
+      const initialTracks = await musicLibraryService.getAllTracks(INITIAL_TRACK_LOAD_LIMIT);
+
+      if (token !== libraryLoadTokenRef.current) return;
+
+      const compactInitialTracks = compactTracksForLibrary(initialTracks);
+      const hasMore = compactInitialTracks.length >= INITIAL_TRACK_LOAD_LIMIT;
+      trackNextOffsetRef.current = initialTracks.length;
+      setHasMoreTracks(hasMore);
+      setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
 
       console.log('Library data loaded:', {
-        tracks: allTracks.length,
-        artists: allArtists.length,
-        albums: allAlbums.length,
-        genres: allGenres.length,
+        tracks: compactInitialTracks.length,
       });
 
-      // 更新显示数据和模块缓存
+      // 閺囧瓨鏌婇弰鍓с仛閺佺増宓侀崪灞灸侀崸妤冪处鐎?
       moduleCache = {
-        tracks: allTracks,
-        artists: allArtists,
-        albums: allAlbums,
-        genres: allGenres,
+        tracks: trimTracksForModuleCache(compactInitialTracks),
+        artists: [],
+        albums: [],
+        genres: [],
+        trackNextOffset: trackNextOffsetRef.current,
+        hasMoreTracks: hasMore,
         timestamp: Date.now(),
       };
 
-      setTracks(allTracks);
-      setArtists(allArtists);
+      setTracks(compactInitialTracks);
+      setArtists([]);
       requestedAlbumCoversRef.current.clear();
-      setAlbums(allAlbums);
-      setGenres(allGenres);
+      setAlbums([]);
+      setGenres([]);
+      facetLoadingRef.current = { artists: false, albums: false, genres: false };
 
-      // 在后台异步计算统计信息（不阻塞UI）
+      if (viewMode === 'albums' || viewMode === 'artists' || viewMode === 'genres') {
+        void loadFacetCollections(viewMode, compactInitialTracks);
+      }
+
+      // 閸︺劌鎮楅崣鏉跨磽濮濄儴顓哥粻妤冪埠鐠佲€蹭繆閹垽绱欐稉宥夋▎婵夋拷I閿?
       musicLibraryService.getLibraryStats().then((stats) => {
+        if (token !== libraryLoadTokenRef.current) return;
         setLibraryStats(stats);
         console.log('Library stats loaded:', stats);
       });
     } catch (error) {
       console.error('Failed to load library data:', error);
+      setHasMoreTracks(false);
+    } finally {
+      releaseProtection();
     }
-  };
+  }, [beginAudioProtection, loadFacetCollections, updateCoverRuntimePolicy, viewMode]);
 
-  // 加载库路径
-  const loadLibraryPaths = async () => {
+  // 閸旂姾娴囨惔鎾圭熅瀵?
+  const loadLibraryPaths = useCallback(async () => {
     try {
       const paths = await musicLibraryService.getLibraryPaths();
       setLibraryPaths(paths);
@@ -559,37 +851,55 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       console.error('Failed to load library paths:', error);
       return [];
     }
-  };
+  }, []);
+
+  const resetLibraryDataFromStorage = useCallback(async () => {
+    clearModuleCache();
+    await loadLibraryData();
+  }, [loadLibraryData]);
 
   useEffect(() => {
-    if (isOpen) {
-      loadLibraryData();
-      loadLibraryPaths();
-    }
-    // ✅ 不清空数据，让它保留在状态中以便快速切换
-  }, [isOpen]);
+    if (!isOpen) return;
+    updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
+    void loadLibraryData();
+  }, [isOpen, loadLibraryData, updateCoverRuntimePolicy, viewMode]);
 
-  // 订阅扫描进度
+  useEffect(() => {
+    if (!isOpen) return;
+    void loadLibraryPaths();
+  }, [isOpen, loadLibraryPaths]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      updateCoverRuntimePolicy('hidden');
+      return;
+    }
+    return () => {
+      updateCoverRuntimePolicy('hidden');
+    };
+  }, [isOpen, updateCoverRuntimePolicy]);
+
+  // 鐠併垽妲勯幍顐ｅ伎鏉╂稑瀹?
   useEffect(() => {
     const unsubscribe = musicLibraryService.onScanProgress((progress) => {
       console.log('Scan progress:', progress);
       setScanProgress(progress);
 
-      // 扫描完成后自动刷新数据和路径列表
+      // 閹殿偅寮跨€瑰本鍨氶崥搴ゅ殰閸斻劌鍩涢弬鐗堟殶閹诡喖鎷扮捄顖氱窞閸掓銆?
       if (!progress.isScanning && progress.current > 0) {
         console.log('Scan completed, refreshing library...');
-        clearModuleCache(); // ✅ 清除缓存
-        // 延迟一点确保数据写入完成
+        clearModuleCache(); // 閴?濞撳懘娅庣紓鎾崇摠
+        // 瀵ゆ儼绻滄稉鈧悙鍦€樻穱婵囨殶閹诡喖鍟撻崗銉ョ暚閹?
         setTimeout(() => {
           Promise.all([
             loadLibraryData(),
-            loadLibraryPaths(), // 同时刷新路径列表
+            loadLibraryPaths(), // 閸氬本妞傞崚閿嬫煀鐠侯垰绶為崚妤勩€?
           ]);
-        }, 300); // 减少延迟到 300ms
+        }, 300); // 閸戝繐鐨鎯扮箿閸?300ms
       }
     });
     return unsubscribe;
-  }, []);
+  }, [loadLibraryData, loadLibraryPaths]);
 
   useEffect(() => {
     const map = new Map<string, AlbumSummary>();
@@ -598,6 +908,28 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
     albumInfoByKeyRef.current = map;
   }, [albums]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (viewMode === 'albums') {
+      updateCoverRuntimePolicy('watch');
+      return;
+    }
+
+    if (searchQuery.trim()) {
+      updateCoverRuntimePolicy('high');
+      return;
+    }
+
+    updateCoverRuntimePolicy(hasMoreTracks ? 'watch' : 'high');
+  }, [hasMoreTracks, isOpen, searchQuery, updateCoverRuntimePolicy, viewMode]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (searchQuery.trim()) return;
+    if (viewMode !== 'albums' && viewMode !== 'artists' && viewMode !== 'genres') return;
+    void loadFacetCollections(viewMode, tracks);
+  }, [isOpen, loadFacetCollections, searchQuery, tracks, viewMode]);
 
   const getAlbumCardRef = useCallback((key: string) => {
     const existing = albumCardRefCallbacksRef.current.get(key);
@@ -621,7 +953,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return cb;
   }, []);
 
-  // Desktop/Tauri: 专辑封面懒加载（IntersectionObserver + 并发队列）
+  // Desktop/Tauri: 娑撴捁绶亸渚€娼伴幊鎺戝鏉炴枻绱橧ntersectionObserver + 楠炶泛褰傞梼鐔峰灙閿?
   useEffect(() => {
     if (!isOpen) return;
     if (!isTauriRuntime()) return;
@@ -636,7 +968,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     albumCoverQueueRef.current = [];
     albumCoverInFlightRef.current = 0;
 
-    const maxConcurrency = 4;
+    const maxConcurrency = searchQuery.trim() ? 2 : hasMoreTracks ? 2 : 3;
+    const rootMargin = searchQuery.trim() ? '220px 0px' : hasMoreTracks ? '280px 0px' : '360px 0px';
 
     function scheduleDrain() {
       if (disposed) return;
@@ -710,7 +1043,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       },
       {
         root,
-        rootMargin: '600px 0px',
+        rootMargin,
         threshold: 0.01,
       }
     );
@@ -731,19 +1064,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         albumCoverObserverRef.current = null;
       }
     };
-  }, [isOpen, viewMode]);
+  }, [hasMoreTracks, isOpen, searchQuery, viewMode]);
 
-  // 处理文件夹扫描
+  // 婢跺嫮鎮婇弬鍥︽婢惰澹傞幓?
   const handleScanFolder = async () => {
+    const releaseProtection = beginAudioProtection('music-library-scan', 90_000);
     try {
       console.log('Starting folder scan...');
       await musicLibraryService.scanFolder();
       console.log('Folder scan completed, refreshing library data...');
-      // 扫描完成后清除缓存并刷新数据和路径列表
-      clearModuleCache(); // ✅ 清除缓存，强制重新加载
+      // 閹殿偅寮跨€瑰本鍨氶崥搴㈢闂勩倗绱︾€涙ê鑻熼崚閿嬫煀閺佺増宓侀崪宀冪熅瀵板嫬鍨悰?
+      clearModuleCache(); // 閴?濞撳懘娅庣紓鎾崇摠閿涘苯宸遍崚鍫曞櫢閺傛澘濮炴潪?
       await Promise.all([
         loadLibraryData(),
-        loadLibraryPaths(), // 刷新路径列表
+        loadLibraryPaths(), // 閸掗攱鏌婄捄顖氱窞閸掓銆?
       ]);
       console.log('Library data and paths refreshed');
       setErrorMessage(null);
@@ -754,6 +1088,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           message: error instanceof Error ? error.message : String(error),
         })
       );
+    } finally {
+      releaseProtection();
     }
   };
 
@@ -765,16 +1101,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
   };
 
-  // 清空库
+  // 濞撳懐鈹栨惔?
   const handleClearLibrary = async () => {
     await musicLibraryService.clearLibrary();
-    clearModuleCache(); // ✅ 清除缓存
+    clearModuleCache(); // 閴?濞撳懘娅庣紓鎾崇摠
     await loadLibraryData();
     setShowClearConfirm(false);
   };
 
-  // ✅ 刷新所有文件夹的权限
+  // 閴?閸掗攱鏌婇幍鈧張澶嬫瀮娴犺泛銇欓惃鍕綀闂?
   const handleRefreshPermissions = async () => {
+    const releaseProtection = beginAudioProtection('music-library-refresh-permissions', 45_000);
     setIsRefreshingPermissions(true);
     try {
       console.log('Refreshing all folder permissions...');
@@ -783,7 +1120,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       if (result.granted === result.total) {
         setErrorMessage(null);
-        console.log(`✅ All ${result.granted} folder permissions granted`);
+        console.log(`閴?All ${result.granted} folder permissions granted`);
       } else if (result.granted > 0) {
         setErrorMessage(
           t('pages.music-library.refreshPermissions.partial', {
@@ -803,79 +1140,107 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       );
     } finally {
       setIsRefreshingPermissions(false);
+      releaseProtection();
     }
   };
 
-  // 搜索处理
-  const handleSearch = async (query: string) => {
+  // 閹兼粎鍌ㄦ径鍕倞
+  const handleSearch = useCallback(async (query: string) => {
+    bumpAudioProtection('music-library-search', 20_000);
+    const token = ++searchTokenRef.current;
     setSearchQuery(query);
+    setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+
     if (query.trim()) {
-      const results = await musicLibraryService.searchTracks(query);
-      setTracks(results);
+      const results = await musicLibraryService.searchTracks(query, 600);
+      if (token !== searchTokenRef.current) return;
 
-      // 从搜索结果中提取 albums、artists 和 genres
-      const uniqueArtists = Array.from(new Set(results.map((t) => t.artist).filter(Boolean)));
-      const uniqueGenres = Array.from(new Set(results.map((t) => t.genre).filter(Boolean)));
+      const compactResults = compactTracksForLibrary(results);
+      setTracks(compactResults);
+      trackNextOffsetRef.current = results.length;
+      setHasMoreTracks(false);
+      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
 
-      // 提取专辑信息（专辑名 + 艺术家 + 封面）
+      const uniqueArtists = Array.from(
+        new Set(compactResults.map((track) => track.artist).filter(Boolean))
+      );
+      const uniqueGenres = Array.from(
+        new Set(compactResults.map((track) => track.genre).filter(Boolean))
+      );
+
       const albumMap = new Map<string, AlbumSummary>();
-      results.forEach((track) => {
-        if (track.album) {
-          const key = `${track.album}-${track.artist}`;
-          if (!albumMap.has(key)) {
-              albumMap.set(key, {
-                album: track.album,
-              artist: track.artist || t('common.unknown.artist'),
-                cover:
-                  typeof track.coverUrl === 'string' &&
-                  (track.coverUrl.toLowerCase().startsWith('data:') ||
-                  track.coverUrl.toLowerCase().startsWith('blob:') ||
-                  track.coverUrl.toLowerCase().startsWith('http:') ||
-                  track.coverUrl.toLowerCase().startsWith('https:'))
-                  ? track.coverUrl
-                  : undefined,
-              coverTrackPath: track.filePath || track.path,
-              coverTrackId: track.id,
-            });
-          }
-        }
+      compactResults.forEach((track) => {
+        if (!track.album) return;
+
+        const key = `${track.album}-${track.artist}`;
+        if (albumMap.has(key)) return;
+
+        albumMap.set(key, {
+          album: track.album,
+          artist: track.artist || t('common.unknown.artist'),
+          cover:
+            typeof track.coverUrl === 'string' &&
+            (track.coverUrl.toLowerCase().startsWith('data:') ||
+              track.coverUrl.toLowerCase().startsWith('blob:') ||
+              track.coverUrl.toLowerCase().startsWith('http:') ||
+              track.coverUrl.toLowerCase().startsWith('https:'))
+              ? track.coverUrl
+              : undefined,
+          coverTrackPath: track.filePath || track.path,
+          coverTrackId: track.id,
+        });
       });
+
       const uniqueAlbums = Array.from(albumMap.values());
 
       setArtists(uniqueArtists as string[]);
       setGenres(uniqueGenres as string[]);
       requestedAlbumCoversRef.current.clear();
       setAlbums(uniqueAlbums);
+      moduleCache = {
+        tracks: trimTracksForModuleCache(compactResults),
+        artists: uniqueArtists as string[],
+        albums: uniqueAlbums,
+        genres: uniqueGenres as string[],
+        trackNextOffset: trackNextOffsetRef.current,
+        hasMoreTracks: false,
+        timestamp: Date.now(),
+      };
     } else {
-      // 清空搜索时恢复原始数据
-      const [allTracks, allArtists, allAlbums, allGenres] = await Promise.all([
-        musicLibraryService.getAllTracks(),
-        musicLibraryService.getAllArtists(),
-        musicLibraryService.getAllAlbums(),
-        musicLibraryService.getAllGenres(),
-      ]);
-
-      setTracks(allTracks);
-      setArtists(allArtists);
-      requestedAlbumCoversRef.current.clear();
-      setAlbums(allAlbums);
-      setGenres(allGenres);
+      await resetLibraryDataFromStorage();
+      if (token !== searchTokenRef.current) return;
+      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
     }
-  };
 
-  // 排序处理函数
+    maybeLoadTrackChunkFromScroll();
+  }, [
+    bumpAudioProtection,
+    maybeLoadTrackChunkFromScroll,
+    resetLibraryDataFromStorage,
+    updateCoverRuntimePolicy,
+    viewMode,
+    t,
+  ]);
+  useEffect(() => {
+    if (!isOpen) return;
+    if (viewMode === 'albums') return;
+    if (searchQuery.trim()) return;
+    maybeLoadTrackChunkFromScroll();
+  }, [isOpen, maybeLoadTrackChunkFromScroll, searchQuery, viewMode, tracks.length]);
+
+  // 閹烘帒绨径鍕倞閸戣姤鏆?
   const handleSort = (field: typeof sortBy) => {
     if (sortBy === field) {
-      // 如果已经是当前排序字段，切换排序方向
+      // 婵″倹鐏夊鑼病閺勵垰缍嬮崜宥嗗笓鎼村繐鐡у▓纰夌礉閸掑洦宕查幒鎺戠碍閺傜懓鎮?
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
-      // 切换到新的排序字段，默认升序
+      // 閸掑洦宕查崚鐗堟煀閻ㄥ嫭甯撴惔蹇撶摟濞堢绱濇妯款吇閸楀洤绨?
       setSortBy(field);
       setSortOrder('asc');
     }
   };
 
-  // 应用排序到数组
+  // 鎼存梻鏁ら幒鎺戠碍閸掔増鏆熺紒?
   const applySorting = useCallback(<T extends Track | { album: string; artist: string }>(items: T[]): T[] => {
     if (sortBy === 'default') return items;
 
@@ -884,7 +1249,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       let compareA: string | number = '';
       let compareB: string | number = '';
 
-      // 根据排序字段获取比较值
+      // 閺嶈宓侀幒鎺戠碍鐎涙顔岄懢宄板絿濮ｆ棁绶濋崐?
       if ('title' in a && sortBy === 'title') {
         compareA = (a as Track).title?.toLowerCase() || '';
         compareB = (b as Track).title?.toLowerCase() || '';
@@ -904,7 +1269,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         return 0;
       }
 
-      // 比较
+      // 濮ｆ棁绶?
       let result = 0;
       if (typeof compareA === 'string' && typeof compareB === 'string') {
         result = compareA.localeCompare(compareB);
@@ -912,14 +1277,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         result = Number(compareA) - Number(compareB);
       }
 
-      // 应用排序方向
+      // 鎼存梻鏁ら幒鎺戠碍閺傜懓鎮?
       return sortOrder === 'asc' ? result : -result;
     });
 
     return sorted;
   }, [sortBy, sortOrder]);
 
-  // 获取过滤和排序后的轨道
+  // 閼惧嘲褰囨潻鍥ㄦ姢閸滃本甯撴惔蹇撴倵閻ㄥ嫯寤洪柆?
   const filteredTracks = useMemo(() => {
     let filtered = tracks;
 
@@ -936,18 +1301,39 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return applySorting(filtered);
   }, [applySorting, selectedAlbum, selectedArtist, selectedGenre, tracks]);
 
-  // 获取排序后的专辑列表
+  // 閼惧嘲褰囬幒鎺戠碍閸氬海娈戞稉鎾圭帆閸掓銆?
   const sortedAlbums = useMemo(() => applySorting(albums), [albums, applySorting]);
 
-  // 单击专辑 - 导航到专辑详情页
+  const filteredTracksTotal = filteredTracks.length;
+
+  useEffect(() => {
+    if (viewMode === 'albums') {
+      setRenderedTrackLimit(filteredTracksTotal);
+      return;
+    }
+
+    setRenderedTrackLimit((prev) => {
+      if (!Number.isFinite(prev) || prev <= 0) {
+        return Math.min(filteredTracksTotal, TRACK_RENDER_CHUNK_SIZE);
+      }
+      return Math.min(filteredTracksTotal, prev);
+    });
+  }, [filteredTracksTotal, viewMode]);
+
+  const renderedTracks = useMemo(() => {
+    if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
+    return filteredTracks.slice(0, renderedTrackLimit);
+  }, [filteredTracks, renderedTrackLimit]);
+
+  // 閸楁洖鍤稉鎾圭帆 - 鐎佃壈鍩呴崚棰佺瑩鏉堟垼顕涢幆鍛淬€?
   const handleAlbumClick = (albumName: string, artist: string) => {
     if (embedded) {
-      // 在embedded模式下，导航到专辑页面
+      // 閸︹暋mbedded濡€崇础娑撳绱濈€佃壈鍩呴崚棰佺瑩鏉堟垿銆夐棃?
       navigateTo('album', { albumName, artist });
     }
   };
 
-  // 双击专辑 - 播放专辑
+  // 閸欏苯鍤稉鎾圭帆 - 閹绢厽鏂佹稉鎾圭帆
   const handlePlayAlbum = async (album: string) => {
     if (!onPlayNow) {
       console.log('Play album:', album, '(embedded mode - no playback)');
@@ -959,7 +1345,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
   };
 
-  // 播放艺术家
+  // 閹绢厽鏂侀懝鐑樻钩鐎?
   const handlePlayArtist = async (artist: string) => {
     if (!onPlayNow) {
       console.log('Play artist:', artist, '(embedded mode - no playback)');
@@ -971,49 +1357,52 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
   };
 
-  // 双击歌曲：添加所有过滤后的歌曲到队列，从选中的歌曲开始播放
+  // 閸欏苯鍤灞炬锤閿涙碍鍧婇崝鐘冲閺堝绻冨銈呮倵閻ㄥ嫭鐡曢弴鎻掑煂闂冪喎鍨敍灞肩矤闁鑵戦惃鍕摃閺囨彃绱戞慨瀣尡閺€?
   const handleTrackDoubleClick = (track: Track, index: number) => {
     if (!onPlayNow) {
       console.log('Play track:', track.title, '(embedded mode - no playback)');
       return;
     }
-    console.log(`🎵 Playing from track ${index + 1}/${filteredTracks.length}`);
-    onPlayNow(filteredTracks, index);
+    const originalIndex = filteredTracks.findIndex((candidate) => candidate.id === track.id);
+    const startIndex = originalIndex >= 0 ? originalIndex : index;
+    console.log(`[MusicLibrary] Playing from track ${startIndex + 1}/${filteredTracks.length}`);
+    onPlayNow(filteredTracks, startIndex);
   };
 
-  // 只播放单首歌曲
+  // 閸欘亝鎸遍弨鎯у礋妫ｆ牗鐡曢弴?
   const handlePlaySingleTrack = (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onPlayNow) {
       console.log('Play single track:', track.title, '(embedded mode - no playback)');
       return;
     }
-    console.log('🎵 Playing single track:', track.title);
+    console.log('[MusicLibrary] Playing single track:', track.title);
     onPlayNow([track]);
   };
 
-  // 只添加单首歌曲到队列
+  // 閸欘亝鍧婇崝鐘插礋妫ｆ牗鐡曢弴鎻掑煂闂冪喎鍨?
   const handleAddSingleTrack = (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onAddToQueue) {
       console.log('Add track:', track.title, '(embedded mode - no queue)');
       return;
     }
-    console.log('➕ Adding single track:', track.title);
+    console.log('閴?Adding single track:', track.title);
     onAddToQueue([track]);
   };
 
-  // 处理歌曲右键菜单
+  // 婢跺嫮鎮婂灞炬锤閸欐娊鏁懣婊冨礋
   const handleTrackContextMenu = (track: Track, index: number, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
     const playTracks = filteredTracks;
+    const playStartIndex = playTracks.findIndex((candidate) => candidate.id === track.id);
 
     const menuItems: ContextMenuItem[] = [
       {
         label: t('pages.music-library.contextMenu.play'),
-        icon: '▶',
+        icon: '>',
         onClick: () => handlePlaySingleTrack(track, e),
       },
       {
@@ -1023,13 +1412,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       },
       {
         label: t('pages.music-library.contextMenu.playAllFromHere'),
-        icon: '🎵',
-        onClick: () => onPlayNow?.(playTracks, index),
+        icon: '>>',
+        onClick: () => onPlayNow?.(playTracks, playStartIndex >= 0 ? playStartIndex : index),
       },
       { divider: true } as ContextMenuItem,
       {
         label: t('pages.music-library.contextMenu.viewAlbum'),
-        icon: '💿',
+        icon: 'A',
         onClick: () => {
           if (track.album && embedded) {
             handleAlbumClick(track.album, track.artist || '');
@@ -1039,7 +1428,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       },
       {
         label: t('pages.music-library.contextMenu.viewArtist'),
-        icon: '👤',
+        icon: 'R',
         onClick: () => {
           if (track.artist) {
             handleViewModeChange('artists', { artist: track.artist });
@@ -1056,7 +1445,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
   };
 
-  // 处理专辑右键菜单
+  // 婢跺嫮鎮婃稉鎾圭帆閸欐娊鏁懣婊冨礋
   const handleAlbumContextMenu = (album: string, artist: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1064,13 +1453,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     const menuItems: ContextMenuItem[] = [
       {
         label: t('pages.music-library.contextMenu.viewAlbum'),
-        icon: '💿',
+        icon: 'A',
         onClick: () => handleAlbumClick(album, artist),
         disabled: !embedded,
       },
       {
         label: t('pages.music-library.contextMenu.playAlbum'),
-        icon: '▶',
+        icon: '>',
         onClick: () => handlePlayAlbum(album),
       },
       {
@@ -1084,7 +1473,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       { divider: true } as ContextMenuItem,
       {
         label: t('pages.music-library.contextMenu.viewArtist'),
-        icon: '👤',
+        icon: 'R',
         onClick: () => {
           handleViewModeChange('artists', { artist: artist });
         },
@@ -1098,7 +1487,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
   };
 
-  // 格式化文件大小
+  // 閺嶇厧绱￠崠鏍ㄦ瀮娴犺泛銇囩亸?
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -1106,7 +1495,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
   };
 
-  // 格式化时长
+  // 閺嶇厧绱￠崠鏍ㄦ闂€?
   const formatTotalDuration = (seconds: number): string => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -1116,7 +1505,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return t('pages.music-library.duration.minutes', { minutes });
   };
 
-  // 格式化轨道时长
+  // 閺嶇厧绱￠崠鏍缓闁挻妞傞梹?
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -1129,10 +1518,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     <div className={`music-library ${embedded ? 'music-library-embedded' : ''}`}>
       {!embedded && (
         <div className="music-library-header">
-          <h2 className="music-library-title">♪ {t('pages.music-library.title')}</h2>
+          <h2 className="music-library-title">{t('pages.music-library.title')}</h2>
           {onClose && (
             <button className="music-library-close" onClick={onClose}>
-              ✕
+              X
             </button>
           )}
         </div>
@@ -1145,14 +1534,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             onClick={() => setShowPathsManager(true)}
             title={t('pages.music-library.paths.manageTitle')}
           >
-            <span>📁 {t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
+            <span>{t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
           </button>
           <button
             className="music-library-btn"
             onClick={() => setShowClearConfirm(true)}
             disabled={libraryStats.totalTracks === 0}
           >
-            × {t('common.action.clear')}
+            {t('common.action.clear')}
           </button>
         </div>
 
@@ -1175,7 +1564,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             onChange={(e) => handleSort(e.target.value as typeof sortBy)}
           >
             <option value="default">{t('pages.music-library.sort.option.default')}</option>
-            {/* Albums 视图只显示专辑和艺术家排序 */}
+            {/* Albums 鐟欏棗娴橀崣顏呮▔缁€杞扮瑩鏉堟垵鎷伴懝鐑樻钩鐎硅埖甯撴惔?*/}
             {viewMode !== 'albums' && <option value="title">{t('pages.music-library.sort.option.title')}</option>}
             <option value="artist">{t('pages.music-library.sort.option.artist')}</option>
             <option value="album">{t('pages.music-library.sort.option.album')}</option>
@@ -1209,7 +1598,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             }
             style={{ opacity: sortBy === 'default' ? 0.4 : 1 }}
           >
-            🎵
+            ▶
           </span>
         </div>
 
@@ -1306,7 +1695,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           <div className="music-library-main" ref={mainScrollRef} onScroll={handleMainScroll}>
           {libraryStats.totalTracks === 0 ? (
             <div className="music-library-empty">
-              <div className="music-library-empty-icon">⊞</div>
+              <div className="music-library-empty-icon">♪</div>
               <div className="music-library-empty-text">{t('pages.music-library.empty.title')}</div>
               <button className="music-library-btn" onClick={handleScanFolder}>
                 {t('pages.music-library.empty.scanButton')}
@@ -1345,7 +1734,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               }}
                             />
                           ) : (
-                            '◉'
+                            '♫'
                           )}
                         </div>
                         <div className="music-library-album-title">{album}</div>
@@ -1366,7 +1755,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                     <div>{t('pages.music-library.tracks.header.duration')}</div>
                     <div>{t('pages.music-library.tracks.header.actions')}</div>
                   </div>
-                  {filteredTracks.map((track, index) => (
+                  {renderedTracks.map((track, index) => (
                     <div
                       key={track.id}
                       data-track-id={track.id}
@@ -1404,6 +1793,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       </div>
                     </div>
                   ))}
+                  {(isTrackChunkLoading || hasMoreTracks || renderedTracks.length < filteredTracksTotal) && (
+                    <div className="music-library-track-load-hint" role="status" aria-live="polite">
+                      {isTrackChunkLoading
+                        ? t('pages.music-library.loading.tracksChunk')
+                        : renderedTracks.length < filteredTracksTotal
+                          ? t('pages.music-library.loading.renderWindowHint', {
+                              shown: renderedTracks.length,
+                              total: filteredTracksTotal,
+                            })
+                          : t('pages.music-library.loading.scrollToLoadMore')}
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -1414,7 +1815,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {scanProgress && scanProgress.isScanning && (
         <div className="music-library-scan-progress">
           <div className="music-library-scan-header">
-            <div className="music-library-scan-title">🔍 {t('pages.music-library.scan.title')}</div>
+            <div className="music-library-scan-title">{t('pages.music-library.scan.title')}</div>
             <button
               className="music-library-scan-cancel"
               onClick={handleCancelScan}
@@ -1460,7 +1861,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
       )}
 
-      {/* 清空确认对话框 */}
+      {/* 濞撳懐鈹栫涵顔款吇鐎电鐦藉?*/}
       <ConfirmDialog
         isOpen={showClearConfirm}
         title={t('pages.music-library.clear.title')}
@@ -1472,7 +1873,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         onCancel={() => setShowClearConfirm(false)}
       />
 
-      {/* 库路径管理器 */}
+      {/* 鎼存捁鐭惧鍕吀閻炲棗娅?*/}
       {showPathsManager && (
         <div className="paths-manager-overlay" onClick={() => setShowPathsManager(false)}>
           <div className="paths-manager-modal" onClick={(e) => e.stopPropagation()}>
@@ -1503,7 +1904,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 >
                   {t('pages.music-library.pathsManager.addFolderButton')}
                 </button>
-                <button onClick={() => setShowPathsManager(false)}>✕</button>
+                <button onClick={() => setShowPathsManager(false)}>X</button>
               </div>
             </div>
 
@@ -1526,12 +1927,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         <div className="path-item-meta">
                           {path.trackCount > 0 && (
                             <span className="path-meta-tracks">
-                              ♪ {t('pages.music-library.pathsManager.path.trackCount', { count: path.trackCount })}
+                              {t('pages.music-library.pathsManager.path.trackCount', { count: path.trackCount })}
                             </span>
                           )}
                           {path.lastScanned && (
                             <span className="path-meta-time">
-                              🕐{' '}
+                              🕒{' '}
                               {new Date(path.lastScanned).toLocaleString(locale, {
                                 month: 'short',
                                 day: 'numeric',
@@ -1551,12 +1952,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         <button
                           className="path-item-action-btn path-item-rescan"
                           onClick={async () => {
+                            const releaseProtection = beginAudioProtection('music-library-rescan-path', 90_000);
                             try {
                               await musicLibraryService.scanFolder(path.path, path.id);
                               await loadLibraryPaths();
                               await loadLibraryData();
                             } catch (error) {
                               console.error('Failed to rescan path:', error);
+                            } finally {
+                              releaseProtection();
                             }
                           }}
                           disabled={scanProgress?.isScanning}
@@ -1567,12 +1971,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         <button
                           className="path-item-action-btn path-item-remove"
                           onClick={async () => {
-                            await musicLibraryService.removeLibraryPath(path.id);
-                            await loadLibraryPaths();
+                            const releaseProtection = beginAudioProtection('music-library-remove-path', 20_000);
+                            try {
+                              await musicLibraryService.removeLibraryPath(path.id);
+                              await loadLibraryPaths();
+                            } finally {
+                              releaseProtection();
+                            }
                           }}
                           title={t('pages.music-library.pathsManager.path.removeTitle')}
                         >
-                          ×
+                          ✕
                         </button>
                       </div>
                     </div>
@@ -1590,7 +1999,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
       )}
 
-      {/* 错误提示对话框 */}
+      {/* 闁挎瑨顕ら幓鎰仛鐎电鐦藉?*/}
       {errorMessage && (
         <ConfirmDialog
           isOpen={true}
@@ -1606,7 +2015,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     </div>
   );
 
-  // 嵌入模式直接返回内容，非嵌入模式使用Portal
+  // 瀹撳苯鍙嗗Ο鈥崇础閻╁瓨甯存潻鏂挎礀閸愬懎顔愰敍宀勬姜瀹撳苯鍙嗗Ο鈥崇础娴ｈ法鏁ortal
   return (
     <>
       {embedded ? libraryContent : createPortal(libraryContent, document.body)}
@@ -1621,3 +2030,4 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     </>
   );
 };
+

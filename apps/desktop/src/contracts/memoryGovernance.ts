@@ -2,6 +2,7 @@ export type MemoryGovernanceTier = 0 | 1 | 2 | 3;
 
 export type MemoryGovernanceReason =
   | 'interval'
+  | 'playback-active'
   | 'visibility-hidden'
   | 'pagehide'
   | 'beforeunload'
@@ -10,6 +11,10 @@ export type MemoryGovernanceReason =
 
 export type MemoryGovernanceAction =
   | 'clear-cover-runtime-caches'
+  | 'tighten-cover-runtime-caches-watch'
+  | 'tighten-cover-runtime-caches-high'
+  | 'tighten-cover-runtime-caches-critical'
+  | 'tighten-cover-runtime-caches-hidden'
   | 'destroy-hidden-editor-windows'
   | 'destroy-hidden-plugin-windows'
   | 'destroy-hidden-vst-manager-windows';
@@ -55,9 +60,10 @@ export const DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED = false;
 export const MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES = 50;
 
 export const MEMORY_GOVERNANCE_INTERVAL_MS = 30_000;
+export const MEMORY_GOVERNANCE_PLAYBACK_INTERVAL_MS = 10_000;
 
 // Mirrors the MusicLibraryService in-memory blob URL cache budget.
-export const COVER_BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+export const COVER_BLOB_CACHE_MAX_BYTES = 12 * 1024 * 1024;
 
 export function computeJsonSizeBytes(value: unknown): number {
   try {
@@ -118,7 +124,30 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
   const actions: MemoryGovernanceAction[] = [];
 
-  if (tier >= 1 && (coverBlobRatio >= 0.85 || snapshot.coverBlobUrlCacheEntries >= 256)) {
+  if (
+    tier >= 1 &&
+    (coverBlobRatio >= 0.80 ||
+      snapshot.coverBlobUrlCacheEntries >= 128 ||
+      snapshot.coverUrlCacheEntries >= 320)
+  ) {
+    actions.push('tighten-cover-runtime-caches-watch');
+
+    if (
+      tier >= 2 &&
+      (coverBlobRatio >= 0.90 || snapshot.coverBlobUrlCacheEntries >= 192 || snapshot.coverUrlCacheEntries >= 480)
+    ) {
+      actions.push('tighten-cover-runtime-caches-high');
+    }
+
+    if (
+      tier >= 3 &&
+      (coverBlobRatio >= 0.96 || snapshot.coverBlobUrlCacheEntries >= 256 || snapshot.coverUrlCacheEntries >= 640)
+    ) {
+      actions.push('tighten-cover-runtime-caches-critical');
+    }
+  }
+
+  if (!snapshot.isTauri && (coverBlobRatio >= 0.96 || snapshot.coverBlobUrlCacheEntries >= 256)) {
     actions.push('clear-cover-runtime-caches');
   }
 

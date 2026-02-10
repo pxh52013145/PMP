@@ -1,4 +1,5 @@
 use std::cell::UnsafeCell;
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -13,6 +14,8 @@ struct AudioRingBufferInner {
     capacity: usize,
     data_ptr: *mut f32,
     _data: UnsafeCell<Box<[f32]>>,
+    lock_bytes: usize,
+    page_locked: AtomicBool,
     read_pos: AtomicU64,
     write_pos: AtomicU64,
     finished: AtomicBool,
@@ -23,6 +26,22 @@ struct AudioRingBufferInner {
 
 unsafe impl Send for AudioRingBufferInner {}
 unsafe impl Sync for AudioRingBufferInner {}
+
+impl Drop for AudioRingBufferInner {
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            if self.page_locked.load(Ordering::Acquire) && self.lock_bytes > 0 {
+                unsafe {
+                    let _ = windows::Win32::System::Memory::VirtualUnlock(
+                        self.data_ptr as *const c_void,
+                        self.lock_bytes,
+                    );
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PopChunkResult {
@@ -41,6 +60,8 @@ impl AudioRingBuffer {
                 capacity,
                 data_ptr,
                 _data: UnsafeCell::new(data),
+                lock_bytes: capacity.saturating_mul(std::mem::size_of::<f32>()),
+                page_locked: AtomicBool::new(false),
                 read_pos: AtomicU64::new(0),
                 write_pos: AtomicU64::new(0),
                 finished: AtomicBool::new(false),
@@ -63,6 +84,44 @@ impl AudioRingBuffer {
             .saturating_mul(TARGET_SECONDS)
             .saturating_mul(channels)
             .clamp(MIN_SAMPLES, MAX_SAMPLES) as usize
+    }
+
+    pub fn try_lock_memory_pages(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            if self
+                .inner
+                .page_locked
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return true;
+            }
+
+            if self.inner.lock_bytes == 0 {
+                self.inner.page_locked.store(false, Ordering::Release);
+                return false;
+            }
+
+            let locked = unsafe {
+                windows::Win32::System::Memory::VirtualLock(
+                    self.inner.data_ptr as *const c_void,
+                    self.inner.lock_bytes,
+                )
+                .is_ok()
+            };
+
+            if !locked {
+                self.inner.page_locked.store(false, Ordering::Release);
+            }
+
+            return locked;
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            false
+        }
     }
 
     pub fn clear(&self) {

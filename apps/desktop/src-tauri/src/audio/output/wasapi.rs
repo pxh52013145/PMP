@@ -60,6 +60,11 @@ impl WasapiBackend {
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
         let join = thread::spawn(move || {
+            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_output();
+            crate::audio::threading::apply_audio_output_pressure_profile(
+                crate::audio::realtime_scheduler::SCHEDULER.profile(),
+            );
+
             let result =
                 (|| -> Result<(OutputStream, OutputStreamHandle, Option<String>, Option<u32>), String> {
                     let host = match rodio::cpal::host_from_id(rodio::cpal::HostId::Wasapi) {
@@ -121,7 +126,14 @@ impl WasapiBackend {
             match result {
                 Ok((stream, handle, device_name, output_sample_rate)) => {
                     let _ = ready_tx.send(Ok((handle, device_name, output_sample_rate)));
-                    let _ = shutdown_rx.recv();
+                    loop {
+                        crate::audio::threading::apply_audio_output_pressure_profile(
+                            crate::audio::realtime_scheduler::SCHEDULER.profile(),
+                        );
+                        if shutdown_rx.recv_timeout(Duration::from_millis(250)).is_ok() {
+                            break;
+                        }
+                    }
                     drop(stream);
                 }
                 Err(err) => {

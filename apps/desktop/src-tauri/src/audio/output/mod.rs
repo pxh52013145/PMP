@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use once_cell::sync::Lazy;
 use rodio::Source;
+use crate::audio::policy::NativeAudioTransportMode;
 
 #[cfg(test)]
 mod null;
@@ -12,7 +14,6 @@ mod wasapi;
 #[cfg(target_os = "windows")]
 mod wasapi_exclusive;
 
-pub use rodio_cpal::default_backend;
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 pub use asio::{asio_backend, ASIO_BACKEND_ID};
@@ -22,6 +23,40 @@ pub(crate) use asio::open_control_panel as open_asio_control_panel;
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
 #[cfg(target_os = "windows")]
 pub use wasapi_exclusive::{wasapi_exclusive_backend, WASAPI_EXCLUSIVE_BACKEND_ID};
+#[cfg(target_os = "windows")]
+pub(crate) use wasapi_exclusive::output_callback_metrics;
+
+static BACKEND_FALLBACK_LOCK: Lazy<std::sync::Mutex<()>> = Lazy::new(|| std::sync::Mutex::new(()));
+
+#[cfg(target_os = "windows")]
+pub fn default_backend() -> Arc<dyn AudioOutputBackend> {
+    if std::env::var("PMP_AUDIO_DEFAULT_BACKEND")
+        .ok()
+        .map(|value| value.trim().eq_ignore_ascii_case("rodio-cpal"))
+        .unwrap_or(false)
+    {
+        return rodio_cpal::default_backend();
+    }
+
+    let _guard = BACKEND_FALLBACK_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let backend = wasapi_exclusive_backend();
+    if backend.create_sink().is_ok() {
+        return backend;
+    }
+
+    let fallback = wasapi_backend();
+    if fallback.create_sink().is_ok() {
+        return fallback;
+    }
+
+    rodio_cpal::default_backend()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub use rodio_cpal::default_backend;
 
 pub type BoxedSource = Box<dyn Source<Item = f32> + Send + 'static>;
 
@@ -106,6 +141,8 @@ pub trait AudioOutputBackend: Send + Sync {
     fn take_error(&self) -> Option<AudioOutputError> {
         None
     }
+
+    fn set_transport_mode(&self, _mode: NativeAudioTransportMode) {}
 }
 
 #[derive(Clone, Debug)]

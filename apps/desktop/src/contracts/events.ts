@@ -1,5 +1,5 @@
 import type { NavigationPageData } from './navigation';
-import type { AudioState } from '../services/audio';
+import type { AudioRobustnessSnapshot, AudioState } from '../services/audio';
 import type { KeybindingsSnapshot } from '../services/keybindings/types';
 import type { MemoryGovernanceRunResult } from './memoryGovernance';
 import type { PerformanceControlSnapshot } from './performanceControl';
@@ -22,6 +22,7 @@ export type AppEvents = {
     isNativeAvailable: boolean;
   };
   'audio/stateChanged': AudioState;
+  'audio/robustnessUpdated': AudioRobustnessSnapshot;
   'audio/timeUpdated': { time: number };
   'audio/ended': null;
   'audio/error': {

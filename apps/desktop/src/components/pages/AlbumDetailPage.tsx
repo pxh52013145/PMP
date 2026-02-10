@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
@@ -11,6 +11,73 @@ interface AlbumDetailPageProps {
   artist?: string;
 }
 
+const ALBUM_TRACK_RENDER_CHUNK_SIZE = 120;
+const ALBUM_SCROLL_RENDER_TRIGGER_PX = 240;
+const ALBUM_TRACK_TEXT_INTERN_POOL_MAX = 2048;
+
+const albumTrackTextInternPool = new Map<string, string>();
+
+function trimAlbumTrackText(value: unknown, maxChars: number = 200): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
+}
+
+function internAlbumTrackText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const existing = albumTrackTextInternPool.get(value);
+  if (existing) return existing;
+  albumTrackTextInternPool.set(value, value);
+  if (albumTrackTextInternPool.size > ALBUM_TRACK_TEXT_INTERN_POOL_MAX) {
+    const oldestKey = albumTrackTextInternPool.keys().next().value as string | undefined;
+    if (oldestKey) albumTrackTextInternPool.delete(oldestKey);
+  }
+  return value;
+}
+
+function compactAlbumTrack(track: Track): Track {
+  const safePath =
+    typeof track.filePath === 'string' && track.filePath ? track.filePath : track.path;
+  const normalizedCoverUrl = typeof track.coverUrl === 'string' ? track.coverUrl.trim() : '';
+  const normalizedCoverLower = normalizedCoverUrl.toLowerCase();
+  const safeCoverUrl =
+    normalizedCoverLower.startsWith('blob:') ||
+    normalizedCoverLower.startsWith('http://') ||
+    normalizedCoverLower.startsWith('https://')
+      ? normalizedCoverUrl
+      : undefined;
+  const safeTitle = internAlbumTrackText(trimAlbumTrackText(track.title) || track.id) || track.id;
+  const safeArtist = internAlbumTrackText(trimAlbumTrackText(track.artist));
+  const safeAlbum = internAlbumTrackText(trimAlbumTrackText(track.album));
+  const safeCoverKey = internAlbumTrackText(trimAlbumTrackText(track.coverKey, 256));
+  const safeOriginalPath = internAlbumTrackText(trimAlbumTrackText(track.originalPath, 512));
+
+  return {
+    id: track.id,
+    title: safeTitle,
+    artist: safeArtist,
+    album: safeAlbum,
+    duration: track.duration,
+    year: track.year,
+    trackNumber: track.trackNumber,
+    discNumber: track.discNumber,
+    filePath: typeof safePath === 'string' && safePath ? safePath : track.filePath,
+    path: safePath,
+    originalPath: safeOriginalPath,
+    fileHandle: safePath ? undefined : track.fileHandle,
+    coverKey: safeCoverKey,
+    coverUrl: safeCoverUrl,
+    replayGainTrackGainDb: track.replayGainTrackGainDb,
+    replayGainAlbumGainDb: track.replayGainAlbumGainDb,
+  };
+}
+
+function compactAlbumTracks(tracks: Track[]): Track[] {
+  if (tracks.length === 0) return tracks;
+  return tracks.map(compactAlbumTrack);
+}
+
 export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   albumName,
   artist,
@@ -19,17 +86,20 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
   const audioService = useAudioService();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albumCover, setAlbumCover] = useState<string | undefined>();
+  const [renderedTrackLimit, setRenderedTrackLimit] = useState(ALBUM_TRACK_RENDER_CHUNK_SIZE);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
+  const tracksListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     if (!albumName) {
       setTracks([]);
+      setRenderedTrackLimit(ALBUM_TRACK_RENDER_CHUNK_SIZE);
       setAlbumCover(undefined);
       return () => {
         cancelled = true;
@@ -45,10 +115,13 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
           ? nextTracks.filter((track) => String(track.artist || '').trim() === artist.trim())
           : nextTracks;
 
-      setTracks(filteredTracks);
+      const compactTracks = compactAlbumTracks(filteredTracks);
+
+      setTracks(compactTracks);
+      setRenderedTrackLimit(ALBUM_TRACK_RENDER_CHUNK_SIZE);
 
       // 使用第一首歌的封面作为专辑封面（Desktop/Tauri 下优先走磁盘缓存懒加载）
-      const candidate = filteredTracks[0];
+      const candidate = compactTracks[0];
       if (!candidate) {
         setAlbumCover(undefined);
         return;
@@ -77,6 +150,30 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
       cancelled = true;
     };
   }, [albumName, artist]);
+
+  useEffect(() => {
+    setRenderedTrackLimit((prev) => {
+      if (!Number.isFinite(prev) || prev <= 0) {
+        return Math.min(tracks.length, ALBUM_TRACK_RENDER_CHUNK_SIZE);
+      }
+      return Math.min(tracks.length, prev);
+    });
+  }, [tracks.length]);
+
+  const renderedTracks = useMemo(() => {
+    if (renderedTrackLimit >= tracks.length) return tracks;
+    return tracks.slice(0, renderedTrackLimit);
+  }, [renderedTrackLimit, tracks]);
+
+  const handleTracksScroll = useCallback(() => {
+    const root = tracksListRef.current;
+    if (!root) return;
+
+    const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
+    if (remaining <= ALBUM_SCROLL_RENDER_TRIGGER_PX) {
+      setRenderedTrackLimit((prev) => Math.min(tracks.length, prev + ALBUM_TRACK_RENDER_CHUNK_SIZE));
+    }
+  }, [tracks.length]);
 
   // 双击播放：添加整个专辑，从选中的歌曲开始播放
   const handlePlayTrack = async (track: Track, index: number) => {
@@ -214,8 +311,8 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
             <div className="track-duration">{t('pages.album.table.duration')}</div>
             <div className="track-actions">{t('pages.album.table.actions')}</div>
           </div>
-          <div className="album-tracks-list">
-            {tracks.map((track, index) => (
+          <div className="album-tracks-list" ref={tracksListRef} onScroll={handleTracksScroll}>
+            {renderedTracks.map((track, index) => (
               <div
                 key={track.id}
                 className="album-track-item"

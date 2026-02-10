@@ -62,6 +62,8 @@ export type ViewMode = 'artists' | 'albums' | 'folders' | 'genres' | 'years' | '
 // 排序选项
 export type SortBy = 'title' | 'artist' | 'album' | 'duration' | 'addedAt' | 'year';
 
+export type CoverRuntimeCachePolicy = 'default' | 'watch' | 'high' | 'critical' | 'hidden';
+
 export class MusicLibraryService {
   private static instance: MusicLibraryService;
   private static startupRefreshScheduled: boolean = false;
@@ -76,12 +78,23 @@ export class MusicLibraryService {
   private coverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
   private albumCoverUrlCache: Map<string, string> = new Map();
   private albumCoverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
-  private COVER_URL_CACHE_MAX_ENTRIES = 1024;
-  private ALBUM_COVER_URL_CACHE_MAX_ENTRIES = 256;
-  private COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024; // 80MB
-  private COVER_MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB max for cover extraction (thumbnails keep return sizes small)
-  private COVER_BLOB_CACHE_MAX_BYTES = 32 * 1024 * 1024; // 32MB in-memory blob URL cache
-  private COVER_DECODED_ESTIMATE_MAX_ENTRIES = 512;
+  private readonly DEFAULT_COVER_URL_CACHE_MAX_ENTRIES = 320;
+  private readonly DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES = 96;
+  private readonly DEFAULT_COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024;
+  private readonly DEFAULT_COVER_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  private readonly DEFAULT_COVER_BLOB_CACHE_MAX_BYTES = 12 * 1024 * 1024;
+  private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES = 160;
+  private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES = 36 * 1024 * 1024;
+
+  private COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_COVER_URL_CACHE_MAX_ENTRIES;
+  private ALBUM_COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES;
+  private COVER_CACHE_MAX_BYTES = this.DEFAULT_COVER_CACHE_MAX_BYTES;
+  private COVER_MAX_IMAGE_BYTES = this.DEFAULT_COVER_MAX_IMAGE_BYTES;
+  private COVER_BLOB_CACHE_MAX_BYTES = this.DEFAULT_COVER_BLOB_CACHE_MAX_BYTES;
+  private COVER_DECODED_ESTIMATE_MAX_ENTRIES = this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES;
+  private COVER_DECODED_ESTIMATE_MAX_BYTES = this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES;
+
+  private currentCoverRuntimeCachePolicy: CoverRuntimeCachePolicy = 'default';
   private coverMaxEdgePx: number = 256;
 
   // 缓存 - 减少数据库查询
@@ -95,6 +108,7 @@ export class MusicLibraryService {
     });
     this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
     this.setupCoverSettingsListener();
+    this.setupCoverVisibilityReclaimListener();
     this.scheduleStartupRefresh();
   }
 
@@ -120,6 +134,138 @@ export class MusicLibraryService {
     };
 
     window.addEventListener(PMP_STORAGE_CHANGE_EVENT, handler as EventListener);
+  }
+
+  private setupCoverVisibilityReclaimListener(): void {
+    if (typeof window === 'undefined') return;
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) return;
+      this.applyCoverRuntimeCachePolicy('hidden');
+    };
+
+    window.addEventListener('visibilitychange', onVisibilityChange);
+  }
+
+  private getPolicyLimits(policy: CoverRuntimeCachePolicy): {
+    coverUrlCacheMaxEntries: number;
+    albumCoverUrlCacheMaxEntries: number;
+    coverBlobCacheMaxBytes: number;
+    coverDecodedEstimateMaxEntries: number;
+    coverDecodedEstimateMaxBytes: number;
+    coverCacheMaxBytes: number;
+    coverMaxImageBytes: number;
+  } {
+    const defaults = {
+      coverUrlCacheMaxEntries: this.DEFAULT_COVER_URL_CACHE_MAX_ENTRIES,
+      albumCoverUrlCacheMaxEntries: this.DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES,
+      coverBlobCacheMaxBytes: this.DEFAULT_COVER_BLOB_CACHE_MAX_BYTES,
+      coverDecodedEstimateMaxEntries: this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES,
+      coverDecodedEstimateMaxBytes: this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES,
+      coverCacheMaxBytes: this.DEFAULT_COVER_CACHE_MAX_BYTES,
+      coverMaxImageBytes: this.DEFAULT_COVER_MAX_IMAGE_BYTES,
+    };
+
+    switch (policy) {
+      case 'watch':
+        return {
+          ...defaults,
+          coverUrlCacheMaxEntries: 256,
+          albumCoverUrlCacheMaxEntries: 72,
+          coverBlobCacheMaxBytes: 8 * 1024 * 1024,
+          coverDecodedEstimateMaxEntries: 128,
+          coverDecodedEstimateMaxBytes: 24 * 1024 * 1024,
+          coverCacheMaxBytes: 64 * 1024 * 1024,
+        };
+      case 'high':
+        return {
+          ...defaults,
+          coverUrlCacheMaxEntries: 192,
+          albumCoverUrlCacheMaxEntries: 56,
+          coverBlobCacheMaxBytes: 6 * 1024 * 1024,
+          coverDecodedEstimateMaxEntries: 96,
+          coverDecodedEstimateMaxBytes: 16 * 1024 * 1024,
+          coverCacheMaxBytes: 48 * 1024 * 1024,
+          coverMaxImageBytes: 3 * 1024 * 1024,
+        };
+      case 'critical':
+        return {
+          ...defaults,
+          coverUrlCacheMaxEntries: 128,
+          albumCoverUrlCacheMaxEntries: 40,
+          coverBlobCacheMaxBytes: 4 * 1024 * 1024,
+          coverDecodedEstimateMaxEntries: 64,
+          coverDecodedEstimateMaxBytes: 10 * 1024 * 1024,
+          coverCacheMaxBytes: 32 * 1024 * 1024,
+          coverMaxImageBytes: 2 * 1024 * 1024,
+        };
+      case 'hidden':
+        return {
+          ...defaults,
+          coverUrlCacheMaxEntries: 32,
+          albumCoverUrlCacheMaxEntries: 16,
+          coverBlobCacheMaxBytes: 1 * 1024 * 1024,
+          coverDecodedEstimateMaxEntries: 16,
+          coverDecodedEstimateMaxBytes: 2 * 1024 * 1024,
+          coverCacheMaxBytes: 16 * 1024 * 1024,
+          coverMaxImageBytes: Math.floor(1.5 * 1024 * 1024),
+        };
+      case 'default':
+      default:
+        return defaults;
+    }
+  }
+
+  private pruneCoverDecodedEstimateCacheByPolicy(): void {
+    while (
+      this.coverDecodedEstimateBytes.size > this.COVER_DECODED_ESTIMATE_MAX_ENTRIES ||
+      this.coverDecodedEstimateTotalBytes > this.COVER_DECODED_ESTIMATE_MAX_BYTES
+    ) {
+      const oldestUrl = this.coverDecodedEstimateBytes.keys().next().value as string | undefined;
+      if (!oldestUrl) break;
+      this.evictCoverUrlFromRuntimeCaches(oldestUrl);
+
+      if (this.coverDecodedEstimateBytes.has(oldestUrl)) {
+        const oldestBytes = this.coverDecodedEstimateBytes.get(oldestUrl);
+        this.coverDecodedEstimateBytes.delete(oldestUrl);
+        if (typeof oldestBytes === 'number') {
+          this.coverDecodedEstimateTotalBytes = Math.max(
+            0,
+            this.coverDecodedEstimateTotalBytes - oldestBytes
+          );
+        }
+      }
+    }
+  }
+
+  private enforceRuntimeCacheBudgets(): void {
+    this.pruneUrlCaches();
+
+    while (
+      this.coverBlobUrlTotalBytes > this.COVER_BLOB_CACHE_MAX_BYTES &&
+      this.coverBlobUrlCache.size > 0
+    ) {
+      const oldestKey = this.coverBlobUrlCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.evictCoverBlobCacheEntry(oldestKey);
+    }
+
+    this.pruneCoverDecodedEstimateCacheByPolicy();
+  }
+
+  applyCoverRuntimeCachePolicy(policy: CoverRuntimeCachePolicy): void {
+    const next = this.getPolicyLimits(policy);
+
+    this.currentCoverRuntimeCachePolicy = policy;
+    this.COVER_URL_CACHE_MAX_ENTRIES = next.coverUrlCacheMaxEntries;
+    this.ALBUM_COVER_URL_CACHE_MAX_ENTRIES = next.albumCoverUrlCacheMaxEntries;
+    this.COVER_BLOB_CACHE_MAX_BYTES = next.coverBlobCacheMaxBytes;
+    this.COVER_DECODED_ESTIMATE_MAX_ENTRIES = next.coverDecodedEstimateMaxEntries;
+    this.COVER_DECODED_ESTIMATE_MAX_BYTES = next.coverDecodedEstimateMaxBytes;
+    this.COVER_CACHE_MAX_BYTES = next.coverCacheMaxBytes;
+    this.COVER_MAX_IMAGE_BYTES = next.coverMaxImageBytes;
+
+    this.enforceRuntimeCacheBudgets();
   }
 
   private stableIdFromPath(path: string): string {
@@ -337,38 +483,16 @@ export class MusicLibraryService {
     const existing = this.coverBlobUrlCache.get(normalizedAudioPath);
     if (existing) {
       this.coverBlobUrlCache.delete(normalizedAudioPath);
-      this.coverBlobUrlCache.set(normalizedAudioPath, existing);
-      return;
+      this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - existing.bytes);
+      this.forgetCoverDecodedEstimate(existing.url);
+      this.removeAlbumCoverUrlCacheEntriesByUrl(existing.url);
+      this.revokeObjectUrlIfNeeded(existing.url);
     }
 
     this.coverBlobUrlCache.set(normalizedAudioPath, { url, bytes });
     this.coverBlobUrlTotalBytes += bytes;
 
-    while (
-      this.coverBlobUrlTotalBytes > this.COVER_BLOB_CACHE_MAX_BYTES &&
-      this.coverBlobUrlCache.size > 0
-    ) {
-      const oldestKey = this.coverBlobUrlCache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      const oldest = this.coverBlobUrlCache.get(oldestKey);
-        this.coverBlobUrlCache.delete(oldestKey);
-      if (oldest) {
-        this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - oldest.bytes);
-        try {
-          URL.revokeObjectURL(oldest.url);
-        } catch (err) {
-          void err;
-        }
-        this.forgetCoverDecodedEstimate(oldest.url);
-
-        const cached = this.coverUrlCache.get(oldestKey);
-        if (cached === oldest.url) {
-          this.coverUrlCache.delete(oldestKey);
-        }
-
-        this.removeAlbumCoverUrlCacheEntriesByUrl(oldest.url);
-      }
-    }
+    this.enforceRuntimeCacheBudgets();
   }
 
   private removeAlbumCoverUrlCacheEntriesByUrl(url: string): void {
@@ -380,11 +504,71 @@ export class MusicLibraryService {
     }
   }
 
+  private revokeObjectUrlIfNeeded(url: string): void {
+    if (!url || !url.startsWith('blob:')) return;
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // best-effort
+    }
+  }
+
+  private evictCoverBlobCacheEntry(cacheKey: string): void {
+    const blobEntry = this.coverBlobUrlCache.get(cacheKey);
+    const cachedUrl = this.coverUrlCache.get(cacheKey);
+    this.coverUrlCache.delete(cacheKey);
+
+    if (blobEntry) {
+      this.coverBlobUrlCache.delete(cacheKey);
+      this.coverBlobUrlTotalBytes = Math.max(0, this.coverBlobUrlTotalBytes - blobEntry.bytes);
+      this.forgetCoverDecodedEstimate(blobEntry.url);
+      this.removeAlbumCoverUrlCacheEntriesByUrl(blobEntry.url);
+      this.revokeObjectUrlIfNeeded(blobEntry.url);
+
+      if (cachedUrl && cachedUrl !== blobEntry.url) {
+        this.forgetCoverDecodedEstimate(cachedUrl);
+        this.removeAlbumCoverUrlCacheEntriesByUrl(cachedUrl);
+        this.revokeObjectUrlIfNeeded(cachedUrl);
+      }
+      return;
+    }
+
+    if (cachedUrl) {
+      this.forgetCoverDecodedEstimate(cachedUrl);
+      this.removeAlbumCoverUrlCacheEntriesByUrl(cachedUrl);
+      this.revokeObjectUrlIfNeeded(cachedUrl);
+    }
+  }
+
+  private evictCoverUrlFromRuntimeCaches(url: string): void {
+    if (!url) return;
+
+    let removed = false;
+
+    for (const [cacheKey, entry] of Array.from(this.coverBlobUrlCache.entries())) {
+      if (entry.url !== url) continue;
+      removed = true;
+      this.evictCoverBlobCacheEntry(cacheKey);
+    }
+
+    for (const [cacheKey, cached] of Array.from(this.coverUrlCache.entries())) {
+      if (cached !== url) continue;
+      removed = true;
+      this.evictCoverBlobCacheEntry(cacheKey);
+    }
+
+    if (removed) return;
+
+    this.removeAlbumCoverUrlCacheEntriesByUrl(url);
+    this.forgetCoverDecodedEstimate(url);
+    this.revokeObjectUrlIfNeeded(url);
+  }
+
   private pruneUrlCaches(): void {
     while (this.coverUrlCache.size > this.COVER_URL_CACHE_MAX_ENTRIES) {
       const oldestKey = this.coverUrlCache.keys().next().value as string | undefined;
       if (!oldestKey) break;
-      this.coverUrlCache.delete(oldestKey);
+      this.evictCoverBlobCacheEntry(oldestKey);
     }
 
     while (this.albumCoverUrlCache.size > this.ALBUM_COVER_URL_CACHE_MAX_ENTRIES) {
@@ -452,6 +636,12 @@ export class MusicLibraryService {
   ): Promise<string | undefined> {
     const allowAlbumFallback = options?.allowAlbumFallback !== false;
     const existingUrl = track.coverUrl;
+
+    const audioPath = track.filePath || track.path;
+    const normalizedAudioPath =
+      audioPath && this.isLikelyAbsolutePath(audioPath) ? this.normalizePathForCompare(audioPath) : null;
+    const cacheKey = normalizedAudioPath ? `${normalizedAudioPath}|edge=${this.coverMaxEdgePx}` : null;
+
     if (
       existingUrl &&
       (String(existingUrl).startsWith('data:') || String(existingUrl).startsWith('blob:')) &&
@@ -459,27 +649,32 @@ export class MusicLibraryService {
       this.coverKeyMatchesVariant(track.coverKey, this.coverMaxEdgePx)
     ) {
       void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+      if (cacheKey && String(existingUrl).startsWith('blob:')) {
+        this.touchCoverBlobCache(cacheKey);
+      }
       return existingUrl;
     }
 
     if (!isTauriRuntime()) return existingUrl;
 
-    const audioPath = track.filePath || track.path;
     if (!audioPath || !this.isLikelyAbsolutePath(audioPath)) return existingUrl;
 
-    const normalized = this.normalizePathForCompare(audioPath);
-    const cacheKey = `${normalized}|edge=${this.coverMaxEdgePx}`;
-    const cached = this.coverUrlCache.get(cacheKey);
+    const effectiveCacheKey = cacheKey ?? `${this.normalizePathForCompare(audioPath)}|edge=${this.coverMaxEdgePx}`;
+    const cached = this.coverUrlCache.get(effectiveCacheKey);
     if (cached) {
       if (track.coverKey) {
         void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
       }
-      this.touchCoverBlobCache(cacheKey);
+      this.touchCoverBlobCache(effectiveCacheKey);
       return cached;
     }
 
-    const inflight = this.coverUrlInflight.get(cacheKey);
+    const inflight = this.coverUrlInflight.get(effectiveCacheKey);
     if (inflight) return inflight;
+
+    if (this.currentCoverRuntimeCachePolicy === 'hidden') {
+      return undefined;
+    }
 
     const promise = (async () => {
       const { invoke } = await import('@tauri-apps/api/tauri');
@@ -513,8 +708,8 @@ export class MusicLibraryService {
 
       const blob = new Blob([buffer], { type: mime });
       const url = URL.createObjectURL(blob);
-      this.coverUrlCache.set(cacheKey, url);
-      this.addCoverBlobUrlToCache(cacheKey, url, result.size);
+      this.coverUrlCache.set(effectiveCacheKey, url);
+      this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
       this.pruneUrlCaches();
 
       const albumKey = this.albumKeyForTrack(track);
@@ -541,10 +736,10 @@ export class MusicLibraryService {
         return undefined;
       })
       .finally(() => {
-        this.coverUrlInflight.delete(cacheKey);
+        this.coverUrlInflight.delete(effectiveCacheKey);
       });
 
-    this.coverUrlInflight.set(cacheKey, promise);
+    this.coverUrlInflight.set(effectiveCacheKey, promise);
     const direct = await promise;
     if (direct) return direct;
 
@@ -663,15 +858,7 @@ export class MusicLibraryService {
     this.coverDecodedEstimateBytes.set(coverUrl, bytes);
     this.coverDecodedEstimateTotalBytes += bytes;
 
-    while (this.coverDecodedEstimateBytes.size > this.COVER_DECODED_ESTIMATE_MAX_ENTRIES) {
-      const oldestKey = this.coverDecodedEstimateBytes.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      const oldestBytes = this.coverDecodedEstimateBytes.get(oldestKey);
-      this.coverDecodedEstimateBytes.delete(oldestKey);
-      if (typeof oldestBytes === 'number') {
-        this.coverDecodedEstimateTotalBytes = Math.max(0, this.coverDecodedEstimateTotalBytes - oldestBytes);
-      }
-    }
+    this.pruneCoverDecodedEstimateCacheByPolicy();
   }
 
   private forgetCoverDecodedEstimate(coverUrl: string): void {
@@ -1719,21 +1906,38 @@ export class MusicLibraryService {
   }
 
   // 获取所有轨道（带限制，避免内存溢出）
-  async getAllTracks(limit?: number): Promise<Track[]> {
+  async getAllTracks(limit?: number, offset?: number): Promise<Track[]> {
     const db = await this.ensureDB();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
       const store = transaction.objectStore('tracks');
 
       if (limit) {
+        const safeOffset =
+          typeof offset === 'number' && Number.isFinite(offset) && offset > 0
+            ? Math.floor(offset)
+            : 0;
+
         // 使用游标限制结果数量
         const tracks: Track[] = [];
         const request = store.openCursor();
         let count = 0;
+        let skipped = 0;
 
         request.onsuccess = (event) => {
           const cursor = (event.target as IDBRequest).result;
-          if (cursor && count < limit) {
+          if (!cursor) {
+            resolve(tracks);
+            return;
+          }
+
+          if (skipped < safeOffset) {
+            skipped++;
+            cursor.continue();
+            return;
+          }
+
+          if (count < limit) {
             tracks.push(this.restoreTrackForPlayback(cursor.value as unknown as StoredTrackRecord));
             count++;
             cursor.continue();
@@ -2029,8 +2233,9 @@ export class MusicLibraryService {
   }
 
   // 获取所有专辑
-  async getAllAlbums(): Promise<AlbumSummary[]> {
+  async getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
     const db = await this.ensureDB();
+    const includeStoredCover = options?.includeStoredCover ?? true;
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
@@ -2047,7 +2252,7 @@ export class MusicLibraryService {
               albumMap.set(key, {
                 album: track.album,
                 artist: track.artist || 'Unknown Artist',
-                cover: this.sanitizeCoverUrl(track.coverUrl),
+                cover: includeStoredCover ? this.sanitizeCoverUrl(track.coverUrl) : undefined,
                 coverTrackPath: track.filePath || track.path,
                 coverTrackId: track.id,
               });
@@ -2076,13 +2281,13 @@ export class MusicLibraryService {
           const artist = String(value.artist ?? 'Unknown Artist');
           const key = `${album}::${artist}`;
           if (!albumMap.has(key)) {
-            albumMap.set(key, {
-              album,
-              artist,
-                cover: this.sanitizeCoverUrl(value.coverUrl),
-              coverTrackPath: value.filePath || value.path,
-              coverTrackId: value.id,
-            });
+              albumMap.set(key, {
+                album,
+                artist,
+                cover: includeStoredCover ? this.sanitizeCoverUrl(value.coverUrl) : undefined,
+                coverTrackPath: value.filePath || value.path,
+                coverTrackId: value.id,
+              });
           }
         }
 

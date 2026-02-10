@@ -9,6 +9,8 @@ pub(crate) mod mixer;
 pub mod output;
 pub(crate) mod pipeline;
 pub(crate) mod playback;
+pub(crate) mod policy;
+pub(crate) mod realtime_scheduler;
 pub(crate) mod resample;
 pub(crate) mod spectrum;
 pub(crate) mod threading;

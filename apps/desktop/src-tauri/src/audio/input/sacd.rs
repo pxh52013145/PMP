@@ -12,7 +12,9 @@ use crate::audio::dsd2pcm::Dsd2PcmContext;
 use crate::audio::buffer::AudioRingBuffer;
 
 use super::streaming::{
-    drain_decoder_commands, DecoderCommand, StreamingPlayback, StreamingSamplesSource,
+    drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
+    DecoderCommand, StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx,
+    TransferCommand,
 };
 use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
 
@@ -198,12 +200,16 @@ fn start_dsf_stream(
         output_sample_rate,
         2,
     ));
+    let render_queue = AudioRingBuffer::new((buffer.capacity_samples() / 4).clamp(16_384, 262_144));
+    try_lock_render_queue_hot_path(&render_queue);
 
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+    let (transfer_tx, transfer_rx) = mpsc::channel::<TransferCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
     let path = path.to_path_buf();
     let buffer_clone = buffer.clone();
+    let render_queue_clone = render_queue.clone();
     let error = Arc::new(Mutex::new(None::<String>));
     let error_clone = error.clone();
 
@@ -212,6 +218,9 @@ fn start_dsf_stream(
         .spawn(move || {
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_decode();
+            crate::audio::threading::apply_audio_decode_pressure_profile(
+                crate::audio::realtime_scheduler::SCHEDULER.profile(),
+            );
 
             let meta_tx_panic = meta_tx.clone();
             let buffer_panic = buffer_clone.clone();
@@ -334,6 +343,9 @@ fn start_dsf_stream(
                 let mut words: Vec<u32> = vec![0u32; channels];
 
                 'decode_loop: loop {
+                    crate::audio::threading::apply_audio_decode_pressure_profile(
+                        crate::audio::realtime_scheduler::SCHEDULER.profile(),
+                    );
                     let drained = drain_decoder_commands(&command_rx);
                     if drained.shutdown {
                         buffer_clone.mark_finished();
@@ -437,6 +449,7 @@ fn start_dsf_stream(
                         }
                         if let Some(target) = drained.seek_target {
                             buffer_clone.clear();
+                            render_queue_clone.clear();
                             pcm8_chunk.clear();
                             for ctx in &mut dsd2pcm {
                                 ctx.reset();
@@ -510,9 +523,21 @@ fn start_dsf_stream(
         }
     };
 
+    if let Err(err) = spawn_render_transfer_worker(
+        buffer.clone(),
+        render_queue.clone(),
+        meta.channels,
+        transfer_rx,
+        "pmpm-sacd-transfer",
+    ) {
+        let _ = transfer_tx.send(TransferCommand::Shutdown);
+        let _ = command_tx.send(DecoderCommand::Shutdown);
+        return Err(AudioInputError::new("AUDIO_INPUT_SACD_OPEN_FAILED", err));
+    }
+
     Ok((
         StreamingSamplesSource::new(
-            buffer.clone(),
+            render_queue.clone(),
             meta.channels,
             meta.sample_rate,
             meta.duration,
@@ -520,6 +545,8 @@ fn start_dsf_stream(
         meta,
         StreamingPlayback {
             buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
             command_tx,
             error,
         },
@@ -773,7 +800,7 @@ mod tests {
         }
         assert!(saw_high, "expected high samples after warm-up");
 
-        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        streaming.shutdown_tx.shutdown();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -822,7 +849,7 @@ mod tests {
         assert!(mean.abs() < 0.02, "mean={mean}");
         assert!(rms < 0.05, "rms={rms}");
 
-        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        streaming.shutdown_tx.shutdown();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -876,7 +903,7 @@ mod tests {
         }
         assert!(saw_negative, "expected negative samples after seek");
 
-        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        streaming.shutdown_tx.shutdown();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -915,7 +942,7 @@ mod tests {
         }
         assert!(saw_high, "expected audible samples after resample");
 
-        let _ = streaming.command_tx.send(DecoderCommand::Shutdown);
+        streaming.shutdown_tx.shutdown();
         let _ = std::fs::remove_file(&path);
     }
 

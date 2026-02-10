@@ -5,14 +5,18 @@ import { readString } from '../modules/storage';
 import { STORAGE_KEYS } from '../utils/windowCommunication';
 import { computePixelGridLayout, hitTestPixelGridFromPoint, PixelGridLayout } from '../utils/pixelGrid';
 
+type PixelShape = 'circle' | 'square' | 'rounded-square' | 'diamond' | 'hexagon';
+
 /**
  * Pixel Matrix 渲染引擎
- * 使用 PixiJS 实现高性能的像素点阵渲染
+ * 使用 PixiJS 实现高性能像素矩阵渲染
  */
 export class PixelMatrixRenderer {
   private app: PIXI.Application;
-  private pixelContainer: PIXI.Container;
-  private pixels: PIXI.Graphics[] = [];
+  private pixelContainer: PIXI.ParticleContainer;
+  private pixels: PIXI.Sprite[] = [];
+  private pixelTexture: PIXI.Texture = PIXI.Texture.EMPTY;
+  private pixelShape: PixelShape = 'circle';
   private pixelSizeScale: number = 1.0; // Pixel 尺寸缩放比例 (0.5-1.0)
   private pixelOpacity: number = 1.0; // Pixel 透明度 (0.0-1.0)
   private isActive: boolean = true;
@@ -57,7 +61,7 @@ export class PixelMatrixRenderer {
     this.app = new PIXI.Application({
       width,
       height,
-      backgroundAlpha: 0, // 完全透明的背景
+      backgroundAlpha: 0, // 完全透明背景
       antialias: useAntialias,
       resolution: (window.devicePixelRatio || 1) * this.renderScale,
       autoDensity: true,
@@ -65,8 +69,12 @@ export class PixelMatrixRenderer {
 
     (this.app.stage as PIXI.Container & { roundPixels?: boolean }).roundPixels = this.roundPixels;
 
-    // 创建像素容器
-    this.pixelContainer = new PIXI.Container();
+    // 创建像素容器（批量渲染）
+    this.pixelContainer = new PIXI.ParticleContainer(MATRIX_CONFIG.COLUMNS * MATRIX_CONFIG.ROWS, {
+      position: true,
+      alpha: true,
+      tint: true,
+    });
     this.app.stage.addChild(this.pixelContainer);
 
     this.layout = computePixelGridLayout(width, height);
@@ -79,6 +87,8 @@ export class PixelMatrixRenderer {
 
     (this.app.view as HTMLCanvasElement).style.cursor = 'pointer';
 
+    this.pixelTexture = this.createPixelTexture(this.pixelShape);
+
     // 初始化像素网格
     this.initPixels();
   }
@@ -88,24 +98,18 @@ export class PixelMatrixRenderer {
    */
   private initPixels(): void {
     const { COLUMNS, ROWS } = MATRIX_CONFIG;
+    const total = COLUMNS * ROWS;
 
-    for (let row = 0; row < ROWS; row++) {
-      for (let col = 0; col < COLUMNS; col++) {
-        const pixel = new PIXI.Graphics();
+    for (let index = 0; index < total; index++) {
+      const pixel = new PIXI.Sprite(this.pixelTexture);
 
-        // 绘制像素点（默认圆形）
-        this.drawPixelShape(pixel, 'circle');
+      // 初始位置设为0，后续通过 updateLayout 更新
+      pixel.x = 0;
+      pixel.y = 0;
+      pixel.alpha = this.pixelOpacity;
 
-        // 初始位置设为0，后续通过 updateLayout 更新
-        pixel.x = 0;
-        pixel.y = 0;
-
-        // 启用交互
-        pixel.eventMode = 'none';
-
-        this.pixelContainer.addChild(pixel);
-        this.pixels.push(pixel);
-      }
+      this.pixelContainer.addChild(pixel);
+      this.pixels.push(pixel);
     }
   }
 
@@ -169,13 +173,26 @@ export class PixelMatrixRenderer {
     console.log(`Pixel clicked: (${hit.gridX}, ${hit.gridY})`);
   }
 
+  private normalizePixelShape(shape: string): PixelShape {
+    switch (shape) {
+      case 'circle':
+      case 'square':
+      case 'rounded-square':
+      case 'diamond':
+      case 'hexagon':
+        return shape;
+      default:
+        return 'circle';
+    }
+  }
+
   /**
-   * 绘制像素形状
+   * 生成共享像素纹理
    */
-  private drawPixelShape(pixel: PIXI.Graphics, shape: string): void {
+  private createPixelTexture(shape: PixelShape): PIXI.Texture {
     const { PIXEL_SIZE } = MATRIX_CONFIG;
-    pixel.clear();
-    pixel.beginFill(PIXEL_COLORS.DEFAULT);
+    const pixelGraphic = new PIXI.Graphics();
+    pixelGraphic.beginFill(PIXEL_COLORS.DEFAULT);
 
     // 应用尺寸缩放
     const size = PIXEL_SIZE * this.pixelSizeScale;
@@ -187,52 +204,77 @@ export class PixelMatrixRenderer {
 
     switch (shape) {
       case 'circle':
-        pixel.drawCircle(half + offset, half + offset, half);
+        pixelGraphic.drawCircle(half + offset, half + offset, half);
         break;
 
       case 'square':
-        pixel.drawRect(offset, offset, size, size);
+        pixelGraphic.drawRect(offset, offset, size, size);
         break;
 
       case 'rounded-square':
-        pixel.drawRoundedRect(offset, offset, size, size, size * 0.2);
+        pixelGraphic.drawRoundedRect(offset, offset, size, size, size * 0.2);
         break;
 
       case 'diamond':
-        pixel.moveTo(half + offset, offset);
-        pixel.lineTo(size + offset, half + offset);
-        pixel.lineTo(half + offset, size + offset);
-        pixel.lineTo(offset, half + offset);
-        pixel.lineTo(half + offset, offset);
+        pixelGraphic.moveTo(half + offset, offset);
+        pixelGraphic.lineTo(size + offset, half + offset);
+        pixelGraphic.lineTo(half + offset, size + offset);
+        pixelGraphic.lineTo(offset, half + offset);
+        pixelGraphic.lineTo(half + offset, offset);
         break;
 
       case 'hexagon': {
         const angle = (Math.PI * 2) / 6;
         const centerX = half + offset;
         const centerY = half + offset;
-        pixel.moveTo(centerX + half * Math.cos(0), centerY + half * Math.sin(0));
+        pixelGraphic.moveTo(centerX + half * Math.cos(0), centerY + half * Math.sin(0));
         for (let i = 1; i <= 6; i++) {
-          pixel.lineTo(centerX + half * Math.cos(angle * i), centerY + half * Math.sin(angle * i));
+          pixelGraphic.lineTo(centerX + half * Math.cos(angle * i), centerY + half * Math.sin(angle * i));
         }
         break;
       }
 
       default:
-        pixel.drawCircle(half + offset, half + offset, half);
+        pixelGraphic.drawCircle(half + offset, half + offset, half);
     }
 
-    pixel.endFill();
+    pixelGraphic.endFill();
+
+    const texture = this.app.renderer.generateTexture(pixelGraphic, {
+      region: new PIXI.Rectangle(0, 0, PIXEL_SIZE, PIXEL_SIZE),
+      resolution: this.app.renderer.resolution,
+    });
+
+    pixelGraphic.destroy();
+    return texture;
+  }
+
+  private refreshPixelTexture(shape: string, force: boolean = false): void {
+    const normalizedShape = this.normalizePixelShape(shape);
+    if (!force && normalizedShape === this.pixelShape) {
+      return;
+    }
+
+    const nextTexture = this.createPixelTexture(normalizedShape);
+    const previousTexture = this.pixelTexture;
+
+    this.pixelTexture = nextTexture;
+    this.pixelShape = normalizedShape;
+
+    for (const pixel of this.pixels) {
+      pixel.texture = nextTexture;
+    }
+
+    if (previousTexture !== PIXI.Texture.EMPTY && previousTexture !== nextTexture) {
+      previousTexture.destroy(true);
+    }
   }
 
   /**
    * 更新所有 Pixel 的形状
    */
   public updatePixelShape(shape: string): void {
-    for (const pixel of this.pixels) {
-      const currentTint = pixel.tint;
-      this.drawPixelShape(pixel, shape);
-      pixel.tint = currentTint;
-    }
+    this.refreshPixelTexture(shape);
   }
 
   /**
@@ -245,15 +287,10 @@ export class PixelMatrixRenderer {
     // 获取当前形状（使用统一的 STORAGE_KEYS）
     const currentShape =
       typeof window !== 'undefined'
-        ? readString(STORAGE_KEYS.PIXEL_SHAPE) || readString('pixel-shape') || 'circle'
-        : 'circle';
+        ? readString(STORAGE_KEYS.PIXEL_SHAPE) || readString('pixel-shape') || this.pixelShape
+        : this.pixelShape;
 
-    // 重绘所有 pixel
-    for (const pixel of this.pixels) {
-      const currentTint = pixel.tint;
-      this.drawPixelShape(pixel, currentShape);
-      pixel.tint = currentTint;
-    }
+    this.refreshPixelTexture(currentShape, true);
   }
 
   /**
@@ -302,12 +339,14 @@ export class PixelMatrixRenderer {
 
   public setQuality(options: { renderScale?: number; fpsCapFull?: number; fpsCapThrottle?: number }): void {
     let changed = false;
+    let renderScaleChanged = false;
 
     if (typeof options.renderScale === 'number' && Number.isFinite(options.renderScale)) {
       const next = Math.max(0.25, Math.min(1.0, options.renderScale));
       if (next !== this.renderScale) {
         this.renderScale = next;
         changed = true;
+        renderScaleChanged = true;
       }
     }
 
@@ -336,6 +375,9 @@ export class PixelMatrixRenderer {
     try {
       this.app.renderer.resolution = (window.devicePixelRatio || 1) * this.renderScale;
       this.app.renderer.resize(this.width, this.height);
+      if (renderScaleChanged) {
+        this.refreshPixelTexture(this.pixelShape, true);
+      }
     } catch {
       // best-effort
     }

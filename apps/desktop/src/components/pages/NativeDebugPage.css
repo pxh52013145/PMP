@@ -347,6 +347,28 @@
   cursor: pointer;
 }
 
+.native-debug-robustness-panel {
+  margin: 20px 0;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 255, 136, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.native-debug-robustness-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.robustness-item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .debug-queue {
   list-style: none;
   padding: 0;

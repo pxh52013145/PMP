@@ -5,6 +5,7 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { NativeAudioService } from './NativeAudioService';
 import { NoopAudioService } from './NoopAudioService';
 import type { IAudioService } from './types';
+import type { AudioRobustnessSnapshot } from './types';
 
 export type AudioEngineType = 'native';
 
@@ -42,6 +43,12 @@ function isErrorListenerAvailable(service: IAudioService): service is IAudioServ
   return typeof service.onError === 'function';
 }
 
+function isRobustnessListenerAvailable(service: IAudioService): service is IAudioService & {
+  onRobustnessSnapshot: (cb: (snapshot: AudioRobustnessSnapshot) => void) => () => void;
+} {
+  return typeof service.onRobustnessSnapshot === 'function';
+}
+
 export class DefaultAudioEngineService implements AudioEngineService {
   private readonly mode: AudioEngineMode;
   private engineType: AudioEngineType;
@@ -53,6 +60,7 @@ export class DefaultAudioEngineService implements AudioEngineService {
   private unsubscribeTimeUpdate: null | (() => void) = null;
   private unsubscribeEnded: null | (() => void) = null;
   private unsubscribeError: null | (() => void) = null;
+  private unsubscribeRobustness: null | (() => void) = null;
 
   constructor(
     private readonly events: ScopedEventBus<AppEvents>,
@@ -141,6 +149,14 @@ export class DefaultAudioEngineService implements AudioEngineService {
     } finally {
       this.unsubscribeError = null;
     }
+
+    try {
+      this.unsubscribeRobustness?.();
+    } catch {
+      // ignore
+    } finally {
+      this.unsubscribeRobustness = null;
+    }
   }
 
   private attachServiceListeners(): void {
@@ -215,6 +231,12 @@ export class DefaultAudioEngineService implements AudioEngineService {
             })
           )
           .catch(() => {});
+      });
+    }
+
+    if (isRobustnessListenerAvailable(this.audioService)) {
+      this.unsubscribeRobustness = this.audioService.onRobustnessSnapshot((snapshot) => {
+        this.events.emit('audio/robustnessUpdated', snapshot);
       });
     }
   }
