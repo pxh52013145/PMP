@@ -547,9 +547,74 @@ impl LimiterProcessor {
             return;
         }
 
-        for sample in frame.iter_mut() {
-            *sample *= self.gain;
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2") {
+                unsafe {
+                    simd_mul_in_place_avx2(frame, self.gain);
+                }
+                return;
+            }
+            if std::arch::is_x86_feature_detected!("sse2") {
+                unsafe {
+                    simd_mul_in_place_sse2(frame, self.gain);
+                }
+                return;
+            }
         }
+
+        scalar_mul_in_place(frame, self.gain);
+    }
+}
+
+#[inline]
+fn scalar_mul_in_place(samples: &mut [f32], gain: f32) {
+    for sample in samples.iter_mut() {
+        *sample *= gain;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn simd_mul_in_place_sse2(samples: &mut [f32], gain: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let gain_vec = _mm_set1_ps(gain);
+
+    while i + 4 <= len {
+        let ptr = unsafe { samples.as_mut_ptr().add(i) };
+        let x = _mm_loadu_ps(ptr);
+        let y = _mm_mul_ps(x, gain_vec);
+        _mm_storeu_ps(ptr, y);
+        i += 4;
+    }
+
+    if i < len {
+        scalar_mul_in_place(&mut samples[i..], gain);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn simd_mul_in_place_avx2(samples: &mut [f32], gain: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let gain_vec = _mm256_set1_ps(gain);
+
+    while i + 8 <= len {
+        let ptr = unsafe { samples.as_mut_ptr().add(i) };
+        let x = _mm256_loadu_ps(ptr);
+        let y = _mm256_mul_ps(x, gain_vec);
+        _mm256_storeu_ps(ptr, y);
+        i += 8;
+    }
+
+    if i < len {
+        simd_mul_in_place_sse2(&mut samples[i..], gain);
     }
 }
 
@@ -602,6 +667,31 @@ impl DspChainProcessor {
         let has_eq = !self.eq.is_empty();
         let has_limiter = self.limiter.is_some();
         if (gain - 1.0).abs() < 1e-6 && !has_eq && !has_limiter {
+            return;
+        }
+
+        if !has_eq && !has_limiter {
+            if (gain - 1.0).abs() < 1e-6 {
+                return;
+            }
+
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::arch::is_x86_feature_detected!("avx2") {
+                    unsafe {
+                        simd_mul_in_place_avx2(samples, gain);
+                    }
+                    return;
+                }
+                if std::arch::is_x86_feature_detected!("sse2") {
+                    unsafe {
+                        simd_mul_in_place_sse2(samples, gain);
+                    }
+                    return;
+                }
+            }
+
+            scalar_mul_in_place(samples, gain);
             return;
         }
 
@@ -664,7 +754,8 @@ where
     sample_rate: u32,
     duration: Option<Duration>,
     dsp: Arc<DspRuntime>,
-    tap: SpectrumTap,
+    pre_tap: SpectrumTap,
+    post_tap: SpectrumTap,
     processor: DspChainProcessor,
     processor_version: u64,
     processor_reset_serial: u64,
@@ -685,10 +776,16 @@ where
 {
     const CHUNK_SAMPLES: usize = 4096;
 
-    pub(crate) fn new(inner: S, dsp: Arc<DspRuntime>, tap: SpectrumTap) -> Self {
+    pub(crate) fn new(
+        inner: S,
+        dsp: Arc<DspRuntime>,
+        pre_tap: SpectrumTap,
+        post_tap: SpectrumTap,
+    ) -> Self {
         let channels = inner.channels().max(1);
         let sample_rate = inner.sample_rate().max(1);
-        tap.set_sample_rate(sample_rate);
+        pre_tap.set_sample_rate(sample_rate);
+        post_tap.set_sample_rate(sample_rate);
         let duration = inner.total_duration();
 
         let processor_version = dsp.version();
@@ -782,7 +879,8 @@ where
             sample_rate,
             duration,
             dsp,
-            tap,
+            pre_tap,
+            post_tap,
             processor,
             processor_version,
             processor_reset_serial,
@@ -961,21 +1059,28 @@ where
         if !processor_already_applied {
             self.processor.process_interleaved_in_place(&mut self.local);
         }
+        self.pre_tap
+            .push_interleaved(&self.local, self.channels.max(1) as usize);
         for node in &mut self.vst_nodes {
             node.process_interleaved_in_place(&mut self.local);
         }
         self.apply_fade_in();
-        self.tap
+        self.post_tap
             .push_interleaved(&self.local, self.channels.max(1) as usize);
         true
     }
 }
 
-pub(crate) fn boxed_with_dsp<S>(source: S, dsp: Arc<DspRuntime>, tap: SpectrumTap) -> BoxedSource
+pub(crate) fn boxed_with_dsp<S>(
+    source: S,
+    dsp: Arc<DspRuntime>,
+    pre_tap: SpectrumTap,
+    post_tap: SpectrumTap,
+) -> BoxedSource
 where
     S: Source<Item = f32> + Send + 'static,
 {
-    Box::new(DspProcessingSource::new(source, dsp, tap))
+    Box::new(DspProcessingSource::new(source, dsp, pre_tap, post_tap))
 }
 
 impl<S> Drop for DspProcessingSource<S>
@@ -1184,8 +1289,9 @@ mod tests {
             sample_rate: 48_000,
             value: 0.5,
         };
-        let tap = SpectrumTap::new(8);
-        let mut processed = DspProcessingSource::new(inner, dsp.clone(), tap);
+        let pre_tap = SpectrumTap::new(8);
+        let post_tap = SpectrumTap::new(8);
+        let mut processed = DspProcessingSource::new(inner, dsp.clone(), pre_tap, post_tap);
 
         let first = processed.next().expect("first sample");
         assert!((first - 0.5).abs() < 1e-6);
@@ -1249,8 +1355,9 @@ mod tests {
             sample_rate: 48_000,
             value: 0.25,
         };
-        let tap = SpectrumTap::new(8);
-        let mut processed = DspProcessingSource::new(inner, dsp.clone(), tap);
+        let pre_tap = SpectrumTap::new(8);
+        let post_tap = SpectrumTap::new(8);
+        let mut processed = DspProcessingSource::new(inner, dsp.clone(), pre_tap, post_tap);
 
         let guard = dsp.slow_config.lock().expect("slow config lock");
         dsp.slow_version.fetch_add(1, Ordering::AcqRel);
@@ -1310,8 +1417,9 @@ mod tests {
             sample_rate: 48_000,
             value: 1.0,
         };
-        let tap = SpectrumTap::new(8);
-        let mut processed = DspProcessingSource::new(inner, dsp.clone(), tap);
+        let pre_tap = SpectrumTap::new(8);
+        let post_tap = SpectrumTap::new(8);
+        let mut processed = DspProcessingSource::new(inner, dsp.clone(), pre_tap, post_tap);
 
         for _ in 0..DspProcessingSource::<TestSource>::CHUNK_SAMPLES {
             processed.next().expect("first chunk sample");

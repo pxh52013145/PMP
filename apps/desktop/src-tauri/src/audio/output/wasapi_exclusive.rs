@@ -8,11 +8,16 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use rodio::Source;
 
-use super::{AudioOutputBackend, AudioOutputError, AudioSink, BoxedSource, OutputDeviceInfo, OutputStreamInfo};
+use super::{
+    AudioOutputBackend, AudioOutputError, AudioSink, BoxedSource,
+    OutputCallbackMetricsSnapshot, OutputDeviceInfo, OutputStreamInfo,
+};
 use crate::audio::buffer::AudioRingBuffer;
+use crate::audio::diagnostics;
 use crate::audio::policy::NativeAudioTransportMode;
 
 pub const WASAPI_EXCLUSIVE_BACKEND_ID: &str = "wasapi-exclusive";
+pub const WASAPI_SHARED_RAW_BACKEND_ID: &str = "wasapi-shared-raw";
 
 const AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND: &str =
     "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND";
@@ -23,6 +28,18 @@ const AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED: &str =
     "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED";
 const AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT: &str =
     "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT";
+const AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED: &str =
+    "AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED";
+const AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT: &str =
+    "AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT";
+const AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED: &str =
+    "AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WasapiStreamMode {
+    Exclusive,
+    SharedRaw,
+}
 
 static CALLBACK_WAIT_TIMEOUT_COUNT: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -30,25 +47,43 @@ static CALLBACK_RENDER_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_RENDER_MAX_US: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_INTERVAL_JITTER_COUNT: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_INTERVAL_JITTER_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_INTERVAL_JITTER_MAX_US: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_INTERVAL_OVERRUN_COUNT: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_EXPECTED_INTERVAL_US: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_INTERVAL_OVERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_WAIT_TIMEOUT_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn output_callback_metrics() -> (u32, u64, u64, u64) {
+fn p99_like_u32(total_us: u64, sample_count: u64, max_us: u64) -> u32 {
+    if sample_count == 0 {
+        return 0;
+    }
+
+    let avg = total_us / sample_count;
+    avg.max(max_us).min(u32::MAX as u64) as u32
+}
+
+pub(crate) fn output_callback_metrics() -> OutputCallbackMetricsSnapshot {
     let render_count = CALLBACK_RENDER_COUNT.load(Ordering::Relaxed);
     let total_us = CALLBACK_RENDER_TOTAL_US.load(Ordering::Relaxed);
     let max_us = CALLBACK_RENDER_MAX_US.load(Ordering::Relaxed);
+    let jitter_count = CALLBACK_INTERVAL_JITTER_COUNT.load(Ordering::Relaxed);
+    let jitter_total_us = CALLBACK_INTERVAL_JITTER_TOTAL_US.load(Ordering::Relaxed);
+    let jitter_max_us = CALLBACK_INTERVAL_JITTER_MAX_US.load(Ordering::Relaxed);
 
-    let p99_like_us: u64 = if render_count == 0 {
-        0
-    } else {
-        let avg = total_us / render_count;
-        avg.max(max_us)
-    };
-
-    (
-        p99_like_us.min(u32::MAX as u64) as u32,
-        CALLBACK_WAIT_TIMEOUT_COUNT.load(Ordering::Relaxed),
-        CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.load(Ordering::Relaxed),
-        CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.load(Ordering::Relaxed),
-    )
+    OutputCallbackMetricsSnapshot {
+        render_p99_us: p99_like_u32(total_us, render_count, max_us),
+        wait_timeout_count: CALLBACK_WAIT_TIMEOUT_COUNT.load(Ordering::Relaxed),
+        render_underrun_events: CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.load(Ordering::Relaxed),
+        render_underrun_frames: CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.load(Ordering::Relaxed),
+        interval_jitter_p99_us: p99_like_u32(jitter_total_us, jitter_count, jitter_max_us),
+        interval_overrun_count: CALLBACK_INTERVAL_OVERRUN_COUNT.load(Ordering::Relaxed),
+        expected_interval_us: CALLBACK_EXPECTED_INTERVAL_US
+            .load(Ordering::Relaxed)
+            .min(u32::MAX as u64) as u32,
+    }
 }
 
 fn reset_output_callback_metrics() {
@@ -58,6 +93,11 @@ fn reset_output_callback_metrics() {
     CALLBACK_RENDER_MAX_US.store(0, Ordering::Relaxed);
     CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.store(0, Ordering::Relaxed);
     CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.store(0, Ordering::Relaxed);
+    CALLBACK_INTERVAL_JITTER_COUNT.store(0, Ordering::Relaxed);
+    CALLBACK_INTERVAL_JITTER_TOTAL_US.store(0, Ordering::Relaxed);
+    CALLBACK_INTERVAL_JITTER_MAX_US.store(0, Ordering::Relaxed);
+    CALLBACK_INTERVAL_OVERRUN_COUNT.store(0, Ordering::Relaxed);
+    CALLBACK_EXPECTED_INTERVAL_US.store(0, Ordering::Relaxed);
 }
 
 fn record_callback_render_cost(duration_us: u32) {
@@ -76,6 +116,77 @@ fn record_callback_render_cost(duration_us: u32) {
             Ok(_) => break,
             Err(next) => observed = next,
         }
+    }
+}
+
+fn record_callback_interval(interval_us: u64, expected_interval_us: u64) {
+    if expected_interval_us == 0 {
+        return;
+    }
+
+    let jitter_us = interval_us.abs_diff(expected_interval_us);
+    CALLBACK_INTERVAL_JITTER_COUNT.fetch_add(1, Ordering::Relaxed);
+    CALLBACK_INTERVAL_JITTER_TOTAL_US.fetch_add(jitter_us, Ordering::Relaxed);
+
+    let mut observed_jitter = CALLBACK_INTERVAL_JITTER_MAX_US.load(Ordering::Relaxed);
+    while jitter_us > observed_jitter {
+        match CALLBACK_INTERVAL_JITTER_MAX_US.compare_exchange(
+            observed_jitter,
+            jitter_us,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(next) => observed_jitter = next,
+        }
+    }
+
+    let overrun_tolerance_us = (expected_interval_us / 4).max(1_000);
+    if interval_us > expected_interval_us.saturating_add(overrun_tolerance_us) {
+        CALLBACK_INTERVAL_OVERRUN_COUNT.fetch_add(1, Ordering::Relaxed);
+        diagnostics::record_event_throttled(
+            "exclusive.callback.interval_overrun",
+            interval_us,
+            expected_interval_us,
+            &CALLBACK_INTERVAL_OVERRUN_TIMELINE_GATE_MS,
+            150,
+        );
+    }
+}
+
+#[derive(Default)]
+struct CallbackTimingState {
+    expected_interval_us: u64,
+    last_wake_at: Option<Instant>,
+}
+
+impl CallbackTimingState {
+    fn reset_for_stream(&mut self, buffer_frame_count: u32, sample_rate: u32) {
+        let sample_rate_u128 = sample_rate.max(1) as u128;
+        let expected = ((buffer_frame_count as u128) * 1_000_000u128)
+            .saturating_div(sample_rate_u128)
+            .max(1)
+            .min(u64::MAX as u128) as u64;
+
+        self.expected_interval_us = expected;
+        self.last_wake_at = None;
+        CALLBACK_EXPECTED_INTERVAL_US.store(expected, Ordering::Relaxed);
+    }
+
+    fn clear_last_wake(&mut self) {
+        self.last_wake_at = None;
+    }
+
+    fn on_callback_wake(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.last_wake_at {
+            let interval_us = now
+                .duration_since(last)
+                .as_micros()
+                .min(u64::MAX as u128) as u64;
+            record_callback_interval(interval_us, self.expected_interval_us);
+        }
+        self.last_wake_at = Some(now);
     }
 }
 
@@ -192,6 +303,97 @@ pub fn wasapi_exclusive_backend() -> Arc<dyn AudioOutputBackend> {
     DEFAULT_BACKEND.clone()
 }
 
+pub struct WasapiSharedRawBackend {
+    state: Arc<Mutex<BackendState>>,
+}
+
+impl WasapiSharedRawBackend {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(BackendState::default())),
+        }
+    }
+
+    fn resolve_device_by_id(&self, device_id: &str) -> Result<(), String> {
+        let device_id = device_id.trim();
+        if device_id.is_empty() {
+            return self.resolve_default_device();
+        }
+
+        let devices = enumerate_render_devices()?;
+        let matched = devices
+            .into_iter()
+            .find(|device| device.id == device_id)
+            .ok_or_else(|| format!("Output device not found: {device_id}"))?;
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.device_id = Some(matched.id);
+        state.device_name = Some(matched.name);
+        Ok(())
+    }
+
+    fn resolve_default_device(&self) -> Result<(), String> {
+        let info = resolve_default_render_device()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.device_id = Some(info.id);
+        state.device_name = Some(info.name);
+        Ok(())
+    }
+
+    fn resolve_named_device(&self, device_name: &str) -> Result<(), String> {
+        let device_name = device_name.trim();
+        if device_name.is_empty() {
+            return self.resolve_default_device();
+        }
+
+        let devices = enumerate_render_devices()?;
+        let matched = devices
+            .into_iter()
+            .find(|device| device.name == device_name)
+            .ok_or_else(|| format!("Output device not found: {device_name}"))?;
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.device_id = Some(matched.id);
+        state.device_name = Some(matched.name);
+        Ok(())
+    }
+
+    fn ensure_device_selected(&self) -> Result<(), String> {
+        let has_device = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?
+            .device_id
+            .is_some();
+        if has_device {
+            return Ok(());
+        }
+        self.resolve_default_device()
+    }
+}
+
+impl Default for WasapiSharedRawBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static SHARED_RAW_BACKEND: Lazy<Arc<WasapiSharedRawBackend>> =
+    Lazy::new(|| Arc::new(WasapiSharedRawBackend::new()));
+
+pub fn wasapi_shared_raw_backend() -> Arc<dyn AudioOutputBackend> {
+    SHARED_RAW_BACKEND.clone()
+}
+
 impl AudioOutputBackend for WasapiExclusiveBackend {
     fn id(&self) -> &'static str {
         WASAPI_EXCLUSIVE_BACKEND_ID
@@ -294,6 +496,124 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
         self.ensure_device_selected()?;
         let sink = WasapiExclusiveSink::new(self.state.clone());
+        let info = self.current_info();
+        Ok((Arc::new(sink), info))
+    }
+
+    fn take_error(&self) -> Option<AudioOutputError> {
+        let mut guard = self.state.lock().ok()?;
+        guard.error.take()
+    }
+
+    fn set_transport_mode(&self, mode: NativeAudioTransportMode) {
+        if let Ok(mut guard) = self.state.lock() {
+            guard.transport_mode = mode;
+        }
+    }
+}
+
+impl AudioOutputBackend for WasapiSharedRawBackend {
+    fn id(&self) -> &'static str {
+        WASAPI_SHARED_RAW_BACKEND_ID
+    }
+
+    fn list_devices(&self) -> Result<Vec<String>, String> {
+        let mut names = enumerate_render_devices()?
+            .into_iter()
+            .map(|device| device.name)
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    fn list_devices_v2(&self) -> Result<Vec<OutputDeviceInfo>, String> {
+        let default_id = resolve_default_render_device().ok().map(|device| device.id);
+        enumerate_render_devices().map(|devices| {
+            devices
+                .into_iter()
+                .map(|device| OutputDeviceInfo {
+                    id: device.id.clone(),
+                    name: device.name.clone(),
+                    is_default: default_id
+                        .as_deref()
+                        .is_some_and(|default_id| default_id == device.id.as_str()),
+                })
+                .collect()
+        })
+    }
+
+    fn default_device_name(&self) -> Option<String> {
+        resolve_default_render_device().ok().map(|device| device.name)
+    }
+
+    fn current_info(&self) -> OutputStreamInfo {
+        let guard = self.state.lock();
+        let Ok(guard) = guard else {
+            return OutputStreamInfo::default();
+        };
+        OutputStreamInfo {
+            device_id: guard.device_id.clone(),
+            device_name: guard.device_name.clone(),
+            output_sample_rate: guard.output_sample_rate,
+        }
+    }
+
+    fn is_stream_open(&self) -> bool {
+        let guard = self.state.lock();
+        let Ok(guard) = guard else {
+            return false;
+        };
+        guard.stream_open
+    }
+
+    fn select_device(&self, device_name: Option<String>) -> Result<OutputStreamInfo, String> {
+        if let Some(name) = device_name.as_deref() {
+            self.resolve_named_device(name)?;
+        } else {
+            self.resolve_default_device()?;
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.stream_open = false;
+        state.output_sample_rate = None;
+        state.error = None;
+
+        Ok(OutputStreamInfo {
+            device_id: state.device_id.clone(),
+            device_name: state.device_name.clone(),
+            output_sample_rate: None,
+        })
+    }
+
+    fn select_device_by_id(&self, device_id: Option<String>) -> Result<OutputStreamInfo, String> {
+        if let Some(device_id) = device_id.as_deref() {
+            self.resolve_device_by_id(device_id)?;
+        } else {
+            self.resolve_default_device()?;
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Audio stream state is locked".to_string())?;
+        state.stream_open = false;
+        state.output_sample_rate = None;
+        state.error = None;
+
+        Ok(OutputStreamInfo {
+            device_id: state.device_id.clone(),
+            device_name: state.device_name.clone(),
+            output_sample_rate: None,
+        })
+    }
+
+    fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
+        self.ensure_device_selected()?;
+        let sink = WasapiSharedRawSink::new(self.state.clone());
         let info = self.current_info();
         Ok((Arc::new(sink), info))
     }
@@ -547,6 +867,25 @@ struct SinkInner {
 
 pub struct WasapiExclusiveSink {
     inner: Arc<SinkInner>,
+}
+
+struct SharedRawSinkInner {
+    backend_state: Arc<Mutex<BackendState>>,
+    device_id: Option<String>,
+    queue: Mutex<VecDeque<BoxedSource>>,
+    render_queue: AudioRingBuffer,
+    producer_thread: Mutex<Option<JoinHandle<()>>>,
+    producer_stop_tx: Mutex<Option<mpsc::Sender<()>>>,
+    producer_source: Mutex<Option<BoxedSource>>,
+    playing: AtomicBool,
+    stopped: AtomicBool,
+    volume_bits: AtomicU32,
+    is_empty: AtomicBool,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+pub struct WasapiSharedRawSink {
+    inner: Arc<SharedRawSinkInner>,
 }
 
 #[cfg(target_os = "windows")]
@@ -822,6 +1161,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
         let mut active_channels: u16 = 0;
         let mut active_sample_rate: u32 = 0;
         let mut render_scratch = Vec::<f32>::new();
+        let mut callback_timing = CallbackTimingState::default();
 
         while !inner.stopped.load(Ordering::Acquire) {
             let queued = match inner.queue.lock() {
@@ -845,11 +1185,12 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                         stream.stop();
                     }
 
-                    match open_wasapi_exclusive_stream(
+                    match open_wasapi_stream(
                         device_id,
                         desired_sample_rate,
                         desired_channels,
                         transport_mode,
+                        WasapiStreamMode::Exclusive,
                     ) {
                         Ok(new_stream) => {
                             if let Ok(mut state) = inner.backend_state.lock() {
@@ -857,6 +1198,10 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                                 state.stream_open = true;
                                 state.error = None;
                             }
+                            callback_timing.reset_for_stream(
+                                new_stream.buffer_frame_count,
+                                new_stream.sample_rate,
+                            );
                             active_channels = new_stream.channels;
                             active_sample_rate = new_stream.sample_rate;
                             stream = Some(new_stream);
@@ -907,6 +1252,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 }
             } else if !playing && stream.started {
                 stream.stop();
+                callback_timing.clear_last_wake();
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
@@ -916,7 +1262,12 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 continue;
             }
 
-            if let Err(err) = render_once(stream, inner.as_ref(), &mut render_scratch) {
+            if let Err(err) = render_once(
+                stream,
+                inner.as_ref(),
+                &mut render_scratch,
+                &mut callback_timing,
+            ) {
                 if let Ok(mut state) = inner.backend_state.lock() {
                     state.error = Some(err);
                 }
@@ -934,6 +1285,373 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 inner.is_empty.store(true, Ordering::Release);
             }
         }
+    }
+}
+
+fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        inner.is_empty.store(true, Ordering::Release);
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _mmcss = MmcssRegistration::register();
+        if _mmcss.is_none() {
+            unsafe {
+                let _ = windows::Win32::System::Threading::SetThreadPriority(
+                    windows::Win32::System::Threading::GetCurrentThread(),
+                    windows::Win32::System::Threading::THREAD_PRIORITY_HIGHEST,
+                );
+            }
+        }
+        crate::audio::threading::apply_audio_output_pressure_profile(
+            crate::audio::realtime_scheduler::SCHEDULER.profile(),
+        );
+
+        let device_id = match inner.device_id.as_deref() {
+            Some(value) => value,
+            None => {
+                if let Ok(mut state) = inner.backend_state.lock() {
+                    state.error = Some(AudioOutputError {
+                        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_NO_DEVICE_SELECTED,
+                        message: "No output device selected".to_string(),
+                    });
+                }
+                inner.is_empty.store(true, Ordering::Release);
+                return;
+            }
+        };
+
+        let transport_mode = inner
+            .backend_state
+            .lock()
+            .ok()
+            .map(|state| state.transport_mode)
+            .unwrap_or(NativeAudioTransportMode::Robust);
+
+        let mut stream: Option<WasapiStream> = None;
+        let mut active_channels: u16 = 0;
+        let mut active_sample_rate: u32 = 0;
+        let mut render_scratch = Vec::<f32>::new();
+        let mut callback_timing = CallbackTimingState::default();
+
+        while !inner.stopped.load(Ordering::Acquire) {
+            let queued = match inner.queue.lock() {
+                Ok(mut queue) => queue.pop_front(),
+                Err(_) => None,
+            };
+
+            if let Some(source) = queued {
+                let desired_sample_rate = source.sample_rate().max(1);
+                let desired_channels = source.channels().max(1);
+
+                let need_open = match stream.as_ref() {
+                    Some(stream) => {
+                        stream.sample_rate != desired_sample_rate || stream.channels != desired_channels
+                    }
+                    None => true,
+                };
+
+                if need_open {
+                    if let Some(stream) = stream.as_mut() {
+                        stream.stop();
+                    }
+
+                    match open_wasapi_stream(
+                        device_id,
+                        desired_sample_rate,
+                        desired_channels,
+                        transport_mode,
+                        WasapiStreamMode::SharedRaw,
+                    ) {
+                        Ok(new_stream) => {
+                            if let Ok(mut state) = inner.backend_state.lock() {
+                                state.output_sample_rate = Some(new_stream.sample_rate);
+                                state.stream_open = true;
+                                state.error = None;
+                            }
+                            callback_timing.reset_for_stream(
+                                new_stream.buffer_frame_count,
+                                new_stream.sample_rate,
+                            );
+                            active_channels = new_stream.channels;
+                            active_sample_rate = new_stream.sample_rate;
+                            stream = Some(new_stream);
+                        }
+                        Err(err) => {
+                            if let Ok(mut state) = inner.backend_state.lock() {
+                                state.stream_open = false;
+                                state.output_sample_rate = None;
+                                state.error = Some(err);
+                            }
+                            inner.is_empty.store(true, Ordering::Release);
+                            return;
+                        }
+                    }
+                }
+
+                WasapiSharedRawSink::start_producer_for_source(&inner, source);
+            }
+
+            if stream.is_none() {
+                if inner.queue.lock().map(|q| q.is_empty()).unwrap_or(true) {
+                    inner.is_empty.store(true, Ordering::Release);
+                    thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                inner.is_empty.store(false, Ordering::Release);
+                continue;
+            }
+
+            let Some(stream) = stream.as_mut() else {
+                continue;
+            };
+
+            let playing = inner.playing.load(Ordering::Acquire);
+            if playing && !stream.started {
+                if let Err(err) = start_stream_with_prefill_shared_raw(
+                    stream,
+                    inner.as_ref(),
+                    active_channels,
+                    active_sample_rate,
+                    &mut render_scratch,
+                ) {
+                    if let Ok(mut state) = inner.backend_state.lock() {
+                        state.error = Some(err);
+                    }
+                    inner.is_empty.store(true, Ordering::Release);
+                    return;
+                }
+            } else if !playing && stream.started {
+                stream.stop();
+                callback_timing.clear_last_wake();
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            if !stream.started {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+
+            if let Err(err) = render_once_shared_raw(
+                stream,
+                inner.as_ref(),
+                &mut render_scratch,
+                &mut callback_timing,
+            ) {
+                if let Ok(mut state) = inner.backend_state.lock() {
+                    state.error = Some(err);
+                }
+                inner.is_empty.store(true, Ordering::Release);
+                return;
+            }
+
+            crate::audio::threading::apply_audio_output_pressure_profile(
+                crate::audio::realtime_scheduler::SCHEDULER.profile(),
+            );
+
+            if inner.render_queue.is_finished_and_empty()
+                && inner.queue.lock().map(|queue| queue.is_empty()).unwrap_or(true)
+            {
+                inner.is_empty.store(true, Ordering::Release);
+            }
+        }
+    }
+}
+
+impl WasapiSharedRawSink {
+    fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
+        let device_id = backend_state.lock().ok().and_then(|state| state.device_id.clone());
+        reset_output_callback_metrics();
+        Self {
+            inner: Arc::new(SharedRawSinkInner {
+                backend_state,
+                device_id,
+                queue: Mutex::new(VecDeque::new()),
+                render_queue: AudioRingBuffer::new(48_000 * 2 * 4),
+                producer_thread: Mutex::new(None),
+                producer_stop_tx: Mutex::new(None),
+                producer_source: Mutex::new(None),
+                playing: AtomicBool::new(false),
+                stopped: AtomicBool::new(false),
+                volume_bits: AtomicU32::new(1.0f32.to_bits()),
+                is_empty: AtomicBool::new(true),
+                thread: Mutex::new(None),
+            }),
+        }
+    }
+
+    fn ensure_thread_started(inner: &Arc<SharedRawSinkInner>) {
+        let mut guard = inner.thread.lock().unwrap();
+        if guard.is_some() {
+            return;
+        }
+        let inner_clone = inner.clone();
+        *guard = Some(thread::spawn(move || run_shared_raw_sink_thread(inner_clone)));
+    }
+
+    fn stop_producer(inner: &Arc<SharedRawSinkInner>) {
+        if let Ok(mut stop_tx_guard) = inner.producer_stop_tx.lock() {
+            if let Some(stop_tx) = stop_tx_guard.take() {
+                let _ = stop_tx.send(());
+            }
+        }
+
+        if let Ok(mut join_guard) = inner.producer_thread.lock() {
+            if let Some(handle) = join_guard.take() {
+                let _ = handle.join();
+            }
+        }
+
+        inner.render_queue.clear();
+    }
+
+    fn start_producer_for_source(inner: &Arc<SharedRawSinkInner>, source: BoxedSource) {
+        Self::stop_producer(inner);
+
+        inner.render_queue.clear();
+
+        if let Ok(mut source_guard) = inner.producer_source.lock() {
+            *source_guard = Some(source);
+        }
+
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        if let Ok(mut stop_tx_guard) = inner.producer_stop_tx.lock() {
+            *stop_tx_guard = Some(stop_tx);
+        }
+
+        let inner_clone = inner.clone();
+        let handle = thread::spawn(move || {
+            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_decode();
+            let mut local: Vec<f32> = Vec::with_capacity(8192);
+
+            let mut source = {
+                let Ok(mut guard) = inner_clone.producer_source.lock() else {
+                    inner_clone.render_queue.mark_finished();
+                    return;
+                };
+                guard.take()
+            };
+
+            let Some(mut source) = source.take() else {
+                inner_clone.render_queue.mark_finished();
+                return;
+            };
+
+            let channels = source.channels().max(1) as usize;
+
+            while !inner_clone.stopped.load(Ordering::Acquire) {
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+
+                crate::audio::threading::apply_audio_decode_pressure_profile(
+                    crate::audio::realtime_scheduler::SCHEDULER.profile(),
+                );
+
+                if inner_clone.render_queue.len_samples() >= inner_clone.render_queue.capacity_samples() * 3 / 4 {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+
+                local.clear();
+                for _ in 0..8192 {
+                    match source.next() {
+                        Some(sample) => local.push(sample),
+                        None => break,
+                    }
+                }
+
+                if local.is_empty() {
+                    inner_clone.render_queue.mark_finished();
+                    break;
+                }
+
+                let mut start = 0usize;
+                while start < local.len() {
+                    let pushed_frames = inner_clone
+                        .render_queue
+                        .push_interleaved(&local[start..], channels);
+                    if pushed_frames == 0 {
+                        thread::sleep(Duration::from_millis(1));
+                        if stop_rx.try_recv().is_ok() {
+                            return;
+                        }
+                        continue;
+                    }
+                    start = start.saturating_add(pushed_frames * channels);
+                }
+            }
+        });
+
+        if let Ok(mut join_guard) = inner.producer_thread.lock() {
+            *join_guard = Some(handle);
+        }
+    }
+}
+
+impl Drop for WasapiSharedRawSink {
+    fn drop(&mut self) {
+        self.inner.stopped.store(true, Ordering::Release);
+        Self::stop_producer(&self.inner);
+        if let Ok(mut guard) = self.inner.thread.lock() {
+            if let Some(handle) = guard.take() {
+                let _ = handle.join();
+            }
+        }
+
+        if let Ok(mut state) = self.inner.backend_state.lock() {
+            state.stream_open = false;
+            state.output_sample_rate = None;
+        }
+    }
+}
+
+impl AudioSink for WasapiSharedRawSink {
+    fn append(&self, source: BoxedSource) {
+        if let Ok(mut queue) = self.inner.queue.lock() {
+            queue.clear();
+            queue.push_back(source);
+            self.inner.is_empty.store(false, Ordering::Release);
+        }
+        Self::ensure_thread_started(&self.inner);
+    }
+
+    fn play(&self) {
+        self.inner.playing.store(true, Ordering::Release);
+        Self::ensure_thread_started(&self.inner);
+    }
+
+    fn pause(&self) {
+        self.inner.playing.store(false, Ordering::Release);
+    }
+
+    fn stop(&self) {
+        self.inner.stopped.store(true, Ordering::Release);
+        Self::stop_producer(&self.inner);
+        if let Ok(mut queue) = self.inner.queue.lock() {
+            queue.clear();
+        }
+        self.inner.is_empty.store(true, Ordering::Release);
+    }
+
+    fn empty(&self) -> bool {
+        self.inner.is_empty.load(Ordering::Acquire)
+    }
+
+    fn set_volume(&self, value: f32) {
+        self.inner
+            .volume_bits
+            .store(value.clamp(0.0, 4.0).to_bits(), Ordering::Release);
     }
 }
 
@@ -965,10 +1683,38 @@ fn start_stream_with_prefill(
 }
 
 #[cfg(target_os = "windows")]
+fn start_stream_with_prefill_shared_raw(
+    stream: &mut WasapiStream,
+    inner: &SharedRawSinkInner,
+    channels: u16,
+    _sample_rate: u32,
+    scratch: &mut Vec<f32>,
+) -> Result<(), AudioOutputError> {
+    inner
+        .render_queue
+        .wait_for_samples((channels.max(1) as usize) * 64, Duration::from_millis(80));
+
+    let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
+    render_frames_shared_raw(stream, stream.buffer_frame_count, inner, true, volume, scratch)?;
+    unsafe {
+        stream
+            .audio_client
+            .Start()
+            .map_err(|e| AudioOutputError {
+                code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+                message: format!("Failed to start shared raw audio client: {e}"),
+            })?;
+    }
+    stream.started = true;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn render_once(
     stream: &mut WasapiStream,
     inner: &SinkInner,
     scratch: &mut Vec<f32>,
+    callback_timing: &mut CallbackTimingState,
 ) -> Result<(), AudioOutputError> {
     use windows::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT;
@@ -977,6 +1723,13 @@ fn render_once(
     let wait = unsafe { WaitForSingleObject(stream.event_handle, 50) };
     if wait == WAIT_TIMEOUT {
         CALLBACK_WAIT_TIMEOUT_COUNT.fetch_add(1, Ordering::Relaxed);
+        diagnostics::record_event_throttled(
+            "exclusive.callback.wait_timeout",
+            50,
+            stream.buffer_frame_count as u64,
+            &CALLBACK_WAIT_TIMEOUT_TIMELINE_GATE_MS,
+            200,
+        );
         return Ok(());
     }
     if wait != WAIT_OBJECT_0 {
@@ -1010,8 +1763,84 @@ fn render_once(
         return Ok(());
     }
 
+    callback_timing.on_callback_wake();
+
     let started = Instant::now();
     render_frames(stream, frames, inner, true, volume, scratch)?;
+    let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
+    record_callback_render_cost(elapsed_us);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn render_once_shared_raw(
+    stream: &mut WasapiStream,
+    inner: &SharedRawSinkInner,
+    scratch: &mut Vec<f32>,
+    callback_timing: &mut CallbackTimingState,
+) -> Result<(), AudioOutputError> {
+    use windows::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT;
+    use windows::Win32::System::Threading::WaitForSingleObject;
+
+    let wait = unsafe { WaitForSingleObject(stream.event_handle, 50) };
+    if wait == WAIT_TIMEOUT {
+        CALLBACK_WAIT_TIMEOUT_COUNT.fetch_add(1, Ordering::Relaxed);
+        diagnostics::record_event_throttled(
+            "shared-raw.callback.wait_timeout",
+            50,
+            stream.buffer_frame_count as u64,
+            &CALLBACK_WAIT_TIMEOUT_TIMELINE_GATE_MS,
+            200,
+        );
+        return Ok(());
+    }
+    if wait != WAIT_OBJECT_0 {
+        return Err(AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+            message: format!("WaitForSingleObject returned unexpected value: {wait:?}"),
+        });
+    }
+
+    let playing = inner.playing.load(Ordering::Acquire);
+    let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
+
+    let padding = unsafe {
+        stream.audio_client.GetCurrentPadding().map_err(|e| AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+            message: format!("Failed to query current padding: {e}"),
+        })?
+    };
+
+    let frames = stream.buffer_frame_count.saturating_sub(padding);
+    if frames == 0 {
+        return Ok(());
+    }
+
+    if !playing || inner.render_queue.is_finished_and_empty() {
+        unsafe {
+            stream
+                .render_client
+                .GetBuffer(frames)
+                .map_err(|e| AudioOutputError {
+                    code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+                    message: format!("Failed to acquire shared raw render buffer: {e}"),
+                })?;
+            stream
+                .render_client
+                .ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)
+                .map_err(|e| AudioOutputError {
+                    code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+                    message: format!("Failed to release shared raw silent buffer: {e}"),
+                })?;
+        }
+        return Ok(());
+    }
+
+    callback_timing.on_callback_wake();
+
+    let started = Instant::now();
+    render_frames_shared_raw(stream, frames, inner, true, volume, scratch)?;
     let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
     record_callback_render_cost(elapsed_us);
     Ok(())
@@ -1045,6 +1874,13 @@ fn render_frames(
             let missing_frames = (missing_samples / channels.max(1)).max(1) as u64;
             CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
             CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.fetch_add(missing_frames, Ordering::Relaxed);
+            diagnostics::record_event_throttled(
+                "exclusive.output.render_underrun",
+                missing_frames,
+                frames as u64,
+                &CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS,
+                120,
+            );
             scratch.resize(total_samples, 0.0);
         }
     }
@@ -1140,17 +1976,151 @@ fn render_frames(
 }
 
 #[cfg(target_os = "windows")]
-fn open_wasapi_exclusive_stream(
+fn render_frames_shared_raw(
+    stream: &mut WasapiStream,
+    frames: u32,
+    inner: &SharedRawSinkInner,
+    consume: bool,
+    volume: f32,
+    scratch: &mut Vec<f32>,
+) -> Result<(), AudioOutputError> {
+    let channels = stream.channels.max(1) as usize;
+    let total_samples = frames as usize * channels;
+    scratch.clear();
+    if scratch.capacity() < total_samples {
+        scratch.reserve(total_samples.saturating_sub(scratch.capacity()));
+    }
+
+    if consume {
+        let popped = inner
+            .render_queue
+            .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        if popped.popped == 0 && popped.finished {
+            return Ok(());
+        }
+        if popped.popped < total_samples {
+            let missing_samples = total_samples.saturating_sub(popped.popped);
+            let missing_frames = (missing_samples / channels.max(1)).max(1) as u64;
+            CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
+            CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.fetch_add(missing_frames, Ordering::Relaxed);
+            diagnostics::record_event_throttled(
+                "shared-raw.output.render_underrun",
+                missing_frames,
+                frames as u64,
+                &CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS,
+                120,
+            );
+            scratch.resize(total_samples, 0.0);
+        }
+    }
+
+    unsafe {
+        let buffer = stream
+            .render_client
+            .GetBuffer(frames)
+            .map_err(|e| AudioOutputError {
+                code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+                message: format!("Failed to acquire shared raw render buffer: {e}"),
+            })?;
+
+        match stream.sample_format {
+            WasapiSampleFormat::Float32 => {
+                let out = buffer as *mut f32;
+                for index in 0..total_samples {
+                    let sample = if consume {
+                        scratch[index] * volume
+                    } else {
+                        0.0
+                    };
+                    *out.add(index) = sample;
+                }
+            }
+            WasapiSampleFormat::Pcm16 => {
+                let out = buffer as *mut i16;
+                let scale = (i16::MAX as f32) * volume;
+                for index in 0..total_samples {
+                    let sample = if consume {
+                        scratch[index] * scale
+                    } else {
+                        0.0
+                    };
+                    let quantized =
+                        sample.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                    *out.add(index) = quantized;
+                }
+            }
+            WasapiSampleFormat::Pcm32 => {
+                let out = buffer as *mut i32;
+                let scale = (i32::MAX as f32) * volume;
+                for index in 0..total_samples {
+                    let sample = if consume {
+                        scratch[index] * scale
+                    } else {
+                        0.0
+                    };
+                    let quantized =
+                        sample.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                    *out.add(index) = quantized;
+                }
+            }
+            WasapiSampleFormat::Pcm24In32 => {
+                let out = buffer as *mut i32;
+                for index in 0..total_samples {
+                    let sample = if consume { scratch[index] } else { 0.0 };
+                    let quantized = if matches!(
+                        stream.transport_mode,
+                        NativeAudioTransportMode::TransportExact
+                    ) {
+                        quantize_pcm24_transport_exact(sample, volume)
+                    } else {
+                        quantize_pcm24(sample, volume)
+                    };
+                    *out.add(index) = pack_pcm24_in32(quantized);
+                }
+            }
+            WasapiSampleFormat::Pcm24Packed => {
+                let out = buffer as *mut u8;
+                for index in 0..total_samples {
+                    let sample = if consume { scratch[index] } else { 0.0 };
+                    let quantized = quantize_pcm24(sample, volume);
+                    let bytes = pack_pcm24_packed_bytes(quantized);
+                    let offset = index * 3;
+                    *out.add(offset) = bytes[0];
+                    *out.add(offset + 1) = bytes[1];
+                    *out.add(offset + 2) = bytes[2];
+                }
+            }
+        }
+
+        stream
+            .render_client
+            .ReleaseBuffer(frames, 0)
+            .map_err(|e| AudioOutputError {
+                code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+                message: format!("Failed to release shared raw render buffer: {e}"),
+            })?;
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn open_wasapi_stream(
     device_id: &str,
     sample_rate: u32,
     channels: u16,
     transport_mode: NativeAudioTransportMode,
+    stream_mode: WasapiStreamMode,
 ) -> Result<WasapiStream, AudioOutputError> {
-    use windows::core::PCWSTR;
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::Foundation::BOOL;
     use windows::Win32::Media::Audio::{
-        IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-        AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+        AudioClientProperties, AudioCategory_Media,
+        IAudioClient, IAudioClient2, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
+        MMDeviceEnumerator,
+        AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMOPTIONS_RAW, WAVEFORMATEX,
+        WAVEFORMATEXTENSIBLE,
         WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_PCM,
     };
     use windows::Win32::Media::KernelStreaming::{
@@ -1164,9 +2134,42 @@ fn open_wasapi_exclusive_stream(
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
+        let is_shared_raw = matches!(stream_mode, WasapiStreamMode::SharedRaw);
+        let backend_log_label = if is_shared_raw {
+            "wasapi-shared-raw"
+        } else {
+            "wasapi-exclusive"
+        };
+        let open_failed_code = if is_shared_raw {
+            AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED
+        } else {
+            AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED
+        };
+        let unsupported_code = if is_shared_raw {
+            AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT
+        } else {
+            AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT
+        };
+        let init_failed_code = if is_shared_raw {
+            AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED
+        } else {
+            AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED
+        };
+        let device_not_found_code = if is_shared_raw {
+            AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED
+        } else {
+            AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND
+        };
+        let share_mode = if is_shared_raw {
+            AUDCLNT_SHAREMODE_SHARED
+        } else {
+            AUDCLNT_SHAREMODE_EXCLUSIVE
+        };
+        let stream_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| AudioOutputError {
-                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                code: open_failed_code,
                 message: format!("Failed to create MMDeviceEnumerator: {e}"),
             })?;
 
@@ -1174,7 +2177,7 @@ fn open_wasapi_exclusive_stream(
         let device: IMMDevice = enumerator
             .GetDevice(PCWSTR(device_id_wide.as_ptr()))
             .map_err(|e| AudioOutputError {
-                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND,
+                code: device_not_found_code,
                 message: format!("Failed to open output device: {e}"),
             })?;
 
@@ -1423,9 +2426,41 @@ fn open_wasapi_exclusive_stream(
             let audio_client: IAudioClient = device
                 .Activate(CLSCTX_ALL, None)
                 .map_err(|e| AudioOutputError {
-                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                    code: open_failed_code,
                     message: format!("Failed to activate audio client: {e}"),
                 })?;
+
+            if is_shared_raw {
+                let raw_props = AudioClientProperties {
+                    cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
+                    bIsOffload: BOOL(0),
+                    eCategory: AudioCategory_Media,
+                    Options: AUDCLNT_STREAMOPTIONS_RAW,
+                };
+                let audio_client2 = match audio_client.cast::<IAudioClient2>() {
+                    Ok(value) => value,
+                    Err(e) => {
+                        last_error = Some(AudioOutputError {
+                            code: init_failed_code,
+                            message: format!(
+                                "Failed to query IAudioClient2 for RAW mode ({backend_log_label}, format={}): {e}",
+                                attempt.label
+                            ),
+                        });
+                        continue;
+                    }
+                };
+                if let Err(e) = audio_client2.SetClientProperties(&raw_props as *const _) {
+                    last_error = Some(AudioOutputError {
+                        code: init_failed_code,
+                        message: format!(
+                            "Failed to enable RAW mode for {backend_log_label} (format={}): {e}",
+                            attempt.label
+                        ),
+                    });
+                    continue;
+                }
+            }
 
             let mut default_period = 0i64;
             let mut min_period = 0i64;
@@ -1433,47 +2468,50 @@ fn open_wasapi_exclusive_stream(
                 audio_client.GetDevicePeriod(Some(&mut default_period), Some(&mut min_period))
             {
                 last_error = Some(AudioOutputError {
-                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                    code: open_failed_code,
                     message: format!("Failed to query device period: {e}"),
                 });
                 continue;
             }
 
-            // Exclusive mode is more sensitive to underruns; prefer larger buffers for stability.
-            // Units: 100ns (20ms = 200_000).
-            let base_periodicity = default_period.max(min_period).max(200_000);
-            let buffer_candidates = [
-                base_periodicity.saturating_mul(4),
-                base_periodicity.saturating_mul(8),
-                base_periodicity.saturating_mul(2),
-                base_periodicity,
-            ];
+            let buffer_candidates: Vec<i64> = if is_shared_raw {
+                vec![3_000_000, 2_400_000, 1_800_000, 1_200_000, 800_000]
+            } else {
+                let base_periodicity = default_period.max(min_period).max(200_000);
+                vec![
+                    base_periodicity.saturating_mul(4),
+                    base_periodicity.saturating_mul(8),
+                    base_periodicity.saturating_mul(2),
+                    base_periodicity,
+                ]
+            };
 
             for buffer_duration in buffer_candidates {
                 let event_handle = CreateEventW(None, false, false, PCWSTR::null()).map_err(
                     |e| AudioOutputError {
-                        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+                        code: open_failed_code,
                         message: format!("Failed to create audio event handle: {e}"),
                     },
                 )?;
 
+                let periodicity = if is_shared_raw { 0 } else { buffer_duration };
                 let init = audio_client.Initialize(
-                    AUDCLNT_SHAREMODE_EXCLUSIVE,
-                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                    share_mode,
+                    stream_flags,
                     buffer_duration,
-                    buffer_duration,
+                    periodicity,
                     attempt.wave_format.as_ptr(),
                     None,
                 );
                 if let Err(e) = init {
                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
 
-                    if e.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
+                    if !is_shared_raw && e.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
                         let aligned_frames = match audio_client.GetBufferSize() {
                             Ok(value) => value,
                             Err(get_err) => {
                                 last_error = Some(AudioOutputError {
-                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
+                                    code: unsupported_code,
                                     message: format!(
                                         "Failed to query aligned buffer size after AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED (format={}, duration={buffer_duration}): {get_err}",
                                         attempt.label
@@ -1492,22 +2530,22 @@ fn open_wasapi_exclusive_stream(
 
                         let aligned_audio_client: IAudioClient = device
                             .Activate(CLSCTX_ALL, None)
-                            .map_err(|e| AudioOutputError {
-                                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                                message: format!("Failed to activate audio client: {e}"),
+                            .map_err(|err| AudioOutputError {
+                                code: open_failed_code,
+                                message: format!("Failed to activate audio client: {err}"),
                             })?;
 
                         let aligned_event_handle =
-                            CreateEventW(None, false, false, PCWSTR::null()).map_err(|e| {
+                            CreateEventW(None, false, false, PCWSTR::null()).map_err(|err| {
                                 AudioOutputError {
-                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                                    message: format!("Failed to create audio event handle: {e}"),
+                                    code: open_failed_code,
+                                    message: format!("Failed to create audio event handle: {err}"),
                                 }
                             })?;
 
                         let aligned_init = aligned_audio_client.Initialize(
-                            AUDCLNT_SHAREMODE_EXCLUSIVE,
-                            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                            share_mode,
+                            stream_flags,
                             aligned_duration,
                             aligned_duration,
                             attempt.wave_format.as_ptr(),
@@ -1516,102 +2554,101 @@ fn open_wasapi_exclusive_stream(
                         if let Err(aligned_err) = aligned_init {
                             let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
                             last_error = Some(AudioOutputError {
-                                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
+                                code: unsupported_code,
                                 message: format!(
-                                    "Failed to init aligned exclusive stream (format={}, duration={aligned_duration}, frames={aligned_frames}): {aligned_err}",
+                                    "Failed to init aligned {backend_log_label} stream (format={}, duration={aligned_duration}, frames={aligned_frames}): {aligned_err}",
                                     attempt.label
                                 ),
                             });
                             continue;
                         }
 
-                        if let Err(e) = aligned_audio_client.SetEventHandle(aligned_event_handle) {
+                        if let Err(err) = aligned_audio_client.SetEventHandle(aligned_event_handle)
+                        {
                             let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
                             last_error = Some(AudioOutputError {
-                                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                                message: format!("Failed to set event handle: {e}"),
+                                code: open_failed_code,
+                                message: format!("Failed to set event handle: {err}"),
                             });
                             continue;
                         }
 
-                        let buffer_frame_count =
-                            aligned_audio_client.GetBufferSize().map_err(|e| {
+                        let buffer_frame_count = aligned_audio_client.GetBufferSize().map_err(|err| {
+                            let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                            AudioOutputError {
+                                code: open_failed_code,
+                                message: format!("Failed to get buffer size: {err}"),
+                            }
+                        })?;
+
+                        let render_client: IAudioRenderClient =
+                            aligned_audio_client.GetService().map_err(|err| {
                                 let _ =
                                     windows::Win32::Foundation::CloseHandle(aligned_event_handle);
                                 AudioOutputError {
-                                    code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                                    message: format!("Failed to get buffer size: {e}"),
+                                    code: open_failed_code,
+                                    message: format!("Failed to get render client: {err}"),
                                 }
                             })?;
 
-                let render_client: IAudioRenderClient =
-                    aligned_audio_client.GetService().map_err(|e| {
-                        let _ =
-                            windows::Win32::Foundation::CloseHandle(aligned_event_handle);
-                        AudioOutputError {
-                            code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                            message: format!("Failed to get render client: {e}"),
-                        }
-                    })?;
-
-                eprintln!(
-                    "[NativeAudio][wasapi-exclusive] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
-                    attempt.label,
-                    channels,
-                    sample_rate,
-                    buffer_frame_count,
-                    aligned_duration
-                );
-                return Ok(WasapiStream {
-                    audio_client: aligned_audio_client,
-                    render_client,
-                    event_handle: aligned_event_handle,
-                    buffer_frame_count,
-                    channels,
-                    sample_rate,
-                    sample_format: attempt.sample_format,
-                    transport_mode,
-                    started: false,
-                });
+                        eprintln!(
+                            "[NativeAudio][{backend_log_label}] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
+                            attempt.label,
+                            channels,
+                            sample_rate,
+                            buffer_frame_count,
+                            aligned_duration
+                        );
+                        return Ok(WasapiStream {
+                            audio_client: aligned_audio_client,
+                            render_client,
+                            event_handle: aligned_event_handle,
+                            buffer_frame_count,
+                            channels,
+                            sample_rate,
+                            sample_format: attempt.sample_format,
+                            transport_mode,
+                            started: false,
+                        });
                     }
 
                     last_error = Some(AudioOutputError {
-                        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
+                        code: init_failed_code,
                         message: format!(
-                            "Failed to init exclusive stream (format={}, duration={buffer_duration}): {e}",
+                            "Failed to init {backend_log_label} stream (format={}, duration={buffer_duration}): {e}",
                             attempt.label
                         ),
                     });
                     continue;
                 }
 
-                if let Err(e) = audio_client.SetEventHandle(event_handle) {
+                if let Err(err) = audio_client.SetEventHandle(event_handle) {
                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
                     last_error = Some(AudioOutputError {
-                        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                        message: format!("Failed to set event handle: {e}"),
+                        code: open_failed_code,
+                        message: format!("Failed to set event handle: {err}"),
                     });
                     continue;
                 }
 
-                let buffer_frame_count = audio_client.GetBufferSize().map_err(|e| {
+                let buffer_frame_count = audio_client.GetBufferSize().map_err(|err| {
                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
                     AudioOutputError {
-                        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                        message: format!("Failed to get buffer size: {e}"),
+                        code: open_failed_code,
+                        message: format!("Failed to get buffer size: {err}"),
                     }
                 })?;
 
-                let render_client: IAudioRenderClient = audio_client.GetService().map_err(|e| {
+                let render_client: IAudioRenderClient = audio_client.GetService().map_err(|err| {
                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
                     AudioOutputError {
-                        code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                        message: format!("Failed to get render client: {e}"),
+                        code: open_failed_code,
+                        message: format!("Failed to get render client: {err}"),
                     }
                 })?;
 
                 eprintln!(
-                    "[NativeAudio][wasapi-exclusive] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
+                    "[NativeAudio][{backend_log_label}] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
                     attempt.label,
                     channels,
                     sample_rate,
@@ -1633,8 +2670,8 @@ fn open_wasapi_exclusive_stream(
         }
 
         Err(last_error.unwrap_or(AudioOutputError {
-            code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT,
-            message: "No supported exclusive output format found".to_string(),
+            code: unsupported_code,
+            message: format!("No supported {backend_log_label} output format found"),
         }))
     }
 }

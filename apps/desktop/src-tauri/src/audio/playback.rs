@@ -15,7 +15,8 @@ pub(crate) struct PreparedPlayback {
 pub(crate) fn prepare_playback(
     opened: AudioInputOpenResult,
     dsp: Arc<DspRuntime>,
-    tap: SpectrumTap,
+    pre_tap: SpectrumTap,
+    post_tap: SpectrumTap,
 ) -> PreparedPlayback {
     let AudioInputOpenResult {
         input_id,
@@ -37,7 +38,7 @@ pub(crate) fn prepare_playback(
         AudioInputKind::Rodio => {}
     }
 
-    let source = boxed_with_dsp(source, dsp, tap);
+    let source = boxed_with_dsp(source, dsp, pre_tap, post_tap);
 
     PreparedPlayback {
         input_id,

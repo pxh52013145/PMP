@@ -201,24 +201,3 @@ pub(crate) fn apply_audio_transfer_pressure_profile(profile: RealtimePressurePro
     }
 }
 
-pub(crate) fn set_current_thread_background_mode_best_effort() -> ThreadPriorityGuard {
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::System::Threading::{
-            GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
-        };
-
-        let enabled =
-            unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN).is_ok() };
-
-        ThreadPriorityGuard {
-            mmcss_handle: None,
-            background_mode_enabled: enabled,
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        ThreadPriorityGuard::default()
-    }
-}

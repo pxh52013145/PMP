@@ -101,6 +101,8 @@ let hostLabel = '';
 let hostInfo = null;
 let audioState = null;
 let audioSpectrum = null;
+let audioSpectrumFramePre = null;
+let audioSpectrumFramePost = null;
 let configValue = {};
 let navigationSnapshot = null;
 
@@ -111,6 +113,7 @@ const audioLoadProgressListeners = new Set();
 const audioErrorListeners = new Set();
 const configListeners = new Set();
 const spectrumListeners = new Set();
+const spectrumFrameListeners = new Set();
 const navigationListeners = new Set();
 
 const post = (msg) => postMessage({ frameId: FRAME_ID, ...msg });
@@ -304,6 +307,14 @@ const api = {
       }
       return audioSpectrum;
     },
+    getSpectrumFrame: (options) => {
+      if (!permissions.has('api:audio-visual')) {
+        warnDenied('api:audio-visual', 'visualizer.getSpectrumFrame(options)');
+        return null;
+      }
+      const tap = options && options.tap === 'pre-dsp' ? 'pre-dsp' : 'post-dsp';
+      return tap === 'pre-dsp' ? audioSpectrumFramePre : audioSpectrumFramePost;
+    },
     onSpectrum: (cb) => {
       if (!permissions.has('api:audio-visual')) {
         warnDenied('api:audio-visual', 'visualizer.onSpectrum(cb)');
@@ -312,6 +323,23 @@ const api = {
       if (typeof cb !== 'function') return () => {};
       spectrumListeners.add(cb);
       return () => spectrumListeners.delete(cb);
+    },
+    onSpectrumFrame: (cb, options) => {
+      if (!permissions.has('api:audio-visual')) {
+        warnDenied('api:audio-visual', 'visualizer.onSpectrumFrame(cb)');
+        return () => {};
+      }
+      if (typeof cb !== 'function') return () => {};
+      const tap = options && options.tap === 'pre-dsp' ? 'pre-dsp' : 'post-dsp';
+      const wrapped = (frame) => {
+        try {
+          if (!frame) return;
+          if (tap === 'pre-dsp' && frame.tap === 'pre-dsp') cb(frame);
+          if (tap === 'post-dsp' && frame.tap === 'post-dsp') cb(frame);
+        } catch {}
+      };
+      spectrumFrameListeners.add(wrapped);
+      return () => spectrumFrameListeners.delete(wrapped);
     },
   },
   navigation: {
@@ -409,6 +437,8 @@ addEventListener('message', async (event) => {
     permissions = new Set(Array.isArray(data.permissions) ? data.permissions.filter((p) => typeof p === 'string') : []);
     audioState = data.initialAudioState ?? null;
     audioSpectrum = data.initialAudioSpectrum ?? null;
+    audioSpectrumFramePre = data.initialAudioSpectrumFramePre ?? null;
+    audioSpectrumFramePost = data.initialAudioSpectrumFramePost ?? null;
     configValue = data.initialConfig && typeof data.initialConfig === 'object' ? data.initialConfig : {};
     navigationSnapshot = data.initialNavigation && typeof data.initialNavigation === 'object' ? data.initialNavigation : null;
 
@@ -484,6 +514,20 @@ addEventListener('message', async (event) => {
       audioSpectrum = data.payload ?? null;
       for (const cb of Array.from(spectrumListeners)) {
         try { cb(audioSpectrum); } catch {}
+      }
+      return;
+    }
+    if (data.name === 'audio.spectrumFrame.pre') {
+      audioSpectrumFramePre = data.payload ?? null;
+      for (const cb of Array.from(spectrumFrameListeners)) {
+        try { cb(audioSpectrumFramePre); } catch {}
+      }
+      return;
+    }
+    if (data.name === 'audio.spectrumFrame.post') {
+      audioSpectrumFramePost = data.payload ?? null;
+      for (const cb of Array.from(spectrumFrameListeners)) {
+        try { cb(audioSpectrumFramePost); } catch {}
       }
       return;
     }
@@ -694,6 +738,15 @@ async function runPmpmSandboxedCommandInWorker(options: {
           permissions: Array.from(permissions),
           entryCode,
           initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
+          initialAudioSpectrum: permissions.has('api:audio-visual') ? api.visualizer.getSpectrum() : null,
+          initialAudioSpectrumFramePre:
+            permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+              ? api.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
+              : null,
+          initialAudioSpectrumFramePost:
+            permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+              ? api.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
+              : null,
           initialNavigation:
             permissions.has('api:navigation') && typeof options.navigation.getSnapshot === 'function'
               ? options.navigation.getSnapshot()
@@ -958,6 +1011,15 @@ export async function runPmpmSandboxedCommand(options: {
       permissions: Array.from(permissions),
       entryCode,
       initialAudioState: permissions.has('api:audio-state') ? options.audioService.getState() : null,
+      initialAudioSpectrum: permissions.has('api:audio-visual') ? api.visualizer.getSpectrum() : null,
+      initialAudioSpectrumFramePre:
+        permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+          ? api.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
+          : null,
+      initialAudioSpectrumFramePost:
+        permissions.has('api:audio-visual') && typeof api.visualizer.getSpectrumFrame === 'function'
+          ? api.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
+          : null,
       initialNavigation:
         permissions.has('api:navigation') && typeof options.navigation.getSnapshot === 'function'
           ? options.navigation.getSnapshot()

@@ -109,6 +109,13 @@ export function AudioComponentsSettingsPanel() {
             title: t('settings.audioComponents.outputBackend.option.wasapi.title'),
             desc: t('settings.audioComponents.outputBackend.option.wasapi.desc'),
           };
+        case 'wasapi-shared-raw':
+          return {
+            id: backendId,
+            title: t('settings.audioComponents.outputBackend.option.wasapiSharedRaw.title'),
+            desc: t('settings.audioComponents.outputBackend.option.wasapiSharedRaw.desc'),
+            warning: t('settings.audioComponents.outputBackend.option.wasapiSharedRaw.warning'),
+          };
         case 'wasapi-exclusive':
           return {
             id: backendId,

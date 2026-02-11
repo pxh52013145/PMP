@@ -25,15 +25,11 @@ type CachedRuntime = {
 };
 
 const runtimeCache = new Map<string, CachedRuntime>();
-
-function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(buffer).set(data);
-  return buffer;
-}
+const UTF8_BOM = String.fromCharCode(0xfeff);
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(data));
+  const normalized = new Uint8Array(data);
+  const digest = await crypto.subtle.digest('SHA-256', normalized);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
@@ -41,6 +37,36 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
 
 async function sha256HexFromString(text: string): Promise<string> {
   return sha256Hex(new TextEncoder().encode(text));
+}
+
+function normalizeLineEndingsToLf(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function buildEntryIntegrityCandidates(entryCode: string): string[] {
+  const candidateTexts = new Set<string>();
+  candidateTexts.add(entryCode);
+
+  if (entryCode.startsWith(UTF8_BOM)) {
+    candidateTexts.add(entryCode.slice(1));
+  } else {
+    candidateTexts.add(`${UTF8_BOM}${entryCode}`);
+  }
+
+  const normalizedCandidates = new Set<string>();
+  for (const text of candidateTexts) {
+    normalizedCandidates.add(text);
+    const withoutBom = text.startsWith(UTF8_BOM) ? text.slice(1) : text;
+    const lf = normalizeLineEndingsToLf(withoutBom);
+    const crlf = lf.replace(/\n/g, '\r\n');
+
+    normalizedCandidates.add(lf);
+    normalizedCandidates.add(crlf);
+    normalizedCandidates.add(`${UTF8_BOM}${lf}`);
+    normalizedCandidates.add(`${UTF8_BOM}${crlf}`);
+  }
+
+  return Array.from(normalizedCandidates);
 }
 
 export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise<string> {
@@ -77,8 +103,14 @@ export async function readVerifiedPmpmPluginEntryCode(pluginId: string): Promise
   }
 
   if (installed.entrySha256) {
-    const computed = await sha256HexFromString(entryCode);
-    if (computed !== installed.entrySha256) {
+    const expected = installed.entrySha256.toLowerCase();
+    const candidateHashes = new Set<string>();
+    const candidateTexts = buildEntryIntegrityCandidates(entryCode);
+    for (const candidate of candidateTexts) {
+      candidateHashes.add(await sha256HexFromString(candidate));
+    }
+
+    if (!candidateHashes.has(expected)) {
       throw new Error(
         `Plugin integrity check failed (entrySha256 mismatch). Please reinstall: ${pluginId}`
       );

@@ -100,6 +100,28 @@ type CrossfadeSettings = {
   durationMs: number;
 };
 
+type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
+type NativeAudioSrcBackend = 'rubato' | 'linear-simd';
+type NativeAudioSrcPresetId = 'balanced' | 'hi-end' | 'low-latency';
+
+type NativeAudioEnginePolicyPayload = {
+  srcMode?: NativeAudioSrcMode;
+  srcBackend?: NativeAudioSrcBackend;
+  srcTargetSampleRate?: number | null;
+};
+
+type NativeAudioDynamicSrcSettings = {
+  enabled: boolean;
+  adaptiveEnabled: boolean;
+  learningEnabled: boolean;
+  restoreDebounceMs: number;
+  minSwitchIntervalMs: number;
+  seekHoldMs: number;
+  underrunHoldMs: number;
+  sharedStressHoldMs: number;
+  outputErrorHoldMs: number;
+};
+
 const EMPTY_ROBUSTNESS: AudioRobustnessSnapshot = {
   outputBackendId: null,
   outputBackends: [],
@@ -164,6 +186,21 @@ export const NativeDebugPage: React.FC = () => {
   const [crossfadeSettings, setCrossfadeSettings] = useState<CrossfadeSettings>({
     enabled: false,
     durationMs: 1200,
+  });
+  const [srcMode, setSrcMode] = useState<NativeAudioSrcMode>('match-output');
+  const [srcBackend, setSrcBackend] = useState<NativeAudioSrcBackend>('rubato');
+  const [srcTargetRate, setSrcTargetRate] = useState<string>('96000');
+  const [srcPresetId, setSrcPresetId] = useState<NativeAudioSrcPresetId>('balanced');
+  const [dynamicSrcSettings, setDynamicSrcSettings] = useState<NativeAudioDynamicSrcSettings>({
+    enabled: true,
+    adaptiveEnabled: true,
+    learningEnabled: true,
+    restoreDebounceMs: 4000,
+    minSwitchIntervalMs: 600,
+    seekHoldMs: 2000,
+    underrunHoldMs: 12000,
+    sharedStressHoldMs: 8000,
+    outputErrorHoldMs: 10000,
   });
   const [robustness, setRobustness] = useState<AudioRobustnessSnapshot>(() =>
     audioService.getRobustnessSnapshot?.() ?? EMPTY_ROBUSTNESS
@@ -355,6 +392,235 @@ export const NativeDebugPage: React.FC = () => {
     return artist ? `${title} — ${artist}` : title;
   }, [state.currentTrack, t]);
 
+  const parseSrcTargetRate = useCallback((value: string): number | null => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return Math.max(8000, Math.min(768000, Math.floor(parsed)));
+  }, []);
+
+  const detectSrcPreset = useCallback(
+    (
+      mode: NativeAudioSrcMode,
+      backend: NativeAudioSrcBackend,
+      targetRate: number | null
+    ): NativeAudioSrcPresetId => {
+      if (mode === 'target-rate' && backend === 'rubato' && targetRate === 192000) {
+        return 'hi-end';
+      }
+      if (mode === 'match-output' && backend === 'linear-simd') {
+        return 'low-latency';
+      }
+      return 'balanced';
+    },
+    []
+  );
+
+  const applySrcPolicyState = useCallback(
+    (payload: NativeAudioEnginePolicyPayload) => {
+      const mode =
+        payload.srcMode === 'source-native' ||
+        payload.srcMode === 'match-output' ||
+        payload.srcMode === 'target-rate'
+          ? payload.srcMode
+          : 'match-output';
+      const backend =
+        payload.srcBackend === 'rubato' || payload.srcBackend === 'linear-simd'
+          ? payload.srcBackend
+          : 'rubato';
+      const targetRate =
+        typeof payload.srcTargetSampleRate === 'number' && Number.isFinite(payload.srcTargetSampleRate)
+          ? Math.max(8000, Math.min(768000, Math.floor(payload.srcTargetSampleRate)))
+          : null;
+
+      setSrcMode(mode);
+      setSrcBackend(backend);
+      setSrcTargetRate(String(targetRate ?? 96000));
+      setSrcPresetId(detectSrcPreset(mode, backend, targetRate));
+    },
+    [detectSrcPreset]
+  );
+
+  const readDynamicSrcAutoSettings = useCallback((): NativeAudioDynamicSrcSettings => {
+    const getter = audioService.getDynamicSrcAutoSettings;
+    if (!getter) {
+      return {
+        enabled: true,
+        adaptiveEnabled: true,
+        learningEnabled: true,
+        restoreDebounceMs: 4000,
+        minSwitchIntervalMs: 600,
+        seekHoldMs: 2000,
+        underrunHoldMs: 12000,
+        sharedStressHoldMs: 8000,
+        outputErrorHoldMs: 10000,
+      };
+    }
+    try {
+      const settings = getter.call(audioService);
+      return {
+        enabled: typeof settings?.enabled === 'boolean' ? settings.enabled : true,
+        adaptiveEnabled:
+          typeof settings?.adaptiveEnabled === 'boolean' ? settings.adaptiveEnabled : true,
+        learningEnabled:
+          typeof settings?.learningEnabled === 'boolean' ? settings.learningEnabled : true,
+        restoreDebounceMs:
+          typeof settings?.restoreDebounceMs === 'number' ? settings.restoreDebounceMs : 4000,
+        minSwitchIntervalMs:
+          typeof settings?.minSwitchIntervalMs === 'number' ? settings.minSwitchIntervalMs : 600,
+        seekHoldMs: typeof settings?.seekHoldMs === 'number' ? settings.seekHoldMs : 2000,
+        underrunHoldMs:
+          typeof settings?.underrunHoldMs === 'number' ? settings.underrunHoldMs : 12000,
+        sharedStressHoldMs:
+          typeof settings?.sharedStressHoldMs === 'number' ? settings.sharedStressHoldMs : 8000,
+        outputErrorHoldMs:
+          typeof settings?.outputErrorHoldMs === 'number' ? settings.outputErrorHoldMs : 10000,
+      };
+    } catch {
+      return {
+        enabled: true,
+        adaptiveEnabled: true,
+        learningEnabled: true,
+        restoreDebounceMs: 4000,
+        minSwitchIntervalMs: 600,
+        seekHoldMs: 2000,
+        underrunHoldMs: 12000,
+        sharedStressHoldMs: 8000,
+        outputErrorHoldMs: 10000,
+      };
+    }
+  }, [audioService]);
+
+  const applyDynamicSrcAutoSettings = useCallback(
+    async (patch: Partial<NativeAudioDynamicSrcSettings>) => {
+      const setter = audioService.setDynamicSrcAutoSettings;
+      if (!setter) return;
+
+      const nextSettings: NativeAudioDynamicSrcSettings = {
+        ...dynamicSrcSettings,
+        ...patch,
+      };
+
+      setDynamicSrcSettings(nextSettings);
+      try {
+        await setter.call(audioService, nextSettings);
+        if (typeof patch.enabled === 'boolean') {
+          appendLog(
+            patch.enabled
+              ? t('pages.native-debug.log.dynamicSrcAutoEnabled')
+              : t('pages.native-debug.log.dynamicSrcAutoDisabled')
+          );
+        } else {
+          appendLog(t('pages.native-debug.log.dynamicSrcParamsUpdated'));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setDynamicSrcSettings(dynamicSrcSettings);
+        appendLog(t('pages.native-debug.log.dynamicSrcAutoUpdateFailed', { message }));
+      }
+    },
+    [appendLog, audioService, dynamicSrcSettings, t]
+  );
+
+  const fetchEnginePolicy = useCallback(async () => {
+    try {
+      const payload = await invoke<unknown>('native_audio_get_engine_policy');
+      const record = asRecord(payload);
+      if (!record) return;
+      applySrcPolicyState(record as NativeAudioEnginePolicyPayload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.enginePolicyFetchFailed', { message }));
+    }
+  }, [appendLog, applySrcPolicyState, t]);
+
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    const settings = readDynamicSrcAutoSettings();
+    setDynamicSrcSettings(settings);
+  }, [isNativeEngine, readDynamicSrcAutoSettings]);
+
+  const handleApplySrcPolicy = useCallback(async () => {
+    const targetRate = parseSrcTargetRate(srcTargetRate);
+    const shouldUseTarget = srcMode === 'target-rate';
+
+    try {
+      const payload = await invoke<unknown>('native_audio_set_engine_policy', {
+        srcMode,
+        srcBackend,
+        srcTargetSampleRate: shouldUseTarget ? targetRate : null,
+      });
+      const record = asRecord(payload);
+      if (record) {
+        applySrcPolicyState(record as NativeAudioEnginePolicyPayload);
+      }
+
+      appendLog(
+        t('pages.native-debug.log.srcPolicyApplied', {
+          mode: srcMode,
+          backend: srcBackend,
+          targetRate: shouldUseTarget ? targetRate ?? 0 : 0,
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendLog(t('pages.native-debug.log.srcPolicyApplyFailed', { message }));
+    }
+  }, [
+    appendLog,
+    applySrcPolicyState,
+    parseSrcTargetRate,
+    srcBackend,
+    srcMode,
+    srcTargetRate,
+    t,
+  ]);
+
+  const handleApplySrcPreset = useCallback(
+    async (presetId: NativeAudioSrcPresetId) => {
+      let nextMode: NativeAudioSrcMode = 'match-output';
+      let nextBackend: NativeAudioSrcBackend = 'rubato';
+      let nextTarget: number | null = null;
+
+      if (presetId === 'hi-end') {
+        nextMode = 'target-rate';
+        nextBackend = 'rubato';
+        nextTarget = 192000;
+      } else if (presetId === 'low-latency') {
+        nextMode = 'match-output';
+        nextBackend = 'linear-simd';
+      }
+
+      setSrcPresetId(presetId);
+      setSrcMode(nextMode);
+      setSrcBackend(nextBackend);
+      if (nextTarget) {
+        setSrcTargetRate(String(nextTarget));
+      }
+
+      try {
+        const payload = await invoke<unknown>('native_audio_set_engine_policy', {
+          srcMode: nextMode,
+          srcBackend: nextBackend,
+          srcTargetSampleRate: nextMode === 'target-rate' ? nextTarget : null,
+        });
+        const record = asRecord(payload);
+        if (record) {
+          applySrcPolicyState(record as NativeAudioEnginePolicyPayload);
+        }
+
+        appendLog(
+          t('pages.native-debug.log.srcPresetApplied', {
+            preset: t(`pages.native-debug.src.preset.${presetId}`),
+          })
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendLog(t('pages.native-debug.log.srcPolicyApplyFailed', { message }));
+      }
+    },
+    [appendLog, applySrcPolicyState, t]
+  );
+
   const handleRefreshAudioComponents = useCallback(async () => {
     try {
       const payload = await invoke<unknown>('native_audio_get_audio_components_state');
@@ -366,6 +632,8 @@ export const NativeDebugPage: React.FC = () => {
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.error', { message }));
     }
+
+    await fetchEnginePolicy();
 
     try {
       const backends = await invoke<string[]>('native_audio_list_output_backends');
@@ -384,7 +652,7 @@ export const NativeDebugPage: React.FC = () => {
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.audioInputsFetchFailed', { message }));
     }
-  }, [appendLog, t]);
+  }, [appendLog, fetchEnginePolicy, t]);
 
   useEffect(() => {
     if (!isNativeEngine) return;
@@ -786,6 +1054,49 @@ export const NativeDebugPage: React.FC = () => {
 
   const displayedState = useMemo(() => JSON.stringify(state, null, 2), [state]);
   const displayedRobustness = useMemo(() => JSON.stringify(robustness, null, 2), [robustness]);
+  const diagnosticTimelineRows = useMemo(
+    () =>
+      (robustness.diagnosticTimeline ?? []).map((event) => {
+        const timestamp = new Date(event.timestampMs).toLocaleTimeString(locale);
+        return `${timestamp} #${event.seq} ${event.kind} value=${event.value} aux=${event.aux}`;
+      }),
+    [locale, robustness.diagnosticTimeline]
+  );
+
+  const outputMetricsUnavailableLabel = useMemo(() => {
+    if (robustness.outputCallbackMetricsValid !== false) {
+      return t('pages.native-debug.robustness.output.metricsUnavailable');
+    }
+
+    return t('pages.native-debug.robustness.output.metricsUnavailableWithBackend', {
+      backend: robustness.outputBackendId ?? t('common.state.unknown'),
+    });
+  }, [robustness.outputBackendId, robustness.outputCallbackMetricsValid, t]);
+
+  const outputMonitorStatusLabel = useMemo(() => {
+    if (robustness.outputCallbackMetricsValid === true) {
+      return t('pages.native-debug.robustness.monitor.output.enabled');
+    }
+    if (robustness.outputCallbackMetricsValid === false) {
+      return t('pages.native-debug.robustness.monitor.output.disabled', {
+        backend: robustness.outputBackendId ?? t('common.state.unknown'),
+      });
+    }
+    return t('common.state.unknown');
+  }, [robustness.outputBackendId, robustness.outputCallbackMetricsValid, t]);
+
+  const transferMonitorStatusLabel = useMemo(() => {
+    const activeInputId = componentsState.activeInputId;
+    if (robustness.transferMetricsValid === true) {
+      return t('pages.native-debug.robustness.monitor.transfer.enabled', {
+        inputId: activeInputId ?? t('common.state.unknown'),
+      });
+    }
+
+    return t('pages.native-debug.robustness.monitor.transfer.disabled', {
+      inputId: activeInputId ?? t('common.state.unknown'),
+    });
+  }, [componentsState.activeInputId, robustness.transferMetricsValid, t]);
 
   const lastAutoSwitchLabel = useMemo(() => {
     if (!robustness.lastAutoSwitchAtMs) {
@@ -849,16 +1160,18 @@ export const NativeDebugPage: React.FC = () => {
             </button>
             <div className="transport-buttons">
               <button type="button" onClick={handlePrev} disabled={!state.queue.length}>
-                鈼€锔?
+                {t('pages.native-debug.transport.prev')}
               </button>
               <button type="button" onClick={() => void handleTogglePlayPause()}>
-                {state.playbackState === 'playing' ? '鉂氣潥' : '鈻讹笌'}
+                {state.playbackState === 'playing'
+                  ? t('pages.native-debug.transport.pause')
+                  : t('pages.native-debug.transport.play')}
               </button>
               <button type="button" onClick={handleStop}>
-                鈻?
+                {t('pages.native-debug.transport.stop')}
               </button>
               <button type="button" onClick={handleNext} disabled={!state.queue.length}>
-                鈻讹笌
+                {t('pages.native-debug.transport.next')}
               </button>
             </div>
           </div>
@@ -1147,6 +1460,269 @@ export const NativeDebugPage: React.FC = () => {
 
           <div className="device-row">
             <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.title')}</p>
+              <p className="device-value">{t(`pages.native-debug.src.preset.${srcPresetId}`)}</p>
+              <p className="device-hint">{t('pages.native-debug.src.desc')}</p>
+            </div>
+            <div className="device-controls src-preset-controls">
+              <button type="button" onClick={() => void handleApplySrcPreset('balanced')}>
+                {t('pages.native-debug.src.preset.balanced')}
+              </button>
+              <button type="button" onClick={() => void handleApplySrcPreset('hi-end')}>
+                {t('pages.native-debug.src.preset.hi-end')}
+              </button>
+              <button type="button" onClick={() => void handleApplySrcPreset('low-latency')}>
+                {t('pages.native-debug.src.preset.low-latency')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.mode.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.src.mode.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <select
+                value={srcMode}
+                onChange={(e) => setSrcMode(e.target.value as NativeAudioSrcMode)}
+                aria-label={t('pages.native-debug.src.mode.title')}
+              >
+                <option value="source-native">{t('pages.native-debug.src.mode.source-native')}</option>
+                <option value="match-output">{t('pages.native-debug.src.mode.match-output')}</option>
+                <option value="target-rate">{t('pages.native-debug.src.mode.target-rate')}</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.backend.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.src.backend.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <select
+                value={srcBackend}
+                onChange={(e) => setSrcBackend(e.target.value as NativeAudioSrcBackend)}
+                aria-label={t('pages.native-debug.src.backend.title')}
+              >
+                <option value="rubato">{t('pages.native-debug.src.backend.rubato')}</option>
+                <option value="linear-simd">{t('pages.native-debug.src.backend.linear-simd')}</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.targetRate.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.src.targetRate.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <input
+                type="number"
+                min={8000}
+                max={768000}
+                step={1000}
+                value={srcTargetRate}
+                onChange={(e) => setSrcTargetRate(e.target.value)}
+                disabled={srcMode !== 'target-rate'}
+                aria-label={t('pages.native-debug.src.targetRate.title')}
+                className="src-target-rate-input"
+              />
+              <button type="button" onClick={() => void handleApplySrcPolicy()}>
+                {t('common.action.apply')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.dynamic.title')}</p>
+              <p className="device-value">
+                {dynamicSrcSettings.enabled ? t('common.state.on') : t('common.state.off')}
+              </p>
+              <p className="device-hint">{t('pages.native-debug.src.dynamic.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <button
+                type="button"
+                className={dynamicSrcSettings.enabled ? 'is-active-toggle' : ''}
+                onClick={() => void applyDynamicSrcAutoSettings({ enabled: true })}
+              >
+                {t('common.state.on')}
+              </button>
+              <button
+                type="button"
+                className={!dynamicSrcSettings.enabled ? 'is-active-toggle' : ''}
+                onClick={() => void applyDynamicSrcAutoSettings({ enabled: false })}
+              >
+                {t('common.state.off')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.dynamic.adaptive.title')}</p>
+              <p className="device-value">
+                {dynamicSrcSettings.adaptiveEnabled ? t('common.state.on') : t('common.state.off')}
+              </p>
+              <p className="device-hint">{t('pages.native-debug.src.dynamic.adaptive.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <button
+                type="button"
+                className={dynamicSrcSettings.adaptiveEnabled ? 'is-active-toggle' : ''}
+                onClick={() => void applyDynamicSrcAutoSettings({ adaptiveEnabled: true })}
+              >
+                {t('common.state.on')}
+              </button>
+              <button
+                type="button"
+                className={!dynamicSrcSettings.adaptiveEnabled ? 'is-active-toggle' : ''}
+                onClick={() => void applyDynamicSrcAutoSettings({ adaptiveEnabled: false })}
+              >
+                {t('common.state.off')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.dynamic.learning.title')}</p>
+              <p className="device-value">
+                {dynamicSrcSettings.learningEnabled ? t('common.state.on') : t('common.state.off')}
+              </p>
+              <p className="device-hint">{t('pages.native-debug.src.dynamic.learning.desc')}</p>
+            </div>
+            <div className="device-controls">
+              <button
+                type="button"
+                className={dynamicSrcSettings.learningEnabled ? 'is-active-toggle' : ''}
+                onClick={() => void applyDynamicSrcAutoSettings({ learningEnabled: true })}
+              >
+                {t('common.state.on')}
+              </button>
+              <button
+                type="button"
+                className={!dynamicSrcSettings.learningEnabled ? 'is-active-toggle' : ''}
+                onClick={() => void applyDynamicSrcAutoSettings({ learningEnabled: false })}
+              >
+                {t('common.state.off')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
+              <p className="device-label">{t('pages.native-debug.src.dynamic.params.title')}</p>
+              <p className="device-hint">{t('pages.native-debug.src.dynamic.params.desc')}</p>
+            </div>
+            <div className="device-controls dynamic-src-param-controls">
+              <label className="dynamic-src-param-item">
+                <span>{t('pages.native-debug.src.dynamic.params.restoreDebounceMs')}</span>
+                <input
+                  type="number"
+                  min={500}
+                  max={30000}
+                  step={100}
+                  value={dynamicSrcSettings.restoreDebounceMs}
+                  onChange={(event) =>
+                    setDynamicSrcSettings((prev) => ({
+                      ...prev,
+                      restoreDebounceMs: Number(event.target.value) || prev.restoreDebounceMs,
+                    }))
+                  }
+                />
+              </label>
+              <label className="dynamic-src-param-item">
+                <span>{t('pages.native-debug.src.dynamic.params.minSwitchIntervalMs')}</span>
+                <input
+                  type="number"
+                  min={100}
+                  max={10000}
+                  step={50}
+                  value={dynamicSrcSettings.minSwitchIntervalMs}
+                  onChange={(event) =>
+                    setDynamicSrcSettings((prev) => ({
+                      ...prev,
+                      minSwitchIntervalMs: Number(event.target.value) || prev.minSwitchIntervalMs,
+                    }))
+                  }
+                />
+              </label>
+              <label className="dynamic-src-param-item">
+                <span>{t('pages.native-debug.src.dynamic.params.seekHoldMs')}</span>
+                <input
+                  type="number"
+                  min={500}
+                  max={20000}
+                  step={100}
+                  value={dynamicSrcSettings.seekHoldMs}
+                  onChange={(event) =>
+                    setDynamicSrcSettings((prev) => ({
+                      ...prev,
+                      seekHoldMs: Number(event.target.value) || prev.seekHoldMs,
+                    }))
+                  }
+                />
+              </label>
+              <label className="dynamic-src-param-item">
+                <span>{t('pages.native-debug.src.dynamic.params.underrunHoldMs')}</span>
+                <input
+                  type="number"
+                  min={2000}
+                  max={120000}
+                  step={500}
+                  value={dynamicSrcSettings.underrunHoldMs}
+                  onChange={(event) =>
+                    setDynamicSrcSettings((prev) => ({
+                      ...prev,
+                      underrunHoldMs: Number(event.target.value) || prev.underrunHoldMs,
+                    }))
+                  }
+                />
+              </label>
+              <label className="dynamic-src-param-item">
+                <span>{t('pages.native-debug.src.dynamic.params.sharedStressHoldMs')}</span>
+                <input
+                  type="number"
+                  min={1000}
+                  max={90000}
+                  step={500}
+                  value={dynamicSrcSettings.sharedStressHoldMs}
+                  onChange={(event) =>
+                    setDynamicSrcSettings((prev) => ({
+                      ...prev,
+                      sharedStressHoldMs: Number(event.target.value) || prev.sharedStressHoldMs,
+                    }))
+                  }
+                />
+              </label>
+              <label className="dynamic-src-param-item">
+                <span>{t('pages.native-debug.src.dynamic.params.outputErrorHoldMs')}</span>
+                <input
+                  type="number"
+                  min={1000}
+                  max={120000}
+                  step={500}
+                  value={dynamicSrcSettings.outputErrorHoldMs}
+                  onChange={(event) =>
+                    setDynamicSrcSettings((prev) => ({
+                      ...prev,
+                      outputErrorHoldMs: Number(event.target.value) || prev.outputErrorHoldMs,
+                    }))
+                  }
+                />
+              </label>
+              <button type="button" onClick={() => void applyDynamicSrcAutoSettings(dynamicSrcSettings)}>
+                {t('common.action.apply')}
+              </button>
+            </div>
+          </div>
+
+          <div className="device-row">
+            <div className="device-meta">
               <p className="device-label">{t('pages.native-debug.outputDevice.title')}</p>
               <p className="device-value">{nativeMeta.device ?? t('pages.native-debug.outputDevice.default')}</p>
               <p className="device-hint">
@@ -1204,6 +1780,14 @@ export const NativeDebugPage: React.FC = () => {
                 </p>
               </div>
               <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.monitor.output.title')}</p>
+                <p className="device-value">{outputMonitorStatusLabel}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.monitor.transfer.title')}</p>
+                <p className="device-value">{transferMonitorStatusLabel}</p>
+              </div>
+              <div className="robustness-item">
                 <p className="device-label">{t('pages.native-debug.robustness.underrun.events')}</p>
                 <p className="device-value">{robustness.underrunEvents}</p>
               </div>
@@ -1230,10 +1814,156 @@ export const NativeDebugPage: React.FC = () => {
                 <p className="device-value">{robustness.hqSrcPhaseMode ?? t('common.state.unknown')}</p>
               </div>
               <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.src.mode')}</p>
+                <p className="device-value">{robustness.srcMode ?? t('common.state.unknown')}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.src.backend')}</p>
+                <p className="device-value">{robustness.srcBackend ?? t('common.state.unknown')}</p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.src.targetRate')}</p>
+                <p className="device-value">
+                  {typeof robustness.srcTargetSampleRate === 'number'
+                    ? `${robustness.srcTargetSampleRate} Hz`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.enabled')}</p>
+                <p className="device-value">
+                  {robustness.dynamicSrcAutoEnabled ? t('common.state.on') : t('common.state.off')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.profile')}</p>
+                <p className="device-value">
+                  {robustness.dynamicSrcProfile ?? t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.adaptiveEnabled')}</p>
+                <p className="device-value">
+                  {robustness.dynamicSrcAdaptiveEnabled ? t('common.state.on') : t('common.state.off')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.adaptiveProfile')}</p>
+                <p className="device-value">
+                  {robustness.dynamicSrcAdaptiveProfile ?? t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.stressScore')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcStressScore === 'number'
+                    ? String(robustness.dynamicSrcStressScore)
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.learningEnabled')}</p>
+                <p className="device-value">
+                  {robustness.dynamicSrcLearningEnabled ? t('common.state.on') : t('common.state.off')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.learningScale')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcLearningScale === 'number'
+                    ? robustness.dynamicSrcLearningScale.toFixed(3)
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.lastReason')}</p>
+                <p className="device-value">
+                  {robustness.dynamicSrcLastSwitchReason ?? t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.holdMs')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcHoldUntilMs === 'number'
+                    ? `${robustness.dynamicSrcHoldUntilMs} ms`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.restoreDebounceMs')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcRestoreDebounceMs === 'number'
+                    ? `${robustness.dynamicSrcRestoreDebounceMs} ms`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.minSwitchIntervalMs')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcMinSwitchIntervalMs === 'number'
+                    ? `${robustness.dynamicSrcMinSwitchIntervalMs} ms`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.effectiveRestoreDebounceMs')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcEffectiveRestoreDebounceMs === 'number'
+                    ? `${robustness.dynamicSrcEffectiveRestoreDebounceMs} ms`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.dynamic.effectiveMinSwitchIntervalMs')}</p>
+                <p className="device-value">
+                  {typeof robustness.dynamicSrcEffectiveMinSwitchIntervalMs === 'number'
+                    ? `${robustness.dynamicSrcEffectiveMinSwitchIntervalMs} ms`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
                 <p className="device-label">{t('pages.native-debug.robustness.hq.stopband')}</p>
                 <p className="device-value">
                   {typeof robustness.hqSrcStopbandDb === 'number'
                     ? `${robustness.hqSrcStopbandDb} dB`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.hq.active')}</p>
+                <p className="device-value">
+                  {typeof robustness.hqSrcActive === 'boolean'
+                    ? robustness.hqSrcActive
+                      ? t('common.state.on')
+                      : t('common.state.off')
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.hq.ratio')}</p>
+                <p className="device-value">
+                  {typeof robustness.hqSrcRatio === 'number' && Number.isFinite(robustness.hqSrcRatio)
+                    ? robustness.hqSrcRatio.toFixed(6)
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.hq.sourceRate')}</p>
+                <p className="device-value">
+                  {typeof robustness.sourceSampleRate === 'number' &&
+                  Number.isFinite(robustness.sourceSampleRate) &&
+                  robustness.sourceSampleRate > 0
+                    ? `${Math.floor(robustness.sourceSampleRate)} Hz`
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.hq.outputRate')}</p>
+                <p className="device-value">
+                  {typeof robustness.outputSampleRate === 'number' &&
+                  Number.isFinite(robustness.outputSampleRate) &&
+                  robustness.outputSampleRate > 0
+                    ? `${Math.floor(robustness.outputSampleRate)} Hz`
                     : t('common.state.unknown')}
                 </p>
               </div>
@@ -1294,7 +2024,7 @@ export const NativeDebugPage: React.FC = () => {
                   typeof robustness.outputCallbackP99Us === 'number'
                     ? `${robustness.outputCallbackP99Us} μs`
                     : robustness.outputCallbackMetricsValid === false
-                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      ? outputMetricsUnavailableLabel
                       : t('common.state.unknown')}
                 </p>
               </div>
@@ -1305,7 +2035,7 @@ export const NativeDebugPage: React.FC = () => {
                   typeof robustness.outputWaitTimeoutCount === 'number'
                     ? robustness.outputWaitTimeoutCount
                     : robustness.outputCallbackMetricsValid === false
-                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      ? outputMetricsUnavailableLabel
                       : t('common.state.unknown')}
                 </p>
               </div>
@@ -1316,7 +2046,7 @@ export const NativeDebugPage: React.FC = () => {
                   typeof robustness.outputRenderUnderrunEvents === 'number'
                     ? robustness.outputRenderUnderrunEvents
                     : robustness.outputCallbackMetricsValid === false
-                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      ? outputMetricsUnavailableLabel
                       : t('common.state.unknown')}
                 </p>
               </div>
@@ -1327,7 +2057,40 @@ export const NativeDebugPage: React.FC = () => {
                   typeof robustness.outputRenderUnderrunFrames === 'number'
                     ? robustness.outputRenderUnderrunFrames
                     : robustness.outputCallbackMetricsValid === false
-                      ? t('pages.native-debug.robustness.output.metricsUnavailable')
+                      ? outputMetricsUnavailableLabel
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.callbackJitterP99')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputCallbackIntervalJitterP99Us === 'number'
+                    ? `${robustness.outputCallbackIntervalJitterP99Us} μs`
+                    : robustness.outputCallbackMetricsValid === false
+                      ? outputMetricsUnavailableLabel
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.callbackOverrun')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputCallbackIntervalOverrunCount === 'number'
+                    ? robustness.outputCallbackIntervalOverrunCount
+                    : robustness.outputCallbackMetricsValid === false
+                      ? outputMetricsUnavailableLabel
+                      : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.output.callbackExpectedInterval')}</p>
+                <p className="device-value">
+                  {robustness.outputCallbackMetricsValid === true &&
+                  typeof robustness.outputCallbackExpectedIntervalUs === 'number'
+                    ? `${robustness.outputCallbackExpectedIntervalUs} μs`
+                    : robustness.outputCallbackMetricsValid === false
+                      ? outputMetricsUnavailableLabel
                       : t('common.state.unknown')}
                 </p>
               </div>
@@ -1356,6 +2119,48 @@ export const NativeDebugPage: React.FC = () => {
                 </p>
               </div>
               <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.shared.enabled')}</p>
+                <p className="device-value">
+                  {typeof robustness.sharedRenderAheadEnabled === 'boolean'
+                    ? robustness.sharedRenderAheadEnabled
+                      ? t('common.state.on')
+                      : t('common.state.off')
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.shared.underrunEvents')}</p>
+                <p className="device-value">
+                  {typeof robustness.sharedRenderUnderrunEvents === 'number'
+                    ? robustness.sharedRenderUnderrunEvents
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.shared.underrunFrames')}</p>
+                <p className="device-value">
+                  {typeof robustness.sharedRenderUnderrunFrames === 'number'
+                    ? robustness.sharedRenderUnderrunFrames
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.shared.lowHits')}</p>
+                <p className="device-value">
+                  {typeof robustness.sharedRenderLowHitCount === 'number'
+                    ? robustness.sharedRenderLowHitCount
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.shared.lowWatermark')}</p>
+                <p className="device-value">
+                  {typeof robustness.sharedRenderLowWatermarkSamples === 'number'
+                    ? robustness.sharedRenderLowWatermarkSamples
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+              <div className="robustness-item">
                 <p className="device-label">{t('pages.native-debug.robustness.transfer.pageLock')}</p>
                 <p className="device-value">
                   {typeof robustness.renderQueuePageLocked === 'boolean'
@@ -1365,6 +2170,26 @@ export const NativeDebugPage: React.FC = () => {
                     : t('common.state.unknown')}
                 </p>
               </div>
+              <div className="robustness-item">
+                <p className="device-label">{t('pages.native-debug.robustness.timeline.dropped')}</p>
+                <p className="device-value">
+                  {typeof robustness.diagnosticTimelineDroppedEvents === 'number'
+                    ? robustness.diagnosticTimelineDroppedEvents
+                    : t('common.state.unknown')}
+                </p>
+              </div>
+            </div>
+            <div className="native-debug-timeline">
+              <p className="device-label">{t('pages.native-debug.robustness.timeline.title')}</p>
+              {diagnosticTimelineRows.length > 0 ? (
+                <ul>
+                  {diagnosticTimelineRows.map((row, index) => (
+                    <li key={`${index}-${row}`}>{row}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="device-hint">{t('pages.native-debug.robustness.timeline.empty')}</p>
+              )}
             </div>
             <pre className="native-debug-state">{displayedRobustness}</pre>
           </div>

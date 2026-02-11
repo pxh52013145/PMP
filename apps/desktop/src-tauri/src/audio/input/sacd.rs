@@ -16,7 +16,10 @@ use super::streaming::{
     DecoderCommand, StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx,
     TransferCommand,
 };
-use super::{AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult};
+use super::{
+    AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
+    AudioInputSrcPolicy,
+};
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
 const SACD_DSD_TO_PCM_DECIMATOR_TAPS: usize = 255;
@@ -195,6 +198,7 @@ impl StreamingFirDecimator {
 fn start_dsf_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
     let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
         output_sample_rate,
@@ -285,6 +289,7 @@ fn start_dsf_stream(
                 let meta = AudioInputMeta {
                     channels: channels as u16,
                     sample_rate: target_pcm_rate,
+                    source_sample_rate: base_pcm_rate,
                     bit_depth: Some(1),
                     duration,
                 };
@@ -312,11 +317,14 @@ fn start_dsf_stream(
                 let resample_chunk_frames = 256usize;
                 let mut resampler: Option<crate::audio::resample::StreamingResampler> =
                     if target_pcm_rate != base_pcm_rate {
-                        crate::audio::resample::StreamingResampler::new(
+                        crate::audio::resample::StreamingResampler::new_with_policy(
                             base_pcm_rate,
                             target_pcm_rate,
                             channels,
                             resample_chunk_frames,
+                            src_policy.hq_src_enabled,
+                            src_policy.hq_src_phase_mode,
+                            src_policy.src_backend,
                         )
                         .ok()
                     } else {
@@ -565,6 +573,7 @@ impl AudioInput for SacdInput {
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+        src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         let ext = path
             .extension()
@@ -579,7 +588,7 @@ impl AudioInput for SacdInput {
             ));
         }
 
-        let (source, meta, streaming) = start_dsf_stream(path, output_sample_rate)?;
+        let (source, meta, streaming) = start_dsf_stream(path, output_sample_rate, src_policy)?;
 
         Ok(AudioInputOpenResult {
             input_id: self.id(),
@@ -637,48 +646,6 @@ mod tests {
         let block = vec![fill; block_size as usize];
         for _ in 0..channels {
             file.write_all(&block).unwrap();
-        }
-    }
-
-    fn write_dsf_stereo_frames(path: &Path, dsd_rate: u32, fill: u8, frames: u32) {
-        let channels = 2u32;
-        let bits_per_sample = 1u32;
-        let block_size = 4096u32;
-        let frames = frames.max(1);
-        let samples_per_block = 8u64 * block_size as u64;
-        let sample_count = samples_per_block.saturating_mul(frames as u64);
-
-        let data_bytes = (channels as u64) * (block_size as u64) * (frames as u64);
-        let file_size = 28u64 + 52u64 + 12u64 + data_bytes;
-        let data_chunk_size = 12u64 + data_bytes;
-
-        let mut file = File::create(path).expect("create dsf");
-
-        file.write_all(b"DSD ").unwrap();
-        file.write_all(&28u64.to_le_bytes()).unwrap();
-        file.write_all(&file_size.to_le_bytes()).unwrap();
-        file.write_all(&0u64.to_le_bytes()).unwrap();
-
-        file.write_all(b"fmt ").unwrap();
-        file.write_all(&52u64.to_le_bytes()).unwrap();
-        file.write_all(&1u32.to_le_bytes()).unwrap();
-        file.write_all(&0u32.to_le_bytes()).unwrap();
-        file.write_all(&2u32.to_le_bytes()).unwrap();
-        file.write_all(&channels.to_le_bytes()).unwrap();
-        file.write_all(&dsd_rate.to_le_bytes()).unwrap();
-        file.write_all(&bits_per_sample.to_le_bytes()).unwrap();
-        file.write_all(&sample_count.to_le_bytes()).unwrap();
-        file.write_all(&block_size.to_le_bytes()).unwrap();
-        file.write_all(&0u32.to_le_bytes()).unwrap();
-
-        file.write_all(b"data").unwrap();
-        file.write_all(&data_chunk_size.to_le_bytes()).unwrap();
-
-        let block = vec![fill; block_size as usize];
-        for _ in 0..channels {
-            for _ in 0..frames {
-                file.write_all(&block).unwrap();
-            }
         }
     }
 
@@ -751,7 +718,9 @@ mod tests {
         write_minimal_dsf_stereo(&path, 2_822_400, 0xAA);
 
         let input = SacdInput::default();
-        let opened = input.open(&path, None).expect("open dsf");
+        let opened = input
+            .open(&path, None, AudioInputSrcPolicy::default())
+            .expect("open dsf");
         assert_eq!(opened.meta.channels, 2);
         assert_eq!(opened.meta.sample_rate, 88_200);
         assert!(opened.meta.duration > 0.0);
@@ -772,7 +741,9 @@ mod tests {
         write_minimal_dsf_stereo(&path, 2_822_400, 0xFF);
 
         let input = SacdInput::default();
-        let opened = input.open(&path, None).expect("open dsf");
+        let opened = input
+            .open(&path, None, AudioInputSrcPolicy::default())
+            .expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
         };
@@ -817,7 +788,9 @@ mod tests {
         write_minimal_dsf_stereo(&path, 2_822_400, 0xAA);
 
         let input = SacdInput::default();
-        let opened = input.open(&path, None).expect("open dsf");
+        let opened = input
+            .open(&path, None, AudioInputSrcPolicy::default())
+            .expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
         };
@@ -866,7 +839,9 @@ mod tests {
         write_minimal_dsf_stereo_split(&path, 2_822_400, 0xFF, 0x00);
 
         let input = SacdInput::default();
-        let opened = input.open(&path, None).expect("open dsf");
+        let opened = input
+            .open(&path, None, AudioInputSrcPolicy::default())
+            .expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
         };
@@ -919,7 +894,9 @@ mod tests {
         write_minimal_dsf_stereo(&path, 2_822_400, 0xFF);
 
         let input = SacdInput::default();
-        let opened = input.open(&path, Some(48_000)).expect("open dsf");
+        let opened = input
+            .open(&path, Some(48_000), AudioInputSrcPolicy::default())
+            .expect("open dsf");
         assert_eq!(opened.meta.sample_rate, 48_000);
 
         let AudioInputKind::Streaming(streaming) = opened.kind else {

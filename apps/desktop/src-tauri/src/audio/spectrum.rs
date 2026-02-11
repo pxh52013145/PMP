@@ -1,6 +1,10 @@
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
+use crate::audio::{
+    engine::SpectrumFrameSnapshot,
+    events::NativeAudioSpectrumFramePayload,
+};
 use crate::audio::pipeline::SpectrumSnapshot;
 
 pub(crate) const SPECTRUM_WINDOW_SIZE: usize = 1024;
@@ -33,12 +37,21 @@ impl SpectrumComputer {
         fft: &Arc<dyn rustfft::Fft<f32>>,
         snapshot: &SpectrumSnapshot,
     ) -> Option<&[f32]> {
-        if snapshot.sample_rate == 0 {
+        self.compute_bins_from_window(fft, snapshot.sample_rate, &snapshot.window)
+    }
+
+    pub fn compute_bins_from_window(
+        &mut self,
+        fft: &Arc<dyn rustfft::Fft<f32>>,
+        sample_rate: u32,
+        window: &[f32],
+    ) -> Option<&[f32]> {
+        if sample_rate == 0 {
             return None;
         }
 
         for frame in 0..SPECTRUM_WINDOW_SIZE {
-            let mono = snapshot.window.get(frame).copied().unwrap_or(0.0);
+            let mono = window.get(frame).copied().unwrap_or(0.0);
             self.input[frame].re = mono * self.hann[frame];
             self.input[frame].im = 0.0;
         }
@@ -76,5 +89,63 @@ impl SpectrumComputer {
         }
 
         Some(&self.mags)
+    }
+}
+
+pub(crate) struct DualSpectrumComputer {
+    pre: SpectrumComputer,
+    post: SpectrumComputer,
+}
+
+impl DualSpectrumComputer {
+    pub fn new() -> Self {
+        Self {
+            pre: SpectrumComputer::new(),
+            post: SpectrumComputer::new(),
+        }
+    }
+
+    pub fn compute_pre_frame<'a>(
+        &'a mut self,
+        fft: &Arc<dyn rustfft::Fft<f32>>,
+        snapshot: Option<&SpectrumFrameSnapshot>,
+    ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
+        self.compute_frame(fft, snapshot, true)
+    }
+
+    pub fn compute_post_frame<'a>(
+        &'a mut self,
+        fft: &Arc<dyn rustfft::Fft<f32>>,
+        snapshot: Option<&SpectrumFrameSnapshot>,
+    ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
+        self.compute_frame(fft, snapshot, false)
+    }
+
+    fn compute_frame<'a>(
+        &'a mut self,
+        fft: &Arc<dyn rustfft::Fft<f32>>,
+        snapshot: Option<&SpectrumFrameSnapshot>,
+        use_pre: bool,
+    ) -> Option<NativeAudioSpectrumFramePayload<'a>> {
+        let snapshot = snapshot?;
+        let bins = if use_pre {
+            self.pre
+                .compute_bins_from_window(fft, snapshot.sample_rate, &snapshot.window)?
+        } else {
+            self.post
+                .compute_bins_from_window(fft, snapshot.sample_rate, &snapshot.window)?
+        };
+
+        Some(NativeAudioSpectrumFramePayload {
+            frame_id: snapshot.frame_id,
+            timestamp_ms: snapshot.timestamp_ms,
+            tap: snapshot.tap,
+            tap_id: Some(match snapshot.tap {
+                crate::audio::engine::SpectrumTapKind::PreDsp => "pre-dsp",
+                crate::audio::engine::SpectrumTapKind::PostDsp => "post-dsp",
+            }),
+            sample_rate: snapshot.sample_rate,
+            bins,
+        })
     }
 }

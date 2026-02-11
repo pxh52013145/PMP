@@ -9,6 +9,37 @@ const TRAY_MENU_SHOW_ID: &str = "show";
 const TRAY_MENU_HIDE_ID: &str = "hide";
 const TRAY_MENU_QUIT_ID: &str = "quit";
 
+#[cfg(target_os = "windows")]
+fn should_enable_windows_shell_integration() -> bool {
+    let force_enable = std::env::var("PMP_ENABLE_WINDOWS_SHELL_INTEGRATION")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    if force_enable {
+        return true;
+    }
+
+    let force_disable = std::env::var("PMP_DISABLE_WINDOWS_SHELL_INTEGRATION")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    if force_disable {
+        return false;
+    }
+
+    // In `tauri dev`, custom Win32 message hooks can interfere with WebView2 runtime startup.
+    // Keep dev stable by default and allow explicit opt-in via env.
+    std::env::var("TAURI_DEV").is_err()
+}
+
 pub fn create_system_tray() -> SystemTray {
     let show = CustomMenuItem::new(TRAY_MENU_SHOW_ID.to_string(), "Show Window");
     let hide = CustomMenuItem::new(TRAY_MENU_HIDE_ID.to_string(), "Hide Window");
@@ -61,8 +92,14 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     {
         use window_shadows::set_shadow;
         let _ = set_shadow(&window, false);
-        crate::windows::taskbar_thumbbar::init_main_window(&app.handle());
-        crate::windows::smtc::init(&app.handle());
+        if should_enable_windows_shell_integration() {
+            crate::windows::taskbar_thumbbar::init_main_window(&app.handle());
+            crate::windows::smtc::init(&app.handle());
+        } else {
+            eprintln!(
+                "[windows] Shell integrations disabled in dev mode (set PMPM_ENABLE_WINDOWS_SHELL_INTEGRATION=1 to re-enable)."
+            );
+        }
     }
 
     bind_main_window_events(app, &window);

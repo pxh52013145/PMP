@@ -6,7 +6,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::audio::engine::{PlaybackState, ENGINE};
 use crate::audio::events::{
-    NativeAudioErrorPayload, NativeAudioSpectrumPayload, NativeAudioStatePayload,
+    NativeAudioErrorPayload, NativeAudioSpectrumFramePayload, NativeAudioSpectrumPayload,
+    NativeAudioStatePayload,
     NATIVE_AUDIO_ERROR_EVENT, NATIVE_AUDIO_SPECTRUM_EVENT, NATIVE_AUDIO_STATE_EVENT,
 };
 
@@ -25,6 +26,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(1024);
         let mut spectrum = crate::audio::spectrum::SpectrumComputer::new();
+        let mut spectrum_dual = crate::audio::spectrum::DualSpectrumComputer::new();
 
         loop {
             if EMITTER_STOP.load(Ordering::Acquire) {
@@ -38,7 +40,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 continue;
             };
 
-            let Some((state_payload, spectrum_snapshot)) = (|| {
+            let Some((state_payload, spectrum_snapshot, dual_spectrum_snapshot)) = (|| {
                 let mut engine = ENGINE.try_lock().ok()?;
                 let was_playing = engine.is_playing_or_rebuffering();
                 let ticked = engine.tick();
@@ -50,6 +52,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 Some((
                     engine.build_tick_state_payload(ended),
                     engine.snapshot_for_spectrum(),
+                    engine.snapshot_for_dual_spectrum(),
                 ))
             })() else {
                 continue;
@@ -85,6 +88,14 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                     let _ = emit_spectrum(&app_handle, NativeAudioSpectrumPayload { bins });
                 }
             }
+            if let Some(snapshot) = dual_spectrum_snapshot {
+                if let Some(frame) = spectrum_dual.compute_pre_frame(&fft, snapshot.pre.as_ref()) {
+                    let _ = emit_spectrum_frame(&app_handle, frame);
+                }
+                if let Some(frame) = spectrum_dual.compute_post_frame(&fft, snapshot.post.as_ref()) {
+                    let _ = emit_spectrum_frame(&app_handle, frame);
+                }
+            }
         }
     });
 }
@@ -106,6 +117,15 @@ pub(crate) fn emit_spectrum(
     app_handle
         .emit_all(NATIVE_AUDIO_SPECTRUM_EVENT, payload)
         .map_err(|e| format!("Failed to emit spectrum: {e}"))
+}
+
+pub(crate) fn emit_spectrum_frame(
+    app_handle: &AppHandle,
+    payload: NativeAudioSpectrumFramePayload<'_>,
+) -> Result<(), String> {
+    app_handle
+        .emit_all(NATIVE_AUDIO_SPECTRUM_EVENT, payload)
+        .map_err(|e| format!("Failed to emit spectrum frame: {e}"))
 }
 
 fn mark_error_emitted(seq: u64) -> bool {

@@ -7,6 +7,8 @@ use std::thread;
 use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
+use crate::audio::diagnostics;
+use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 static STREAMING_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
 static STREAMING_UNDERRUN_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -16,6 +18,9 @@ static TRANSFER_RENDER_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_DECODE_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static RENDER_QUEUE_PAGE_LOCK_SUCCESS: AtomicU64 = AtomicU64::new(0);
 static RENDER_QUEUE_PAGE_LOCK_FAILURE: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_RENDER_LOW_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_DECODE_LOW_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static STREAMING_UNDERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn streaming_underrun_stats() -> (u64, u64) {
     (
@@ -75,6 +80,30 @@ fn env_bool(name: &str, default_value: bool) -> bool {
     }
 }
 
+fn transfer_wait(profile: RealtimePressureProfile) -> Duration {
+    match profile {
+        RealtimePressureProfile::Normal => Duration::from_millis(2),
+        RealtimePressureProfile::Guarded => Duration::from_millis(1),
+        RealtimePressureProfile::Critical => Duration::from_millis(0),
+    }
+}
+
+fn transfer_chunk_samples(profile: RealtimePressureProfile) -> usize {
+    match profile {
+        RealtimePressureProfile::Normal => 8_192,
+        RealtimePressureProfile::Guarded => 12_288,
+        RealtimePressureProfile::Critical => 16_384,
+    }
+}
+
+fn transfer_backoff(profile: RealtimePressureProfile) -> Duration {
+    match profile {
+        RealtimePressureProfile::Normal => Duration::from_millis(1),
+        RealtimePressureProfile::Guarded => Duration::from_millis(0),
+        RealtimePressureProfile::Critical => Duration::from_millis(0),
+    }
+}
+
 pub(crate) fn try_lock_render_queue_hot_path(render_queue: &AudioRingBuffer) {
     if !env_bool("PMP_AUDIO_LOCK_RENDER_QUEUE", true) {
         return;
@@ -99,9 +128,6 @@ pub(crate) fn spawn_render_transfer_worker(
     command_rx: mpsc::Receiver<TransferCommand>,
     thread_name: &str,
 ) -> Result<(), String> {
-    const TRANSFER_CHUNK_SAMPLES: usize = 8_192;
-    const TRANSFER_WAIT: Duration = Duration::from_millis(4);
-
     let channels = channels.max(1) as usize;
     let capacity = render_queue.capacity_samples().max(channels);
     let low_watermark = ((capacity * 3) / 10).max(channels * 128).min(capacity);
@@ -112,7 +138,7 @@ pub(crate) fn spawn_render_transfer_worker(
         .name(thread_name.to_string())
         .spawn(move || {
             let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_transfer();
-            let mut transfer_block: Vec<f32> = Vec::with_capacity(TRANSFER_CHUNK_SAMPLES);
+            let mut transfer_block: Vec<f32> = Vec::with_capacity(8_192);
 
             loop {
                 match command_rx.try_recv() {
@@ -123,9 +149,11 @@ pub(crate) fn spawn_render_transfer_worker(
                     Err(mpsc::TryRecvError::Empty) => {}
                 }
 
-                crate::audio::threading::apply_audio_transfer_pressure_profile(
-                    crate::audio::realtime_scheduler::SCHEDULER.profile(),
-                );
+                let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                crate::audio::threading::apply_audio_transfer_pressure_profile(profile);
+                let chunk_limit = transfer_chunk_samples(profile);
+                let wait_timeout = transfer_wait(profile);
+                let backoff = transfer_backoff(profile);
 
                 if decode_reservoir.is_finished_and_empty() {
                     render_queue.mark_finished();
@@ -134,16 +162,34 @@ pub(crate) fn spawn_render_transfer_worker(
 
                 let render_len = render_queue.len_samples();
                 if render_len >= high_watermark {
-                    thread::sleep(Duration::from_millis(1));
+                    if backoff.is_zero() {
+                        thread::yield_now();
+                    } else {
+                        thread::sleep(backoff);
+                    }
                     continue;
                 }
 
                 if render_len <= low_watermark {
                     TRANSFER_RENDER_LOW_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
+                    diagnostics::record_event_throttled(
+                        "shared.transfer.render_low_watermark",
+                        render_len as u64,
+                        low_watermark as u64,
+                        &TRANSFER_RENDER_LOW_TIMELINE_GATE_MS,
+                        180,
+                    );
                 }
 
                 if decode_reservoir.len_samples() <= low_watermark {
                     TRANSFER_DECODE_LOW_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
+                    diagnostics::record_event_throttled(
+                        "shared.transfer.decode_low_watermark",
+                        decode_reservoir.len_samples() as u64,
+                        low_watermark as u64,
+                        &TRANSFER_DECODE_LOW_TIMELINE_GATE_MS,
+                        180,
+                    );
                 }
 
                 let target_samples = if render_len <= low_watermark {
@@ -152,12 +198,12 @@ pub(crate) fn spawn_render_transfer_worker(
                     low_watermark.saturating_sub(render_len)
                 }
                 .max(channels)
-                .min(TRANSFER_CHUNK_SAMPLES);
+                .min(chunk_limit);
 
                 let transfer = decode_reservoir.pop_chunk_into(
                     &mut transfer_block,
                     target_samples,
-                    TRANSFER_WAIT,
+                    wait_timeout,
                 );
 
                 if transfer.popped > 0 {
@@ -169,7 +215,11 @@ pub(crate) fn spawn_render_transfer_worker(
                             let pushed_frames =
                                 render_queue.push_interleaved(&transfer_block[start..samples_to_push], channels);
                             if pushed_frames == 0 {
-                                thread::sleep(Duration::from_millis(1));
+                                if backoff.is_zero() {
+                                    thread::yield_now();
+                                } else {
+                                    thread::sleep(backoff);
+                                }
                                 continue;
                             }
                             start = start.saturating_add(pushed_frames * channels);
@@ -287,6 +337,13 @@ impl Iterator for StreamingSamplesSource {
 
                 STREAMING_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
                 STREAMING_UNDERRUN_FRAMES.fetch_add(Self::SILENCE_FRAMES as u64, Ordering::Relaxed);
+                diagnostics::record_event_throttled(
+                    "shared.output.render_underrun",
+                    Self::SILENCE_FRAMES as u64,
+                    channels as u64,
+                    &STREAMING_UNDERRUN_TIMELINE_GATE_MS,
+                    120,
+                );
 
                 self.needs_fade_in = true;
                 let silence_frames = Self::SILENCE_FRAMES.max(1);

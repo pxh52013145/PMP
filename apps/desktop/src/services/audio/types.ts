@@ -83,13 +83,80 @@ export interface AudioProtectionWindowOptions {
   durationMs?: number;
 }
 
+export interface AudioEnginePolicyPatch {
+  transportMode?: 'robust' | 'transport-exact';
+  hqSrcEnabled?: boolean;
+  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  srcMode?: 'source-native' | 'match-output' | 'target-rate';
+  srcBackend?: 'rubato' | 'linear-simd';
+  srcTargetSampleRate?: number | null;
+}
+
+export interface AudioDynamicSrcAutoSettings {
+  enabled: boolean;
+  adaptiveEnabled: boolean;
+  learningEnabled: boolean;
+  restoreDebounceMs: number;
+  minSwitchIntervalMs: number;
+  seekHoldMs: number;
+  underrunHoldMs: number;
+  sharedStressHoldMs: number;
+  outputErrorHoldMs: number;
+}
+
+export interface AudioDynamicSrcAutoSettingsPatch {
+  enabled?: boolean;
+  adaptiveEnabled?: boolean;
+  learningEnabled?: boolean;
+  restoreDebounceMs?: number;
+  minSwitchIntervalMs?: number;
+  seekHoldMs?: number;
+  underrunHoldMs?: number;
+  sharedStressHoldMs?: number;
+  outputErrorHoldMs?: number;
+}
+
+export type AudioDynamicSrcAdaptiveProfile = 'baseline' | 'elevated' | 'critical';
+
 export interface AudioRobustnessSnapshot {
   outputBackendId: string | null;
   outputBackends: string[];
   schedulerProfile?: 'normal' | 'guarded' | 'critical';
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  srcMode?: 'source-native' | 'match-output' | 'target-rate';
+  srcBackend?: 'rubato' | 'linear-simd';
+  srcTargetSampleRate?: number | null;
+  dynamicSrcAutoEnabled?: boolean;
+  dynamicSrcProfile?: 'quality' | 'latency';
+  dynamicSrcLastSwitchAtMs?: number | null;
+  dynamicSrcLastSwitchReason?: string | null;
+  dynamicSrcHoldUntilMs?: number;
+  dynamicSrcManualLockActive?: boolean;
+  dynamicSrcAdaptiveEnabled?: boolean;
+  dynamicSrcAdaptiveProfile?: AudioDynamicSrcAdaptiveProfile;
+  dynamicSrcStressScore?: number;
+  dynamicSrcLearningEnabled?: boolean;
+  dynamicSrcLearningDeviceKey?: string;
+  dynamicSrcLearningStressIndex?: number;
+  dynamicSrcLearningScale?: number;
+  dynamicSrcRestoreDebounceMs?: number;
+  dynamicSrcMinSwitchIntervalMs?: number;
+  dynamicSrcSeekHoldMs?: number;
+  dynamicSrcUnderrunHoldMs?: number;
+  dynamicSrcSharedStressHoldMs?: number;
+  dynamicSrcOutputErrorHoldMs?: number;
+  dynamicSrcEffectiveRestoreDebounceMs?: number;
+  dynamicSrcEffectiveMinSwitchIntervalMs?: number;
+  dynamicSrcEffectiveSeekHoldMs?: number;
+  dynamicSrcEffectiveUnderrunHoldMs?: number;
+  dynamicSrcEffectiveSharedStressHoldMs?: number;
+  dynamicSrcEffectiveOutputErrorHoldMs?: number;
   hqSrcStopbandDb?: number;
+  hqSrcActive?: boolean;
+  hqSrcRatio?: number;
+  sourceSampleRate?: number;
+  outputSampleRate?: number;
   transportExactInt32Container?: boolean;
   outputCallbackMetricsValid?: boolean;
   underrunEvents: number;
@@ -110,10 +177,37 @@ export interface AudioRobustnessSnapshot {
   outputWaitTimeoutCount?: number;
   outputRenderUnderrunEvents?: number;
   outputRenderUnderrunFrames?: number;
+  outputCallbackIntervalJitterP99Us?: number;
+  outputCallbackIntervalOverrunCount?: number;
+  outputCallbackExpectedIntervalUs?: number;
   transferLowWatermarkSamples?: number;
   transferRenderLowHitCount?: number;
   transferDecodeLowHitCount?: number;
   renderQueuePageLocked?: boolean;
+  transferMetricsValid?: boolean;
+  sharedRenderAheadEnabled?: boolean;
+  sharedRenderUnderrunEvents?: number;
+  sharedRenderUnderrunFrames?: number;
+  sharedRenderLowHitCount?: number;
+  sharedRenderLowWatermarkSamples?: number;
+  diagnosticTimelineDroppedEvents?: number;
+  diagnosticTimeline?: Array<{
+    seq: number;
+    timestampMs: number;
+    kind: string;
+    value: number;
+    aux: number;
+  }>;
+}
+
+export type AudioSpectrumTap = 'pre-dsp' | 'post-dsp';
+
+export interface AudioSpectrumFrame {
+  frameId: number;
+  timestampMs: number;
+  tap: AudioSpectrumTap;
+  sampleRate: number;
+  bins: Uint8Array;
 }
 
 /**
@@ -208,6 +302,12 @@ export interface IAudioService {
   onError(callback: (error: Error) => void): () => void;
 
   enterProtectionWindow?(options?: AudioProtectionWindowOptions): () => void;
+
+  setEnginePolicy?(patch: AudioEnginePolicyPatch): Promise<void>;
+
+  getDynamicSrcAutoSettings?(): AudioDynamicSrcAutoSettings;
+
+  setDynamicSrcAutoSettings?(settings: AudioDynamicSrcAutoSettingsPatch): Promise<void>;
 
   getRobustnessSnapshot?(): AudioRobustnessSnapshot;
 
@@ -337,6 +437,8 @@ export interface IAudioService {
    * @returns 频谱数据数组，如果不可用则返回 null
    */
   getFrequencyData?(): Uint8Array | null;
+
+  getSpectrumFrame?(tap?: AudioSpectrumTap): AudioSpectrumFrame | null;
 
   // ===== 清理 =====
   /**

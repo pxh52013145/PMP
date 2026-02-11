@@ -41,6 +41,13 @@ function installPlugin(plugin: InstalledPmpmPlugin): void {
   writeJson(STORAGE_KEYS.PMPM_PLUGINS, [plugin]);
 }
 
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 describe('pmpmRuntime signature trust policy', () => {
   beforeEach(() => {
     localStorage.removeItem(STORAGE_KEYS.PMPM_PLUGINS);
@@ -111,5 +118,39 @@ describe('pmpmRuntime signature trust policy', () => {
 
     const stored = getInstalledPmpmPlugin(PLUGIN_ID);
     expect(stored?.disabledReason).toBe('policy');
+  });
+
+  it('accepts entrySha256 when durable entry includes UTF-8 BOM', async () => {
+    writeJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true);
+
+    const entryWithoutBom = 'export function mount() {}';
+    const entryWithBom = `\uFEFF${entryWithoutBom}`;
+    const entrySha256 = await sha256Hex(entryWithoutBom);
+
+    installPlugin({
+      manifest: buildManifest(),
+      entryCode: entryWithBom,
+      installedAt: Date.now(),
+      entrySha256,
+    });
+
+    await expect(readVerifiedPmpmPluginEntryCode(PLUGIN_ID)).resolves.toBe(entryWithBom);
+  });
+
+  it('accepts entrySha256 when line endings differ (CRLF/LF)', async () => {
+    writeJson(STORAGE_KEYS.PMPM_ALLOW_UNSIGNED_PLUGINS, true);
+
+    const entryLf = 'export function mount() {\n  return undefined;\n}\n';
+    const entryCrlf = entryLf.replace(/\n/g, '\r\n');
+    const entrySha256 = await sha256Hex(entryLf);
+
+    installPlugin({
+      manifest: buildManifest(),
+      entryCode: entryCrlf,
+      installedAt: Date.now(),
+      entrySha256,
+    });
+
+    await expect(readVerifiedPmpmPluginEntryCode(PLUGIN_ID)).resolves.toBe(entryCrlf);
   });
 });

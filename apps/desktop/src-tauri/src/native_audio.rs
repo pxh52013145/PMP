@@ -9,11 +9,18 @@ use tauri::AppHandle;
 
 use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
 use crate::audio::emitter;
-use crate::audio::input::{AudioInputKind, AudioInputRegistry};
+use crate::audio::input::{
+    resolve_audio_input_target_sample_rate, AudioInputKind, AudioInputRegistry,
+};
 use crate::audio::mixer::PlaybackMixerSource;
-use crate::audio::output::{default_backend, AudioOutputBackend, OutputDeviceInfo, RODIO_CPAL_BACKEND_ID};
+use crate::audio::output::{
+    rodio_cpal_backend, AudioOutputBackend, OutputDeviceInfo, RODIO_CPAL_BACKEND_ID,
+};
 #[cfg(target_os = "windows")]
-use crate::audio::output::{wasapi_backend, wasapi_exclusive_backend, WASAPI_BACKEND_ID, WASAPI_EXCLUSIVE_BACKEND_ID};
+use crate::audio::output::{
+    wasapi_backend, wasapi_exclusive_backend, wasapi_shared_raw_backend, WASAPI_BACKEND_ID,
+    WASAPI_EXCLUSIVE_BACKEND_ID, WASAPI_SHARED_RAW_BACKEND_ID,
+};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 use crate::audio::output::{asio_backend, ASIO_BACKEND_ID};
 use crate::audio::engine::{ENGINE, PlaybackState, PreparedCrossfade, PreparedLoad};
@@ -26,7 +33,7 @@ pub use crate::audio::engine::NativeAudioComponentsStatePayload;
 pub use crate::audio::engine::NativeAudioStreamingBufferSettingsPayload;
 pub use crate::audio::policy::{
     NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
-    NativeAudioTransportMode,
+    NativeAudioSrcBackend, NativeAudioSrcMode, NativeAudioTransportMode,
 };
 
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
@@ -1083,8 +1090,9 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
         let opened = AudioInputRegistry::default()
             .open_prefer(
                 &track_path,
-                output_info.output_sample_rate,
+                resolve_audio_input_target_sample_rate(output_info.output_sample_rate, op.src_policy),
                 op.preferred_input_id.as_deref(),
+                op.src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
 
@@ -1114,7 +1122,8 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
         sink.append(boxed_with_dsp(
             mixer_source,
             op.dsp_runtime.clone(),
-            op.spectrum_tap.clone(),
+            op.spectrum_pre_tap.clone(),
+            op.spectrum_post_tap.clone(),
         ));
         sink.pause();
         sink.set_volume(op.effective_volume);
@@ -1200,8 +1209,9 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
         let opened = AudioInputRegistry::default()
             .open_prefer(
                 &track_path,
-                Some(op.target_sample_rate),
+                resolve_audio_input_target_sample_rate(Some(op.target_sample_rate), op.src_policy),
                 op.preferred_input_id.as_deref(),
+                op.src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
 
@@ -2065,6 +2075,7 @@ fn available_output_backend_ids() -> Vec<&'static str> {
     #[cfg(target_os = "windows")]
     {
         ids.push(WASAPI_BACKEND_ID);
+        ids.push(WASAPI_SHARED_RAW_BACKEND_ID);
         ids.push(WASAPI_EXCLUSIVE_BACKEND_ID);
         #[cfg(feature = "asio-sdk")]
         {
@@ -2074,11 +2085,42 @@ fn available_output_backend_ids() -> Vec<&'static str> {
     ids
 }
 
-fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> {
+fn normalize_output_backend_id(id: &str) -> &str {
     match id {
-        RODIO_CPAL_BACKEND_ID => Some(default_backend()),
+        value if value.eq_ignore_ascii_case("rodio-capl") => RODIO_CPAL_BACKEND_ID,
+        value if value.eq_ignore_ascii_case("rodio_capl") => RODIO_CPAL_BACKEND_ID,
+        value if value.eq_ignore_ascii_case("rodio_cpal") => RODIO_CPAL_BACKEND_ID,
+        _ => id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_output_backend_aliases() {
+        assert_eq!(normalize_output_backend_id("rodio-capl"), RODIO_CPAL_BACKEND_ID);
+        assert_eq!(normalize_output_backend_id("RODIO_CAPL"), RODIO_CPAL_BACKEND_ID);
+        assert_eq!(normalize_output_backend_id("rodio_cpal"), RODIO_CPAL_BACKEND_ID);
+        assert_eq!(normalize_output_backend_id("wasapi"), "wasapi");
+    }
+
+    #[test]
+    fn selecting_rodio_cpal_uses_rodio_backend() {
+        let backend = create_output_backend_by_id(RODIO_CPAL_BACKEND_ID)
+            .expect("rodio-cpal backend should exist");
+        assert_eq!(backend.id(), RODIO_CPAL_BACKEND_ID);
+    }
+}
+
+fn create_output_backend_by_id(id: &str) -> Option<Arc<dyn AudioOutputBackend>> {
+    match normalize_output_backend_id(id) {
+        RODIO_CPAL_BACKEND_ID => Some(rodio_cpal_backend()),
         #[cfg(target_os = "windows")]
         WASAPI_BACKEND_ID => Some(wasapi_backend()),
+        #[cfg(target_os = "windows")]
+        WASAPI_SHARED_RAW_BACKEND_ID => Some(wasapi_shared_raw_backend()),
         #[cfg(target_os = "windows")]
         WASAPI_EXCLUSIVE_BACKEND_ID => Some(wasapi_exclusive_backend()),
         #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -2164,7 +2206,7 @@ pub fn select_output_backend(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let target_id = requested.unwrap_or(RODIO_CPAL_BACKEND_ID);
+    let target_id = normalize_output_backend_id(requested.unwrap_or(RODIO_CPAL_BACKEND_ID));
 
     let Some(target_backend) = create_output_backend_by_id(target_id) else {
         let message = format!("Unknown output backend id: {target_id}");

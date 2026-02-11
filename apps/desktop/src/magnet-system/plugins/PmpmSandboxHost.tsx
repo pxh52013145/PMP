@@ -388,6 +388,17 @@ export function PmpmSandboxHost({
           permissions: Array.from(permissions),
           entryCode,
           initialAudioState: permissions.has('api:audio-state') ? audioService.getState() : null,
+          initialAudioSpectrum: permissions.has('api:audio-visual') ? hostApi.visualizer.getSpectrum() : null,
+          initialAudioSpectrumFramePre:
+            permissions.has('api:audio-visual') &&
+            typeof hostApi.visualizer.getSpectrumFrame === 'function'
+              ? hostApi.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
+              : null,
+          initialAudioSpectrumFramePost:
+            permissions.has('api:audio-visual') &&
+            typeof hostApi.visualizer.getSpectrumFrame === 'function'
+              ? hostApi.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
+              : null,
           initialNavigation,
           initialConfig,
         });
@@ -451,10 +462,28 @@ export function PmpmSandboxHost({
     if (permissions.has('api:audio-visual')) {
       spectrumHandle = window.setInterval(() => {
         try {
+          const spectrumFramePost =
+            typeof hostApi.visualizer.getSpectrumFrame === 'function'
+              ? hostApi.visualizer.getSpectrumFrame({ tap: 'post-dsp' })
+              : null;
+          const spectrumFramePre =
+            typeof hostApi.visualizer.getSpectrumFrame === 'function'
+              ? hostApi.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })
+              : null;
           postToFrame({
             type: 'pmpm:event',
             name: 'audio.spectrum',
             payload: hostApi.visualizer.getSpectrum(),
+          });
+          postToFrame({
+            type: 'pmpm:event',
+            name: 'audio.spectrumFrame.post',
+            payload: spectrumFramePost,
+          });
+          postToFrame({
+            type: 'pmpm:event',
+            name: 'audio.spectrumFrame.pre',
+            payload: spectrumFramePre,
           });
         } catch {
           // ignore

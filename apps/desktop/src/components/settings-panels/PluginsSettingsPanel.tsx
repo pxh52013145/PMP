@@ -67,7 +67,7 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
 export function PluginsSettingsPanel() {
   const kernel = useKernel();
   const t = useT();
-  const governance = kernel.services.get(GOVERNANCE_SERVICE_TOKEN);
+  const governance = kernel.services.getOptional(GOVERNANCE_SERVICE_TOKEN);
   const { activeMagnetIds, magnetLibrary, setMagnetLibrary } = useMagnetConfig();
   const isTauri = isTauriRuntime();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
@@ -128,6 +128,13 @@ export function PluginsSettingsPanel() {
     void sandboxRevision;
     return getPmpmSandboxRuntimeEnabled();
   }, [sandboxRevision]);
+
+  const restartPmpmRuntime = useCallback(
+    (pluginId: string, reason: string) => {
+      governance?.restartPmpmPluginRuntime(pluginId, { reason });
+    },
+    [governance]
+  );
 
   const handleInstall = useCallback(async () => {
     if (!isTauri) {
@@ -258,7 +265,7 @@ export function PluginsSettingsPanel() {
         if (!ok) return;
 
         uninstallPmpmPlugin(pluginId);
-        governance.restartPmpmPluginRuntime(pluginId, { reason: 'uninstall' });
+        restartPmpmRuntime(pluginId, 'uninstall');
         clearPmpmAuditLog(pluginId);
 
         removeMagnetCatalogMagnet(pluginId);
@@ -271,7 +278,7 @@ export function PluginsSettingsPanel() {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, confirm, governance, magnetLibrary, setMagnetLibrary, t]
+    [activeMagnetIds, busy, confirm, magnetLibrary, restartPmpmRuntime, setMagnetLibrary, t]
   );
 
   const handleToggleEnabled = useCallback(
@@ -293,14 +300,14 @@ export function PluginsSettingsPanel() {
         }
 
         setPmpmPluginEnabled(pluginId, enabled);
-        governance.restartPmpmPluginRuntime(pluginId, { reason: enabled ? 'enabled' : 'disabled' });
+        restartPmpmRuntime(pluginId, enabled ? 'enabled' : 'disabled');
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [activeMagnetIds, busy, confirm, governance, t]
+    [activeMagnetIds, busy, confirm, restartPmpmRuntime, t]
   );
 
   return (
@@ -453,9 +460,7 @@ export function PluginsSettingsPanel() {
                                   if (nextAllowed) nextDenied.delete(perm);
                                   else nextDenied.add(perm);
                                   setPmpmPluginDeniedPermissions(meta.id, Array.from(nextDenied));
-                                  governance.restartPmpmPluginRuntime(meta.id, {
-                                    reason: 'permissions-updated',
-                                  });
+                                  restartPmpmRuntime(meta.id, 'permissions-updated');
                                 }}
                               />
                               <span>{perm}</span>
@@ -514,7 +519,7 @@ export function PluginsSettingsPanel() {
                     type="button"
                     className="settings-action-btn"
                     disabled={busy}
-                    onClick={() => governance.restartPmpmPluginRuntime(meta.id, { reason: 'manual' })}
+                    onClick={() => restartPmpmRuntime(meta.id, 'manual')}
                     title={t('settings.plugins.action.restart.title')}
                   >
                     {t('common.action.restart')}
@@ -535,9 +540,10 @@ export function PluginsSettingsPanel() {
                               setPmpmPluginEnabled(meta.id, true);
                             }
                           }
-                          governance.restartPmpmPluginRuntime(meta.id, {
-                            reason: signatureTrusted ? 'key-untrusted' : 'key-trusted',
-                          });
+                          restartPmpmRuntime(
+                            meta.id,
+                            signatureTrusted ? 'key-untrusted' : 'key-trusted'
+                          );
                         } catch (err) {
                           setError(err instanceof Error ? err.message : String(err));
                         }

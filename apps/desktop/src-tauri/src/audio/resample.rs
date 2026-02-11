@@ -1,7 +1,7 @@
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use crate::audio::policy::NativeAudioHqSrcPhaseMode;
+use crate::audio::policy::{NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResampleError {
@@ -58,6 +58,7 @@ fn sinc_params_for_hq_mode(enabled: bool, phase_mode: NativeAudioHqSrcPhaseMode)
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resample_interleaved_f32(
     samples: &[f32],
     input_sample_rate: u32,
@@ -71,10 +72,55 @@ pub(crate) fn resample_interleaved_f32(
         channels,
         true,
         NativeAudioHqSrcPhaseMode::Linear,
+        NativeAudioSrcBackend::Rubato,
     )
 }
 
 pub(crate) fn resample_interleaved_f32_with_policy(
+    samples: &[f32],
+    input_sample_rate: u32,
+    output_sample_rate: u32,
+    channels: usize,
+    hq_enabled: bool,
+    hq_phase_mode: NativeAudioHqSrcPhaseMode,
+    backend: NativeAudioSrcBackend,
+) -> Result<Vec<f32>, ResampleError> {
+    resample_interleaved_f32_with_backend(
+        samples,
+        input_sample_rate,
+        output_sample_rate,
+        channels,
+        hq_enabled,
+        hq_phase_mode,
+        backend,
+    )
+}
+
+pub(crate) fn resample_interleaved_f32_with_backend(
+    samples: &[f32],
+    input_sample_rate: u32,
+    output_sample_rate: u32,
+    channels: usize,
+    hq_enabled: bool,
+    hq_phase_mode: NativeAudioHqSrcPhaseMode,
+    backend: NativeAudioSrcBackend,
+) -> Result<Vec<f32>, ResampleError> {
+    match backend {
+        NativeAudioSrcBackend::Rubato => resample_interleaved_f32_rubato(
+            samples,
+            input_sample_rate,
+            output_sample_rate,
+            channels,
+            hq_enabled,
+            hq_phase_mode,
+        ),
+        NativeAudioSrcBackend::LinearSimd => {
+            resample_interleaved_f32_linear_simd(samples, input_sample_rate, output_sample_rate, channels)
+        }
+    }
+}
+
+fn resample_interleaved_f32_rubato(
     samples: &[f32],
     input_sample_rate: u32,
     output_sample_rate: u32,
@@ -169,17 +215,114 @@ pub(crate) fn resample_interleaved_f32_with_policy(
     Ok(out_interleaved)
 }
 
+#[inline]
+fn lerp_scalar(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn lerp_stereo_sse(a_l: f32, a_r: f32, b_l: f32, b_r: f32, t: f32) -> (f32, f32) {
+    use std::arch::x86_64::*;
+
+    let a = _mm_set_ps(0.0, 0.0, a_r, a_l);
+    let b = _mm_set_ps(0.0, 0.0, b_r, b_l);
+    let frac = _mm_set1_ps(t);
+    let out = _mm_add_ps(a, _mm_mul_ps(_mm_sub_ps(b, a), frac));
+    let mut tmp = [0.0f32; 4];
+    _mm_storeu_ps(tmp.as_mut_ptr(), out);
+    (tmp[0], tmp[1])
+}
+
+fn resample_interleaved_f32_linear_simd(
+    samples: &[f32],
+    input_sample_rate: u32,
+    output_sample_rate: u32,
+    channels: usize,
+) -> Result<Vec<f32>, ResampleError> {
+    if channels == 0 {
+        return Err(ResampleError::new(
+            "AUDIO_INPUT_RESAMPLE_INVALID_CHANNELS",
+            "Channels must be > 0",
+        ));
+    }
+
+    let input_sample_rate = input_sample_rate.max(1);
+    let output_sample_rate = output_sample_rate.max(1);
+    if input_sample_rate == output_sample_rate {
+        return Ok(samples.to_vec());
+    }
+
+    let frames_in = samples.len() / channels;
+    if frames_in == 0 {
+        return Ok(Vec::new());
+    }
+
+    let ratio = output_sample_rate as f64 / input_sample_rate as f64;
+    let frames_out = ((frames_in as f64) * ratio).round().max(1.0) as usize;
+    let step = input_sample_rate as f64 / output_sample_rate as f64;
+    let mut out = Vec::<f32>::with_capacity(frames_out.saturating_mul(channels));
+
+    for out_frame in 0..frames_out {
+        let src_pos = out_frame as f64 * step;
+        let i0 = src_pos.floor() as usize;
+        let i1 = (i0 + 1).min(frames_in.saturating_sub(1));
+        let frac = (src_pos - i0 as f64) as f32;
+
+        let base0 = i0.saturating_mul(channels);
+        let base1 = i1.saturating_mul(channels);
+
+        if channels == 2 {
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::arch::is_x86_feature_detected!("sse2") {
+                    let (l, r) = unsafe {
+                        lerp_stereo_sse(
+                            samples[base0],
+                            samples[base0 + 1],
+                            samples[base1],
+                            samples[base1 + 1],
+                            frac,
+                        )
+                    };
+                    out.push(l);
+                    out.push(r);
+                    continue;
+                }
+            }
+        }
+
+        for ch in 0..channels {
+            out.push(lerp_scalar(samples[base0 + ch], samples[base1 + ch], frac));
+        }
+    }
+
+    Ok(out)
+}
+
 pub(crate) struct StreamingResampler {
     channels: usize,
     chunk_frames: usize,
-    resampler: SincFixedIn<f32>,
+    backend: StreamingResamplerBackend,
     input: Vec<Vec<f32>>,
     scratch_in: Vec<Vec<f32>>,
     output: Vec<Vec<f32>>,
 }
 
+enum StreamingResamplerBackend {
+    Rubato(SincFixedIn<f32>),
+    LinearSimd(LinearStreamingResamplerState),
+}
+
+struct LinearStreamingResamplerState {
+    step: f64,
+    src_pos: f64,
+    carry: Vec<f32>,
+    has_carry: bool,
+}
+
 impl StreamingResampler {
-    fn new_inner(
+    fn new_inner_rubato(
         input_sample_rate: u32,
         output_sample_rate: u32,
         channels: usize,
@@ -221,13 +364,59 @@ impl StreamingResampler {
         Ok(Self {
             channels,
             chunk_frames,
-            resampler,
+            backend: StreamingResamplerBackend::Rubato(resampler),
             input,
             scratch_in,
             output,
         })
     }
 
+    fn new_inner_linear_simd(
+        input_sample_rate: u32,
+        output_sample_rate: u32,
+        channels: usize,
+        chunk_frames: usize,
+    ) -> Result<Self, ResampleError> {
+        if channels == 0 {
+            return Err(ResampleError::new(
+                "AUDIO_INPUT_RESAMPLE_INVALID_CHANNELS",
+                "Channels must be > 0",
+            ));
+        }
+        if chunk_frames == 0 {
+            return Err(ResampleError::new(
+                "AUDIO_INPUT_RESAMPLE_INVALID_CHUNK",
+                "Chunk frames must be > 0",
+            ));
+        }
+
+        let input_sample_rate = input_sample_rate.max(1);
+        let output_sample_rate = output_sample_rate.max(1);
+        let step = input_sample_rate as f64 / output_sample_rate as f64;
+
+        let input = (0..channels)
+            .map(|_| Vec::with_capacity(chunk_frames * 2))
+            .collect();
+        let scratch_in = (0..channels)
+            .map(|_| Vec::with_capacity(chunk_frames))
+            .collect();
+
+        Ok(Self {
+            channels,
+            chunk_frames,
+            backend: StreamingResamplerBackend::LinearSimd(LinearStreamingResamplerState {
+                step,
+                src_pos: 0.0,
+                carry: vec![0.0; channels],
+                has_carry: false,
+            }),
+            input,
+            scratch_in,
+            output: Vec::new(),
+        })
+    }
+
+    #[cfg(test)]
     pub fn new(
         input_sample_rate: u32,
         output_sample_rate: u32,
@@ -235,7 +424,7 @@ impl StreamingResampler {
         chunk_frames: usize,
     ) -> Result<Self, ResampleError> {
         let params = default_sinc_params();
-        Self::new_inner(
+        Self::new_inner_rubato(
             input_sample_rate,
             output_sample_rate,
             channels,
@@ -244,13 +433,55 @@ impl StreamingResampler {
         )
     }
 
+    pub fn new_with_policy(
+        input_sample_rate: u32,
+        output_sample_rate: u32,
+        channels: usize,
+        chunk_frames: usize,
+        hq_enabled: bool,
+        hq_phase_mode: NativeAudioHqSrcPhaseMode,
+        backend: NativeAudioSrcBackend,
+    ) -> Result<Self, ResampleError> {
+        match backend {
+            NativeAudioSrcBackend::Rubato => {
+                let params = sinc_params_for_hq_mode(hq_enabled, hq_phase_mode);
+                Self::new_inner_rubato(
+                    input_sample_rate,
+                    output_sample_rate,
+                    channels,
+                    chunk_frames,
+                    params,
+                )
+            }
+            NativeAudioSrcBackend::LinearSimd => Self::new_inner_linear_simd(
+                input_sample_rate,
+                output_sample_rate,
+                channels,
+                chunk_frames,
+            ),
+        }
+    }
+
     pub fn reset(&mut self) {
-        self.resampler.reset();
+        match &mut self.backend {
+            StreamingResamplerBackend::Rubato(resampler) => resampler.reset(),
+            StreamingResamplerBackend::LinearSimd(state) => {
+                state.src_pos = 0.0;
+                state.has_carry = false;
+            }
+        }
         for channel in &mut self.input {
             channel.clear();
         }
         for channel in &mut self.scratch_in {
             channel.clear();
+        }
+    }
+
+    pub fn output_delay(&self) -> usize {
+        match &self.backend {
+            StreamingResamplerBackend::Rubato(resampler) => resampler.output_delay(),
+            StreamingResamplerBackend::LinearSimd(_) => 0,
         }
     }
 
@@ -277,21 +508,98 @@ impl StreamingResampler {
                 }
             }
 
-            let (_in_frames, out_frames) =
-                match self
-                    .resampler
-                    .process_into_buffer(&self.scratch_in, &mut self.output, None)
-                {
-                    Ok(value) => value,
-                    Err(_) => break,
-                };
-            if out_frames == 0 {
-                continue;
-            }
+            match &mut self.backend {
+                StreamingResamplerBackend::Rubato(resampler) => {
+                    let (_in_frames, out_frames) =
+                        match resampler.process_into_buffer(&self.scratch_in, &mut self.output, None) {
+                            Ok(value) => value,
+                            Err(_) => break,
+                        };
+                    if out_frames == 0 {
+                        continue;
+                    }
 
-            for frame in 0..out_frames {
-                for ch in 0..self.channels {
-                    out_interleaved.push(self.output[ch][frame]);
+                    for frame in 0..out_frames {
+                        for ch in 0..self.channels {
+                            out_interleaved.push(self.output[ch][frame]);
+                        }
+                    }
+                }
+                StreamingResamplerBackend::LinearSimd(state) => {
+                    let frames_in = self.scratch_in[0].len();
+                    if frames_in == 0 {
+                        continue;
+                    }
+
+                    let had_carry = state.has_carry;
+                    let max_frame = if had_carry {
+                        frames_in
+                    } else {
+                        frames_in.saturating_sub(1)
+                    };
+
+                    if max_frame == 0 {
+                        for ch in 0..self.channels {
+                            state.carry[ch] = self.scratch_in[ch][frames_in - 1];
+                        }
+                        state.has_carry = true;
+                        continue;
+                    }
+
+                    while state.src_pos + 1.0 <= max_frame as f64 {
+                        let i0 = state.src_pos.floor() as usize;
+                        let i1 = (i0 + 1).min(max_frame);
+                        let frac = (state.src_pos - i0 as f64) as f32;
+
+                        let sample_at = |channel: usize, frame: usize| -> f32 {
+                            if had_carry {
+                                if frame == 0 {
+                                    state.carry[channel]
+                                } else {
+                                    self.scratch_in[channel][frame - 1]
+                                }
+                            } else {
+                                self.scratch_in[channel][frame]
+                            }
+                        };
+
+                        if self.channels == 2 {
+                            #[cfg(target_arch = "x86_64")]
+                            {
+                                if std::arch::is_x86_feature_detected!("sse2") {
+                                    let (l, r) = unsafe {
+                                        lerp_stereo_sse(
+                                            sample_at(0, i0),
+                                            sample_at(1, i0),
+                                            sample_at(0, i1),
+                                            sample_at(1, i1),
+                                            frac,
+                                        )
+                                    };
+                                    out_interleaved.push(l);
+                                    out_interleaved.push(r);
+                                    state.src_pos += state.step;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        for ch in 0..self.channels {
+                            out_interleaved.push(lerp_scalar(sample_at(ch, i0), sample_at(ch, i1), frac));
+                        }
+                        state.src_pos += state.step;
+                    }
+
+                    let shift = frames_in as f64 - if had_carry { 0.0 } else { 1.0 };
+                    state.src_pos -= shift;
+                    if state.src_pos < 0.0 {
+                        state.src_pos = 0.0;
+                    }
+
+                    for ch in 0..self.channels {
+                        state.carry[ch] = self.scratch_in[ch][frames_in - 1];
+                    }
+                    state.has_carry = true;
                 }
             }
         }
@@ -391,7 +699,7 @@ mod tests {
 
         let frames_out = out.len() / channels;
         let expected = ((frames_in as f64) * (out_sr as f64 / in_sr as f64)).round() as isize;
-        let expected_without_flush = expected - resampler.resampler.output_delay() as isize;
+        let expected_without_flush = expected - resampler.output_delay() as isize;
         let delta = (frames_out as isize - expected_without_flush).abs();
         assert!(
             delta <= 4,
@@ -426,10 +734,67 @@ mod tests {
                 channels,
                 true,
                 phase,
+                NativeAudioSrcBackend::Rubato,
             )
             .expect("hq resample");
             assert!(!out.is_empty());
             assert!(out.iter().all(|sample| sample.is_finite()));
         }
+    }
+
+    #[test]
+    fn linear_simd_backend_produces_finite_output() {
+        let channels = 2usize;
+        let in_sr = 44_100u32;
+        let out_sr = 48_000u32;
+        let frames_in = 2_048usize;
+
+        let mut input = vec![0.0f32; frames_in * channels];
+        for frame in 0..frames_in {
+            let t = frame as f32 / in_sr as f32;
+            let sample = (2.0 * std::f32::consts::PI * 440.0 * t).sin();
+            input[frame * channels] = sample;
+            input[frame * channels + 1] = sample;
+        }
+
+        let out = resample_interleaved_f32_with_policy(
+            &input,
+            in_sr,
+            out_sr,
+            channels,
+            false,
+            NativeAudioHqSrcPhaseMode::Linear,
+            NativeAudioSrcBackend::LinearSimd,
+        )
+        .expect("linear-simd resample");
+
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|sample| sample.is_finite()));
+        assert_eq!(out.len() % channels, 0);
+    }
+
+    #[test]
+    fn streaming_linear_simd_produces_output() {
+        let channels = 2usize;
+        let in_sr = 44_100u32;
+        let out_sr = 48_000u32;
+        let chunk_frames = 256usize;
+
+        let mut resampler = StreamingResampler::new_with_policy(
+            in_sr,
+            out_sr,
+            channels,
+            chunk_frames,
+            false,
+            NativeAudioHqSrcPhaseMode::Linear,
+            NativeAudioSrcBackend::LinearSimd,
+        )
+        .expect("init ok");
+
+        let input = vec![0.1f32; chunk_frames * channels * 3];
+        let out = resampler.process_interleaved(&input);
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|sample| sample.is_finite()));
+        assert_eq!(out.len() % channels, 0);
     }
 }

@@ -2,6 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::audio::output::BoxedSource;
+use crate::audio::policy::{
+    NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend, NativeAudioSrcMode,
+};
 
 mod rodio;
 mod sacd;
@@ -24,8 +27,50 @@ pub(crate) const SACD_INPUT_ID: &str = "sacd";
 pub(crate) struct AudioInputMeta {
     pub channels: u16,
     pub sample_rate: u32,
+    pub source_sample_rate: u32,
     pub bit_depth: Option<u32>,
     pub duration: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AudioInputSrcPolicy {
+    pub hq_src_enabled: bool,
+    pub hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
+    pub src_mode: NativeAudioSrcMode,
+    pub src_backend: NativeAudioSrcBackend,
+    pub src_target_sample_rate: Option<u32>,
+}
+
+impl Default for AudioInputSrcPolicy {
+    fn default() -> Self {
+        Self {
+            hq_src_enabled: true,
+            hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
+            src_mode: NativeAudioSrcMode::MatchOutput,
+            src_backend: NativeAudioSrcBackend::Rubato,
+            src_target_sample_rate: None,
+        }
+    }
+}
+
+fn sanitize_target_sample_rate(sample_rate: Option<u32>) -> Option<u32> {
+    sample_rate
+        .filter(|rate| *rate > 0)
+        .map(|rate| rate.clamp(8_000, 768_000))
+}
+
+pub(crate) fn resolve_audio_input_target_sample_rate(
+    output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
+) -> Option<u32> {
+    let output_sample_rate = sanitize_target_sample_rate(output_sample_rate);
+    match src_policy.src_mode {
+        NativeAudioSrcMode::SourceNative => None,
+        NativeAudioSrcMode::MatchOutput => output_sample_rate,
+        NativeAudioSrcMode::TargetRate => {
+            sanitize_target_sample_rate(src_policy.src_target_sample_rate).or(output_sample_rate)
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +107,7 @@ pub(crate) trait AudioInput: Send + Sync {
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+        src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError>;
 }
 
@@ -99,6 +145,7 @@ impl AudioInputRegistry {
         path: &Path,
         output_sample_rate: Option<u32>,
         preferred_id: Option<&str>,
+        src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         if self.inputs.is_empty() {
             return Err(AudioInputError::new(
@@ -110,7 +157,7 @@ impl AudioInputRegistry {
         let mut attempts: Vec<(String, AudioInputError)> = Vec::new();
         if let Some(preferred) = preferred_id {
             if let Some(input) = self.inputs.iter().find(|input| input.id() == preferred) {
-                match input.open(path, output_sample_rate) {
+                match input.open(path, output_sample_rate, src_policy) {
                     Ok(result) => return Ok(result),
                     Err(err) => attempts.push((input.id().to_string(), err)),
                 }
@@ -122,7 +169,7 @@ impl AudioInputRegistry {
                 continue;
             }
 
-            match input.open(path, output_sample_rate) {
+            match input.open(path, output_sample_rate, src_policy) {
                 Ok(result) => return Ok(result),
                 Err(err) => attempts.push((input.id().to_string(), err)),
             }
@@ -158,6 +205,7 @@ mod tests {
             &self,
             _path: &Path,
             _output_sample_rate: Option<u32>,
+            _src_policy: AudioInputSrcPolicy,
         ) -> Result<AudioInputOpenResult, AudioInputError> {
             Err(AudioInputError::new("FAIL", "nope"))
         }
@@ -174,6 +222,7 @@ mod tests {
             &self,
             _path: &Path,
             _output_sample_rate: Option<u32>,
+            _src_policy: AudioInputSrcPolicy,
         ) -> Result<AudioInputOpenResult, AudioInputError> {
             let source = ::rodio::buffer::SamplesBuffer::new(2, 48_000, vec![0.0f32; 256]);
             Ok(AudioInputOpenResult {
@@ -181,6 +230,7 @@ mod tests {
                 meta: AudioInputMeta {
                     channels: 2,
                     sample_rate: 48_000,
+                    source_sample_rate: 48_000,
                     bit_depth: None,
                     duration: 0.0,
                 },
@@ -199,7 +249,7 @@ mod tests {
         registry.register(Arc::new(OkInput));
 
         let result = registry
-            .open_prefer(Path::new("dummy.wav"), None, None)
+            .open_prefer(Path::new("dummy.wav"), None, None, AudioInputSrcPolicy::default())
             .expect("open should succeed");
 
         assert_eq!(result.input_id, "ok");
@@ -212,7 +262,12 @@ mod tests {
         registry.register(Arc::new(OkInput));
 
         let result = registry
-            .open_prefer(Path::new("dummy.wav"), None, Some("ok"))
+            .open_prefer(
+                Path::new("dummy.wav"),
+                None,
+                Some("ok"),
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open should succeed");
 
         assert_eq!(result.input_id, "ok");
@@ -224,7 +279,7 @@ mod tests {
         registry.register(Arc::new(FailInput));
 
         let err = registry
-            .open_prefer(Path::new("dummy.wav"), None, None)
+            .open_prefer(Path::new("dummy.wav"), None, None, AudioInputSrcPolicy::default())
             .err()
             .expect("open should fail");
         assert_eq!(err.code, "AUDIO_INPUT_OPEN_FAILED");

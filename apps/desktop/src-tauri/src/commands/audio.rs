@@ -157,12 +157,18 @@ pub async fn native_audio_set_engine_policy(
     transport_mode: Option<native_audio::NativeAudioTransportMode>,
     hq_src_enabled: Option<bool>,
     hq_src_phase_mode: Option<native_audio::NativeAudioHqSrcPhaseMode>,
+    src_mode: Option<native_audio::NativeAudioSrcMode>,
+    src_backend: Option<native_audio::NativeAudioSrcBackend>,
+    src_target_sample_rate: Option<u32>,
 ) -> Result<native_audio::NativeAudioEnginePolicyPayload, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let patch = native_audio::NativeAudioEnginePolicyPatch {
             transport_mode,
             hq_src_enabled,
             hq_src_phase_mode,
+            src_mode,
+            src_backend,
+            src_target_sample_rate,
         };
         native_audio::set_engine_policy(&app, patch)
     })

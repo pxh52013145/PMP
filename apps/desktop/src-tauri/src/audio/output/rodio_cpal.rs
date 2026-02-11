@@ -7,6 +7,7 @@ use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{OutputStream, OutputStreamHandle, Sink};
 
 use super::{AudioOutputBackend, AudioSink, OutputStreamInfo};
+use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 pub const RODIO_CPAL_BACKEND_ID: &str = "rodio-cpal";
 
@@ -141,10 +142,14 @@ impl RodioCpalBackend {
                 Ok((stream, handle, device_name, output_sample_rate)) => {
                     let _ = ready_tx.send(Ok((handle, device_name, output_sample_rate)));
                     loop {
-                        crate::audio::threading::apply_audio_output_pressure_profile(
-                            crate::audio::realtime_scheduler::SCHEDULER.profile(),
-                        );
-                        if shutdown_rx.recv_timeout(Duration::from_millis(250)).is_ok() {
+                        let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                        crate::audio::threading::apply_audio_output_pressure_profile(profile);
+                        let wait_ms = match profile {
+                            RealtimePressureProfile::Normal => 250,
+                            RealtimePressureProfile::Guarded => 96,
+                            RealtimePressureProfile::Critical => 48,
+                        };
+                        if shutdown_rx.recv_timeout(Duration::from_millis(wait_ms)).is_ok() {
                             break;
                         }
                     }

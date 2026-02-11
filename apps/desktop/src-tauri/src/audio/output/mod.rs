@@ -9,12 +9,16 @@ mod null;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 mod asio;
 mod rodio_cpal;
+mod render_ahead;
 #[cfg(target_os = "windows")]
 mod wasapi;
 #[cfg(target_os = "windows")]
 mod wasapi_exclusive;
 
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
+pub(crate) use render_ahead::{
+    shared_render_ahead_metrics, wrap_source_for_shared_backend,
+};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 pub use asio::{asio_backend, ASIO_BACKEND_ID};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -22,11 +26,37 @@ pub(crate) use asio::open_control_panel as open_asio_control_panel;
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
 #[cfg(target_os = "windows")]
-pub use wasapi_exclusive::{wasapi_exclusive_backend, WASAPI_EXCLUSIVE_BACKEND_ID};
+pub use wasapi_exclusive::{
+    wasapi_exclusive_backend, wasapi_shared_raw_backend, WASAPI_EXCLUSIVE_BACKEND_ID,
+    WASAPI_SHARED_RAW_BACKEND_ID,
+};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct OutputCallbackMetricsSnapshot {
+    pub render_p99_us: u32,
+    pub wait_timeout_count: u64,
+    pub render_underrun_events: u64,
+    pub render_underrun_frames: u64,
+    pub interval_jitter_p99_us: u32,
+    pub interval_overrun_count: u64,
+    pub expected_interval_us: u32,
+}
+
 #[cfg(target_os = "windows")]
-pub(crate) use wasapi_exclusive::output_callback_metrics;
+pub(crate) fn output_callback_metrics() -> OutputCallbackMetricsSnapshot {
+    wasapi_exclusive::output_callback_metrics()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn output_callback_metrics() -> OutputCallbackMetricsSnapshot {
+    OutputCallbackMetricsSnapshot::default()
+}
 
 static BACKEND_FALLBACK_LOCK: Lazy<std::sync::Mutex<()>> = Lazy::new(|| std::sync::Mutex::new(()));
+
+pub fn rodio_cpal_backend() -> Arc<dyn AudioOutputBackend> {
+    rodio_cpal::default_backend()
+}
 
 #[cfg(target_os = "windows")]
 pub fn default_backend() -> Arc<dyn AudioOutputBackend> {
@@ -35,7 +65,7 @@ pub fn default_backend() -> Arc<dyn AudioOutputBackend> {
         .map(|value| value.trim().eq_ignore_ascii_case("rodio-cpal"))
         .unwrap_or(false)
     {
-        return rodio_cpal::default_backend();
+        return rodio_cpal_backend();
     }
 
     let _guard = BACKEND_FALLBACK_LOCK
@@ -47,12 +77,17 @@ pub fn default_backend() -> Arc<dyn AudioOutputBackend> {
         return backend;
     }
 
+    let shared_raw = wasapi_shared_raw_backend();
+    if shared_raw.create_sink().is_ok() {
+        return shared_raw;
+    }
+
     let fallback = wasapi_backend();
     if fallback.create_sink().is_ok() {
         return fallback;
     }
 
-    rodio_cpal::default_backend()
+    rodio_cpal_backend()
 }
 
 #[cfg(not(target_os = "windows"))]

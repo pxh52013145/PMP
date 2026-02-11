@@ -1,5 +1,6 @@
 import type { NavigationPageData, NavigationPageType } from '../../../contracts/navigation';
 import type { PlayMode } from '../../../services/audio';
+import type { AudioSpectrumFrame, AudioSpectrumTap } from '../../../services/audio/types';
 import type { DynamicColors } from '../../../utils/dynamicColors';
 
 export type PluginCoverSnapshot = {
@@ -44,9 +45,14 @@ export type PluginAudioApi = {
 
 export type PluginVisualizerApi = {
   getSpectrum: () => Uint8Array | null;
+  getSpectrumFrame: (options?: { tap?: AudioSpectrumTap }) => AudioSpectrumFrame | null;
   onSpectrum: (
     cb: (bins: Uint8Array | null) => void,
     options?: { intervalMs?: number }
+  ) => () => void;
+  onSpectrumFrame: (
+    cb: (frame: AudioSpectrumFrame | null) => void,
+    options?: { tap?: AudioSpectrumTap; intervalMs?: number }
   ) => () => void;
 };
 
@@ -114,6 +120,7 @@ export type HostAudioService = {
   getPlayMode?: () => PlayMode;
   setPlayMode?: (mode: PlayMode) => void;
   getFrequencyData?: () => Uint8Array | null;
+  getSpectrumFrame?: (tap?: AudioSpectrumTap) => AudioSpectrumFrame | null;
 };
 
 export type HostNavigation = {

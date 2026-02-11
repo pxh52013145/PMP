@@ -179,4 +179,46 @@ describe('pmpm Host API - extensions', () => {
     emitChange(2);
     expect(cb).toHaveBeenCalledTimes(1);
   });
+
+  it('visualizer.getSpectrumFrame and onSpectrumFrame are gated and poll host frames', async () => {
+    const getSpectrumFrame = vi.fn((tap?: 'pre-dsp' | 'post-dsp') => ({
+      frameId: tap === 'pre-dsp' ? 10 : 20,
+      timestampMs: 123,
+      tap: tap ?? 'post-dsp',
+      sampleRate: 48_000,
+      bins: new Uint8Array([1, 2, 3]),
+    }));
+
+    const denied = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(),
+      audioService: createTestAudioService({ getSpectrumFrame }),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    expect(denied.visualizer.getSpectrumFrame({ tap: 'pre-dsp' })).toBeNull();
+
+    const allowed = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:audio-visual']),
+      audioService: createTestAudioService({ getSpectrumFrame }),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    const pre = allowed.visualizer.getSpectrumFrame({ tap: 'pre-dsp' });
+    expect(pre?.tap).toBe('pre-dsp');
+
+    vi.useFakeTimers();
+    const cb = vi.fn();
+    const off = allowed.visualizer.onSpectrumFrame(cb, { tap: 'post-dsp', intervalMs: 16 });
+    vi.advanceTimersByTime(20);
+    off();
+    vi.useRealTimers();
+
+    expect(cb).toHaveBeenCalled();
+    expect(getSpectrumFrame).toHaveBeenCalledWith('pre-dsp');
+    expect(getSpectrumFrame).toHaveBeenCalledWith('post-dsp');
+  });
 });

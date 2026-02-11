@@ -172,6 +172,9 @@ export const STORAGE_KEYS = {
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
   NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings（object）
   NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS: 'pixel-matrix-native-audio-streaming-buffer-settings', // Streaming buffer settings（object）
+  NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS: 'pixel-matrix-native-audio-dynamic-src-settings', // Dynamic SRC auto settings（object）
+  NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE:
+    'pixel-matrix-native-audio-dynamic-src-learning-profile', // Dynamic SRC learned stress profile（object）
 
   // === VST3 ===
   VST_SCAN_SETTINGS: 'pixel-matrix-vst3-scan-settings-v1', // VST3 扫描设置（object，含 scan paths）
@@ -295,6 +298,9 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',
   NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED: 'native-audio-crossfade-settings-updated',
   NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS_UPDATED: 'native-audio-streaming-buffer-settings-updated',
+  NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED: 'native-audio-dynamic-src-settings-updated',
+  NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE_UPDATED:
+    'native-audio-dynamic-src-learning-profile-updated',
   DSP_RACK_LOCATE_NODE: 'dsp-rack-locate-node',
   NAVIGATION_REQUESTED: 'navigation-requested',
 

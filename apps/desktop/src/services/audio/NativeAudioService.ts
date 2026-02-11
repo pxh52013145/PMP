@@ -322,6 +322,14 @@ export class NativeAudioService implements IAudioService {
     void this.invokeCommand(cmd, payload).catch(() => {});
   }
 
+  private isSharedOutputBackend(backendId: string | null | undefined): backendId is string {
+    return (
+      backendId === 'wasapi' ||
+      backendId === 'wasapi-shared-raw' ||
+      backendId === 'rodio-cpal'
+    );
+  }
+
   private clearPendingSeek(): void {
     this.pendingSeekTime = null;
     if (this.pendingSeekTimer !== null && typeof window !== 'undefined') {
@@ -1584,11 +1592,16 @@ export class NativeAudioService implements IAudioService {
 
   private getAutoBackendChain(): string[] {
     const backends = [...this.availableOutputBackends];
-    if (this.currentOutputBackendId && !backends.includes(this.currentOutputBackendId)) {
+    if (
+      this.isSharedOutputBackend(this.currentOutputBackendId) &&
+      !backends.includes(this.currentOutputBackendId)
+    ) {
       backends.unshift(this.currentOutputBackendId);
     }
 
-    const unique = Array.from(new Set(backends.filter((value) => value.length > 0)));
+    const unique = Array.from(
+      new Set(backends.filter((value) => value.length > 0 && this.isSharedOutputBackend(value)))
+    );
     if (unique.length <= 1) return unique;
 
     const platform =
@@ -1598,7 +1611,7 @@ export class NativeAudioService implements IAudioService {
     const isWindows = /win/i.test(platform);
     if (!isWindows) return unique;
 
-    const preferredOrder = ['wasapi-exclusive', 'wasapi', 'rodio-cpal'];
+    const preferredOrder = ['wasapi-shared-raw', 'wasapi', 'rodio-cpal'];
     const ordered: string[] = [];
     for (const preferred of preferredOrder) {
       if (unique.includes(preferred)) ordered.push(preferred);
@@ -1658,6 +1671,10 @@ export class NativeAudioService implements IAudioService {
   private async tryAutoSwitchOutputBackend(reason: string): Promise<void> {
     if (this.backendSwitchInFlight) return;
 
+    if (!this.isSharedOutputBackend(this.currentOutputBackendId)) {
+      return;
+    }
+
     const nowMs = Date.now();
     if (
       this.lastAutoBackendSwitchAtMs !== null &&
@@ -1675,6 +1692,7 @@ export class NativeAudioService implements IAudioService {
       if (chain.length <= 1) return;
 
       const current = this.currentOutputBackendId;
+      if (!this.isSharedOutputBackend(current)) return;
       const currentIndex = current ? chain.indexOf(current) : -1;
       const targetBackend =
         currentIndex >= 0 ? chain[(currentIndex + 1) % chain.length] ?? null : chain[0] ?? null;

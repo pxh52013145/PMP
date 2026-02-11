@@ -399,6 +399,14 @@ export function createPluginMountApi({
         }
         return audioService.getFrequencyData?.() ?? null;
       },
+      getSpectrumFrame: (options) => {
+        if (!allowAudioVisual) {
+          warnDenied('api:audio-visual', 'visualizer.getSpectrumFrame(options)');
+          return null;
+        }
+        const tap = options?.tap === 'pre-dsp' ? 'pre-dsp' : 'post-dsp';
+        return audioService.getSpectrumFrame?.(tap) ?? null;
+      },
       onSpectrum: (cb, options) => {
         if (!allowAudioVisual) {
           warnDenied('api:audio-visual', 'visualizer.onSpectrum(cb)');
@@ -421,6 +429,38 @@ export function createPluginMountApi({
           } catch (error) {
             console.warn(
               `[${hostLabel}] visualizer.onSpectrum callback failed (plugin=${pluginId})`,
+              error
+            );
+          }
+        }, intervalMs);
+
+        return () => {
+          window.clearInterval(handle);
+        };
+      },
+      onSpectrumFrame: (cb, options) => {
+        if (!allowAudioVisual) {
+          warnDenied('api:audio-visual', 'visualizer.onSpectrumFrame(cb)');
+          return () => {};
+        }
+
+        if (typeof cb !== 'function') {
+          console.warn(`[${hostLabel}] Invalid onSpectrumFrame callback (plugin=${pluginId})`);
+          return () => {};
+        }
+
+        const intervalMs =
+          typeof options?.intervalMs === 'number' && Number.isFinite(options.intervalMs)
+            ? Math.max(16, Math.min(2000, Math.floor(options.intervalMs)))
+            : 33;
+        const tap = options?.tap === 'pre-dsp' ? 'pre-dsp' : 'post-dsp';
+
+        const handle = window.setInterval(() => {
+          try {
+            cb(audioService.getSpectrumFrame?.(tap) ?? null);
+          } catch (error) {
+            console.warn(
+              `[${hostLabel}] visualizer.onSpectrumFrame callback failed (plugin=${pluginId})`,
               error
             );
           }

@@ -18,6 +18,7 @@ use symphonia::core::{
 
 use super::{
     AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
+    AudioInputSrcPolicy,
     SYMPHONIA_INPUT_ID,
 };
 
@@ -64,6 +65,7 @@ fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
 fn start_symphonia_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
     let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
         output_sample_rate,
@@ -200,6 +202,8 @@ fn start_symphonia_stream(
                     sample_buf = None;
                     if let Some(r) = resampler.as_mut() {
                         r.reset();
+                        pending_trim_frames_out =
+                            pending_trim_frames_out.saturating_add(r.output_delay());
                     }
                 }
             }
@@ -266,14 +270,22 @@ fn start_symphonia_stream(
                             let requested_sample_rate =
                                 output_sample_rate.unwrap_or(input_sample_rate);
                             if requested_sample_rate != input_sample_rate {
-                                match crate::audio::resample::StreamingResampler::new(
+                                match crate::audio::resample::StreamingResampler::new_with_policy(
                                     input_sample_rate,
                                     requested_sample_rate,
                                     channels_usize,
                                     resample_chunk_frames,
+                                    src_policy.hq_src_enabled,
+                                    src_policy.hq_src_phase_mode,
+                                    src_policy.src_backend,
                                 ) {
                                     Ok(instance) => {
+                                        let resampler_delay = instance.output_delay();
                                         resampler = Some(instance);
+                                        if resampler_delay > 0 {
+                                            pending_trim_frames_out = pending_trim_frames_out
+                                                .saturating_add(resampler_delay);
+                                        }
                                         effective_sample_rate = requested_sample_rate;
                                     }
                                     Err(err) => {
@@ -293,6 +305,7 @@ fn start_symphonia_stream(
                             let _ = meta_tx.send(Ok(AudioInputMeta {
                                 channels: channels_usize as u16,
                                 sample_rate: effective_sample_rate,
+                                source_sample_rate: input_sample_rate,
                                 bit_depth,
                                 duration,
                             }));
@@ -387,6 +400,8 @@ fn start_symphonia_stream(
                                         sample_buf = None;
                                         if let Some(r) = resampler.as_mut() {
                                             r.reset();
+                                            pending_trim_frames_out = pending_trim_frames_out
+                                                .saturating_add(r.output_delay());
                                         }
                                     }
 
@@ -495,6 +510,7 @@ fn start_symphonia_stream(
 struct DecodedAudioBuffer {
     samples: Arc<Vec<f32>>,
     channels: u16,
+    source_sample_rate: u32,
     sample_rate: u32,
     bit_depth: Option<u32>,
     duration: f64,
@@ -503,6 +519,7 @@ struct DecodedAudioBuffer {
 fn decode_track_to_buffer(
     path: &Path,
     output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
 ) -> Result<DecodedAudioBuffer, AudioInputError> {
     let file = File::open(path).map_err(|e| {
         AudioInputError::new(
@@ -620,13 +637,17 @@ fn decode_track_to_buffer(
     let frames = samples.len() / channels;
     let duration = frames as f64 / sample_rate as f64;
 
+    let source_sample_rate = sample_rate;
     let target_sample_rate = output_sample_rate.unwrap_or(sample_rate);
     let (samples, sample_rate) = if target_sample_rate != sample_rate {
-        let samples = crate::audio::resample::resample_interleaved_f32(
+        let samples = crate::audio::resample::resample_interleaved_f32_with_policy(
             &samples,
             sample_rate,
             target_sample_rate,
             channels,
+            src_policy.hq_src_enabled,
+            src_policy.hq_src_phase_mode,
+            src_policy.src_backend,
         )
         .map_err(|err| AudioInputError::new(err.code, err.message))?;
 
@@ -639,6 +660,7 @@ fn decode_track_to_buffer(
     Ok(DecodedAudioBuffer {
         samples: shared,
         channels: channels as u16,
+        source_sample_rate,
         sample_rate,
         bit_depth,
         duration,
@@ -657,8 +679,9 @@ impl AudioInput for SymphoniaInput {
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+        src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
-        match start_symphonia_stream(path, output_sample_rate) {
+        match start_symphonia_stream(path, output_sample_rate, src_policy) {
             Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                 input_id: self.id(),
                 meta,
@@ -670,7 +693,7 @@ impl AudioInput for SymphoniaInput {
                     return Err(stream_err);
                 }
 
-                match decode_track_to_buffer(path, output_sample_rate) {
+                match decode_track_to_buffer(path, output_sample_rate, src_policy) {
                     Ok(decoded) => {
                         let source = Box::new(SharedSamplesSource::new(
                             decoded.samples.clone(),
@@ -683,6 +706,7 @@ impl AudioInput for SymphoniaInput {
                             meta: AudioInputMeta {
                                 channels: decoded.channels,
                                 sample_rate: decoded.sample_rate,
+                                source_sample_rate: decoded.source_sample_rate,
                                 bit_depth: decoded.bit_depth,
                                 duration: decoded.duration,
                             },
@@ -769,7 +793,12 @@ mod tests {
         let frames = 4_800usize; // 0.1s
         write_wav_i16_stereo_lcg(&path, input_rate, frames);
 
-        let decoded = decode_track_to_buffer(&path, Some(44_100)).expect("offline decode");
+        let decoded = decode_track_to_buffer(
+            &path,
+            Some(44_100),
+            AudioInputSrcPolicy::default(),
+        )
+        .expect("offline decode");
         assert_eq!(decoded.channels, 2);
         assert_eq!(decoded.sample_rate, 44_100);
         assert_eq!(decoded.samples.len(), 4_410 * 2);
