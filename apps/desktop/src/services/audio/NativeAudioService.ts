@@ -1,8 +1,14 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
+  AudioDynamicSrcAdaptiveProfile,
+  AudioDynamicSrcAutoSettingsPatch,
+  AudioDynamicSrcAutoSettings,
+  AudioEnginePolicyPatch,
   AudioProtectionWindowOptions,
   AudioRobustnessSnapshot,
+  AudioSpectrumFrame,
+  AudioSpectrumTap,
   AudioState,
   IAudioService,
   PlayMode,
@@ -10,7 +16,12 @@ import {
   Track,
   PlaybackState,
 } from './types';
-import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
+import {
+  broadcastDataUpdate,
+  setupDualListener,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+} from '../../utils/windowCommunication';
 import { readString } from '../../modules/storage';
 
 type StateListener = (state: AudioState) => void;
@@ -25,22 +36,44 @@ type NativeAudioStatePayload = {
   bufferedTime?: number;
   bufferedAhead?: number;
   sampleRate?: number;
+  sourceSampleRate?: number;
   underrunEvents?: number;
   underrunFrames?: number;
   schedulerProfile?: 'normal' | 'guarded' | 'critical';
   transportMode?: 'robust' | 'transport-exact';
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  srcMode?: 'source-native' | 'match-output' | 'target-rate';
+  srcBackend?: 'rubato' | 'linear-simd';
+  srcTargetSampleRate?: number | null;
   hqSrcStopbandDb?: number;
+  hqSrcActive?: boolean;
+  hqSrcRatio?: number;
   transportExactInt32Container?: boolean;
   outputCallbackMetricsValid?: boolean;
   outputCallbackP99Us?: number;
   outputWaitTimeoutCount?: number;
   outputRenderUnderrunEvents?: number;
   outputRenderUnderrunFrames?: number;
+  outputCallbackIntervalJitterP99Us?: number;
+  outputCallbackIntervalOverrunCount?: number;
+  outputCallbackExpectedIntervalUs?: number;
   transferLowWatermarkSamples?: number;
   transferRenderLowHitCount?: number;
   transferDecodeLowHitCount?: number;
   renderQueuePageLocked?: boolean;
+  sharedRenderAheadEnabled?: boolean;
+  sharedRenderUnderrunEvents?: number;
+  sharedRenderUnderrunFrames?: number;
+  sharedRenderLowHitCount?: number;
+  sharedRenderLowWatermarkSamples?: number;
+  diagnosticTimelineDroppedEvents?: number;
+  diagnosticTimeline?: Array<{
+    seq?: number;
+    timestampMs?: number;
+    kind?: string;
+    value?: number;
+    aux?: number;
+  }>;
   queue?: string[];
   currentIndex?: number;
   ended?: boolean;
@@ -50,18 +83,28 @@ type NativeAudioEnginePolicyPayload = {
   transportMode?: 'robust' | 'transport-exact';
   hqSrcEnabled?: boolean;
   hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  srcMode?: 'source-native' | 'match-output' | 'target-rate';
+  srcBackend?: 'rubato' | 'linear-simd';
+  srcTargetSampleRate?: number | null;
   hqSrcStopbandDb?: number;
   transportExactInt32Container?: boolean;
 };
 
-type NativeAudioEnginePolicyPatch = {
-  transportMode?: 'robust' | 'transport-exact';
-  hqSrcEnabled?: boolean;
-  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+type NativeAudioEnginePolicyPatch = AudioEnginePolicyPatch;
+
+type NativeAudioSrcPolicy = {
+  srcMode: 'source-native' | 'match-output' | 'target-rate';
+  srcBackend: 'rubato' | 'linear-simd';
+  srcTargetSampleRate: number | null;
 };
 
 type NativeAudioSpectrumPayload = {
   bins: number[];
+  frameId?: number;
+  timestampMs?: number;
+  tap?: 'pre-dsp' | 'post-dsp';
+  tapId?: 'pre-dsp' | 'post-dsp';
+  sampleRate?: number;
 };
 
 type NativeAudioErrorPayload = {
@@ -94,6 +137,13 @@ type StreamingBufferSettings = {
   crossfadeSeconds: number | null;
 };
 
+type DynamicSrcLearningRecord = {
+  stressIndex: number;
+  updatedAtMs: number;
+};
+
+type DynamicSrcLearningMap = Record<string, DynamicSrcLearningRecord>;
+
 type RobustnessListener = (snapshot: AudioRobustnessSnapshot) => void;
 
 /**
@@ -115,7 +165,10 @@ export class NativeAudioService implements IAudioService {
   private stateListener?: UnlistenFn;
   private spectrumListener?: UnlistenFn;
   private errorListener?: UnlistenFn;
+  private dynamicSrcSettingsListenerCleanup: (() => void) | null = null;
+  private dynamicSrcSettingsListenerInitPromise: Promise<void> | null = null;
   private spectrumData: Uint8Array | null = null;
+  private spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>> = {};
   private restoredOutputBackend = false;
   private restoredOutputDevice = false;
   private restoredInputId = false;
@@ -138,6 +191,9 @@ export class NativeAudioService implements IAudioService {
   private underrunSpikeTimestampsMs: number[] = [];
   private pendingSeekTime: number | null = null;
   private pendingSeekTimer: number | null = null;
+  private pendingSeekTarget: number | null = null;
+  private pendingSeekDirection: 'forward' | 'backward' | null = null;
+  private pendingSeekSettleUntilMs = 0;
   private seekInvokeInFlight = false;
   private desiredPlayIndex: number | null = null;
   private playIndexQueue: Promise<void> = Promise.resolve();
@@ -165,19 +221,62 @@ export class NativeAudioService implements IAudioService {
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
+  private srcMode: 'source-native' | 'match-output' | 'target-rate' = 'match-output';
+  private srcBackend: 'rubato' | 'linear-simd' = 'rubato';
+  private srcTargetSampleRate: number | null = null;
+  private dynamicSrcAutoEnabled = true;
+  private dynamicSrcProfile: 'quality' | 'latency' = 'quality';
+  private dynamicSrcLastSwitchAtMs: number | null = null;
+  private dynamicSrcLastSwitchReason: string | null = null;
+  private dynamicSrcHoldUntilMs = 0;
+  private dynamicSrcRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+  private dynamicSrcLastApplyAtMs: number | null = null;
+  private dynamicSrcManualLockActive = false;
+  private dynamicSrcQualityPolicy: NativeAudioSrcPolicy = {
+    srcMode: 'match-output',
+    srcBackend: 'rubato',
+    srcTargetSampleRate: null,
+  };
   private hqSrcStopbandDb: number = 140;
+  private hqSrcActive = false;
+  private hqSrcRatio = 1;
+  private sourceSampleRate = 0;
+  private outputSampleRate = 0;
   private transportExactInt32Container = true;
   private outputCallbackMetricsValid = false;
   private outputCallbackP99Us = 0;
   private outputWaitTimeoutCount = 0;
   private outputRenderUnderrunEvents = 0;
   private outputRenderUnderrunFrames = 0;
+  private outputCallbackIntervalJitterP99Us = 0;
+  private outputCallbackIntervalOverrunCount = 0;
+  private outputCallbackExpectedIntervalUs = 0;
   private transferLowWatermarkSamples = 0;
   private transferRenderLowHitCount = 0;
   private transferDecodeLowHitCount = 0;
   private renderQueuePageLocked = false;
+  private transferMetricsValid = false;
+  private sharedRenderAheadEnabled = false;
+  private sharedRenderUnderrunEvents = 0;
+  private sharedRenderUnderrunFrames = 0;
+  private sharedRenderLowHitCount = 0;
+  private sharedRenderLowWatermarkSamples = 0;
+  private diagnosticTimelineDroppedEvents = 0;
+  private diagnosticTimeline: Array<{
+    seq: number;
+    timestampMs: number;
+    kind: string;
+    value: number;
+    aux: number;
+  }> = [];
+  private diagnosticTimelineLastSeq = 0;
+  private sharedStressUntilMs = 0;
+  private sharedStressReason: string | null = null;
+  private sharedStressEscalationCount = 0;
 
-  private static readonly SEEK_COALESCE_MS = 60;
+  private static readonly SEEK_COALESCE_MS = 24;
+  private static readonly SEEK_STALE_GUARD_WINDOW_MS = 1_500;
+  private static readonly SEEK_STALE_GUARD_TOLERANCE_SECONDS = 0.45;
   private static readonly UNDERRUN_RECOVERY_WINDOW_MS = 20_000;
   private static readonly AUTO_BACKEND_UNDERRUN_WINDOW_MS = 15_000;
   private static readonly AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT = 3;
@@ -186,6 +285,34 @@ export class NativeAudioService implements IAudioService {
   private static readonly PROTECTION_WINDOW_DEFAULT_MS = 20_000;
   private static readonly PROTECTION_WINDOW_MAX_MS = 120_000;
   private static readonly ROBUSTNESS_BUFFER_WINDOW_SIZE = 48;
+  private static readonly SHARED_TIMELINE_STRESS_WINDOW_MS = 12_000;
+  private static readonly SHARED_TIMELINE_LOW_WATERMARK_TRIGGER = 4;
+  private static readonly SHARED_TIMELINE_UNDERRUN_TRIGGER = 1;
+  private static readonly DYNAMIC_SRC_RESTORE_DEBOUNCE_MS = 4_000;
+  private static readonly DYNAMIC_SRC_MIN_SWITCH_INTERVAL_MS = 600;
+  private static readonly DYNAMIC_SRC_SEEK_HOLD_MS = 2_000;
+  private static readonly DYNAMIC_SRC_UNDERRUN_HOLD_MS = 12_000;
+  private static readonly DYNAMIC_SRC_SHARED_STRESS_HOLD_MS = 8_000;
+  private static readonly DYNAMIC_SRC_OUTPUT_ERROR_HOLD_MS = 10_000;
+  private static readonly DYNAMIC_SRC_LEARNING_MAX_ITEMS = 64;
+  private static readonly DYNAMIC_SRC_LEARNING_PERSIST_MIN_INTERVAL_MS = 2_000;
+  private static readonly DYNAMIC_SRC_LEARNING_MIN_DELTA = 0.0005;
+  private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED = 4;
+  private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL = 8;
+
+  private dynamicSrcRestoreDebounceMs = NativeAudioService.DYNAMIC_SRC_RESTORE_DEBOUNCE_MS;
+  private dynamicSrcMinSwitchIntervalMs = NativeAudioService.DYNAMIC_SRC_MIN_SWITCH_INTERVAL_MS;
+  private dynamicSrcSeekHoldMs = NativeAudioService.DYNAMIC_SRC_SEEK_HOLD_MS;
+  private dynamicSrcUnderrunHoldMs = NativeAudioService.DYNAMIC_SRC_UNDERRUN_HOLD_MS;
+  private dynamicSrcSharedStressHoldMs = NativeAudioService.DYNAMIC_SRC_SHARED_STRESS_HOLD_MS;
+  private dynamicSrcOutputErrorHoldMs = NativeAudioService.DYNAMIC_SRC_OUTPUT_ERROR_HOLD_MS;
+  private dynamicSrcAdaptiveEnabled = true;
+  private dynamicSrcAdaptiveProfile: AudioDynamicSrcAdaptiveProfile = 'baseline';
+  private dynamicSrcLearningEnabled = true;
+  private dynamicSrcLearningProfile: DynamicSrcLearningMap = {};
+  private dynamicSrcLearningPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private dynamicSrcLearningLastPersistAtMs = 0;
+  private dynamicSrcLearningLastPersistedSignature: string | null = null;
 
   private fireAndForgetCommand(cmd: string, payload?: Record<string, unknown>): void {
     void this.invokeCommand(cmd, payload).catch(() => {});
@@ -197,6 +324,62 @@ export class NativeAudioService implements IAudioService {
       window.clearTimeout(this.pendingSeekTimer);
     }
     this.pendingSeekTimer = null;
+    this.clearPendingSeekGuard();
+  }
+
+  private markPendingSeekGuard(target: number): void {
+    if (!isFinite(target)) return;
+    this.pendingSeekDirection = target >= this.state.currentTime ? 'forward' : 'backward';
+    this.pendingSeekTarget = target;
+    this.pendingSeekSettleUntilMs = Date.now() + NativeAudioService.SEEK_STALE_GUARD_WINDOW_MS;
+  }
+
+  private clearPendingSeekGuard(): void {
+    this.pendingSeekTarget = null;
+    this.pendingSeekDirection = null;
+    this.pendingSeekSettleUntilMs = 0;
+  }
+
+  private shouldIgnoreBackendCurrentTime(nextTime: number): boolean {
+    if (!isFinite(nextTime)) return false;
+    if (typeof this.pendingSeekTarget !== 'number') return false;
+
+    const target = this.pendingSeekTarget;
+    const tolerance = NativeAudioService.SEEK_STALE_GUARD_TOLERANCE_SECONDS;
+    const direction = this.pendingSeekDirection;
+    const waitingForSeekCommit =
+      this.seekInvokeInFlight || typeof this.pendingSeekTime === 'number';
+
+    if (Math.abs(nextTime - target) <= tolerance) {
+      this.clearPendingSeekGuard();
+      return false;
+    }
+
+    if (direction === 'forward' && nextTime > target + tolerance) {
+      this.clearPendingSeekGuard();
+      return false;
+    }
+
+    if (direction === 'backward' && nextTime < target - tolerance) {
+      this.clearPendingSeekGuard();
+      return false;
+    }
+
+    if (waitingForSeekCommit) {
+      return true;
+    }
+
+    if (Date.now() <= this.pendingSeekSettleUntilMs) {
+      if (direction === 'forward') {
+        return nextTime < target - tolerance;
+      }
+      if (direction === 'backward') {
+        return nextTime > target + tolerance;
+      }
+    }
+
+    this.clearPendingSeekGuard();
+    return false;
   }
 
   private flushPendingSeekCommand(): void {
@@ -286,6 +469,7 @@ export class NativeAudioService implements IAudioService {
     await this.restoreOutputDeviceFromStorage();
     await this.restoreAudioInputFromStorage();
     await this.restoreStreamingBufferSettingsFromStorage();
+    await this.restoreDynamicSrcAutoSettingsFromStorage();
     await this.restoreVstEnabledFromStorage();
 
     const restoredGraph = await this.restoreDspGraphFromBackend();
@@ -514,9 +698,649 @@ export class NativeAudioService implements IAudioService {
     try {
       const policyPayload = await invoke<unknown>('native_audio_get_engine_policy');
       this.applyEnginePolicyPayload(policyPayload);
+      if (this.dynamicSrcProfile !== 'latency') {
+        this.captureCurrentQualitySrcPolicy();
+      }
     } catch {
       // best-effort
     }
+  }
+
+  private normalizeSrcPolicyFromPatch(
+    patch: NativeAudioEnginePolicyPatch,
+    fallback?: NativeAudioSrcPolicy
+  ): NativeAudioSrcPolicy {
+    const baseline: NativeAudioSrcPolicy = fallback ?? {
+      srcMode: this.srcMode,
+      srcBackend: this.srcBackend,
+      srcTargetSampleRate: this.srcTargetSampleRate,
+    };
+
+    const normalized: NativeAudioSrcPolicy = {
+      srcMode: baseline.srcMode,
+      srcBackend: baseline.srcBackend,
+      srcTargetSampleRate: baseline.srcTargetSampleRate,
+    };
+
+    if (
+      patch.srcMode === 'source-native' ||
+      patch.srcMode === 'match-output' ||
+      patch.srcMode === 'target-rate'
+    ) {
+      normalized.srcMode = patch.srcMode;
+    }
+
+    if (patch.srcBackend === 'rubato' || patch.srcBackend === 'linear-simd') {
+      normalized.srcBackend = patch.srcBackend;
+    }
+
+    if (
+      typeof patch.srcTargetSampleRate === 'number' &&
+      Number.isFinite(patch.srcTargetSampleRate) &&
+      patch.srcTargetSampleRate > 0
+    ) {
+      normalized.srcTargetSampleRate = Math.max(
+        8000,
+        Math.min(768000, Math.floor(patch.srcTargetSampleRate))
+      );
+    } else if (patch.srcTargetSampleRate === null) {
+      normalized.srcTargetSampleRate = null;
+    }
+
+    if (normalized.srcMode !== 'target-rate') {
+      normalized.srcTargetSampleRate = null;
+    }
+
+    return normalized;
+  }
+
+  private captureCurrentQualitySrcPolicy(): void {
+    this.dynamicSrcQualityPolicy = {
+      srcMode: this.srcMode,
+      srcBackend: this.srcBackend,
+      srcTargetSampleRate: this.srcMode === 'target-rate' ? this.srcTargetSampleRate : null,
+    };
+  }
+
+  private getLatencySrcPolicy(): NativeAudioSrcPolicy {
+    return {
+      srcMode: 'match-output',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: null,
+    };
+  }
+
+  private getDynamicSrcStressScore(nowMs: number = Date.now()): number {
+    let score = 0;
+
+    if (this.state.playbackState === 'buffering') {
+      score += 3;
+    } else if (this.state.playbackState === 'loading') {
+      score += 2;
+    }
+
+    if (this.underrunRecoveryUntilMs > nowMs) {
+      score += 4;
+    }
+
+    if (this.hasActiveProtectionWindow(nowMs)) {
+      score += 3;
+    }
+
+    if (this.hasActiveSharedStressWindow(nowMs)) {
+      score += 4;
+    }
+
+    if (this.outputCallbackMetricsValid) {
+      if (this.outputWaitTimeoutCount > 0) {
+        score += Math.min(3, this.outputWaitTimeoutCount);
+      }
+      if (this.outputRenderUnderrunEvents > 0) {
+        score += Math.min(3, this.outputRenderUnderrunEvents);
+      }
+      if (this.outputCallbackIntervalOverrunCount > 0) {
+        score += Math.min(2, this.outputCallbackIntervalOverrunCount);
+      }
+      if (this.outputCallbackIntervalJitterP99Us >= 2500) {
+        score += 1;
+      }
+    }
+
+    if (this.transferMetricsValid) {
+      if (this.transferRenderLowHitCount > 0) {
+        score += 1;
+      }
+      if (this.transferDecodeLowHitCount > 0) {
+        score += 1;
+      }
+      if (this.renderQueuePageLocked) {
+        score += 1;
+      }
+    }
+
+    if (this.sharedRenderAheadEnabled) {
+      if (this.sharedRenderUnderrunEvents > 0) {
+        score += Math.min(3, this.sharedRenderUnderrunEvents);
+      }
+      if (this.sharedRenderLowHitCount > 0) {
+        score += 1;
+      }
+    }
+
+    return Math.max(0, Math.floor(score));
+  }
+
+  private buildDynamicSrcLearningDeviceKey(): string {
+    const backend = this.currentOutputBackendId ?? 'unknown-backend';
+    const persistedOutputDevice = (() => {
+      try {
+        const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
+        if (!raw) return '';
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object') {
+          const record = parsed as Record<string, unknown>;
+          if (typeof record.id === 'string' && record.id.trim().length > 0) {
+            return record.id.trim();
+          }
+          if (typeof record.name === 'string' && record.name.trim().length > 0) {
+            return record.name.trim();
+          }
+        }
+        if (typeof parsed === 'string' && parsed.trim().length > 0) {
+          return parsed.trim();
+        }
+      } catch {
+        // ignore
+      }
+      return '';
+    })();
+
+    return `${backend}::${persistedOutputDevice || 'default-device'}`;
+  }
+
+  private parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap {
+    if (!raw) return {};
+
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return {};
+
+      const input = parsed as Record<string, unknown>;
+      const entries: Array<[string, DynamicSrcLearningRecord]> = [];
+      for (const [key, value] of Object.entries(input)) {
+        if (typeof key !== 'string' || key.trim().length === 0) continue;
+        if (!value || typeof value !== 'object') continue;
+
+        const record = value as Record<string, unknown>;
+        const stressIndexRaw = record.stressIndex;
+        const updatedAtRaw = record.updatedAtMs;
+        if (typeof stressIndexRaw !== 'number' || !Number.isFinite(stressIndexRaw)) continue;
+        const normalizedStress = Math.max(0, Math.min(12, stressIndexRaw));
+        const updatedAtMs =
+          typeof updatedAtRaw === 'number' && Number.isFinite(updatedAtRaw)
+            ? Math.max(0, Math.floor(updatedAtRaw))
+            : 0;
+
+        entries.push([
+          key,
+          {
+            stressIndex: normalizedStress,
+            updatedAtMs,
+          },
+        ]);
+      }
+
+      entries.sort((a, b) => (b[1].updatedAtMs || 0) - (a[1].updatedAtMs || 0));
+      return Object.fromEntries(entries.slice(0, NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS));
+    } catch {
+      return {};
+    }
+  }
+
+  private clearDynamicSrcLearningPersistTimer(): void {
+    if (this.dynamicSrcLearningPersistTimer === null) return;
+    clearTimeout(this.dynamicSrcLearningPersistTimer);
+    this.dynamicSrcLearningPersistTimer = null;
+  }
+
+  private normalizeDynamicSrcLearningProfileForPersistence(): DynamicSrcLearningMap {
+    const trimmedEntries = Object.entries(this.dynamicSrcLearningProfile)
+      .sort((a, b) => (b[1].updatedAtMs || 0) - (a[1].updatedAtMs || 0))
+      .slice(0, NativeAudioService.DYNAMIC_SRC_LEARNING_MAX_ITEMS);
+    this.dynamicSrcLearningProfile = Object.fromEntries(trimmedEntries);
+    return this.dynamicSrcLearningProfile;
+  }
+
+  private persistDynamicSrcLearningProfile(nowMs: number = Date.now()): void {
+    if (!this.dynamicSrcLearningEnabled) return;
+
+    const normalizedProfile = this.normalizeDynamicSrcLearningProfileForPersistence();
+    const signature = JSON.stringify(normalizedProfile);
+    if (signature === this.dynamicSrcLearningLastPersistedSignature) {
+      this.dynamicSrcLearningLastPersistAtMs = nowMs;
+      return;
+    }
+
+    this.dynamicSrcLearningLastPersistAtMs = nowMs;
+    this.dynamicSrcLearningLastPersistedSignature = signature;
+
+    void broadcastDataUpdate(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE, normalizedProfile).catch(
+      () => {}
+    );
+  }
+
+  private scheduleDynamicSrcLearningPersist(nowMs: number = Date.now()): void {
+    if (!this.dynamicSrcLearningEnabled) return;
+
+    const minIntervalMs = NativeAudioService.DYNAMIC_SRC_LEARNING_PERSIST_MIN_INTERVAL_MS;
+    const elapsedMs = nowMs - this.dynamicSrcLearningLastPersistAtMs;
+    if (elapsedMs >= minIntervalMs) {
+      this.clearDynamicSrcLearningPersistTimer();
+      this.persistDynamicSrcLearningProfile(nowMs);
+      return;
+    }
+
+    if (this.dynamicSrcLearningPersistTimer !== null) return;
+
+    const delayMs = Math.max(0, minIntervalMs - elapsedMs);
+    this.dynamicSrcLearningPersistTimer = setTimeout(() => {
+      this.dynamicSrcLearningPersistTimer = null;
+      this.persistDynamicSrcLearningProfile(Date.now());
+    }, delayMs);
+  }
+
+  private updateDynamicSrcLearningFromStress(stressScore: number, nowMs: number = Date.now()): void {
+    if (!this.dynamicSrcLearningEnabled) return;
+    if (!Number.isFinite(stressScore)) return;
+
+    const deviceKey = this.buildDynamicSrcLearningDeviceKey();
+    const previous = this.dynamicSrcLearningProfile[deviceKey]?.stressIndex ?? 0;
+    const normalizedStress = Math.max(0, Math.min(12, stressScore));
+    const blended = previous * 0.9 + normalizedStress * 0.1;
+    const nextStressIndex = Math.max(0, Math.min(12, blended));
+    if (Math.abs(nextStressIndex - previous) < NativeAudioService.DYNAMIC_SRC_LEARNING_MIN_DELTA) {
+      return;
+    }
+
+    this.dynamicSrcLearningProfile[deviceKey] = {
+      stressIndex: nextStressIndex,
+      updatedAtMs: nowMs,
+    };
+
+    this.scheduleDynamicSrcLearningPersist(nowMs);
+  }
+
+  private getDynamicSrcLearningScale(): number {
+    if (!this.dynamicSrcLearningEnabled) return 1;
+
+    const deviceKey = this.buildDynamicSrcLearningDeviceKey();
+    const stressIndex = this.dynamicSrcLearningProfile[deviceKey]?.stressIndex ?? 0;
+    if (stressIndex <= 0) return 1;
+
+    return 1 + Math.min(0.5, stressIndex / 30);
+  }
+
+  private resolveDynamicSrcAdaptiveProfile(
+    nowMs: number = Date.now()
+  ): AudioDynamicSrcAdaptiveProfile {
+    if (!this.dynamicSrcAdaptiveEnabled) {
+      return 'baseline';
+    }
+
+    const score = this.getDynamicSrcStressScore(nowMs);
+    if (score >= NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL) {
+      return 'critical';
+    }
+    if (score >= NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED) {
+      return 'elevated';
+    }
+    return 'baseline';
+  }
+
+  private getDynamicSrcAdaptiveScale(profile: AudioDynamicSrcAdaptiveProfile): number {
+    if (profile === 'critical') return 1.8;
+    if (profile === 'elevated') return 1.35;
+    return 1;
+  }
+
+  private getEffectiveDynamicSrcTiming(nowMs: number = Date.now()): {
+    profile: AudioDynamicSrcAdaptiveProfile;
+    stressScore: number;
+    restoreDebounceMs: number;
+    minSwitchIntervalMs: number;
+    seekHoldMs: number;
+    underrunHoldMs: number;
+    sharedStressHoldMs: number;
+    outputErrorHoldMs: number;
+  } {
+    const profile = this.resolveDynamicSrcAdaptiveProfile(nowMs);
+    const stressScore = this.getDynamicSrcStressScore(nowMs);
+    const scale = this.getDynamicSrcAdaptiveScale(profile) * this.getDynamicSrcLearningScale();
+    const scaleMs = (
+      value: number,
+      options: { min: number; max: number; inverse?: boolean }
+    ): number => {
+      const raw = options.inverse ? value / scale : value * scale;
+      return Math.max(options.min, Math.min(options.max, Math.floor(raw)));
+    };
+
+    return {
+      profile,
+      stressScore,
+      restoreDebounceMs: scaleMs(this.dynamicSrcRestoreDebounceMs, { min: 500, max: 30_000 }),
+      minSwitchIntervalMs: scaleMs(this.dynamicSrcMinSwitchIntervalMs, {
+        min: 100,
+        max: 10_000,
+        inverse: true,
+      }),
+      seekHoldMs: scaleMs(this.dynamicSrcSeekHoldMs, { min: 500, max: 20_000 }),
+      underrunHoldMs: scaleMs(this.dynamicSrcUnderrunHoldMs, { min: 2_000, max: 120_000 }),
+      sharedStressHoldMs: scaleMs(this.dynamicSrcSharedStressHoldMs, { min: 1_000, max: 90_000 }),
+      outputErrorHoldMs: scaleMs(this.dynamicSrcOutputErrorHoldMs, { min: 1_000, max: 120_000 }),
+    };
+  }
+
+  private isSameSrcPolicy(left: NativeAudioSrcPolicy, right: NativeAudioSrcPolicy): boolean {
+    return (
+      left.srcMode === right.srcMode &&
+      left.srcBackend === right.srcBackend &&
+      left.srcTargetSampleRate === right.srcTargetSampleRate
+    );
+  }
+
+  private clearDynamicSrcRestoreTimer(): void {
+    if (this.dynamicSrcRestoreTimer === null) return;
+    clearTimeout(this.dynamicSrcRestoreTimer);
+    this.dynamicSrcRestoreTimer = null;
+  }
+
+  private scheduleDynamicSrcRestoreEvaluation(): void {
+    this.clearDynamicSrcRestoreTimer();
+    const nowMs = Date.now();
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    const holdRemaining = Math.max(0, this.dynamicSrcHoldUntilMs - nowMs);
+    const delayMs = Math.max(effective.restoreDebounceMs, holdRemaining);
+
+    this.dynamicSrcRestoreTimer = setTimeout(() => {
+      this.dynamicSrcRestoreTimer = null;
+      void this.maybeRestoreQualitySrc('stable-window');
+    }, delayMs);
+  }
+
+  private withDynamicSrcHold(reason: string, holdMs: number): void {
+    const nowMs = Date.now();
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    const safeHoldMs = Math.max(1000, Math.floor(holdMs));
+    const adaptiveHoldMs = Math.max(1000, Math.floor(safeHoldMs * this.getDynamicSrcAdaptiveScale(effective.profile)));
+    this.dynamicSrcHoldUntilMs = Math.max(this.dynamicSrcHoldUntilMs, nowMs + safeHoldMs);
+    this.dynamicSrcHoldUntilMs = Math.max(this.dynamicSrcHoldUntilMs, nowMs + adaptiveHoldMs);
+    this.dynamicSrcLastSwitchReason = reason;
+    this.dynamicSrcAdaptiveProfile = effective.profile;
+    void this.ensureLatencySrcPolicy(reason);
+    this.scheduleDynamicSrcRestoreEvaluation();
+  }
+
+  private canApplyDynamicSrcNow(nowMs: number): boolean {
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    if (this.dynamicSrcLastApplyAtMs === null) return true;
+    return (
+      nowMs - this.dynamicSrcLastApplyAtMs >=
+      effective.minSwitchIntervalMs
+    );
+  }
+
+  private async applySrcPolicyIfNeeded(
+    target: NativeAudioSrcPolicy,
+    reason: string,
+    profile: 'quality' | 'latency'
+  ): Promise<boolean> {
+    const current: NativeAudioSrcPolicy = {
+      srcMode: this.srcMode,
+      srcBackend: this.srcBackend,
+      srcTargetSampleRate: this.srcMode === 'target-rate' ? this.srcTargetSampleRate : null,
+    };
+
+    if (this.isSameSrcPolicy(current, target)) {
+      this.dynamicSrcProfile = profile;
+      return false;
+    }
+
+    const nowMs = Date.now();
+    if (!this.canApplyDynamicSrcNow(nowMs)) {
+      this.scheduleDynamicSrcRestoreEvaluation();
+      return false;
+    }
+
+    try {
+      await this.setEnginePolicyInternal(target, { fromDynamicAuto: true });
+      this.dynamicSrcProfile = profile;
+      this.dynamicSrcLastSwitchAtMs = nowMs;
+      this.dynamicSrcLastSwitchReason = reason;
+      this.dynamicSrcLastApplyAtMs = nowMs;
+      this.emitRobustnessSnapshot(true);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureLatencySrcPolicy(reason: string): Promise<void> {
+    if (!this.dynamicSrcAutoEnabled) return;
+    if (this.dynamicSrcManualLockActive) return;
+    await this.applySrcPolicyIfNeeded(this.getLatencySrcPolicy(), reason, 'latency');
+  }
+
+  private async maybeRestoreQualitySrc(reason: string): Promise<void> {
+    if (!this.dynamicSrcAutoEnabled) return;
+    if (this.dynamicSrcManualLockActive) return;
+
+    const nowMs = Date.now();
+    if (nowMs < this.dynamicSrcHoldUntilMs) {
+      this.scheduleDynamicSrcRestoreEvaluation();
+      return;
+    }
+    if (this.underrunRecoveryUntilMs > nowMs) {
+      this.scheduleDynamicSrcRestoreEvaluation();
+      return;
+    }
+    if (this.hasActiveProtectionWindow(nowMs) || this.hasActiveSharedStressWindow(nowMs)) {
+      this.scheduleDynamicSrcRestoreEvaluation();
+      return;
+    }
+    if (this.state.playbackState === 'buffering' || this.state.playbackState === 'loading') {
+      this.scheduleDynamicSrcRestoreEvaluation();
+      return;
+    }
+
+    const restored = await this.applySrcPolicyIfNeeded(
+      this.dynamicSrcQualityPolicy,
+      reason,
+      'quality'
+    );
+    if (!restored && this.dynamicSrcProfile !== 'quality') {
+      this.scheduleDynamicSrcRestoreEvaluation();
+    }
+  }
+
+  private readDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings {
+    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(value)));
+    };
+
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS);
+      if (!raw) {
+        return {
+          enabled: true,
+          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+          learningEnabled: this.dynamicSrcLearningEnabled,
+          restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
+          minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
+          seekHoldMs: this.dynamicSrcSeekHoldMs,
+          underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
+          sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
+          outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+        };
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') {
+        return {
+          enabled: true,
+          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+          learningEnabled: this.dynamicSrcLearningEnabled,
+          restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
+          minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
+          seekHoldMs: this.dynamicSrcSeekHoldMs,
+          underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
+          sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
+          outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+        };
+      }
+      const record = parsed as Record<string, unknown>;
+      return {
+        enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
+        adaptiveEnabled:
+          typeof record.adaptiveEnabled === 'boolean'
+            ? record.adaptiveEnabled
+            : this.dynamicSrcAdaptiveEnabled,
+        learningEnabled:
+          typeof record.learningEnabled === 'boolean'
+            ? record.learningEnabled
+            : this.dynamicSrcLearningEnabled,
+        restoreDebounceMs: clampMs(record.restoreDebounceMs, this.dynamicSrcRestoreDebounceMs, 500, 30_000),
+        minSwitchIntervalMs: clampMs(
+          record.minSwitchIntervalMs,
+          this.dynamicSrcMinSwitchIntervalMs,
+          100,
+          10_000
+        ),
+        seekHoldMs: clampMs(record.seekHoldMs, this.dynamicSrcSeekHoldMs, 500, 20_000),
+        underrunHoldMs: clampMs(record.underrunHoldMs, this.dynamicSrcUnderrunHoldMs, 2_000, 120_000),
+        sharedStressHoldMs: clampMs(
+          record.sharedStressHoldMs,
+          this.dynamicSrcSharedStressHoldMs,
+          1_000,
+          90_000
+        ),
+        outputErrorHoldMs: clampMs(
+          record.outputErrorHoldMs,
+          this.dynamicSrcOutputErrorHoldMs,
+          1_000,
+          120_000
+        ),
+      };
+    } catch {
+      return {
+        enabled: true,
+        adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+        learningEnabled: this.dynamicSrcLearningEnabled,
+        restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
+        minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
+        seekHoldMs: this.dynamicSrcSeekHoldMs,
+        underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
+        sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
+        outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+      };
+    }
+  }
+
+  private async restoreDynamicSrcAutoSettingsFromStorage(): Promise<void> {
+    this.dynamicSrcLearningProfile = this.parseDynamicSrcLearningProfile(
+      readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
+    );
+    this.dynamicSrcLearningLastPersistedSignature = JSON.stringify(
+      this.normalizeDynamicSrcLearningProfileForPersistence()
+    );
+    this.dynamicSrcLearningLastPersistAtMs = 0;
+
+    const persisted = this.readDynamicSrcAutoSettings();
+    this.dynamicSrcAutoEnabled = persisted.enabled;
+    this.dynamicSrcAdaptiveEnabled = persisted.adaptiveEnabled;
+    this.dynamicSrcLearningEnabled = persisted.learningEnabled;
+    this.dynamicSrcRestoreDebounceMs = persisted.restoreDebounceMs;
+    this.dynamicSrcMinSwitchIntervalMs = persisted.minSwitchIntervalMs;
+    this.dynamicSrcSeekHoldMs = persisted.seekHoldMs;
+    this.dynamicSrcUnderrunHoldMs = persisted.underrunHoldMs;
+    this.dynamicSrcSharedStressHoldMs = persisted.sharedStressHoldMs;
+    this.dynamicSrcOutputErrorHoldMs = persisted.outputErrorHoldMs;
+    this.dynamicSrcAdaptiveProfile = this.resolveDynamicSrcAdaptiveProfile();
+    this.emitRobustnessSnapshot(true);
+
+    if (this.dynamicSrcSettingsListenerCleanup) return;
+    if (this.dynamicSrcSettingsListenerInitPromise) {
+      await this.dynamicSrcSettingsListenerInitPromise;
+      return;
+    }
+
+    const applyPersistedDynamicSrcSettings = () => {
+      const next = this.readDynamicSrcAutoSettings();
+      const changed =
+        next.enabled !== this.dynamicSrcAutoEnabled ||
+        next.adaptiveEnabled !== this.dynamicSrcAdaptiveEnabled ||
+        next.learningEnabled !== this.dynamicSrcLearningEnabled;
+      this.dynamicSrcAutoEnabled = next.enabled;
+      this.dynamicSrcAdaptiveEnabled = next.adaptiveEnabled;
+      this.dynamicSrcLearningEnabled = next.learningEnabled;
+      if (!this.dynamicSrcLearningEnabled) {
+        this.clearDynamicSrcLearningPersistTimer();
+      }
+      this.dynamicSrcRestoreDebounceMs = next.restoreDebounceMs;
+      this.dynamicSrcMinSwitchIntervalMs = next.minSwitchIntervalMs;
+      this.dynamicSrcSeekHoldMs = next.seekHoldMs;
+      this.dynamicSrcUnderrunHoldMs = next.underrunHoldMs;
+      this.dynamicSrcSharedStressHoldMs = next.sharedStressHoldMs;
+      this.dynamicSrcOutputErrorHoldMs = next.outputErrorHoldMs;
+      if (!this.dynamicSrcAutoEnabled) {
+        this.dynamicSrcProfile = 'quality';
+        this.dynamicSrcAdaptiveProfile = 'baseline';
+        this.dynamicSrcHoldUntilMs = 0;
+        this.clearDynamicSrcRestoreTimer();
+      } else {
+        this.dynamicSrcAdaptiveProfile = this.resolveDynamicSrcAdaptiveProfile();
+        this.scheduleDynamicSrcRestoreEvaluation();
+      }
+      if (changed) {
+        this.emitRobustnessSnapshot(true);
+      }
+    };
+
+    this.dynamicSrcSettingsListenerInitPromise = (async () => {
+      if (this.dynamicSrcSettingsListenerCleanup) return;
+
+      const settingsCleanup = await setupDualListener(
+        [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS],
+        [],
+        applyPersistedDynamicSrcSettings
+      );
+
+      const learningCleanup = await setupDualListener(
+        [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE],
+        [],
+        () => {
+          const nextProfile = this.parseDynamicSrcLearningProfile(
+            readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
+          );
+          const nextSignature = JSON.stringify(nextProfile);
+          if (nextSignature === this.dynamicSrcLearningLastPersistedSignature) {
+            return;
+          }
+          this.dynamicSrcLearningProfile = nextProfile;
+          this.dynamicSrcLearningLastPersistedSignature = nextSignature;
+          this.dynamicSrcLearningLastPersistAtMs = Date.now();
+          this.emitRobustnessSnapshot(true);
+        }
+      );
+
+      this.dynamicSrcSettingsListenerCleanup = () => {
+        settingsCleanup();
+        learningCleanup();
+      };
+    })().finally(() => {
+      this.dynamicSrcSettingsListenerInitPromise = null;
+    });
+
+    await this.dynamicSrcSettingsListenerInitPromise;
   }
 
   private applyEnginePolicyPayload(payload: unknown): void {
@@ -535,6 +1359,32 @@ export class NativeAudioService implements IAudioService {
       this.hqSrcPhaseMode = policy.hqSrcPhaseMode;
     }
 
+    if (
+      policy.srcMode === 'source-native' ||
+      policy.srcMode === 'match-output' ||
+      policy.srcMode === 'target-rate'
+    ) {
+      this.srcMode = policy.srcMode;
+    }
+
+    if (policy.srcBackend === 'rubato' || policy.srcBackend === 'linear-simd') {
+      this.srcBackend = policy.srcBackend;
+    }
+
+    if (
+      typeof policy.srcTargetSampleRate === 'number' &&
+      Number.isFinite(policy.srcTargetSampleRate) &&
+      policy.srcTargetSampleRate > 0
+    ) {
+      this.srcTargetSampleRate = Math.max(8000, Math.min(768000, Math.floor(policy.srcTargetSampleRate)));
+    } else if (policy.srcTargetSampleRate == null) {
+      this.srcTargetSampleRate = null;
+    }
+
+    if (!this.dynamicSrcAutoEnabled || this.dynamicSrcManualLockActive) {
+      this.captureCurrentQualitySrcPolicy();
+    }
+
     if (typeof policy.hqSrcStopbandDb === 'number' && Number.isFinite(policy.hqSrcStopbandDb)) {
       this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(policy.hqSrcStopbandDb)));
     }
@@ -542,9 +1392,17 @@ export class NativeAudioService implements IAudioService {
     if (typeof policy.transportExactInt32Container === 'boolean') {
       this.transportExactInt32Container = policy.transportExactInt32Container;
     }
+
+    if (!policy.hqSrcEnabled) {
+      this.hqSrcActive = false;
+      this.hqSrcRatio = 1;
+    }
   }
 
-  async setEnginePolicy(patch: NativeAudioEnginePolicyPatch): Promise<void> {
+  private async setEnginePolicyInternal(
+    patch: NativeAudioEnginePolicyPatch,
+    options?: { fromDynamicAuto?: boolean }
+  ): Promise<void> {
     const normalized: NativeAudioEnginePolicyPatch = {};
     if (patch.transportMode === 'robust' || patch.transportMode === 'transport-exact') {
       normalized.transportMode = patch.transportMode;
@@ -559,9 +1417,155 @@ export class NativeAudioService implements IAudioService {
     ) {
       normalized.hqSrcPhaseMode = patch.hqSrcPhaseMode;
     }
+    if (
+      patch.srcMode === 'source-native' ||
+      patch.srcMode === 'match-output' ||
+      patch.srcMode === 'target-rate'
+    ) {
+      normalized.srcMode = patch.srcMode;
+    }
+    if (patch.srcBackend === 'rubato' || patch.srcBackend === 'linear-simd') {
+      normalized.srcBackend = patch.srcBackend;
+    }
+    if (
+      typeof patch.srcTargetSampleRate === 'number' &&
+      Number.isFinite(patch.srcTargetSampleRate) &&
+      patch.srcTargetSampleRate > 0
+    ) {
+      normalized.srcTargetSampleRate = Math.max(
+        8000,
+        Math.min(768000, Math.floor(patch.srcTargetSampleRate))
+      );
+    } else if (patch.srcTargetSampleRate === null) {
+      normalized.srcTargetSampleRate = null;
+    }
 
-    const response = await invoke<unknown>('native_audio_set_engine_policy', normalized);
+    const hasExplicitSrcPatch =
+      typeof normalized.srcMode !== 'undefined' ||
+      typeof normalized.srcBackend !== 'undefined' ||
+      'srcTargetSampleRate' in normalized;
+
+    if (hasExplicitSrcPatch && !options?.fromDynamicAuto) {
+      const requestedSrcPolicy = this.normalizeSrcPolicyFromPatch(normalized);
+      this.dynamicSrcManualLockActive = true;
+      this.dynamicSrcQualityPolicy = requestedSrcPolicy;
+      this.dynamicSrcProfile = 'quality';
+      this.dynamicSrcHoldUntilMs = 0;
+      this.clearDynamicSrcRestoreTimer();
+    }
+
+    const response = await invoke<unknown>(
+      'native_audio_set_engine_policy',
+      normalized as Record<string, unknown>
+    );
     this.applyEnginePolicyPayload(response);
+    this.emitRobustnessSnapshot(true);
+  }
+
+  async setEnginePolicy(patch: NativeAudioEnginePolicyPatch): Promise<void> {
+    await this.setEnginePolicyInternal(patch);
+  }
+
+  getDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings {
+    return {
+      enabled: this.dynamicSrcAutoEnabled,
+      adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+      learningEnabled: this.dynamicSrcLearningEnabled,
+      restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
+      minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
+      seekHoldMs: this.dynamicSrcSeekHoldMs,
+      underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
+      sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
+      outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+    };
+  }
+
+  async setDynamicSrcAutoSettings(settings: AudioDynamicSrcAutoSettingsPatch): Promise<void> {
+    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(value)));
+    };
+
+    const enabled =
+      typeof settings.enabled === 'boolean' ? settings.enabled : this.dynamicSrcAutoEnabled;
+    const adaptiveEnabled =
+      typeof settings.adaptiveEnabled === 'boolean'
+        ? settings.adaptiveEnabled
+        : this.dynamicSrcAdaptiveEnabled;
+    const learningEnabled =
+      typeof settings.learningEnabled === 'boolean'
+        ? settings.learningEnabled
+        : this.dynamicSrcLearningEnabled;
+    const nextSettings: AudioDynamicSrcAutoSettings = {
+      enabled,
+      adaptiveEnabled,
+      learningEnabled,
+      restoreDebounceMs: clampMs(
+        settings.restoreDebounceMs,
+        this.dynamicSrcRestoreDebounceMs,
+        500,
+        30_000
+      ),
+      minSwitchIntervalMs: clampMs(
+        settings.minSwitchIntervalMs,
+        this.dynamicSrcMinSwitchIntervalMs,
+        100,
+        10_000
+      ),
+      seekHoldMs: clampMs(settings.seekHoldMs, this.dynamicSrcSeekHoldMs, 500, 20_000),
+      underrunHoldMs: clampMs(settings.underrunHoldMs, this.dynamicSrcUnderrunHoldMs, 2_000, 120_000),
+      sharedStressHoldMs: clampMs(
+        settings.sharedStressHoldMs,
+        this.dynamicSrcSharedStressHoldMs,
+        1_000,
+        90_000
+      ),
+      outputErrorHoldMs: clampMs(
+        settings.outputErrorHoldMs,
+        this.dynamicSrcOutputErrorHoldMs,
+        1_000,
+        120_000
+      ),
+    };
+
+    if (!enabled && this.dynamicSrcProfile === 'latency') {
+      await this.applySrcPolicyIfNeeded(this.dynamicSrcQualityPolicy, 'dynamic-src-disabled', 'quality');
+    }
+
+    await broadcastDataUpdate(
+      STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS,
+      nextSettings,
+      TAURI_EVENTS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED
+    );
+
+    this.dynamicSrcAutoEnabled = nextSettings.enabled;
+    this.dynamicSrcAdaptiveEnabled = nextSettings.adaptiveEnabled;
+    this.dynamicSrcLearningEnabled = nextSettings.learningEnabled;
+    if (!this.dynamicSrcLearningEnabled) {
+      this.clearDynamicSrcLearningPersistTimer();
+    }
+    this.dynamicSrcRestoreDebounceMs = nextSettings.restoreDebounceMs;
+    this.dynamicSrcMinSwitchIntervalMs = nextSettings.minSwitchIntervalMs;
+    this.dynamicSrcSeekHoldMs = nextSettings.seekHoldMs;
+    this.dynamicSrcUnderrunHoldMs = nextSettings.underrunHoldMs;
+    this.dynamicSrcSharedStressHoldMs = nextSettings.sharedStressHoldMs;
+    this.dynamicSrcOutputErrorHoldMs = nextSettings.outputErrorHoldMs;
+
+    if (!nextSettings.enabled) {
+      this.dynamicSrcProfile = 'quality';
+      this.dynamicSrcAdaptiveProfile = 'baseline';
+      this.dynamicSrcHoldUntilMs = 0;
+      this.clearDynamicSrcRestoreTimer();
+      this.emitRobustnessSnapshot(true);
+      return;
+    }
+
+    this.dynamicSrcManualLockActive = false;
+    this.captureCurrentQualitySrcPolicy();
+    this.dynamicSrcProfile = 'quality';
+    this.dynamicSrcAdaptiveProfile = this.resolveDynamicSrcAdaptiveProfile();
+    this.dynamicSrcLastSwitchReason = 'dynamic-src-enabled';
+    this.scheduleDynamicSrcRestoreEvaluation();
     this.emitRobustnessSnapshot(true);
   }
 
@@ -621,6 +1625,14 @@ export class NativeAudioService implements IAudioService {
     return true;
   }
 
+  private handleOutputBackendSwitchFailure(reason: string): void {
+    const effective = this.getEffectiveDynamicSrcTiming();
+    this.withDynamicSrcHold(
+      `output-backend-switch-failed:${reason}`,
+      effective.outputErrorHoldMs
+    );
+  }
+
   private maybeAutoSwitchOutputBackend(reason: string, options?: { force?: boolean }): void {
     const nowMs = Date.now();
     if (!options?.force && !this.shouldAutoSwitchNow(reason, nowMs)) {
@@ -660,7 +1672,10 @@ export class NativeAudioService implements IAudioService {
         persist: true,
         clearDevice: true,
       });
-      if (!switched) return;
+      if (!switched) {
+        this.handleOutputBackendSwitchFailure(reason);
+        return;
+      }
 
       this.autoBackendSwitchCount += 1;
       this.lastAutoBackendSwitchAtMs = Date.now();
@@ -676,12 +1691,24 @@ export class NativeAudioService implements IAudioService {
     options?: { persist?: boolean; clearDevice?: boolean }
   ): Promise<boolean> {
     try {
+      const previousBackendId = this.currentOutputBackendId;
       const payload = await invoke<unknown>('native_audio_select_output_backend', {
         backendId,
       });
       const parsed = this.parseComponentsStatePayload(payload);
       const resolvedBackendId = this.sanitizeBackendId(parsed.outputBackendId) ?? backendId;
+      if (!resolvedBackendId) {
+        this.handleOutputBackendSwitchFailure('resolved-backend-empty');
+        return false;
+      }
       this.currentOutputBackendId = resolvedBackendId;
+      if (resolvedBackendId !== previousBackendId) {
+        this.resetUnderrunTracking();
+        this.scheduleDynamicSrcRestoreEvaluation();
+      } else {
+        this.handleOutputBackendSwitchFailure('resolved-backend-unchanged');
+        return false;
+      }
 
       if (resolvedBackendId && !this.availableOutputBackends.includes(resolvedBackendId)) {
         this.availableOutputBackends = [...this.availableOutputBackends, resolvedBackendId];
@@ -706,6 +1733,7 @@ export class NativeAudioService implements IAudioService {
       return true;
     } catch (error) {
       console.warn('[NativeAudio] Failed to select output backend:', error);
+      this.handleOutputBackendSwitchFailure('select-output-backend-error');
       return false;
     }
   }
@@ -756,6 +1784,80 @@ export class NativeAudioService implements IAudioService {
     return this.protectionWindowUntilMs > nowMs;
   }
 
+  private hasActiveSharedStressWindow(nowMs: number = Date.now()): boolean {
+    return this.sharedStressUntilMs > nowMs;
+  }
+
+  private applySharedTimelineStressIfNeeded(
+    timeline: Array<{ seq: number; timestampMs: number; kind: string; value: number; aux: number }>
+  ): void {
+    if (!this.currentOutputBackendId || this.currentOutputBackendId === 'wasapi-exclusive') {
+      return;
+    }
+
+    const newEvents = timeline.filter((event) => event.seq > this.diagnosticTimelineLastSeq);
+    if (newEvents.length === 0) {
+      return;
+    }
+
+    const latestSeq = newEvents.reduce((max, event) => Math.max(max, event.seq), this.diagnosticTimelineLastSeq);
+    this.diagnosticTimelineLastSeq = latestSeq;
+
+    const nowMs = Date.now();
+    const recent = newEvents.filter(
+      (event) =>
+        Number.isFinite(event.timestampMs) &&
+        event.timestampMs > 0 &&
+        nowMs - event.timestampMs <= NativeAudioService.SHARED_TIMELINE_STRESS_WINDOW_MS
+    );
+
+    if (recent.length === 0) {
+      return;
+    }
+
+    let lowWatermarkEvents = 0;
+    let underrunEvents = 0;
+
+    for (const event of recent) {
+      if (
+        event.kind === 'shared.transfer.render_low_watermark' ||
+        event.kind === 'shared.transfer.decode_low_watermark' ||
+        event.kind === 'shared.render_ahead.low_watermark'
+      ) {
+        lowWatermarkEvents += 1;
+      }
+      if (
+        event.kind === 'shared.output.render_underrun' ||
+        event.kind === 'shared.render_ahead.underrun'
+      ) {
+        underrunEvents += 1;
+      }
+    }
+
+    const shouldEscalate =
+      underrunEvents >= NativeAudioService.SHARED_TIMELINE_UNDERRUN_TRIGGER ||
+      lowWatermarkEvents >= NativeAudioService.SHARED_TIMELINE_LOW_WATERMARK_TRIGGER;
+
+    if (!shouldEscalate) {
+      return;
+    }
+
+    this.sharedStressEscalationCount += 1;
+    const extensionMs = Math.min(60_000, 12_000 + this.sharedStressEscalationCount * 4_000);
+    this.sharedStressUntilMs = Math.max(this.sharedStressUntilMs, nowMs + extensionMs);
+    this.sharedStressReason =
+      underrunEvents > 0
+        ? 'shared-underrun'
+        : 'shared-low-watermark-pressure';
+
+    this.applyStreamingBufferPolicy(true);
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    this.withDynamicSrcHold(
+      this.sharedStressReason,
+      effective.sharedStressHoldMs
+    );
+  }
+
   private getStreamingBufferPolicyTarget(nowMs: number = Date.now()): StreamingBufferSettings {
     let target = this.normalizeStreamingBufferSettings(this.storedStreamingBufferSettings);
 
@@ -769,6 +1871,13 @@ export class NativeAudioService implements IAudioService {
 
     if (this.hasActiveProtectionWindow(nowMs)) {
       target = this.buildProtectionStreamingBufferSettings(target);
+    }
+
+    if (this.hasActiveSharedStressWindow(nowMs)) {
+      target = {
+        startOrSeekSeconds: Math.min(4, Math.max(target.startOrSeekSeconds ?? 2.4, 3.6)),
+        crossfadeSeconds: Math.min(3, Math.max(target.crossfadeSeconds ?? 1.0, 1.9)),
+      };
     }
 
     return this.normalizeStreamingBufferSettings(target);
@@ -791,6 +1900,12 @@ export class NativeAudioService implements IAudioService {
     if (this.protectionWindowRefCount === 0 && this.protectionWindowUntilMs > 0 && nowMs >= this.protectionWindowUntilMs) {
       this.protectionWindowUntilMs = 0;
       this.protectionWindowReason = null;
+    }
+
+    if (this.sharedStressUntilMs > 0 && nowMs >= this.sharedStressUntilMs) {
+      this.sharedStressUntilMs = 0;
+      this.sharedStressReason = null;
+      this.sharedStressEscalationCount = 0;
     }
 
     const target = this.getStreamingBufferPolicyTarget(nowMs);
@@ -840,7 +1955,23 @@ export class NativeAudioService implements IAudioService {
     this.pruneUnderrunSpikeWindow(nowMs);
     this.underrunRecoveryUntilMs = nowMs + NativeAudioService.UNDERRUN_RECOVERY_WINDOW_MS;
     this.applyStreamingBufferPolicy(true);
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    this.withDynamicSrcHold('underrun-spike', effective.underrunHoldMs);
     this.maybeAutoSwitchOutputBackend('underrun-spike');
+  }
+
+  private resetUnderrunTracking(): void {
+    this.lastUnderrunEvents = 0;
+    this.lastUnderrunFrames = 0;
+    this.underrunSpikeTimestampsMs = [];
+    this.underrunRecoveryUntilMs = 0;
+    this.sharedStressUntilMs = 0;
+    this.sharedStressReason = null;
+    this.sharedStressEscalationCount = 0;
+    this.dynamicSrcHoldUntilMs = 0;
+    this.clearDynamicSrcRestoreTimer();
+    this.applyStreamingBufferPolicy(true);
+    this.scheduleDynamicSrcRestoreEvaluation();
   }
 
   private maybeReleaseUnderrunRecovery(playbackState: PlaybackState): void {
@@ -851,6 +1982,17 @@ export class NativeAudioService implements IAudioService {
 
     this.underrunRecoveryUntilMs = 0;
     this.applyStreamingBufferPolicy(true);
+    this.scheduleDynamicSrcRestoreEvaluation();
+
+    if (this.sharedStressUntilMs > 0 && nowMs >= this.sharedStressUntilMs) {
+      this.sharedStressUntilMs = 0;
+      this.sharedStressReason = null;
+      this.sharedStressEscalationCount = 0;
+      this.applyStreamingBufferPolicy(true);
+      this.scheduleDynamicSrcRestoreEvaluation();
+    }
+
+    this.scheduleDynamicSrcRestoreEvaluation();
   }
 
   private clearProtectionWindowTimer(): void {
@@ -885,6 +2027,11 @@ export class NativeAudioService implements IAudioService {
 
   private buildRobustnessSnapshot(nowMs: number = Date.now()): AudioRobustnessSnapshot {
     this.pruneUnderrunSpikeWindow(nowMs);
+    const effectiveDynamicSrc = this.getEffectiveDynamicSrcTiming(nowMs);
+    this.dynamicSrcAdaptiveProfile = effectiveDynamicSrc.profile;
+    const learningDeviceKey = this.buildDynamicSrcLearningDeviceKey();
+    const learningStressIndex = this.dynamicSrcLearningProfile[learningDeviceKey]?.stressIndex ?? 0;
+    const learningScale = this.getDynamicSrcLearningScale();
 
     const bufferedAheadNow =
       typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
@@ -903,7 +2050,39 @@ export class NativeAudioService implements IAudioService {
       schedulerProfile: this.lastSchedulerProfile,
       transportMode: this.transportMode,
       hqSrcPhaseMode: this.hqSrcPhaseMode,
+      srcMode: this.srcMode,
+      srcBackend: this.srcBackend,
+      srcTargetSampleRate: this.srcTargetSampleRate,
+      dynamicSrcAutoEnabled: this.dynamicSrcAutoEnabled,
+      dynamicSrcProfile: this.dynamicSrcProfile,
+      dynamicSrcLastSwitchAtMs: this.dynamicSrcLastSwitchAtMs,
+      dynamicSrcLastSwitchReason: this.dynamicSrcLastSwitchReason,
+      dynamicSrcHoldUntilMs: Math.max(0, this.dynamicSrcHoldUntilMs - nowMs),
+      dynamicSrcManualLockActive: this.dynamicSrcManualLockActive,
+      dynamicSrcAdaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+      dynamicSrcAdaptiveProfile: this.dynamicSrcAdaptiveProfile,
+      dynamicSrcStressScore: effectiveDynamicSrc.stressScore,
+      dynamicSrcLearningEnabled: this.dynamicSrcLearningEnabled,
+      dynamicSrcLearningDeviceKey: learningDeviceKey,
+      dynamicSrcLearningStressIndex: Number(learningStressIndex.toFixed(4)),
+      dynamicSrcLearningScale: Number(learningScale.toFixed(4)),
+      dynamicSrcRestoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
+      dynamicSrcMinSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
+      dynamicSrcSeekHoldMs: this.dynamicSrcSeekHoldMs,
+      dynamicSrcUnderrunHoldMs: this.dynamicSrcUnderrunHoldMs,
+      dynamicSrcSharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
+      dynamicSrcOutputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+      dynamicSrcEffectiveRestoreDebounceMs: effectiveDynamicSrc.restoreDebounceMs,
+      dynamicSrcEffectiveMinSwitchIntervalMs: effectiveDynamicSrc.minSwitchIntervalMs,
+      dynamicSrcEffectiveSeekHoldMs: effectiveDynamicSrc.seekHoldMs,
+      dynamicSrcEffectiveUnderrunHoldMs: effectiveDynamicSrc.underrunHoldMs,
+      dynamicSrcEffectiveSharedStressHoldMs: effectiveDynamicSrc.sharedStressHoldMs,
+      dynamicSrcEffectiveOutputErrorHoldMs: effectiveDynamicSrc.outputErrorHoldMs,
       hqSrcStopbandDb: this.hqSrcStopbandDb,
+      hqSrcActive: this.hqSrcActive,
+      hqSrcRatio: this.hqSrcRatio,
+      sourceSampleRate: this.sourceSampleRate,
+      outputSampleRate: this.outputSampleRate,
       transportExactInt32Container: this.transportExactInt32Container,
       outputCallbackMetricsValid: this.outputCallbackMetricsValid,
       underrunEvents: this.lastUnderrunEvents,
@@ -912,7 +2091,6 @@ export class NativeAudioService implements IAudioService {
       underrunRecoveryActive: recoveryActive,
       protectionWindowActive: protectionActive,
       protectionRefCount: this.protectionWindowRefCount,
-      protectionReason: protectionActive ? this.protectionWindowReason : null,
       autoSwitchCount: this.autoBackendSwitchCount,
       lastAutoSwitchAtMs: this.lastAutoBackendSwitchAtMs,
       lastAutoSwitchReason: this.lastAutoBackendSwitchReason,
@@ -924,10 +2102,27 @@ export class NativeAudioService implements IAudioService {
       outputWaitTimeoutCount: this.outputWaitTimeoutCount,
       outputRenderUnderrunEvents: this.outputRenderUnderrunEvents,
       outputRenderUnderrunFrames: this.outputRenderUnderrunFrames,
+      outputCallbackIntervalJitterP99Us: this.outputCallbackIntervalJitterP99Us,
+      outputCallbackIntervalOverrunCount: this.outputCallbackIntervalOverrunCount,
+      outputCallbackExpectedIntervalUs: this.outputCallbackExpectedIntervalUs,
       transferLowWatermarkSamples: this.transferLowWatermarkSamples,
       transferRenderLowHitCount: this.transferRenderLowHitCount,
       transferDecodeLowHitCount: this.transferDecodeLowHitCount,
       renderQueuePageLocked: this.renderQueuePageLocked,
+      transferMetricsValid: this.transferMetricsValid,
+      sharedRenderAheadEnabled: this.sharedRenderAheadEnabled,
+      sharedRenderUnderrunEvents: this.sharedRenderUnderrunEvents,
+      sharedRenderUnderrunFrames: this.sharedRenderUnderrunFrames,
+      sharedRenderLowHitCount: this.sharedRenderLowHitCount,
+      sharedRenderLowWatermarkSamples: this.sharedRenderLowWatermarkSamples,
+      diagnosticTimelineDroppedEvents: this.diagnosticTimelineDroppedEvents,
+      diagnosticTimeline: [...this.diagnosticTimeline],
+      protectionReason:
+        protectionActive
+          ? this.protectionWindowReason ?? this.sharedStressReason
+          : this.hasActiveSharedStressWindow(nowMs)
+            ? this.sharedStressReason
+            : null,
     };
   }
 
@@ -1059,7 +2254,12 @@ export class NativeAudioService implements IAudioService {
     const coded = error as Error & { code?: string };
     const code = typeof coded.code === 'string' ? coded.code : '';
     if (code === 'NATIVE_AUDIO_OUTPUT_ERROR' || code === 'NATIVE_AUDIO_REBUILD_SINK_FAILED') {
+      const effective = this.getEffectiveDynamicSrcTiming();
       this.maybeAutoSwitchOutputBackend(`output-error:${code}`);
+      this.withDynamicSrcHold(
+        `output-error:${code}`,
+        effective.outputErrorHoldMs
+      );
     }
 
     this.emitRobustnessSnapshot(true);
@@ -1073,25 +2273,45 @@ export class NativeAudioService implements IAudioService {
           payload && 'state' in payload ? (payload.state as NativeAudioStatePayload) : (payload as NativeAudioStatePayload);
         if (!next) return;
 
+        const hasCurrentTime =
+          typeof next.currentTime === 'number' && Number.isFinite(next.currentTime);
+        const nextCurrentTime = hasCurrentTime ? next.currentTime : null;
+        const shouldApplyCurrentTime =
+          typeof nextCurrentTime === 'number' &&
+          !this.shouldIgnoreBackendCurrentTime(nextCurrentTime);
+
         const update: Partial<AudioState> = {};
         if (typeof next.playbackState !== 'undefined') update.playbackState = next.playbackState;
         if (typeof next.volume !== 'undefined') update.volume = next.volume;
         if (typeof next.muted !== 'undefined') update.muted = next.muted;
-        if (typeof next.currentTime !== 'undefined') update.currentTime = next.currentTime;
+        if (shouldApplyCurrentTime && typeof nextCurrentTime === 'number') {
+          update.currentTime = nextCurrentTime;
+        }
         if (typeof next.duration !== 'undefined') update.duration = next.duration;
         if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
         if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
 
+        if (typeof next.sampleRate === 'number' && Number.isFinite(next.sampleRate)) {
+          this.outputSampleRate = Math.max(0, Math.floor(next.sampleRate));
+        }
+        if (
+          typeof next.sourceSampleRate === 'number' &&
+          Number.isFinite(next.sourceSampleRate)
+        ) {
+          this.sourceSampleRate = Math.max(0, Math.floor(next.sourceSampleRate));
+        }
+
         if (typeof next.underrunEvents === 'number' && Number.isFinite(next.underrunEvents)) {
-          if (next.underrunEvents > this.lastUnderrunEvents) {
-            this.handleUnderrunSpike(next.underrunEvents, next.underrunFrames);
-          } else {
-            this.lastUnderrunEvents = Math.max(this.lastUnderrunEvents, Math.floor(next.underrunEvents));
+          const normalizedUnderrunEvents = Math.max(0, Math.floor(next.underrunEvents));
+          if (normalizedUnderrunEvents < this.lastUnderrunEvents) {
+            this.lastUnderrunEvents = normalizedUnderrunEvents;
+          } else if (normalizedUnderrunEvents > this.lastUnderrunEvents) {
+            this.handleUnderrunSpike(normalizedUnderrunEvents, next.underrunFrames);
           }
         }
 
         if (typeof next.underrunFrames === 'number' && Number.isFinite(next.underrunFrames)) {
-          this.lastUnderrunFrames = Math.max(this.lastUnderrunFrames, Math.floor(next.underrunFrames));
+          this.lastUnderrunFrames = Math.max(0, Math.floor(next.underrunFrames));
         }
 
         if (
@@ -1114,8 +2334,38 @@ export class NativeAudioService implements IAudioService {
           this.hqSrcPhaseMode = next.hqSrcPhaseMode;
         }
 
+        if (
+          next.srcMode === 'source-native' ||
+          next.srcMode === 'match-output' ||
+          next.srcMode === 'target-rate'
+        ) {
+          this.srcMode = next.srcMode;
+        }
+
+        if (next.srcBackend === 'rubato' || next.srcBackend === 'linear-simd') {
+          this.srcBackend = next.srcBackend;
+        }
+
+        if (
+          typeof next.srcTargetSampleRate === 'number' &&
+          Number.isFinite(next.srcTargetSampleRate) &&
+          next.srcTargetSampleRate > 0
+        ) {
+          this.srcTargetSampleRate = Math.max(8000, Math.min(768000, Math.floor(next.srcTargetSampleRate)));
+        } else if (next.srcTargetSampleRate == null) {
+          this.srcTargetSampleRate = null;
+        }
+
         if (typeof next.hqSrcStopbandDb === 'number' && Number.isFinite(next.hqSrcStopbandDb)) {
           this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(next.hqSrcStopbandDb)));
+        }
+
+        if (typeof next.hqSrcActive === 'boolean') {
+          this.hqSrcActive = next.hqSrcActive;
+        }
+
+        if (typeof next.hqSrcRatio === 'number' && Number.isFinite(next.hqSrcRatio)) {
+          this.hqSrcRatio = next.hqSrcRatio;
         }
 
         if (typeof next.transportExactInt32Container === 'boolean') {
@@ -1129,6 +2379,9 @@ export class NativeAudioService implements IAudioService {
             this.outputWaitTimeoutCount = 0;
             this.outputRenderUnderrunEvents = 0;
             this.outputRenderUnderrunFrames = 0;
+            this.outputCallbackIntervalJitterP99Us = 0;
+            this.outputCallbackIntervalOverrunCount = 0;
+            this.outputCallbackExpectedIntervalUs = 0;
           }
         }
 
@@ -1165,10 +2418,50 @@ export class NativeAudioService implements IAudioService {
         }
 
         if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputCallbackIntervalJitterP99Us === 'number' &&
+          Number.isFinite(next.outputCallbackIntervalJitterP99Us)
+        ) {
+          this.outputCallbackIntervalJitterP99Us = Math.max(
+            0,
+            Math.floor(next.outputCallbackIntervalJitterP99Us)
+          );
+        }
+
+        if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputCallbackIntervalOverrunCount === 'number' &&
+          Number.isFinite(next.outputCallbackIntervalOverrunCount)
+        ) {
+          this.outputCallbackIntervalOverrunCount = Math.max(
+            0,
+            Math.floor(next.outputCallbackIntervalOverrunCount)
+          );
+        }
+
+        if (
+          this.outputCallbackMetricsValid &&
+          typeof next.outputCallbackExpectedIntervalUs === 'number' &&
+          Number.isFinite(next.outputCallbackExpectedIntervalUs)
+        ) {
+          this.outputCallbackExpectedIntervalUs = Math.max(
+            0,
+            Math.floor(next.outputCallbackExpectedIntervalUs)
+          );
+        }
+
+        if (
           typeof next.transferLowWatermarkSamples === 'number' &&
           Number.isFinite(next.transferLowWatermarkSamples)
         ) {
+          this.transferMetricsValid = true;
           this.transferLowWatermarkSamples = Math.max(0, Math.floor(next.transferLowWatermarkSamples));
+        } else {
+          this.transferMetricsValid = false;
+          this.transferLowWatermarkSamples = 0;
+          this.transferRenderLowHitCount = 0;
+          this.transferDecodeLowHitCount = 0;
+          this.renderQueuePageLocked = false;
         }
 
         if (
@@ -1187,6 +2480,110 @@ export class NativeAudioService implements IAudioService {
 
         if (typeof next.renderQueuePageLocked === 'boolean') {
           this.renderQueuePageLocked = next.renderQueuePageLocked;
+        }
+
+        if (typeof next.sharedRenderAheadEnabled === 'boolean') {
+          this.sharedRenderAheadEnabled = next.sharedRenderAheadEnabled;
+          if (!this.sharedRenderAheadEnabled) {
+            this.sharedRenderUnderrunEvents = 0;
+            this.sharedRenderUnderrunFrames = 0;
+            this.sharedRenderLowHitCount = 0;
+            this.sharedRenderLowWatermarkSamples = 0;
+          }
+        }
+
+        if (
+          this.sharedRenderAheadEnabled &&
+          typeof next.sharedRenderUnderrunEvents === 'number' &&
+          Number.isFinite(next.sharedRenderUnderrunEvents)
+        ) {
+          this.sharedRenderUnderrunEvents = Math.max(0, Math.floor(next.sharedRenderUnderrunEvents));
+        }
+
+        if (
+          this.sharedRenderAheadEnabled &&
+          typeof next.sharedRenderUnderrunFrames === 'number' &&
+          Number.isFinite(next.sharedRenderUnderrunFrames)
+        ) {
+          this.sharedRenderUnderrunFrames = Math.max(0, Math.floor(next.sharedRenderUnderrunFrames));
+        }
+
+        if (
+          this.sharedRenderAheadEnabled &&
+          typeof next.sharedRenderLowHitCount === 'number' &&
+          Number.isFinite(next.sharedRenderLowHitCount)
+        ) {
+          this.sharedRenderLowHitCount = Math.max(0, Math.floor(next.sharedRenderLowHitCount));
+        }
+
+        if (
+          this.sharedRenderAheadEnabled &&
+          typeof next.sharedRenderLowWatermarkSamples === 'number' &&
+          Number.isFinite(next.sharedRenderLowWatermarkSamples)
+        ) {
+          this.sharedRenderLowWatermarkSamples = Math.max(
+            0,
+            Math.floor(next.sharedRenderLowWatermarkSamples)
+          );
+        }
+
+        if (
+          typeof next.diagnosticTimelineDroppedEvents === 'number' &&
+          Number.isFinite(next.diagnosticTimelineDroppedEvents)
+        ) {
+          this.diagnosticTimelineDroppedEvents = Math.max(
+            0,
+            Math.floor(next.diagnosticTimelineDroppedEvents)
+          );
+        }
+
+        if (Array.isArray(next.diagnosticTimeline)) {
+          const normalized = next.diagnosticTimeline
+            .map((entry) => {
+              const seq =
+                typeof entry?.seq === 'number' && Number.isFinite(entry.seq)
+                  ? Math.max(0, Math.floor(entry.seq))
+                  : null;
+              const timestampMs =
+                typeof entry?.timestampMs === 'number' && Number.isFinite(entry.timestampMs)
+                  ? Math.max(0, Math.floor(entry.timestampMs))
+                  : null;
+              const kind = typeof entry?.kind === 'string' ? entry.kind.trim() : '';
+              const value =
+                typeof entry?.value === 'number' && Number.isFinite(entry.value)
+                  ? Math.max(0, Math.floor(entry.value))
+                  : 0;
+              const aux =
+                typeof entry?.aux === 'number' && Number.isFinite(entry.aux)
+                  ? Math.max(0, Math.floor(entry.aux))
+                  : 0;
+
+              if (seq === null || timestampMs === null || !kind) {
+                return null;
+              }
+
+              return {
+                seq,
+                timestampMs,
+                kind,
+                value,
+                aux,
+              };
+            })
+            .filter(
+              (
+                value
+              ): value is {
+                seq: number;
+                timestampMs: number;
+                kind: string;
+                value: number;
+                aux: number;
+              } => value !== null
+            );
+
+          this.diagnosticTimeline = normalized.slice(-24);
+          this.applySharedTimelineStressIfNeeded(this.diagnosticTimeline);
         }
 
         if (typeof next.bufferedAhead === 'number' && Number.isFinite(next.bufferedAhead)) {
@@ -1235,21 +2632,27 @@ export class NativeAudioService implements IAudioService {
           this.trackPlaybackStateForMetrics(merged.playbackState);
           this.applyPlaybackStateSideEffects(merged.playbackState);
         }
-        if (typeof next.currentTime !== 'undefined') {
+        if (shouldApplyCurrentTime && typeof nextCurrentTime === 'number') {
           this.lastBackendTimeUpdateAtMs = performance.now();
           if (merged.playbackState === 'playing') {
-            this.fallbackClockBaseTimeSec = Number(next.currentTime) || 0;
+            this.fallbackClockBaseTimeSec = nextCurrentTime;
             this.fallbackClockStartedAtMs = this.lastBackendTimeUpdateAtMs;
             this.ensureFallbackTicker();
           } else {
-            this.fallbackClockBaseTimeSec = Number(next.currentTime) || 0;
+            this.fallbackClockBaseTimeSec = nextCurrentTime;
             this.fallbackClockStartedAtMs = null;
           }
-          this.timeUpdateCallbacks.forEach((cb) => cb(next.currentTime as number));
+          this.timeUpdateCallbacks.forEach((cb) => cb(nextCurrentTime));
         }
         if (next.ended) {
           this.endedCallbacks.forEach((cb) => cb());
           void this.handleTrackEnded();
+        }
+
+        if (merged.playbackState === 'playing' || merged.playbackState === 'buffering') {
+          const nowMs = Date.now();
+          const stressScore = this.getEffectiveDynamicSrcTiming(nowMs).stressScore;
+          this.updateDynamicSrcLearningFromStress(stressScore, nowMs);
         }
 
         this.maybeReleaseUnderrunRecovery(merged.playbackState);
@@ -1271,6 +2674,35 @@ export class NativeAudioService implements IAudioService {
           const clamped = Math.max(0, Math.min(1, value));
           next[i] = Math.round(clamped * 255);
         }
+
+        const tap =
+          payload.tapId === 'pre-dsp' || payload.tap === 'pre-dsp'
+            ? 'pre-dsp'
+            : payload.tapId === 'post-dsp' || payload.tap === 'post-dsp'
+              ? 'post-dsp'
+              : null;
+        if (!tap) return;
+
+        const frameId =
+          typeof payload.frameId === 'number' && Number.isFinite(payload.frameId)
+            ? payload.frameId
+            : 0;
+        const timestampMs =
+          typeof payload.timestampMs === 'number' && Number.isFinite(payload.timestampMs)
+            ? payload.timestampMs
+            : Date.now();
+        const sampleRate =
+          typeof payload.sampleRate === 'number' && Number.isFinite(payload.sampleRate)
+            ? payload.sampleRate
+            : this.outputSampleRate || this.sourceSampleRate || 0;
+
+        this.spectrumFrames[tap] = {
+          frameId,
+          timestampMs,
+          tap,
+          sampleRate,
+          bins: new Uint8Array(next),
+        };
       });
 
       this.errorListener = await listen('native_audio_error', (event) => {
@@ -1421,6 +2853,7 @@ export class NativeAudioService implements IAudioService {
     this.protectionWindowReason = reason;
     this.protectionWindowUntilMs = Math.max(this.protectionWindowUntilMs, nowMs + durationMsRaw);
     this.applyStreamingBufferPolicy(true);
+    this.withDynamicSrcHold(`protection-window:${reason}`, durationMsRaw);
     this.emitRobustnessSnapshot(true);
 
     let released = false;
@@ -1434,6 +2867,7 @@ export class NativeAudioService implements IAudioService {
       }
 
       this.applyStreamingBufferPolicy(true);
+      this.scheduleDynamicSrcRestoreEvaluation();
       this.emitRobustnessSnapshot(true);
     };
   }
@@ -1499,7 +2933,9 @@ export class NativeAudioService implements IAudioService {
   }
 
   private applyPlaybackStateSideEffects(playbackState: PlaybackState) {
-    void playbackState;
+    if (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'idle') {
+      this.scheduleDynamicSrcRestoreEvaluation();
+    }
   }
 
   private async invokeCommand<T = void>(cmd: string, payload?: Record<string, unknown>): Promise<T> {
@@ -1512,7 +2948,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 播放控制 =====
+  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇熶繆閵堝洤啸闁稿鍋熼弫顕€鎮㈡俊鎾虫喘瀵濡烽敂鎯у箞?=====
   private async loadTrackInternal(track: Track): Promise<boolean> {
     this.clearPendingSeek();
     if (!track) return false;
@@ -1612,7 +3048,10 @@ export class NativeAudioService implements IAudioService {
   seek(time: number): void {
     const duration = this.state.duration || time;
     const clamped = Math.max(0, Math.min(time, duration));
+    this.markPendingSeekGuard(clamped);
     this.pendingSeekTime = clamped;
+    const effective = this.getEffectiveDynamicSrcTiming();
+    this.withDynamicSrcHold('seek', effective.seekHoldMs);
     this.scheduleSeekFlush();
     const nextState = this.updateState({ currentTime: clamped });
     this.fallbackClockBaseTimeSec = clamped;
@@ -1623,7 +3062,7 @@ export class NativeAudioService implements IAudioService {
     this.timeUpdateCallbacks.forEach((cb) => cb(clamped));
   }
 
-  // ===== 音量控制 =====
+  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸劍閺呮繈鏌曟径娑橆洭缂佺姵鍎抽埞鎴︽偐閸欏鎮欓梻鍌氬亞閸ㄨ京鎹㈠☉姗嗗晠妞ゆ棁宕甸惄搴ｇ磽娴ｅ搫孝缁剧虎鍙冮獮澶岀矙濞嗘儳鎮戞繝銏ｆ硾閿曘儱危?=====
   setVolume(volume: number): void {
     const clamped = Math.max(0, Math.min(1, volume));
     this.fireAndForgetCommand('native_audio_set_volume', { volume: clamped });
@@ -1640,7 +3079,7 @@ export class NativeAudioService implements IAudioService {
     this.updateState({ muted });
   }
 
-  // ===== 状态查询 =====
+  // ===== 闂傚倸鍊搁崐鐑芥嚄閸撲礁鍨濇い鏍亹閳ь剨绠撳畷濂稿Ψ閵夛附袣闂備礁鎼粙渚€宕㈡總鍛婂€块柛顭戝亖娴滄粓鏌熸潏鍓хɑ缁绢厼鐖奸弻娑㈠棘鐠恒剱褔鏌″畝瀣М妤犵偞鐟╁畷鐔碱敇閻欏懐鍚归梻?=====
   getCurrentTime(): number {
     return this.state.currentTime;
   }
@@ -1653,7 +3092,7 @@ export class NativeAudioService implements IAudioService {
     return this.state;
   }
 
-  // ===== 事件监听 =====
+  // ===== 婵犵數濮烽弫鎼佸磻濞戙垺鍋ら柕濞у啫鐏婇悗鍏夊亾闁告洖鐏氶弲鐐烘⒑閸涘﹥澶勯柛瀣у亾闂佸搫顑呴柊锝夊蓟閺囷紕鐤€閻庯綆浜栭崑鎾诲冀椤撶偟锛熼柟鍏肩暘閸斿秹鎮″▎鎾村€垫繛鎴炵懐閻掔晫绱掗悩宕囧⒌闁?=====
   onTimeUpdate(callback: (time: number) => void): () => void {
     this.timeUpdateCallbacks.add(callback);
     return () => this.timeUpdateCallbacks.delete(callback);
@@ -1680,7 +3119,7 @@ export class NativeAudioService implements IAudioService {
     return () => this.errorCallbacks.delete(callback);
   }
 
-  // ===== 播放队列 =====
+  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇熺節濞堝灝鏋涢柨鏇樺€濇俊鍫曞箹娴ｅ摜鐣洪梺闈涚箳婵兘寮崇€ｎ喗鐓欐繛鍫濈仢閺嬫瑧绱?=====
   addToQueue(track: Track): void {
     if (!track) return;
     const queue = [...this.state.queue, track];
@@ -1858,7 +3297,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 播放模式 =====
+  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪婀侀梺鎸庣箓閻楀棝鍩€椤戣法鐭欓柟顔哄灲閹剝鎯旈敐鍕闂佽姘﹂～澶娒洪弽顬℃椽濡搁埞搴撳亾?=====
   setPlayMode(mode: PlayMode): void {
     this.updateState({ playMode: mode });
   }
@@ -1877,7 +3316,7 @@ export class NativeAudioService implements IAudioService {
     this.seek(nextTime);
   }
 
-  // ===== 播放列表管理 =====
+  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇㈡煟鎼淬値娼愭繛鍙夛耿閹虫繈骞戦幇顔荤胺闂傚倷绀侀幉鈥趁哄澶婃濞撴埃鍋撶€规洘鍨块獮妯兼嫚閼碱剦妲版俊鐐€曠换鎰涢弮鍌滅當濠㈣埖鍔栭埛鎴︽煙缁嬫寧鎹ｉ柍钘夘樀閹顫濋悡搴＄睄閻?=====
   createPlaylist(name: string, description?: string): Playlist {
     const playlist: Playlist = {
       id: `playlist-${Date.now()}`,
@@ -1972,19 +3411,29 @@ export class NativeAudioService implements IAudioService {
     this.addMultipleToQueue(playlist.tracks);
   }
 
-  // ===== 音频可视化 (placeholder) =====
+  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸劍閺呮繈鏌曟径娑橆洭缂佺姵鍎抽埞鎴︽偐閸欏鍋嶉梺閫炲苯澧柛濠傜仢閻ｉ攱绺界粙鍨祮闂佺粯鍔楅弫鎼佸储椤掍椒绻嗛柣鎰典簻閳ь剚鐗犻幃褍螖閸愨晛搴婇悗骞垮劚閹峰鎮炴禒瀣厵闁绘垶锕╁▓鏇㈡煟?(placeholder) =====
   getFrequencyData(): Uint8Array | null {
     return this.spectrumData;
   }
 
-  // ===== 清理 =====
+  getSpectrumFrame(tap: AudioSpectrumTap = 'post-dsp'): AudioSpectrumFrame | null {
+    return this.spectrumFrames[tap] ?? null;
+  }
+
+  // ===== 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈缁犱即鏌熼梻瀵割槮缂佺姷濞€閺岀喖鎮ч崼鐔哄嚒缂?=====
   destroy(): void {
     this.stop();
     this.stopFallbackTicker();
     this.clearProtectionWindowTimer();
+    this.clearDynamicSrcRestoreTimer();
+    this.clearDynamicSrcLearningPersistTimer();
     this.protectionWindowUntilMs = 0;
     this.protectionWindowRefCount = 0;
     this.protectionWindowReason = null;
+    this.dynamicSrcHoldUntilMs = 0;
+    this.dynamicSrcSettingsListenerCleanup?.();
+    this.dynamicSrcSettingsListenerCleanup = null;
+    this.dynamicSrcSettingsListenerInitPromise = null;
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();
@@ -2007,5 +3456,6 @@ export class NativeAudioService implements IAudioService {
       this.errorListener = undefined;
     }
     this.spectrumData = null;
+    this.spectrumFrames = {};
   }
 }
