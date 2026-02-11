@@ -216,28 +216,25 @@ export function AudioBufferSettingsPanel() {
   const estimatedCrossfadeMiB = estimateMiB(effectiveCrossfadeSeconds, sampleRate, channels);
 
   return (
-    <div className="settings-card">
-      <div className="settings-card-header">
-        <div>
-          <p className="settings-card-label">{t('settings.audioBuffer.title')}</p>
-          <p className="settings-card-desc">{t('settings.audioBuffer.desc')}</p>
+    <div className="settings-audio-panel">
+      <div className="settings-audio-block">
+        <div className="settings-param-head">
+          <p className="settings-param-eyebrow">STREAM PREBUFFER</p>
+          <h3 className="settings-param-title">{t('settings.audioBuffer.title')}</h3>
+          <p className="settings-param-subtitle">Decode Ahead & Recovery Window</p>
         </div>
-        <span className="settings-card-badge">{badge}</span>
-      </div>
+        <div className="settings-param-divider" />
 
-      {!canUseBackend && <p className="settings-card-note">{t('settings.audioBuffer.note.requireNative')}</p>}
+        <p className="settings-card-note">{badge}</p>
 
-      {canUseBackend && (
-        <>
-          <div style={{ marginTop: 18 }}>
-            <p className="settings-card-label" style={{ fontSize: 14 }}>
-              {t('settings.audioBuffer.startOrSeek.label')}
-            </p>
-            <p className="settings-card-desc">{t('settings.audioBuffer.startOrSeek.desc')}</p>
-
-            <div className="settings-toggle" style={{ marginTop: 12 }}>
+        {!canUseBackend ? (
+          <p className="settings-card-note">{t('settings.audioBuffer.note.requireNative')}</p>
+        ) : (
+          <>
+            <div className="settings-choice-row">
               <button
                 type="button"
+                className="settings-choice-btn"
                 data-active={settings.startOrSeekSeconds === null}
                 onClick={() => handleStartOrSeekMode('auto')}
               >
@@ -245,6 +242,7 @@ export function AudioBufferSettingsPanel() {
               </button>
               <button
                 type="button"
+                className="settings-choice-btn"
                 data-active={settings.startOrSeekSeconds !== null}
                 onClick={() => handleStartOrSeekMode('custom')}
               >
@@ -252,39 +250,30 @@ export function AudioBufferSettingsPanel() {
               </button>
             </div>
 
-            {settings.startOrSeekSeconds !== null && (
-              <div style={{ marginTop: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="settings-number-grid">
+              <label className="settings-number-item">
+                <span>{t('settings.audioBuffer.startOrSeek.label')}</span>
                 <input
-                  type="range"
-                  min={0}
-                  max={10}
-                  step={0.05}
-                  value={settings.startOrSeekSeconds}
-                  onChange={(e) => handleStartOrSeekSeconds(Number(e.target.value))}
-                  style={{ flex: '1 1 280px' }}
-                />
-                <input
+                  className="settings-number-input"
                   type="number"
                   min={0}
                   max={10}
                   step={0.05}
-                  value={settings.startOrSeekSeconds}
+                  value={effectiveStartOrSeekSeconds}
                   onChange={(e) => handleStartOrSeekSeconds(Number(e.target.value))}
-                  style={{ width: 96 }}
+                  disabled={settings.startOrSeekSeconds === null}
                 />
-              </div>
-            )}
-          </div>
+              </label>
+            </div>
 
-          <div style={{ marginTop: 18 }}>
-            <p className="settings-card-label" style={{ fontSize: 14 }}>
-              {t('settings.audioBuffer.crossfade.label')}
-            </p>
-            <p className="settings-card-desc">{t('settings.audioBuffer.crossfade.desc')}</p>
+            <p className="settings-card-note">{t('settings.audioBuffer.startOrSeek.desc')}</p>
 
-            <div className="settings-toggle" style={{ marginTop: 12 }}>
+            <div className="settings-param-divider" />
+
+            <div className="settings-choice-row">
               <button
                 type="button"
+                className="settings-choice-btn"
                 data-active={settings.crossfadeSeconds === null}
                 onClick={() => handleCrossfadeMode('auto')}
               >
@@ -292,6 +281,7 @@ export function AudioBufferSettingsPanel() {
               </button>
               <button
                 type="button"
+                className="settings-choice-btn"
                 data-active={settings.crossfadeSeconds !== null}
                 onClick={() => handleCrossfadeMode('custom')}
               >
@@ -299,66 +289,61 @@ export function AudioBufferSettingsPanel() {
               </button>
             </div>
 
-            {settings.crossfadeSeconds !== null && (
-              <div style={{ marginTop: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="settings-number-grid">
+              <label className="settings-number-item">
+                <span>{t('settings.audioBuffer.crossfade.label')}</span>
                 <input
-                  type="range"
-                  min={0}
-                  max={10}
-                  step={0.05}
-                  value={settings.crossfadeSeconds}
-                  onChange={(e) => handleCrossfadeSeconds(Number(e.target.value))}
-                  style={{ flex: '1 1 280px' }}
-                />
-                <input
+                  className="settings-number-input"
                   type="number"
                   min={0}
                   max={10}
                   step={0.05}
-                  value={settings.crossfadeSeconds}
+                  value={effectiveCrossfadeSeconds}
                   onChange={(e) => handleCrossfadeSeconds(Number(e.target.value))}
-                  style={{ width: 96 }}
+                  disabled={settings.crossfadeSeconds === null}
                 />
-              </div>
-            )}
-          </div>
+              </label>
+            </div>
 
-          <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button type="button" className="settings-action-btn" onClick={() => void refreshComponentsState()}>
-              {t('common.action.refresh')}
-            </button>
-            <button type="button" className="settings-action-btn" onClick={handleReset}>
-              {t('common.action.reset')}
-            </button>
-          </div>
+            <p className="settings-card-note">{t('settings.audioBuffer.crossfade.desc')}</p>
 
-          <p className="settings-card-note">
-            {t('settings.audioBuffer.note.defaults', {
-              start: defaults.startOrSeekSeconds.toFixed(2),
-              crossfade: defaults.crossfadeSeconds.toFixed(2),
-              backendId: componentsState.outputBackendId ?? '',
-            })}
-          </p>
-          <p className="settings-card-note">
-            {t('settings.audioBuffer.note.estimate', {
-              sampleRate: String(sampleRate),
-              channels: String(channels),
-              startMiB: estimatedStartMiB.toFixed(2),
-              crossfadeMiB: estimatedCrossfadeMiB.toFixed(2),
-            })}
-          </p>
-          {underrunEvents !== null && underrunFrames !== null && (
+            <div className="settings-section-controls">
+              <button type="button" className="settings-action-btn" onClick={() => void refreshComponentsState()}>
+                {t('common.action.refresh')}
+              </button>
+              <button type="button" className="settings-action-btn" onClick={handleReset}>
+                {t('common.action.reset')}
+              </button>
+            </div>
+
             <p className="settings-card-note">
-              {t('settings.audioBuffer.note.underrun', {
-                events: String(underrunEvents),
-                frames: String(underrunFrames),
+              {t('settings.audioBuffer.note.defaults', {
+                start: defaults.startOrSeekSeconds.toFixed(2),
+                crossfade: defaults.crossfadeSeconds.toFixed(2),
+                backendId: componentsState.outputBackendId ?? '',
               })}
             </p>
-          )}
-        </>
-      )}
+            <p className="settings-card-note">
+              {t('settings.audioBuffer.note.estimate', {
+                sampleRate: String(sampleRate),
+                channels: String(channels),
+                startMiB: estimatedStartMiB.toFixed(2),
+                crossfadeMiB: estimatedCrossfadeMiB.toFixed(2),
+              })}
+            </p>
+            {underrunEvents !== null && underrunFrames !== null && (
+              <p className="settings-card-note">
+                {t('settings.audioBuffer.note.underrun', {
+                  events: String(underrunEvents),
+                  frames: String(underrunFrames),
+                })}
+              </p>
+            )}
+          </>
+        )}
 
-      {error && <div className="settings-inline-error">{error}</div>}
+        {error && <div className="settings-inline-error">{error}</div>}
+      </div>
     </div>
   );
 }

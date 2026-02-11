@@ -33,14 +33,17 @@ const PerfMonitorPageLazy = React.lazy(async () => ({
 }));
 const DebugPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/DebugPage')).DebugPage }));
 const DspRackPageLazy = React.lazy(async () => ({ default: (await import('../components/pages/DspRackPage')).DspRackPage }));
-const AudioSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/AudioSettingsPanel')).AudioSettingsPanel,
-}));
 const AudioComponentsSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/AudioComponentsSettingsPanel')).AudioComponentsSettingsPanel,
 }));
 const AudioBufferSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/AudioBufferSettingsPanel')).AudioBufferSettingsPanel,
+}));
+const AudioEngineAdvancedSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/AudioEngineAdvancedSettingsPanel')).AudioEngineAdvancedSettingsPanel,
+}));
+const AudioDspSettingsPanelLazy = React.lazy(async () => ({
+  default: (await import('../components/settings-panels/AudioDspSettingsPanel')).AudioDspSettingsPanel,
 }));
 const LanguageSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/LanguageSettingsPanel')).LanguageSettingsPanel,
@@ -183,11 +186,12 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
 
         register<SettingsPanelContribution>({
           kind: 'settings-panel',
-          id: 'audio',
-          title: t('settings.panels.audio.title'),
-          render: () => renderWithLazyBoundary(<AudioSettingsPanelLazy />),
+          id: 'audio-engine-advanced',
+          title: t('settings.panels.audioAdvanced.title'),
+          description: t('settings.panels.audioAdvanced.desc'),
+          render: () => renderWithLazyBoundary(<AudioEngineAdvancedSettingsPanelLazy />),
           source: 'builtin',
-          order: 20,
+          order: 21,
           group: 'audio',
           metadata: { settingsSection: 'audio' },
         });
@@ -200,6 +204,18 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<AudioComponentsSettingsPanelLazy />),
           source: 'builtin',
           order: 22,
+          group: 'audio',
+          metadata: { settingsSection: 'audio' },
+        });
+
+        register<SettingsPanelContribution>({
+          kind: 'settings-panel',
+          id: 'audio-dsp',
+          title: t('settings.panels.audioDsp.title'),
+          description: t('settings.panels.audioDsp.desc'),
+          render: () => renderWithLazyBoundary(<AudioDspSettingsPanelLazy />),
+          source: 'builtin',
+          order: 23,
           group: 'audio',
           metadata: { settingsSection: 'audio' },
         });

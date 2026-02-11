@@ -181,8 +181,6 @@ export function AudioComponentsSettingsPanel() {
     return outputBackends.includes('asio') || componentsState.outputBackendId === 'asio';
   }, [componentsState.outputBackendId, outputBackends]);
 
-  const sectionNameColor = 'var(--settings-section-name-color, #b4cde0)';
-
   const refreshComponents = useCallback(async () => {
     if (!canUseBackend) return;
     if (busyRef.current) return;
@@ -384,114 +382,48 @@ export function AudioComponentsSettingsPanel() {
   }, [canUseBackend, selectedInput]);
 
   return (
-    <div className="settings-card">
-      <div className="settings-card-header">
-        <div>
-          <p className="settings-card-label">{t('settings.audioComponents.title')}</p>
-          <p className="settings-card-desc">{t('settings.audioComponents.desc')}</p>
+    <div className="settings-audio-panel">
+      <div className="settings-audio-block">
+        <div className="settings-param-head">
+          <p className="settings-param-eyebrow">OUTPUT BACKEND</p>
+          <h3 className="settings-param-title">{t('settings.audioComponents.outputBackend.title')}</h3>
+          <p className="settings-param-subtitle">Backend Transport & Driver Mode</p>
         </div>
-        <span className="settings-card-badge">{badge}</span>
-      </div>
+        <div className="settings-param-divider" />
 
-      {!canUseBackend && <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>}
+        <p className="settings-card-note">{badge}</p>
 
-      {canUseBackend && (
-        <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 0 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <p className="settings-section-title">OUTPUT BACKEND</p>
-            <div className="settings-section-row">
-              <p className="settings-section-name" style={{ color: sectionNameColor }}>
-                {t('settings.audioComponents.outputBackend.title')}
-              </p>
-              <div className="settings-section-spacer" />
-            </div>
-
-            <fieldset
-              style={{ border: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}
+        {!canUseBackend ? (
+          <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
+        ) : (
+          <>
+            <div
+              className="settings-choice-row"
+              role="radiogroup"
               aria-label={t('settings.audioComponents.outputBackend.select.ariaLabel')}
             >
               {outputBackendOptions.map((backend) => {
-                const isActive = componentsState.outputBackendId === backend.id;
                 const isSelected = selectedBackend === backend.id;
-                const isDisabled = busy || Boolean(backend.disabled);
                 return (
-                  <label
+                  <button
                     key={backend.id}
-                    style={{
-                      display: 'flex',
-                      gap: 12,
-                      padding: '10px 12px',
-                      borderRadius: 0,
-                      border: isSelected ? '1px solid #eaf6ff' : '1px solid rgba(234, 246, 255, 0.35)',
-                      background: 'transparent',
-                      opacity: backend.disabled ? 0.55 : 1,
-                      cursor: isDisabled ? 'not-allowed' : 'pointer',
-                    }}
+                    type="button"
+                    className="settings-choice-btn"
+                    data-active={isSelected}
+                    disabled={busy || backend.disabled}
+                    onClick={() => setSelectedBackend(backend.id)}
+                    title={backend.desc}
                   >
-                    <input
-                      type="radio"
-                      name="audio-output-backend"
-                      value={backend.id}
-                      checked={isSelected}
-                      onChange={() => setSelectedBackend(backend.id)}
-                      disabled={isDisabled}
-                      style={{ marginTop: 3 }}
-                    />
-
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: '#eaf6ff' }}>
-                          {backend.title}
-                        </span>
-                        <span style={{ fontSize: 12, color: '#8fafc5', fontFamily: 'monospace' }}>
-                          {backend.id}
-                        </span>
-                        {isActive && (
-                          <span
-                            style={{
-                              padding: '2px 8px',
-                              borderRadius: 0,
-                              fontSize: 12,
-                              border: '1px solid #3cf6ff',
-                              background: 'transparent',
-                              color: '#3cf6ff',
-                            }}
-                          >
-                            {t('settings.audioComponents.outputBackend.tag.active')}
-                          </span>
-                        )}
-                        {backend.disabled && (
-                          <span
-                            style={{
-                              padding: '2px 8px',
-                              borderRadius: 0,
-                              fontSize: 12,
-                              background: 'rgba(255, 184, 0, 0.12)',
-                              color: 'rgba(255, 212, 102, 0.95)',
-                            }}
-                          >
-                            {t('settings.audioComponents.outputBackend.tag.wip')}
-                          </span>
-                        )}
-                      </div>
-                      <p className="settings-card-note" style={{ marginTop: 6 }}>
-                        {backend.desc}
-                      </p>
-                      {backend.warning && (
-                        <p
-                          className="settings-card-note"
-                          style={{ marginTop: 6, color: 'rgba(255, 212, 102, 0.95)' }}
-                        >
-                          {backend.warning}
-                        </p>
-                      )}
-                    </div>
-                  </label>
+                    {backend.title}
+                  </button>
                 );
               })}
-            </fieldset>
+            </div>
 
-            <div className="settings-section-controls" style={{ marginTop: 12 }}>
+            {selectedBackendOption?.desc && <p className="settings-card-note">{selectedBackendOption.desc}</p>}
+            {selectedBackendOption?.warning && <p className="settings-card-note">{selectedBackendOption.warning}</p>}
+
+            <div className="settings-section-controls">
               <button type="button" className="settings-action-btn" onClick={() => void refreshComponents()} disabled={busy}>
                 {t('common.action.refresh')}
               </button>
@@ -504,44 +436,49 @@ export function AudioComponentsSettingsPanel() {
                 {t('common.action.apply')}
               </button>
             </div>
-          </div>
+          </>
+        )}
+      </div>
 
-          <div className="settings-section-line" style={{ marginTop: 14, marginBottom: 14 }} />
+      <div className="settings-param-divider settings-param-divider--major" />
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <p className="settings-section-title">OUTPUT DEVICE</p>
-            <div className="settings-section-row">
-              <p className="settings-section-name" style={{ color: sectionNameColor }}>
-                {t('settings.audioComponents.outputDevice.title')}
-              </p>
-              <div className="settings-section-spacer" />
-              <div className="settings-section-controls">
-                <select
-                  className="settings-select"
-                  value={selectedDeviceId}
-                  onChange={(e) => setSelectedDeviceId(e.target.value)}
-                  aria-label={t('settings.audioComponents.outputDevice.select.ariaLabel')}
-                  disabled={busy}
-                  style={{ minWidth: 300 }}
-                >
-                  <option value="">{t('settings.audioComponents.outputDevice.default')}</option>
-                  {outputDevices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+      <div className="settings-audio-block">
+        <div className="settings-param-head">
+          <p className="settings-param-eyebrow">OUTPUT DEVICE</p>
+          <h3 className="settings-param-title">{t('settings.audioComponents.outputDevice.title')}</h3>
+          <p className="settings-param-subtitle">Target Device & Hardware Route</p>
+        </div>
+        <div className="settings-param-divider" />
+
+        {!canUseBackend ? (
+          <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
+        ) : (
+          <>
+            <div className="settings-section-controls settings-section-controls--stretch">
+              <select
+                className="settings-select"
+                value={selectedDeviceId}
+                onChange={(e) => setSelectedDeviceId(e.target.value)}
+                aria-label={t('settings.audioComponents.outputDevice.select.ariaLabel')}
+                disabled={busy}
+              >
+                <option value="">{t('settings.audioComponents.outputDevice.default')}</option>
+                {outputDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <p className="settings-card-note" style={{ marginTop: 10 }}>
+            <p className="settings-card-note">
               {t('settings.audioComponents.outputDevice.current', {
                 device: componentsState.outputDevice ?? t('settings.audioComponents.outputDevice.default'),
                 sampleRate: componentsState.outputSampleRate ? `${componentsState.outputSampleRate} Hz` : '\u2014',
               })}
             </p>
 
-            <div className="settings-section-controls" style={{ marginTop: 12 }}>
+            <div className="settings-section-controls">
               <button type="button" className="settings-action-btn" onClick={() => void refreshDevices()} disabled={busy}>
                 {t('common.action.refresh')}
               </button>
@@ -559,52 +496,54 @@ export function AudioComponentsSettingsPanel() {
                 </button>
               )}
             </div>
-          </div>
+          </>
+        )}
+      </div>
 
-          <div className="settings-section-line" style={{ marginTop: 14, marginBottom: 14 }} />
+      <div className="settings-param-divider settings-param-divider--major" />
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <p className="settings-section-title">INPUT / DECODER</p>
-            <div className="settings-section-row">
-              <p className="settings-section-name" style={{ color: sectionNameColor }}>
-                {t('settings.audioComponents.audioInput.title')}
-              </p>
-              <div className="settings-section-spacer" />
-              <div className="settings-section-controls">
-                <select
-                  className="settings-select"
-                  value={selectedInput}
-                  onChange={(e) => setSelectedInput(e.target.value)}
-                  aria-label={t('settings.audioComponents.audioInput.select.ariaLabel')}
-                  disabled={busy}
-                  style={{ minWidth: 260 }}
-                >
-                  <option value="">{t('settings.audioComponents.audioInput.auto')}</option>
-                  {audioInputs.map((inputId) => (
-                    <option key={inputId} value={inputId}>
-                      {inputId}
-                    </option>
-                  ))}
-                </select>
-              </div>
+      <div className="settings-audio-block">
+        <div className="settings-param-head">
+          <p className="settings-param-eyebrow">INPUT DECODER</p>
+          <h3 className="settings-param-title">{t('settings.audioComponents.audioInput.title')}</h3>
+          <p className="settings-param-subtitle">File Decoder & Input Path</p>
+        </div>
+        <div className="settings-param-divider" />
+
+        {!canUseBackend ? (
+          <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
+        ) : (
+          <>
+            <div className="settings-section-controls settings-section-controls--stretch">
+              <select
+                className="settings-select"
+                value={selectedInput}
+                onChange={(e) => setSelectedInput(e.target.value)}
+                aria-label={t('settings.audioComponents.audioInput.select.ariaLabel')}
+                disabled={busy}
+              >
+                <option value="">{t('settings.audioComponents.audioInput.auto')}</option>
+                {audioInputs.map((inputId) => (
+                  <option key={inputId} value={inputId}>
+                    {inputId}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <p className="settings-card-note" style={{ marginTop: 6 }}>
-              {t('settings.audioComponents.audioInput.desc')}
-            </p>
-
-            <p className="settings-card-note" style={{ marginTop: 10 }}>
+            <p className="settings-card-note">{t('settings.audioComponents.audioInput.desc')}</p>
+            <p className="settings-card-note">
               {t('settings.audioComponents.audioInput.preferred', {
                 id: componentsState.preferredInputId ?? t('settings.audioComponents.audioInput.auto'),
               })}
             </p>
-            <p className="settings-card-note" style={{ marginTop: 6 }}>
+            <p className="settings-card-note">
               {t('settings.audioComponents.audioInput.active', {
                 id: componentsState.activeInputId ?? t('settings.audioComponents.audioInput.active.none'),
               })}
             </p>
 
-            <div className="settings-section-controls" style={{ marginTop: 12 }}>
+            <div className="settings-section-controls">
               <button type="button" className="settings-action-btn" onClick={() => void refreshComponents()} disabled={busy}>
                 {t('common.action.refresh')}
               </button>
@@ -612,9 +551,9 @@ export function AudioComponentsSettingsPanel() {
                 {t('common.action.apply')}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
 
       {error && <div className="settings-inline-error">{error}</div>}
     </div>
