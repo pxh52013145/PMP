@@ -213,6 +213,7 @@
   "settings.panels.visualizers.title": "可视化",
 
   "settings.sections.system": "系统",
+  "settings.sections.audio": "音频",
   "settings.sections.plugins": "插件",
   "settings.sections.visualizers": "可视化",
 
@@ -430,6 +431,7 @@
   "pages.settings.title": "设置",
   "pages.settings.subtitle": "在这里管理全局配置、插件与可视化入口",
   "pages.settings.empty": "未注册任何设置面板。",
+  "pages.settings.emptySection": "“{section}”暂未提供设置项。",
   "pages.debug.title": "调试",
   "pages.debug.subtitle": "诊断与开发工具。",
   "pages.debug.empty": "未注册任何调试页面。",

@@ -27,24 +27,32 @@
 }
 
 .page-settings--deltaforce {
-  --settings-bg: #0b1117;
-  --settings-surface: rgba(14, 21, 29, 0.72);
-  --settings-surface-strong: rgba(14, 21, 29, 0.86);
+  --settings-bg: #050f19;
+  --settings-surface: rgba(8, 18, 28, 0.76);
+  --settings-surface-strong: rgba(8, 18, 28, 0.9);
   --settings-surface-muted: rgba(0, 0, 0, 0);
-  --settings-border: rgba(255, 255, 255, 0.14);
-  --settings-border-strong: rgba(255, 255, 255, 0.18);
-  --settings-text: rgba(230, 238, 247, 0.95);
-  --settings-text-muted: rgba(184, 195, 206, 0.72);
-  --settings-text-dim: rgba(127, 138, 150, 0.9);
-  --settings-accent-rgb: 43, 216, 137;
+  --settings-border: rgba(154, 213, 235, 0.3);
+  --settings-border-strong: rgba(194, 239, 255, 0.55);
+  --settings-text: rgba(230, 246, 252, 0.96);
+  --settings-text-muted: rgba(167, 197, 212, 0.78);
+  --settings-text-dim: rgba(136, 165, 179, 0.9);
+  --settings-accent-rgb: 76, 227, 255;
+  --settings-side-gutter: 0.72vw;
+  --settings-sub-line-thickness: clamp(1px, 0.12vw, 2px);
+  --settings-frame-thickness: 1px;
+  --settings-main-notch: clamp(12px, 1vw, 18px);
+  --settings-main-corner-fx-size: clamp(7px, 0.56vw, 11px);
+  --settings-main-active-line: #28c8dd;
+  --settings-main-active-line-glow: rgba(40, 200, 221, 0.36);
+  --settings-sub-active-line: #24c7d5;
+  --settings-main-ring-idle: rgba(143, 190, 207, 0.62);
+  --settings-main-ring-idle-gap: rgba(143, 190, 207, 0.62);
+  --settings-main-ring-active: rgba(36, 199, 213, 0.95);
+  --settings-main-ring-active-gap: rgba(36, 199, 213, 0.28);
 
   padding: 0;
   gap: 0;
-  background:
-    radial-gradient(1100px circle at 18% -10%, rgba(43, 216, 137, 0.12), transparent 60%),
-    radial-gradient(900px circle at 112% 8%, rgba(74, 123, 216, 0.1), transparent 62%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0) 38%),
-    var(--settings-bg);
+  background: transparent;
 }
 
 .page-settings--debug {
@@ -63,22 +71,36 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: transparent;
 }
 
 .page-settings--deltaforce .settings-divider {
   width: 100%;
   height: 1px;
-  background: #1f2b35;
+  background: rgba(120, 154, 178, 0.38);
   flex: 0 0 auto;
 }
 
+.page-settings--deltaforce .settings-topbar + .settings-divider {
+  display: none;
+}
+
+.page-settings--deltaforce .settings-subbar + .settings-divider {
+  width: auto;
+  margin: 0 var(--settings-side-gutter);
+  background: #123049;
+  height: var(--settings-sub-line-thickness);
+  margin-top: calc(-1 * var(--settings-sub-line-thickness));
+}
+
 .page-settings--deltaforce .settings-topbar {
-  height: 64px;
+  height: clamp(40px, 3.3vw, 60px);
+  min-height: 40px;
   padding: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  background: #0e151d;
+  background: transparent;
   flex: 0 0 auto;
 }
 
@@ -86,12 +108,12 @@
   display: flex;
   min-width: 0;
   height: 100%;
-  align-items: center;
+  align-items: flex-end;
 }
 
 .page-settings--deltaforce .settings-topbar-left,
 .page-settings--deltaforce .settings-sub-tabs {
-  padding-left: 0;
+  padding-left: var(--settings-side-gutter);
 }
 
 .page-settings--deltaforce .settings-topbar-title {
@@ -112,24 +134,31 @@
 }
 
 .page-settings--deltaforce .settings-main-tabs {
-  height: 100%;
+  height: clamp(40px, 3.3vw, 60px);
+  min-height: 40px;
   display: flex;
   min-width: 0;
-  align-items: stretch;
+  align-items: flex-end;
+  gap: 0.28vw;
+  padding-right: var(--settings-side-gutter);
 }
 
 .page-settings--deltaforce .settings-main-tab {
   position: relative;
-  height: 100%;
-  flex: 1 0 140px;
-  padding: 0 18px;
+  height: clamp(38px, 3.05vw, 54px);
+  min-height: 38px;
+  flex: 0 0 clamp(128px, 9.8vw, 172px);
+  min-width: 0;
+  padding: 0 0.6vw;
   display: inline-flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   justify-content: center;
-  gap: 10px;
-  background: transparent;
+  gap: 0;
+  background: rgba(10, 37, 54, 0.96);
   border: none;
-  color: rgba(184, 195, 206, 0.92);
+  clip-path: polygon(0 0, calc(100% - var(--settings-main-notch)) 0, 100% var(--settings-main-notch), 100% 100%, 0 100%);
+  color: #6d8ea2;
   cursor: pointer;
   transition:
     background 0.16s ease,
@@ -138,71 +167,205 @@
 }
 
 .page-settings--deltaforce .settings-main-tab[data-has-separator='true']::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 50%;
-  width: 1px;
-  height: 26px;
-  transform: translateY(-50%);
-  background: #23303b;
+  display: none;
 }
 
 .page-settings--deltaforce .settings-main-tab::before {
   content: '';
   position: absolute;
   left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  background: transparent;
+  right: var(--settings-main-notch);
+  top: 0;
+  height: clamp(1px, 0.08vw, 2px);
+  background: var(--settings-main-active-line);
+  opacity: 0;
+  transform: scaleX(0.4);
+  transform-origin: left center;
+  transition:
+    opacity 0.18s ease,
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.2s ease;
 }
 
 .page-settings--deltaforce .settings-main-tab:hover {
-  background: rgba(17, 27, 36, 0.55);
-  color: rgba(230, 238, 247, 0.92);
+  background: #0c293b;
+  color: #9ab1c5;
 }
 
 .page-settings--deltaforce .settings-main-tab[data-active='true'] {
-  background: #111b24;
-  color: rgba(230, 238, 247, 0.98);
+  background: #0a2536;
+  color: #f3faff;
 }
 
 .page-settings--deltaforce .settings-main-tab[data-active='true']::before {
-  background: rgba(var(--settings-accent-rgb), 0.95);
+  background: var(--settings-main-active-line);
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 .page-settings--deltaforce .settings-main-tab-label {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: clamp(12px, 0.88vw, 16px);
+  font-weight: 600;
+  letter-spacing: 0.03vw;
+  line-height: 1;
+  transition: color 0.2s ease;
 }
 
-.page-settings--deltaforce .settings-main-tab-count {
-  padding: 2px 8px;
+.page-settings--deltaforce .settings-main-tab[data-active='true'] .settings-main-tab-label {
+  color: #d9e2e9;
+}
+
+.page-settings--deltaforce .settings-main-tab-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.38vw;
+}
+
+.page-settings--deltaforce .settings-main-tab-ring-slot {
+  width: clamp(14px, 1.18vw, 22px);
+  height: clamp(14px, 1.18vw, 22px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.page-settings--deltaforce .settings-main-tab-subline {
+  display: none;
+}
+
+.page-settings--deltaforce .settings-main-tab-meta {
+  display: none;
+}
+
+.page-settings--deltaforce .settings-main-tab-corner {
+  display: none;
+}
+
+.page-settings--deltaforce .settings-main-tab-spin {
+  position: relative;
+  left: 0;
+  top: 0;
+  transform: none;
+  width: clamp(11px, 0.82vw, 16px);
+  height: clamp(11px, 0.82vw, 16px);
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.22);
-  color: rgba(184, 195, 206, 0.82);
-  font-size: 11px;
-  line-height: 1.1;
+  pointer-events: none;
+  transition:
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.2s ease;
+}
+
+.page-settings--deltaforce .settings-main-tab-spin::before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  border: 2px solid var(--settings-main-ring-idle);
+  box-sizing: border-box;
+  opacity: 1;
+  transition:
+    border-color 0.22s ease,
+    opacity 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease,
+    filter 0.22s ease;
+}
+
+.page-settings--deltaforce .settings-main-tab .settings-main-tab-spin::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 999px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(36, 199, 213, 0) 0deg,
+    rgba(36, 199, 213, 0) 228deg,
+    rgba(36, 199, 213, 0.9) 304deg,
+    rgba(36, 199, 213, 0.16) 346deg,
+    rgba(36, 199, 213, 0) 360deg
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  opacity: 0;
+  transform: scale(0.9);
+  filter: drop-shadow(0 0 0.14vw rgba(36, 199, 213, 0.24));
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.24s ease;
+}
+
+.page-settings--deltaforce .settings-main-tab[data-active='true'] .settings-main-tab-spin::before {
+  border-color: var(--settings-main-ring-idle);
+  box-shadow: 0 0 0.08vw rgba(36, 199, 213, 0.2);
+}
+
+.page-settings--deltaforce .settings-main-tab[data-active='true'] .settings-main-tab-spin::after {
+  opacity: 1;
+  transform: scale(1);
+  filter: drop-shadow(0 0 0.2vw rgba(36, 199, 213, 0.46));
+  animation: settings-main-tab-spin 0.9s linear infinite;
+}
+
+.page-settings--deltaforce .settings-main-tab-active-corner-fx {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: var(--settings-main-corner-fx-size);
+  height: 1px;
+  background: var(--settings-main-active-line);
+  box-shadow: 0 0 0.18vw var(--settings-main-active-line-glow);
+  opacity: 0;
+  transition:
+    opacity 0.24s ease,
+    box-shadow 0.24s ease,
+    background-color 0.24s ease;
+}
+
+.page-settings--deltaforce .settings-main-tab-active-corner-fx::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: var(--settings-main-corner-fx-size);
+  background: var(--settings-main-active-line);
+}
+
+.page-settings--deltaforce .settings-main-tab[data-active='true'] .settings-main-tab-active-corner-fx {
+  opacity: 1;
+  box-shadow: 0 0 0.2vw var(--settings-main-active-line-glow);
+}
+
+@keyframes settings-main-tab-spin {
+  from {
+    transform: scale(1) rotate(0deg);
+  }
+
+  to {
+    transform: scale(1) rotate(360deg);
+  }
 }
 
 .page-settings--deltaforce .settings-topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 0 0 auto;
-  padding-right: 24px;
+  display: none;
 }
 
 .page-settings--deltaforce .settings-subbar {
-  height: 52px;
+  height: 3.1vw;
+  min-height: 38px;
   padding: 0;
   display: flex;
   align-items: center;
-  background: #0b1117;
+  background: transparent;
   flex: 0 0 auto;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 2;
 }
 
 .page-settings--deltaforce .settings-sub-tabs {
@@ -210,8 +373,11 @@
   height: 100%;
   display: flex;
   align-items: stretch;
+  padding-right: var(--settings-side-gutter);
+  box-sizing: border-box;
+  position: relative;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -225,9 +391,9 @@
 .page-settings--deltaforce .settings-sub-tab {
   position: relative;
   height: 100%;
-  flex: 1 0 150px;
-  min-width: 140px;
-  padding: 0 14px;
+  flex: 0 0 auto;
+  min-width: 7.9vw;
+  padding: 0 0.96vw;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -235,51 +401,89 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  color: rgba(184, 195, 206, 0.9);
+  color: rgba(159, 188, 203, 0.92);
   transition:
     background 0.16s ease,
     color 0.16s ease;
   white-space: nowrap;
 }
 
-.page-settings--deltaforce .settings-sub-tab[data-has-separator='true']::after {
+.page-settings--deltaforce .settings-sub-tab:first-child {
+  border-left: none;
+}
+
+.page-settings--deltaforce .settings-sub-tabs::before {
+  content: '';
+  position: absolute;
+  left: var(--settings-side-gutter);
+  top: 50%;
+  width: 1px;
+  height: 0.98vw;
+  min-height: 12px;
+  transform: translateY(-50%);
+  background: rgba(123, 161, 184, 0.44);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.page-settings--deltaforce .settings-sub-tab::after {
   content: '';
   position: absolute;
   right: 0;
   top: 50%;
   width: 1px;
-  height: 18px;
+  height: 0.98vw;
+  min-height: 12px;
   transform: translateY(-50%);
-  background: #1f2b35;
+  background: rgba(123, 161, 184, 0.44);
+  pointer-events: none;
 }
 
 .page-settings--deltaforce .settings-sub-tab::before {
   content: '';
+  display: block;
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 2px;
+  height: var(--settings-sub-line-thickness);
   background: transparent;
+  top: auto;
+  transform: none;
+  width: auto;
+  min-height: 1px;
+  z-index: 3;
+  opacity: 0;
+  transform: scaleX(0.42);
+  transform-origin: center;
+  transition:
+    opacity 0.2s ease,
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .page-settings--deltaforce .settings-sub-tab:hover {
-  background: rgba(17, 27, 36, 0.45);
-  color: rgba(230, 238, 247, 0.92);
+  background: rgba(10, 23, 34, 0.45);
+  color: rgba(214, 240, 250, 0.94);
 }
 
 .page-settings--deltaforce .settings-sub-tab[data-active='true'] {
-  background: #111b24;
-  color: rgba(230, 238, 247, 0.98);
+  background: rgba(10, 23, 34, 0.55);
+  color: #f3faff;
 }
 
 .page-settings--deltaforce .settings-sub-tab[data-active='true']::before {
-  background: rgba(var(--settings-accent-rgb), 0.95);
+  background: var(--settings-sub-active-line);
+  box-shadow: 0 0 0.35vw rgba(28, 240, 222, 0.45);
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 .page-settings--deltaforce .settings-sub-tab-label {
-  font-size: 13px;
-  font-weight: 650;
+  font-size: 0.98vw;
+  font-weight: 500;
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 260px;
@@ -287,11 +491,11 @@
 
 .page-settings--deltaforce .settings-sub-tab-tag {
   flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(var(--settings-accent-rgb), 0.28);
-  background: rgba(var(--settings-accent-rgb), 0.08);
-  color: rgba(var(--settings-accent-rgb), 0.9);
+  padding: 1px 6px;
+  border-radius: 0;
+  border: 1px solid rgba(var(--settings-accent-rgb), 0.45);
+  background: rgba(5, 19, 30, 0.74);
+  color: rgba(var(--settings-accent-rgb), 0.92);
   font-size: 11px;
   text-transform: uppercase;
   white-space: nowrap;
@@ -300,11 +504,24 @@
 .page-settings--deltaforce .settings-content {
   flex: 1;
   min-height: 0;
-  padding: 24px;
-  background: #0b1117;
+  margin: 0 var(--settings-side-gutter);
+  margin-top: 0;
+  padding: 1.4vw 1.3vw 1.2vw;
+  background:
+    linear-gradient(180deg, rgba(30, 112, 148, 0.12), rgba(10, 26, 38, 0.72) 28%, rgba(7, 18, 28, 0.76));
+  border-left: var(--settings-frame-thickness) solid rgba(60, 246, 255, 0.82);
+  border-right: var(--settings-frame-thickness) solid rgba(60, 246, 255, 0.82);
+  border-bottom: var(--settings-frame-thickness) solid rgba(60, 246, 255, 0.82);
+  min-height: 0;
+  background-color: rgba(9, 31, 46, 0.66);
+  box-shadow: none;
   overflow: auto;
   display: flex;
   justify-content: stretch;
+}
+
+.page-settings--deltaforce .settings-content-body {
+  width: 100%;
 }
 
 .page-settings--deltaforce .settings-content-panel {
@@ -313,24 +530,37 @@
 }
 
 .page-settings--deltaforce .settings-content-header {
-  margin-bottom: 18px;
+  margin-bottom: 1.24vw;
 }
 
 .page-settings--deltaforce .settings-content-title {
-  font-size: 18px;
-  font-weight: 750;
+  margin: 0;
+  font-size: clamp(30px, 2.08vw, 40px);
+  line-height: 1.05;
+  font-weight: 500;
+  color: #eaf6ff;
 }
 
 .page-settings--deltaforce .settings-content-desc {
-  font-size: 12px;
+  margin-top: 0.44vw;
+  font-size: clamp(12px, 0.8vw, 14px);
+  color: #8fafc5;
+}
+
+.page-settings--deltaforce .settings-content-meta {
+  margin: 0 0 0.56vw;
+  font-size: clamp(9px, 0.58vw, 11px);
+  letter-spacing: 0.2vw;
+  font-weight: 600;
+  color: #6e8ea6;
 }
 
 .page-settings--deltaforce .settings-action-btn--topbar {
   height: 34px;
   padding: 0 12px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: #111b24;
+  border-radius: 0;
+  border: 1px solid rgba(235, 248, 255, 0.66);
+  background: rgba(7, 20, 32, 0.86);
   box-shadow: none;
   backdrop-filter: none;
   font-size: 13px;
@@ -338,20 +568,49 @@
 }
 
 .page-settings--deltaforce .settings-action-btn--topbar:hover:not(:disabled) {
-  border-color: rgba(var(--settings-accent-rgb), 0.4);
-  background: rgba(17, 27, 36, 0.9);
+  border-color: rgba(var(--settings-accent-rgb), 0.82);
+  background: rgba(12, 30, 44, 0.92);
 }
 
 .page-settings--deltaforce .settings-card {
-  border-radius: 10px;
-  background: rgba(14, 21, 29, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(14px);
+  padding: 10px 0 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .page-settings--deltaforce .settings-card-badge {
-  border-radius: 8px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 0;
+  border: 1px solid #eaf6ff;
+  background: transparent;
+  color: #eaf6ff;
+}
+
+.page-settings--deltaforce .settings-card-header {
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #123049;
+}
+
+.page-settings--deltaforce .settings-card-label {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #5e8099;
+  text-transform: uppercase;
+}
+
+.page-settings--deltaforce .settings-card-desc {
+  margin: 6px 0 0;
+  color: #8fafc5;
+}
+
+.page-settings--deltaforce .settings-card-note {
+  color: #8fafc5;
 }
 
 .page-settings--deltaforce .settings-toggle {
@@ -359,24 +618,70 @@
 }
 
 .page-settings--deltaforce .settings-toggle button {
-  border-radius: 4px;
-  background: #0e151d;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
+  background: rgba(8, 20, 31, 0.82);
+  border: 1px solid rgba(234, 246, 252, 0.62);
+  color: rgba(222, 238, 246, 0.9);
 }
 
 .page-settings--deltaforce .settings-toggle button[data-active='true'] {
-  border-color: rgba(var(--settings-accent-rgb), 0.6);
-  background: #111b24;
-  color: rgba(230, 238, 247, 0.98);
-  box-shadow: inset 0 0 0 1px rgba(var(--settings-accent-rgb), 0.12);
+  border-color: rgba(var(--settings-accent-rgb), 0.78);
+  background: rgba(12, 34, 48, 0.92);
+  color: rgba(var(--settings-accent-rgb), 0.98);
+  box-shadow: inset 0 -2px 0 rgba(var(--settings-accent-rgb), 0.92);
 }
 
 .page-settings--deltaforce .settings-rows {
   width: 100%;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(14, 21, 29, 0.6);
+  border-radius: 0;
+  border: 1px solid rgba(152, 210, 230, 0.42);
+  background: rgba(8, 20, 30, 0.66);
   overflow: hidden;
+}
+
+.page-settings--deltaforce .settings-section-title {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #5e8099;
+}
+
+.page-settings--deltaforce .settings-section-line {
+  height: 1px;
+  width: 100%;
+  background: #123049;
+}
+
+.page-settings--deltaforce .settings-section-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+}
+
+.page-settings--deltaforce .settings-section-name {
+  min-width: 220px;
+  margin: 0;
+  font-size: 26px;
+  font-weight: 400;
+  color: #b4cde0;
+}
+
+.page-settings--deltaforce .settings-section-spacer {
+  height: 1px;
+  flex: 1;
+  min-width: 0;
+  background: #0a2136;
+}
+
+.page-settings--deltaforce .settings-section-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .page-settings--deltaforce .settings-row {
@@ -387,7 +692,7 @@
   flex-wrap: wrap;
   padding: 12px 14px;
   min-height: 56px;
-  border-bottom: 1px solid #1f2b35;
+  border-bottom: 1px solid rgba(96, 138, 160, 0.52);
 }
 
 .page-settings--deltaforce .settings-row:last-child {
@@ -427,9 +732,9 @@
 .page-settings--deltaforce .settings-row-badge {
   height: 30px;
   padding: 0 10px;
-  border-radius: 4px;
-  border: 1px solid rgba(var(--settings-accent-rgb), 0.4);
-  background: rgba(var(--settings-accent-rgb), 0.06);
+  border-radius: 0;
+  border: 1px solid rgba(var(--settings-accent-rgb), 0.5);
+  background: rgba(var(--settings-accent-rgb), 0.12);
   color: rgba(var(--settings-accent-rgb), 0.95);
   font-size: 12px;
   display: inline-flex;
@@ -453,6 +758,113 @@
   font-size: 12px;
   font-weight: 650;
   text-overflow: clip;
+}
+
+.page-settings--deltaforce .settings-action-btn,
+.page-settings--deltaforce .settings-danger-btn,
+.page-settings--deltaforce .settings-select,
+.page-settings--deltaforce .settings-visualizer-search input {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 0;
+  border: 1px solid #eaf6ff;
+  background: transparent;
+  color: #eaf6ff;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.page-settings--deltaforce .settings-select {
+  min-width: 180px;
+  color: #d6ebf7;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #9fbcd2 50%),
+    linear-gradient(135deg, #9fbcd2 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 14px,
+    calc(100% - 8px) 14px;
+  background-size:
+    6px 6px,
+    6px 6px;
+  background-repeat: no-repeat;
+  appearance: none;
+  padding-right: 24px;
+}
+
+.page-settings--deltaforce .settings-action-btn:hover:not(:disabled),
+.page-settings--deltaforce .settings-danger-btn:hover:not(:disabled),
+.page-settings--deltaforce .settings-select:focus,
+.page-settings--deltaforce .settings-visualizer-search input:focus {
+  border-color: #3cf6ff;
+  color: #3cf6ff;
+  background: rgba(9, 25, 38, 0.35);
+  box-shadow: none;
+}
+
+.page-settings--deltaforce .settings-select option,
+.page-settings--deltaforce .settings-select optgroup {
+  background: rgba(4, 13, 20, 0.98);
+  color: rgba(234, 247, 255, 0.96);
+}
+
+.page-settings--deltaforce .settings-inline-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 0;
+  border: 1px solid rgba(255, 69, 58, 0.62);
+  background: rgba(62, 14, 16, 0.4);
+  color: #ffd8d8;
+  box-shadow: none;
+}
+
+.page-settings--deltaforce .settings-plugin-list,
+.page-settings--deltaforce .settings-visualizer-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-settings--deltaforce .settings-plugin-item,
+.page-settings--deltaforce .settings-visualizer-item {
+  border-radius: 0;
+  border: 1px solid rgba(152, 210, 230, 0.4);
+  background: rgba(8, 20, 30, 0.42);
+  box-shadow: none;
+}
+
+.page-settings--deltaforce .settings-plugin-title,
+.page-settings--deltaforce .settings-visualizer-title {
+  color: rgba(224, 239, 247, 0.94);
+}
+
+.page-settings--deltaforce .settings-plugin-subtitle,
+.page-settings--deltaforce .settings-plugin-desc,
+.page-settings--deltaforce .settings-plugin-permissions,
+.page-settings--deltaforce .settings-visualizer-id,
+.page-settings--deltaforce .settings-visualizer-inputs {
+  color: rgba(142, 176, 194, 0.9);
+}
+
+.page-settings--deltaforce .settings-plugin-tag {
+  border-radius: 0;
+  border: 1px solid rgba(152, 210, 230, 0.46);
+  background: rgba(13, 41, 58, 0.48);
+  color: rgba(194, 232, 246, 0.94);
+}
+
+.page-settings--deltaforce .settings-plugin-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-settings--deltaforce .settings-visualizer-search {
+  margin-top: 10px;
 }
 
 @media (max-width: 960px) {

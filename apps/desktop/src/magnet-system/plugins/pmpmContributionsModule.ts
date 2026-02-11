@@ -334,6 +334,7 @@ export function createPmpmContributionsModule(): KernelModule<AppEvents> {
                 pluginName: plugin.manifest.metadata.name,
                 panelId: panel.id,
                 ...(panel.metadata ?? {}),
+                settingsSection: 'plugins',
               },
               render: () =>
                 React.createElement(PluginSettingsHost, {

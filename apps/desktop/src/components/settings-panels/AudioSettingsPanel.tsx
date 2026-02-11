@@ -9,30 +9,44 @@ export function AudioSettingsPanel() {
   const isTauri = isTauriRuntime();
 
   return (
-    <div className="audio-engine-card">
-      <div className="audio-engine-card-header">
-        <div>
-          <p className="audio-engine-label">{t('settings.audio.engine.label')}</p>
-          <p className="audio-engine-desc">{t('settings.audio.engine.desc')}</p>
+    <div className="settings-rows">
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.audio.engine.label')}</div>
+          <div className="settings-row-desc">{t('settings.audio.engine.desc')}</div>
         </div>
-        <span className="audio-engine-badge">{t('settings.audio.engine.badge.native')}</span>
+        <div className="settings-row-right">
+          <span className="settings-row-badge">{t('settings.audio.engine.badge.native')}</span>
+        </div>
       </div>
 
-      {!isNativeAvailable && <p className="audio-engine-note">{t('settings.audio.engine.note.nativeUnavailable')}</p>}
+      {!isNativeAvailable && (
+        <div className="settings-row">
+          <div className="settings-row-left">
+            <div className="settings-row-desc">{t('settings.audio.engine.note.nativeUnavailable')}</div>
+          </div>
+        </div>
+      )}
 
-      <div style={{ marginTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button
-          className="native-debug-link"
-          onClick={() =>
-            void openVstManagerWindow({ title: t('windows.vst-manager.title') }).catch((error) => {
-              console.warn('[AudioSettingsPanel] Failed to open VST3 plugin manager window', error);
-            })
-          }
-          disabled={!isNativeAvailable || !isTauri}
-          title={isTauri ? undefined : t('settings.audio.openVstManager.requireTauri')}
-        >
-          {t('settings.audio.openVstManager')}
-        </button>
+      <div className="settings-row">
+        <div className="settings-row-left">
+          <div className="settings-row-title">{t('settings.audio.openVstManager')}</div>
+          <div className="settings-row-desc">{t('settings.audio.openVstManager.requireTauri')}</div>
+        </div>
+        <div className="settings-row-right">
+          <button
+            type="button"
+            className="settings-action-btn"
+            onClick={() =>
+              void openVstManagerWindow({ title: t('windows.vst-manager.title') }).catch((error) => {
+                console.warn('[AudioSettingsPanel] Failed to open VST3 plugin manager window', error);
+              })
+            }
+            disabled={!isNativeAvailable || !isTauri}
+          >
+            {t('common.action.open')}
+          </button>
+        </div>
       </div>
     </div>
   );

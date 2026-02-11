@@ -144,6 +144,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 1,
           group: 'core',
+          metadata: { settingsSection: 'system' },
         });
 
         register<SettingsPanelContribution>({
@@ -154,6 +155,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 5,
           group: 'core',
+          metadata: { settingsSection: 'system' },
         });
 
         register<SettingsPanelContribution>({
@@ -165,6 +167,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 7,
           group: 'core',
+          metadata: { settingsSection: 'system' },
         });
 
         register<SettingsPanelContribution>({
@@ -175,6 +178,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 10,
           group: 'core',
+          metadata: { settingsSection: 'system' },
         });
 
         register<SettingsPanelContribution>({
@@ -184,7 +188,8 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<AudioSettingsPanelLazy />),
           source: 'builtin',
           order: 20,
-          group: 'core',
+          group: 'audio',
+          metadata: { settingsSection: 'audio' },
         });
 
         register<SettingsPanelContribution>({
@@ -195,7 +200,8 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<AudioComponentsSettingsPanelLazy />),
           source: 'builtin',
           order: 22,
-          group: 'core',
+          group: 'audio',
+          metadata: { settingsSection: 'audio' },
         });
 
         register<SettingsPanelContribution>({
@@ -206,7 +212,8 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<AudioBufferSettingsPanelLazy />),
           source: 'builtin',
           order: 25,
-          group: 'core',
+          group: 'audio',
+          metadata: { settingsSection: 'audio' },
         });
 
         register<SettingsPanelContribution>({
@@ -217,6 +224,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 30,
           group: 'plugin',
+          metadata: { settingsSection: 'plugins' },
         });
 
         register<SettingsPanelContribution>({
@@ -227,6 +235,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           source: 'builtin',
           order: 40,
           group: 'visualizer',
+          metadata: { settingsSection: 'visualizers' },
         });
 
         register<PageContribution>({

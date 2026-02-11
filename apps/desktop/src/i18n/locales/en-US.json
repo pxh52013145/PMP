@@ -191,6 +191,7 @@
   "settings.panels.visualizers.title": "Visualizers",
 
   "settings.sections.system": "System",
+  "settings.sections.audio": "Audio",
   "settings.sections.plugins": "Plugins",
   "settings.sections.visualizers": "Visualizers",
 
@@ -407,6 +408,7 @@
   "pages.settings.title": "Settings",
   "pages.settings.subtitle": "Manage global settings, plugins, and visualizers here.",
   "pages.settings.empty": "No settings panels registered.",
+  "pages.settings.emptySection": "No settings available in \"{section}\".",
   "pages.debug.title": "Debug",
   "pages.debug.subtitle": "Diagnostics and developer tools.",
   "pages.debug.empty": "No debug pages registered.",

@@ -1,7 +1,6 @@
 import './SettingsPage.css';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
-import { useNavigation } from '../../contexts/NavigationContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
 
@@ -12,14 +11,44 @@ function sortPanels(a: SettingsPanelContribution, b: SettingsPanelContribution):
   return a.title.localeCompare(b.title);
 }
 
-function resolveSettingsSectionId(panel: SettingsPanelContribution): 'system' | 'plugins' | 'visualizers' {
-  if (panel.id === 'plugins' || panel.source === 'plugin' || panel.id.startsWith('pmpm:')) return 'plugins';
-  if (panel.id === 'visualizers') return 'visualizers';
+function isSettingsSectionId(value: string): value is SettingsSectionId {
+  return value === 'system' || value === 'audio' || value === 'plugins' || value === 'visualizers';
+}
+
+function resolveSettingsSectionId(panel: SettingsPanelContribution): SettingsSectionId {
+  const sectionInMetadata = panel.metadata?.settingsSection;
+  if (typeof sectionInMetadata === 'string') {
+    const normalized = sectionInMetadata.trim();
+    if (isSettingsSectionId(normalized)) return normalized;
+  }
+
+  if (
+    panel.id === 'plugins' ||
+    panel.source === 'plugin' ||
+    panel.group === 'plugin' ||
+    panel.id.startsWith('pmpm:')
+  ) {
+    return 'plugins';
+  }
+
+  if (panel.id === 'visualizers' || panel.group === 'visualizer') return 'visualizers';
+
+  if (
+    panel.id === 'audio' ||
+    panel.id === 'audio-components' ||
+    panel.id === 'audio-buffer' ||
+    panel.group === 'audio'
+  ) {
+    return 'audio';
+  }
+
   return 'system';
 }
 
+type SettingsSectionId = 'system' | 'audio' | 'plugins' | 'visualizers';
+
 type SettingsSection = {
-  id: string;
+  id: SettingsSectionId;
   title: string;
   order: number;
   panels: SettingsPanelContribution[];
@@ -27,7 +56,6 @@ type SettingsSection = {
 
 export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
-  const { navigateTo } = useNavigation();
   const t = useT();
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
@@ -44,31 +72,43 @@ export const SettingsPage: React.FC = () => {
   }, [kernel.contributions, revision]);
 
   const sections = useMemo(() => {
-    const resolveSection = (panel: SettingsPanelContribution): Omit<SettingsSection, 'panels'> => {
-      const id = resolveSettingsSectionId(panel);
-      switch (id) {
-        case 'plugins':
-          return { id, title: t('settings.sections.plugins'), order: 20 };
-        case 'visualizers':
-          return { id, title: t('settings.sections.visualizers'), order: 30 };
-        case 'system':
-        default:
-          return { id: 'system', title: t('settings.sections.system'), order: 10 };
-      }
-    };
+    const baseSections: SettingsSection[] = [
+      {
+        id: 'system',
+        title: t('settings.sections.system'),
+        order: 10,
+        panels: [],
+      },
+      {
+        id: 'audio',
+        title: t('settings.sections.audio'),
+        order: 20,
+        panels: [],
+      },
+      {
+        id: 'plugins',
+        title: t('settings.sections.plugins'),
+        order: 30,
+        panels: [],
+      },
+      {
+        id: 'visualizers',
+        title: t('settings.sections.visualizers'),
+        order: 40,
+        panels: [],
+      },
+    ];
 
-    const buckets = new Map<string, SettingsSection>();
+    const buckets = new Map<SettingsSectionId, SettingsSection>(
+      baseSections.map((section) => [section.id, section])
+    );
     for (const panel of panels) {
-      const sectionDef = resolveSection(panel);
-      const existing = buckets.get(sectionDef.id);
-      if (existing) {
-        existing.panels.push(panel);
-        continue;
-      }
-      buckets.set(sectionDef.id, { ...sectionDef, panels: [panel] });
+      const sectionId = resolveSettingsSectionId(panel);
+      const section = buckets.get(sectionId);
+      if (section) section.panels.push(panel);
     }
 
-    const sorted = Array.from(buckets.values()).sort((a, b) => {
+    const sorted = baseSections.sort((a, b) => {
       if (a.order !== b.order) return a.order - b.order;
       return a.title.localeCompare(b.title);
     });
@@ -81,27 +121,33 @@ export const SettingsPage: React.FC = () => {
   }, [panels, t]);
 
   useEffect(() => {
-    if (panels.length === 0) {
+    if (sections.length === 0) {
       if (activePanelId !== null) setActivePanelId(null);
       if (activeSectionId !== null) setActiveSectionId(null);
       return;
     }
 
-    const validSectionId = activeSectionId && sections.some((section) => section.id === activeSectionId);
-    const nextSectionId = validSectionId ? activeSectionId : sections[0]?.id ?? null;
-
-    let nextPanelId = activePanelId && panels.some((panel) => panel.id === activePanelId) ? activePanelId : null;
-    if (!nextPanelId) {
-      const targetSection = nextSectionId ? sections.find((section) => section.id === nextSectionId) : null;
-      nextPanelId = targetSection?.panels[0]?.id ?? panels[0].id;
+    let nextSection: SettingsSection | null = null;
+    if (activeSectionId) {
+      nextSection = sections.find((section) => section.id === activeSectionId) ?? null;
+    }
+    if (!nextSection) {
+      nextSection = sections.find((section) => section.panels.length > 0) ?? sections[0] ?? null;
     }
 
-    const derivedSectionId =
-      sections.find((section) => section.panels.some((panel) => panel.id === nextPanelId))?.id ?? nextSectionId;
+    const nextSectionId = nextSection?.id ?? null;
+    const sectionPanels = nextSection?.panels ?? [];
 
+    const nextPanelId =
+      sectionPanels.length === 0
+        ? null
+        : sectionPanels.some((panel) => panel.id === activePanelId)
+          ? activePanelId
+          : sectionPanels[0]?.id ?? null;
+
+    if (nextSectionId !== activeSectionId) setActiveSectionId(nextSectionId);
     if (nextPanelId !== activePanelId) setActivePanelId(nextPanelId);
-    if (derivedSectionId && derivedSectionId !== activeSectionId) setActiveSectionId(derivedSectionId);
-  }, [activePanelId, activeSectionId, panels, sections]);
+  }, [activePanelId, activeSectionId, sections]);
 
   const activePanel = useMemo(() => {
     if (!activePanelId) return null;
@@ -114,8 +160,8 @@ export const SettingsPage: React.FC = () => {
   }, [activeSectionId, sections]);
 
   const visiblePanels = useMemo(() => {
-    return activeSection?.panels ?? panels;
-  }, [activeSection, panels]);
+    return activeSection?.panels ?? [];
+  }, [activeSection]);
 
   return (
     <div className="page-settings page-settings--deltaforce">
@@ -142,11 +188,17 @@ export const SettingsPage: React.FC = () => {
                             section.panels.find((panel) => panel.id === activePanelId)?.id ??
                             section.panels[0]?.id ??
                             null;
-                          if (panelInSection) setActivePanelId(panelInSection);
+                          setActivePanelId(panelInSection);
                         }}
                       >
-                        <span className="settings-main-tab-label">{section.title}</span>
-                        <span className="settings-main-tab-count">{section.panels.length}</span>
+                        <span className="settings-main-tab-top">
+                          <span className="settings-main-tab-ring-slot" aria-hidden="true">
+                            <span className="settings-main-tab-spin" aria-hidden="true" />
+                          </span>
+                          <span className="settings-main-tab-label">{section.title}</span>
+                        </span>
+                        <span className="settings-main-tab-active-corner-fx" aria-hidden="true" />
+                        <span className="settings-main-tab-corner" aria-hidden="true" />
                       </button>
                     );
                   })}
@@ -157,16 +209,6 @@ export const SettingsPage: React.FC = () => {
                   <div className="settings-subtitle">{t('pages.settings.subtitle')}</div>
                 </div>
               )}
-            </div>
-
-            <div className="settings-topbar-actions">
-              <button
-                type="button"
-                className="settings-action-btn settings-action-btn--topbar"
-                onClick={() => navigateTo('keyboard-shortcuts')}
-              >
-                {t('pages.keyboard-shortcuts.title')}
-              </button>
             </div>
           </header>
 
@@ -215,6 +257,7 @@ export const SettingsPage: React.FC = () => {
             {activePanel ? (
               <section className="settings-content-panel">
                 <div className="settings-content-header">
+                  <p className="settings-content-meta">{t('pages.settings.title').toUpperCase()}</p>
                   <h2 className="settings-content-title">{activePanel.title}</h2>
                   {activePanel.description && (
                     <p className="settings-content-desc">{activePanel.description}</p>
@@ -223,7 +266,9 @@ export const SettingsPage: React.FC = () => {
                 <div className="settings-content-body">{activePanel.render() as React.ReactNode}</div>
               </section>
             ) : (
-              <div className="settings-card-note">{t('pages.settings.empty')}</div>
+              <div className="settings-card-note">
+                {t('pages.settings.emptySection', { section: activeSection?.title ?? t('pages.settings.title') })}
+              </div>
             )}
           </main>
         </div>
