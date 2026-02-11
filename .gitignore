@@ -19,6 +19,7 @@ apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/target-test/
 apps/desktop/src-tauri/target-test-no-run/
 apps/desktop/src-tauri/target-codex/
+apps/desktop/src-tauri/target-test-temp/
 
 # Misc
 .DS_Store
@@ -54,11 +55,10 @@ community/supabase/.temp/
 
 # Community (local-only, except shared resource packs)
 community/*
-!community/resource/
-!community/resource/**
 
 # New source-first phase: archive and local package experiments
 legacy/
+design/
 packages/
 scripts/
 snapshots/
