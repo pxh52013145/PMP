@@ -218,6 +218,8 @@ export class NativeAudioService implements IAudioService {
   private lastAutoBackendSwitchAtMs: number | null = null;
   private lastAutoBackendSwitchReason: string | null = null;
   private lastEmittedRobustnessSignature: string | null = null;
+  private robustnessEmissionInProgress = false;
+  private robustnessEmissionPendingForce = false;
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
@@ -2139,19 +2141,41 @@ export class NativeAudioService implements IAudioService {
 
   private emitRobustnessSnapshot(force: boolean = false): void {
     if (this.robustnessCallbacks.size === 0) return;
-    const snapshot = this.buildRobustnessSnapshot();
-    const signature = JSON.stringify(snapshot);
-    if (!force && signature === this.lastEmittedRobustnessSignature) {
+
+    if (this.robustnessEmissionInProgress) {
+      this.robustnessEmissionPendingForce = this.robustnessEmissionPendingForce || force;
       return;
     }
-    this.lastEmittedRobustnessSignature = signature;
-    this.robustnessCallbacks.forEach((callback) => {
-      try {
-        callback(snapshot);
-      } catch (error) {
-        console.warn('[NativeAudio] Robustness listener callback failed:', error);
+
+    this.robustnessEmissionInProgress = true;
+
+    const snapshot = this.buildRobustnessSnapshot();
+    const signature = JSON.stringify(snapshot);
+    try {
+      if (!force && signature === this.lastEmittedRobustnessSignature) {
+        return;
       }
-    });
+      this.lastEmittedRobustnessSignature = signature;
+      this.robustnessCallbacks.forEach((callback) => {
+        try {
+          callback(snapshot);
+        } catch (error) {
+          console.warn('[NativeAudio] Robustness listener callback failed:', error);
+        }
+      });
+    } finally {
+      this.robustnessEmissionInProgress = false;
+    }
+
+    if (this.robustnessEmissionPendingForce) {
+      const nextForce = this.robustnessEmissionPendingForce;
+      this.robustnessEmissionPendingForce = false;
+      if (typeof queueMicrotask === 'function') {
+        queueMicrotask(() => this.emitRobustnessSnapshot(nextForce));
+      } else {
+        void Promise.resolve().then(() => this.emitRobustnessSnapshot(nextForce));
+      }
+    }
   }
 
   // ===== Helpers =====
@@ -3457,6 +3481,8 @@ export class NativeAudioService implements IAudioService {
     this.loadProgressCallbacks.clear();
     this.errorCallbacks.clear();
     this.robustnessCallbacks.clear();
+    this.robustnessEmissionPendingForce = false;
+    this.robustnessEmissionInProgress = false;
     this.visibilityListenerCleanup?.();
     this.visibilityListenerCleanup = null;
     this.visibilityListenerAttached = false;
