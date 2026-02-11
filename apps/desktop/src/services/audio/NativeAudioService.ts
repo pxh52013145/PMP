@@ -297,6 +297,7 @@ export class NativeAudioService implements IAudioService {
   private static readonly DYNAMIC_SRC_LEARNING_MAX_ITEMS = 64;
   private static readonly DYNAMIC_SRC_LEARNING_PERSIST_MIN_INTERVAL_MS = 2_000;
   private static readonly DYNAMIC_SRC_LEARNING_MIN_DELTA = 0.0005;
+  private static readonly DYNAMIC_SRC_LEARNING_UPDATE_MIN_INTERVAL_MS = 250;
   private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED = 4;
   private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL = 8;
 
@@ -313,6 +314,7 @@ export class NativeAudioService implements IAudioService {
   private dynamicSrcLearningPersistTimer: ReturnType<typeof setTimeout> | null = null;
   private dynamicSrcLearningLastPersistAtMs = 0;
   private dynamicSrcLearningLastPersistedSignature: string | null = null;
+  private dynamicSrcLearningLastUpdateAtMs = 0;
 
   private fireAndForgetCommand(cmd: string, payload?: Record<string, unknown>): void {
     void this.invokeCommand(cmd, payload).catch(() => {});
@@ -952,6 +954,15 @@ export class NativeAudioService implements IAudioService {
   private updateDynamicSrcLearningFromStress(stressScore: number, nowMs: number = Date.now()): void {
     if (!this.dynamicSrcLearningEnabled) return;
     if (!Number.isFinite(stressScore)) return;
+
+    if (
+      this.dynamicSrcLearningLastUpdateAtMs > 0 &&
+      nowMs - this.dynamicSrcLearningLastUpdateAtMs <
+        NativeAudioService.DYNAMIC_SRC_LEARNING_UPDATE_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.dynamicSrcLearningLastUpdateAtMs = nowMs;
 
     const deviceKey = this.buildDynamicSrcLearningDeviceKey();
     const previous = this.dynamicSrcLearningProfile[deviceKey]?.stressIndex ?? 0;
@@ -2134,7 +2145,13 @@ export class NativeAudioService implements IAudioService {
       return;
     }
     this.lastEmittedRobustnessSignature = signature;
-    this.robustnessCallbacks.forEach((callback) => callback(snapshot));
+    this.robustnessCallbacks.forEach((callback) => {
+      try {
+        callback(snapshot);
+      } catch (error) {
+        console.warn('[NativeAudio] Robustness listener callback failed:', error);
+      }
+    });
   }
 
   // ===== Helpers =====
