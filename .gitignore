@@ -65,6 +65,7 @@ snapshots/
 
 # Local scratch
 problem_test/
+logs/
 
 # OS generated files
 Thumbs.db
