@@ -15,5 +15,5 @@ pub mod media;
 pub mod network;
 pub mod performance;
 pub mod tag;
-pub mod windowing;
 pub mod vst;
+pub mod windowing;

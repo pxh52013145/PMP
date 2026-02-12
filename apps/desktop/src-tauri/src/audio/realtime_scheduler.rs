@@ -50,7 +50,8 @@ impl RealtimeScheduler {
 
         let next = if buffered_ahead_seconds <= Self::CRITICAL_BUFFER_AHEAD_SECONDS {
             RealtimePressureProfile::Critical
-        } else if underrun_recovery_active || buffered_ahead_seconds <= Self::GUARDED_BUFFER_AHEAD_SECONDS
+        } else if underrun_recovery_active
+            || buffered_ahead_seconds <= Self::GUARDED_BUFFER_AHEAD_SECONDS
         {
             RealtimePressureProfile::Guarded
         } else {
@@ -63,4 +64,3 @@ impl RealtimeScheduler {
 }
 
 pub(crate) static SCHEDULER: Lazy<RealtimeScheduler> = Lazy::new(RealtimeScheduler::new);
-

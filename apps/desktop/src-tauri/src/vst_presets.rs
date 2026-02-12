@@ -62,7 +62,9 @@ fn read_store_from_disk(app: &AppHandle) -> Result<VstPresetStore, String> {
     let path = presets_file_path(app)?;
     let data = match std::fs::read(&path) {
         Ok(data) => data,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(VstPresetStore::default()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(VstPresetStore::default())
+        }
         Err(err) => return Err(format!("Failed to read VST presets: {err}")),
     };
 
@@ -134,7 +136,11 @@ fn build_preset_id() -> String {
 pub fn list_presets(app: &AppHandle, plugin_id: &str) -> Result<Vec<VstPresetSummary>, String> {
     let plugin_id = normalized_plugin_id(plugin_id)?;
     let store = get_store(app);
-    let presets = store.presets_by_plugin.get(&plugin_id).cloned().unwrap_or_default();
+    let presets = store
+        .presets_by_plugin
+        .get(&plugin_id)
+        .cloned()
+        .unwrap_or_default();
     Ok(presets
         .into_iter()
         .map(|preset| VstPresetSummary {
@@ -202,11 +208,7 @@ pub fn delete_preset(app: &AppHandle, plugin_id: &str, preset_id: &str) -> Resul
     Ok(())
 }
 
-pub fn apply_preset_to_node(
-    app: &AppHandle,
-    node_id: &str,
-    preset_id: &str,
-) -> Result<(), String> {
+pub fn apply_preset_to_node(app: &AppHandle, node_id: &str, preset_id: &str) -> Result<(), String> {
     let node_id = normalized_node_id(node_id)?;
     let preset_id = preset_id.trim();
     if preset_id.is_empty() {
@@ -228,10 +230,13 @@ pub fn apply_preset_to_node(
         .get(node_id.as_str())
         .cloned()
         .unwrap_or_default();
-    let locked: std::collections::HashSet<String> =
-        locked_keys.into_iter().filter_map(|k| normalized_key(&k)).collect();
+    let locked: std::collections::HashSet<String> = locked_keys
+        .into_iter()
+        .filter_map(|k| normalized_key(&k))
+        .collect();
 
-    let existing = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str());
+    let existing =
+        crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str());
     let mut merged: Vec<(String, f32)> = existing.clone();
     let mut index_by_key: HashMap<String, usize> = HashMap::new();
     for (idx, (key, _)) in merged.iter().enumerate() {
@@ -298,4 +303,3 @@ pub fn set_param_locked(
     set_store(app, store)?;
     Ok(())
 }
-

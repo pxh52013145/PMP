@@ -52,7 +52,9 @@ fn is_minimal_boot_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn is_blank_baseline_profile(context: &tauri::Context<tauri::utils::assets::EmbeddedAssets>) -> bool {
+fn is_blank_baseline_profile(
+    context: &tauri::Context<tauri::utils::assets::EmbeddedAssets>,
+) -> bool {
     matches!(
         context.config().package.product_name.as_deref(),
         Some("Pixel Matrix Blank Baseline") | Some("Pixel Matrix Player Blank")

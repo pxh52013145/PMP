@@ -473,7 +473,16 @@ fn extract_quick_metadata(
             }
         }
 
-        return Ok((duration, pcm_sample_rate, Some(1), None, None, None, None, None));
+        return Ok((
+            duration,
+            pcm_sample_rate,
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ));
     }
 
     fn track_is_audio_like(track: &Track) -> bool {
@@ -648,8 +657,8 @@ fn create_cover_thumbnail_jpeg(source_bytes: &[u8], max_edge_px: u32) -> Result<
         return Err("max_edge_px must be > 0".to_string());
     }
 
-    let decoded =
-        image::load_from_memory(source_bytes).map_err(|e| format!("Failed to decode cover: {e}"))?;
+    let decoded = image::load_from_memory(source_bytes)
+        .map_err(|e| format!("Failed to decode cover: {e}"))?;
 
     let resized = decoded.resize(
         max_edge_px,
@@ -1032,10 +1041,11 @@ pub fn scan_library_paths(
 
     let include_metadata = options.and_then(|o| o.include_metadata).unwrap_or(true);
 
-    let supported_exts: HashSet<&'static str> =
-        ["mp3", "flac", "wav", "dsf", "m4a", "mp4", "ogg", "weba", "aac"]
-            .into_iter()
-            .collect();
+    let supported_exts: HashSet<&'static str> = [
+        "mp3", "flac", "wav", "dsf", "m4a", "mp4", "ogg", "weba", "aac",
+    ]
+    .into_iter()
+    .collect();
 
     let mut audio_files: Vec<PathBuf> = Vec::new();
     for root in paths {

@@ -1,11 +1,8 @@
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
-use crate::audio::{
-    engine::SpectrumFrameSnapshot,
-    events::NativeAudioSpectrumFramePayload,
-};
 use crate::audio::pipeline::SpectrumSnapshot;
+use crate::audio::{engine::SpectrumFrameSnapshot, events::NativeAudioSpectrumFramePayload};
 
 pub(crate) const SPECTRUM_WINDOW_SIZE: usize = 1024;
 pub(crate) const SPECTRUM_BINS: usize = 128;
@@ -21,8 +18,7 @@ impl SpectrumComputer {
         let mut hann = [0.0f32; SPECTRUM_WINDOW_SIZE];
         let denom = SPECTRUM_WINDOW_SIZE as f32;
         for frame in 0..SPECTRUM_WINDOW_SIZE {
-            hann[frame] =
-                0.5 - 0.5 * ((2.0 * std::f32::consts::PI * frame as f32) / denom).cos();
+            hann[frame] = 0.5 - 0.5 * ((2.0 * std::f32::consts::PI * frame as f32) / denom).cos();
         }
 
         Self {

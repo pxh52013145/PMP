@@ -65,13 +65,162 @@
 }
 
 .page-settings--debug {
-  --settings-accent-rgb: 244, 194, 69;
+  --settings-bg: #120d0b;
+  --settings-accent-rgb: 243, 124, 38;
+  --settings-main-active-line: #f37c26;
+  --settings-main-active-line-glow: rgba(243, 124, 38, 0.34);
+  --settings-sub-active-line: #f37c26;
+  --settings-main-ring-idle: rgba(163, 146, 133, 0.72);
+  --settings-main-ring-idle-gap: rgba(163, 146, 133, 0.58);
+  --settings-main-ring-active: rgba(243, 124, 38, 0.96);
+  --settings-main-ring-active-gap: rgba(243, 124, 38, 0.24);
+  --settings-panel-bg: #271e1a;
+  --settings-panel-bg-deep: #221913;
+  --settings-divider-solid: #4a3c35;
+  --settings-text-sub: #8f8177;
+  --settings-text-label: #a3968d;
+  --settings-text-desc: #8f8177;
+  --settings-text-value: #f0eae5;
+  --settings-control-bg: rgba(39, 30, 26, 0.58);
+  --settings-control-border: #6b5649;
+  --settings-text: #f0eae5;
+  --settings-text-muted: rgba(173, 154, 141, 0.86);
+  --settings-text-dim: rgba(143, 129, 119, 0.88);
 
   background:
-    radial-gradient(1100px circle at 18% -10%, rgba(244, 194, 69, 0.14), transparent 60%),
-    radial-gradient(900px circle at 112% 8%, rgba(74, 123, 216, 0.1), transparent 62%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0) 38%),
+    radial-gradient(1100px circle at 18% -10%, rgba(243, 124, 38, 0.18), transparent 60%),
+    radial-gradient(900px circle at 112% 8%, rgba(243, 124, 38, 0.08), transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0) 38%),
     var(--settings-bg);
+}
+
+.page-settings--debug .settings-main-tab {
+  background: #2f231f;
+  color: #97887e;
+}
+
+.page-settings--debug .settings-main-tab:hover {
+  background: #382a24;
+  color: #b7a79d;
+}
+
+.page-settings--debug .settings-main-tab[data-active='true'] {
+  background: #271f1b;
+  color: #f0eae5;
+}
+
+.page-settings--debug .settings-main-tab .settings-main-tab-spin::after {
+  background: conic-gradient(
+    from 0deg,
+    rgba(243, 124, 38, 0) 0deg,
+    rgba(243, 124, 38, 0) 228deg,
+    rgba(243, 124, 38, 0.92) 304deg,
+    rgba(243, 124, 38, 0.18) 346deg,
+    rgba(243, 124, 38, 0) 360deg
+  );
+  filter: drop-shadow(0 0 0.14vw rgba(243, 124, 38, 0.26));
+}
+
+.page-settings--debug .settings-subbar::after {
+  background: var(--settings-divider-solid);
+}
+
+.page-settings--debug .settings-sub-tabs::before,
+.page-settings--debug .settings-sub-tab::after {
+  background: rgba(126, 104, 89, 0.56);
+}
+
+.page-settings--debug .settings-sub-tab {
+  color: rgba(172, 151, 138, 0.94);
+}
+
+.page-settings--debug .settings-sub-tab:hover {
+  background: rgba(46, 32, 27, 0.48);
+  color: #e4d4c6;
+}
+
+.page-settings--debug .settings-sub-tab[data-active='true'] {
+  background: rgba(46, 32, 27, 0.62);
+  color: #f0eae5;
+}
+
+.page-settings--debug .settings-sub-tab[data-active='true']::before {
+  background: var(--settings-sub-active-line);
+  box-shadow:
+    0 0 0.46vw rgba(243, 124, 38, 0.58),
+    0 0 0.18vw rgba(243, 124, 38, 0.8);
+}
+
+.page-settings--debug .settings-content {
+  background-image:
+    linear-gradient(180deg, rgba(39, 30, 26, 0.96), rgba(34, 25, 19, 0.95) 26%, rgba(26, 20, 17, 0.96)),
+    linear-gradient(
+      120deg,
+      rgba(243, 124, 38, 0.9) 0%,
+      rgba(243, 124, 38, 0.05) 25%,
+      rgba(243, 124, 38, 0.6) 50%,
+      rgba(243, 124, 38, 0.05) 75%,
+      rgba(243, 124, 38, 1) 100%
+    );
+  box-shadow:
+    0 15px 30px rgba(0, 0, 0, 0.6),
+    0 0 24px rgba(243, 124, 38, 0.15),
+    0 30px 60px -15px rgba(243, 124, 38, 0.35);
+  animation: settings-content-shell-glow-orange 2.8s ease-in-out infinite;
+}
+
+@keyframes settings-content-shell-glow-orange {
+  0%,
+  100% {
+    box-shadow:
+      0 15px 30px rgba(0, 0, 0, 0.6),
+      0 0 16px rgba(243, 124, 38, 0.1),
+      0 30px 60px -15px rgba(243, 124, 38, 0.28);
+  }
+
+  50% {
+    box-shadow:
+      0 15px 30px rgba(0, 0, 0, 0.6),
+      0 0 24px rgba(243, 124, 38, 0.2),
+      0 30px 60px -15px rgba(243, 124, 38, 0.38);
+  }
+}
+
+.page-settings--debug .settings-action-btn,
+.page-settings--debug .settings-danger-btn,
+.page-settings--debug .settings-select,
+.page-settings--debug .settings-visualizer-search input,
+.page-settings--debug .settings-choice-btn,
+.page-settings--debug .settings-toggle button,
+.page-settings--debug .settings-action-btn--topbar {
+  border-color: rgba(150, 118, 95, 0.74);
+  background: rgba(39, 30, 26, 0.6);
+  color: #f0eae5;
+}
+
+.page-settings--debug .settings-action-btn:hover:not(:disabled),
+.page-settings--debug .settings-danger-btn:hover:not(:disabled),
+.page-settings--debug .settings-select:focus,
+.page-settings--debug .settings-visualizer-search input:focus,
+.page-settings--debug .settings-choice-btn:hover:not(:disabled),
+.page-settings--debug .settings-toggle button:hover:not(:disabled),
+.page-settings--debug .settings-action-btn--topbar:hover:not(:disabled) {
+  border-color: rgba(243, 124, 38, 0.92);
+  color: #f3c9a7;
+  background: rgba(51, 35, 27, 0.74);
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 124, 38, 0.22),
+    0 0 16px rgba(243, 124, 38, 0.24);
+}
+
+.page-settings--debug .settings-choice-btn[data-active='true'],
+.page-settings--debug .settings-toggle button[data-active='true'] {
+  border-color: rgba(243, 124, 38, 0.92);
+  background: rgba(243, 124, 38, 0.12);
+  color: #f7d8be;
+  box-shadow:
+    inset 0 0 10px rgba(243, 124, 38, 0.18),
+    0 0 12px rgba(243, 124, 38, 0.2);
 }
 
 .page-settings--deltaforce .settings-shell {
@@ -606,10 +755,10 @@
 
 .page-settings--deltaforce .settings-content-title {
   margin: 0;
-  font-size: clamp(28px, 1.96vw, 38px);
+  font-size: clamp(24px, 1.66vw, 33px);
   line-height: 1.05;
   font-weight: 500;
-  color: var(--settings-text-label);
+  color: #a7bbc9;
 }
 
 .page-settings--deltaforce .settings-content-desc {
@@ -1283,6 +1432,86 @@
   margin: 0.34vw 0;
 }
 
+.page-settings--deltaforce .settings-inline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(250px, 20vw, 420px);
+  align-items: end;
+  gap: clamp(12px, 0.92vw, 18px);
+  min-height: clamp(44px, 3.2vw, 72px);
+  padding: clamp(2px, 0.16vw, 4px) 0;
+}
+
+.page-settings--deltaforce .settings-inline-row + .settings-inline-row {
+  margin-top: clamp(2px, 0.16vw, 5px);
+}
+
+.page-settings--deltaforce .settings-inline-row-copy {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+}
+
+.page-settings--deltaforce .settings-inline-row-title {
+  margin: 0;
+  font-size: clamp(12px, 0.78vw, 15px);
+  line-height: 1.14;
+  color: var(--settings-text-label);
+  letter-spacing: 0.01vw;
+}
+
+.page-settings--deltaforce .settings-inline-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: clamp(6px, 0.4vw, 9px);
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-inline-help {
+  width: clamp(16px, 1.1vw, 20px);
+  height: clamp(16px, 1.1vw, 20px);
+  border: 1px solid var(--settings-control-border);
+  border-radius: 999px;
+  background: rgba(14, 27, 38, 0.58);
+  color: var(--settings-text-desc);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(10px, 0.66vw, 12px);
+  line-height: 1;
+  cursor: help;
+  transition:
+    color 0.18s ease,
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.page-settings--deltaforce .settings-inline-help:hover,
+.page-settings--deltaforce .settings-inline-help:focus-visible {
+  border-color: rgb(var(--settings-accent-rgb));
+  color: rgb(var(--settings-accent-rgb));
+  background: rgba(var(--settings-accent-rgb), 0.12);
+  box-shadow: 0 0 0 1px rgba(var(--settings-accent-rgb), 0.22);
+}
+
+.page-settings--deltaforce .settings-inline-row-controls {
+  min-width: 0;
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: clamp(6px, 0.42vw, 10px);
+}
+
+.page-settings--deltaforce .settings-inline-row-controls .settings-number-input {
+  width: clamp(112px, 8vw, 170px);
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-inline-row-controls .settings-action-btn {
+  min-width: clamp(64px, 4.6vw, 96px);
+}
+
 .page-settings--deltaforce .settings-choice-btn {
   min-height: clamp(30px, 2.08vw, 38px);
   padding: 0 clamp(12px, 0.9vw, 18px);
@@ -1696,6 +1925,16 @@
   }
 
   .page-settings--deltaforce .settings-toggle--compact {
+    justify-content: flex-start;
+  }
+
+  .page-settings--deltaforce .settings-inline-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: clamp(6px, 1.6vw, 12px);
+  }
+
+  .page-settings--deltaforce .settings-inline-row-controls {
     justify-content: flex-start;
   }
 

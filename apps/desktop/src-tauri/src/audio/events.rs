@@ -37,6 +37,7 @@ pub struct NativeAudioStatePayload {
     pub src_mode: Option<String>,
     pub src_backend: Option<String>,
     pub src_target_sample_rate: Option<u32>,
+    pub output_quantization_mode: Option<String>,
     pub hq_src_stopband_db: Option<u16>,
     pub hq_src_active: Option<bool>,
     pub hq_src_ratio: Option<f64>,

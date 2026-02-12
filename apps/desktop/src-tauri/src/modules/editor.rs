@@ -5,5 +5,9 @@ pub const DESCRIPTOR: BackendModuleDescriptor = BackendModuleDescriptor {
     version: "1.0.0",
     display_name: "Editor Window Module",
     depends_on: &["windowing", "custom", "performance"],
-    command_domains: &["open_editor_window", "close_editor_window", "editor_effects"],
+    command_domains: &[
+        "open_editor_window",
+        "close_editor_window",
+        "editor_effects",
+    ],
 };

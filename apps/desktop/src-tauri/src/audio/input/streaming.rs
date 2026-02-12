@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use rodio::Source;
 
@@ -114,9 +114,7 @@ pub(crate) fn try_lock_render_queue_hot_path(render_queue: &AudioRingBuffer) {
     } else {
         RENDER_QUEUE_PAGE_LOCK_FAILURE.fetch_add(1, Ordering::Relaxed);
         if env_bool("PMP_AUDIO_LOG_PAGE_LOCK_FAILURE", false) {
-            eprintln!(
-                "[NativeAudio][buffer] Failed to page-lock render queue (best effort)."
-            );
+            eprintln!("[NativeAudio][buffer] Failed to page-lock render queue (best effort).");
         }
     }
 }
@@ -137,7 +135,8 @@ pub(crate) fn spawn_render_transfer_worker(
     thread::Builder::new()
         .name(thread_name.to_string())
         .spawn(move || {
-            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_transfer();
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_transfer();
             let mut transfer_block: Vec<f32> = Vec::with_capacity(8_192);
 
             loop {
@@ -212,8 +211,10 @@ pub(crate) fn spawn_render_transfer_worker(
                         let samples_to_push = frames * channels;
                         let mut start = 0usize;
                         while start < samples_to_push {
-                            let pushed_frames =
-                                render_queue.push_interleaved(&transfer_block[start..samples_to_push], channels);
+                            let pushed_frames = render_queue.push_interleaved(
+                                &transfer_block[start..samples_to_push],
+                                channels,
+                            );
                             if pushed_frames == 0 {
                                 if backoff.is_zero() {
                                     thread::yield_now();
@@ -256,7 +257,9 @@ pub(crate) struct DrainedDecoderCommands {
     pub seek_target: Option<f64>,
 }
 
-pub(crate) fn drain_decoder_commands(command_rx: &mpsc::Receiver<DecoderCommand>) -> DrainedDecoderCommands {
+pub(crate) fn drain_decoder_commands(
+    command_rx: &mpsc::Receiver<DecoderCommand>,
+) -> DrainedDecoderCommands {
     let mut result = DrainedDecoderCommands::default();
 
     loop {
@@ -486,12 +489,7 @@ mod tests {
             "test-transfer-worker",
         )
         .expect("transfer worker should start");
-        let mut source = StreamingSamplesSource::new(
-            render_queue.clone(),
-            2,
-            48_000,
-            0.0,
-        );
+        let mut source = StreamingSamplesSource::new(render_queue.clone(), 2, 48_000, 0.0);
 
         for _ in 0..8 {
             assert_eq!(source.next(), Some(0.0));
@@ -512,7 +510,10 @@ mod tests {
                 break;
             }
         }
-        assert!(saw_sample, "expected buffered samples to reach the consumer");
+        assert!(
+            saw_sample,
+            "expected buffered samples to reach the consumer"
+        );
 
         buffer.mark_finished();
 
@@ -523,7 +524,10 @@ mod tests {
                 break;
             }
         }
-        assert!(finished, "expected stream to finish after buffer is drained");
+        assert!(
+            finished,
+            "expected stream to finish after buffer is drained"
+        );
     }
 
     #[test]
@@ -546,4 +550,3 @@ mod tests {
         assert_eq!(drained.seek_target, None);
     }
 }
-

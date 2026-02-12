@@ -10,8 +10,7 @@ use crate::audio::output::BoxedSource;
 
 use super::{
     AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
-    AudioInputSrcPolicy,
-    RODIO_INPUT_ID,
+    AudioInputSrcPolicy, RODIO_INPUT_ID,
 };
 
 #[derive(Default)]

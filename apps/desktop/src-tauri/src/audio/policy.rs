@@ -68,6 +68,22 @@ impl NativeAudioSrcBackend {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeAudioOutputQuantizationMode {
+    Round,
+    Tpdf,
+}
+
+impl NativeAudioOutputQuantizationMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Round => "round",
+            Self::Tpdf => "tpdf",
+        }
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioEnginePolicyPayload {
@@ -77,6 +93,7 @@ pub struct NativeAudioEnginePolicyPayload {
     pub src_mode: NativeAudioSrcMode,
     pub src_backend: NativeAudioSrcBackend,
     pub src_target_sample_rate: Option<u32>,
+    pub output_quantization_mode: NativeAudioOutputQuantizationMode,
     pub hq_src_stopband_db: u16,
     pub transport_exact_int32_container: bool,
 }
@@ -90,6 +107,7 @@ pub struct NativeAudioEnginePolicyPatch {
     pub src_mode: Option<NativeAudioSrcMode>,
     pub src_backend: Option<NativeAudioSrcBackend>,
     pub src_target_sample_rate: Option<u32>,
+    pub output_quantization_mode: Option<NativeAudioOutputQuantizationMode>,
 }
 
 impl NativeAudioEnginePolicyPatch {
@@ -100,5 +118,6 @@ impl NativeAudioEnginePolicyPatch {
             && self.src_mode.is_none()
             && self.src_backend.is_none()
             && self.src_target_sample_rate.is_none()
+            && self.output_quantization_mode.is_none()
     }
 }

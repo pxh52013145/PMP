@@ -132,7 +132,9 @@ pub fn start_scan(app: &AppHandle, request: VstScanRequest) -> Result<String, St
         let nonce = SCAN_NONCE.fetch_add(1, Ordering::Relaxed);
         let run_id = format!("vst-scan-{}-{}", now_ms(), nonce);
         let cancel = Arc::new(AtomicBool::new(false));
-        *guard = Some(ScannerJob { cancel: cancel.clone() });
+        *guard = Some(ScannerJob {
+            cancel: cancel.clone(),
+        });
 
         update_state(|state| {
             state.running = true;
@@ -152,7 +154,12 @@ pub fn start_scan(app: &AppHandle, request: VstScanRequest) -> Result<String, St
     }
 }
 
-fn run_scan_thread(app: AppHandle, request: VstScanRequest, run_id: String, cancel: Arc<AtomicBool>) {
+fn run_scan_thread(
+    app: AppHandle,
+    request: VstScanRequest,
+    run_id: String,
+    cancel: Arc<AtomicBool>,
+) {
     let started_at = now_ms();
     let VstScanRequest {
         mode,
@@ -172,9 +179,14 @@ fn run_scan_thread(app: AppHandle, request: VstScanRequest, run_id: String, canc
     let result = match mode {
         VstScanMode::Fast => scan_fast(&app, &run_id, &cancel, &scan_paths, include_default_paths),
         VstScanMode::Full => scan_full(&app, &run_id, &cancel, &scan_paths, include_default_paths),
-        VstScanMode::Params => {
-            scan_params(&app, &run_id, &cancel, plugin_ids, &scan_paths, include_default_paths)
-        }
+        VstScanMode::Params => scan_params(
+            &app,
+            &run_id,
+            &cancel,
+            plugin_ids,
+            &scan_paths,
+            include_default_paths,
+        ),
     };
 
     let finished_at = now_ms();
@@ -336,7 +348,12 @@ fn scan_fast(
         );
 
         if let Err(err) = vst_library::upsert_plugin_snapshot(run_id, plugin) {
-            vst_library::record_scan_event(run_id, "persist-failed", Some(plugin.id.as_str()), &err);
+            vst_library::record_scan_event(
+                run_id,
+                "persist-failed",
+                Some(plugin.id.as_str()),
+                &err,
+            );
         }
     }
 
@@ -440,8 +457,15 @@ fn scan_params(
             }
         };
 
-        if let Err(err) = vst_library::upsert_plugin_params(run_id, plugin_id.as_str(), &desc.parameters) {
-            vst_library::record_scan_event(run_id, "persist-params-failed", Some(plugin_id.as_str()), &err);
+        if let Err(err) =
+            vst_library::upsert_plugin_params(run_id, plugin_id.as_str(), &desc.parameters)
+        {
+            vst_library::record_scan_event(
+                run_id,
+                "persist-params-failed",
+                Some(plugin_id.as_str()),
+                &err,
+            );
         }
     }
 

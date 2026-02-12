@@ -55,13 +55,13 @@ pub struct ProcessPerfTotals {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessPerfSnapshot {
-  pub timestamp_ms: u64,
-  pub sample_interval_ms: Option<u64>,
-  pub cpu_count: usize,
-  pub root_pid: u32,
-  pub system_memory: Option<SystemMemorySnapshot>,
-  pub totals: ProcessPerfTotals,
-  pub processes: Vec<ProcessPerfRow>,
+    pub timestamp_ms: u64,
+    pub sample_interval_ms: Option<u64>,
+    pub cpu_count: usize,
+    pub root_pid: u32,
+    pub system_memory: Option<SystemMemorySnapshot>,
+    pub totals: ProcessPerfTotals,
+    pub processes: Vec<ProcessPerfRow>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,7 +140,10 @@ struct SnapshotOut {
 }
 
 #[cfg(target_os = "windows")]
-fn snapshot_windows(inner: &Mutex<PerfMonitorInner>, include_processes: bool) -> Result<SnapshotOut, String> {
+fn snapshot_windows(
+    inner: &Mutex<PerfMonitorInner>,
+    include_processes: bool,
+) -> Result<SnapshotOut, String> {
     use std::cmp::Reverse;
 
     let root_pid = std::process::id();
@@ -159,7 +162,10 @@ fn snapshot_windows(inner: &Mutex<PerfMonitorInner>, include_processes: bool) ->
     };
 
     let (sample_interval, prev_cpu_times_by_pid_100ns) = match guard.last_sample.take() {
-        Some(prev) => (Some(now.duration_since(prev.instant)), prev.cpu_times_by_pid_100ns),
+        Some(prev) => (
+            Some(now.duration_since(prev.instant)),
+            prev.cpu_times_by_pid_100ns,
+        ),
         None => (None, HashMap::new()),
     };
 
@@ -186,10 +192,11 @@ fn snapshot_windows(inner: &Mutex<PerfMonitorInner>, include_processes: bool) ->
             next_cpu_times_by_pid_100ns.insert(pid, times);
         }
 
-        let cpu_percent = match (metrics.cpu_times_100ns, prev_cpu_times_by_pid_100ns.get(&pid)) {
-            (Some(current), Some(prev))
-                if sample_interval.is_some() && cpu_capacity > 0.0 =>
-            {
+        let cpu_percent = match (
+            metrics.cpu_times_100ns,
+            prev_cpu_times_by_pid_100ns.get(&pid),
+        ) {
+            (Some(current), Some(prev)) if sample_interval.is_some() && cpu_capacity > 0.0 => {
                 let current_total = current.kernel.saturating_add(current.user);
                 let prev_total = prev.kernel.saturating_add(prev.user);
                 if current_total < prev_total {
@@ -336,7 +343,8 @@ impl TotalsBuilder {
                     self.app_private_bytes = self.app_private_bytes.saturating_add(private);
                 }
                 ProcessPerfKind::WebView2 => {
-                    self.webview2_private_bytes = self.webview2_private_bytes.saturating_add(private);
+                    self.webview2_private_bytes =
+                        self.webview2_private_bytes.saturating_add(private);
                 }
                 ProcessPerfKind::Child => {
                     self.other_private_bytes = self.other_private_bytes.saturating_add(private);
@@ -378,7 +386,8 @@ impl TotalsBuilder {
                 .then_some(self.webview2_cpu_percent_sum),
             other_working_set_bytes: self.other_working_set_bytes,
             other_private_bytes: self.other_private_bytes,
-            other_cpu_percent: (self.other_cpu_percent_count > 0).then_some(self.other_cpu_percent_sum),
+            other_cpu_percent: (self.other_cpu_percent_count > 0)
+                .then_some(self.other_cpu_percent_sum),
         }
     }
 }
@@ -411,8 +420,7 @@ fn read_process_metrics(pid: u32) -> ProcessMetrics {
     }
 
     unsafe {
-        let handle =
-            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
         if handle.is_null() {
             return ProcessMetrics::default();
         }
@@ -436,8 +444,7 @@ fn read_process_metrics(pid: u32) -> ProcessMetrics {
         let mut exit: FILETIME = std::mem::zeroed();
         let mut kernel: FILETIME = std::mem::zeroed();
         let mut user: FILETIME = std::mem::zeroed();
-        let times_ok =
-            GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user);
+        let times_ok = GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user);
         if times_ok != 0 {
             metrics.cpu_times_100ns = Some(CpuTimes100ns {
                 kernel: filetime_to_100ns(kernel),
@@ -532,7 +539,10 @@ fn build_process_tree(
     let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
     for entry in entries {
         by_pid.insert(entry.pid, entry.clone());
-        children_by_ppid.entry(entry.ppid).or_default().push(entry.pid);
+        children_by_ppid
+            .entry(entry.ppid)
+            .or_default()
+            .push(entry.pid);
     }
 
     let mut tree: Vec<u32> = Vec::new();

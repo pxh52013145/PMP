@@ -4,8 +4,8 @@ use crate::{
 };
 
 #[tauri::command]
-pub async fn native_audio_vst_list_plugins() -> Result<Vec<vst_bridge::BridgePluginDescriptor>, String>
-{
+pub async fn native_audio_vst_list_plugins(
+) -> Result<Vec<vst_bridge::BridgePluginDescriptor>, String> {
     tauri::async_runtime::spawn_blocking(|| vst_runtime::list_plugins())
         .await
         .map_err(|e| format!("VST list task failed: {e}"))?
@@ -21,8 +21,8 @@ pub async fn native_audio_vst_describe_plugin(
 }
 
 #[tauri::command]
-pub async fn native_audio_vst_library_list_plugins() -> Result<Vec<vst_library::VstLibraryPlugin>, String>
-{
+pub async fn native_audio_vst_library_list_plugins(
+) -> Result<Vec<vst_library::VstLibraryPlugin>, String> {
     tauri::async_runtime::spawn_blocking(|| vst_library::list_plugins())
         .await
         .map_err(|e| format!("VST library list task failed: {e}"))?
@@ -38,19 +38,25 @@ pub async fn native_audio_vst_library_get_plugin_params(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn native_audio_vst_library_reset_plugin_scan_status(plugin_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vst_library::reset_plugin_scan_status(plugin_id.as_str()))
-        .await
-        .map_err(|e| format!("VST library reset scan status task failed: {e}"))?
+pub async fn native_audio_vst_library_reset_plugin_scan_status(
+    plugin_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_library::reset_plugin_scan_status(plugin_id.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST library reset scan status task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_vst_library_invalidate_plugin_params_cache(
     plugin_id: String,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vst_library::invalidate_plugin_params_cache(plugin_id.as_str()))
-        .await
-        .map_err(|e| format!("VST library invalidate params cache task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_library::invalidate_plugin_params_cache(plugin_id.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST library invalidate params cache task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -122,21 +128,29 @@ pub async fn native_audio_vst_scan_state() -> Result<vst_scanner::VstScanState, 
 }
 
 #[tauri::command]
-pub async fn native_audio_vst_list_session_statuses() -> Result<Vec<vst_runtime::VstSessionStatus>, String> {
-    Ok(tauri::async_runtime::spawn_blocking(|| vst_runtime::list_session_statuses())
-        .await
-        .map_err(|e| format!("VST list session statuses task failed: {e}"))?)
+pub async fn native_audio_vst_list_session_statuses(
+) -> Result<Vec<vst_runtime::VstSessionStatus>, String> {
+    Ok(
+        tauri::async_runtime::spawn_blocking(|| vst_runtime::list_session_statuses())
+            .await
+            .map_err(|e| format!("VST list session statuses task failed: {e}"))?,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn native_audio_vst_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+pub async fn native_audio_vst_set_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || native_audio::set_vst_enabled(&app, enabled))
         .await
         .map_err(|e| format!("VST set enabled task failed: {e}"))?
 }
 
 #[tauri::command]
-pub async fn native_audio_vst_warmup(app: tauri::AppHandle) -> Result<Vec<native_audio::VstWarmupNodeReport>, String> {
+pub async fn native_audio_vst_warmup(
+    app: tauri::AppHandle,
+) -> Result<Vec<native_audio::VstWarmupNodeReport>, String> {
     tauri::async_runtime::spawn_blocking(move || native_audio::vst_warmup(&app))
         .await
         .map_err(|e| format!("VST warmup task failed: {e}"))?
@@ -268,11 +282,9 @@ pub async fn native_audio_vst_clear_compat_rule(
     scope: vst_compat::VstCompatScope,
     key: String,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        vst_compat::clear_rule(&app, scope, key.as_str())
-    })
-    .await
-    .map_err(|e| format!("VST clear compatibility task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || vst_compat::clear_rule(&app, scope, key.as_str()))
+        .await
+        .map_err(|e| format!("VST clear compatibility task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -280,9 +292,11 @@ pub async fn native_audio_vst_list_presets(
     app: tauri::AppHandle,
     plugin_id: String,
 ) -> Result<Vec<vst_presets::VstPresetSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || vst_presets::list_presets(&app, plugin_id.as_str()))
-        .await
-        .map_err(|e| format!("VST list presets task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        vst_presets::list_presets(&app, plugin_id.as_str())
+    })
+    .await
+    .map_err(|e| format!("VST list presets task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -363,7 +377,8 @@ pub async fn native_audio_vst_clear_audit_log() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn native_audio_vst_get_governance() -> Result<vst_governance::VstGovernanceState, String> {
+pub async fn native_audio_vst_get_governance() -> Result<vst_governance::VstGovernanceState, String>
+{
     tauri::async_runtime::spawn_blocking(|| vst_governance::state())
         .await
         .map_err(|e| format!("VST governance task failed: {e}"))?

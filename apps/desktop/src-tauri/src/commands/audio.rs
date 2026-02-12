@@ -20,9 +20,11 @@ pub async fn native_audio_crossfade_to(
     path: String,
     duration_ms: u64,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || native_audio::crossfade_to(&app, path, duration_ms))
-        .await
-        .map_err(|e| format!("Native audio crossfade task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::crossfade_to(&app, path, duration_ms)
+    })
+    .await
+    .map_err(|e| format!("Native audio crossfade task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -97,9 +99,11 @@ pub async fn native_audio_select_output_backend(
     app: tauri::AppHandle,
     backend_id: Option<String>,
 ) -> Result<native_audio::NativeAudioComponentsStatePayload, String> {
-    tauri::async_runtime::spawn_blocking(move || native_audio::select_output_backend(&app, backend_id))
-        .await
-        .map_err(|e| format!("Native audio select output backend task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::select_output_backend(&app, backend_id)
+    })
+    .await
+    .map_err(|e| format!("Native audio select output backend task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -160,6 +164,7 @@ pub async fn native_audio_set_engine_policy(
     src_mode: Option<native_audio::NativeAudioSrcMode>,
     src_backend: Option<native_audio::NativeAudioSrcBackend>,
     src_target_sample_rate: Option<u32>,
+    output_quantization_mode: Option<native_audio::NativeAudioOutputQuantizationMode>,
 ) -> Result<native_audio::NativeAudioEnginePolicyPayload, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let patch = native_audio::NativeAudioEnginePolicyPatch {
@@ -169,6 +174,7 @@ pub async fn native_audio_set_engine_policy(
             src_mode,
             src_backend,
             src_target_sample_rate,
+            output_quantization_mode,
         };
         native_audio::set_engine_policy(&app, patch)
     })
@@ -184,7 +190,8 @@ pub async fn native_audio_list_devices() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn native_audio_list_devices_v2() -> Result<Vec<native_audio::NativeAudioOutputDevicePayload>, String> {
+pub async fn native_audio_list_devices_v2(
+) -> Result<Vec<native_audio::NativeAudioOutputDevicePayload>, String> {
     tauri::async_runtime::spawn_blocking(native_audio::list_output_devices_v2)
         .await
         .map_err(|e| format!("Native audio list devices v2 task failed: {e}"))?
@@ -204,7 +211,9 @@ pub async fn native_audio_select_device(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn native_audio_open_asio_control_panel(device_name: Option<String>) -> Result<(), String> {
+pub async fn native_audio_open_asio_control_panel(
+    device_name: Option<String>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || native_audio::open_asio_control_panel(device_name))
         .await
         .map_err(|e| format!("Native audio open ASIO control panel task failed: {e}"))?
@@ -216,7 +225,9 @@ pub async fn native_audio_sync_queue(
     queue: Vec<String>,
     current_index: i32,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || native_audio::sync_queue(&app, queue, current_index))
-        .await
-        .map_err(|e| format!("Native audio sync queue task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::sync_queue(&app, queue, current_index)
+    })
+    .await
+    .map_err(|e| format!("Native audio sync queue task failed: {e}"))?
 }

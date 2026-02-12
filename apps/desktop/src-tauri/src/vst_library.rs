@@ -564,7 +564,8 @@ pub fn get_scan_run_summary(run_id: &str) -> Result<VstScanRunSummary, String> {
             })
             .map_err(|e| format!("Failed to query scan event counts: {e}"))?;
         for row in rows {
-            let (kind, count) = row.map_err(|e| format!("Failed to read scan event counts row: {e}"))?;
+            let (kind, count) =
+                row.map_err(|e| format!("Failed to read scan event counts row: {e}"))?;
             let count_u32 = u32::try_from(count).unwrap_or(u32::MAX);
             events_total = events_total.saturating_add(count_u32);
             event_counts.insert(kind, count_u32);
@@ -614,9 +615,7 @@ pub fn get_scan_run_summary(run_id: &str) -> Result<VstScanRunSummary, String> {
             )
             .optional()
             .map_err(|e| format!("Failed to query scan deadman hint: {e}"))?;
-        let last_deadman_hint = deadman_message
-            .as_deref()
-            .and_then(extract_deadman_hint);
+        let last_deadman_hint = deadman_message.as_deref().and_then(extract_deadman_hint);
 
         Ok(VstScanRunSummary {
             run_id: run_id.to_string(),
@@ -937,8 +936,11 @@ pub fn invalidate_plugin_params_cache(plugin_id: &str) -> Result<(), String> {
             return Err("Plugin not found".to_string());
         }
 
-        tx.execute("DELETE FROM vst_params WHERE plugin_id = ?1", params![plugin_id])
-            .map_err(|e| format!("Failed to delete cached plugin params: {e}"))?;
+        tx.execute(
+            "DELETE FROM vst_params WHERE plugin_id = ?1",
+            params![plugin_id],
+        )
+        .map_err(|e| format!("Failed to delete cached plugin params: {e}"))?;
 
         tx.commit()
             .map_err(|e| format!("Failed to commit VST library transaction: {e}"))?;
@@ -1012,9 +1014,15 @@ pub fn list_plugins() -> Result<Vec<VstLibraryPlugin>, String> {
                     status: row.get::<_, String>(5)?,
                     last_seen_at_ms: row.get::<_, i64>(6)? as u64,
                     params_scanned_at_ms: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-                    input_channels: row.get::<_, Option<i64>>(8)?.and_then(|v| u32::try_from(v).ok()),
-                    output_channels: row.get::<_, Option<i64>>(9)?.and_then(|v| u32::try_from(v).ok()),
-                    params_count: row.get::<_, Option<i64>>(10)?.and_then(|v| u32::try_from(v).ok()),
+                    input_channels: row
+                        .get::<_, Option<i64>>(8)?
+                        .and_then(|v| u32::try_from(v).ok()),
+                    output_channels: row
+                        .get::<_, Option<i64>>(9)?
+                        .and_then(|v| u32::try_from(v).ok()),
+                    params_count: row
+                        .get::<_, Option<i64>>(10)?
+                        .and_then(|v| u32::try_from(v).ok()),
                     params_attempted_at_ms: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
                     params_failure_count: row.get::<_, i64>(12)? as u32,
                 };

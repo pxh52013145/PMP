@@ -116,9 +116,11 @@ fn scanner_stall_timeout() -> Duration {
 #[cfg(target_os = "windows")]
 fn scanner_deadman_file_path() -> Option<PathBuf> {
     // Must match sidecar: juce::File::userApplicationDataDirectory/PixelMatrixPlayer/vst3_scanner_deadman.txt
-    std::env::var("APPDATA")
-        .ok()
-        .map(|dir| PathBuf::from(dir).join("PixelMatrixPlayer").join("vst3_scanner_deadman.txt"))
+    std::env::var("APPDATA").ok().map(|dir| {
+        PathBuf::from(dir)
+            .join("PixelMatrixPlayer")
+            .join("vst3_scanner_deadman.txt")
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -296,7 +298,9 @@ fn run_bridge_cli_cancellable_dynamic(
     let bridge = bridge_executable_path()?;
 
     let watch_scanner_progress = is_scanner_command(&args);
-    let deadman_path = watch_scanner_progress.then(scanner_deadman_file_path).flatten();
+    let deadman_path = watch_scanner_progress
+        .then(scanner_deadman_file_path)
+        .flatten();
     let stall_timeout = watch_scanner_progress.then(scanner_stall_timeout);
     let mut last_deadman_mtime: Option<SystemTime> = None;
     let mut last_deadman_progress_at = Instant::now();
@@ -362,7 +366,10 @@ fn run_bridge_cli_cancellable_dynamic(
             if let Ok(meta) = std::fs::metadata(path) {
                 saw_deadman = true;
                 if let Ok(modified) = meta.modified() {
-                    if last_deadman_mtime.map(|prev| prev != modified).unwrap_or(true) {
+                    if last_deadman_mtime
+                        .map(|prev| prev != modified)
+                        .unwrap_or(true)
+                    {
                         last_deadman_mtime = Some(modified);
                         last_deadman_progress_at = Instant::now();
                     }
@@ -1093,9 +1100,7 @@ mod tests {
             worker: Some(worker),
         };
 
-        let err = client
-            .set_params(&[("0".to_string(), 0.5)])
-            .unwrap_err();
+        let err = client.set_params(&[("0".to_string(), 0.5)]).unwrap_err();
         assert!(err.contains("timed out"), "expected timeout, got: {err}");
         assert!(
             matches!(client.child.try_wait(), Ok(None)),

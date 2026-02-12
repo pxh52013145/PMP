@@ -9,9 +9,7 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
 };
 
-use super::{
-    EVENT_VST_MANAGER_WINDOW_HIDDEN, EVENT_VST_MANAGER_WINDOW_SHOWN, MAIN_WINDOW_LABEL,
-};
+use super::{EVENT_VST_MANAGER_WINDOW_HIDDEN, EVENT_VST_MANAGER_WINDOW_SHOWN, MAIN_WINDOW_LABEL};
 
 pub const VST_MANAGER_WINDOW_LABEL: &str = "vst-manager";
 
@@ -209,4 +207,3 @@ pub fn governance_destroy_hidden_vst_manager_windows(app: &AppHandle) -> usize {
 
     destroyed
 }
-

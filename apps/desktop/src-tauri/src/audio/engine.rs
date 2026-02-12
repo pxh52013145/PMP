@@ -2,31 +2,29 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::{
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
     open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputRegistry,
-    AudioInputSrcPolicy, DecoderCommand, SharedSamplesSource,
-    StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx, SACD_INPUT_ID,
-    SYMPHONIA_INPUT_ID,
+    AudioInputSrcPolicy, DecoderCommand, SharedSamplesSource, StreamingPlayback,
+    StreamingSamplesSource, StreamingShutdownTx, SACD_INPUT_ID, SYMPHONIA_INPUT_ID,
 };
 use crate::audio::mixer::{coerce_source_format, PlaybackMixerController, PlaybackMixerSource};
-use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
-use crate::audio::policy::{
-    NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
-    NativeAudioSrcBackend, NativeAudioSrcMode, NativeAudioTransportMode,
-};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
+use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
 use crate::audio::pipeline::{
     boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumSnapshot, SpectrumTap,
+};
+use crate::audio::policy::{
+    NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
+    NativeAudioOutputQuantizationMode, NativeAudioSrcBackend, NativeAudioSrcMode,
+    NativeAudioTransportMode,
 };
 use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
@@ -34,9 +32,8 @@ const SHARED_TIMELINE_STRESS_WINDOW: Duration = Duration::from_secs(12);
 const SHARED_TIMELINE_STRESS_EXTENSION: Duration = Duration::from_secs(16);
 const SHARED_TIMELINE_LOW_WATERMARK_TRIGGER: usize = 4;
 
-pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> = Lazy::new(|| {
-    Mutex::new(NativeAudioEngine::new())
-});
+pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> =
+    Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
 
 static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
     std::env::var("PMP_AUDIO_INFO_LOG")
@@ -238,6 +235,7 @@ pub(crate) struct NativeAudioEngine {
     src_mode: NativeAudioSrcMode,
     src_backend: NativeAudioSrcBackend,
     src_target_sample_rate: Option<u32>,
+    output_quantization_mode: NativeAudioOutputQuantizationMode,
     spectrum_frame_counter: u64,
 }
 
@@ -358,7 +356,11 @@ impl NativeAudioEngine {
 
     fn new_with_backend(output_backend: Arc<dyn AudioOutputBackend>) -> Self {
         output_backend.set_transport_mode(NativeAudioTransportMode::Robust);
-        info_log(format!("[NativeAudio] Output backend: {}", output_backend.id()));
+        output_backend.set_output_quantization_mode(NativeAudioOutputQuantizationMode::Round);
+        info_log(format!(
+            "[NativeAudio] Output backend: {}",
+            output_backend.id()
+        ));
         Self {
             input_registry: AudioInputRegistry::default(),
             preferred_input_id: None,
@@ -414,6 +416,7 @@ impl NativeAudioEngine {
             src_mode: NativeAudioSrcMode::MatchOutput,
             src_backend: NativeAudioSrcBackend::Rubato,
             src_target_sample_rate: None,
+            output_quantization_mode: NativeAudioOutputQuantizationMode::Round,
             spectrum_frame_counter: 0,
         }
     }
@@ -444,7 +447,9 @@ impl NativeAudioEngine {
         self.vst_enabled = enabled;
     }
 
-    pub(crate) fn streaming_buffer_settings_payload(&self) -> NativeAudioStreamingBufferSettingsPayload {
+    pub(crate) fn streaming_buffer_settings_payload(
+        &self,
+    ) -> NativeAudioStreamingBufferSettingsPayload {
         NativeAudioStreamingBufferSettingsPayload {
             start_or_seek_seconds: self.streaming_prebuffer_start_or_seek_seconds,
             crossfade_seconds: self.streaming_prebuffer_crossfade_seconds,
@@ -552,6 +557,7 @@ impl NativeAudioEngine {
             src_mode: self.src_mode,
             src_backend: self.src_backend,
             src_target_sample_rate: self.src_target_sample_rate,
+            output_quantization_mode: self.output_quantization_mode,
             hq_src_stopband_db: 140,
             transport_exact_int32_container: true,
         }
@@ -566,6 +572,11 @@ impl NativeAudioEngine {
         if let Some(mode) = patch.transport_mode {
             self.transport_mode = mode;
             self.output_backend.set_transport_mode(mode);
+        }
+        if let Some(output_quantization_mode) = patch.output_quantization_mode {
+            self.output_quantization_mode = output_quantization_mode;
+            self.output_backend
+                .set_output_quantization_mode(output_quantization_mode);
         }
         if let Some(enabled) = patch.hq_src_enabled {
             if self.hq_src_enabled != enabled {
@@ -592,7 +603,9 @@ impl NativeAudioEngine {
             }
         }
         if patch.src_target_sample_rate.is_some() {
-            let normalized = patch.src_target_sample_rate.and_then(Self::sanitize_src_target_sample_rate);
+            let normalized = patch
+                .src_target_sample_rate
+                .and_then(Self::sanitize_src_target_sample_rate);
             if self.src_target_sample_rate != normalized {
                 self.src_target_sample_rate = normalized;
                 src_changed = true;
@@ -755,7 +768,10 @@ impl NativeAudioEngine {
         Ok(true)
     }
 
-    pub(crate) fn begin_crossfade_operation(&mut self, duration_ms: u64) -> Option<CrossfadeOperation> {
+    pub(crate) fn begin_crossfade_operation(
+        &mut self,
+        duration_ms: u64,
+    ) -> Option<CrossfadeOperation> {
         let was_playing = matches!(self.playback_state, PlaybackState::Playing);
         let can_crossfade = was_playing
             && self.sink.is_some()
@@ -837,7 +853,10 @@ impl NativeAudioEngine {
         if self.queue.is_empty() {
             self.queue.push(prepared.track_path.clone());
             self.current_index = 0;
-        } else if let Some(index) = self.queue.iter().position(|entry| entry == &prepared.track_path)
+        } else if let Some(index) = self
+            .queue
+            .iter()
+            .position(|entry| entry == &prepared.track_path)
         {
             self.current_index = index as i32;
         } else {
@@ -935,6 +954,8 @@ impl NativeAudioEngine {
 
         self.output_backend = target_backend;
         self.output_backend.set_transport_mode(self.transport_mode);
+        self.output_backend
+            .set_output_quantization_mode(self.output_quantization_mode);
         self.device_id = None;
         self.device_name = None;
         self.output_sample_rate = None;
@@ -951,6 +972,8 @@ impl NativeAudioEngine {
                 self.device_name = previous_device_name;
                 self.output_sample_rate = previous_output_sample_rate;
                 self.output_backend.set_transport_mode(self.transport_mode);
+                self.output_backend
+                    .set_output_quantization_mode(self.output_quantization_mode);
                 if switching_from_exclusive || switching_to_exclusive || switching_to_asio {
                     let _ = self.rebuild_sink_on_new_device();
                 }
@@ -964,7 +987,9 @@ impl NativeAudioEngine {
             match self.output_backend.create_sink() {
                 Ok((_sink, output_info)) => {
                     self.output_sample_rate = output_info.output_sample_rate;
-                    self.device_id = output_info.device_id.or_else(|| output_info.device_name.clone());
+                    self.device_id = output_info
+                        .device_id
+                        .or_else(|| output_info.device_name.clone());
                     self.device_name = output_info
                         .device_name
                         .or_else(|| self.output_backend.default_device_name());
@@ -975,6 +1000,8 @@ impl NativeAudioEngine {
                     self.device_name = previous_device_name;
                     self.output_sample_rate = previous_output_sample_rate;
                     self.output_backend.set_transport_mode(self.transport_mode);
+                    self.output_backend
+                        .set_output_quantization_mode(self.output_quantization_mode);
                     return Err(err);
                 }
             }
@@ -1055,7 +1082,10 @@ impl NativeAudioEngine {
         self.playback_state = state;
         if matches!(
             state,
-            PlaybackState::Idle | PlaybackState::Playing | PlaybackState::Paused | PlaybackState::Stopped
+            PlaybackState::Idle
+                | PlaybackState::Playing
+                | PlaybackState::Paused
+                | PlaybackState::Stopped
         ) {
             self.desired_playback_state = state;
         }
@@ -1143,9 +1173,7 @@ impl NativeAudioEngine {
             );
             let available = self.streaming_available_samples(streaming);
             if available < target_samples {
-                streaming
-                    .buffer
-                    .wait_for_samples(target_samples, timeout);
+                streaming.buffer.wait_for_samples(target_samples, timeout);
             }
         }
 
@@ -1255,9 +1283,7 @@ impl NativeAudioEngine {
                 self.streaming_prebuffer_crossfade_seconds,
             );
             if self.streaming_available_samples(streaming) < target_samples {
-                streaming
-                    .buffer
-                    .wait_for_samples(target_samples, timeout);
+                streaming.buffer.wait_for_samples(target_samples, timeout);
             }
         }
 
@@ -1271,8 +1297,8 @@ impl NativeAudioEngine {
             .mixer
             .as_ref()
             .ok_or_else(|| "Playback mixer unavailable".to_string())?;
-        let duration_frames = ((target_sample_rate as u64).saturating_mul(duration_ms.clamp(1, 30_000)))
-            / 1000;
+        let duration_frames =
+            ((target_sample_rate as u64).saturating_mul(duration_ms.clamp(1, 30_000))) / 1000;
         controller.crossfade_to(next_source, old_shutdown_tx, duration_frames.max(1))?;
 
         let decoded_samples = if decoded_samples.is_some()
@@ -1345,14 +1371,17 @@ impl NativeAudioEngine {
                     let sample_rate = self.decoded_sample_rate.max(1) as f64;
                     let channels_f64 = channels.max(1) as f64;
                     let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
-                    let (min_seconds_cap, min_seconds_floor) =
-                        streaming_min_start_bounds(self.output_backend.id(), underrun_recovery_active);
+                    let (min_seconds_cap, min_seconds_floor) = streaming_min_start_bounds(
+                        self.output_backend.id(),
+                        underrun_recovery_active,
+                    );
                     let min_start_seconds = target_seconds
                         .min(min_seconds_cap)
                         .max(min_seconds_floor)
                         .min(target_seconds);
-                    let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
-                        .clamp(1, target_samples);
+                    let min_start_samples =
+                        ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                            .clamp(1, target_samples);
 
                     let available = self.streaming_available_samples(streaming);
                     self.desired_playback_state = PlaybackState::Playing;
@@ -1420,29 +1449,32 @@ impl NativeAudioEngine {
             let sink = self.output_backend.create_sink().ok().map(|(sink, _)| sink);
 
             if let Some(sink) = sink {
-                let (source, channels, sample_rate) = if let (Some(samples), channels, sample_rate) =
-                    (self.decoded_samples.clone(), self.decoded_channels, self.decoded_sample_rate)
-                {
-                    (
-                        Box::new(SharedSamplesSource::new(samples, channels, sample_rate, 0))
-                            as crate::audio::output::BoxedSource,
-                        channels,
-                        sample_rate,
-                    )
-                } else if let Ok((source, meta)) = open_rodio_source_at(&track_path, 0.0) {
-                    (source, meta.channels, meta.sample_rate)
-                } else {
-                    sink.pause();
-                    sink.set_volume(self.effective_volume());
-                    if let Some(old) = self.sink.replace(sink) {
-                        old.stop();
-                    }
-                    self.current_position = 0.0;
-                    self.base_position = 0.0;
-                    self.playback_started_at = None;
-                    self.set_state(PlaybackState::Stopped);
-                    return;
-                };
+                let (source, channels, sample_rate) =
+                    if let (Some(samples), channels, sample_rate) = (
+                        self.decoded_samples.clone(),
+                        self.decoded_channels,
+                        self.decoded_sample_rate,
+                    ) {
+                        (
+                            Box::new(SharedSamplesSource::new(samples, channels, sample_rate, 0))
+                                as crate::audio::output::BoxedSource,
+                            channels,
+                            sample_rate,
+                        )
+                    } else if let Ok((source, meta)) = open_rodio_source_at(&track_path, 0.0) {
+                        (source, meta.channels, meta.sample_rate)
+                    } else {
+                        sink.pause();
+                        sink.set_volume(self.effective_volume());
+                        if let Some(old) = self.sink.replace(sink) {
+                            old.stop();
+                        }
+                        self.current_position = 0.0;
+                        self.base_position = 0.0;
+                        self.playback_started_at = None;
+                        self.set_state(PlaybackState::Stopped);
+                        return;
+                    };
 
                 self.mixer = Some(self.append_source_with_pipeline(
                     &sink,
@@ -1561,8 +1593,12 @@ impl NativeAudioEngine {
         ) {
             let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
             (
-                Box::new(SharedSamplesSource::new(samples, channels, sample_rate, start_sample))
-                    as crate::audio::output::BoxedSource,
+                Box::new(SharedSamplesSource::new(
+                    samples,
+                    channels,
+                    sample_rate,
+                    start_sample,
+                )) as crate::audio::output::BoxedSource,
                 channels,
                 sample_rate,
             )
@@ -1614,16 +1650,17 @@ impl NativeAudioEngine {
 
         let frame_id = self.next_spectrum_frame_id();
         let timestamp_ms = crate::audio::diagnostics::current_timestamp_ms();
-        let map_frame =
-            |snapshot: Option<(Vec<f32>, u32)>, tap: SpectrumTapKind| -> Option<SpectrumFrameSnapshot> {
-                snapshot.map(|(window, sample_rate)| SpectrumFrameSnapshot {
-                    frame_id,
-                    timestamp_ms,
-                    tap,
-                    sample_rate,
-                    window,
-                })
-            };
+        let map_frame = |snapshot: Option<(Vec<f32>, u32)>,
+                         tap: SpectrumTapKind|
+         -> Option<SpectrumFrameSnapshot> {
+            snapshot.map(|(window, sample_rate)| SpectrumFrameSnapshot {
+                frame_id,
+                timestamp_ms,
+                tap,
+                sample_rate,
+                window,
+            })
+        };
 
         Some(DualSpectrumSnapshot {
             pre: map_frame(pre, SpectrumTapKind::PreDsp),
@@ -1742,7 +1779,8 @@ impl NativeAudioEngine {
                     .min(min_seconds_cap)
                     .max(min_seconds_floor)
                     .min(target_seconds);
-                let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil()
+                    as usize)
                     .clamp(1, target_samples);
                 let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
                     (self.streaming_available_samples(streaming) as f64)
@@ -1909,7 +1947,10 @@ impl NativeAudioEngine {
         self.gain_db = self.dsp_runtime.apply_chain(&self.dsp_chain);
     }
 
-    pub(crate) fn set_preferred_input_id(&mut self, input_id: Option<String>) -> Result<(), String> {
+    pub(crate) fn set_preferred_input_id(
+        &mut self,
+        input_id: Option<String>,
+    ) -> Result<(), String> {
         let input_id = input_id.and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -1966,9 +2007,8 @@ impl NativeAudioEngine {
         #[cfg(not(target_os = "windows"))]
         let output_metrics = crate::audio::output::OutputCallbackMetricsSnapshot::default();
 
-        let output_callback_metrics_valid =
-            self.output_backend.id() == "wasapi-exclusive"
-                || self.output_backend.id() == "wasapi-shared-raw";
+        let output_callback_metrics_valid = self.output_backend.id() == "wasapi-exclusive"
+            || self.output_backend.id() == "wasapi-shared-raw";
         let shared_render_backend = is_shared_output_backend(self.output_backend.id());
         let shared_render_metrics = crate::audio::output::shared_render_ahead_metrics();
         let diagnostics_timeline = crate::audio::diagnostics::snapshot_recent_default();
@@ -1980,8 +2020,8 @@ impl NativeAudioEngine {
         let (buffered_time, buffered_ahead) = if let Some(streaming) = &self.streaming {
             let channels = self.decoded_channels.max(1) as f64;
             let sample_rate = self.decoded_sample_rate.max(1) as f64;
-            let buffered_seconds = (self.streaming_available_samples(streaming) as f64 / channels)
-                / sample_rate;
+            let buffered_seconds =
+                (self.streaming_available_samples(streaming) as f64 / channels) / sample_rate;
             let buffered_time = if self.duration > 0.0 {
                 (self.current_position + buffered_seconds).min(self.duration)
             } else {
@@ -2047,9 +2087,9 @@ impl NativeAudioEngine {
             hq_src_active: Some(
                 matches!(self.src_mode, NativeAudioSrcMode::SourceNative)
                     || self.hq_src_enabled
-                    && self.source_sample_rate > 0
-                    && self.decoded_sample_rate > 0
-                    && self.source_sample_rate != self.decoded_sample_rate,
+                        && self.source_sample_rate > 0
+                        && self.decoded_sample_rate > 0
+                        && self.source_sample_rate != self.decoded_sample_rate,
             ),
             hq_src_ratio: if self.source_sample_rate > 0 && self.decoded_sample_rate > 0 {
                 Some(self.decoded_sample_rate as f64 / self.source_sample_rate as f64)
@@ -2061,6 +2101,7 @@ impl NativeAudioEngine {
             src_mode: Some(self.src_mode.as_str().to_string()),
             src_backend: Some(self.src_backend.as_str().to_string()),
             src_target_sample_rate: self.src_target_sample_rate,
+            output_quantization_mode: Some(self.output_quantization_mode.as_str().to_string()),
             hq_src_stopband_db: Some(140),
             transport_exact_int32_container: Some(true),
             output_callback_metrics_valid: Some(output_callback_metrics_valid),
@@ -2282,9 +2323,7 @@ impl NativeAudioEngine {
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
                 if self.streaming_available_samples(streaming) < target_samples {
-                    streaming
-                        .buffer
-                        .wait_for_samples(target_samples, timeout);
+                    streaming.buffer.wait_for_samples(target_samples, timeout);
                 }
             }
 
@@ -2312,9 +2351,9 @@ impl NativeAudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
 
     struct FailBackend;
 
@@ -2503,7 +2542,10 @@ mod tests {
         }
     }
 
-    fn make_finished_streaming_playback(capacity_samples: usize, channels: usize) -> StreamingPlayback {
+    fn make_finished_streaming_playback(
+        capacity_samples: usize,
+        channels: usize,
+    ) -> StreamingPlayback {
         let buffer = crate::audio::buffer::AudioRingBuffer::new(capacity_samples);
         let render_queue = crate::audio::buffer::AudioRingBuffer::new(
             (capacity_samples / 4).clamp(16_384, 262_144),
@@ -2529,10 +2571,16 @@ mod tests {
         let engine = NativeAudioEngine::new();
         let policy = engine.engine_policy_payload();
 
-        assert!(matches!(policy.transport_mode, NativeAudioTransportMode::Robust));
+        assert!(matches!(
+            policy.transport_mode,
+            NativeAudioTransportMode::Robust
+        ));
         assert!(policy.transport_exact_int32_container);
         assert_eq!(policy.hq_src_stopband_db, 140);
-        assert!(matches!(policy.hq_src_phase_mode, NativeAudioHqSrcPhaseMode::Linear));
+        assert!(matches!(
+            policy.hq_src_phase_mode,
+            NativeAudioHqSrcPhaseMode::Linear
+        ));
     }
 
     #[test]
@@ -2545,15 +2593,29 @@ mod tests {
             src_mode: Some(NativeAudioSrcMode::TargetRate),
             src_backend: Some(NativeAudioSrcBackend::LinearSimd),
             src_target_sample_rate: Some(192_000),
+            output_quantization_mode: Some(NativeAudioOutputQuantizationMode::Tpdf),
         };
 
         let next = engine.apply_engine_policy_patch(patch);
-        assert!(matches!(next.transport_mode, NativeAudioTransportMode::TransportExact));
+        assert!(matches!(
+            next.transport_mode,
+            NativeAudioTransportMode::TransportExact
+        ));
         assert!(next.hq_src_enabled);
-        assert!(matches!(next.hq_src_phase_mode, NativeAudioHqSrcPhaseMode::Linear));
+        assert!(matches!(
+            next.hq_src_phase_mode,
+            NativeAudioHqSrcPhaseMode::Linear
+        ));
         assert!(matches!(next.src_mode, NativeAudioSrcMode::TargetRate));
-        assert!(matches!(next.src_backend, NativeAudioSrcBackend::LinearSimd));
+        assert!(matches!(
+            next.src_backend,
+            NativeAudioSrcBackend::LinearSimd
+        ));
         assert_eq!(next.src_target_sample_rate, Some(192_000));
+        assert!(matches!(
+            next.output_quantization_mode,
+            NativeAudioOutputQuantizationMode::Tpdf
+        ));
     }
 
     #[test]
@@ -2637,26 +2699,10 @@ mod tests {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("wasapi"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
 
-        crate::audio::diagnostics::record_event(
-            "shared.transfer.render_low_watermark",
-            128,
-            512,
-        );
-        crate::audio::diagnostics::record_event(
-            "shared.transfer.decode_low_watermark",
-            128,
-            512,
-        );
-        crate::audio::diagnostics::record_event(
-            "shared.render_ahead.low_watermark",
-            128,
-            512,
-        );
-        crate::audio::diagnostics::record_event(
-            "shared.transfer.render_low_watermark",
-            128,
-            512,
-        );
+        crate::audio::diagnostics::record_event("shared.transfer.render_low_watermark", 128, 512);
+        crate::audio::diagnostics::record_event("shared.transfer.decode_low_watermark", 128, 512);
+        crate::audio::diagnostics::record_event("shared.render_ahead.low_watermark", 128, 512);
+        crate::audio::diagnostics::record_event("shared.transfer.render_low_watermark", 128, 512);
 
         engine.update_shared_timeline_stress_window();
         assert!(engine.shared_timeline_stress_until.is_some());

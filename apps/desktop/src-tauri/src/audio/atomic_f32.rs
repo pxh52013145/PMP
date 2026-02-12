@@ -7,4 +7,3 @@ pub(crate) fn store_atomic_f32(target: &AtomicU32, value: f32) {
 pub(crate) fn load_atomic_f32(target: &AtomicU32) -> f32 {
     f32::from_bits(target.load(Ordering::Acquire))
 }
-

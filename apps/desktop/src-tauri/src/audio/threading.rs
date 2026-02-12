@@ -145,8 +145,8 @@ pub(crate) fn apply_audio_output_pressure_profile(profile: RealtimePressureProfi
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::System::Threading::{
-            GetCurrentThread, SetThreadPriority,
-            THREAD_PRIORITY_HIGHEST, THREAD_PRIORITY_TIME_CRITICAL,
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+            THREAD_PRIORITY_TIME_CRITICAL,
         };
 
         let priority = match profile {
@@ -200,4 +200,3 @@ pub(crate) fn apply_audio_transfer_pressure_profile(profile: RealtimePressurePro
         }
     }
 }
-

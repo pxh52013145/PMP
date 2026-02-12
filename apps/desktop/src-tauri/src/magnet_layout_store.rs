@@ -139,7 +139,8 @@ fn system_space1_additional_anchors(magnet_id: &str) -> Option<Vec<PixelAnchor>>
 fn system_anchors_for_space(space_id: &str, magnet_id: &str) -> Option<Vec<PixelAnchor>> {
     let normalized_space_id = space_id.trim();
     if normalized_space_id == "space1" {
-        return system_space1_additional_anchors(magnet_id).or_else(|| system_required_anchors(magnet_id));
+        return system_space1_additional_anchors(magnet_id)
+            .or_else(|| system_required_anchors(magnet_id));
     }
 
     system_required_anchors(magnet_id)
@@ -151,7 +152,9 @@ fn fill_system_anchors_for_active(space_id: &str, layout: &mut MagnetSpaceLayout
             continue;
         }
         if let Some(anchors) = system_anchors_for_space(space_id, magnet_id) {
-            layout.anchors_by_magnet_id.insert(magnet_id.clone(), anchors);
+            layout
+                .anchors_by_magnet_id
+                .insert(magnet_id.clone(), anchors);
         }
     }
 }
@@ -269,12 +272,26 @@ pub struct MagnetLayoutStoreApplyPatchError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MagnetLayoutStorePatch {
-    SetActiveSpaceId { space_id: String },
-    SetSpacesState { spaces: MagnetSpacesState },
-    SetSpaceLayout { space_id: String, layout: MagnetSpaceLayout },
-    SetActiveMagnetIds { space_id: String, active_magnet_ids: Vec<String> },
+    SetActiveSpaceId {
+        space_id: String,
+    },
+    SetSpacesState {
+        spaces: MagnetSpacesState,
+    },
+    SetSpaceLayout {
+        space_id: String,
+        layout: MagnetSpaceLayout,
+    },
+    SetActiveMagnetIds {
+        space_id: String,
+        active_magnet_ids: Vec<String>,
+    },
     SetMagnetActive {
         space_id: String,
         magnet_id: String,
@@ -407,7 +424,10 @@ fn sanitize_preset(space_id: &str, preset: &MagnetSpacePreset) -> Option<MagnetS
     })
 }
 
-fn sanitize_history_item(space_id: &str, item: &MagnetSpaceHistoryItem) -> Option<MagnetSpaceHistoryItem> {
+fn sanitize_history_item(
+    space_id: &str,
+    item: &MagnetSpaceHistoryItem,
+) -> Option<MagnetSpaceHistoryItem> {
     let id = item.id.trim();
     if id.is_empty() {
         return None;
@@ -456,7 +476,11 @@ fn sanitize_spaces_state(value: &MagnetSpacesState) -> MagnetSpacesState {
         };
 
         let order = if entry.order > 0 { entry.order } else { 0 };
-        let created_at = if entry.created_at > 0 { entry.created_at } else { now };
+        let created_at = if entry.created_at > 0 {
+            entry.created_at
+        } else {
+            now
+        };
 
         spaces.push(MagnetSpace {
             id: id.to_string(),
@@ -635,7 +659,8 @@ fn sanitize_store_state(
     HashMap<String, Vec<MagnetSpaceHistoryItem>>,
 ) {
     let spaces_clean = sanitize_spaces_state(spaces);
-    let valid_space_ids: HashSet<String> = spaces_clean.spaces.iter().map(|s| s.id.clone()).collect();
+    let valid_space_ids: HashSet<String> =
+        spaces_clean.spaces.iter().map(|s| s.id.clone()).collect();
 
     let mut layouts_clean: HashMap<String, MagnetSpaceLayout> = HashMap::new();
     for space in &spaces_clean.spaces {
@@ -745,7 +770,8 @@ fn write_store_file(path: &Path, state: &MagnetLayoutStoreState) -> Result<(), S
     let contents = serde_json::to_string_pretty(state)
         .map_err(|error| format!("Failed to serialize store state: {error}"))?;
 
-    fs::write(&tmp_path, contents).map_err(|error| format!("Failed to write temp store file: {error}"))?;
+    fs::write(&tmp_path, contents)
+        .map_err(|error| format!("Failed to write temp store file: {error}"))?;
     if path.exists() {
         let _ = fs::remove_file(path);
     }
@@ -768,12 +794,13 @@ impl MagnetLayoutStore {
             }
         };
 
-        let (spaces, layouts_by_space_id, presets_by_space_id, history_by_space_id) = sanitize_store_state(
-            &state.spaces,
-            &state.layouts_by_space_id,
-            &state.presets_by_space_id,
-            &state.history_by_space_id,
-        );
+        let (spaces, layouts_by_space_id, presets_by_space_id, history_by_space_id) =
+            sanitize_store_state(
+                &state.spaces,
+                &state.layouts_by_space_id,
+                &state.presets_by_space_id,
+                &state.history_by_space_id,
+            );
         let mut sanitized = state;
         sanitized.version = STORE_VERSION;
         sanitized.spaces = spaces;
@@ -811,12 +838,13 @@ impl MagnetLayoutStore {
             });
         }
 
-        let (spaces, layouts_by_space_id, presets_by_space_id, history_by_space_id) = sanitize_store_state(
-            &request.spaces,
-            &request.layouts_by_space_id,
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+        let (spaces, layouts_by_space_id, presets_by_space_id, history_by_space_id) =
+            sanitize_store_state(
+                &request.spaces,
+                &request.layouts_by_space_id,
+                &HashMap::new(),
+                &HashMap::new(),
+            );
 
         let next_state = MagnetLayoutStoreState {
             version: STORE_VERSION,
@@ -933,7 +961,11 @@ impl MagnetLayoutStore {
                         .unwrap_or_else(|| default_layout_for_space(&trimmed_space_id));
 
                     if active {
-                        if !existing.active_magnet_ids.iter().any(|id| id == &trimmed_magnet_id) {
+                        if !existing
+                            .active_magnet_ids
+                            .iter()
+                            .any(|id| id == &trimmed_magnet_id)
+                        {
                             existing.active_magnet_ids.push(trimmed_magnet_id);
                         }
                     } else {
@@ -988,7 +1020,9 @@ impl MagnetLayoutStore {
                         Some(value) => value,
                         None => continue,
                     };
-                    let list = next_presets.entry(trimmed_space_id).or_insert_with(Vec::new);
+                    let list = next_presets
+                        .entry(trimmed_space_id)
+                        .or_insert_with(Vec::new);
                     if let Some(existing) = list.iter_mut().find(|p| p.id == clean.id) {
                         *existing = clean;
                     } else {
@@ -996,7 +1030,10 @@ impl MagnetLayoutStore {
                     }
                     presets_changed = true;
                 }
-                MagnetLayoutStorePatch::DeleteSpacePreset { space_id, preset_id } => {
+                MagnetLayoutStorePatch::DeleteSpacePreset {
+                    space_id,
+                    preset_id,
+                } => {
                     let trimmed_space_id = trim_or_empty(&space_id);
                     let trimmed_preset_id = trim_or_empty(&preset_id);
                     if trimmed_space_id.is_empty() || trimmed_preset_id.is_empty() {
@@ -1036,7 +1073,10 @@ impl MagnetLayoutStore {
                     }
                     history_changed = true;
                 }
-                MagnetLayoutStorePatch::DeleteSpaceHistoryItem { space_id, history_id } => {
+                MagnetLayoutStorePatch::DeleteSpaceHistoryItem {
+                    space_id,
+                    history_id,
+                } => {
                     let trimmed_space_id = trim_or_empty(&space_id);
                     let trimmed_history_id = trim_or_empty(&history_id);
                     if trimmed_space_id.is_empty() || trimmed_history_id.is_empty() {
@@ -1132,7 +1172,9 @@ fn emit_store_events(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn magnet_layout_store_get_state(store: tauri::State<'_, MagnetLayoutStore>) -> MagnetLayoutStoreState {
+pub fn magnet_layout_store_get_state(
+    store: tauri::State<'_, MagnetLayoutStore>,
+) -> MagnetLayoutStoreState {
     store.get_state()
 }
 
@@ -1162,7 +1204,10 @@ mod tests {
     fn default_space1_layout_includes_system_anchors() {
         let layout = default_layout_for_space("space1");
         assert!(
-            layout.active_magnet_ids.iter().any(|id| id == "audio-visualizer"),
+            layout
+                .active_magnet_ids
+                .iter()
+                .any(|id| id == "audio-visualizer"),
             "space1 should include default audio-visualizer"
         );
         assert!(
@@ -1229,7 +1274,8 @@ mod tests {
             "kind": "setActiveSpaceId",
             "spaceId": "space2",
         });
-        let patch: MagnetLayoutStorePatch = serde_json::from_value(json).expect("patch should deserialize");
+        let patch: MagnetLayoutStorePatch =
+            serde_json::from_value(json).expect("patch should deserialize");
         match patch {
             MagnetLayoutStorePatch::SetActiveSpaceId { space_id } => {
                 assert_eq!(space_id, "space2");

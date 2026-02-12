@@ -426,7 +426,11 @@ fn bump_hidden_destroy_revision(window_type: EditorWindowType) -> u64 {
         Err(poisoned) => poisoned.into_inner(),
     };
 
-    let next = revisions.get(&window_type).copied().unwrap_or(0).saturating_add(1);
+    let next = revisions
+        .get(&window_type)
+        .copied()
+        .unwrap_or(0)
+        .saturating_add(1);
     revisions.insert(window_type, next);
     next
 }
@@ -726,9 +730,7 @@ pub fn debug_get_editor_windows_state(app: &AppHandle) -> EditorWindowsDebugStat
     for window_type in ALL_EDITOR_WINDOWS {
         let window = app.get_window(label(*window_type));
         let exists = window.is_some();
-        let visible = window
-            .and_then(|w| w.is_visible().ok())
-            .unwrap_or(false);
+        let visible = window.and_then(|w| w.is_visible().ok()).unwrap_or(false);
 
         windows.push(EditorWindowDebugInfo {
             window_type: window_type.as_str().to_string(),

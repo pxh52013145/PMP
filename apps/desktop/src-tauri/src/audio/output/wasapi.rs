@@ -53,14 +53,22 @@ impl WasapiBackend {
 
     fn spawn_output_stream_thread(
         preferred_device_name: Option<String>,
-    ) -> Result<(StreamThread, OutputStreamHandle, Option<String>, Option<u32>), String> {
-        let (ready_tx, ready_rx) = mpsc::channel::<
-            Result<(OutputStreamHandle, Option<String>, Option<u32>), String>,
-        >();
+    ) -> Result<
+        (
+            StreamThread,
+            OutputStreamHandle,
+            Option<String>,
+            Option<u32>,
+        ),
+        String,
+    > {
+        let (ready_tx, ready_rx) =
+            mpsc::channel::<Result<(OutputStreamHandle, Option<String>, Option<u32>), String>>();
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
         let join = thread::spawn(move || {
-            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_output();
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_output();
             crate::audio::threading::apply_audio_output_pressure_profile(
                 crate::audio::realtime_scheduler::SCHEDULER.profile(),
             );

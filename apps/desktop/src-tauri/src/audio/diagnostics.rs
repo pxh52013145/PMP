@@ -38,12 +38,7 @@ static START_EPOCH_MS: Lazy<u64> = Lazy::new(|| {
 static START_INSTANT: Lazy<Instant> = Lazy::new(Instant::now);
 
 fn now_ms() -> u64 {
-    START_EPOCH_MS.saturating_add(
-        START_INSTANT
-            .elapsed()
-            .as_millis()
-            .min(u64::MAX as u128) as u64,
-    )
+    START_EPOCH_MS.saturating_add(START_INSTANT.elapsed().as_millis().min(u64::MAX as u128) as u64)
 }
 
 pub(crate) fn current_timestamp_ms() -> u64 {
@@ -89,12 +84,7 @@ pub(crate) fn record_event_throttled(
             return;
         }
 
-        match throttle_state.compare_exchange(
-            previous,
-            now,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
+        match throttle_state.compare_exchange(previous, now, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 record_event(kind, value, aux);
                 return;
@@ -134,7 +124,10 @@ mod tests {
         let after = snapshot_recent_default();
 
         assert!(after.events.len() >= before.events.len());
-        let last = after.events.last().expect("timeline should contain last event");
+        let last = after
+            .events
+            .last()
+            .expect("timeline should contain last event");
         assert_eq!(last.kind, "test.timeline");
         assert_eq!(last.value, 1);
         assert_eq!(last.aux, 2);

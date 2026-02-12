@@ -2,9 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::audio::output::BoxedSource;
-use crate::audio::policy::{
-    NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend, NativeAudioSrcMode,
-};
+use crate::audio::policy::{NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend, NativeAudioSrcMode};
 
 mod rodio;
 mod sacd;
@@ -249,7 +247,12 @@ mod tests {
         registry.register(Arc::new(OkInput));
 
         let result = registry
-            .open_prefer(Path::new("dummy.wav"), None, None, AudioInputSrcPolicy::default())
+            .open_prefer(
+                Path::new("dummy.wav"),
+                None,
+                None,
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open should succeed");
 
         assert_eq!(result.input_id, "ok");
@@ -279,7 +282,12 @@ mod tests {
         registry.register(Arc::new(FailInput));
 
         let err = registry
-            .open_prefer(Path::new("dummy.wav"), None, None, AudioInputSrcPolicy::default())
+            .open_prefer(
+                Path::new("dummy.wav"),
+                None,
+                None,
+                AudioInputSrcPolicy::default(),
+            )
             .err()
             .expect("open should fail");
         assert_eq!(err.code, "AUDIO_INPUT_OPEN_FAILED");

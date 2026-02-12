@@ -206,7 +206,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           description: t('settings.panels.audioAdvanced.desc'),
           render: () => renderWithLazyBoundary(<AudioEngineAdvancedSettingsPanelLazy />),
           source: 'builtin',
-          order: 21,
+          order: 24,
           group: 'audio',
           metadata: { settingsSection: 'audio' },
         });
@@ -218,7 +218,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           description: t('settings.panels.audioComponents.desc'),
           render: () => renderWithLazyBoundary(<AudioComponentsSettingsPanelLazy />),
           source: 'builtin',
-          order: 22,
+          order: 21,
           group: 'audio',
           metadata: { settingsSection: 'audio' },
         });
@@ -242,7 +242,7 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           description: t('settings.panels.audioBuffer.desc'),
           render: () => renderWithLazyBoundary(<AudioBufferSettingsPanelLazy />),
           source: 'builtin',
-          order: 25,
+          order: 22,
           group: 'audio',
           metadata: { settingsSection: 'audio' },
         });

@@ -1,0 +1,6 @@
+case_id,category,priority,scenario,steps,assertions,automation,commands
+NAP-001,auto,P0,Engine policy default includes outputQuantizationMode,"调用 native_audio_get_engine_policy", "返回 outputQuantizationMode 且默认值为 round",yes,"cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml transport_exact_policy_defaults_to_robust_int32_container"
+NAP-002,auto,P0,Policy patch applies output quantization mode,"调用 native_audio_set_engine_policy(outputQuantizationMode=tpdf)","native_audio_get_engine_policy 返回 outputQuantizationMode=tpdf",yes,"cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml transport_exact_policy_patch_updates_mode_and_phase"
+NAP-003,auto,P1,TPDF path is deterministic by seed,"执行 PCM16/24/32 TPDF 量化单测", "同 seed 输出一致且不出现 NaN/Inf",yes,"cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tpdf_quantization"
+NAP-004,manual,P1,TransportExact keeps constrained quantization,"设置 transportMode=transport-exact + outputQuantizationMode=tpdf 并播放 24-bit 内容","24-bit-in-32 容器路径仍按 transport-exact 约束执行，不注入额外 dither",no,"N/A"
+NAP-005,manual,P2,Settings preset combinations map correctly,"在设置页分别应用 reference/hifi/balanced/stable/low-power", "每个预设映射到预期 transportMode/srcMode/srcBackend/srcTargetSampleRate/outputQuantizationMode 组合",no,"N/A"

@@ -45,6 +45,7 @@ type NativeAudioStatePayload = {
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
   srcBackend?: 'rubato' | 'linear-simd';
   srcTargetSampleRate?: number | null;
+  outputQuantizationMode?: 'round' | 'tpdf';
   hqSrcStopbandDb?: number;
   hqSrcActive?: boolean;
   hqSrcRatio?: number;
@@ -86,6 +87,7 @@ type NativeAudioEnginePolicyPayload = {
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
   srcBackend?: 'rubato' | 'linear-simd';
   srcTargetSampleRate?: number | null;
+  outputQuantizationMode?: 'round' | 'tpdf';
   hqSrcStopbandDb?: number;
   transportExactInt32Container?: boolean;
 };
@@ -226,6 +228,7 @@ export class NativeAudioService implements IAudioService {
   private srcMode: 'source-native' | 'match-output' | 'target-rate' = 'match-output';
   private srcBackend: 'rubato' | 'linear-simd' = 'rubato';
   private srcTargetSampleRate: number | null = null;
+  private outputQuantizationMode: 'round' | 'tpdf' = 'round';
   private dynamicSrcAutoEnabled = true;
   private dynamicSrcProfile: 'quality' | 'latency' = 'quality';
   private dynamicSrcLastSwitchAtMs: number | null = null;
@@ -1402,6 +1405,10 @@ export class NativeAudioService implements IAudioService {
       this.srcTargetSampleRate = null;
     }
 
+    if (policy.outputQuantizationMode === 'round' || policy.outputQuantizationMode === 'tpdf') {
+      this.outputQuantizationMode = policy.outputQuantizationMode;
+    }
+
     if (!this.dynamicSrcAutoEnabled || this.dynamicSrcManualLockActive) {
       this.captureCurrentQualitySrcPolicy();
     }
@@ -1459,6 +1466,9 @@ export class NativeAudioService implements IAudioService {
       );
     } else if (patch.srcTargetSampleRate === null) {
       normalized.srcTargetSampleRate = null;
+    }
+    if (patch.outputQuantizationMode === 'round' || patch.outputQuantizationMode === 'tpdf') {
+      normalized.outputQuantizationMode = patch.outputQuantizationMode;
     }
 
     const hasExplicitSrcPatch =
@@ -2084,6 +2094,7 @@ export class NativeAudioService implements IAudioService {
       srcMode: this.srcMode,
       srcBackend: this.srcBackend,
       srcTargetSampleRate: this.srcTargetSampleRate,
+      outputQuantizationMode: this.outputQuantizationMode,
       dynamicSrcAutoEnabled: this.dynamicSrcAutoEnabled,
       dynamicSrcProfile: this.dynamicSrcProfile,
       dynamicSrcLastSwitchAtMs: this.dynamicSrcLastSwitchAtMs,
@@ -2413,6 +2424,10 @@ export class NativeAudioService implements IAudioService {
           this.srcTargetSampleRate = Math.max(8000, Math.min(768000, Math.floor(next.srcTargetSampleRate)));
         } else if (next.srcTargetSampleRate == null) {
           this.srcTargetSampleRate = null;
+        }
+
+        if (next.outputQuantizationMode === 'round' || next.outputQuantizationMode === 'tpdf') {
+          this.outputQuantizationMode = next.outputQuantizationMode;
         }
 
         if (typeof next.hqSrcStopbandDb === 'number' && Number.isFinite(next.hqSrcStopbandDb)) {

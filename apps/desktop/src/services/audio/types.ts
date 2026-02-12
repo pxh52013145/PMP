@@ -90,6 +90,7 @@ export interface AudioEnginePolicyPatch {
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
   srcBackend?: 'rubato' | 'linear-simd';
   srcTargetSampleRate?: number | null;
+  outputQuantizationMode?: 'round' | 'tpdf';
 }
 
 export interface AudioDynamicSrcAutoSettings {
@@ -127,6 +128,7 @@ export interface AudioRobustnessSnapshot {
   srcMode?: 'source-native' | 'match-output' | 'target-rate';
   srcBackend?: 'rubato' | 'linear-simd';
   srcTargetSampleRate?: number | null;
+  outputQuantizationMode?: 'round' | 'tpdf';
   dynamicSrcAutoEnabled?: boolean;
   dynamicSrcProfile?: 'quality' | 'latency';
   dynamicSrcLastSwitchAtMs?: number | null;

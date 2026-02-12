@@ -6,11 +6,10 @@ use tauri::{AppHandle, Manager};
 
 use windows::{
     core::HSTRING,
-    Foundation::{TypedEventHandler, TimeSpan},
+    Foundation::{TimeSpan, TypedEventHandler},
     Media::{
-        MediaPlaybackStatus, MediaPlaybackType,
-        SystemMediaTransportControls, SystemMediaTransportControlsButton,
-        SystemMediaTransportControlsButtonPressedEventArgs,
+        MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
+        SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
         SystemMediaTransportControlsTimelineProperties,
     },
     Win32::Foundation::HWND,
@@ -20,8 +19,8 @@ use windows::{
     },
 };
 
-use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
 use crate::windows::taskbar_thumbbar::TaskbarMediaControlPayload;
+use crate::windows::EVENT_TASKBAR_MEDIA_CONTROL;
 
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 
@@ -51,7 +50,10 @@ fn emit_action(action: &'static str) {
     let Some(app) = APP_HANDLE.get() else {
         return;
     };
-    let _ = app.emit_all(EVENT_TASKBAR_MEDIA_CONTROL, TaskbarMediaControlPayload { action });
+    let _ = app.emit_all(
+        EVENT_TASKBAR_MEDIA_CONTROL,
+        TaskbarMediaControlPayload { action },
+    );
 }
 
 fn title_from_track_path(track_path: &str) -> String {
@@ -107,9 +109,8 @@ pub fn init(app: &AppHandle) {
     };
 
     let controls = (|| unsafe {
-        let factory: ISystemMediaTransportControlsInterop = RoGetActivationFactory(&HSTRING::from(
-            "Windows.Media.SystemMediaTransportControls",
-        ))?;
+        let factory: ISystemMediaTransportControlsInterop =
+            RoGetActivationFactory(&HSTRING::from("Windows.Media.SystemMediaTransportControls"))?;
         factory.GetForWindow::<_, SystemMediaTransportControls>(HWND(hwnd.0 as isize))
     })()
     .map_err(|err| format!("{err:?}"));
@@ -156,7 +157,9 @@ pub fn init(app: &AppHandle) {
         last_playback_state: None,
         last_timeline_position_sec: -1,
         last_timeline_duration_sec: -1,
-        last_timeline_updated_at: Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now),
+        last_timeline_updated_at: Instant::now()
+            .checked_sub(Duration::from_secs(60))
+            .unwrap_or_else(Instant::now),
     });
 }
 

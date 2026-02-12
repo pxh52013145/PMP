@@ -75,7 +75,6 @@ export function LanguageSettingsPanel() {
           </div>
         </div>
 
-        <div className="settings-param-divider settings-param-divider--compact" />
       </div>
     </div>
   );

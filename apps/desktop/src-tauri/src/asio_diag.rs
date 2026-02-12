@@ -69,10 +69,16 @@ fn run_diag() -> Result<(), String> {
         print!("- {name}: ");
         match asio.load_driver(&name) {
             Ok(driver) => {
-                let channels = driver.channels().map_err(|e| format!("{name}: channels: {e}"))?;
-                let sample_rate =
-                    driver.sample_rate().map_err(|e| format!("{name}: sample_rate: {e}"))?;
-                println!("ok (ins={}, outs={}, rate={})", channels.ins, channels.outs, sample_rate);
+                let channels = driver
+                    .channels()
+                    .map_err(|e| format!("{name}: channels: {e}"))?;
+                let sample_rate = driver
+                    .sample_rate()
+                    .map_err(|e| format!("{name}: sample_rate: {e}"))?;
+                println!(
+                    "ok (ins={}, outs={}, rate={})",
+                    channels.ins, channels.outs, sample_rate
+                );
                 let destroyed = driver
                     .destroy()
                     .map_err(|e| format!("{name}: destroy failed: {e}"))?;
@@ -254,11 +260,17 @@ fn run_tone(args: &[String]) -> Result<(), String> {
                 None,
             )
         }
-        other => return Err(format!("Unsupported sample format for tone test: {other:?}")),
+        other => {
+            return Err(format!(
+                "Unsupported sample format for tone test: {other:?}"
+            ))
+        }
     }
     .map_err(|e| format!("Failed to build ASIO output stream: {e}"))?;
 
-    stream.play().map_err(|e| format!("Failed to start stream: {e}"))?;
+    stream
+        .play()
+        .map_err(|e| format!("Failed to start stream: {e}"))?;
 
     let mut last_calls = 0u64;
     for second in 1..=seconds {

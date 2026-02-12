@@ -7,8 +7,8 @@ use tauri::{AppHandle, Manager};
 use crate::audio::engine::{PlaybackState, ENGINE};
 use crate::audio::events::{
     NativeAudioErrorPayload, NativeAudioSpectrumFramePayload, NativeAudioSpectrumPayload,
-    NativeAudioStatePayload,
-    NATIVE_AUDIO_ERROR_EVENT, NATIVE_AUDIO_SPECTRUM_EVENT, NATIVE_AUDIO_STATE_EVENT,
+    NativeAudioStatePayload, NATIVE_AUDIO_ERROR_EVENT, NATIVE_AUDIO_SPECTRUM_EVENT,
+    NATIVE_AUDIO_STATE_EVENT,
 };
 
 static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
@@ -92,7 +92,8 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 if let Some(frame) = spectrum_dual.compute_pre_frame(&fft, snapshot.pre.as_ref()) {
                     let _ = emit_spectrum_frame(&app_handle, frame);
                 }
-                if let Some(frame) = spectrum_dual.compute_post_frame(&fft, snapshot.post.as_ref()) {
+                if let Some(frame) = spectrum_dual.compute_post_frame(&fft, snapshot.post.as_ref())
+                {
                     let _ = emit_spectrum_frame(&app_handle, frame);
                 }
             }
@@ -104,7 +105,10 @@ pub(crate) fn shutdown() {
     EMITTER_STOP.store(true, Ordering::SeqCst);
 }
 
-pub(crate) fn emit_state(app_handle: &AppHandle, payload: NativeAudioStatePayload) -> Result<(), String> {
+pub(crate) fn emit_state(
+    app_handle: &AppHandle,
+    payload: NativeAudioStatePayload,
+) -> Result<(), String> {
     app_handle
         .emit_all(NATIVE_AUDIO_STATE_EVENT, payload)
         .map_err(|e| format!("Failed to emit state: {e}"))
@@ -146,7 +150,10 @@ fn mark_error_emitted(seq: u64) -> bool {
     }
 }
 
-pub(crate) fn emit_error(app_handle: &AppHandle, payload: NativeAudioErrorPayload) -> Result<(), String> {
+pub(crate) fn emit_error(
+    app_handle: &AppHandle,
+    payload: NativeAudioErrorPayload,
+) -> Result<(), String> {
     if !mark_error_emitted(payload.seq) {
         return Ok(());
     }

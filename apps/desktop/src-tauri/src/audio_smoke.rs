@@ -221,4 +221,3 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
         max_underrun_frames,
     })
 }
-

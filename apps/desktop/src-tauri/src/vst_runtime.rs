@@ -335,7 +335,9 @@ fn ensure_session_internal(
             .ok()
             .and_then(|raw| raw.parse::<u32>().ok())
             .filter(|v| *v <= 2)
-            .unwrap_or_else(|| crate::vst_settings::effective_sidechain_channels(&settings, channels))
+            .unwrap_or_else(|| {
+                crate::vst_settings::effective_sidechain_channels(&settings, channels)
+            })
     };
 
     let needs_spawn = {
@@ -1000,10 +1002,11 @@ pub fn set_params(
         params.clone(),
     );
 
-    let desired_snapshot = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str())
-        .into_iter()
-        .map(|(key, value)| VstParamValue { key, value })
-        .collect::<Vec<_>>();
+    let desired_snapshot =
+        crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str())
+            .into_iter()
+            .map(|(key, value)| VstParamValue { key, value })
+            .collect::<Vec<_>>();
     if let Err(err) = crate::dsp_graph::set_vst_node_params(
         app,
         node_id.as_str(),
@@ -1087,7 +1090,8 @@ pub fn set_param_value(
 
     let plugin_id = crate::dsp_graph::resolve_vst_plugin_id(app, node_id.as_str())?;
 
-    let existing = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str());
+    let existing =
+        crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str());
     let mut merged: Vec<(String, f32)> = Vec::with_capacity(existing.len().saturating_add(1));
     let mut index_by_key: HashMap<String, usize> = HashMap::new();
     for (k, v) in existing {
@@ -1122,10 +1126,11 @@ pub fn set_param_value(
         merged_values,
     );
 
-    let desired_snapshot = crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str())
-        .into_iter()
-        .map(|(key, value)| VstParamValue { key, value })
-        .collect::<Vec<_>>();
+    let desired_snapshot =
+        crate::vst_instance_manager::desired_params(node_id.as_str(), plugin_id.as_str())
+            .into_iter()
+            .map(|(key, value)| VstParamValue { key, value })
+            .collect::<Vec<_>>();
     if let Err(err) = crate::dsp_graph::set_vst_node_params(
         app,
         node_id.as_str(),

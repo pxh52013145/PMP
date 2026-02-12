@@ -18,8 +18,7 @@ use symphonia::core::{
 
 use super::{
     AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
-    AudioInputSrcPolicy,
-    SYMPHONIA_INPUT_ID,
+    AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
 };
 
 use crate::audio::buffer::AudioRingBuffer;
@@ -763,12 +762,8 @@ mod tests {
         let mut right_state: u32 = 0xDEAD_BEEF;
 
         for _ in 0..frames {
-            left_state = left_state
-                .wrapping_mul(1664525)
-                .wrapping_add(1013904223);
-            right_state = right_state
-                .wrapping_mul(1664525)
-                .wrapping_add(1013904223);
+            left_state = left_state.wrapping_mul(1664525).wrapping_add(1013904223);
+            right_state = right_state.wrapping_mul(1664525).wrapping_add(1013904223);
 
             let left_raw = (left_state >> 16) as i16;
             let right_raw = (right_state >> 16) as i16;
@@ -793,12 +788,8 @@ mod tests {
         let frames = 4_800usize; // 0.1s
         write_wav_i16_stereo_lcg(&path, input_rate, frames);
 
-        let decoded = decode_track_to_buffer(
-            &path,
-            Some(44_100),
-            AudioInputSrcPolicy::default(),
-        )
-        .expect("offline decode");
+        let decoded = decode_track_to_buffer(&path, Some(44_100), AudioInputSrcPolicy::default())
+            .expect("offline decode");
         assert_eq!(decoded.channels, 2);
         assert_eq!(decoded.sample_rate, 44_100);
         assert_eq!(decoded.samples.len(), 4_410 * 2);
@@ -815,8 +806,7 @@ mod tests {
         }
 
         assert_eq!(
-            hex,
-            "81b3efc29ef481951f337884ebca4929b670343adb5476a8bca7a2f3c54dd598",
+            hex, "81b3efc29ef481951f337884ebca4929b670343adb5476a8bca7a2f3c54dd598",
             "offline render output changed; if intentional, update the golden hash"
         );
 

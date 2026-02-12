@@ -9,7 +9,10 @@ pub fn debug_get_config(app: tauri::AppHandle) -> Result<debug_config::DebugConf
 }
 
 #[tauri::command]
-pub fn debug_set_config(app: tauri::AppHandle, config: debug_config::DebugConfig) -> Result<(), String> {
+pub fn debug_set_config(
+    app: tauri::AppHandle,
+    config: debug_config::DebugConfig,
+) -> Result<(), String> {
     debug_config::set_config(&app, config)
 }
 
@@ -19,7 +22,9 @@ pub fn debug_get_env_snapshot() -> BTreeMap<String, Option<String>> {
 }
 
 #[tauri::command]
-pub fn debug_get_editor_windows_state(app: tauri::AppHandle) -> windows::editor::EditorWindowsDebugState {
+pub fn debug_get_editor_windows_state(
+    app: tauri::AppHandle,
+) -> windows::editor::EditorWindowsDebugState {
     windows::editor::debug_get_editor_windows_state(&app)
 }
 

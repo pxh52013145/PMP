@@ -384,12 +384,12 @@ export function AudioComponentsSettingsPanel() {
   return (
     <div className="settings-audio-panel">
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">OUTPUT BACKEND</p>
           <h3 className="settings-param-title">{t('settings.audioComponents.outputBackend.title')}</h3>
           <p className="settings-param-subtitle">Backend Transport & Driver Mode</p>
         </div>
-        <div className="settings-param-divider" />
 
         <p className="settings-card-note">{badge}</p>
 
@@ -397,27 +397,32 @@ export function AudioComponentsSettingsPanel() {
           <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
         ) : (
           <>
-            <div
-              className="settings-choice-row"
-              role="radiogroup"
-              aria-label={t('settings.audioComponents.outputBackend.select.ariaLabel')}
-            >
-              {outputBackendOptions.map((backend) => {
-                const isSelected = selectedBackend === backend.id;
-                return (
-                  <button
-                    key={backend.id}
-                    type="button"
-                    className="settings-choice-btn"
-                    data-active={isSelected}
-                    disabled={busy || backend.disabled}
-                    onClick={() => setSelectedBackend(backend.id)}
-                    title={backend.desc}
-                  >
-                    {backend.title}
-                  </button>
-                );
-              })}
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioComponents.outputBackend.select.ariaLabel')}</p>
+              </div>
+              <div
+                className="settings-inline-row-controls"
+                role="radiogroup"
+                aria-label={t('settings.audioComponents.outputBackend.select.ariaLabel')}
+              >
+                {outputBackendOptions.map((backend) => {
+                  const isSelected = selectedBackend === backend.id;
+                  return (
+                    <button
+                      key={backend.id}
+                      type="button"
+                      className="settings-choice-btn"
+                      data-active={isSelected}
+                      disabled={busy || backend.disabled}
+                      onClick={() => setSelectedBackend(backend.id)}
+                      title={backend.desc}
+                    >
+                      {backend.title}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {selectedBackendOption?.desc && <p className="settings-card-note">{selectedBackendOption.desc}</p>}
@@ -440,35 +445,38 @@ export function AudioComponentsSettingsPanel() {
         )}
       </div>
 
-      <div className="settings-param-divider settings-param-divider--major" />
-
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">OUTPUT DEVICE</p>
           <h3 className="settings-param-title">{t('settings.audioComponents.outputDevice.title')}</h3>
           <p className="settings-param-subtitle">Target Device & Hardware Route</p>
         </div>
-        <div className="settings-param-divider" />
 
         {!canUseBackend ? (
           <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
         ) : (
           <>
-            <div className="settings-section-controls settings-section-controls--stretch">
-              <select
-                className="settings-select"
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                aria-label={t('settings.audioComponents.outputDevice.select.ariaLabel')}
-                disabled={busy}
-              >
-                <option value="">{t('settings.audioComponents.outputDevice.default')}</option>
-                {outputDevices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.name}
-                  </option>
-                ))}
-              </select>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioComponents.outputDevice.select.ariaLabel')}</p>
+              </div>
+              <div className="settings-inline-row-controls settings-section-controls--stretch">
+                <select
+                  className="settings-select"
+                  value={selectedDeviceId}
+                  onChange={(e) => setSelectedDeviceId(e.target.value)}
+                  aria-label={t('settings.audioComponents.outputDevice.select.ariaLabel')}
+                  disabled={busy}
+                >
+                  <option value="">{t('settings.audioComponents.outputDevice.default')}</option>
+                  {outputDevices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <p className="settings-card-note">
@@ -500,35 +508,38 @@ export function AudioComponentsSettingsPanel() {
         )}
       </div>
 
-      <div className="settings-param-divider settings-param-divider--major" />
-
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">INPUT DECODER</p>
           <h3 className="settings-param-title">{t('settings.audioComponents.audioInput.title')}</h3>
           <p className="settings-param-subtitle">File Decoder & Input Path</p>
         </div>
-        <div className="settings-param-divider" />
 
         {!canUseBackend ? (
           <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
         ) : (
           <>
-            <div className="settings-section-controls settings-section-controls--stretch">
-              <select
-                className="settings-select"
-                value={selectedInput}
-                onChange={(e) => setSelectedInput(e.target.value)}
-                aria-label={t('settings.audioComponents.audioInput.select.ariaLabel')}
-                disabled={busy}
-              >
-                <option value="">{t('settings.audioComponents.audioInput.auto')}</option>
-                {audioInputs.map((inputId) => (
-                  <option key={inputId} value={inputId}>
-                    {inputId}
-                  </option>
-                ))}
-              </select>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioComponents.audioInput.select.ariaLabel')}</p>
+              </div>
+              <div className="settings-inline-row-controls settings-section-controls--stretch">
+                <select
+                  className="settings-select"
+                  value={selectedInput}
+                  onChange={(e) => setSelectedInput(e.target.value)}
+                  aria-label={t('settings.audioComponents.audioInput.select.ariaLabel')}
+                  disabled={busy}
+                >
+                  <option value="">{t('settings.audioComponents.audioInput.auto')}</option>
+                  {audioInputs.map((inputId) => (
+                    <option key={inputId} value={inputId}>
+                      {inputId}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <p className="settings-card-note">{t('settings.audioComponents.audioInput.desc')}</p>

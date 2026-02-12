@@ -1,6 +1,4 @@
-use std::sync::{
-    atomic::Ordering,
-};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
@@ -86,7 +84,9 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
 
     let window = app
         .get_window(crate::windows::MAIN_WINDOW_LABEL)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Main window not found"))?;
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "Main window not found")
+        })?;
 
     #[cfg(target_os = "windows")]
     {

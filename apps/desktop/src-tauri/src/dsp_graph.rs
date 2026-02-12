@@ -210,7 +210,9 @@ pub fn set_vst_node_params(
     let mut guard = DSP_GRAPH
         .lock()
         .map_err(|_| "DSP graph state is locked".to_string())?;
-    let mut graph = guard.clone().unwrap_or_else(|| read_graph_from_disk(app).unwrap_or_default());
+    let mut graph = guard
+        .clone()
+        .unwrap_or_else(|| read_graph_from_disk(app).unwrap_or_default());
 
     let mut found = false;
     for node in &mut graph.nodes {

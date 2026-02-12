@@ -1,28 +1,26 @@
 use std::sync::Arc;
 
+use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTransportMode};
 use once_cell::sync::Lazy;
 use rodio::Source;
-use crate::audio::policy::NativeAudioTransportMode;
 
-#[cfg(test)]
-mod null;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 mod asio;
-mod rodio_cpal;
+#[cfg(test)]
+mod null;
 mod render_ahead;
+mod rodio_cpal;
 #[cfg(target_os = "windows")]
 mod wasapi;
 #[cfg(target_os = "windows")]
 mod wasapi_exclusive;
 
-pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
-pub(crate) use render_ahead::{
-    shared_render_ahead_metrics, wrap_source_for_shared_backend,
-};
-#[cfg(all(target_os = "windows", feature = "asio-sdk"))]
-pub use asio::{asio_backend, ASIO_BACKEND_ID};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 pub(crate) use asio::open_control_panel as open_asio_control_panel;
+#[cfg(all(target_os = "windows", feature = "asio-sdk"))]
+pub use asio::{asio_backend, ASIO_BACKEND_ID};
+pub(crate) use render_ahead::{shared_render_ahead_metrics, wrap_source_for_shared_backend};
+pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
 #[cfg(target_os = "windows")]
@@ -178,6 +176,8 @@ pub trait AudioOutputBackend: Send + Sync {
     }
 
     fn set_transport_mode(&self, _mode: NativeAudioTransportMode) {}
+
+    fn set_output_quantization_mode(&self, _mode: NativeAudioOutputQuantizationMode) {}
 }
 
 #[derive(Clone, Debug)]

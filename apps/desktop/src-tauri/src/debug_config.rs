@@ -195,9 +195,10 @@ pub fn env_snapshot() -> BTreeMap<String, Option<String>> {
     for key in keys {
         map.insert(
             key.to_string(),
-            std::env::var(key).ok().map(|value| value.trim().to_string()),
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string()),
         );
     }
     map
 }
-

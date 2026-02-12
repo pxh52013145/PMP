@@ -215,7 +215,11 @@ impl DspRuntime {
                             continue;
                         }
                         let q = if band.q.is_finite() { band.q } else { 0.707 };
-                        let gain_db = if band.gain_db.is_finite() { band.gain_db } else { 0.0 };
+                        let gain_db = if band.gain_db.is_finite() {
+                            band.gain_db
+                        } else {
+                            0.0
+                        };
                         eq_bands.push(EqBandConfig {
                             kind: band.kind,
                             frequency_hz: band.frequency_hz,
@@ -399,12 +403,7 @@ fn normalize_biquad(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> Biq
     let b2 = (b2 * inv_a0).clamp(-16.0, 16.0);
     let a1 = (a1 * inv_a0).clamp(-16.0, 16.0);
     let a2 = (a2 * inv_a0).clamp(-16.0, 16.0);
-    if !b0.is_finite()
-        || !b1.is_finite()
-        || !b2.is_finite()
-        || !a1.is_finite()
-        || !a2.is_finite()
-    {
+    if !b0.is_finite() || !b1.is_finite() || !b2.is_finite() || !a1.is_finite() || !a2.is_finite() {
         return BiquadCoeffs::identity();
     }
     BiquadCoeffs { b0, b1, b2, a1, a2 }
@@ -821,8 +820,8 @@ where
                     break;
                 }
 
-                let version =
-                    dsp_thread.wait_for_slow_version_change(last_seen_version, &pending_stop_thread);
+                let version = dsp_thread
+                    .wait_for_slow_version_change(last_seen_version, &pending_stop_thread);
                 if pending_stop_thread.load(Ordering::Acquire) {
                     break;
                 }
@@ -1005,7 +1004,9 @@ where
             return false;
         }
         let crossfade_frames = crossfade_frames.min(frames);
-        let crossfade_samples = crossfade_frames.saturating_mul(channels).min(self.local.len());
+        let crossfade_samples = crossfade_frames
+            .saturating_mul(channels)
+            .min(self.local.len());
 
         self.update_scratch.clear();
         self.update_scratch.extend_from_slice(&self.local);
@@ -1432,9 +1433,7 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(40));
 
-        let crossfade_frames = ((48_000u64).saturating_mul(5) / 1000)
-            .max(1)
-            .min(2048) as usize;
+        let crossfade_frames = ((48_000u64).saturating_mul(5) / 1000).max(1).min(2048) as usize;
         let crossfade_samples = crossfade_frames * 2;
         for _ in 0..crossfade_samples {
             processed.next().expect("crossfade sample");

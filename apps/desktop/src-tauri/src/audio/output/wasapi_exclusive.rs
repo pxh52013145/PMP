@@ -9,12 +9,12 @@ use once_cell::sync::Lazy;
 use rodio::Source;
 
 use super::{
-    AudioOutputBackend, AudioOutputError, AudioSink, BoxedSource,
-    OutputCallbackMetricsSnapshot, OutputDeviceInfo, OutputStreamInfo,
+    AudioOutputBackend, AudioOutputError, AudioSink, BoxedSource, OutputCallbackMetricsSnapshot,
+    OutputDeviceInfo, OutputStreamInfo,
 };
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::diagnostics;
-use crate::audio::policy::NativeAudioTransportMode;
+use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTransportMode};
 
 pub const WASAPI_EXCLUSIVE_BACKEND_ID: &str = "wasapi-exclusive";
 pub const WASAPI_SHARED_RAW_BACKEND_ID: &str = "wasapi-shared-raw";
@@ -55,6 +55,7 @@ static CALLBACK_EXPECTED_INTERVAL_US: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_INTERVAL_OVERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_WAIT_TIMEOUT_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static QUANTIZATION_RNG_STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
 
 fn p99_like_u32(total_us: u64, sample_count: u64, max_us: u64) -> u32 {
     if sample_count == 0 {
@@ -180,10 +181,7 @@ impl CallbackTimingState {
     fn on_callback_wake(&mut self) {
         let now = Instant::now();
         if let Some(last) = self.last_wake_at {
-            let interval_us = now
-                .duration_since(last)
-                .as_micros()
-                .min(u64::MAX as u128) as u64;
+            let interval_us = now.duration_since(last).as_micros().min(u64::MAX as u128) as u64;
             record_callback_interval(interval_us, self.expected_interval_us);
         }
         self.last_wake_at = Some(now);
@@ -199,6 +197,7 @@ impl Default for BackendState {
             stream_open: false,
             error: None,
             transport_mode: NativeAudioTransportMode::Robust,
+            output_quantization_mode: NativeAudioOutputQuantizationMode::Round,
         }
     }
 }
@@ -210,6 +209,7 @@ struct BackendState {
     stream_open: bool,
     error: Option<AudioOutputError>,
     transport_mode: NativeAudioTransportMode,
+    output_quantization_mode: NativeAudioOutputQuantizationMode,
 }
 
 pub struct WasapiExclusiveBackend {
@@ -325,6 +325,9 @@ impl WasapiSharedRawBackend {
             .into_iter()
             .find(|device| device.id == device_id)
             .ok_or_else(|| format!("Output device not found: {device_id}"))?;
+        let mix_sample_rate = query_render_device_mix_sample_rate(&matched.id)
+            .ok()
+            .flatten();
 
         let mut state = self
             .state
@@ -332,17 +335,20 @@ impl WasapiSharedRawBackend {
             .map_err(|_| "Audio stream state is locked".to_string())?;
         state.device_id = Some(matched.id);
         state.device_name = Some(matched.name);
+        state.output_sample_rate = mix_sample_rate;
         Ok(())
     }
 
     fn resolve_default_device(&self) -> Result<(), String> {
         let info = resolve_default_render_device()?;
+        let mix_sample_rate = query_render_device_mix_sample_rate(&info.id).ok().flatten();
         let mut state = self
             .state
             .lock()
             .map_err(|_| "Audio stream state is locked".to_string())?;
         state.device_id = Some(info.id);
         state.device_name = Some(info.name);
+        state.output_sample_rate = mix_sample_rate;
         Ok(())
     }
 
@@ -357,6 +363,9 @@ impl WasapiSharedRawBackend {
             .into_iter()
             .find(|device| device.name == device_name)
             .ok_or_else(|| format!("Output device not found: {device_name}"))?;
+        let mix_sample_rate = query_render_device_mix_sample_rate(&matched.id)
+            .ok()
+            .flatten();
 
         let mut state = self
             .state
@@ -364,17 +373,27 @@ impl WasapiSharedRawBackend {
             .map_err(|_| "Audio stream state is locked".to_string())?;
         state.device_id = Some(matched.id);
         state.device_name = Some(matched.name);
+        state.output_sample_rate = mix_sample_rate;
         Ok(())
     }
 
     fn ensure_device_selected(&self) -> Result<(), String> {
-        let has_device = self
+        let (device_id, output_sample_rate) = self
             .state
             .lock()
-            .map_err(|_| "Audio stream state is locked".to_string())?
-            .device_id
-            .is_some();
-        if has_device {
+            .map_err(|_| "Audio stream state is locked".to_string())
+            .map(|state| (state.device_id.clone(), state.output_sample_rate))?;
+        if let Some(device_id) = device_id {
+            if output_sample_rate.is_none() {
+                let mix_sample_rate = query_render_device_mix_sample_rate(&device_id)
+                    .ok()
+                    .flatten();
+                if let Ok(mut state) = self.state.lock() {
+                    if state.output_sample_rate.is_none() {
+                        state.output_sample_rate = mix_sample_rate;
+                    }
+                }
+            }
             return Ok(());
         }
         self.resolve_default_device()
@@ -426,7 +445,9 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
     }
 
     fn default_device_name(&self) -> Option<String> {
-        resolve_default_render_device().ok().map(|device| device.name)
+        resolve_default_render_device()
+            .ok()
+            .map(|device| device.name)
     }
 
     fn current_info(&self) -> OutputStreamInfo {
@@ -510,6 +531,12 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
             guard.transport_mode = mode;
         }
     }
+
+    fn set_output_quantization_mode(&self, mode: NativeAudioOutputQuantizationMode) {
+        if let Ok(mut guard) = self.state.lock() {
+            guard.output_quantization_mode = mode;
+        }
+    }
 }
 
 impl AudioOutputBackend for WasapiSharedRawBackend {
@@ -544,7 +571,9 @@ impl AudioOutputBackend for WasapiSharedRawBackend {
     }
 
     fn default_device_name(&self) -> Option<String> {
-        resolve_default_render_device().ok().map(|device| device.name)
+        resolve_default_render_device()
+            .ok()
+            .map(|device| device.name)
     }
 
     fn current_info(&self) -> OutputStreamInfo {
@@ -628,6 +657,12 @@ impl AudioOutputBackend for WasapiSharedRawBackend {
             guard.transport_mode = mode;
         }
     }
+
+    fn set_output_quantization_mode(&self, mode: NativeAudioOutputQuantizationMode) {
+        if let Ok(mut guard) = self.state.lock() {
+            guard.output_quantization_mode = mode;
+        }
+    }
 }
 
 struct DeviceInfo {
@@ -638,10 +673,12 @@ struct DeviceInfo {
 #[cfg(target_os = "windows")]
 fn enumerate_render_devices() -> Result<Vec<DeviceInfo>, String> {
     use windows::Win32::Media::Audio::{
-        eRender, DEVICE_STATE_ACTIVE, IMMDevice, IMMDeviceCollection, IMMDeviceEnumerator,
-        MMDeviceEnumerator,
+        eRender, IMMDevice, IMMDeviceCollection, IMMDeviceEnumerator, MMDeviceEnumerator,
+        DEVICE_STATE_ACTIVE,
     };
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
 
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -677,8 +714,12 @@ fn enumerate_render_devices() -> Result<Vec<DeviceInfo>, String> {
 
 #[cfg(target_os = "windows")]
 fn resolve_default_render_device() -> Result<DeviceInfo, String> {
-    use windows::Win32::Media::Audio::{eConsole, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
 
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -700,10 +741,59 @@ fn resolve_default_render_device() -> Result<DeviceInfo, String> {
 }
 
 #[cfg(target_os = "windows")]
+fn query_render_device_mix_sample_rate(device_id: &str) -> Result<Option<u32>, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Media::Audio::{
+        IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| format!("Failed to create MMDeviceEnumerator: {e}"))?;
+
+        let device_id_wide: Vec<u16> = device_id.encode_utf16().chain(Some(0)).collect();
+        let device: IMMDevice = enumerator
+            .GetDevice(PCWSTR(device_id_wide.as_ptr()))
+            .map_err(|e| format!("Failed to open output device: {e}"))?;
+
+        let audio_client: IAudioClient = device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|e| format!("Failed to activate audio client: {e}"))?;
+
+        let mix_ptr = audio_client
+            .GetMixFormat()
+            .map_err(|e| format!("Failed to query mix format: {e}"))?;
+
+        if mix_ptr.is_null() {
+            return Ok(None);
+        }
+
+        let mix = &*mix_ptr;
+        let sample_rate = if mix.nSamplesPerSec > 0 {
+            Some(mix.nSamplesPerSec)
+        } else {
+            None
+        };
+        windows::Win32::System::Com::CoTaskMemFree(Some(mix_ptr as *const c_void));
+        Ok(sample_rate)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn query_render_device_mix_sample_rate(_device_id: &str) -> Result<Option<u32>, String> {
+    Ok(None)
+}
+
+#[cfg(target_os = "windows")]
 fn get_device_info(device: &windows::Win32::Media::Audio::IMMDevice) -> Result<DeviceInfo, String> {
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
-    use windows::Win32::System::Com::{CoTaskMemFree, STGM_READ};
     use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+    use windows::Win32::System::Com::{CoTaskMemFree, STGM_READ};
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 
     unsafe {
@@ -754,7 +844,64 @@ enum WasapiSampleFormat {
 
 #[inline]
 fn quantize_pcm24(sample: f32, volume: f32) -> i32 {
-    let scaled = sample * 8_388_607.0f32 * volume;
+    let scaled = sample * (8_388_607.0f32 * volume);
+    scaled.round().clamp(-8_388_608.0, 8_388_607.0) as i32
+}
+
+#[inline]
+fn quantize_pcm16_with_mode(
+    sample: f32,
+    volume: f32,
+    mode: NativeAudioOutputQuantizationMode,
+    dither_state: &mut u64,
+) -> i16 {
+    let mut scaled = sample * (i16::MAX as f32) * volume;
+    if matches!(mode, NativeAudioOutputQuantizationMode::Tpdf) {
+        scaled += tpdf_noise_lsb(dither_state);
+    }
+    scaled.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
+#[inline]
+fn quantize_pcm32_with_mode(
+    sample: f32,
+    volume: f32,
+    mode: NativeAudioOutputQuantizationMode,
+    dither_state: &mut u64,
+) -> i32 {
+    let mut scaled = sample * (i32::MAX as f32) * volume;
+    if matches!(mode, NativeAudioOutputQuantizationMode::Tpdf) {
+        scaled += tpdf_noise_lsb(dither_state);
+    }
+    scaled.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
+#[inline]
+fn next_dither_u32(state: &mut u64) -> u32 {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    (*state >> 32) as u32
+}
+
+#[inline]
+fn tpdf_noise_lsb(state: &mut u64) -> f32 {
+    let a = next_dither_u32(state) as f32 / u32::MAX as f32;
+    let b = next_dither_u32(state) as f32 / u32::MAX as f32;
+    a - b
+}
+
+#[inline]
+fn quantize_pcm24_with_mode(
+    sample: f32,
+    volume: f32,
+    mode: NativeAudioOutputQuantizationMode,
+    dither_state: &mut u64,
+) -> i32 {
+    let mut scaled = sample * 8_388_607.0f32 * volume;
+    if matches!(mode, NativeAudioOutputQuantizationMode::Tpdf) {
+        scaled += tpdf_noise_lsb(dither_state);
+    }
     scaled.round().clamp(-8_388_608.0, 8_388_607.0) as i32
 }
 
@@ -769,6 +916,100 @@ fn pack_pcm24_in32(sample: i32) -> i32 {
 }
 
 #[inline]
+fn quantize_pcm24_round_in32_buffer(samples: &[f32], out: *mut i32, volume: f32) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let scale = 8_388_607.0f32 * volume;
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            unsafe {
+                quantize_pcm24_round_in32_buffer_avx2(samples, out, scale);
+            }
+            return;
+        }
+        if std::arch::is_x86_feature_detected!("sse2") {
+            unsafe {
+                quantize_pcm24_round_in32_buffer_sse2(samples, out, scale);
+            }
+            return;
+        }
+    }
+
+    for (index, sample) in samples.iter().enumerate() {
+        unsafe {
+            *out.add(index) = pack_pcm24_in32(quantize_pcm24(*sample, volume));
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn quantize_pcm24_round_in32_buffer_sse2(samples: &[f32], out: *mut i32, scale: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let scale_vec = _mm_set1_ps(scale);
+    let min_vec = _mm_set1_ps(-8_388_608.0);
+    let max_vec = _mm_set1_ps(8_388_607.0);
+    let half_vec = _mm_set1_ps(0.5);
+    let sign_mask = _mm_set1_ps(-0.0);
+
+    while i + 4 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm_loadu_ps(ptr);
+        let scaled = _mm_mul_ps(x, scale_vec);
+        let clamped = _mm_min_ps(_mm_max_ps(scaled, min_vec), max_vec);
+        let signed_half = _mm_or_ps(half_vec, _mm_and_ps(clamped, sign_mask));
+        let rounded = _mm_cvttps_epi32(_mm_add_ps(clamped, signed_half));
+        let packed = _mm_slli_epi32(rounded, 8);
+        _mm_storeu_si128(out.add(i) as *mut __m128i, packed);
+        i += 4;
+    }
+
+    while i < len {
+        let scaled = *samples.get_unchecked(i) * scale;
+        let quantized = scaled.round().clamp(-8_388_608.0, 8_388_607.0) as i32;
+        *out.add(i) = pack_pcm24_in32(quantized);
+        i += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn quantize_pcm24_round_in32_buffer_avx2(samples: &[f32], out: *mut i32, scale: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let scale_vec = _mm256_set1_ps(scale);
+    let min_vec = _mm256_set1_ps(-8_388_608.0);
+    let max_vec = _mm256_set1_ps(8_388_607.0);
+    let half_vec = _mm256_set1_ps(0.5);
+    let sign_mask = _mm256_set1_ps(-0.0);
+
+    while i + 8 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm256_loadu_ps(ptr);
+        let scaled = _mm256_mul_ps(x, scale_vec);
+        let clamped = _mm256_min_ps(_mm256_max_ps(scaled, min_vec), max_vec);
+        let signed_half = _mm256_or_ps(half_vec, _mm256_and_ps(clamped, sign_mask));
+        let rounded = _mm256_cvttps_epi32(_mm256_add_ps(clamped, signed_half));
+        let packed = _mm256_slli_epi32(rounded, 8);
+        _mm256_storeu_si256(out.add(i) as *mut __m256i, packed);
+        i += 8;
+    }
+
+    if i < len {
+        quantize_pcm24_round_in32_buffer_sse2(&samples[i..], out.add(i), scale);
+    }
+}
+
+#[inline]
 fn pack_pcm24_packed_bytes(sample: i32) -> [u8; 3] {
     let bytes = sample.to_le_bytes();
     [bytes[0], bytes[1], bytes[2]]
@@ -777,7 +1018,9 @@ fn pack_pcm24_packed_bytes(sample: i32) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        pack_pcm24_in32, pack_pcm24_packed_bytes, quantize_pcm24, quantize_pcm24_transport_exact,
+        pack_pcm24_in32, pack_pcm24_packed_bytes, quantize_pcm16_with_mode, quantize_pcm24,
+        quantize_pcm24_round_in32_buffer, quantize_pcm24_transport_exact, quantize_pcm24_with_mode,
+        quantize_pcm32_with_mode, NativeAudioOutputQuantizationMode,
     };
 
     #[test]
@@ -811,6 +1054,84 @@ mod tests {
                 quantize_pcm24_transport_exact(sample, 1.0),
                 quantize_pcm24(sample, 1.0)
             );
+        }
+    }
+
+    #[test]
+    fn pcm24_tpdf_quantization_is_deterministic_with_same_seed() {
+        let mut seed_a = 0x1234_5678_9abc_def0u64;
+        let mut seed_b = 0x1234_5678_9abc_def0u64;
+
+        let a = quantize_pcm24_with_mode(
+            0.000_001,
+            1.0,
+            NativeAudioOutputQuantizationMode::Tpdf,
+            &mut seed_a,
+        );
+        let b = quantize_pcm24_with_mode(
+            0.000_001,
+            1.0,
+            NativeAudioOutputQuantizationMode::Tpdf,
+            &mut seed_b,
+        );
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pcm16_tpdf_quantization_is_deterministic_with_same_seed() {
+        let mut seed_a = 0x1234_5678_1111_2222u64;
+        let mut seed_b = 0x1234_5678_1111_2222u64;
+
+        let a = quantize_pcm16_with_mode(
+            0.000_1,
+            1.0,
+            NativeAudioOutputQuantizationMode::Tpdf,
+            &mut seed_a,
+        );
+        let b = quantize_pcm16_with_mode(
+            0.000_1,
+            1.0,
+            NativeAudioOutputQuantizationMode::Tpdf,
+            &mut seed_b,
+        );
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pcm32_tpdf_quantization_is_deterministic_with_same_seed() {
+        let mut seed_a = 0xabcd_ef98_7654_3210u64;
+        let mut seed_b = 0xabcd_ef98_7654_3210u64;
+
+        let a = quantize_pcm32_with_mode(
+            0.000_001,
+            1.0,
+            NativeAudioOutputQuantizationMode::Tpdf,
+            &mut seed_a,
+        );
+        let b = quantize_pcm32_with_mode(
+            0.000_001,
+            1.0,
+            NativeAudioOutputQuantizationMode::Tpdf,
+            &mut seed_b,
+        );
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pcm24_in32_round_buffer_matches_scalar_quantize() {
+        let samples = [
+            -1.2f32, -1.0, -0.75, -0.25, -0.0001, 0.0, 0.0001, 0.25, 0.5, 0.75, 0.9999, 1.1,
+        ];
+        let volume = 0.87f32;
+        let mut out = vec![0i32; samples.len()];
+
+        quantize_pcm24_round_in32_buffer(&samples, out.as_mut_ptr(), volume);
+
+        for (index, sample) in samples.iter().enumerate() {
+            assert_eq!(out[index], pack_pcm24_in32(quantize_pcm24(*sample, volume)));
         }
     }
 }
@@ -897,7 +1218,9 @@ struct MmcssRegistration {
 impl MmcssRegistration {
     fn register() -> Option<Self> {
         use windows::core::w;
-        use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority};
+        use windows::Win32::System::Threading::{
+            AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority,
+        };
 
         unsafe {
             let mut task_index = 0u32;
@@ -905,7 +1228,10 @@ impl MmcssRegistration {
                 .or_else(|_| AvSetMmThreadCharacteristicsW(w!("Audio"), &mut task_index))
                 .ok()?;
 
-            let _ = AvSetMmThreadPriority(handle, windows::Win32::System::Threading::AVRT_PRIORITY_HIGH);
+            let _ = AvSetMmThreadPriority(
+                handle,
+                windows::Win32::System::Threading::AVRT_PRIORITY_HIGH,
+            );
             Some(Self { handle })
         }
     }
@@ -922,7 +1248,10 @@ impl Drop for MmcssRegistration {
 
 impl WasapiExclusiveSink {
     fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
-        let device_id = backend_state.lock().ok().and_then(|state| state.device_id.clone());
+        let device_id = backend_state
+            .lock()
+            .ok()
+            .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
         Self {
             inner: Arc::new(SinkInner {
@@ -983,7 +1312,8 @@ impl WasapiExclusiveSink {
 
         let inner_clone = inner.clone();
         let handle = thread::spawn(move || {
-            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_decode();
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_decode();
             let mut local: Vec<f32> = Vec::with_capacity(8192);
 
             let mut source = {
@@ -1010,7 +1340,9 @@ impl WasapiExclusiveSink {
                     crate::audio::realtime_scheduler::SCHEDULER.profile(),
                 );
 
-                if inner_clone.render_queue.len_samples() >= inner_clone.render_queue.capacity_samples() * 3 / 4 {
+                if inner_clone.render_queue.len_samples()
+                    >= inner_clone.render_queue.capacity_samples() * 3 / 4
+                {
                     thread::sleep(Duration::from_millis(1));
                     continue;
                 }
@@ -1175,7 +1507,8 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
 
                 let need_open = match stream.as_ref() {
                     Some(stream) => {
-                        stream.sample_rate != desired_sample_rate || stream.channels != desired_channels
+                        stream.sample_rate != desired_sample_rate
+                            || stream.channels != desired_channels
                     }
                     None => true,
                 };
@@ -1280,7 +1613,11 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
             );
 
             if inner.render_queue.is_finished_and_empty()
-                && inner.queue.lock().map(|queue| queue.is_empty()).unwrap_or(true)
+                && inner
+                    .queue
+                    .lock()
+                    .map(|queue| queue.is_empty())
+                    .unwrap_or(true)
             {
                 inner.is_empty.store(true, Ordering::Release);
             }
@@ -1355,7 +1692,8 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
 
                 let need_open = match stream.as_ref() {
                     Some(stream) => {
-                        stream.sample_rate != desired_sample_rate || stream.channels != desired_channels
+                        stream.sample_rate != desired_sample_rate
+                            || stream.channels != desired_channels
                     }
                     None => true,
                 };
@@ -1460,7 +1798,11 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
             );
 
             if inner.render_queue.is_finished_and_empty()
-                && inner.queue.lock().map(|queue| queue.is_empty()).unwrap_or(true)
+                && inner
+                    .queue
+                    .lock()
+                    .map(|queue| queue.is_empty())
+                    .unwrap_or(true)
             {
                 inner.is_empty.store(true, Ordering::Release);
             }
@@ -1470,7 +1812,10 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
 
 impl WasapiSharedRawSink {
     fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
-        let device_id = backend_state.lock().ok().and_then(|state| state.device_id.clone());
+        let device_id = backend_state
+            .lock()
+            .ok()
+            .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
         Self {
             inner: Arc::new(SharedRawSinkInner {
@@ -1496,7 +1841,9 @@ impl WasapiSharedRawSink {
             return;
         }
         let inner_clone = inner.clone();
-        *guard = Some(thread::spawn(move || run_shared_raw_sink_thread(inner_clone)));
+        *guard = Some(thread::spawn(move || {
+            run_shared_raw_sink_thread(inner_clone)
+        }));
     }
 
     fn stop_producer(inner: &Arc<SharedRawSinkInner>) {
@@ -1531,7 +1878,8 @@ impl WasapiSharedRawSink {
 
         let inner_clone = inner.clone();
         let handle = thread::spawn(move || {
-            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_decode();
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_decode();
             let mut local: Vec<f32> = Vec::with_capacity(8192);
 
             let mut source = {
@@ -1558,7 +1906,9 @@ impl WasapiSharedRawSink {
                     crate::audio::realtime_scheduler::SCHEDULER.profile(),
                 );
 
-                if inner_clone.render_queue.len_samples() >= inner_clone.render_queue.capacity_samples() * 3 / 4 {
+                if inner_clone.render_queue.len_samples()
+                    >= inner_clone.render_queue.capacity_samples() * 3 / 4
+                {
                     thread::sleep(Duration::from_millis(1));
                     continue;
                 }
@@ -1668,15 +2018,26 @@ fn start_stream_with_prefill(
         .wait_for_samples((channels.max(1) as usize) * 64, Duration::from_millis(60));
 
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    render_frames(stream, stream.buffer_frame_count, inner, true, volume, scratch)?;
+    let output_quantization_mode = inner
+        .backend_state
+        .lock()
+        .ok()
+        .map(|state| state.output_quantization_mode)
+        .unwrap_or(NativeAudioOutputQuantizationMode::Round);
+    render_frames(
+        stream,
+        stream.buffer_frame_count,
+        inner,
+        true,
+        volume,
+        output_quantization_mode,
+        scratch,
+    )?;
     unsafe {
-        stream
-            .audio_client
-            .Start()
-            .map_err(|e| AudioOutputError {
-                code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
-                message: format!("Failed to start audio client: {e}"),
-            })?;
+        stream.audio_client.Start().map_err(|e| AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_OPEN_FAILED,
+            message: format!("Failed to start audio client: {e}"),
+        })?;
     }
     stream.started = true;
     Ok(())
@@ -1695,15 +2056,26 @@ fn start_stream_with_prefill_shared_raw(
         .wait_for_samples((channels.max(1) as usize) * 64, Duration::from_millis(80));
 
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    render_frames_shared_raw(stream, stream.buffer_frame_count, inner, true, volume, scratch)?;
+    let output_quantization_mode = inner
+        .backend_state
+        .lock()
+        .ok()
+        .map(|state| state.output_quantization_mode)
+        .unwrap_or(NativeAudioOutputQuantizationMode::Round);
+    render_frames_shared_raw(
+        stream,
+        stream.buffer_frame_count,
+        inner,
+        true,
+        volume,
+        output_quantization_mode,
+        scratch,
+    )?;
     unsafe {
-        stream
-            .audio_client
-            .Start()
-            .map_err(|e| AudioOutputError {
-                code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
-                message: format!("Failed to start shared raw audio client: {e}"),
-            })?;
+        stream.audio_client.Start().map_err(|e| AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+            message: format!("Failed to start shared raw audio client: {e}"),
+        })?;
     }
     stream.started = true;
     Ok(())
@@ -1741,6 +2113,12 @@ fn render_once(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
+    let output_quantization_mode = inner
+        .backend_state
+        .lock()
+        .ok()
+        .map(|state| state.output_quantization_mode)
+        .unwrap_or(NativeAudioOutputQuantizationMode::Round);
     let frames = stream.buffer_frame_count;
 
     if !playing || inner.render_queue.is_finished_and_empty() {
@@ -1766,7 +2144,15 @@ fn render_once(
     callback_timing.on_callback_wake();
 
     let started = Instant::now();
-    render_frames(stream, frames, inner, true, volume, scratch)?;
+    render_frames(
+        stream,
+        frames,
+        inner,
+        true,
+        volume,
+        output_quantization_mode,
+        scratch,
+    )?;
     let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
     record_callback_render_cost(elapsed_us);
     Ok(())
@@ -1804,12 +2190,21 @@ fn render_once_shared_raw(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
+    let output_quantization_mode = inner
+        .backend_state
+        .lock()
+        .ok()
+        .map(|state| state.output_quantization_mode)
+        .unwrap_or(NativeAudioOutputQuantizationMode::Round);
 
     let padding = unsafe {
-        stream.audio_client.GetCurrentPadding().map_err(|e| AudioOutputError {
-            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
-            message: format!("Failed to query current padding: {e}"),
-        })?
+        stream
+            .audio_client
+            .GetCurrentPadding()
+            .map_err(|e| AudioOutputError {
+                code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+                message: format!("Failed to query current padding: {e}"),
+            })?
     };
 
     let frames = stream.buffer_frame_count.saturating_sub(padding);
@@ -1840,7 +2235,15 @@ fn render_once_shared_raw(
     callback_timing.on_callback_wake();
 
     let started = Instant::now();
-    render_frames_shared_raw(stream, frames, inner, true, volume, scratch)?;
+    render_frames_shared_raw(
+        stream,
+        frames,
+        inner,
+        true,
+        volume,
+        output_quantization_mode,
+        scratch,
+    )?;
     let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
     record_callback_render_cost(elapsed_us);
     Ok(())
@@ -1853,6 +2256,7 @@ fn render_frames(
     inner: &SinkInner,
     consume: bool,
     volume: f32,
+    output_quantization_mode: NativeAudioOutputQuantizationMode,
     scratch: &mut Vec<f32>,
 ) -> Result<(), AudioOutputError> {
     let channels = stream.channels.max(1) as usize;
@@ -1863,9 +2267,10 @@ fn render_frames(
     }
 
     if consume {
-        let popped = inner
-            .render_queue
-            .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        let popped =
+            inner
+                .render_queue
+                .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
         if popped.popped == 0 && popped.finished {
             return Ok(());
         }
@@ -1886,6 +2291,10 @@ fn render_frames(
     }
 
     unsafe {
+        let mut dither_state = QUANTIZATION_RNG_STATE
+            .fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed)
+            .wrapping_add(frames as u64)
+            .wrapping_add(channels as u64);
         let buffer = stream
             .render_client
             .GetBuffer(frames)
@@ -1908,52 +2317,73 @@ fn render_frames(
             }
             WasapiSampleFormat::Pcm16 => {
                 let out = buffer as *mut i16;
-                let scale = (i16::MAX as f32) * volume;
                 for index in 0..total_samples {
-                    let sample = if consume {
-                        scratch[index] * scale
-                    } else {
-                        0.0
-                    };
-                    let quantized =
-                        sample.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                    let sample = if consume { scratch[index] } else { 0.0 };
+                    let quantized = quantize_pcm16_with_mode(
+                        sample,
+                        volume,
+                        output_quantization_mode,
+                        &mut dither_state,
+                    );
                     *out.add(index) = quantized;
                 }
             }
             WasapiSampleFormat::Pcm32 => {
                 let out = buffer as *mut i32;
-                let scale = (i32::MAX as f32) * volume;
                 for index in 0..total_samples {
-                    let sample = if consume {
-                        scratch[index] * scale
-                    } else {
-                        0.0
-                    };
-                    let quantized =
-                        sample.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                    let sample = if consume { scratch[index] } else { 0.0 };
+                    let quantized = quantize_pcm32_with_mode(
+                        sample,
+                        volume,
+                        output_quantization_mode,
+                        &mut dither_state,
+                    );
                     *out.add(index) = quantized;
                 }
             }
             WasapiSampleFormat::Pcm24In32 => {
                 let out = buffer as *mut i32;
-                for index in 0..total_samples {
-                    let sample = if consume { scratch[index] } else { 0.0 };
-                    let quantized = if matches!(
+                if consume
+                    && !matches!(
                         stream.transport_mode,
                         NativeAudioTransportMode::TransportExact
-                    ) {
-                        quantize_pcm24_transport_exact(sample, volume)
-                    } else {
-                        quantize_pcm24(sample, volume)
-                    };
-                    *out.add(index) = pack_pcm24_in32(quantized);
+                    )
+                    && matches!(
+                        output_quantization_mode,
+                        NativeAudioOutputQuantizationMode::Round
+                    )
+                {
+                    quantize_pcm24_round_in32_buffer(&scratch[..total_samples], out, volume);
+                } else {
+                    for index in 0..total_samples {
+                        let sample = if consume { scratch[index] } else { 0.0 };
+                        let quantized = if matches!(
+                            stream.transport_mode,
+                            NativeAudioTransportMode::TransportExact
+                        ) {
+                            quantize_pcm24_transport_exact(sample, volume)
+                        } else {
+                            quantize_pcm24_with_mode(
+                                sample,
+                                volume,
+                                output_quantization_mode,
+                                &mut dither_state,
+                            )
+                        };
+                        *out.add(index) = pack_pcm24_in32(quantized);
+                    }
                 }
             }
             WasapiSampleFormat::Pcm24Packed => {
                 let out = buffer as *mut u8;
                 for index in 0..total_samples {
                     let sample = if consume { scratch[index] } else { 0.0 };
-                    let quantized = quantize_pcm24(sample, volume);
+                    let quantized = quantize_pcm24_with_mode(
+                        sample,
+                        volume,
+                        output_quantization_mode,
+                        &mut dither_state,
+                    );
                     let bytes = pack_pcm24_packed_bytes(quantized);
                     let offset = index * 3;
                     *out.add(offset) = bytes[0];
@@ -1982,6 +2412,7 @@ fn render_frames_shared_raw(
     inner: &SharedRawSinkInner,
     consume: bool,
     volume: f32,
+    output_quantization_mode: NativeAudioOutputQuantizationMode,
     scratch: &mut Vec<f32>,
 ) -> Result<(), AudioOutputError> {
     let channels = stream.channels.max(1) as usize;
@@ -1992,9 +2423,10 @@ fn render_frames_shared_raw(
     }
 
     if consume {
-        let popped = inner
-            .render_queue
-            .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        let popped =
+            inner
+                .render_queue
+                .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
         if popped.popped == 0 && popped.finished {
             return Ok(());
         }
@@ -2015,6 +2447,11 @@ fn render_frames_shared_raw(
     }
 
     unsafe {
+        let mut dither_state = QUANTIZATION_RNG_STATE
+            .fetch_add(0xD1B5_4A32_D192_ED03, Ordering::Relaxed)
+            .wrapping_add(frames as u64)
+            .wrapping_add(channels as u64)
+            .wrapping_add(1);
         let buffer = stream
             .render_client
             .GetBuffer(frames)
@@ -2037,52 +2474,73 @@ fn render_frames_shared_raw(
             }
             WasapiSampleFormat::Pcm16 => {
                 let out = buffer as *mut i16;
-                let scale = (i16::MAX as f32) * volume;
                 for index in 0..total_samples {
-                    let sample = if consume {
-                        scratch[index] * scale
-                    } else {
-                        0.0
-                    };
-                    let quantized =
-                        sample.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                    let sample = if consume { scratch[index] } else { 0.0 };
+                    let quantized = quantize_pcm16_with_mode(
+                        sample,
+                        volume,
+                        output_quantization_mode,
+                        &mut dither_state,
+                    );
                     *out.add(index) = quantized;
                 }
             }
             WasapiSampleFormat::Pcm32 => {
                 let out = buffer as *mut i32;
-                let scale = (i32::MAX as f32) * volume;
                 for index in 0..total_samples {
-                    let sample = if consume {
-                        scratch[index] * scale
-                    } else {
-                        0.0
-                    };
-                    let quantized =
-                        sample.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                    let sample = if consume { scratch[index] } else { 0.0 };
+                    let quantized = quantize_pcm32_with_mode(
+                        sample,
+                        volume,
+                        output_quantization_mode,
+                        &mut dither_state,
+                    );
                     *out.add(index) = quantized;
                 }
             }
             WasapiSampleFormat::Pcm24In32 => {
                 let out = buffer as *mut i32;
-                for index in 0..total_samples {
-                    let sample = if consume { scratch[index] } else { 0.0 };
-                    let quantized = if matches!(
+                if consume
+                    && !matches!(
                         stream.transport_mode,
                         NativeAudioTransportMode::TransportExact
-                    ) {
-                        quantize_pcm24_transport_exact(sample, volume)
-                    } else {
-                        quantize_pcm24(sample, volume)
-                    };
-                    *out.add(index) = pack_pcm24_in32(quantized);
+                    )
+                    && matches!(
+                        output_quantization_mode,
+                        NativeAudioOutputQuantizationMode::Round
+                    )
+                {
+                    quantize_pcm24_round_in32_buffer(&scratch[..total_samples], out, volume);
+                } else {
+                    for index in 0..total_samples {
+                        let sample = if consume { scratch[index] } else { 0.0 };
+                        let quantized = if matches!(
+                            stream.transport_mode,
+                            NativeAudioTransportMode::TransportExact
+                        ) {
+                            quantize_pcm24_transport_exact(sample, volume)
+                        } else {
+                            quantize_pcm24_with_mode(
+                                sample,
+                                volume,
+                                output_quantization_mode,
+                                &mut dither_state,
+                            )
+                        };
+                        *out.add(index) = pack_pcm24_in32(quantized);
+                    }
                 }
             }
             WasapiSampleFormat::Pcm24Packed => {
                 let out = buffer as *mut u8;
                 for index in 0..total_samples {
                     let sample = if consume { scratch[index] } else { 0.0 };
-                    let quantized = quantize_pcm24(sample, volume);
+                    let quantized = quantize_pcm24_with_mode(
+                        sample,
+                        volume,
+                        output_quantization_mode,
+                        &mut dither_state,
+                    );
                     let bytes = pack_pcm24_packed_bytes(quantized);
                     let offset = index * 3;
                     *out.add(offset) = bytes[0];
@@ -2115,20 +2573,23 @@ fn open_wasapi_stream(
     use windows::core::{Interface, PCWSTR};
     use windows::Win32::Foundation::BOOL;
     use windows::Win32::Media::Audio::{
-        AudioClientProperties, AudioCategory_Media,
-        IAudioClient, IAudioClient2, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
-        MMDeviceEnumerator,
-        AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMOPTIONS_RAW, WAVEFORMATEX,
-        WAVEFORMATEXTENSIBLE,
-        WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_PCM,
+        AudioCategory_Media, AudioClientProperties, IAudioClient, IAudioClient2,
+        IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+        AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_E_UNSUPPORTED_FORMAT,
+        AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        AUDCLNT_STREAMOPTIONS_RAW, WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+        WAVE_FORMAT_PCM,
     };
     use windows::Win32::Media::KernelStreaming::{
         KSAUDIO_SPEAKER_DIRECTOUT, KSDATAFORMAT_SUBTYPE_PCM, SPEAKER_FRONT_CENTER,
         SPEAKER_FRONT_LEFT, SPEAKER_FRONT_RIGHT, WAVE_FORMAT_EXTENSIBLE,
     };
-    use windows::Win32::Media::Multimedia::{KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, WAVE_FORMAT_IEEE_FLOAT};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::Media::Multimedia::{
+        KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, WAVE_FORMAT_IEEE_FLOAT,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
     use windows::Win32::System::Threading::CreateEventW;
 
     unsafe {
@@ -2168,9 +2629,11 @@ fn open_wasapi_stream(
         let stream_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 
         let enumerator: IMMDeviceEnumerator =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| AudioOutputError {
-                code: open_failed_code,
-                message: format!("Failed to create MMDeviceEnumerator: {e}"),
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| {
+                AudioOutputError {
+                    code: open_failed_code,
+                    message: format!("Failed to create MMDeviceEnumerator: {e}"),
+                }
             })?;
 
         let device_id_wide: Vec<u16> = device_id.encode_utf16().chain(Some(0)).collect();
@@ -2197,6 +2660,16 @@ fn open_wasapi_stream(
                         &format.0 as *const WAVEFORMATEXTENSIBLE as *const WAVEFORMATEX
                     }
                 }
+            }
+
+            fn format_tag_bits_channels_rate(&self) -> (u16, u16, u16, u32) {
+                let format = unsafe { &*self.as_ptr() };
+                (
+                    format.wFormatTag,
+                    format.wBitsPerSample,
+                    format.nChannels,
+                    format.nSamplesPerSec,
+                )
             }
         }
 
@@ -2422,13 +2895,34 @@ fn open_wasapi_stream(
         }
         let mut last_error: Option<AudioOutputError> = None;
 
+        fn query_mix_format_rate_channels(
+            audio_client: &IAudioClient,
+        ) -> Option<(u32, u16, u16, u16)> {
+            let mix_ptr = unsafe { audio_client.GetMixFormat().ok()? };
+            if mix_ptr.is_null() {
+                return None;
+            }
+            let mix = unsafe { &*mix_ptr };
+            let result = (
+                mix.nSamplesPerSec,
+                mix.nChannels,
+                mix.wBitsPerSample,
+                mix.wFormatTag,
+            );
+            unsafe {
+                windows::Win32::System::Com::CoTaskMemFree(Some(mix_ptr as *const c_void));
+            }
+            Some(result)
+        }
+
         for attempt in candidates {
-            let audio_client: IAudioClient = device
-                .Activate(CLSCTX_ALL, None)
-                .map_err(|e| AudioOutputError {
-                    code: open_failed_code,
-                    message: format!("Failed to activate audio client: {e}"),
-                })?;
+            let audio_client: IAudioClient =
+                device
+                    .Activate(CLSCTX_ALL, None)
+                    .map_err(|e| AudioOutputError {
+                        code: open_failed_code,
+                        message: format!("Failed to activate audio client: {e}"),
+                    })?;
 
             if is_shared_raw {
                 let raw_props = AudioClientProperties {
@@ -2460,6 +2954,42 @@ fn open_wasapi_stream(
                     });
                     continue;
                 }
+
+                let mut closest_match: *mut WAVEFORMATEX = std::ptr::null_mut();
+                let support_hr = audio_client.IsFormatSupported(
+                    share_mode,
+                    attempt.wave_format.as_ptr(),
+                    Some(&mut closest_match),
+                );
+                if !support_hr.is_ok() {
+                    if !closest_match.is_null() {
+                        windows::Win32::System::Com::CoTaskMemFree(Some(
+                            closest_match as *const c_void,
+                        ));
+                    }
+                    let (tag, bits, ch, rate) = attempt.wave_format.format_tag_bits_channels_rate();
+                    let mix_hint = query_mix_format_rate_channels(&audio_client)
+                        .map(|(mix_rate, mix_channels, mix_bits, mix_tag)| {
+                            format!(
+                                "mix(rate={mix_rate}, channels={mix_channels}, bits={mix_bits}, tag=0x{mix_tag:04X})"
+                            )
+                        })
+                        .unwrap_or_else(|| "mix(unknown)".to_string());
+                    last_error = Some(AudioOutputError {
+                        code: unsupported_code,
+                        message: format!(
+                            "Unsupported RAW format for {backend_log_label}: {} (rate={rate}, channels={ch}, bits={bits}, tag=0x{tag:04X}, {})",
+                            attempt.label,
+                            mix_hint
+                        ),
+                    });
+                    continue;
+                }
+                if !closest_match.is_null() {
+                    windows::Win32::System::Com::CoTaskMemFree(Some(
+                        closest_match as *const c_void,
+                    ));
+                }
             }
 
             let mut default_period = 0i64;
@@ -2487,12 +3017,13 @@ fn open_wasapi_stream(
             };
 
             for buffer_duration in buffer_candidates {
-                let event_handle = CreateEventW(None, false, false, PCWSTR::null()).map_err(
-                    |e| AudioOutputError {
-                        code: open_failed_code,
-                        message: format!("Failed to create audio event handle: {e}"),
-                    },
-                )?;
+                let event_handle =
+                    CreateEventW(None, false, false, PCWSTR::null()).map_err(|e| {
+                        AudioOutputError {
+                            code: open_failed_code,
+                            message: format!("Failed to create audio event handle: {e}"),
+                        }
+                    })?;
 
                 let periodicity = if is_shared_raw { 0 } else { buffer_duration };
                 let init = audio_client.Initialize(
@@ -2505,6 +3036,26 @@ fn open_wasapi_stream(
                 );
                 if let Err(e) = init {
                     let _ = windows::Win32::Foundation::CloseHandle(event_handle);
+
+                    if is_shared_raw && e.code() == AUDCLNT_E_UNSUPPORTED_FORMAT {
+                        let (tag, bits, ch, rate) =
+                            attempt.wave_format.format_tag_bits_channels_rate();
+                        let mix_hint = query_mix_format_rate_channels(&audio_client)
+                            .map(|(mix_rate, mix_channels, mix_bits, mix_tag)| {
+                                format!(
+                                    "mix(rate={mix_rate}, channels={mix_channels}, bits={mix_bits}, tag=0x{mix_tag:04X})"
+                                )
+                            })
+                            .unwrap_or_else(|| "mix(unknown)".to_string());
+                        last_error = Some(AudioOutputError {
+                            code: unsupported_code,
+                            message: format!(
+                                "Failed to init {backend_log_label} stream (unsupported format={}, rate={rate}, channels={ch}, bits={bits}, tag=0x{tag:04X}, duration={buffer_duration}, {mix_hint})",
+                                attempt.label,
+                            ),
+                        });
+                        continue;
+                    }
 
                     if !is_shared_raw && e.code() == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
                         let aligned_frames = match audio_client.GetBufferSize() {
@@ -2535,12 +3086,10 @@ fn open_wasapi_stream(
                                 message: format!("Failed to activate audio client: {err}"),
                             })?;
 
-                        let aligned_event_handle =
-                            CreateEventW(None, false, false, PCWSTR::null()).map_err(|err| {
-                                AudioOutputError {
-                                    code: open_failed_code,
-                                    message: format!("Failed to create audio event handle: {err}"),
-                                }
+                        let aligned_event_handle = CreateEventW(None, false, false, PCWSTR::null())
+                            .map_err(|err| AudioOutputError {
+                                code: open_failed_code,
+                                message: format!("Failed to create audio event handle: {err}"),
                             })?;
 
                         let aligned_init = aligned_audio_client.Initialize(
@@ -2573,23 +3122,25 @@ fn open_wasapi_stream(
                             continue;
                         }
 
-                        let buffer_frame_count = aligned_audio_client.GetBufferSize().map_err(|err| {
-                            let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
-                            AudioOutputError {
-                                code: open_failed_code,
-                                message: format!("Failed to get buffer size: {err}"),
-                            }
-                        })?;
-
-                        let render_client: IAudioRenderClient =
-                            aligned_audio_client.GetService().map_err(|err| {
+                        let buffer_frame_count =
+                            aligned_audio_client.GetBufferSize().map_err(|err| {
                                 let _ =
                                     windows::Win32::Foundation::CloseHandle(aligned_event_handle);
                                 AudioOutputError {
                                     code: open_failed_code,
-                                    message: format!("Failed to get render client: {err}"),
+                                    message: format!("Failed to get buffer size: {err}"),
                                 }
                             })?;
+
+                        let render_client: IAudioRenderClient = aligned_audio_client
+                            .GetService()
+                            .map_err(|err| {
+                            let _ = windows::Win32::Foundation::CloseHandle(aligned_event_handle);
+                            AudioOutputError {
+                                code: open_failed_code,
+                                message: format!("Failed to get render client: {err}"),
+                            }
+                        })?;
 
                         eprintln!(
                             "[NativeAudio][{backend_log_label}] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",
@@ -2639,13 +3190,14 @@ fn open_wasapi_stream(
                     }
                 })?;
 
-                let render_client: IAudioRenderClient = audio_client.GetService().map_err(|err| {
-                    let _ = windows::Win32::Foundation::CloseHandle(event_handle);
-                    AudioOutputError {
-                        code: open_failed_code,
-                        message: format!("Failed to get render client: {err}"),
-                    }
-                })?;
+                let render_client: IAudioRenderClient =
+                    audio_client.GetService().map_err(|err| {
+                        let _ = windows::Win32::Foundation::CloseHandle(event_handle);
+                        AudioOutputError {
+                            code: open_failed_code,
+                            message: format!("Failed to get render client: {err}"),
+                        }
+                    })?;
 
                 eprintln!(
                     "[NativeAudio][{backend_log_label}] Open stream: format={} channels={} sample_rate={} frames={} buffer_duration_100ns={}",

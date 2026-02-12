@@ -92,13 +92,10 @@ pub(crate) fn wrap_source_for_shared_backend(source: BoxedSource) -> BoxedSource
     let sample_rate = source.sample_rate().max(1);
     let duration = source.total_duration();
 
-    let prebuffer_seconds = parse_env_seconds(
-        "PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS",
-        1.8,
-        0.3,
-        6.0,
-    );
-    let prebuffer_samples = ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
+    let prebuffer_seconds =
+        parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 1.8, 0.3, 6.0);
+    let prebuffer_samples =
+        ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
     let capacity_samples = prebuffer_samples.clamp(16_384, 2_000_000);
 
     let queue = AudioRingBuffer::new(capacity_samples.max(channels as usize * 256));
@@ -118,9 +115,12 @@ pub(crate) fn wrap_source_for_shared_backend(source: BoxedSource) -> BoxedSource
         0.02,
         0.8,
     );
-    let prebuffer_target = ((sample_rate as f64) * (channels as f64) * prebuffer_target_seconds)
-        .ceil() as usize;
-    queue.wait_for_samples(prebuffer_target.max(channels as usize * 32), Duration::from_millis(300));
+    let prebuffer_target =
+        ((sample_rate as f64) * (channels as f64) * prebuffer_target_seconds).ceil() as usize;
+    queue.wait_for_samples(
+        prebuffer_target.max(channels as usize * 32),
+        Duration::from_millis(300),
+    );
 
     Box::new(RenderAheadSource {
         queue,
@@ -147,7 +147,8 @@ fn spawn_producer_thread(
 
     builder
         .spawn(move || {
-            let _priority_guard = crate::audio::threading::promote_current_thread_for_audio_decode();
+            let _priority_guard =
+                crate::audio::threading::promote_current_thread_for_audio_decode();
             let channels = source.channels().max(1) as usize;
             let high_watermark = ((queue.capacity_samples() * 8) / 10)
                 .max(channels * 256)
@@ -254,7 +255,8 @@ impl RenderAheadSource {
         if pop.popped > 0 {
             if self.needs_fade_in {
                 let channels = self.channels.max(1) as usize;
-                let fade_frames = (self.local.len() / channels).min(Self::SILENCE_FRAMES_ON_UNDERRUN);
+                let fade_frames =
+                    (self.local.len() / channels).min(Self::SILENCE_FRAMES_ON_UNDERRUN);
                 if fade_frames > 0 {
                     let denom = (fade_frames.saturating_sub(1)).max(1) as f32;
                     for frame in 0..fade_frames {
@@ -287,7 +289,8 @@ impl RenderAheadSource {
             }
         }
         SHARED_RENDER_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
-        SHARED_RENDER_UNDERRUN_FRAMES.fetch_add(Self::SILENCE_FRAMES_ON_UNDERRUN as u64, Ordering::Relaxed);
+        SHARED_RENDER_UNDERRUN_FRAMES
+            .fetch_add(Self::SILENCE_FRAMES_ON_UNDERRUN as u64, Ordering::Relaxed);
         diagnostics::record_event_throttled(
             "shared.render_ahead.underrun",
             Self::SILENCE_FRAMES_ON_UNDERRUN as u64,

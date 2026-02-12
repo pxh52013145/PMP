@@ -1,11 +1,7 @@
 use serde::Serialize;
 use std::collections::HashSet;
 
-pub const APP_COMMAND_NAMES: &[&str] = &[
-    "greet",
-    "app_request_exit",
-    "app_restart",
-];
+pub const APP_COMMAND_NAMES: &[&str] = &["greet", "app_request_exit", "app_restart"];
 
 pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "debug_get_config",
@@ -21,10 +17,7 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "debug_get_registered_commands",
 ];
 
-pub const MEDIA_COMMAND_NAMES: &[&str] = &[
-    "background_import_media",
-    "ornament_import_media",
-];
+pub const MEDIA_COMMAND_NAMES: &[&str] = &["background_import_media", "ornament_import_media"];
 
 pub const WINDOW_COMMAND_NAMES: &[&str] = &[
     "open_editor_window",
@@ -72,10 +65,8 @@ pub const AUDIO_COMMAND_NAMES: &[&str] = &[
     "native_audio_sync_queue",
 ];
 
-pub const DSP_COMMAND_NAMES: &[&str] = &[
-    "native_audio_get_dsp_graph",
-    "native_audio_set_dsp_graph",
-];
+pub const DSP_COMMAND_NAMES: &[&str] =
+    &["native_audio_get_dsp_graph", "native_audio_set_dsp_graph"];
 
 pub const VST_COMMAND_NAMES: &[&str] = &[
     "native_audio_vst_list_plugins",

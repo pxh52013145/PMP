@@ -1,7 +1,7 @@
+use crate::audio::policy::{NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use crate::audio::policy::{NativeAudioHqSrcPhaseMode, NativeAudioSrcBackend};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResampleError {
@@ -28,7 +28,10 @@ fn default_sinc_params() -> SincInterpolationParameters {
     }
 }
 
-fn sinc_params_for_hq_mode(enabled: bool, phase_mode: NativeAudioHqSrcPhaseMode) -> SincInterpolationParameters {
+fn sinc_params_for_hq_mode(
+    enabled: bool,
+    phase_mode: NativeAudioHqSrcPhaseMode,
+) -> SincInterpolationParameters {
     if !enabled {
         return default_sinc_params();
     }
@@ -114,9 +117,12 @@ pub(crate) fn resample_interleaved_f32_with_backend(
             hq_enabled,
             hq_phase_mode,
         ),
-        NativeAudioSrcBackend::LinearSimd => {
-            resample_interleaved_f32_linear_simd(samples, input_sample_rate, output_sample_rate, channels)
-        }
+        NativeAudioSrcBackend::LinearSimd => resample_interleaved_f32_linear_simd(
+            samples,
+            input_sample_rate,
+            output_sample_rate,
+            channels,
+        ),
     }
 }
 
@@ -189,15 +195,14 @@ fn resample_interleaved_f32_rubato(
             }
         }
 
-        let (_in_frames, out_frames) =
-            resampler
-                .process_into_buffer(&scratch_in, &mut output, None)
-                .map_err(|e| {
-                    ResampleError::new(
-                        "AUDIO_INPUT_RESAMPLE_FAILED",
-                        format!("Resample failed: {e}"),
-                    )
-                })?;
+        let (_in_frames, out_frames) = resampler
+            .process_into_buffer(&scratch_in, &mut output, None)
+            .map_err(|e| {
+                ResampleError::new(
+                    "AUDIO_INPUT_RESAMPLE_FAILED",
+                    format!("Resample failed: {e}"),
+                )
+            })?;
 
         for frame in 0..out_frames {
             for ch in 0..channels {
@@ -510,11 +515,14 @@ impl StreamingResampler {
 
             match &mut self.backend {
                 StreamingResamplerBackend::Rubato(resampler) => {
-                    let (_in_frames, out_frames) =
-                        match resampler.process_into_buffer(&self.scratch_in, &mut self.output, None) {
-                            Ok(value) => value,
-                            Err(_) => break,
-                        };
+                    let (_in_frames, out_frames) = match resampler.process_into_buffer(
+                        &self.scratch_in,
+                        &mut self.output,
+                        None,
+                    ) {
+                        Ok(value) => value,
+                        Err(_) => break,
+                    };
                     if out_frames == 0 {
                         continue;
                     }
@@ -585,7 +593,11 @@ impl StreamingResampler {
                         }
 
                         for ch in 0..self.channels {
-                            out_interleaved.push(lerp_scalar(sample_at(ch, i0), sample_at(ch, i1), frac));
+                            out_interleaved.push(lerp_scalar(
+                                sample_at(ch, i0),
+                                sample_at(ch, i1),
+                                frac,
+                            ));
                         }
                         state.src_pos += state.step;
                     }

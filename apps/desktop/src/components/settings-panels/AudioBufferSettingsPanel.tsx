@@ -218,12 +218,12 @@ export function AudioBufferSettingsPanel() {
   return (
     <div className="settings-audio-panel">
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">STREAM PREBUFFER</p>
           <h3 className="settings-param-title">{t('settings.audioBuffer.title')}</h3>
           <p className="settings-param-subtitle">Decode Ahead & Recovery Window</p>
         </div>
-        <div className="settings-param-divider" />
 
         <p className="settings-card-note">{badge}</p>
 
@@ -231,28 +231,27 @@ export function AudioBufferSettingsPanel() {
           <p className="settings-card-note">{t('settings.audioBuffer.note.requireNative')}</p>
         ) : (
           <>
-            <div className="settings-choice-row">
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={settings.startOrSeekSeconds === null}
-                onClick={() => handleStartOrSeekMode('auto')}
-              >
-                {t('settings.audioBuffer.mode.auto')}
-              </button>
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={settings.startOrSeekSeconds !== null}
-                onClick={() => handleStartOrSeekMode('custom')}
-              >
-                {t('settings.audioBuffer.mode.custom')}
-              </button>
-            </div>
-
-            <div className="settings-number-grid">
-              <label className="settings-number-item">
-                <span>{t('settings.audioBuffer.startOrSeek.label')}</span>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioBuffer.startOrSeek.label')}</p>
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={settings.startOrSeekSeconds === null}
+                  onClick={() => handleStartOrSeekMode('auto')}
+                >
+                  {t('settings.audioBuffer.mode.auto')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={settings.startOrSeekSeconds !== null}
+                  onClick={() => handleStartOrSeekMode('custom')}
+                >
+                  {t('settings.audioBuffer.mode.custom')}
+                </button>
                 <input
                   className="settings-number-input"
                   type="number"
@@ -263,35 +262,32 @@ export function AudioBufferSettingsPanel() {
                   onChange={(e) => handleStartOrSeekSeconds(Number(e.target.value))}
                   disabled={settings.startOrSeekSeconds === null}
                 />
-              </label>
+              </div>
             </div>
 
             <p className="settings-card-note">{t('settings.audioBuffer.startOrSeek.desc')}</p>
 
-            <div className="settings-param-divider" />
-
-            <div className="settings-choice-row">
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={settings.crossfadeSeconds === null}
-                onClick={() => handleCrossfadeMode('auto')}
-              >
-                {t('settings.audioBuffer.mode.auto')}
-              </button>
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={settings.crossfadeSeconds !== null}
-                onClick={() => handleCrossfadeMode('custom')}
-              >
-                {t('settings.audioBuffer.mode.custom')}
-              </button>
-            </div>
-
-            <div className="settings-number-grid">
-              <label className="settings-number-item">
-                <span>{t('settings.audioBuffer.crossfade.label')}</span>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioBuffer.crossfade.label')}</p>
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={settings.crossfadeSeconds === null}
+                  onClick={() => handleCrossfadeMode('auto')}
+                >
+                  {t('settings.audioBuffer.mode.auto')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={settings.crossfadeSeconds !== null}
+                  onClick={() => handleCrossfadeMode('custom')}
+                >
+                  {t('settings.audioBuffer.mode.custom')}
+                </button>
                 <input
                   className="settings-number-input"
                   type="number"
@@ -302,7 +298,7 @@ export function AudioBufferSettingsPanel() {
                   onChange={(e) => handleCrossfadeSeconds(Number(e.target.value))}
                   disabled={settings.crossfadeSeconds === null}
                 />
-              </label>
+              </div>
             </div>
 
             <p className="settings-card-note">{t('settings.audioBuffer.crossfade.desc')}</p>

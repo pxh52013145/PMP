@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use super::{AudioOutputBackend, AudioSink, BoxedSource, OutputStreamInfo};
 
@@ -273,7 +273,8 @@ mod tests {
         sink.play();
 
         let start = std::time::Instant::now();
-        while !started.load(Ordering::Acquire) && start.elapsed() < std::time::Duration::from_secs(1)
+        while !started.load(Ordering::Acquire)
+            && start.elapsed() < std::time::Duration::from_secs(1)
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }

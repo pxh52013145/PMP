@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use dsf::DsfFile;
 
@@ -922,5 +922,4 @@ mod tests {
         streaming.shutdown_tx.shutdown();
         let _ = std::fs::remove_file(&path);
     }
-
 }

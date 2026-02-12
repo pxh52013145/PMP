@@ -207,22 +207,25 @@ export function AudioDspSettingsPanel() {
   return (
     <div className="settings-audio-panel">
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">DSP CORE</p>
           <h3 className="settings-param-title">{t('settings.audioDsp.gain.title')}</h3>
           <p className="settings-param-subtitle">Master Gain & Headroom</p>
         </div>
-        <div className="settings-param-divider" />
-
         <p className="settings-card-note">{chainPreview}</p>
 
         {!canUseBackend ? (
-          <p className="settings-card-note">{t('settings.audioDsp.note.requireNative')}</p>
+          <>
+            <p className="settings-card-note">{t('settings.audioDsp.note.requireNative')}</p>
+          </>
         ) : (
           <>
-            <div className="settings-number-grid">
-              <label className="settings-number-item">
-                <span>{t('settings.audioDsp.gain.db')}</span>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioDsp.gain.db')}</p>
+              </div>
+              <div className="settings-inline-row-controls">
                 <input
                   className="settings-number-input"
                   type="number"
@@ -238,57 +241,61 @@ export function AudioDspSettingsPanel() {
                   }
                   disabled={busy}
                 />
-              </label>
+              </div>
             </div>
 
-            <div className="settings-choice-row">
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={Math.abs(dsp.gainDb + 6) <= 0.05}
-                onClick={() => setDsp((prev) => ({ ...prev, gainDb: -6 }))}
-                disabled={busy}
-              >
-                {t('settings.audioDsp.gain.preset.minus6')}
-              </button>
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={Math.abs(dsp.gainDb) <= 0.05}
-                onClick={() => setDsp((prev) => ({ ...prev, gainDb: 0 }))}
-                disabled={busy}
-              >
-                {t('settings.audioDsp.gain.preset.zero')}
-              </button>
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={Math.abs(dsp.gainDb - 6) <= 0.05}
-                onClick={() => setDsp((prev) => ({ ...prev, gainDb: 6 }))}
-                disabled={busy}
-              >
-                {t('settings.audioDsp.gain.preset.plus6')}
-              </button>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioDsp.gain.presets')}</p>
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={Math.abs(dsp.gainDb + 6) <= 0.05}
+                  onClick={() => setDsp((prev) => ({ ...prev, gainDb: -6 }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioDsp.gain.preset.minus6')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={Math.abs(dsp.gainDb) <= 0.05}
+                  onClick={() => setDsp((prev) => ({ ...prev, gainDb: 0 }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioDsp.gain.preset.zero')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={Math.abs(dsp.gainDb - 6) <= 0.05}
+                  onClick={() => setDsp((prev) => ({ ...prev, gainDb: 6 }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioDsp.gain.preset.plus6')}
+                </button>
+              </div>
             </div>
           </>
         )}
       </div>
 
-      <div className="settings-param-divider settings-param-divider--major" />
-
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">EQ MATRIX</p>
           <h3 className="settings-param-title">{t('settings.audioDsp.eq.title')}</h3>
           <p className="settings-param-subtitle">Three-Band Tonal Balance</p>
         </div>
-        <div className="settings-param-divider" />
-
         {!canUseBackend ? (
-          <p className="settings-card-note">{t('settings.audioDsp.note.requireNative')}</p>
+          <>
+            <p className="settings-card-note">{t('settings.audioDsp.note.requireNative')}</p>
+          </>
         ) : (
           <>
-            <div className="settings-number-grid">
+            <div className="settings-row-desc-list">
               {dsp.eqBands.map((band, index) => {
                 const label =
                   band.kind === 'low-shelf'
@@ -297,21 +304,25 @@ export function AudioDspSettingsPanel() {
                       ? t('settings.audioDsp.eq.band.high')
                       : t('settings.audioDsp.eq.band.mid');
                 return (
-                  <label key={`${band.kind}-${index}`} className="settings-number-item">
-                    <span>
-                      {label} · {Math.round(band.frequencyHz)} Hz
-                    </span>
-                    <input
-                      className="settings-number-input"
-                      type="number"
-                      min={-18}
-                      max={18}
-                      step={0.1}
-                      value={band.gainDb}
-                      onChange={(e) => setEqBandGain(index, Number(e.target.value))}
-                      disabled={busy}
-                    />
-                  </label>
+                  <div key={`${band.kind}-${index}`} className="settings-inline-row">
+                    <div className="settings-inline-row-copy">
+                      <p className="settings-inline-row-title">
+                        {label} · {Math.round(band.frequencyHz)} Hz
+                      </p>
+                    </div>
+                    <div className="settings-inline-row-controls">
+                      <input
+                        className="settings-number-input"
+                        type="number"
+                        min={-18}
+                        max={18}
+                        step={0.1}
+                        value={band.gainDb}
+                        onChange={(e) => setEqBandGain(index, Number(e.target.value))}
+                        disabled={busy}
+                      />
+                    </div>
+                  </div>
                 );
               })}
             </div>
@@ -337,44 +348,50 @@ export function AudioDspSettingsPanel() {
         )}
       </div>
 
-      <div className="settings-param-divider settings-param-divider--major" />
-
       <div className="settings-audio-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">LIMITER</p>
           <h3 className="settings-param-title">{t('settings.audioDsp.limiter.title')}</h3>
           <p className="settings-param-subtitle">Peak Ceiling Guard</p>
         </div>
-        <div className="settings-param-divider" />
-
         {!canUseBackend ? (
-          <p className="settings-card-note">{t('settings.audioDsp.note.requireNative')}</p>
+          <>
+            <p className="settings-card-note">{t('settings.audioDsp.note.requireNative')}</p>
+          </>
         ) : (
           <>
-            <div className="settings-choice-row">
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={!dsp.limiterEnabled}
-                onClick={() => setDsp((prev) => ({ ...prev, limiterEnabled: false }))}
-                disabled={busy}
-              >
-                {t('settings.audioDsp.limiter.disable')}
-              </button>
-              <button
-                type="button"
-                className="settings-choice-btn"
-                data-active={dsp.limiterEnabled}
-                onClick={() => setDsp((prev) => ({ ...prev, limiterEnabled: true }))}
-                disabled={busy}
-              >
-                {t('settings.audioDsp.limiter.enable')}
-              </button>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('common.state.label')}</p>
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={!dsp.limiterEnabled}
+                  onClick={() => setDsp((prev) => ({ ...prev, limiterEnabled: false }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioDsp.limiter.disable')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={dsp.limiterEnabled}
+                  onClick={() => setDsp((prev) => ({ ...prev, limiterEnabled: true }))}
+                  disabled={busy}
+                >
+                  {t('settings.audioDsp.limiter.enable')}
+                </button>
+              </div>
             </div>
 
-            <div className="settings-number-grid">
-              <label className="settings-number-item">
-                <span>{t('settings.audioDsp.limiter.thresholdDb')}</span>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioDsp.limiter.thresholdDb')}</p>
+              </div>
+              <div className="settings-inline-row-controls">
                 <input
                   className="settings-number-input"
                   type="number"
@@ -390,7 +407,7 @@ export function AudioDspSettingsPanel() {
                   }
                   disabled={busy || !dsp.limiterEnabled}
                 />
-              </label>
+              </div>
             </div>
           </>
         )}
@@ -421,4 +438,3 @@ export function AudioDspSettingsPanel() {
     </div>
   );
 }
-

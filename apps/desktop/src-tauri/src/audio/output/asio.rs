@@ -59,10 +59,17 @@ impl AsioBackend {
 
     fn spawn_output_stream_thread(
         preferred_device_name: Option<String>,
-    ) -> Result<(StreamThread, OutputStreamHandle, Option<String>, Option<u32>), String> {
-        let (ready_tx, ready_rx) = mpsc::channel::<
-            Result<(OutputStreamHandle, Option<String>, Option<u32>), String>,
-        >();
+    ) -> Result<
+        (
+            StreamThread,
+            OutputStreamHandle,
+            Option<String>,
+            Option<u32>,
+        ),
+        String,
+    > {
+        let (ready_tx, ready_rx) =
+            mpsc::channel::<Result<(OutputStreamHandle, Option<String>, Option<u32>), String>>();
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
         let join = thread::spawn(move || {

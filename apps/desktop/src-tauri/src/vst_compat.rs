@@ -87,7 +87,9 @@ fn read_store_from_disk(app: &AppHandle) -> Result<VstCompatStore, String> {
     let path = compat_file_path(app)?;
     let data = match std::fs::read(&path) {
         Ok(data) => data,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(VstCompatStore::default()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(VstCompatStore::default())
+        }
         Err(err) => return Err(format!("Failed to read VST compatibility: {err}")),
     };
 
@@ -151,7 +153,11 @@ fn normalize_vendor_key(raw: &str) -> Option<String> {
     Some(trimmed.to_lowercase())
 }
 
-fn resolve_effective_rule(store: &VstCompatStore, plugin_id: &str, vendor: Option<&str>) -> VstCompatRule {
+fn resolve_effective_rule(
+    store: &VstCompatStore,
+    plugin_id: &str,
+    vendor: Option<&str>,
+) -> VstCompatRule {
     let mut effective = VstCompatRule::default();
 
     if let Some(vendor) = vendor.and_then(normalize_vendor_key) {
@@ -219,7 +225,8 @@ pub fn set_rule(
             set_store(app, store)?;
         }
         VstCompatScope::Vendor => {
-            let vendor_key = normalize_vendor_key(key).ok_or_else(|| "vendor is required".to_string())?;
+            let vendor_key =
+                normalize_vendor_key(key).ok_or_else(|| "vendor is required".to_string())?;
             let mut store = get_store(app);
             store.vendors.insert(vendor_key, rule);
             set_store(app, store)?;
@@ -237,7 +244,8 @@ pub fn clear_rule(app: &AppHandle, scope: VstCompatScope, key: &str) -> Result<(
             set_store(app, store)?;
         }
         VstCompatScope::Vendor => {
-            let vendor_key = normalize_vendor_key(key).ok_or_else(|| "vendor is required".to_string())?;
+            let vendor_key =
+                normalize_vendor_key(key).ok_or_else(|| "vendor is required".to_string())?;
             let mut store = get_store(app);
             store.vendors.remove(vendor_key.as_str());
             set_store(app, store)?;
@@ -294,4 +302,3 @@ mod tests {
         assert_eq!(effective.mono_input, VstMonoInputPolicy::LeftOnly);
     }
 }
-
