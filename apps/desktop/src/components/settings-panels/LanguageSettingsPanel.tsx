@@ -35,25 +35,38 @@ export function LanguageSettingsPanel() {
   );
 
   return (
-    <div className="settings-rows">
-      <div className="settings-row">
-        <div className="settings-row-left">
-          <div className="settings-row-title">{t('settings.language.title')}</div>
-          <div className="settings-row-desc">{t('settings.language.desc')}</div>
-        </div>
-        <div className="settings-row-right">
-          <span className="settings-row-badge">{locale}</span>
-          <div className="settings-toggle settings-toggle--compact" aria-disabled={busy}>
+    <div className="settings-audio-panel">
+      <div className="settings-audio-block settings-language-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
+
+        <div className="settings-language-body">
+          <div className="settings-language-copy">
+            <div className="settings-param-head settings-language-head">
+              <p className="settings-param-eyebrow">SYSTEM LOCALE</p>
+              <h3 className="settings-param-title">{t('settings.language.title')}</h3>
+              <p className="settings-param-subtitle">{t('settings.language.desc')}</p>
+            </div>
+
+            <p className="settings-card-note settings-language-note">{t('settings.language.note')}</p>
+          </div>
+
+          <div
+            className="settings-language-controls"
+            role="radiogroup"
+            aria-label={t('settings.language.title')}
+          >
             {options.map((option) => {
               const isActive = option.id === locale;
               return (
                 <button
                   key={option.id}
                   type="button"
+                  className="settings-choice-btn"
                   data-active={isActive}
                   disabled={busy}
                   onClick={() => void handleSelect(option.id)}
                   title={t(option.titleKey)}
+                  aria-pressed={isActive}
                 >
                   {t(option.titleKey)}
                 </button>
@@ -61,12 +74,8 @@ export function LanguageSettingsPanel() {
             })}
           </div>
         </div>
-      </div>
 
-      <div className="settings-row">
-        <div className="settings-row-left">
-          <div className="settings-row-desc">{t('settings.language.note')}</div>
-        </div>
+        <div className="settings-param-divider settings-param-divider--compact" />
       </div>
     </div>
   );

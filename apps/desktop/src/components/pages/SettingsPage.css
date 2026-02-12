@@ -702,6 +702,211 @@
   padding: 0.38vw 0 0.56vw;
 }
 
+.page-settings--deltaforce .settings-language-block {
+  gap: 0.34vw;
+  padding-top: 0.18vw;
+}
+
+.page-settings--deltaforce .settings-language-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.1vw;
+  min-height: 3.2vw;
+}
+
+.page-settings--deltaforce .settings-language-body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.08vw;
+}
+
+.page-settings--deltaforce .settings-language-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.16vw;
+}
+
+.page-settings--deltaforce .settings-language-head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-language-head .settings-param-title {
+  font-size: clamp(30px, 1.96vw, 40px);
+}
+
+.page-settings--deltaforce .settings-language-controls {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.42vw;
+  padding-bottom: 0.22vw;
+}
+
+.page-settings--deltaforce .settings-language-controls .settings-choice-btn {
+  min-height: clamp(29px, 1.95vw, 36px);
+  padding: 0 clamp(10px, 0.74vw, 16px);
+}
+
+.page-settings--deltaforce .settings-language-note {
+  margin-top: 0;
+}
+
+.page-settings--deltaforce .settings-window-close-panel {
+  gap: 0.2vw;
+}
+
+.page-settings--deltaforce .settings-window-close-block {
+  gap: 0.34vw;
+  padding-top: 0.18vw;
+}
+
+.page-settings--deltaforce .settings-window-close-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.1vw;
+  min-height: 3.2vw;
+}
+
+.page-settings--deltaforce .settings-window-close-body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.08vw;
+}
+
+.page-settings--deltaforce .settings-window-close-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.16vw;
+}
+
+.page-settings--deltaforce .settings-window-close-head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-window-close-head .settings-param-title {
+  font-size: clamp(27px, 1.82vw, 36px);
+}
+
+.page-settings--deltaforce .settings-window-close-controls {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.42vw;
+  padding-bottom: 0;
+}
+
+.page-settings--deltaforce .settings-window-close-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 0.16vw;
+  margin-bottom: 0.22vw;
+}
+
+.page-settings--deltaforce .settings-window-close-body .settings-window-close-controls {
+  padding-bottom: 0.22vw;
+}
+
+.page-settings--deltaforce .settings-window-close-controls .settings-choice-btn {
+  min-height: clamp(29px, 1.95vw, 36px);
+  padding: 0 clamp(10px, 0.74vw, 16px);
+}
+
+.page-settings--deltaforce .settings-window-close-note {
+  margin-top: 0.3vw;
+}
+
+.page-settings--deltaforce .settings-demo-panel {
+  gap: 0.3vw;
+}
+
+.page-settings--deltaforce .settings-demo-block {
+  gap: 0.28vw;
+  padding-top: 0.08vw;
+}
+
+.page-settings--deltaforce .settings-demo-block + .settings-demo-block > .settings-param-divider:first-child {
+  display: none;
+}
+
+.page-settings--deltaforce .settings-demo-body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.08vw;
+  padding-bottom: 0.42vw;
+}
+
+.page-settings--deltaforce .settings-demo-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.16vw;
+}
+
+.page-settings--deltaforce .settings-demo-head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-demo-head .settings-param-title {
+  font-size: clamp(27px, 1.82vw, 36px);
+}
+
+.page-settings--deltaforce .settings-demo-note {
+  margin-top: 0.12vw;
+}
+
+.page-settings--deltaforce .settings-demo-controls {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding-bottom: 0.22vw;
+}
+
+.page-settings--deltaforce .settings-demo-control-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.34vw;
+}
+
+.page-settings--deltaforce .settings-demo-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.42vw;
+}
+
+.page-settings--deltaforce .settings-demo-control-row--stretch {
+  width: 100%;
+}
+
+.page-settings--deltaforce .settings-demo-control-row--stretch .settings-select {
+  min-width: clamp(190px, 16vw, 340px);
+}
+
+.page-settings--deltaforce .settings-demo-number-item {
+  width: clamp(132px, 9.4vw, 180px);
+}
+
 .page-settings--deltaforce .settings-param-head {
   display: flex;
   flex-direction: column;
@@ -739,6 +944,10 @@
   height: 1px;
   background: #113149;
   margin: 0.42vw 0 0.58vw;
+}
+
+.page-settings--deltaforce .settings-param-divider--compact {
+  margin: 0.2vw 0;
 }
 
 .page-settings--deltaforce .settings-param-divider--major {

@@ -27,85 +27,101 @@ export function WindowCloseSettingsPanel() {
   const magnetBehavior = useMemo(() => normalizeBehavior(magnetBehaviorRaw, 'ask'), [magnetBehaviorRaw]);
   const systemBehavior = useMemo(() => normalizeBehavior(systemBehaviorRaw, 'hide'), [systemBehaviorRaw]);
 
-  const behaviorLabel = (behavior: MainWindowCloseBehavior) => {
-    if (behavior === 'ask') return t('settings.windowClose.behavior.ask');
-    if (behavior === 'hide') return t('settings.windowClose.behavior.hide');
-    return t('settings.windowClose.behavior.exit');
-  };
-
   return (
-    <>
-      <div className="settings-card">
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.windowClose.magnet.label')}</p>
-            <p className="settings-card-desc">{t('settings.windowClose.magnet.desc')}</p>
+    <div className="settings-audio-panel settings-window-close-panel">
+      <div className="settings-audio-block settings-window-close-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
+
+        <div className="settings-window-close-body">
+          <div className="settings-window-close-copy">
+            <div className="settings-param-head settings-window-close-head">
+              <p className="settings-param-eyebrow">MAGNET CLOSE</p>
+              <h3 className="settings-param-title">{t('settings.windowClose.magnet.label')}</h3>
+              <p className="settings-param-subtitle">{t('settings.windowClose.magnet.desc')}</p>
+            </div>
+            <p className="settings-card-note settings-window-close-note">{t('settings.windowClose.magnet.note')}</p>
           </div>
-          <span className="settings-card-badge">{behaviorLabel(magnetBehavior)}</span>
+
+          <div
+            className="settings-window-close-controls"
+            role="radiogroup"
+            aria-label={t('settings.windowClose.magnet.label')}
+          >
+            <button
+              type="button"
+              className="settings-choice-btn"
+              data-active={magnetBehavior === 'ask'}
+              onClick={() => setMagnetBehaviorRaw('ask')}
+            >
+              {t('settings.windowClose.behavior.ask')}
+            </button>
+            <button
+              type="button"
+              className="settings-choice-btn"
+              data-active={magnetBehavior === 'hide'}
+              onClick={() => setMagnetBehaviorRaw('hide')}
+            >
+              {t('settings.windowClose.behavior.hide')}
+            </button>
+            <button
+              type="button"
+              className="settings-choice-btn"
+              data-active={magnetBehavior === 'exit'}
+              onClick={() => setMagnetBehaviorRaw('exit')}
+            >
+              {t('settings.windowClose.behavior.exit')}
+            </button>
+          </div>
         </div>
 
-        <div className="settings-toggle">
-          <button
-            type="button"
-            data-active={magnetBehavior === 'ask'}
-            onClick={() => setMagnetBehaviorRaw('ask')}
-          >
-            {t('settings.windowClose.behavior.ask')}
-          </button>
-          <button
-            type="button"
-            data-active={magnetBehavior === 'hide'}
-            onClick={() => setMagnetBehaviorRaw('hide')}
-          >
-            {t('settings.windowClose.behavior.hide')}
-          </button>
-          <button
-            type="button"
-            data-active={magnetBehavior === 'exit'}
-            onClick={() => setMagnetBehaviorRaw('exit')}
-          >
-            {t('settings.windowClose.behavior.exit')}
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.windowClose.magnet.note')}</p>
+        <div className="settings-param-divider settings-param-divider--compact" />
       </div>
 
-      <div className="settings-card" style={{ marginTop: 16 }}>
-        <div className="settings-card-header">
-          <div>
-            <p className="settings-card-label">{t('settings.windowClose.system.label')}</p>
-            <p className="settings-card-desc">{t('settings.windowClose.system.desc')}</p>
+      <div className="settings-audio-block settings-window-close-block">
+        <div className="settings-window-close-body">
+          <div className="settings-window-close-copy">
+            <div className="settings-param-head settings-window-close-head">
+              <p className="settings-param-eyebrow">SYSTEM CLOSE</p>
+              <h3 className="settings-param-title">{t('settings.windowClose.system.label')}</h3>
+              <p className="settings-param-subtitle">{t('settings.windowClose.system.desc')}</p>
+            </div>
+            <p className="settings-card-note settings-window-close-note">{t('settings.windowClose.system.note')}</p>
           </div>
-          <span className="settings-card-badge">{behaviorLabel(systemBehavior)}</span>
+
+          <div
+            className="settings-window-close-controls"
+            role="radiogroup"
+            aria-label={t('settings.windowClose.system.label')}
+          >
+            <button
+              type="button"
+              className="settings-choice-btn"
+              data-active={systemBehavior === 'ask'}
+              onClick={() => setSystemBehaviorRaw('ask')}
+            >
+              {t('settings.windowClose.behavior.ask')}
+            </button>
+            <button
+              type="button"
+              className="settings-choice-btn"
+              data-active={systemBehavior === 'hide'}
+              onClick={() => setSystemBehaviorRaw('hide')}
+            >
+              {t('settings.windowClose.behavior.hide')}
+            </button>
+            <button
+              type="button"
+              className="settings-choice-btn"
+              data-active={systemBehavior === 'exit'}
+              onClick={() => setSystemBehaviorRaw('exit')}
+            >
+              {t('settings.windowClose.behavior.exit')}
+            </button>
+          </div>
         </div>
 
-        <div className="settings-toggle">
-          <button
-            type="button"
-            data-active={systemBehavior === 'ask'}
-            onClick={() => setSystemBehaviorRaw('ask')}
-          >
-            {t('settings.windowClose.behavior.ask')}
-          </button>
-          <button
-            type="button"
-            data-active={systemBehavior === 'hide'}
-            onClick={() => setSystemBehaviorRaw('hide')}
-          >
-            {t('settings.windowClose.behavior.hide')}
-          </button>
-          <button
-            type="button"
-            data-active={systemBehavior === 'exit'}
-            onClick={() => setSystemBehaviorRaw('exit')}
-          >
-            {t('settings.windowClose.behavior.exit')}
-          </button>
-        </div>
-
-        <p className="settings-card-note">{t('settings.windowClose.system.note')}</p>
+        <div className="settings-param-divider settings-param-divider--compact" />
       </div>
-    </>
+    </div>
   );
 }
