@@ -521,10 +521,7 @@ impl LimiterProcessor {
     }
 
     fn process_frame_in_place(&mut self, frame: &mut [f32]) {
-        let mut peak = 0.0f32;
-        for sample in frame.iter() {
-            peak = peak.max(sample.abs());
-        }
+        let peak = peak_abs(frame);
 
         let desired_gain = if peak > self.threshold && peak.is_finite() {
             (self.threshold / peak).clamp(0.0, 1.0)
@@ -564,6 +561,91 @@ impl LimiterProcessor {
 
         scalar_mul_in_place(frame, self.gain);
     }
+}
+
+#[inline]
+fn peak_abs(samples: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            unsafe {
+                return peak_abs_avx2(samples);
+            }
+        }
+        if std::arch::is_x86_feature_detected!("sse2") {
+            unsafe {
+                return peak_abs_sse2(samples);
+            }
+        }
+    }
+
+    let mut peak = 0.0f32;
+    for sample in samples {
+        peak = peak.max(sample.abs());
+    }
+    peak
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn peak_abs_sse2(samples: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let sign_mask = _mm_set1_ps(-0.0);
+    let mut max_vec = _mm_setzero_ps();
+
+    while i + 4 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm_loadu_ps(ptr);
+        let abs = _mm_andnot_ps(sign_mask, x);
+        max_vec = _mm_max_ps(max_vec, abs);
+        i += 4;
+    }
+
+    let mut tmp = [0.0f32; 4];
+    _mm_storeu_ps(tmp.as_mut_ptr(), max_vec);
+    let mut peak = tmp[0].max(tmp[1]).max(tmp[2]).max(tmp[3]);
+
+    while i < len {
+        peak = peak.max(samples.get_unchecked(i).abs());
+        i += 1;
+    }
+
+    peak
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn peak_abs_avx2(samples: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let sign_mask = _mm256_set1_ps(-0.0);
+    let mut max_vec = _mm256_setzero_ps();
+
+    while i + 8 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm256_loadu_ps(ptr);
+        let abs = _mm256_andnot_ps(sign_mask, x);
+        max_vec = _mm256_max_ps(max_vec, abs);
+        i += 8;
+    }
+
+    let mut tmp = [0.0f32; 8];
+    _mm256_storeu_ps(tmp.as_mut_ptr(), max_vec);
+    let mut peak = 0.0f32;
+    for value in tmp {
+        peak = peak.max(value);
+    }
+
+    if i < len {
+        peak = peak.max(peak_abs_sse2(&samples[i..]));
+    }
+
+    peak
 }
 
 #[inline]
@@ -1503,6 +1585,18 @@ mod tests {
         let threshold = gain_db_to_linear(threshold_db);
         assert!((samples[0].abs() - threshold).abs() < 1e-6);
         assert!((samples[1].abs() - threshold).abs() < 1e-6);
+    }
+
+    #[test]
+    fn peak_abs_matches_scalar_max_abs() {
+        let samples = [
+            -0.1f32, 0.25, -0.9, 0.0, 0.33, -1.25, 1.1, -0.77, 0.42, -0.56, 0.88,
+        ];
+        let expected = samples
+            .iter()
+            .fold(0.0f32, |acc, value| acc.max(value.abs()));
+        let actual = peak_abs(&samples);
+        assert!((actual - expected).abs() < 1e-6);
     }
 
     #[test]

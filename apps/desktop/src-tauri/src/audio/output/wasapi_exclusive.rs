@@ -849,16 +849,22 @@ fn quantize_pcm24(sample: f32, volume: f32) -> i32 {
 }
 
 #[inline]
+fn quantize_pcm16_round(sample: f32, volume: f32) -> i16 {
+    let scaled = sample * ((i16::MAX as f32) * volume);
+    scaled.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
+#[inline]
 fn quantize_pcm16_with_mode(
     sample: f32,
     volume: f32,
     mode: NativeAudioOutputQuantizationMode,
     dither_state: &mut u64,
 ) -> i16 {
-    let mut scaled = sample * (i16::MAX as f32) * volume;
-    if matches!(mode, NativeAudioOutputQuantizationMode::Tpdf) {
-        scaled += tpdf_noise_lsb(dither_state);
+    if matches!(mode, NativeAudioOutputQuantizationMode::Round) {
+        return quantize_pcm16_round(sample, volume);
     }
+    let scaled = sample * ((i16::MAX as f32) * volume) + tpdf_noise_lsb(dither_state);
     scaled.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
@@ -869,7 +875,7 @@ fn quantize_pcm32_with_mode(
     mode: NativeAudioOutputQuantizationMode,
     dither_state: &mut u64,
 ) -> i32 {
-    let mut scaled = sample * (i32::MAX as f32) * volume;
+    let mut scaled = sample * ((i32::MAX as f32) * volume);
     if matches!(mode, NativeAudioOutputQuantizationMode::Tpdf) {
         scaled += tpdf_noise_lsb(dither_state);
     }
@@ -946,6 +952,182 @@ fn quantize_pcm24_round_in32_buffer(samples: &[f32], out: *mut i32, volume: f32)
     }
 }
 
+#[inline]
+fn write_scaled_f32_buffer(samples: &[f32], out: *mut f32, volume: f32) {
+    if samples.is_empty() {
+        return;
+    }
+
+    if (volume - 1.0).abs() < 1e-8 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(samples.as_ptr(), out, samples.len());
+        }
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            unsafe {
+                write_scaled_f32_buffer_avx2(samples, out, volume);
+            }
+            return;
+        }
+        if std::arch::is_x86_feature_detected!("sse2") {
+            unsafe {
+                write_scaled_f32_buffer_sse2(samples, out, volume);
+            }
+            return;
+        }
+    }
+
+    for (index, sample) in samples.iter().enumerate() {
+        unsafe {
+            *out.add(index) = *sample * volume;
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn write_scaled_f32_buffer_sse2(samples: &[f32], out: *mut f32, volume: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let gain = _mm_set1_ps(volume);
+
+    while i + 4 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm_loadu_ps(ptr);
+        let y = _mm_mul_ps(x, gain);
+        _mm_storeu_ps(out.add(i), y);
+        i += 4;
+    }
+
+    while i < len {
+        *out.add(i) = *samples.get_unchecked(i) * volume;
+        i += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn write_scaled_f32_buffer_avx2(samples: &[f32], out: *mut f32, volume: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let gain = _mm256_set1_ps(volume);
+
+    while i + 8 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm256_loadu_ps(ptr);
+        let y = _mm256_mul_ps(x, gain);
+        _mm256_storeu_ps(out.add(i), y);
+        i += 8;
+    }
+
+    if i < len {
+        write_scaled_f32_buffer_sse2(&samples[i..], out.add(i), volume);
+    }
+}
+
+#[inline]
+fn quantize_pcm16_round_buffer(samples: &[f32], out: *mut i16, volume: f32) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let scale = (i16::MAX as f32) * volume;
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            unsafe {
+                quantize_pcm16_round_buffer_avx2(samples, out, scale);
+            }
+            return;
+        }
+        if std::arch::is_x86_feature_detected!("sse2") {
+            unsafe {
+                quantize_pcm16_round_buffer_sse2(samples, out, scale);
+            }
+            return;
+        }
+    }
+
+    for (index, sample) in samples.iter().enumerate() {
+        unsafe {
+            *out.add(index) = quantize_pcm16_round(*sample, volume);
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn quantize_pcm16_round_buffer_sse2(samples: &[f32], out: *mut i16, scale: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let scale_vec = _mm_set1_ps(scale);
+    let min_vec = _mm_set1_ps(i16::MIN as f32);
+    let max_vec = _mm_set1_ps(i16::MAX as f32);
+    let half_vec = _mm_set1_ps(0.5);
+    let sign_mask = _mm_set1_ps(-0.0);
+
+    while i + 4 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm_loadu_ps(ptr);
+        let scaled = _mm_mul_ps(x, scale_vec);
+        let clamped = _mm_min_ps(_mm_max_ps(scaled, min_vec), max_vec);
+        let signed_half = _mm_or_ps(half_vec, _mm_and_ps(clamped, sign_mask));
+        let rounded = _mm_cvttps_epi32(_mm_add_ps(clamped, signed_half));
+        let packed = _mm_packs_epi32(rounded, rounded);
+        _mm_storel_epi64(out.add(i) as *mut __m128i, packed);
+        i += 4;
+    }
+
+    while i < len {
+        let scaled = *samples.get_unchecked(i) * scale;
+        *out.add(i) = scaled.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        i += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn quantize_pcm16_round_buffer_avx2(samples: &[f32], out: *mut i16, scale: f32) {
+    use std::arch::x86_64::*;
+
+    let mut i = 0usize;
+    let len = samples.len();
+    let scale_vec = _mm256_set1_ps(scale);
+    let min_vec = _mm256_set1_ps(i16::MIN as f32);
+    let max_vec = _mm256_set1_ps(i16::MAX as f32);
+    let half_vec = _mm256_set1_ps(0.5);
+    let sign_mask = _mm256_set1_ps(-0.0);
+
+    while i + 8 <= len {
+        let ptr = samples.as_ptr().add(i);
+        let x = _mm256_loadu_ps(ptr);
+        let scaled = _mm256_mul_ps(x, scale_vec);
+        let clamped = _mm256_min_ps(_mm256_max_ps(scaled, min_vec), max_vec);
+        let signed_half = _mm256_or_ps(half_vec, _mm256_and_ps(clamped, sign_mask));
+        let rounded = _mm256_cvttps_epi32(_mm256_add_ps(clamped, signed_half));
+        let lo = _mm256_castsi256_si128(rounded);
+        let hi = _mm256_extracti128_si256(rounded, 1);
+        let packed = _mm_packs_epi32(lo, hi);
+        _mm_storeu_si128(out.add(i) as *mut __m128i, packed);
+        i += 8;
+    }
+
+    if i < len {
+        quantize_pcm16_round_buffer_sse2(&samples[i..], out.add(i), scale);
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn quantize_pcm24_round_in32_buffer_sse2(samples: &[f32], out: *mut i32, scale: f32) {
@@ -1018,9 +1200,10 @@ fn pack_pcm24_packed_bytes(sample: i32) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        pack_pcm24_in32, pack_pcm24_packed_bytes, quantize_pcm16_with_mode, quantize_pcm24,
+        pack_pcm24_in32, pack_pcm24_packed_bytes, quantize_pcm16_round,
+        quantize_pcm16_round_buffer, quantize_pcm16_with_mode, quantize_pcm24,
         quantize_pcm24_round_in32_buffer, quantize_pcm24_transport_exact, quantize_pcm24_with_mode,
-        quantize_pcm32_with_mode, NativeAudioOutputQuantizationMode,
+        quantize_pcm32_with_mode, write_scaled_f32_buffer, NativeAudioOutputQuantizationMode,
     };
 
     #[test]
@@ -1132,6 +1315,33 @@ mod tests {
 
         for (index, sample) in samples.iter().enumerate() {
             assert_eq!(out[index], pack_pcm24_in32(quantize_pcm24(*sample, volume)));
+        }
+    }
+
+    #[test]
+    fn pcm16_round_buffer_matches_scalar_quantize() {
+        let samples = [
+            -1.2f32, -1.0, -0.7, -0.25, -0.01, 0.0, 0.01, 0.25, 0.5, 0.7, 0.9999, 1.2,
+        ];
+        let volume = 0.91f32;
+        let mut out = vec![0i16; samples.len()];
+
+        quantize_pcm16_round_buffer(&samples, out.as_mut_ptr(), volume);
+
+        for (index, sample) in samples.iter().enumerate() {
+            assert_eq!(out[index], quantize_pcm16_round(*sample, volume));
+        }
+    }
+
+    #[test]
+    fn scaled_f32_buffer_matches_scalar() {
+        let samples = [-1.0f32, -0.3, 0.0, 0.25, 0.75, 1.0];
+        let mut out = vec![0.0f32; samples.len()];
+        let volume = 0.83f32;
+        write_scaled_f32_buffer(&samples, out.as_mut_ptr(), volume);
+
+        for (index, sample) in samples.iter().enumerate() {
+            assert!((out[index] - (*sample * volume)).abs() <= 1e-6);
         }
     }
 }
@@ -2306,26 +2516,34 @@ fn render_frames(
         match stream.sample_format {
             WasapiSampleFormat::Float32 => {
                 let out = buffer as *mut f32;
-                for index in 0..total_samples {
-                    let sample = if consume {
-                        scratch[index] * volume
-                    } else {
-                        0.0
-                    };
-                    *out.add(index) = sample;
+                if consume {
+                    write_scaled_f32_buffer(&scratch[..total_samples], out, volume);
+                } else {
+                    for index in 0..total_samples {
+                        *out.add(index) = 0.0;
+                    }
                 }
             }
             WasapiSampleFormat::Pcm16 => {
                 let out = buffer as *mut i16;
-                for index in 0..total_samples {
-                    let sample = if consume { scratch[index] } else { 0.0 };
-                    let quantized = quantize_pcm16_with_mode(
-                        sample,
-                        volume,
+                if consume
+                    && matches!(
                         output_quantization_mode,
-                        &mut dither_state,
-                    );
-                    *out.add(index) = quantized;
+                        NativeAudioOutputQuantizationMode::Round
+                    )
+                {
+                    quantize_pcm16_round_buffer(&scratch[..total_samples], out, volume);
+                } else {
+                    for index in 0..total_samples {
+                        let sample = if consume { scratch[index] } else { 0.0 };
+                        let quantized = quantize_pcm16_with_mode(
+                            sample,
+                            volume,
+                            output_quantization_mode,
+                            &mut dither_state,
+                        );
+                        *out.add(index) = quantized;
+                    }
                 }
             }
             WasapiSampleFormat::Pcm32 => {
@@ -2463,26 +2681,34 @@ fn render_frames_shared_raw(
         match stream.sample_format {
             WasapiSampleFormat::Float32 => {
                 let out = buffer as *mut f32;
-                for index in 0..total_samples {
-                    let sample = if consume {
-                        scratch[index] * volume
-                    } else {
-                        0.0
-                    };
-                    *out.add(index) = sample;
+                if consume {
+                    write_scaled_f32_buffer(&scratch[..total_samples], out, volume);
+                } else {
+                    for index in 0..total_samples {
+                        *out.add(index) = 0.0;
+                    }
                 }
             }
             WasapiSampleFormat::Pcm16 => {
                 let out = buffer as *mut i16;
-                for index in 0..total_samples {
-                    let sample = if consume { scratch[index] } else { 0.0 };
-                    let quantized = quantize_pcm16_with_mode(
-                        sample,
-                        volume,
+                if consume
+                    && matches!(
                         output_quantization_mode,
-                        &mut dither_state,
-                    );
-                    *out.add(index) = quantized;
+                        NativeAudioOutputQuantizationMode::Round
+                    )
+                {
+                    quantize_pcm16_round_buffer(&scratch[..total_samples], out, volume);
+                } else {
+                    for index in 0..total_samples {
+                        let sample = if consume { scratch[index] } else { 0.0 };
+                        let quantized = quantize_pcm16_with_mode(
+                            sample,
+                            volume,
+                            output_quantization_mode,
+                            &mut dither_state,
+                        );
+                        *out.add(index) = quantized;
+                    }
                 }
             }
             WasapiSampleFormat::Pcm32 => {
