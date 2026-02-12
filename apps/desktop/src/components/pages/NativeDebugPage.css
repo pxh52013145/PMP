@@ -669,6 +669,50 @@
     inset 0 0 0 1px rgba(var(--debug-orange-rgb), 0.04);
 }
 
+.native-debug-panel-group {
+  margin-bottom: 20px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(var(--debug-orange-rgb), 0.18);
+  background: rgba(255, 149, 69, 0.045);
+}
+
+.native-debug-panel-group--playback {
+  box-shadow: inset 0 0 0 1px rgba(var(--debug-orange-rgb), 0.06);
+}
+
+.native-debug-panel-group--engine {
+  box-shadow: inset 0 0 0 1px rgba(var(--debug-orange-rgb), 0.08);
+}
+
+.native-debug-panel-group .current-track,
+.native-debug-panel-group .device-row,
+.native-debug-panel-group .volume-row,
+.native-debug-panel-group .control-row {
+  margin-bottom: 14px;
+}
+
+.native-debug-panel-group .device-row:last-child,
+.native-debug-panel-group .volume-row:last-child,
+.native-debug-panel-group .control-row:last-child {
+  margin-bottom: 0;
+}
+
+.native-debug-system-group {
+  margin-bottom: 12px;
+}
+
+.native-debug-visual-card {
+  border-radius: 14px;
+  border: 1px solid rgba(var(--debug-orange-rgb), 0.2);
+  background: rgba(255, 149, 69, 0.05);
+  padding: 12px;
+}
+
+.native-debug-queue-header {
+  margin-top: 18px;
+}
+
 .native-debug-warning p,
 .section-label,
 .device-label,
