@@ -45,6 +45,8 @@ export function VisualizersSettingsPanel() {
         <span className="settings-card-badge">{visualizers.length}</span>
       </div>
 
+      <div className="settings-param-divider settings-param-divider--compact" />
+
       <div className="settings-visualizer-search">
         <input
           value={query}

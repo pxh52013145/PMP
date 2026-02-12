@@ -585,6 +585,14 @@
 
 .page-settings--deltaforce .settings-content-body {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 0.62vw, 14px);
+}
+
+.page-settings--deltaforce .settings-content-body > * {
+  width: 100%;
+  min-width: 0;
 }
 
 .page-settings--deltaforce .settings-content-panel {
@@ -636,7 +644,11 @@
 }
 
 .page-settings--deltaforce .settings-card {
-  padding: 10px 0 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, 0.34vw, 10px);
+  padding: clamp(2px, 0.16vw, 4px) 0 clamp(9px, 0.68vw, 14px);
   border-radius: 0;
   background: transparent;
   border: none;
@@ -644,36 +656,59 @@
   backdrop-filter: none;
 }
 
+.page-settings--deltaforce .settings-card::before {
+  content: '';
+  width: 100%;
+  height: 1px;
+  background: var(--settings-divider-solid);
+  margin-bottom: clamp(2px, 0.16vw, 5px);
+}
+
 .page-settings--deltaforce .settings-card-badge {
-  height: 26px;
-  padding: 0 10px;
+  height: clamp(24px, 1.8vw, 30px);
+  min-width: clamp(32px, 2.4vw, 48px);
+  padding: 0 clamp(8px, 0.62vw, 12px);
   border-radius: 0;
-  border: 1px solid #eaf6ff;
-  background: transparent;
-  color: #eaf6ff;
+  border: 1px solid var(--settings-control-border);
+  background: var(--settings-control-bg);
+  color: var(--settings-text-value);
+  font-size: clamp(11px, 0.72vw, 13px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .page-settings--deltaforce .settings-card-header {
-  align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #123049;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: clamp(10px, 0.8vw, 18px);
+  padding: 0;
+  border-bottom: none;
 }
 
 .page-settings--deltaforce .settings-card-label {
   margin: 0;
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: #5e8099;
+  font-size: clamp(10px, 0.62vw, 12px);
+  letter-spacing: clamp(1.4px, 0.14vw, 2.8px);
+  color: var(--settings-text-sub);
   text-transform: uppercase;
+  line-height: 1.02;
+  font-weight: 600;
 }
 
 .page-settings--deltaforce .settings-card-desc {
-  margin: 6px 0 0;
-  color: #8fafc5;
+  margin: clamp(4px, 0.28vw, 8px) 0 0;
+  color: var(--settings-text-desc);
+  font-size: clamp(11px, 0.72vw, 14px);
+  line-height: 1.2;
 }
 
 .page-settings--deltaforce .settings-card-note {
-  color: #8fafc5;
+  margin: clamp(3px, 0.24vw, 6px) 0 0;
+  color: var(--settings-text-desc);
+  font-size: clamp(11px, 0.7vw, 13px);
+  line-height: 1.22;
 }
 
 .page-settings--deltaforce .settings-toggle {
@@ -697,9 +732,12 @@
 .page-settings--deltaforce .settings-rows {
   width: 100%;
   border-radius: 0;
-  border: 1px solid rgba(152, 210, 230, 0.42);
-  background: rgba(8, 20, 30, 0.66);
-  overflow: hidden;
+  border: none;
+  background: transparent;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .page-settings--deltaforce .settings-section-title {
@@ -740,16 +778,23 @@
 }
 
 .page-settings--deltaforce .settings-section-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  width: 100%;
+  display: inline-flex;
+  align-items: flex-end;
   justify-content: flex-end;
+  gap: clamp(6px, 0.42vw, 10px);
+  flex-wrap: wrap;
 }
 
 .page-settings--deltaforce .settings-section-controls--stretch {
+  width: clamp(240px, 20vw, 420px);
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.page-settings--deltaforce .settings-section-controls--stretch .settings-select {
   width: 100%;
-  justify-content: flex-start;
+  min-width: 0;
 }
 
 .page-settings--deltaforce .settings-audio-panel {
@@ -1325,57 +1370,65 @@
 
 .page-settings--deltaforce .settings-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 12px 14px;
-  min-height: 56px;
-  border-bottom: 1px solid rgba(96, 138, 160, 0.52);
+  gap: clamp(12px, 0.92vw, 20px);
+  flex-wrap: nowrap;
+  padding: clamp(4px, 0.26vw, 8px) 0 clamp(9px, 0.72vw, 16px);
+  min-height: clamp(58px, 3.8vw, 96px);
+  border-top: 1px solid var(--settings-divider-solid);
 }
 
 .page-settings--deltaforce .settings-row:last-child {
-  border-bottom: none;
+  padding-bottom: clamp(7px, 0.54vw, 12px);
 }
 
 .page-settings--deltaforce .settings-row-left {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 clamp(420px, 56vw, 920px);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: clamp(3px, 0.22vw, 7px);
+  padding-top: clamp(1px, 0.08vw, 2px);
 }
 
 .page-settings--deltaforce .settings-row-title {
-  font-size: 13px;
-  font-weight: 650;
-  color: rgba(184, 195, 206, 0.92);
+  margin: 0;
+  font-size: clamp(18px, 1.28vw, 28px);
+  line-height: 1.06;
+  font-weight: 500;
+  color: var(--settings-text-label);
 }
 
 .page-settings--deltaforce .settings-row-desc {
-  font-size: 12px;
-  color: rgba(127, 138, 150, 0.92);
-  line-height: 1.25;
+  margin: 0;
+  font-size: clamp(11px, 0.72vw, 14px);
+  color: var(--settings-text-desc);
+  line-height: 1.22;
 }
 
 .page-settings--deltaforce .settings-row-right {
-  flex: 0 0 auto;
+  flex: 0 0 clamp(250px, 20vw, 420px);
   min-width: 0;
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  align-items: flex-end;
+  align-self: stretch;
+  flex-wrap: nowrap;
+  flex-direction: column;
   justify-content: flex-end;
-  gap: 10px;
+  gap: clamp(6px, 0.42vw, 10px);
+  margin-top: auto;
+  padding-bottom: clamp(2px, 0.16vw, 5px);
 }
 
 .page-settings--deltaforce .settings-row-badge {
-  height: 30px;
-  padding: 0 10px;
+  height: clamp(24px, 1.82vw, 32px);
+  padding: 0 clamp(8px, 0.62vw, 12px);
   border-radius: 0;
-  border: 1px solid rgba(var(--settings-accent-rgb), 0.5);
-  background: rgba(var(--settings-accent-rgb), 0.12);
-  color: rgba(var(--settings-accent-rgb), 0.95);
-  font-size: 12px;
+  border: 1px solid var(--settings-control-border);
+  background: var(--settings-control-bg);
+  color: var(--settings-text-value);
+  font-size: clamp(11px, 0.72vw, 13px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1384,18 +1437,20 @@
 
 .page-settings--deltaforce .settings-toggle--compact {
   margin-top: 0;
+  width: 100%;
+  display: inline-flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: clamp(6px, 0.42vw, 10px);
 }
 
 .page-settings--deltaforce .settings-toggle--compact button {
   flex: 0 0 auto;
-  min-width: 72px;
-  height: 30px;
-  padding: 0 12px;
-  font-size: 12px;
-  font-weight: 650;
+  min-width: clamp(72px, 5.6vw, 112px);
+  height: clamp(30px, 2.08vw, 38px);
+  padding: 0 clamp(10px, 0.74vw, 16px);
+  font-size: clamp(12px, 0.76vw, 14px);
+  font-weight: 500;
   text-overflow: clip;
 }
 
@@ -1449,34 +1504,57 @@
 }
 
 .page-settings--deltaforce .settings-inline-error {
-  margin-top: 12px;
-  padding: 10px 12px;
+  margin-top: clamp(6px, 0.42vw, 10px);
+  padding: clamp(8px, 0.56vw, 12px) clamp(10px, 0.74vw, 14px);
   border-radius: 0;
   border: 1px solid rgba(255, 69, 58, 0.62);
   background: rgba(62, 14, 16, 0.4);
   color: #ffd8d8;
   box-shadow: none;
+  font-size: clamp(11px, 0.72vw, 13px);
+  line-height: 1.22;
 }
 
 .page-settings--deltaforce .settings-plugin-list,
 .page-settings--deltaforce .settings-visualizer-list {
-  margin-top: 10px;
+  margin-top: clamp(4px, 0.3vw, 8px);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: clamp(6px, 0.42vw, 10px);
 }
 
 .page-settings--deltaforce .settings-plugin-item,
 .page-settings--deltaforce .settings-visualizer-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: clamp(10px, 0.8vw, 18px);
+  padding: clamp(9px, 0.68vw, 14px);
   border-radius: 0;
   border: 1px solid rgba(152, 210, 230, 0.4);
   background: rgba(8, 20, 30, 0.42);
   box-shadow: none;
 }
 
+.page-settings--deltaforce label.settings-plugin-item {
+  cursor: pointer;
+}
+
+.page-settings--deltaforce .settings-plugin-meta,
+.page-settings--deltaforce .settings-visualizer-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4px, 0.26vw, 8px);
+}
+
 .page-settings--deltaforce .settings-plugin-title,
 .page-settings--deltaforce .settings-visualizer-title {
   color: rgba(224, 239, 247, 0.94);
+  font-size: clamp(13px, 0.86vw, 16px);
+  font-weight: 600;
+  line-height: 1.14;
 }
 
 .page-settings--deltaforce .settings-plugin-subtitle,
@@ -1485,6 +1563,8 @@
 .page-settings--deltaforce .settings-visualizer-id,
 .page-settings--deltaforce .settings-visualizer-inputs {
   color: rgba(142, 176, 194, 0.9);
+  font-size: clamp(11px, 0.7vw, 13px);
+  line-height: 1.22;
 }
 
 .page-settings--deltaforce .settings-plugin-tag {
@@ -1492,33 +1572,140 @@
   border: 1px solid rgba(152, 210, 230, 0.46);
   background: rgba(13, 41, 58, 0.48);
   color: rgba(194, 232, 246, 0.94);
+  font-size: clamp(10px, 0.62vw, 12px);
+  padding: clamp(2px, 0.16vw, 4px) clamp(6px, 0.44vw, 10px);
 }
 
 .page-settings--deltaforce .settings-plugin-actions {
+  display: inline-flex;
+  width: clamp(240px, 19vw, 400px);
   flex-direction: row;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-end;
+  align-self: stretch;
+  margin-top: auto;
+  gap: clamp(6px, 0.42vw, 10px);
 }
 
 .page-settings--deltaforce .settings-visualizer-search {
-  margin-top: 10px;
+  margin-top: clamp(2px, 0.16vw, 6px);
+}
+
+.page-settings--deltaforce .settings-visualizer-search input {
+  width: 100%;
+}
+
+.page-settings--deltaforce .settings-plugin-permission-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: clamp(11px, 0.72vw, 13px);
+  color: var(--settings-text-desc);
+}
+
+.page-settings--deltaforce .settings-plugin-details {
+  margin-top: clamp(4px, 0.28vw, 8px);
+  border: 1px solid rgba(76, 120, 146, 0.5);
+  background: rgba(6, 16, 24, 0.42);
+  padding: clamp(6px, 0.44vw, 10px);
+}
+
+.page-settings--deltaforce .settings-plugin-details-summary {
+  cursor: pointer;
+  font-size: clamp(11px, 0.72vw, 13px);
+  color: var(--settings-text-value);
+}
+
+.page-settings--deltaforce .settings-plugin-details-content {
+  margin-top: clamp(5px, 0.36vw, 9px);
+  font-size: clamp(11px, 0.7vw, 12px);
+  color: var(--settings-text-desc);
+  white-space: pre-wrap;
+  line-height: 1.22;
+}
+
+.page-settings--deltaforce .settings-plugin-details-actions {
+  margin-top: clamp(5px, 0.36vw, 9px);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.page-settings--deltaforce .settings-plugin-switches {
+  margin: 0 0 clamp(4px, 0.3vw, 8px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 0.42vw, 10px);
+}
+
+.page-settings--deltaforce .settings-plugin-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: clamp(11px, 0.72vw, 13px);
+  color: var(--settings-text-value);
+}
+
+.page-settings--deltaforce .settings-plugin-switch-row input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.page-settings--deltaforce .settings-row-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: clamp(6px, 0.42vw, 10px);
+  width: 100%;
+}
+
+.page-settings--deltaforce .settings-row-grid {
+  display: grid;
+  width: 100%;
+  gap: clamp(6px, 0.42vw, 10px);
+  justify-items: end;
+}
+
+.page-settings--deltaforce .settings-row-desc-list {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4px, 0.3vw, 8px);
+}
+
+.page-settings--deltaforce .settings-row-meta {
+  margin-top: clamp(3px, 0.22vw, 7px);
 }
 
 @media (max-width: 960px) {
   .page-settings--deltaforce .settings-row {
     flex-direction: column;
     align-items: stretch;
+    flex-wrap: wrap;
+    gap: clamp(8px, 2.2vw, 14px);
   }
 
   .page-settings--deltaforce .settings-row-right {
     width: 100%;
+    flex: 1 1 auto;
     justify-content: flex-start;
+    align-items: flex-start;
+    padding-bottom: 0;
   }
 
   .page-settings--deltaforce .settings-toggle--compact {
     justify-content: flex-start;
+  }
+
+  .page-settings--deltaforce .settings-plugin-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .page-settings--deltaforce .settings-section-controls--stretch {
+    width: 100%;
   }
 }
 

@@ -128,7 +128,7 @@ export function WorkbenchSettingsPanel() {
               const experimental = Boolean(metadata?.experimental);
               const description = readMetadataString(metadata, 'description');
               return (
-                <label key={wb.id} className="settings-plugin-item" style={{ cursor: 'pointer' }}>
+                <label key={wb.id} className="settings-plugin-item">
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {wb.title} <span className="settings-plugin-subtitle">({wb.id})</span>
@@ -181,7 +181,7 @@ export function WorkbenchSettingsPanel() {
               const experimental = Boolean(metadata?.experimental);
               const description = readMetadataString(metadata, 'description');
               return (
-                <label key={layout.id} className="settings-plugin-item" style={{ cursor: 'pointer' }}>
+                <label key={layout.id} className="settings-plugin-item">
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {layout.title} <span className="settings-plugin-subtitle">({layout.id})</span>
@@ -234,7 +234,7 @@ export function WorkbenchSettingsPanel() {
               const experimental = Boolean(metadata?.experimental);
               const description = readMetadataString(metadata, 'description');
               return (
-                <label key={nav.id} className="settings-plugin-item" style={{ cursor: 'pointer' }}>
+                <label key={nav.id} className="settings-plugin-item">
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {nav.title} <span className="settings-plugin-subtitle">({nav.id})</span>
@@ -287,11 +287,7 @@ export function WorkbenchSettingsPanel() {
               const experimental = Boolean(metadata?.experimental);
               const description = readMetadataString(metadata, 'description');
               return (
-                <label
-                  key={container.id}
-                  className="settings-plugin-item"
-                  style={{ cursor: 'pointer' }}
-                >
+                <label key={container.id} className="settings-plugin-item">
                   <div className="settings-plugin-meta">
                     <div className="settings-plugin-title">
                       {container.title}{' '}

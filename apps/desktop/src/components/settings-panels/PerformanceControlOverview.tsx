@@ -24,11 +24,11 @@ export function PerformanceControlOverview() {
         : t('settings.performance.overview.pressure.normal');
 
   return (
-    <div className="settings-row" style={{ alignItems: 'flex-start' }}>
-      <div className="settings-row-left" style={{ width: '100%' }}>
+    <div className="settings-row">
+      <div className="settings-row-left">
         <div className="settings-row-title">{t('settings.performance.overview.title')}</div>
         <div className="settings-row-desc">{t('settings.performance.overview.desc')}</div>
-        <div className="performance-overview-grid" style={{ marginTop: 10 }}>
+        <div className="performance-overview-grid settings-row-meta">
           <div className="performance-overview-item">
             <span className="settings-row-desc">{t('settings.performance.overview.field.pressure')}</span>
             <span className="settings-row-badge">{pressureText}</span>
@@ -58,7 +58,10 @@ export function PerformanceControlOverview() {
             </span>
           </div>
         </div>
-        <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+      </div>
+
+      <div className="settings-row-right">
+        <div className="settings-row-stack">
           <button
             type="button"
             className="settings-action-btn"

@@ -325,8 +325,8 @@ export function PluginsSettingsPanel() {
 
       {error && <div className="settings-inline-error">{error}</div>}
 
-      <div className="settings-card-note" style={{ marginBottom: 10 }}>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div className="settings-plugin-switches settings-card-note">
+        <label className="settings-plugin-switch-row">
           <input
             type="checkbox"
             checked={sandboxEnabled}
@@ -334,7 +334,7 @@ export function PluginsSettingsPanel() {
           />
           <span>{t('settings.plugins.runtimeSandbox.label')}</span>
         </label>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <label className="settings-plugin-switch-row">
           <input
             type="checkbox"
             checked={requireTrustedSignatures}
@@ -346,7 +346,7 @@ export function PluginsSettingsPanel() {
           />
           <span>{t('settings.plugins.requireTrustedSignatures.label')}</span>
         </label>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <label className="settings-plugin-switch-row">
           <input
             type="checkbox"
             checked={allowUnsignedPlugins}
@@ -433,23 +433,13 @@ export function PluginsSettingsPanel() {
                   <div className="settings-plugin-permissions">
                     <div>{t('settings.plugins.permissions.label')}</div>
                     {permissions.length === 0 ? (
-                      <div style={{ opacity: 0.8 }}>{t('settings.plugins.permissions.none')}</div>
+                      <div className="settings-row-desc">{t('settings.plugins.permissions.none')}</div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                      <div className="settings-row-desc-list settings-row-meta">
                         {permissions.map((perm) => {
                           const allowed = !deniedSet.has(perm);
                           return (
-                            <label
-                              key={perm}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 8,
-                                cursor: busy ? 'not-allowed' : 'pointer',
-                                opacity: busy ? 0.6 : 0.9,
-                                fontSize: 12,
-                              }}
-                            >
+                            <label key={perm} className="settings-plugin-permission-line">
                               <input
                                 type="checkbox"
                                 checked={allowed}
@@ -478,24 +468,25 @@ export function PluginsSettingsPanel() {
                   )}
 
                   {pluginAudit.length > 0 && (
-                    <details style={{ marginTop: 8 }}>
-                      <summary style={{ cursor: 'pointer', fontSize: 12, opacity: 0.85 }}>
+                    <details className="settings-plugin-details">
+                      <summary className="settings-plugin-details-summary">
                         {t('settings.plugins.audit.summary', { count: pluginAudit.length })}
                       </summary>
-                      <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75, whiteSpace: 'pre-wrap' }}>
+                      <div className="settings-plugin-details-content">
                         {pluginAudit.map((event, idx) => (
                           <div key={idx}>{formatAuditEvent(event)}</div>
                         ))}
                       </div>
-                      <button
-                        type="button"
-                        className="settings-action-btn"
-                        style={{ marginTop: 6 }}
-                        onClick={() => clearPmpmAuditLog(meta.id)}
-                        disabled={busy}
-                      >
-                        {t('common.action.clear')}
-                      </button>
+                      <div className="settings-plugin-details-actions">
+                        <button
+                          type="button"
+                          className="settings-action-btn"
+                          onClick={() => clearPmpmAuditLog(meta.id)}
+                          disabled={busy}
+                        >
+                          {t('common.action.clear')}
+                        </button>
+                      </div>
                     </details>
                   )}
                 </div>

@@ -229,12 +229,13 @@ export function PerformanceSettingsPanel() {
         </div>
       </div>
 
-      <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+      <div className="settings-row">
         <div className="settings-row-left">
           <div className="settings-row-title">{t('settings.performance.quality.label')}</div>
           <div className="settings-row-desc">{t('settings.performance.quality.desc')}</div>
         </div>
-        <div className="settings-row-right" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+        <div className="settings-row-right">
+          <div className="settings-row-stack">
           <span className="settings-row-badge">
             {uiQualitySettings.mode === 'auto'
               ? t('settings.performance.quality.badge.auto', {
@@ -273,10 +274,10 @@ export function PerformanceSettingsPanel() {
                 >
                   {t(`settings.performance.quality.level.${level}`)}
                 </button>
-              ))}
-            </div>
+                ))}
+              </div>
           ) : (
-            <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
+            <div className="settings-row-grid">
               <div className="settings-row-desc">{t('settings.performance.quality.auto.range')}</div>
               <div className="settings-toggle settings-toggle--compact">
                 {QUALITY_LEVELS.map((level) => (
@@ -331,10 +332,11 @@ export function PerformanceSettingsPanel() {
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
 
-      <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+      <div className="settings-row">
         <div className="settings-row-left">
           <div className="settings-row-desc">
             {t('settings.performance.quality.effective', {
@@ -345,7 +347,7 @@ export function PerformanceSettingsPanel() {
             })}
           </div>
           {qualitySnapshot.lastDecision ? (
-            <div className="settings-row-desc" style={{ marginTop: 6 }}>
+            <div className="settings-row-desc settings-row-meta">
               {t('settings.performance.quality.lastDecision', {
                 from: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.from}`),
                 to: t(`settings.performance.quality.level.${qualitySnapshot.lastDecision.to}`),
@@ -371,18 +373,12 @@ export function PerformanceSettingsPanel() {
 
       <div className="settings-row">
         <div className="settings-row-left">
-          <div className="settings-row-desc">{t('settings.performance.lowPerformance.note')}</div>
-          <div className="settings-row-desc" style={{ marginTop: 6 }}>
-            {t('settings.performance.gifImportFps.note')}
-          </div>
-          <div className="settings-row-desc" style={{ marginTop: 6 }}>
-            {t('settings.performance.coverThumbnails.note')}
-          </div>
-          <div className="settings-row-desc" style={{ marginTop: 6 }}>
-            {t('settings.performance.backgroundRenderPolicy.note')}
-          </div>
-          <div className="settings-row-desc" style={{ marginTop: 6 }}>
-            {t('settings.performance.memoryGovernanceAuto.note')}
+          <div className="settings-row-desc-list">
+            <div className="settings-row-desc">{t('settings.performance.lowPerformance.note')}</div>
+            <div className="settings-row-desc">{t('settings.performance.gifImportFps.note')}</div>
+            <div className="settings-row-desc">{t('settings.performance.coverThumbnails.note')}</div>
+            <div className="settings-row-desc">{t('settings.performance.backgroundRenderPolicy.note')}</div>
+            <div className="settings-row-desc">{t('settings.performance.memoryGovernanceAuto.note')}</div>
           </div>
         </div>
       </div>
