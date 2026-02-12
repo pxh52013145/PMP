@@ -27,28 +27,37 @@
 }
 
 .page-settings--deltaforce {
-  --settings-bg: #050f19;
-  --settings-surface: rgba(8, 18, 28, 0.76);
-  --settings-surface-strong: rgba(8, 18, 28, 0.9);
+  --settings-bg: #0b1118;
+  --settings-surface: rgba(14, 24, 34, 0.86);
+  --settings-surface-strong: rgba(12, 22, 32, 0.92);
   --settings-surface-muted: rgba(0, 0, 0, 0);
-  --settings-border: rgba(154, 213, 235, 0.3);
-  --settings-border-strong: rgba(194, 239, 255, 0.55);
-  --settings-text: rgba(230, 246, 252, 0.96);
-  --settings-text-muted: rgba(167, 197, 212, 0.78);
-  --settings-text-dim: rgba(136, 165, 179, 0.9);
-  --settings-accent-rgb: 76, 227, 255;
+  --settings-border: rgba(80, 133, 165, 0.56);
+  --settings-border-strong: rgba(124, 201, 227, 0.74);
+  --settings-text: rgba(221, 236, 245, 0.95);
+  --settings-text-muted: rgba(143, 171, 188, 0.88);
+  --settings-text-dim: rgba(109, 138, 156, 0.92);
+  --settings-accent-rgb: 0, 225, 255;
   --settings-side-gutter: 0.72vw;
-  --settings-sub-line-thickness: clamp(1px, 0.12vw, 2px);
+  --settings-sub-line-thickness: 1px;
   --settings-frame-thickness: 1px;
   --settings-main-notch: clamp(12px, 1vw, 18px);
   --settings-main-corner-fx-size: clamp(7px, 0.56vw, 11px);
-  --settings-main-active-line: #28c8dd;
-  --settings-main-active-line-glow: rgba(40, 200, 221, 0.36);
-  --settings-sub-active-line: #24c7d5;
+  --settings-main-active-line: #1eb9d5;
+  --settings-main-active-line-glow: rgba(30, 185, 213, 0.32);
+  --settings-sub-active-line: #17aeca;
   --settings-main-ring-idle: rgba(143, 190, 207, 0.62);
   --settings-main-ring-idle-gap: rgba(143, 190, 207, 0.62);
   --settings-main-ring-active: rgba(36, 199, 213, 0.95);
   --settings-main-ring-active-gap: rgba(36, 199, 213, 0.28);
+  --settings-panel-bg: #141b22;
+  --settings-panel-bg-deep: #0f1721;
+  --settings-divider-solid: #1e2d3d;
+  --settings-text-sub: #4a606e;
+  --settings-text-label: #90a4ae;
+  --settings-text-desc: #6b8394;
+  --settings-text-value: #dceef7;
+  --settings-control-bg: rgba(10, 20, 30, 0.5);
+  --settings-control-border: #2c3e50;
 
   padding: 0;
   gap: 0;
@@ -77,7 +86,7 @@
 .page-settings--deltaforce .settings-divider {
   width: 100%;
   height: 1px;
-  background: rgba(120, 154, 178, 0.38);
+  background: rgba(120, 154, 178, 0);
   flex: 0 0 auto;
 }
 
@@ -86,11 +95,7 @@
 }
 
 .page-settings--deltaforce .settings-subbar + .settings-divider {
-  width: auto;
-  margin: 0 var(--settings-side-gutter);
-  background: #123049;
-  height: var(--settings-sub-line-thickness);
-  margin-top: calc(-1 * var(--settings-sub-line-thickness));
+  display: none;
 }
 
 .page-settings--deltaforce .settings-topbar {
@@ -365,7 +370,19 @@
   flex: 0 0 auto;
   overflow: visible;
   position: relative;
-  z-index: 2;
+  z-index: 6;
+}
+
+.page-settings--deltaforce .settings-subbar::after {
+  content: '';
+  position: absolute;
+  left: var(--settings-side-gutter);
+  right: var(--settings-side-gutter);
+  bottom: 0;
+  height: var(--settings-sub-line-thickness);
+  background: var(--settings-divider-solid);
+  pointer-events: none;
+  z-index: 6;
 }
 
 .page-settings--deltaforce .settings-sub-tabs {
@@ -380,6 +397,7 @@
   overflow-y: visible;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  z-index: 7;
 }
 
 .page-settings--deltaforce .settings-sub-tabs::-webkit-scrollbar {
@@ -452,7 +470,7 @@
   transform: none;
   width: auto;
   min-height: 1px;
-  z-index: 3;
+  z-index: 9;
   opacity: 0;
   transform: scaleX(0.42);
   transform-origin: center;
@@ -475,7 +493,9 @@
 
 .page-settings--deltaforce .settings-sub-tab[data-active='true']::before {
   background: var(--settings-sub-active-line);
-  box-shadow: 0 0 0.35vw rgba(28, 240, 222, 0.45);
+  box-shadow:
+    0 0 0.46vw rgba(28, 240, 222, 0.64),
+    0 0 0.18vw rgba(28, 240, 222, 0.82);
   opacity: 1;
   transform: scaleX(1);
 }
@@ -502,22 +522,65 @@
 }
 
 .page-settings--deltaforce .settings-content {
+  position: relative;
   flex: 1;
   min-height: 0;
-  margin: 0 var(--settings-side-gutter);
+  margin: 0 var(--settings-side-gutter) var(--settings-side-gutter);
   margin-top: 0;
-  padding: 1.4vw 1.3vw 1.2vw;
-  background:
-    linear-gradient(180deg, rgba(30, 112, 148, 0.12), rgba(10, 26, 38, 0.72) 28%, rgba(7, 18, 28, 0.76));
-  border-left: var(--settings-frame-thickness) solid rgba(60, 246, 255, 0.82);
-  border-right: var(--settings-frame-thickness) solid rgba(60, 246, 255, 0.82);
-  border-bottom: var(--settings-frame-thickness) solid rgba(60, 246, 255, 0.82);
-  min-height: 0;
-  background-color: rgba(9, 31, 46, 0.66);
-  box-shadow: none;
+  padding: 1.4vw 1.36vw 1.2vw;
+  border-width: 0 var(--settings-sub-line-thickness) var(--settings-sub-line-thickness);
+  border-style: solid;
+  border-color: transparent;
+  background-image:
+    linear-gradient(180deg, rgba(20, 27, 34, 0.96), rgba(15, 23, 33, 0.94) 26%, rgba(10, 16, 24, 0.96)),
+    linear-gradient(
+      120deg,
+      rgba(var(--settings-accent-rgb), 0.8) 0%,
+      rgba(var(--settings-accent-rgb), 0.05) 20%,
+      rgba(var(--settings-accent-rgb), 0.4) 50%,
+      rgba(var(--settings-accent-rgb), 0.05) 80%,
+      rgba(var(--settings-accent-rgb), 1) 100%
+    );
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow:
+    0 15px 30px rgba(0, 5, 15, 0.8),
+    0 0 20px rgba(var(--settings-accent-rgb), 0.1),
+    0 30px 60px -15px rgba(var(--settings-accent-rgb), 0.3);
+  animation: settings-content-shell-glow 2.8s ease-in-out infinite;
   overflow: auto;
   display: flex;
   justify-content: stretch;
+}
+
+.page-settings--deltaforce .settings-content::before,
+.page-settings--deltaforce .settings-content::after {
+  content: none;
+}
+
+.page-settings--deltaforce .settings-content::before {
+  display: none;
+}
+
+.page-settings--deltaforce .settings-content::after {
+  display: none;
+}
+
+@keyframes settings-content-shell-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 15px 30px rgba(0, 5, 15, 0.8),
+      0 0 16px rgba(var(--settings-accent-rgb), 0.08),
+      0 30px 60px -15px rgba(var(--settings-accent-rgb), 0.24);
+  }
+
+  50% {
+    box-shadow:
+      0 15px 30px rgba(0, 5, 15, 0.8),
+      0 0 24px rgba(var(--settings-accent-rgb), 0.14),
+      0 30px 60px -15px rgba(var(--settings-accent-rgb), 0.34);
+  }
 }
 
 .page-settings--deltaforce .settings-content-body {
@@ -535,16 +598,16 @@
 
 .page-settings--deltaforce .settings-content-title {
   margin: 0;
-  font-size: clamp(30px, 2.08vw, 40px);
+  font-size: clamp(28px, 1.96vw, 38px);
   line-height: 1.05;
   font-weight: 500;
-  color: #eaf6ff;
+  color: var(--settings-text-label);
 }
 
 .page-settings--deltaforce .settings-content-desc {
   margin-top: 0.44vw;
   font-size: clamp(12px, 0.8vw, 14px);
-  color: #8fafc5;
+  color: var(--settings-text-desc);
 }
 
 .page-settings--deltaforce .settings-content-meta {
@@ -552,7 +615,7 @@
   font-size: clamp(9px, 0.58vw, 11px);
   letter-spacing: 0.2vw;
   font-weight: 600;
-  color: #6e8ea6;
+  color: var(--settings-text-sub);
 }
 
 .page-settings--deltaforce .settings-action-btn--topbar {
@@ -759,27 +822,21 @@
 }
 
 .page-settings--deltaforce .settings-window-close-panel {
-  gap: 0.2vw;
+  gap: 0;
 }
 
 .page-settings--deltaforce .settings-window-close-block {
-  gap: 0.34vw;
-  padding-top: 0.18vw;
-}
-
-.page-settings--deltaforce .settings-window-close-row {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1.1vw;
-  min-height: 3.2vw;
+  flex-direction: column;
+  gap: 0.52vw;
+  padding: 0.2vw 0 0.64vw;
 }
 
 .page-settings--deltaforce .settings-window-close-body {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 1.08vw;
+  gap: 1.36vw;
 }
 
 .page-settings--deltaforce .settings-window-close-copy {
@@ -787,8 +844,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  gap: 0.16vw;
+  justify-content: flex-start;
+  gap: 0.22vw;
 }
 
 .page-settings--deltaforce .settings-window-close-head {
@@ -797,37 +854,39 @@
 }
 
 .page-settings--deltaforce .settings-window-close-head .settings-param-title {
-  font-size: clamp(27px, 1.82vw, 36px);
+  font-size: clamp(30px, 1.96vw, 40px);
 }
 
 .page-settings--deltaforce .settings-window-close-controls {
-  flex: 0 0 auto;
+  flex: 0 0 clamp(250px, 20vw, 420px);
   display: inline-flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: flex-end;
   gap: 0.42vw;
-  padding-bottom: 0;
+  margin-top: auto;
+  padding-bottom: 0.2vw;
 }
 
 .page-settings--deltaforce .settings-window-close-actions {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  margin-top: 0.16vw;
-  margin-bottom: 0.22vw;
+  margin-top: 0.2vw;
+  margin-bottom: 0;
 }
 
 .page-settings--deltaforce .settings-window-close-body .settings-window-close-controls {
-  padding-bottom: 0.22vw;
+  padding-bottom: 0.2vw;
 }
 
 .page-settings--deltaforce .settings-window-close-controls .settings-choice-btn {
-  min-height: clamp(29px, 1.95vw, 36px);
-  padding: 0 clamp(10px, 0.74vw, 16px);
+  min-height: clamp(30px, 2vw, 38px);
+  padding: 0 clamp(12px, 0.82vw, 18px);
 }
 
 .page-settings--deltaforce .settings-window-close-note {
-  margin-top: 0.3vw;
+  margin-top: 0.08vw;
+  color: var(--settings-text-desc);
 }
 
 .page-settings--deltaforce .settings-demo-panel {
@@ -840,7 +899,8 @@
 }
 
 .page-settings--deltaforce .settings-demo-block + .settings-demo-block > .settings-param-divider:first-child {
-  display: none;
+  visibility: hidden;
+  opacity: 0;
 }
 
 .page-settings--deltaforce .settings-demo-body {
@@ -919,7 +979,7 @@
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.14vw;
-  color: #7ea3bb;
+  color: var(--settings-text-sub);
   font-weight: 600;
 }
 
@@ -928,7 +988,7 @@
   font-size: clamp(33px, 2.1vw, 44px);
   line-height: 1.04;
   font-weight: 500;
-  color: #dceaf2;
+  color: var(--settings-text-label);
 }
 
 .page-settings--deltaforce .settings-param-subtitle {
@@ -936,13 +996,13 @@
   font-size: clamp(11px, 0.72vw, 14px);
   line-height: 1.2;
   letter-spacing: 0.04vw;
-  color: #7d9ab0;
+  color: var(--settings-text-desc);
 }
 
 .page-settings--deltaforce .settings-param-divider {
   width: 100%;
   height: 1px;
-  background: #113149;
+  background: var(--settings-divider-solid);
   margin: 0.42vw 0 0.58vw;
 }
 
@@ -965,25 +1025,32 @@
 .page-settings--deltaforce .settings-choice-btn {
   min-height: clamp(30px, 2.08vw, 38px);
   padding: 0 clamp(12px, 0.9vw, 18px);
-  border: 1px solid rgba(234, 246, 255, 0.6);
+  border: 1px solid var(--settings-control-border);
   border-radius: 0;
-  background: transparent;
-  color: #d6e9f4;
+  background: var(--settings-control-bg);
+  color: var(--settings-text-desc);
   font-size: clamp(12px, 0.76vw, 14px);
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.02vw;
   line-height: 1;
   cursor: pointer;
   transition:
     color 0.18s ease,
     border-color 0.18s ease,
-    background-color 0.18s ease;
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.page-settings--deltaforce .settings-choice-btn:hover:not(:disabled) {
+  border-color: var(--settings-text-label);
+  color: var(--settings-text-value);
 }
 
 .page-settings--deltaforce .settings-choice-btn[data-active='true'] {
-  border-color: #3cf6ff;
-  background: rgba(10, 31, 45, 0.46);
-  color: #3cf6ff;
+  border-color: rgb(var(--settings-accent-rgb));
+  background: rgba(var(--settings-accent-rgb), 0.08);
+  box-shadow: inset 0 0 8px rgba(var(--settings-accent-rgb), 0.2);
+  color: rgb(var(--settings-accent-rgb));
 }
 
 .page-settings--deltaforce .settings-choice-btn:disabled {

@@ -74,10 +74,11 @@ export function WindowCloseSettingsPanel() {
           </div>
         </div>
 
-        <div className="settings-param-divider settings-param-divider--compact" />
       </div>
 
       <div className="settings-audio-block settings-window-close-block">
+        <div className="settings-param-divider settings-param-divider--compact" />
+
         <div className="settings-window-close-body">
           <div className="settings-window-close-copy">
             <div className="settings-param-head settings-window-close-head">
@@ -120,7 +121,6 @@ export function WindowCloseSettingsPanel() {
           </div>
         </div>
 
-        <div className="settings-param-divider settings-param-divider--compact" />
       </div>
     </div>
   );
