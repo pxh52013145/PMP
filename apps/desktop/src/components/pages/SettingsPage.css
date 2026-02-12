@@ -800,7 +800,7 @@
 }
 
 .page-settings--deltaforce .settings-language-head .settings-param-title {
-  font-size: clamp(30px, 1.96vw, 40px);
+  font-size: clamp(26px, 1.64vw, 32px);
 }
 
 .page-settings--deltaforce .settings-language-controls {
@@ -854,7 +854,7 @@
 }
 
 .page-settings--deltaforce .settings-window-close-head .settings-param-title {
-  font-size: clamp(30px, 1.96vw, 40px);
+  font-size: clamp(26px, 1.64vw, 32px);
 }
 
 .page-settings--deltaforce .settings-window-close-controls {
@@ -898,54 +898,86 @@
   padding-top: 0.08vw;
 }
 
-.page-settings--deltaforce .settings-demo-block + .settings-demo-block > .settings-param-divider:first-child {
-  visibility: hidden;
-  opacity: 0;
-}
-
 .page-settings--deltaforce .settings-demo-body {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1.08vw;
-  padding-bottom: 0.42vw;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(250px, 20vw, 420px);
+  align-items: start;
+  gap: clamp(16px, 1.2vw, 24px);
+  padding: clamp(2px, 0.18vw, 4px) 0 clamp(7px, 0.5vw, 12px);
 }
 
 .page-settings--deltaforce .settings-demo-copy {
-  flex: 1 1 auto;
+  flex: 1 1 clamp(380px, 54vw, 860px);
   min-width: 0;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  gap: 0.16vw;
+  justify-content: flex-start;
+  gap: clamp(4px, 0.3vw, 8px);
+  padding-top: clamp(1px, 0.08vw, 3px);
 }
 
 .page-settings--deltaforce .settings-demo-head {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(2px, 0.16vw, 5px);
 }
 
 .page-settings--deltaforce .settings-demo-head .settings-param-title {
-  font-size: clamp(27px, 1.82vw, 36px);
+  font-size: clamp(25px, 1.56vw, 30px);
+  line-height: 1.03;
+}
+
+.page-settings--deltaforce .settings-demo-head .settings-param-eyebrow {
+  margin-bottom: clamp(2px, 0.14vw, 4px);
+  letter-spacing: clamp(1.6px, 0.16vw, 3px);
+  line-height: 1.08;
+}
+
+.page-settings--deltaforce .settings-demo-head .settings-param-subtitle {
+  margin-top: 0;
+  line-height: 1.22;
+  max-width: 62ch;
 }
 
 .page-settings--deltaforce .settings-demo-note {
-  margin-top: 0.12vw;
+  margin-top: 0;
+  line-height: 1.26;
+  max-width: 66ch;
 }
 
 .page-settings--deltaforce .settings-demo-controls {
-  flex: 0 0 auto;
   display: inline-flex;
   align-items: flex-end;
   justify-content: flex-end;
-  padding-bottom: 0.22vw;
+  width: 100%;
+  align-self: flex-end;
+  margin-top: auto;
+  padding-top: 0;
+  padding-bottom: 0.2vw;
 }
 
 .page-settings--deltaforce .settings-demo-control-stack {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  justify-content: flex-end;
   gap: 0.34vw;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-controls {
+  width: 100%;
+  gap: 8px;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-controls .settings-demo-control-row--stretch {
+  width: 100%;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-controls .settings-demo-control-row--stretch .settings-select {
+  width: 100%;
+  min-width: 0;
 }
 
 .page-settings--deltaforce .settings-demo-control-row {
@@ -953,6 +985,61 @@
   align-items: center;
   justify-content: flex-end;
   gap: 0.42vw;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-switches {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-switch-row {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-switch-title {
+  font-size: 12px;
+  line-height: 1.1;
+  color: var(--settings-text-label);
+  letter-spacing: 0.02em;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-switch-right {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.page-settings--deltaforce .settings-demo-switch-label--dim {
+  min-width: 32px;
+  font-size: 11px;
+  color: var(--settings-text-muted);
+  text-align: right;
+  letter-spacing: 0.05em;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-transport {
+  width: 100%;
+  gap: 0;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-transport .settings-choice-btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-demo-pipeline-transport .settings-choice-btn + .settings-choice-btn {
+  border-left: none;
+}
+
+.page-settings--deltaforce .settings-demo-control-row--tight {
+  justify-content: flex-start;
 }
 
 .page-settings--deltaforce .settings-demo-control-row--stretch {
@@ -965,6 +1052,135 @@
 
 .page-settings--deltaforce .settings-demo-number-item {
   width: clamp(132px, 9.4vw, 180px);
+}
+
+.page-settings--deltaforce .settings-demo-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.page-settings--deltaforce .settings-demo-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.page-settings--deltaforce .settings-demo-switch-track {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--settings-control-border);
+  background: var(--settings-control-bg);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.page-settings--deltaforce .settings-demo-switch-thumb {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  width: 16px;
+  height: 16px;
+  background: #7f9aad;
+  transition: transform 0.22s ease, background-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.page-settings--deltaforce .settings-demo-switch input:checked + .settings-demo-switch-track {
+  border-color: rgb(var(--settings-accent-rgb));
+  background: rgba(var(--settings-accent-rgb), 0.1);
+}
+
+.page-settings--deltaforce .settings-demo-switch input:checked + .settings-demo-switch-track .settings-demo-switch-thumb {
+  transform: translateX(26px);
+  background: rgb(var(--settings-accent-rgb));
+  box-shadow: 0 0 8px rgba(var(--settings-accent-rgb), 0.65);
+}
+
+.page-settings--deltaforce .settings-demo-switch-label {
+  font-size: clamp(11px, 0.72vw, 14px);
+  color: var(--settings-text-value);
+  line-height: 1.1;
+}
+
+.page-settings--deltaforce .settings-demo-slider-wrap {
+  display: flex;
+  align-items: center;
+  width: min(360px, 22vw);
+  max-width: 100%;
+  gap: 0.56vw;
+}
+
+.page-settings--deltaforce .settings-demo-range {
+  flex: 1;
+  appearance: none;
+  background: transparent;
+}
+
+.page-settings--deltaforce .settings-demo-range:focus {
+  outline: none;
+}
+
+.page-settings--deltaforce .settings-demo-range::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 2px;
+  background: var(--settings-control-border);
+  cursor: pointer;
+}
+
+.page-settings--deltaforce .settings-demo-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 6px;
+  height: 16px;
+  margin-top: -7px;
+  background: rgb(var(--settings-accent-rgb));
+  box-shadow: 0 0 8px rgba(var(--settings-accent-rgb), 0.6);
+  cursor: pointer;
+}
+
+.page-settings--deltaforce .settings-demo-range::-moz-range-track {
+  width: 100%;
+  height: 2px;
+  background: var(--settings-control-border);
+}
+
+.page-settings--deltaforce .settings-demo-range::-moz-range-thumb {
+  width: 6px;
+  height: 16px;
+  border: none;
+  border-radius: 0;
+  background: rgb(var(--settings-accent-rgb));
+  box-shadow: 0 0 8px rgba(var(--settings-accent-rgb), 0.6);
+}
+
+.page-settings--deltaforce .settings-demo-slider-value {
+  min-width: 36px;
+  text-align: right;
+  font-size: clamp(11px, 0.72vw, 14px);
+  color: var(--settings-text-value);
+}
+
+.page-settings--deltaforce .settings-demo-input-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: min(100%, 280px);
+}
+
+.page-settings--deltaforce .settings-demo-inline-input {
+  width: clamp(82px, 6vw, 120px);
+  border-right: none;
+}
+
+.page-settings--deltaforce .settings-demo-input-group .settings-action-btn {
+  border-left: 1px solid var(--settings-control-border);
+  flex: 0 0 auto;
+  min-width: clamp(56px, 4.2vw, 88px);
+  padding: 0 clamp(9px, 0.62vw, 14px);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .page-settings--deltaforce .settings-param-head {
@@ -985,7 +1201,7 @@
 
 .page-settings--deltaforce .settings-param-title {
   margin: 0;
-  font-size: clamp(33px, 2.1vw, 44px);
+  font-size: clamp(27px, 1.68vw, 33px);
   line-height: 1.04;
   font-weight: 500;
   color: var(--settings-text-label);
@@ -1090,6 +1306,15 @@
   font-size: clamp(12px, 0.76vw, 14px);
   outline: none;
   box-shadow: none;
+  color-scheme: dark;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.page-settings--deltaforce .settings-number-input::-webkit-outer-spin-button,
+.page-settings--deltaforce .settings-number-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .page-settings--deltaforce .settings-number-input:focus {
