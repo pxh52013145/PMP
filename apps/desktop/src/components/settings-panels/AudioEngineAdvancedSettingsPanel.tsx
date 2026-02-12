@@ -2,7 +2,6 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
-import type { AudioRobustnessSnapshot } from '../../services/audio';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
@@ -308,9 +307,6 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [enginePolicy, setEnginePolicy] = useState<EnginePolicyState>(DEFAULT_ENGINE_POLICY);
   const [policyPreset, setPolicyPreset] = useState<AudioPolicyPresetId | 'custom'>('custom');
   const [dynamicSrc, setDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
-  const [robustness, setRobustness] = useState<AudioRobustnessSnapshot | null>(
-    () => audioService.getRobustnessSnapshot?.() ?? null
-  );
 
   const sourceRateChoices = useMemo(() => [44100, 48000, 88200, 96000, 176400, 192000], []);
 
@@ -347,17 +343,6 @@ export function AudioEngineAdvancedSettingsPanel() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    if (!canUse) {
-      setRobustness(null);
-      return;
-    }
-
-    setRobustness(audioService.getRobustnessSnapshot?.() ?? null);
-    const off = audioService.onRobustnessSnapshot?.((next) => setRobustness(next));
-    return () => off?.();
-  }, [audioService, canUse]);
 
   useEffect(() => {
     setPolicyPreset(resolvePolicyPresetId(enginePolicy));
@@ -460,101 +445,6 @@ export function AudioEngineAdvancedSettingsPanel() {
       setBusy(false);
     }
   }, [audioService, canUse, dynamicSrc, refresh]);
-
-  const monitorView = useMemo(() => {
-    const snapshot = robustness;
-    const unknown = t('common.state.unknown');
-    const unavailable = t('settings.audioAdvanced.monitor.metricsUnavailable');
-
-    const formatCount = (value?: number) =>
-      typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)).toString() : unknown;
-
-    const formatSeconds = (value?: number | null) =>
-      typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, value).toFixed(2)} s` : unknown;
-
-    const formatUs = (value?: number) =>
-      typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))} μs` : unknown;
-
-    const outputMetric = (value?: number, unit: 'count' | 'us' = 'count') => {
-      if (snapshot?.outputCallbackMetricsValid === false) {
-        return unavailable;
-      }
-      return unit === 'us' ? formatUs(value) : formatCount(value);
-    };
-
-    const backend = snapshot?.outputBackendId ?? unknown;
-    const scheduler = snapshot?.schedulerProfile ?? unknown;
-
-    const transport =
-      snapshot?.transportMode === 'robust'
-        ? t('settings.audioAdvanced.enginePolicy.transport.robust')
-        : snapshot?.transportMode === 'transport-exact'
-          ? t('settings.audioAdvanced.enginePolicy.transport.exact')
-          : unknown;
-
-    const srcBackend =
-      snapshot?.srcBackend === 'rubato'
-        ? t('settings.audioAdvanced.enginePolicy.srcBackend.rubato')
-        : snapshot?.srcBackend === 'linear-simd'
-          ? t('settings.audioAdvanced.enginePolicy.srcBackend.linearSimd')
-          : unknown;
-
-    const quantization =
-      snapshot?.outputQuantizationMode === 'tpdf'
-        ? t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.tpdf')
-        : snapshot?.outputQuantizationMode === 'round'
-          ? t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.round')
-          : unknown;
-
-    const bufferNow =
-      typeof snapshot?.bufferedAheadSeconds === 'number' && Number.isFinite(snapshot.bufferedAheadSeconds)
-        ? Math.max(0, snapshot.bufferedAheadSeconds)
-        : 0;
-
-    const bufferReference =
-      typeof snapshot?.bufferedAheadMinSeconds === 'number' &&
-      Number.isFinite(snapshot.bufferedAheadMinSeconds) &&
-      snapshot.bufferedAheadMinSeconds > 0
-        ? Math.max(snapshot.bufferedAheadMinSeconds * 2, 0.5)
-        : 1.5;
-
-    const bufferPercent = Math.round(clampNumber((bufferNow / bufferReference) * 100, 0, 100));
-    const bufferStatus =
-      bufferNow < 0.15
-        ? t('settings.audioAdvanced.monitor.bufferStatus.low')
-        : bufferNow < 0.4
-          ? t('settings.audioAdvanced.monitor.bufferStatus.guard')
-          : t('settings.audioAdvanced.monitor.bufferStatus.stable');
-
-    return {
-      backend,
-      scheduler,
-      transport,
-      srcBackend,
-      quantization,
-      callbackP99: outputMetric(snapshot?.outputCallbackP99Us, 'us'),
-      jitterP99: outputMetric(snapshot?.outputCallbackIntervalJitterP99Us, 'us'),
-      waitTimeout: outputMetric(snapshot?.outputWaitTimeoutCount),
-      callbackOverrun: outputMetric(snapshot?.outputCallbackIntervalOverrunCount),
-      outputUnderrunEvents: outputMetric(snapshot?.outputRenderUnderrunEvents),
-      outputUnderrunFrames: outputMetric(snapshot?.outputRenderUnderrunFrames),
-      engineUnderrunEvents: formatCount(snapshot?.underrunEvents),
-      engineUnderrunWindow: formatCount(snapshot?.underrunEventsWindow),
-      rebufferCount: formatCount(snapshot?.rebufferCount),
-      bufferNowLabel: formatSeconds(snapshot?.bufferedAheadSeconds),
-      bufferMinLabel: formatSeconds(snapshot?.bufferedAheadMinSeconds),
-      bufferAvgLabel: formatSeconds(snapshot?.bufferedAheadAvgSeconds),
-      bufferPercent,
-      bufferStatus,
-      outputSampleRate:
-        typeof snapshot?.outputSampleRate === 'number' && Number.isFinite(snapshot.outputSampleRate)
-          ? `${Math.floor(snapshot.outputSampleRate)} Hz`
-          : unknown,
-      transferLowWatermark: formatCount(snapshot?.transferLowWatermarkSamples),
-      renderLowHits: formatCount(snapshot?.transferRenderLowHitCount),
-      decodeLowHits: formatCount(snapshot?.transferDecodeLowHitCount),
-    };
-  }, [robustness, t]);
 
   return (
     <div className="settings-audio-panel">
@@ -1212,149 +1102,6 @@ export function AudioEngineAdvancedSettingsPanel() {
               </button>
             </div>
           </>
-        ) : (
-          <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
-        )}
-      </div>
-
-      <div className="settings-audio-block">
-        <div className="settings-param-divider settings-param-divider--compact" />
-        <div className="settings-param-head">
-          <p className="settings-param-eyebrow">ENGINE MONITOR</p>
-          <h3 className="settings-param-title">{t('settings.audioAdvanced.monitor.title')}</h3>
-          <p className="settings-param-subtitle">{t('settings.audioAdvanced.monitor.subtitle')}</p>
-        </div>
-
-        {canUse ? (
-          <div className="settings-engine-monitor">
-            <section className="settings-engine-monitor-section">
-              <p className="settings-engine-monitor-section-title">
-                {t('settings.audioAdvanced.monitor.section.context')}
-              </p>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.backend')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.backend}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.scheduler')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.scheduler}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.transport')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.transport}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.srcBackend')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.srcBackend}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.quantization')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.quantization}</span>
-              </div>
-            </section>
-
-            <div className="settings-engine-monitor-divider" />
-
-            <section className="settings-engine-monitor-section">
-              <p className="settings-engine-monitor-section-title">
-                {t('settings.audioAdvanced.monitor.section.callback')}
-              </p>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.callbackP99')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.callbackP99}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.callbackJitterP99')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.jitterP99}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.waitTimeout')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.waitTimeout}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.callbackOverrun')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.callbackOverrun}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.outputUnderrunEvents')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.outputUnderrunEvents}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.outputUnderrunFrames')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.outputUnderrunFrames}</span>
-              </div>
-            </section>
-
-            <div className="settings-engine-monitor-divider" />
-
-            <section className="settings-engine-monitor-section">
-              <p className="settings-engine-monitor-section-title">
-                {t('settings.audioAdvanced.monitor.section.buffer')}
-              </p>
-              <div className="settings-engine-monitor-row settings-engine-monitor-row--progress">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.bufferAhead')}</span>
-                <div className="settings-engine-monitor-progress-track" role="presentation">
-                  <div
-                    className="settings-engine-monitor-progress-fill"
-                    style={{ width: `${monitorView.bufferPercent}%` }}
-                  />
-                </div>
-                <span className="settings-engine-monitor-value">{`${monitorView.bufferPercent}%`}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.bufferNow')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.bufferNowLabel}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.bufferMin')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.bufferMinLabel}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.bufferAvg')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.bufferAvgLabel}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.bufferStatus')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.bufferStatus}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.rebufferCount')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.rebufferCount}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.engineUnderrunEvents')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.engineUnderrunEvents}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.engineUnderrunWindow')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.engineUnderrunWindow}</span>
-              </div>
-            </section>
-
-            <div className="settings-engine-monitor-divider" />
-
-            <section className="settings-engine-monitor-section">
-              <p className="settings-engine-monitor-section-title">
-                {t('settings.audioAdvanced.monitor.section.transfer')}
-              </p>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.outputSampleRate')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.outputSampleRate}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.transferLowWatermark')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.transferLowWatermark}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.transferRenderLowHits')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.renderLowHits}</span>
-              </div>
-              <div className="settings-engine-monitor-row">
-                <span className="settings-engine-monitor-label">{t('settings.audioAdvanced.monitor.transferDecodeLowHits')}</span>
-                <span className="settings-engine-monitor-value">{monitorView.decodeLowHits}</span>
-              </div>
-            </section>
-          </div>
         ) : (
           <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
         )}

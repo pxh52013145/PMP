@@ -1098,6 +1098,100 @@ export const NativeDebugPage: React.FC = () => {
     });
   }, [componentsState.activeInputId, robustness.transferMetricsValid, t]);
 
+  const robustnessMetricsView = useMemo(() => {
+    const unknown = t('common.state.unknown');
+
+    const formatCount = (value?: number) =>
+      typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)).toString() : unknown;
+
+    const formatSecondsValue = (value?: number | null) =>
+      typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : null;
+
+    const formatSecondsLabel = (value?: number | null) => {
+      const normalized = formatSecondsValue(value);
+      return normalized === null ? unknown : `${normalized.toFixed(2)} s`;
+    };
+
+    const formatUs = (value?: number) =>
+      typeof value === 'number' && Number.isFinite(value) ? `${Math.max(0, Math.floor(value))} μs` : unknown;
+
+    const outputMetric = (value?: number, unit: 'count' | 'us' = 'count') => {
+      if (robustness.outputCallbackMetricsValid === false) {
+        return outputMetricsUnavailableLabel;
+      }
+      return unit === 'us' ? formatUs(value) : formatCount(value);
+    };
+
+    const srcBackend =
+      robustness.srcBackend === 'rubato'
+        ? t('pages.native-debug.src.backend.rubato')
+        : robustness.srcBackend === 'linear-simd'
+          ? t('pages.native-debug.src.backend.linear-simd')
+          : unknown;
+
+    const quantization =
+      robustness.outputQuantizationMode === 'tpdf'
+        ? 'TPDF Dither'
+        : robustness.outputQuantizationMode === 'round'
+          ? 'Round'
+          : unknown;
+
+    const bufferNowValue = formatSecondsValue(robustness.bufferedAheadSeconds) ?? 0;
+    const bufferReferenceValue =
+      typeof robustness.bufferedAheadMinSeconds === 'number' &&
+      Number.isFinite(robustness.bufferedAheadMinSeconds) &&
+      robustness.bufferedAheadMinSeconds > 0
+        ? Math.max(robustness.bufferedAheadMinSeconds * 2, 0.5)
+        : 1.5;
+
+    const bufferPercent = Math.round(Math.max(0, Math.min((bufferNowValue / bufferReferenceValue) * 100, 100)));
+    const bufferStatus =
+      bufferNowValue < 0.15
+        ? t('settings.audioAdvanced.monitor.bufferStatus.low')
+        : bufferNowValue < 0.4
+          ? t('settings.audioAdvanced.monitor.bufferStatus.guard')
+          : t('settings.audioAdvanced.monitor.bufferStatus.stable');
+
+    const outputSampleRate =
+      typeof robustness.outputSampleRate === 'number' && Number.isFinite(robustness.outputSampleRate)
+        ? `${Math.floor(robustness.outputSampleRate)} Hz`
+        : unknown;
+
+    return {
+      backend: robustness.outputBackendId ?? unknown,
+      scheduler: robustness.schedulerProfile ?? unknown,
+      transport: robustness.transportMode ?? unknown,
+      srcBackend,
+      quantization,
+      outputMonitorStatus: outputMonitorStatusLabel,
+      transferMonitorStatus: transferMonitorStatusLabel,
+      callbackP99: outputMetric(robustness.outputCallbackP99Us, 'us'),
+      callbackJitterP99: outputMetric(robustness.outputCallbackIntervalJitterP99Us, 'us'),
+      waitTimeout: outputMetric(robustness.outputWaitTimeoutCount),
+      callbackOverrun: outputMetric(robustness.outputCallbackIntervalOverrunCount),
+      outputUnderrunEvents: outputMetric(robustness.outputRenderUnderrunEvents),
+      outputUnderrunFrames: outputMetric(robustness.outputRenderUnderrunFrames),
+      bufferPercent,
+      bufferStatus,
+      bufferNow: formatSecondsLabel(robustness.bufferedAheadSeconds),
+      bufferMin: formatSecondsLabel(robustness.bufferedAheadMinSeconds),
+      bufferAvg: formatSecondsLabel(robustness.bufferedAheadAvgSeconds),
+      rebuffer: formatCount(robustness.rebufferCount),
+      engineUnderrunEvents: formatCount(robustness.underrunEvents),
+      engineUnderrunWindow: formatCount(robustness.underrunEventsWindow),
+      outputSampleRate,
+      transferLowWatermark: formatCount(robustness.transferLowWatermarkSamples),
+      transferRenderLowHits: formatCount(robustness.transferRenderLowHitCount),
+      transferDecodeLowHits: formatCount(robustness.transferDecodeLowHitCount),
+    };
+  }, [
+    outputMetricsUnavailableLabel,
+    outputMonitorStatusLabel,
+    robustness,
+    t,
+    transferMonitorStatusLabel,
+  ]);
+
   const lastAutoSwitchLabel = useMemo(() => {
     if (!robustness.lastAutoSwitchAtMs) {
       return t('pages.native-debug.robustness.lastAutoSwitch.none');
@@ -1764,6 +1858,145 @@ export const NativeDebugPage: React.FC = () => {
                 <h3>{t('pages.native-debug.robustness.subtitle')}</h3>
               </div>
             </div>
+
+            <div className="native-debug-metrics-panel">
+              <section className="native-debug-metrics-section">
+                <p className="native-debug-metrics-section-title">
+                  {t('settings.audioAdvanced.monitor.section.context')}
+                </p>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.backend.current')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.backend}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('settings.audioAdvanced.monitor.scheduler')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.scheduler}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transport.mode')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.transport}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.src.backend')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.srcBackend}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('settings.audioAdvanced.monitor.quantization')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.quantization}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.monitor.output.title')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.outputMonitorStatus}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.monitor.transfer.title')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.transferMonitorStatus}</span>
+                </div>
+              </section>
+
+              <div className="native-debug-metrics-divider" />
+
+              <section className="native-debug-metrics-section">
+                <p className="native-debug-metrics-section-title">
+                  {t('settings.audioAdvanced.monitor.section.callback')}
+                </p>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.callbackP99')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.callbackP99}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.callbackJitterP99')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.callbackJitterP99}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.waitTimeout')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.waitTimeout}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.callbackOverrun')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.callbackOverrun}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.renderUnderrunEvents')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.outputUnderrunEvents}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.output.renderUnderrunFrames')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.outputUnderrunFrames}</span>
+                </div>
+              </section>
+
+              <div className="native-debug-metrics-divider" />
+
+              <section className="native-debug-metrics-section">
+                <p className="native-debug-metrics-section-title">
+                  {t('settings.audioAdvanced.monitor.section.buffer')}
+                </p>
+                <div className="native-debug-metrics-row native-debug-metrics-row--progress">
+                  <span className="native-debug-metrics-label">{t('settings.audioAdvanced.monitor.bufferAhead')}</span>
+                  <div className="native-debug-metrics-progress-track" role="presentation">
+                    <div
+                      className="native-debug-metrics-progress-fill"
+                      style={{ width: `${robustnessMetricsView.bufferPercent}%` }}
+                    />
+                  </div>
+                  <span className="native-debug-metrics-value">{`${robustnessMetricsView.bufferPercent}%`}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.now')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.bufferNow}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.min')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.bufferMin}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.avg')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.bufferAvg}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('settings.audioAdvanced.monitor.bufferStatus')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.bufferStatus}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.rebuffer')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.rebuffer}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.underrun.events')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.engineUnderrunEvents}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.underrun.window')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.engineUnderrunWindow}</span>
+                </div>
+              </section>
+
+              <div className="native-debug-metrics-divider" />
+
+              <section className="native-debug-metrics-section">
+                <p className="native-debug-metrics-section-title">
+                  {t('settings.audioAdvanced.monitor.section.transfer')}
+                </p>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('settings.audioAdvanced.monitor.outputSampleRate')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.outputSampleRate}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.lowWatermark')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.transferLowWatermark}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.renderLowHits')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.transferRenderLowHits}</span>
+                </div>
+                <div className="native-debug-metrics-row">
+                  <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.decodeLowHits')}</span>
+                  <span className="native-debug-metrics-value">{robustnessMetricsView.transferDecodeLowHits}</span>
+                </div>
+              </section>
+            </div>
+
             <div className="native-debug-robustness-grid">
               <div className="robustness-item">
                 <p className="device-label">{t('pages.native-debug.robustness.backend.current')}</p>
