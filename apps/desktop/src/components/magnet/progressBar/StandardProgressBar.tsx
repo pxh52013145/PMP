@@ -58,11 +58,17 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
 
     const finalTime = latestSeekTimeRef.current;
     latestSeekTimeRef.current = null;
-    setPreviewTime(null);
-
-    logic.onSeekEnd();
     if (typeof finalTime === 'number') {
       logic.onSeek(finalTime);
+    }
+    logic.onSeekEnd();
+
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        setPreviewTime(null);
+      });
+    } else {
+      setPreviewTime(null);
     }
   };
 

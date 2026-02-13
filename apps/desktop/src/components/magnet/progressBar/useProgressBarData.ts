@@ -23,7 +23,6 @@ export interface ProgressBarData {
 
 export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const audioService = useAudioService();
-  const isSeekingRef = useRef(isSeeking);
   const lastTrackKeyRef = useRef<string>('none');
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -37,13 +36,9 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     baseAtMs: number;
   } | null>(null);
 
-  isSeekingRef.current = isSeeking;
-
   useEffect(() => {
     const unsubscribeState = audioService.onStateChange((state) => {
-      if (!isSeekingRef.current) {
-        setCurrentTime(state.currentTime);
-      }
+      setCurrentTime(state.currentTime);
       setDuration(state.duration);
       const nextBufferedTime = typeof state.bufferedTime === 'number' && isFinite(state.bufferedTime) ? state.bufferedTime : 0;
       const nextDuration = typeof state.duration === 'number' && isFinite(state.duration) ? state.duration : 0;
@@ -70,9 +65,7 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     });
 
     const unsubscribeTime = audioService.onTimeUpdate((time) => {
-      if (!isSeekingRef.current) {
-        setCurrentTime(time);
-      }
+      setCurrentTime(time);
     });
 
     const state = audioService.getState();

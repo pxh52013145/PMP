@@ -1154,6 +1154,14 @@ impl NativeAudioEngine {
         }
     }
 
+    fn reload_track_for_seek_recovery(&mut self, track_path: PathBuf) -> Result<(), String> {
+        let previous_prebuffer = self.streaming_prebuffer_start_or_seek_seconds;
+        self.streaming_prebuffer_start_or_seek_seconds = Some(0.0);
+        let result = self.load(track_path);
+        self.streaming_prebuffer_start_or_seek_seconds = previous_prebuffer;
+        result
+    }
+
     pub(crate) fn load(&mut self, path: PathBuf) -> Result<(), String> {
         self.cancel_crossfade();
         self.sync_clock();
@@ -1653,7 +1661,7 @@ impl NativeAudioEngine {
                 }
             }
 
-            self.load(track_path.clone())?;
+            self.reload_track_for_seek_recovery(track_path.clone())?;
             if resume_playing {
                 self.desired_playback_state = PlaybackState::Playing;
             }
@@ -2402,7 +2410,7 @@ impl NativeAudioEngine {
                 info_log(
                     "[NativeAudio] Streaming decoder is unavailable while rebuilding sink; reloading stream pipeline.",
                 );
-                self.load(track_path.clone())?;
+                self.reload_track_for_seek_recovery(track_path.clone())?;
                 if target > 0.0 {
                     self.seek(target)?;
                 }
