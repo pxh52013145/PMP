@@ -120,17 +120,21 @@ mod tests {
     #[test]
     fn timeline_records_events() {
         let before = snapshot_recent_default();
+        let before_count = before
+            .events
+            .iter()
+            .filter(|event| event.kind == "test.timeline" && event.value == 1 && event.aux == 2)
+            .count();
         record_event("test.timeline", 1, 2);
         let after = snapshot_recent_default();
+        let after_count = after
+            .events
+            .iter()
+            .filter(|event| event.kind == "test.timeline" && event.value == 1 && event.aux == 2)
+            .count();
 
         assert!(after.events.len() >= before.events.len());
-        let last = after
-            .events
-            .last()
-            .expect("timeline should contain last event");
-        assert_eq!(last.kind, "test.timeline");
-        assert_eq!(last.value, 1);
-        assert_eq!(last.aux, 2);
+        assert!(after_count >= before_count.saturating_add(1));
     }
 
     #[test]

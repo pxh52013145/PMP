@@ -8,9 +8,10 @@ use std::{
 
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
-    open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputRegistry,
-    AudioInputSrcPolicy, DecoderCommand, SharedSamplesSource, StreamingPlayback,
-    StreamingSamplesSource, StreamingShutdownTx, SACD_INPUT_ID, SYMPHONIA_INPUT_ID,
+    open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputDecodeMode,
+    AudioInputRegistry, AudioInputSrcPolicy, DecoderCommand, SharedSamplesSource,
+    StreamingPlayback, StreamingSamplesSource, StreamingShutdownTx, SACD_INPUT_ID,
+    SYMPHONIA_INPUT_ID,
 };
 use crate::audio::mixer::{coerce_source_format, PlaybackMixerController, PlaybackMixerSource};
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -57,6 +58,21 @@ fn is_shared_output_backend(backend_id: &str) -> bool {
 
 fn should_wrap_source_for_shared_backend(backend_id: &str) -> bool {
     is_shared_output_backend(backend_id)
+}
+
+fn decode_mode_id(mode: AudioInputDecodeMode) -> &'static str {
+    match mode {
+        AudioInputDecodeMode::Streaming => "streaming",
+        AudioInputDecodeMode::FullTrack => "full-track",
+    }
+}
+
+fn parse_decode_mode(value: &str) -> Option<AudioInputDecodeMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "streaming" => Some(AudioInputDecodeMode::Streaming),
+        "full-track" => Some(AudioInputDecodeMode::FullTrack),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -178,6 +194,7 @@ pub struct NativeAudioComponentsStatePayload {
 pub struct NativeAudioStreamingBufferSettingsPayload {
     pub start_or_seek_seconds: Option<f64>,
     pub crossfade_seconds: Option<f64>,
+    pub decode_mode: String,
 }
 
 pub(crate) struct NativeAudioEngine {
@@ -229,6 +246,7 @@ pub(crate) struct NativeAudioEngine {
     last_error_message: Option<String>,
     streaming_prebuffer_start_or_seek_seconds: Option<f64>,
     streaming_prebuffer_crossfade_seconds: Option<f64>,
+    streaming_decode_mode: AudioInputDecodeMode,
     transport_mode: NativeAudioTransportMode,
     hq_src_enabled: bool,
     hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
@@ -243,6 +261,7 @@ pub(crate) struct LoadOperation {
     pub token: u64,
     pub output_backend: Arc<dyn AudioOutputBackend>,
     pub preferred_input_id: Option<String>,
+    pub decode_mode: AudioInputDecodeMode,
     pub src_policy: AudioInputSrcPolicy,
     pub dsp_runtime: Arc<DspRuntime>,
     pub spectrum_pre_tap: SpectrumTap,
@@ -295,6 +314,7 @@ impl PreparedLoad {
 pub(crate) struct CrossfadeOperation {
     pub token: u64,
     pub preferred_input_id: Option<String>,
+    pub decode_mode: AudioInputDecodeMode,
     pub src_policy: AudioInputSrcPolicy,
     pub output_backend_id: &'static str,
     pub target_channels: u16,
@@ -410,6 +430,7 @@ impl NativeAudioEngine {
             last_error_message: None,
             streaming_prebuffer_start_or_seek_seconds: None,
             streaming_prebuffer_crossfade_seconds: None,
+            streaming_decode_mode: AudioInputDecodeMode::Streaming,
             transport_mode: NativeAudioTransportMode::Robust,
             hq_src_enabled: true,
             hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
@@ -453,13 +474,19 @@ impl NativeAudioEngine {
         NativeAudioStreamingBufferSettingsPayload {
             start_or_seek_seconds: self.streaming_prebuffer_start_or_seek_seconds,
             crossfade_seconds: self.streaming_prebuffer_crossfade_seconds,
+            decode_mode: decode_mode_id(self.streaming_decode_mode).to_string(),
         }
+    }
+
+    fn current_decode_mode(&self) -> AudioInputDecodeMode {
+        self.streaming_decode_mode
     }
 
     pub(crate) fn set_streaming_buffer_settings(
         &mut self,
         start_or_seek_seconds: Option<f64>,
         crossfade_seconds: Option<f64>,
+        decode_mode: Option<&str>,
     ) {
         fn sanitize(value: Option<f64>) -> Option<f64> {
             value
@@ -469,6 +496,9 @@ impl NativeAudioEngine {
 
         self.streaming_prebuffer_start_or_seek_seconds = sanitize(start_or_seek_seconds);
         self.streaming_prebuffer_crossfade_seconds = sanitize(crossfade_seconds);
+        if let Some(mode) = decode_mode.and_then(parse_decode_mode) {
+            self.streaming_decode_mode = mode;
+        }
     }
 
     fn append_source_with_pipeline(
@@ -699,6 +729,7 @@ impl NativeAudioEngine {
             token,
             output_backend: self.output_backend.clone(),
             preferred_input_id: self.preferred_input_id.clone(),
+            decode_mode: self.current_decode_mode(),
             src_policy: self.current_src_policy(),
             dsp_runtime: self.dsp_runtime.clone(),
             spectrum_pre_tap: self.spectrum_pre_tap.clone(),
@@ -792,6 +823,7 @@ impl NativeAudioEngine {
         Some(CrossfadeOperation {
             token,
             preferred_input_id: self.preferred_input_id.clone(),
+            decode_mode: self.current_decode_mode(),
             src_policy: self.current_src_policy(),
             output_backend_id: self.output_backend.id(),
             target_channels: self.decoded_channels.max(1),
@@ -1127,6 +1159,7 @@ impl NativeAudioEngine {
                 &path,
                 self.resolve_requested_output_sample_rate_for_open(),
                 self.preferred_input_id.as_deref(),
+                self.current_decode_mode(),
                 self.current_src_policy(),
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
@@ -1246,6 +1279,7 @@ impl NativeAudioEngine {
                 &path,
                 open_sample_rate,
                 self.preferred_input_id.as_deref(),
+                self.current_decode_mode(),
                 self.current_src_policy(),
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
@@ -1960,6 +1994,12 @@ impl NativeAudioEngine {
             }
         });
 
+        let mut input_id = input_id;
+        if input_id.as_deref() == Some("symphonia-decoded") {
+            self.streaming_decode_mode = AudioInputDecodeMode::FullTrack;
+            input_id = Some(SYMPHONIA_INPUT_ID.to_string());
+        }
+
         if let Some(id) = input_id.as_deref() {
             if !self.input_registry.contains_id(id) {
                 return Err(format!("Unknown audio input id: {id}"));
@@ -2351,9 +2391,13 @@ impl NativeAudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct FailBackend;
 
@@ -2566,6 +2610,161 @@ mod tests {
         }
     }
 
+    fn write_wav_i16_stereo(path: &Path, sample_rate: u32, frames: usize) {
+        let channels = 2u16;
+        let bits_per_sample = 16u16;
+        let block_align = channels * (bits_per_sample / 8);
+        let byte_rate = sample_rate * block_align as u32;
+        let data_bytes = frames as u32 * block_align as u32;
+        let riff_chunk_size = 36u32 + data_bytes;
+
+        let mut file = File::create(path).expect("create wav");
+        file.write_all(b"RIFF").expect("riff");
+        file.write_all(&riff_chunk_size.to_le_bytes())
+            .expect("riff size");
+        file.write_all(b"WAVE").expect("wave");
+        file.write_all(b"fmt ").expect("fmt");
+        file.write_all(&16u32.to_le_bytes()).expect("fmt size");
+        file.write_all(&1u16.to_le_bytes()).expect("pcm");
+        file.write_all(&channels.to_le_bytes()).expect("channels");
+        file.write_all(&sample_rate.to_le_bytes())
+            .expect("sample rate");
+        file.write_all(&byte_rate.to_le_bytes()).expect("byte rate");
+        file.write_all(&block_align.to_le_bytes())
+            .expect("block align");
+        file.write_all(&bits_per_sample.to_le_bytes())
+            .expect("bits");
+        file.write_all(b"data").expect("data");
+        file.write_all(&data_bytes.to_le_bytes())
+            .expect("data size");
+
+        for frame in 0..frames {
+            let phase = frame as f32 / sample_rate.max(1) as f32;
+            let sample = (phase * 440.0 * std::f32::consts::TAU).sin();
+            let pcm = (sample * i16::MAX as f32 * 0.45) as i16;
+            file.write_all(&pcm.to_le_bytes()).expect("left");
+            file.write_all(&pcm.to_le_bytes()).expect("right");
+        }
+    }
+
+    #[test]
+    fn prebuffer_defaults_follow_output_backend_profiles() {
+        let sample_rate = 48_000u32;
+        let channels = 2usize;
+        let capacity = sample_rate as usize * channels * 30;
+        let duration_seconds = 360.0;
+
+        let (shared_start_samples, _) = streaming_prebuffer_target_samples(
+            "rodio-cpal",
+            sample_rate,
+            channels,
+            capacity,
+            duration_seconds,
+            StreamingPrebufferKind::StartOrSeek,
+            None,
+        );
+        let (shared_cross_samples, _) = streaming_prebuffer_target_samples(
+            "rodio-cpal",
+            sample_rate,
+            channels,
+            capacity,
+            duration_seconds,
+            StreamingPrebufferKind::Crossfade,
+            None,
+        );
+        let (exclusive_start_samples, _) = streaming_prebuffer_target_samples(
+            "wasapi-exclusive",
+            sample_rate,
+            channels,
+            capacity,
+            duration_seconds,
+            StreamingPrebufferKind::StartOrSeek,
+            None,
+        );
+        let (exclusive_cross_samples, _) = streaming_prebuffer_target_samples(
+            "wasapi-exclusive",
+            sample_rate,
+            channels,
+            capacity,
+            duration_seconds,
+            StreamingPrebufferKind::Crossfade,
+            None,
+        );
+
+        let samples_per_second = sample_rate as usize * channels;
+        assert_eq!(shared_start_samples, samples_per_second * 2);
+        assert_eq!(shared_cross_samples, samples_per_second / 2);
+        assert_eq!(exclusive_start_samples, samples_per_second * 3);
+        assert_eq!(exclusive_cross_samples, samples_per_second);
+    }
+
+    #[test]
+    fn decode_mode_and_output_backend_matrix_loads_reliably() {
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let path = tmp_dir.join(format!("pmp_decode_output_matrix_{nonce}.wav"));
+        write_wav_i16_stereo(&path, 48_000, 48_000);
+
+        for decode_mode in ["streaming", "full-track"] {
+            let initial_backend: Arc<dyn AudioOutputBackend> =
+                Arc::new(TransportModeBackend::new("rodio-cpal"));
+            let mut engine = NativeAudioEngine::new_with_backend(initial_backend);
+
+            engine
+                .set_preferred_input_id(Some(super::SYMPHONIA_INPUT_ID.to_string()))
+                .expect("set input");
+            engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode));
+
+            engine.load(path.clone()).expect("load on initial backend");
+            assert_eq!(
+                engine.active_input_id.as_deref(),
+                Some(super::SYMPHONIA_INPUT_ID)
+            );
+            assert!(
+                engine.streaming.is_some(),
+                "expected streaming for {decode_mode}"
+            );
+            assert!(
+                engine.decoded_samples.is_none(),
+                "decoded buffer should be empty for {decode_mode}"
+            );
+            assert!(matches!(engine.playback_state, PlaybackState::Paused));
+
+            let switched_backend: Arc<dyn AudioOutputBackend> =
+                Arc::new(TransportModeBackend::new("wasapi-exclusive"));
+            engine
+                .switch_output_backend(switched_backend)
+                .expect("switch backend");
+
+            assert_eq!(engine.output_backend.id(), "wasapi-exclusive");
+            assert_eq!(
+                engine.active_input_id.as_deref(),
+                Some(super::SYMPHONIA_INPUT_ID)
+            );
+            assert!(
+                engine.streaming.is_some(),
+                "switch should preserve streaming pipeline"
+            );
+            assert!(
+                engine.decoded_samples.is_none(),
+                "switch should keep streaming mode"
+            );
+
+            let expected_mode = if decode_mode == "full-track" {
+                AudioInputDecodeMode::FullTrack
+            } else {
+                AudioInputDecodeMode::Streaming
+            };
+            assert_eq!(engine.current_decode_mode(), expected_mode);
+            engine.shutdown_streaming();
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn transport_exact_policy_defaults_to_robust_int32_container() {
         let engine = NativeAudioEngine::new();
@@ -2699,10 +2898,14 @@ mod tests {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("wasapi"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
 
-        crate::audio::diagnostics::record_event("shared.transfer.render_low_watermark", 128, 512);
-        crate::audio::diagnostics::record_event("shared.transfer.decode_low_watermark", 128, 512);
-        crate::audio::diagnostics::record_event("shared.render_ahead.low_watermark", 128, 512);
-        crate::audio::diagnostics::record_event("shared.transfer.render_low_watermark", 128, 512);
+        for index in 0..32 {
+            let kind = match index % 3 {
+                0 => "shared.transfer.render_low_watermark",
+                1 => "shared.transfer.decode_low_watermark",
+                _ => "shared.render_ahead.low_watermark",
+            };
+            crate::audio::diagnostics::record_event(kind, 128, 512);
+        }
 
         engine.update_shared_timeline_stress_window();
         assert!(engine.shared_timeline_stress_until.is_some());

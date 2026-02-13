@@ -21,6 +21,18 @@ pub(crate) const SYMPHONIA_INPUT_ID: &str = "symphonia";
 pub(crate) const RODIO_INPUT_ID: &str = "rodio";
 pub(crate) const SACD_INPUT_ID: &str = "sacd";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AudioInputDecodeMode {
+    Streaming,
+    FullTrack,
+}
+
+impl Default for AudioInputDecodeMode {
+    fn default() -> Self {
+        Self::Streaming
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct AudioInputMeta {
     pub channels: u16,
@@ -105,6 +117,7 @@ pub(crate) trait AudioInput: Send + Sync {
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+        decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError>;
 }
@@ -143,6 +156,7 @@ impl AudioInputRegistry {
         path: &Path,
         output_sample_rate: Option<u32>,
         preferred_id: Option<&str>,
+        decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         if self.inputs.is_empty() {
@@ -155,7 +169,7 @@ impl AudioInputRegistry {
         let mut attempts: Vec<(String, AudioInputError)> = Vec::new();
         if let Some(preferred) = preferred_id {
             if let Some(input) = self.inputs.iter().find(|input| input.id() == preferred) {
-                match input.open(path, output_sample_rate, src_policy) {
+                match input.open(path, output_sample_rate, decode_mode, src_policy) {
                     Ok(result) => return Ok(result),
                     Err(err) => attempts.push((input.id().to_string(), err)),
                 }
@@ -167,7 +181,7 @@ impl AudioInputRegistry {
                 continue;
             }
 
-            match input.open(path, output_sample_rate, src_policy) {
+            match input.open(path, output_sample_rate, decode_mode, src_policy) {
                 Ok(result) => return Ok(result),
                 Err(err) => attempts.push((input.id().to_string(), err)),
             }
@@ -203,6 +217,7 @@ mod tests {
             &self,
             _path: &Path,
             _output_sample_rate: Option<u32>,
+            _decode_mode: AudioInputDecodeMode,
             _src_policy: AudioInputSrcPolicy,
         ) -> Result<AudioInputOpenResult, AudioInputError> {
             Err(AudioInputError::new("FAIL", "nope"))
@@ -220,8 +235,47 @@ mod tests {
             &self,
             _path: &Path,
             _output_sample_rate: Option<u32>,
+            _decode_mode: AudioInputDecodeMode,
             _src_policy: AudioInputSrcPolicy,
         ) -> Result<AudioInputOpenResult, AudioInputError> {
+            let source = ::rodio::buffer::SamplesBuffer::new(2, 48_000, vec![0.0f32; 256]);
+            Ok(AudioInputOpenResult {
+                input_id: self.id(),
+                meta: AudioInputMeta {
+                    channels: 2,
+                    sample_rate: 48_000,
+                    source_sample_rate: 48_000,
+                    bit_depth: None,
+                    duration: 0.0,
+                },
+                kind: AudioInputKind::Decoded {
+                    samples: Arc::new(vec![0.0f32; 256]),
+                },
+                source: Box::new(source),
+            })
+        }
+    }
+
+    struct FullTrackOnlyInput;
+
+    impl AudioInput for FullTrackOnlyInput {
+        fn id(&self) -> &'static str {
+            "full-track-only"
+        }
+
+        fn open(
+            &self,
+            _path: &Path,
+            _output_sample_rate: Option<u32>,
+            decode_mode: AudioInputDecodeMode,
+            _src_policy: AudioInputSrcPolicy,
+        ) -> Result<AudioInputOpenResult, AudioInputError> {
+            if decode_mode != AudioInputDecodeMode::FullTrack {
+                return Err(AudioInputError::new(
+                    "UNSUPPORTED_MODE",
+                    "full-track mode required",
+                ));
+            }
             let source = ::rodio::buffer::SamplesBuffer::new(2, 48_000, vec![0.0f32; 256]);
             Ok(AudioInputOpenResult {
                 input_id: self.id(),
@@ -251,6 +305,7 @@ mod tests {
                 Path::new("dummy.wav"),
                 None,
                 None,
+                AudioInputDecodeMode::Streaming,
                 AudioInputSrcPolicy::default(),
             )
             .expect("open should succeed");
@@ -269,11 +324,31 @@ mod tests {
                 Path::new("dummy.wav"),
                 None,
                 Some("ok"),
+                AudioInputDecodeMode::Streaming,
                 AudioInputSrcPolicy::default(),
             )
             .expect("open should succeed");
 
         assert_eq!(result.input_id, "ok");
+    }
+
+    #[test]
+    fn registry_forwards_decode_mode_to_inputs() {
+        let mut registry = AudioInputRegistry::new();
+        registry.register(Arc::new(FullTrackOnlyInput));
+        registry.register(Arc::new(OkInput));
+
+        let result = registry
+            .open_prefer(
+                Path::new("dummy.wav"),
+                None,
+                None,
+                AudioInputDecodeMode::FullTrack,
+                AudioInputSrcPolicy::default(),
+            )
+            .expect("open should succeed");
+
+        assert_eq!(result.input_id, "full-track-only");
     }
 
     #[test]
@@ -286,6 +361,7 @@ mod tests {
                 Path::new("dummy.wav"),
                 None,
                 None,
+                AudioInputDecodeMode::Streaming,
                 AudioInputSrcPolicy::default(),
             )
             .err()

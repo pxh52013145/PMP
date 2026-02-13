@@ -490,6 +490,48 @@ describe('NativeAudioService', () => {
     expect(invoke).toHaveBeenCalledWith('native_audio_set_streaming_buffer_settings', {
       startOrSeekSeconds: 3.2,
       crossfadeSeconds: 1.4,
+      decodeMode: 'streaming',
+    });
+
+    service.destroy();
+  });
+
+  it('keeps full-track decode mode when recovery policy escalates buffering', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS,
+      JSON.stringify({
+        startOrSeekSeconds: 1.4,
+        crossfadeSeconds: 0.7,
+        decodeMode: 'full-track',
+      })
+    );
+
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        underrunEvents: 2,
+        currentTime: 2,
+        duration: 12,
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_streaming_buffer_settings', {
+      startOrSeekSeconds: 3.2,
+      crossfadeSeconds: 1.4,
+      decodeMode: 'full-track',
     });
 
     service.destroy();
@@ -899,6 +941,7 @@ describe('NativeAudioService', () => {
       {
         startOrSeekSeconds: 3.6,
         crossfadeSeconds: 1.9,
+        decodeMode: 'streaming',
       },
     ]);
 

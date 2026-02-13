@@ -9,8 +9,8 @@ use rodio::Source;
 use crate::audio::output::BoxedSource;
 
 use super::{
-    AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
-    AudioInputSrcPolicy, RODIO_INPUT_ID,
+    AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind, AudioInputMeta,
+    AudioInputOpenResult, AudioInputSrcPolicy, RODIO_INPUT_ID,
 };
 
 #[derive(Default)]
@@ -71,6 +71,7 @@ impl AudioInput for RodioInput {
         &self,
         path: &Path,
         _output_sample_rate: Option<u32>,
+        _decode_mode: AudioInputDecodeMode,
         _src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         let (source, meta) = open_source_at(path, 0.0)?;

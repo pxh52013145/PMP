@@ -1451,6 +1451,38 @@
   align-items: flex-end;
 }
 
+.page-settings--deltaforce .settings-inline-row--stack {
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.page-settings--deltaforce .settings-inline-row-copy--stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: clamp(3px, 0.2vw, 6px);
+}
+
+.page-settings--deltaforce .settings-inline-row-kicker {
+  margin: 0;
+  font-size: clamp(10px, 0.62vw, 12px);
+  line-height: 1;
+  letter-spacing: 0.08vw;
+  text-transform: uppercase;
+  color: var(--settings-text-sub);
+}
+
+.page-settings--deltaforce .settings-inline-row-note {
+  margin: 0;
+  font-size: clamp(11px, 0.7vw, 13px);
+  line-height: 1.32;
+  color: var(--settings-text-desc);
+}
+
+.page-settings--deltaforce .settings-inline-row-note--warn {
+  color: rgb(246 160 105 / 96%);
+}
+
 .page-settings--deltaforce .settings-inline-row-title {
   margin: 0;
   font-size: clamp(12px, 0.78vw, 15px);
@@ -1501,6 +1533,10 @@
   align-items: flex-end;
   flex-wrap: wrap;
   gap: clamp(6px, 0.42vw, 10px);
+}
+
+.page-settings--deltaforce .settings-inline-row--stack .settings-inline-row-controls {
+  align-items: flex-start;
 }
 
 .page-settings--deltaforce .settings-inline-row-controls .settings-number-input {
@@ -1612,6 +1648,19 @@
   padding-bottom: clamp(7px, 0.54vw, 12px);
 }
 
+.page-settings--deltaforce .settings-rows--audio-preprocess {
+  margin-top: clamp(2px, 0.16vw, 6px);
+}
+
+.page-settings--deltaforce .settings-row--audio-preprocess .settings-row-title--audio-preprocess {
+  font-size: clamp(13px, 0.92vw, 18px);
+  line-height: 1.15;
+}
+
+.page-settings--deltaforce .settings-row-meta--warn {
+  color: rgb(246 160 105 / 96%);
+}
+
 .page-settings--deltaforce .settings-row-left {
   min-width: 0;
   flex: 1 1 clamp(420px, 56vw, 920px);
@@ -1650,6 +1699,10 @@
   padding-bottom: clamp(2px, 0.16vw, 5px);
 }
 
+.page-settings--deltaforce .settings-row--audio-preprocess .settings-row-right {
+  gap: clamp(8px, 0.56vw, 12px);
+}
+
 .page-settings--deltaforce .settings-row-badge {
   height: clamp(24px, 1.82vw, 32px);
   padding: 0 clamp(8px, 0.62vw, 12px);
@@ -1671,6 +1724,21 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: clamp(6px, 0.42vw, 10px);
+}
+
+.page-settings--deltaforce .settings-toggle--audio-preprocess {
+  width: auto;
+}
+
+.page-settings--deltaforce .settings-inline-row-controls--audio-preprocess {
+  width: 100%;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: clamp(6px, 0.42vw, 10px);
+}
+
+.page-settings--deltaforce .settings-inline-row-controls--audio-preprocess .settings-number-input {
+  width: clamp(112px, 8vw, 170px);
 }
 
 .page-settings--deltaforce .settings-toggle--compact button {

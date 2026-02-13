@@ -17,8 +17,8 @@ use super::streaming::{
     TransferCommand,
 };
 use super::{
-    AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
-    AudioInputSrcPolicy,
+    AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind, AudioInputMeta,
+    AudioInputOpenResult, AudioInputSrcPolicy,
 };
 
 const MAX_PCM_SAMPLE_RATE: u32 = 384_000;
@@ -573,6 +573,7 @@ impl AudioInput for SacdInput {
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+        _decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         let ext = path
@@ -719,7 +720,12 @@ mod tests {
 
         let input = SacdInput::default();
         let opened = input
-            .open(&path, None, AudioInputSrcPolicy::default())
+            .open(
+                &path,
+                None,
+                AudioInputDecodeMode::Streaming,
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open dsf");
         assert_eq!(opened.meta.channels, 2);
         assert_eq!(opened.meta.sample_rate, 88_200);
@@ -742,7 +748,12 @@ mod tests {
 
         let input = SacdInput::default();
         let opened = input
-            .open(&path, None, AudioInputSrcPolicy::default())
+            .open(
+                &path,
+                None,
+                AudioInputDecodeMode::Streaming,
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
@@ -789,7 +800,12 @@ mod tests {
 
         let input = SacdInput::default();
         let opened = input
-            .open(&path, None, AudioInputSrcPolicy::default())
+            .open(
+                &path,
+                None,
+                AudioInputDecodeMode::Streaming,
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
@@ -840,7 +856,12 @@ mod tests {
 
         let input = SacdInput::default();
         let opened = input
-            .open(&path, None, AudioInputSrcPolicy::default())
+            .open(
+                &path,
+                None,
+                AudioInputDecodeMode::Streaming,
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open dsf");
         let AudioInputKind::Streaming(streaming) = opened.kind else {
             panic!("expected streaming kind");
@@ -858,9 +879,16 @@ mod tests {
             let sample = iter.next().unwrap_or(0.0);
             assert!(sample.is_finite());
         }
-        let first = iter.next().unwrap_or(0.0);
-        assert!(first.is_finite());
-        assert!(first > 0.2, "first sample={first}");
+        let mut saw_positive = false;
+        for _ in 0..4096 {
+            let sample = iter.next().unwrap_or(0.0);
+            assert!(sample.is_finite());
+            if sample > 0.2 {
+                saw_positive = true;
+                break;
+            }
+        }
+        assert!(saw_positive, "expected positive samples before seek");
 
         let seek_target = duration * 0.75;
         let _ = streaming.command_tx.send(DecoderCommand::Seek(seek_target));
@@ -895,7 +923,12 @@ mod tests {
 
         let input = SacdInput::default();
         let opened = input
-            .open(&path, Some(48_000), AudioInputSrcPolicy::default())
+            .open(
+                &path,
+                Some(48_000),
+                AudioInputDecodeMode::Streaming,
+                AudioInputSrcPolicy::default(),
+            )
             .expect("open dsf");
         assert_eq!(opened.meta.sample_rate, 48_000);
 

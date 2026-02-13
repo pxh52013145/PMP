@@ -141,6 +141,22 @@ export function AudioComponentsSettingsPanel() {
     [t]
   );
 
+  const describeAudioInput = useCallback(
+    (inputId: string): string => {
+      switch (inputId) {
+        case 'sacd':
+          return t('settings.audioComponents.audioInput.option.sacd');
+        case 'symphonia':
+          return t('settings.audioComponents.audioInput.option.symphonia');
+        case 'rodio':
+          return t('settings.audioComponents.audioInput.option.rodio');
+        default:
+          return inputId;
+      }
+    },
+    [t]
+  );
+
   const outputBackendOptions = useMemo(() => {
     const ids: string[] = [];
     const seen = new Set<string>();
@@ -535,7 +551,7 @@ export function AudioComponentsSettingsPanel() {
                   <option value="">{t('settings.audioComponents.audioInput.auto')}</option>
                   {audioInputs.map((inputId) => (
                     <option key={inputId} value={inputId}>
-                      {inputId}
+                      {describeAudioInput(inputId)}
                     </option>
                   ))}
                 </select>
@@ -545,12 +561,16 @@ export function AudioComponentsSettingsPanel() {
             <p className="settings-card-note">{t('settings.audioComponents.audioInput.desc')}</p>
             <p className="settings-card-note">
               {t('settings.audioComponents.audioInput.preferred', {
-                id: componentsState.preferredInputId ?? t('settings.audioComponents.audioInput.auto'),
+                id: componentsState.preferredInputId
+                  ? describeAudioInput(componentsState.preferredInputId)
+                  : t('settings.audioComponents.audioInput.auto'),
               })}
             </p>
             <p className="settings-card-note">
               {t('settings.audioComponents.audioInput.active', {
-                id: componentsState.activeInputId ?? t('settings.audioComponents.audioInput.active.none'),
+                id: componentsState.activeInputId
+                  ? describeAudioInput(componentsState.activeInputId)
+                  : t('settings.audioComponents.audioInput.active.none'),
               })}
             </p>
 

@@ -141,9 +141,15 @@ pub async fn native_audio_set_streaming_buffer_settings(
     app: tauri::AppHandle,
     start_or_seek_seconds: Option<f64>,
     crossfade_seconds: Option<f64>,
+    decode_mode: Option<String>,
 ) -> Result<native_audio::NativeAudioStreamingBufferSettingsPayload, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        native_audio::set_streaming_buffer_settings(&app, start_or_seek_seconds, crossfade_seconds)
+        native_audio::set_streaming_buffer_settings(
+            &app,
+            start_or_seek_seconds,
+            crossfade_seconds,
+            decode_mode,
+        )
     })
     .await
     .map_err(|e| format!("Native audio set streaming buffer settings task failed: {e}"))?

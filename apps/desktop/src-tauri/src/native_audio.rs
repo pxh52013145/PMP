@@ -1113,6 +1113,7 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
                     op.src_policy,
                 ),
                 op.preferred_input_id.as_deref(),
+                op.decode_mode,
                 op.src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
@@ -1235,6 +1236,7 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
                 &track_path,
                 resolve_audio_input_target_sample_rate(Some(op.target_sample_rate), op.src_policy),
                 op.preferred_input_id.as_deref(),
+                op.decode_mode,
                 op.src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
@@ -2199,12 +2201,17 @@ pub fn set_streaming_buffer_settings(
     app_handle: &AppHandle,
     start_or_seek_seconds: Option<f64>,
     crossfade_seconds: Option<f64>,
+    decode_mode: Option<String>,
 ) -> Result<NativeAudioStreamingBufferSettingsPayload, String> {
     emitter::ensure_started(app_handle);
     let mut engine = ENGINE
         .lock()
         .map_err(|_| "Audio engine is locked".to_string())?;
-    engine.set_streaming_buffer_settings(start_or_seek_seconds, crossfade_seconds);
+    engine.set_streaming_buffer_settings(
+        start_or_seek_seconds,
+        crossfade_seconds,
+        decode_mode.as_deref(),
+    );
     Ok(engine.streaming_buffer_settings_payload())
 }
 

@@ -14,6 +14,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 type StreamingBufferSettings = {
   startOrSeekSeconds: number | null;
   crossfadeSeconds: number | null;
+  decodeMode: 'streaming' | 'full-track';
 };
 
 type NativeAudioComponentsState = {
@@ -32,11 +33,18 @@ function parseSecondsOrNull(value: unknown): number | null {
   return clampSeconds(value);
 }
 
+function parseDecodeMode(value: unknown): 'streaming' | 'full-track' | null {
+  if (typeof value !== 'string') return null;
+  if (value === 'streaming' || value === 'full-track') return value;
+  return null;
+}
+
 function parseStreamingBufferSettings(payload: unknown): StreamingBufferSettings {
   const record = asRecord(payload);
   return {
     startOrSeekSeconds: parseSecondsOrNull(record?.startOrSeekSeconds),
     crossfadeSeconds: parseSecondsOrNull(record?.crossfadeSeconds),
+    decodeMode: parseDecodeMode(record?.decodeMode) ?? 'streaming',
   };
 }
 
@@ -156,6 +164,7 @@ export function AudioBufferSettingsPanel() {
         void invoke('native_audio_set_streaming_buffer_settings', {
           startOrSeekSeconds: latest.startOrSeekSeconds,
           crossfadeSeconds: latest.crossfadeSeconds,
+          decodeMode: latest.decodeMode,
         }).catch((err) => {
           setError(err instanceof Error ? err.message : String(err));
         });
@@ -207,8 +216,15 @@ export function AudioBufferSettingsPanel() {
   );
 
   const handleReset = useCallback(() => {
-    scheduleApply({ startOrSeekSeconds: null, crossfadeSeconds: null });
+    scheduleApply({ startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' });
   }, [scheduleApply]);
+
+  const handleDecodeModeChange = useCallback(
+    (mode: 'streaming' | 'full-track') => {
+      scheduleApply({ ...settings, decodeMode: mode });
+    },
+    [scheduleApply, settings]
+  );
 
   const sampleRate = componentsState.outputSampleRate && isFinite(componentsState.outputSampleRate) ? componentsState.outputSampleRate : 48_000;
   const channels = 2;
@@ -218,90 +234,133 @@ export function AudioBufferSettingsPanel() {
   return (
     <div className="settings-audio-panel">
       <div className="settings-audio-block">
-        <div className="settings-param-divider settings-param-divider--compact" />
-        <div className="settings-param-head">
-          <p className="settings-param-eyebrow">STREAM PREBUFFER</p>
-          <h3 className="settings-param-title">{t('settings.audioBuffer.title')}</h3>
-          <p className="settings-param-subtitle">Decode Ahead & Recovery Window</p>
-        </div>
-
-        <p className="settings-card-note">{badge}</p>
-
         {!canUseBackend ? (
           <p className="settings-card-note">{t('settings.audioBuffer.note.requireNative')}</p>
         ) : (
           <>
-            <div className="settings-inline-row">
-              <div className="settings-inline-row-copy">
-                <p className="settings-inline-row-title">{t('settings.audioBuffer.startOrSeek.label')}</p>
+            <div className="settings-rows settings-rows--audio-preprocess">
+              <div className="settings-row settings-row--audio-preprocess">
+                <div className="settings-row-left">
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.section.decode.title')}</div>
+                  <div className="settings-row-title settings-row-title--audio-preprocess">
+                    {t('settings.audioBuffer.decodeMode.label')}
+                  </div>
+                  <div className="settings-row-desc">{t('settings.audioBuffer.decodeMode.desc')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.decodeMode.range')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.section.decode.desc')}</div>
+                  {settings.decodeMode === 'full-track' && (
+                    <div className="settings-row-desc settings-row-meta settings-row-meta--warn">
+                      {t('settings.audioBuffer.decodeMode.warning')}
+                    </div>
+                  )}
+                </div>
+                <div className="settings-row-right">
+                  <div className="settings-toggle settings-toggle--compact settings-toggle--audio-preprocess">
+                    <button
+                      type="button"
+                      data-active={settings.decodeMode === 'streaming'}
+                      onClick={() => handleDecodeModeChange('streaming')}
+                    >
+                      {t('settings.audioBuffer.decodeMode.streaming')}
+                    </button>
+                    <button
+                      type="button"
+                      data-active={settings.decodeMode === 'full-track'}
+                      onClick={() => handleDecodeModeChange('full-track')}
+                    >
+                      {t('settings.audioBuffer.decodeMode.fullTrack')}
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={settings.startOrSeekSeconds === null}
-                  onClick={() => handleStartOrSeekMode('auto')}
-                >
-                  {t('settings.audioBuffer.mode.auto')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={settings.startOrSeekSeconds !== null}
-                  onClick={() => handleStartOrSeekMode('custom')}
-                >
-                  {t('settings.audioBuffer.mode.custom')}
-                </button>
-                <input
-                  className="settings-number-input"
-                  type="number"
-                  min={0}
-                  max={10}
-                  step={0.05}
-                  value={effectiveStartOrSeekSeconds}
-                  onChange={(e) => handleStartOrSeekSeconds(Number(e.target.value))}
-                  disabled={settings.startOrSeekSeconds === null}
-                />
+
+              <div className="settings-row settings-row--audio-preprocess">
+                <div className="settings-row-left">
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.section.prebuffer.title')}</div>
+                  <div className="settings-row-title settings-row-title--audio-preprocess">
+                    {t('settings.audioBuffer.startOrSeek.label')}
+                  </div>
+                  <div className="settings-row-desc">{t('settings.audioBuffer.startOrSeek.desc')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.startOrSeek.range')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.startOrSeek.policyRange')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.section.prebuffer.desc')}</div>
+                  <div className="settings-row-desc settings-row-meta">{badge}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.note.thresholdNotCap')}</div>
+                </div>
+                <div className="settings-row-right">
+                  <div className="settings-inline-row-controls settings-inline-row-controls--audio-preprocess">
+                    <button
+                      type="button"
+                      className="settings-choice-btn"
+                      data-active={settings.startOrSeekSeconds === null}
+                      onClick={() => handleStartOrSeekMode('auto')}
+                    >
+                      {t('settings.audioBuffer.mode.auto')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-choice-btn"
+                      data-active={settings.startOrSeekSeconds !== null}
+                      onClick={() => handleStartOrSeekMode('custom')}
+                    >
+                      {t('settings.audioBuffer.mode.custom')}
+                    </button>
+                    <input
+                      className="settings-number-input"
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.05}
+                      value={effectiveStartOrSeekSeconds}
+                      onChange={(e) => handleStartOrSeekSeconds(Number(e.target.value))}
+                      disabled={settings.startOrSeekSeconds === null}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-row settings-row--audio-preprocess">
+                <div className="settings-row-left">
+                  <div className="settings-row-title settings-row-title--audio-preprocess">
+                    {t('settings.audioBuffer.crossfade.label')}
+                  </div>
+                  <div className="settings-row-desc">{t('settings.audioBuffer.crossfade.desc')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.crossfade.range')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.crossfade.policyRange')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.note.metricsLocation')}</div>
+                </div>
+                <div className="settings-row-right">
+                  <div className="settings-inline-row-controls settings-inline-row-controls--audio-preprocess">
+                    <button
+                      type="button"
+                      className="settings-choice-btn"
+                      data-active={settings.crossfadeSeconds === null}
+                      onClick={() => handleCrossfadeMode('auto')}
+                    >
+                      {t('settings.audioBuffer.mode.auto')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-choice-btn"
+                      data-active={settings.crossfadeSeconds !== null}
+                      onClick={() => handleCrossfadeMode('custom')}
+                    >
+                      {t('settings.audioBuffer.mode.custom')}
+                    </button>
+                    <input
+                      className="settings-number-input"
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.05}
+                      value={effectiveCrossfadeSeconds}
+                      onChange={(e) => handleCrossfadeSeconds(Number(e.target.value))}
+                      disabled={settings.crossfadeSeconds === null}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-
-            <p className="settings-card-note">{t('settings.audioBuffer.startOrSeek.desc')}</p>
-
-            <div className="settings-inline-row">
-              <div className="settings-inline-row-copy">
-                <p className="settings-inline-row-title">{t('settings.audioBuffer.crossfade.label')}</p>
-              </div>
-              <div className="settings-inline-row-controls">
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={settings.crossfadeSeconds === null}
-                  onClick={() => handleCrossfadeMode('auto')}
-                >
-                  {t('settings.audioBuffer.mode.auto')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={settings.crossfadeSeconds !== null}
-                  onClick={() => handleCrossfadeMode('custom')}
-                >
-                  {t('settings.audioBuffer.mode.custom')}
-                </button>
-                <input
-                  className="settings-number-input"
-                  type="number"
-                  min={0}
-                  max={10}
-                  step={0.05}
-                  value={effectiveCrossfadeSeconds}
-                  onChange={(e) => handleCrossfadeSeconds(Number(e.target.value))}
-                  disabled={settings.crossfadeSeconds === null}
-                />
-              </div>
-            </div>
-
-            <p className="settings-card-note">{t('settings.audioBuffer.crossfade.desc')}</p>
 
             <div className="settings-section-controls">
               <button type="button" className="settings-action-btn" onClick={() => void refreshComponentsState()}>

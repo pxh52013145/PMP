@@ -17,8 +17,8 @@ use symphonia::core::{
 };
 
 use super::{
-    AudioInput, AudioInputError, AudioInputKind, AudioInputMeta, AudioInputOpenResult,
-    AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
+    AudioInput, AudioInputDecodeMode, AudioInputError, AudioInputKind, AudioInputMeta,
+    AudioInputOpenResult, AudioInputSrcPolicy, SYMPHONIA_INPUT_ID,
 };
 
 use crate::audio::buffer::AudioRingBuffer;
@@ -61,15 +61,90 @@ fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
         .or_else(|| tracks.first())
 }
 
-fn start_symphonia_stream(
+fn full_track_buffer_budget_samples() -> usize {
+    const DEFAULT_BUDGET_MIB: usize = 512;
+    const MIN_BUDGET_MIB: usize = 64;
+    const MAX_BUDGET_MIB: usize = 4096;
+
+    let budget_mib = std::env::var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_BUDGET_MIB)
+        .clamp(MIN_BUDGET_MIB, MAX_BUDGET_MIB);
+
+    let bytes = (budget_mib as u128)
+        .saturating_mul(1024)
+        .saturating_mul(1024);
+    let samples = bytes / (std::mem::size_of::<f32>() as u128);
+    samples.clamp(32_768, usize::MAX as u128) as usize
+}
+
+fn estimate_full_track_capacity_samples(
     path: &Path,
     output_sample_rate: Option<u32>,
     src_policy: AudioInputSrcPolicy,
+) -> Option<usize> {
+    let file = File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|value| value.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .ok()?;
+    let format = probed.format;
+    let track = pick_audio_track(format.as_ref())?;
+
+    let channels = track.codec_params.channels.map(|value| value.count())?;
+    let source_rate = track.codec_params.sample_rate?;
+    let frame_count = track.codec_params.n_frames?;
+
+    let target_rate = super::resolve_audio_input_target_sample_rate(output_sample_rate, src_policy)
+        .unwrap_or(source_rate)
+        .max(1);
+
+    let source_rate_u128 = source_rate.max(1) as u128;
+    let target_rate_u128 = target_rate.max(1) as u128;
+    let frame_count_u128 = frame_count as u128;
+    let target_frames = if target_rate_u128 == source_rate_u128 {
+        frame_count_u128
+    } else {
+        frame_count_u128
+            .saturating_mul(target_rate_u128)
+            .saturating_add(source_rate_u128.saturating_sub(1))
+            / source_rate_u128
+    };
+
+    let estimated_samples = target_frames.saturating_mul(channels.max(1) as u128);
+    let recommended =
+        AudioRingBuffer::recommended_capacity_samples(Some(target_rate), channels.max(1) as u16)
+            as u128;
+    let budget = full_track_buffer_budget_samples() as u128;
+    let capacity = estimated_samples.max(recommended).min(budget);
+    Some(capacity.clamp(1, usize::MAX as u128) as usize)
+}
+
+fn start_symphonia_stream(
+    path: &Path,
+    output_sample_rate: Option<u32>,
+    decode_mode: AudioInputDecodeMode,
+    src_policy: AudioInputSrcPolicy,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
-    let buffer = AudioRingBuffer::new(AudioRingBuffer::recommended_capacity_samples(
-        output_sample_rate,
-        2,
-    ));
+    let default_capacity = AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
+    let capacity_samples = if decode_mode == AudioInputDecodeMode::FullTrack {
+        estimate_full_track_capacity_samples(path, output_sample_rate, src_policy)
+            .unwrap_or(default_capacity)
+            .max(default_capacity)
+    } else {
+        default_capacity
+    };
+    let buffer = AudioRingBuffer::new(capacity_samples);
     let render_queue = AudioRingBuffer::new((buffer.capacity_samples() / 4).clamp(16_384, 262_144));
     try_lock_render_queue_hot_path(&render_queue);
 
@@ -515,6 +590,33 @@ struct DecodedAudioBuffer {
     duration: f64,
 }
 
+fn decoded_to_open_result(
+    input_id: &'static str,
+    decoded: DecodedAudioBuffer,
+) -> AudioInputOpenResult {
+    let source = Box::new(SharedSamplesSource::new(
+        decoded.samples.clone(),
+        decoded.channels,
+        decoded.sample_rate,
+        0,
+    ));
+
+    AudioInputOpenResult {
+        input_id,
+        meta: AudioInputMeta {
+            channels: decoded.channels,
+            sample_rate: decoded.sample_rate,
+            source_sample_rate: decoded.source_sample_rate,
+            bit_depth: decoded.bit_depth,
+            duration: decoded.duration,
+        },
+        kind: AudioInputKind::Decoded {
+            samples: decoded.samples,
+        },
+        source,
+    }
+}
+
 fn decode_track_to_buffer(
     path: &Path,
     output_sample_rate: Option<u32>,
@@ -678,9 +780,10 @@ impl AudioInput for SymphoniaInput {
         &self,
         path: &Path,
         output_sample_rate: Option<u32>,
+        decode_mode: AudioInputDecodeMode,
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
-        match start_symphonia_stream(path, output_sample_rate, src_policy) {
+        match start_symphonia_stream(path, output_sample_rate, decode_mode, src_policy) {
             Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                 input_id: self.id(),
                 meta,
@@ -688,33 +791,14 @@ impl AudioInput for SymphoniaInput {
                 source: Box::new(source),
             }),
             Err(stream_err) => {
-                if !is_full_decode_fallback_enabled() {
+                let allow_fallback = decode_mode == AudioInputDecodeMode::FullTrack
+                    || is_full_decode_fallback_enabled();
+                if !allow_fallback {
                     return Err(stream_err);
                 }
 
                 match decode_track_to_buffer(path, output_sample_rate, src_policy) {
-                    Ok(decoded) => {
-                        let source = Box::new(SharedSamplesSource::new(
-                            decoded.samples.clone(),
-                            decoded.channels,
-                            decoded.sample_rate,
-                            0,
-                        ));
-                        Ok(AudioInputOpenResult {
-                            input_id: self.id(),
-                            meta: AudioInputMeta {
-                                channels: decoded.channels,
-                                sample_rate: decoded.sample_rate,
-                                source_sample_rate: decoded.source_sample_rate,
-                                bit_depth: decoded.bit_depth,
-                                duration: decoded.duration,
-                            },
-                            kind: AudioInputKind::Decoded {
-                                samples: decoded.samples,
-                            },
-                            source,
-                        })
-                    }
+                    Ok(decoded) => Ok(decoded_to_open_result(self.id(), decoded)),
                     Err(buffer_err) => Err(AudioInputError::new(
                         "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
                         format!(
@@ -773,6 +857,52 @@ mod tests {
             file.write_all(&left.to_le_bytes()).unwrap();
             file.write_all(&right.to_le_bytes()).unwrap();
         }
+    }
+
+    #[test]
+    fn decode_mode_matrix_prefers_streaming_path_when_available() {
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+        let path = tmp_dir.join(format!("pmp_symphonia_stream_mode_{nonce}.wav"));
+
+        write_wav_i16_stereo_lcg(&path, 48_000, 4_800);
+
+        let input = SymphoniaInput::default();
+        for decode_mode in [
+            AudioInputDecodeMode::Streaming,
+            AudioInputDecodeMode::FullTrack,
+        ] {
+            let opened = input
+                .open(
+                    &path,
+                    Some(48_000),
+                    decode_mode,
+                    AudioInputSrcPolicy::default(),
+                )
+                .expect("open should succeed");
+
+            let duration = opened.meta.duration;
+            match opened.kind {
+                AudioInputKind::Streaming(streaming) => {
+                    assert!(duration > 0.0);
+                    streaming.shutdown_tx.shutdown();
+                }
+                AudioInputKind::Decoded { .. } => {
+                    panic!("decode mode {:?} should use streaming path", decode_mode)
+                }
+                AudioInputKind::Rodio => {
+                    panic!(
+                        "decode mode {:?} should not fall back to rodio",
+                        decode_mode
+                    )
+                }
+            }
+        }
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

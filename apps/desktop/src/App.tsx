@@ -321,6 +321,8 @@ function AppContent() {
   }, [kernel.events]);
 
   useEffect(() => {
+    if (!isTauri) return;
+
     const init = async () => {
       try {
         setIsMainWindowVisible(await appWindow.isVisible());
@@ -345,7 +347,7 @@ function AppContent() {
     return () => {
       cleanupPromise.then((cleanup) => cleanup());
     };
-  }, []);
+  }, [isTauri]);
 
   const renderMode = useAdaptiveRenderMode({
     isWindowVisible: isMainWindowVisible,

@@ -549,7 +549,7 @@ export function AudioEngineAdvancedSettingsPanel() {
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">TRANSITION</p>
           <h3 className="settings-param-title">{t('settings.audioAdvanced.crossfade.title')}</h3>
-          <p className="settings-param-subtitle">Playback Transition & Fade Timing</p>
+          <p className="settings-param-subtitle">{t('settings.audioAdvanced.crossfade.subtitle')}</p>
         </div>
 
         {canUse ? (

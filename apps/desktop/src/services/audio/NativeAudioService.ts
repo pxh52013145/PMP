@@ -137,6 +137,7 @@ type CrossfadeSettings = {
 type StreamingBufferSettings = {
   startOrSeekSeconds: number | null;
   crossfadeSeconds: number | null;
+  decodeMode: 'streaming' | 'full-track';
 };
 
 type DynamicSrcLearningRecord = {
@@ -207,6 +208,7 @@ export class NativeAudioService implements IAudioService {
   private storedStreamingBufferSettings: StreamingBufferSettings = {
     startOrSeekSeconds: null,
     crossfadeSeconds: null,
+    decodeMode: 'streaming',
   };
   private lastAppliedStreamingBufferSettings: StreamingBufferSettings | null = null;
   private protectionWindowRefCount = 0;
@@ -498,13 +500,16 @@ export class NativeAudioService implements IAudioService {
   private readStreamingBufferSettings(): StreamingBufferSettings {
     try {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
-      if (!raw) return { startOrSeekSeconds: null, crossfadeSeconds: null };
+      if (!raw) return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' };
       const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== 'object') return { startOrSeekSeconds: null, crossfadeSeconds: null };
+      if (!parsed || typeof parsed !== 'object') {
+        return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' };
+      }
       const record = parsed as Record<string, unknown>;
 
       const startRaw = record.startOrSeekSeconds;
       const crossfadeRaw = record.crossfadeSeconds;
+      const decodeModeRaw = record.decodeMode;
 
       const start =
         startRaw === null
@@ -519,9 +524,14 @@ export class NativeAudioService implements IAudioService {
             ? Math.max(0, Math.min(3, crossfadeRaw))
             : null;
 
-      return { startOrSeekSeconds: start, crossfadeSeconds: crossfade };
+      const decodeMode =
+        decodeModeRaw === 'full-track' || decodeModeRaw === 'streaming'
+          ? decodeModeRaw
+          : 'streaming';
+
+      return { startOrSeekSeconds: start, crossfadeSeconds: crossfade, decodeMode };
     } catch {
-      return { startOrSeekSeconds: null, crossfadeSeconds: null };
+      return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' };
     }
   }
 
@@ -1788,6 +1798,7 @@ export class NativeAudioService implements IAudioService {
     return {
       startOrSeekSeconds: normalize(settings.startOrSeekSeconds, 0, 4),
       crossfadeSeconds: normalize(settings.crossfadeSeconds, 0, 3),
+      decodeMode: settings.decodeMode === 'full-track' ? 'full-track' : 'streaming',
     };
   }
 
@@ -1801,6 +1812,7 @@ export class NativeAudioService implements IAudioService {
         typeof base.crossfadeSeconds === 'number'
           ? Math.min(1.8, Math.max(0.4, base.crossfadeSeconds))
           : 1.0,
+      decodeMode: base.decodeMode,
     };
   }
 
@@ -1809,6 +1821,7 @@ export class NativeAudioService implements IAudioService {
     return {
       startOrSeekSeconds: Math.min(4, Math.max(background.startOrSeekSeconds ?? 2.4, 3.2)),
       crossfadeSeconds: Math.min(3, Math.max(background.crossfadeSeconds ?? 1.0, 1.4)),
+      decodeMode: background.decodeMode,
     };
   }
 
@@ -1817,6 +1830,7 @@ export class NativeAudioService implements IAudioService {
     return {
       startOrSeekSeconds: Math.min(4, Math.max(recovery.startOrSeekSeconds ?? 3.2, 3.8)),
       crossfadeSeconds: Math.min(3, Math.max(recovery.crossfadeSeconds ?? 1.4, 1.8)),
+      decodeMode: recovery.decodeMode,
     };
   }
 
@@ -1918,6 +1932,7 @@ export class NativeAudioService implements IAudioService {
       target = {
         startOrSeekSeconds: Math.min(4, Math.max(target.startOrSeekSeconds ?? 2.4, 3.6)),
         crossfadeSeconds: Math.min(3, Math.max(target.crossfadeSeconds ?? 1.0, 1.9)),
+        decodeMode: target.decodeMode,
       };
     }
 
@@ -1931,7 +1946,8 @@ export class NativeAudioService implements IAudioService {
     if (!left || !right) return false;
     return (
       left.startOrSeekSeconds === right.startOrSeekSeconds &&
-      left.crossfadeSeconds === right.crossfadeSeconds
+      left.crossfadeSeconds === right.crossfadeSeconds &&
+      left.decodeMode === right.decodeMode
     );
   }
 
