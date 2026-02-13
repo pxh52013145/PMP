@@ -2978,6 +2978,76 @@ mod tests {
     }
 
     #[test]
+    fn seek_recovery_holds_across_decode_and_transport_modes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_nanos();
+        let tmp_dir = std::env::temp_dir();
+        let path = tmp_dir.join(format!("pmp_seek_mode_matrix_{nonce}.wav"));
+        write_wav_i16_stereo(&path, 48_000, 96_000);
+
+        for decode_mode in ["streaming", "full-track"] {
+            for transport_mode in [
+                NativeAudioTransportMode::Robust,
+                NativeAudioTransportMode::TransportExact,
+            ] {
+                let backend: Arc<dyn AudioOutputBackend> =
+                    Arc::new(TransportModeBackend::new("rodio-cpal"));
+                let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+                engine
+                    .set_preferred_input_id(Some(super::SYMPHONIA_INPUT_ID.to_string()))
+                    .expect("set input");
+                engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode));
+                engine.apply_engine_policy_patch(NativeAudioEnginePolicyPatch {
+                    transport_mode: Some(transport_mode),
+                    ..Default::default()
+                });
+
+                engine
+                    .load(path.clone())
+                    .expect("load track for mode matrix");
+                assert!(
+                    engine.streaming.is_some(),
+                    "expected streaming pipeline for decode_mode={decode_mode}"
+                );
+
+                let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+                drop(command_rx);
+                let (transfer_tx, _transfer_rx) = mpsc::channel();
+                {
+                    let streaming = engine.streaming.as_mut().expect("streaming pipeline");
+                    streaming.command_tx = command_tx.clone();
+                    streaming.shutdown_tx =
+                        StreamingShutdownTx::new(command_tx.clone(), transfer_tx);
+                }
+
+                engine.desired_playback_state = PlaybackState::Playing;
+
+                for target in [1.95, 0.05, 1.90, 0.10] {
+                    let result = engine.seek(target);
+                    assert!(
+                        result.is_ok(),
+                        "seek should recover in decode_mode={decode_mode}, transport_mode={transport_mode:?}, target={target}: {result:?}"
+                    );
+                    assert!(
+                        (engine.current_position - target).abs() <= 0.1,
+                        "seek target drift too large in decode_mode={decode_mode}, transport_mode={transport_mode:?}, target={target}, actual={}",
+                        engine.current_position
+                    );
+                    assert!(
+                        !matches!(engine.playback_state, PlaybackState::Error),
+                        "seek should not push playback into error in decode_mode={decode_mode}, transport_mode={transport_mode:?}"
+                    );
+                }
+            }
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn buffering_finished_stream_resumes_instead_of_timeout() {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("rodio-cpal"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
