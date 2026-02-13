@@ -176,6 +176,7 @@ export class NativeAudioService implements IAudioService {
   private restoredOutputDevice = false;
   private restoredInputId = false;
   private restoredStreamingBufferSettings = false;
+  private restoredEnginePolicy = false;
   private restoredVstEnabled = false;
   private restoredDspGraph = false;
   private restoredDspChain = false;
@@ -282,7 +283,7 @@ export class NativeAudioService implements IAudioService {
   private sharedStressEscalationCount = 0;
 
   private static readonly SEEK_COALESCE_MS = 24;
-  private static readonly SEEK_STALE_GUARD_WINDOW_MS = 1_500;
+  private static readonly SEEK_STALE_GUARD_WINDOW_MS = 8_000;
   private static readonly SEEK_STALE_GUARD_TOLERANCE_SECONDS = 0.45;
   private static readonly UNDERRUN_RECOVERY_WINDOW_MS = 20_000;
   private static readonly AUTO_BACKEND_UNDERRUN_WINDOW_MS = 15_000;
@@ -409,6 +410,14 @@ export class NativeAudioService implements IAudioService {
     this.seekInvokeInFlight = true;
     void this.invokeCommand('native_audio_seek', { time: target })
       .catch(() => {
+        const hasQueuedSeek = typeof this.pendingSeekTime === 'number';
+        const isSameGuardTarget =
+          typeof this.pendingSeekTarget === 'number' &&
+          Math.abs(this.pendingSeekTarget - target) <=
+            NativeAudioService.SEEK_STALE_GUARD_TOLERANCE_SECONDS;
+        if (!hasQueuedSeek && isSameGuardTarget) {
+          this.clearPendingSeekGuard();
+        }
         // invokeCommand already emits structured error.
       })
       .finally(() => {
@@ -486,6 +495,7 @@ export class NativeAudioService implements IAudioService {
     await this.restoreOutputDeviceFromStorage();
     await this.restoreAudioInputFromStorage();
     await this.restoreStreamingBufferSettingsFromStorage();
+    await this.restoreEnginePolicyFromStorage();
     await this.restoreDynamicSrcAutoSettingsFromStorage();
     await this.restoreVstEnabledFromStorage();
 
@@ -564,6 +574,98 @@ export class NativeAudioService implements IAudioService {
       document.removeEventListener('visibilitychange', sync);
     };
     sync();
+  }
+
+  private readPersistedEnginePolicy(): NativeAudioEnginePolicyPatch | null {
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_ENGINE_POLICY);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return null;
+
+      const record = parsed as Record<string, unknown>;
+      const patch: NativeAudioEnginePolicyPatch = {};
+
+      if (record.transportMode === 'robust' || record.transportMode === 'transport-exact') {
+        patch.transportMode = record.transportMode;
+      }
+
+      if (
+        record.hqSrcPhaseMode === 'linear' ||
+        record.hqSrcPhaseMode === 'minimum' ||
+        record.hqSrcPhaseMode === 'intermediate'
+      ) {
+        patch.hqSrcPhaseMode = record.hqSrcPhaseMode;
+      }
+
+      if (
+        record.srcMode === 'source-native' ||
+        record.srcMode === 'match-output' ||
+        record.srcMode === 'target-rate'
+      ) {
+        patch.srcMode = record.srcMode;
+      }
+
+      if (record.srcBackend === 'rubato' || record.srcBackend === 'linear-simd') {
+        patch.srcBackend = record.srcBackend;
+      }
+
+      if (
+        typeof record.srcTargetSampleRate === 'number' &&
+        Number.isFinite(record.srcTargetSampleRate) &&
+        record.srcTargetSampleRate > 0
+      ) {
+        patch.srcTargetSampleRate = Math.max(
+          8_000,
+          Math.min(768_000, Math.floor(record.srcTargetSampleRate))
+        );
+      } else if (record.srcTargetSampleRate === null) {
+        patch.srcTargetSampleRate = null;
+      }
+
+      if (record.outputQuantizationMode === 'round' || record.outputQuantizationMode === 'tpdf') {
+        patch.outputQuantizationMode = record.outputQuantizationMode;
+      }
+
+      if (Object.keys(patch).length === 0) return null;
+      return patch;
+    } catch {
+      return null;
+    }
+  }
+
+  private buildPersistedEnginePolicyPayload(): NativeAudioEnginePolicyPatch {
+    return {
+      transportMode: this.transportMode,
+      hqSrcPhaseMode: this.hqSrcPhaseMode,
+      srcMode: this.srcMode,
+      srcBackend: this.srcBackend,
+      srcTargetSampleRate: this.srcMode === 'target-rate' ? this.srcTargetSampleRate : null,
+      outputQuantizationMode: this.outputQuantizationMode,
+    };
+  }
+
+  private async persistEnginePolicyToStorage(): Promise<void> {
+    await broadcastDataUpdate(
+      STORAGE_KEYS.NATIVE_AUDIO_ENGINE_POLICY,
+      this.buildPersistedEnginePolicyPayload(),
+      TAURI_EVENTS.NATIVE_AUDIO_ENGINE_POLICY_UPDATED
+    );
+  }
+
+  private async restoreEnginePolicyFromStorage(): Promise<void> {
+    if (this.restoredEnginePolicy) return;
+    this.restoredEnginePolicy = true;
+
+    const persisted = this.readPersistedEnginePolicy();
+    if (!persisted) return;
+
+    try {
+      await this.setEnginePolicyInternal(persisted);
+    } catch {
+      // ignore
+    }
   }
 
   private async restoreVstEnabledFromStorage(): Promise<void> {
@@ -1505,6 +1607,7 @@ export class NativeAudioService implements IAudioService {
 
   async setEnginePolicy(patch: NativeAudioEnginePolicyPatch): Promise<void> {
     await this.setEnginePolicyInternal(patch);
+    await this.persistEnginePolicyToStorage();
   }
 
   getDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings {

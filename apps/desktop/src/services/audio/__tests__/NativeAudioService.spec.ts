@@ -426,6 +426,87 @@ describe('NativeAudioService', () => {
     vi.useRealTimers();
   });
 
+  it('keeps ignoring stale native currentTime for slow seek settle window', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    vi.useFakeTimers();
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    (service as unknown as { state: { duration: number; currentTime: number } }).state.duration = 240;
+    (service as unknown as { state: { duration: number; currentTime: number } }).state.currentTime = 5;
+
+    service.seek(120);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        currentTime: 24,
+      },
+    });
+
+    expect(service.getCurrentTime()).toBe(120);
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        currentTime: 120,
+      },
+    });
+
+    expect(service.getCurrentTime()).toBe(120);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('releases stale guard after seek command failure so backend clock can recover', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_seek') {
+        return Promise.reject(new Error('seek failed'));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    vi.useFakeTimers();
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    (service as unknown as { state: { duration: number; currentTime: number } }).state.duration = 240;
+    (service as unknown as { state: { duration: number; currentTime: number } }).state.currentTime = 5;
+
+    service.seek(120);
+    await vi.advanceTimersByTimeAsync(100);
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        currentTime: 26,
+      },
+    });
+
+    expect(service.getCurrentTime()).toBe(26);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
   it('does not rebuild queue/currentTrack when native state payload is unchanged', async () => {
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
     const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
@@ -491,6 +572,32 @@ describe('NativeAudioService', () => {
       startOrSeekSeconds: 3.2,
       crossfadeSeconds: 1.4,
       decodeMode: 'streaming',
+    });
+
+    service.destroy();
+  });
+
+  it('restores engine policy from storage', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_ENGINE_POLICY,
+      JSON.stringify({
+        transportMode: 'transport-exact',
+        srcMode: 'target-rate',
+        srcBackend: 'linear-simd',
+        srcTargetSampleRate: 96000,
+        outputQuantizationMode: 'round',
+      })
+    );
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_engine_policy', {
+      transportMode: 'transport-exact',
+      srcMode: 'target-rate',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: 96000,
+      outputQuantizationMode: 'round',
     });
 
     service.destroy();
@@ -1080,6 +1187,48 @@ describe('NativeAudioService', () => {
 
     service.destroy();
     vi.useRealTimers();
+  });
+
+  it('persists engine policy after setEnginePolicy', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_set_engine_policy') {
+        return Promise.resolve({
+          transportMode: payload?.transportMode,
+          hqSrcPhaseMode: 'minimum',
+          srcMode: payload?.srcMode,
+          srcBackend: payload?.srcBackend,
+          srcTargetSampleRate: payload?.srcTargetSampleRate ?? null,
+          outputQuantizationMode: payload?.outputQuantizationMode,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await service.setEnginePolicy?.({
+      transportMode: 'robust',
+      srcMode: 'target-rate',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: 96000,
+      outputQuantizationMode: 'tpdf',
+    });
+
+    const persistedRaw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_ENGINE_POLICY);
+    expect(persistedRaw).toBeTruthy();
+    const persisted = JSON.parse(persistedRaw as string) as Record<string, unknown>;
+    expect(persisted).toMatchObject({
+      transportMode: 'robust',
+      hqSrcPhaseMode: 'minimum',
+      srcMode: 'target-rate',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: 96000,
+      outputQuantizationMode: 'tpdf',
+    });
+
+    service.destroy();
   });
 
   it('accepts configurable dynamic SRC timing parameters from settings and reflects them in snapshot', async () => {
