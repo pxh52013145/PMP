@@ -60,6 +60,18 @@ fn record_latest_requested_seek_seq(seq: u64) {
     }
 }
 
+fn is_stale_seek_sequence(seek_seq: Option<u64>) -> bool {
+    let Some(seq) = seek_seq else {
+        return false;
+    };
+    if seq == 0 {
+        return false;
+    }
+
+    let latest = LATEST_REQUESTED_SEEK_SEQ.load(Ordering::Relaxed);
+    latest > 0 && seq < latest
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioOutputDevicePayload {
@@ -1490,6 +1502,10 @@ pub fn seek(app_handle: &AppHandle, time: f64, seek_seq: Option<u64>) -> Result<
         record_latest_requested_seek_seq(seq);
     }
 
+    if is_stale_seek_sequence(seek_seq) {
+        return Ok(());
+    }
+
     let (result, payload) = {
         let mut engine = ENGINE
             .lock()
@@ -2185,6 +2201,20 @@ mod tests {
         let backend = create_output_backend_by_id(RODIO_CPAL_BACKEND_ID)
             .expect("rodio-cpal backend should exist");
         assert_eq!(backend.id(), RODIO_CPAL_BACKEND_ID);
+    }
+
+    #[test]
+    fn stale_seek_sequence_is_short_circuited() {
+        LATEST_REQUESTED_SEEK_SEQ.store(0, Ordering::Relaxed);
+
+        record_latest_requested_seek_seq(42);
+        assert!(is_stale_seek_sequence(Some(41)));
+        assert!(!is_stale_seek_sequence(Some(42)));
+        assert!(!is_stale_seek_sequence(Some(43)));
+        assert!(!is_stale_seek_sequence(Some(0)));
+        assert!(!is_stale_seek_sequence(None));
+
+        LATEST_REQUESTED_SEEK_SEQ.store(0, Ordering::Relaxed);
     }
 }
 
