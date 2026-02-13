@@ -60,6 +60,12 @@ fn record_latest_requested_seek_seq(seq: u64) {
     }
 }
 
+pub fn mark_latest_seek_sequence(seek_seq: Option<u64>) {
+    if let Some(seq) = seek_seq {
+        record_latest_requested_seek_seq(seq);
+    }
+}
+
 fn is_stale_seek_sequence(seek_seq: Option<u64>) -> bool {
     let Some(seq) = seek_seq else {
         return false;

@@ -3,7 +3,7 @@
  * 当前的默认实现
  */
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProgressBarVariantProps } from './ProgressBarTypes';
 import { buildCoverGradient } from '../shared/useDynamicColor';
 import './StandardProgressBar.css';
@@ -17,6 +17,7 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
   const progressBarRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const latestSeekTimeRef = useRef<number | null>(null);
+  const globalDragEndCleanupRef = useRef<(() => void) | null>(null);
   const [previewTime, setPreviewTime] = useState<number | null>(null);
 
   const getTimeFromClientX = (clientX: number) => {
@@ -30,29 +31,16 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
     return newTime;
   };
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!data.duration) return;
+  const cleanupGlobalDragEndListeners = useCallback(() => {
+    const cleanup = globalDragEndCleanupRef.current;
+    if (!cleanup) return;
 
-    progressBarRef.current?.setPointerCapture(e.pointerId);
-    logic.onSeekStart();
-    isDraggingRef.current = true;
+    cleanup();
+    globalDragEndCleanupRef.current = null;
+  }, []);
 
-    const newTime = getTimeFromClientX(e.clientX);
-    if (typeof newTime !== 'number') return;
-    latestSeekTimeRef.current = newTime;
-    setPreviewTime(newTime);
-  };
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingRef.current || !data.duration) return;
-
-    const newTime = getTimeFromClientX(e.clientX);
-    if (typeof newTime !== 'number') return;
-    latestSeekTimeRef.current = newTime;
-    setPreviewTime(newTime);
-  };
-
-  const endDrag = () => {
+  const endDrag = useCallback(() => {
+    cleanupGlobalDragEndListeners();
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
 
@@ -70,6 +58,53 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
     } else {
       setPreviewTime(null);
     }
+  }, [cleanupGlobalDragEndListeners, logic]);
+
+  const attachGlobalDragEndListeners = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    cleanupGlobalDragEndListeners();
+    const handleDragEnd = () => {
+      endDrag();
+    };
+
+    window.addEventListener('pointerup', handleDragEnd, true);
+    window.addEventListener('pointercancel', handleDragEnd, true);
+    window.addEventListener('blur', handleDragEnd);
+    globalDragEndCleanupRef.current = () => {
+      window.removeEventListener('pointerup', handleDragEnd, true);
+      window.removeEventListener('pointercancel', handleDragEnd, true);
+      window.removeEventListener('blur', handleDragEnd);
+    };
+  }, [cleanupGlobalDragEndListeners, endDrag]);
+
+  useEffect(() => {
+    return () => {
+      cleanupGlobalDragEndListeners();
+    };
+  }, [cleanupGlobalDragEndListeners]);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!data.duration) return;
+
+    progressBarRef.current?.setPointerCapture(e.pointerId);
+    logic.onSeekStart();
+    isDraggingRef.current = true;
+    attachGlobalDragEndListeners();
+
+    const newTime = getTimeFromClientX(e.clientX);
+    if (typeof newTime !== 'number') return;
+    latestSeekTimeRef.current = newTime;
+    setPreviewTime(newTime);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current || !data.duration) return;
+
+    const newTime = getTimeFromClientX(e.clientX);
+    if (typeof newTime !== 'number') return;
+    latestSeekTimeRef.current = newTime;
+    setPreviewTime(newTime);
   };
 
   const effectiveTime = previewTime ?? data.currentTime;

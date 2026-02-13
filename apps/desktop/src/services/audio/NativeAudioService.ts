@@ -333,6 +333,15 @@ export class NativeAudioService implements IAudioService {
     void this.invokeCommand(cmd, payload).catch(() => {});
   }
 
+  private notifyLatestSeekSequence(seekSeq: number | null): void {
+    if (typeof seekSeq !== 'number' || !Number.isFinite(seekSeq)) return;
+
+    const normalizedSeekSeq = Math.max(1, Math.floor(seekSeq));
+    void invoke('native_audio_mark_seek_seq', { seekSeq: normalizedSeekSeq }).catch(() => {
+      // Best-effort fast-path: seek command itself still carries seekSeq for correctness.
+    });
+  }
+
   private isSharedOutputBackend(backendId: string | null | undefined): backendId is string {
     return (
       backendId === 'wasapi' ||
@@ -3265,6 +3274,7 @@ export class NativeAudioService implements IAudioService {
     this.pendingSeekTime = clamped;
     this.seekCommandSeqCounter = this.seekCommandSeqCounter + 1;
     this.pendingSeekSeq = this.seekCommandSeqCounter;
+    this.notifyLatestSeekSequence(this.pendingSeekSeq);
     const effective = this.getEffectiveDynamicSrcTiming();
     this.withDynamicSrcHold('seek', effective.seekHoldMs);
     this.scheduleSeekFlush();

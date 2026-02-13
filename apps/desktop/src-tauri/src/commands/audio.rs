@@ -42,14 +42,18 @@ pub async fn native_audio_stop(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn native_audio_mark_seek_seq(seek_seq: Option<u64>) -> Result<(), String> {
+    native_audio::mark_latest_seek_sequence(seek_seq);
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_seek(
     app: tauri::AppHandle,
     time: f64,
     seek_seq: Option<u64>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || native_audio::seek(&app, time, seek_seq))
-        .await
-        .map_err(|e| format!("Native audio seek task failed: {e}"))?
+    native_audio::seek(&app, time, seek_seq)
 }
 
 #[tauri::command]
