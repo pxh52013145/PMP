@@ -24,11 +24,8 @@ pnpm dev
 并行前端模式：
 
 ```bash
-# legacy 前端 + 现有 tauri
-pnpm dev:legacy
-
-# next 模式（apps/desktop）+ 现有 tauri backend
-pnpm dev:next
+# desktop（apps/desktop）+ 现有 tauri backend
+pnpm dev
 
 ```
 

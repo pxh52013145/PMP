@@ -61,7 +61,7 @@ pnpm run perf:snapshot:4rounds
 推荐（更稳定、可比性更强）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartNext -StrictHostExe
+powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartDev -StrictHostExe
 ```
 
 快速版：
@@ -115,26 +115,20 @@ snapshots/
 2. 明确选择 `minimal` / `balanced` / `boosted`。
 3. 再跑四轮快照，避免“上次是 custom，这次是 minimal”造成误判。
 
-### 4.1.1 `dev:next` 档位行为与低内存策略
+### 4.1.1 `dev` 档位行为与低内存策略
 
 从当前版本开始：
 
-- `pnpm dev:next` **不强制覆盖档位**，沿用你在设置中持久化的 `runtime profile`。
-- 当你显式指定 `minimal`（例如 `pnpm dev:next -- --profile minimal`）时，会自动注入 WebView2 低内存参数：
+- `pnpm dev` **不强制覆盖档位**，沿用你在设置中持久化的 `runtime profile`。
+- 当你显式指定 `minimal`（例如通过环境变量或设置页切换）时，会自动注入 WebView2 低内存参数：
   - `--disable-gpu`
   - `--disable-gpu-compositing`
 
-可选命令（显式覆盖本次启动档位）：
-
-- `pnpm dev:next:minimal`
-- `pnpm dev:next:balanced`
-- `pnpm dev:next:boosted`
-
-如需关闭默认 WebView2 低内存参数，可设置环境变量：
+如需手动覆盖 WebView2 启动参数，请直接设置：
 
 ```powershell
-$env:PMP_NEXT_DISABLE_LOWMEM_WEBVIEW2="1"
-pnpm dev:next
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--disable-gpu --disable-gpu-compositing"
+pnpm dev
 ```
 
 ## 4.2 如何理解 Private MB 偏高

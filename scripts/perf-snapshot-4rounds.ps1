@@ -3,7 +3,7 @@ Param(
   [string]$SuiteName = "",
 
   [Parameter(Mandatory = $false)]
-  [switch]$AutoStartNext,
+  [switch]$AutoStartDev,
 
   [Parameter(Mandatory = $false)]
   [int]$BootWaitSeconds = 12,
@@ -96,7 +96,7 @@ function Show-PerfSuiteHelp() {
   4) recovery-after-stress    压力后恢复场景
 
 关键参数：
-  -AutoStartNext              自动启动 pnpm dev:next
+  -AutoStartDev               自动启动 pnpm dev
   -Quick                      快速模式（每轮时长更短）
   -SuiteName [name]           套件目录名（默认 suite-日期时间）
   -MainWindowTitleLike [pat]  按窗口标题定位
@@ -110,7 +110,7 @@ function Show-PerfSuiteHelp() {
 示例：
   pnpm run perf:snapshot:4rounds
   pnpm run perf:snapshot:4rounds:quick
-  powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartNext -SuiteName my-baseline-2026-02-08
+  powershell -ExecutionPolicy Bypass -File scripts/perf-snapshot-4rounds.ps1 -AutoStartDev -SuiteName my-baseline-2026-02-08
 '@
   Write-Host $helpText
 }
@@ -132,9 +132,9 @@ Write-Host "[perf-suite] QuickMode: $($Quick.IsPresent)"
 Write-Host "[perf-suite] StrictHostExe: $($StrictHostExe.IsPresent)"
 
 $devProcess = $null
-if ($AutoStartNext.IsPresent) {
-  Write-Host "[perf-suite] Auto starting app: pnpm dev:next"
-  $devProcess = Start-Process -FilePath "pnpm.cmd" -ArgumentList "dev:next" -WorkingDirectory $repoRoot -PassThru
+if ($AutoStartDev.IsPresent) {
+  Write-Host "[perf-suite] Auto starting app: pnpm dev"
+  $devProcess = Start-Process -FilePath "pnpm.cmd" -ArgumentList "dev" -WorkingDirectory $repoRoot -PassThru
   if ($BootWaitSeconds -gt 0) {
     Write-Host "[perf-suite] Waiting $BootWaitSeconds seconds for startup"
     Start-Sleep -Seconds $BootWaitSeconds
