@@ -1600,6 +1600,32 @@ impl NativeAudioEngine {
             .ok_or_else(|| "No track loaded".to_string())?;
         let target = seconds.max(0.0);
         let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
+        let mut force_non_streaming_seek = false;
+
+        let apply_streaming_seek_state =
+            |engine: &mut NativeAudioEngine,
+             seek_target: f64,
+             should_resume_playing: bool,
+             available_samples: usize| {
+                if should_resume_playing {
+                    engine.base_position = seek_target;
+                    engine.playback_started_at = None;
+                    engine.desired_playback_state = PlaybackState::Playing;
+                    engine.playback_state = PlaybackState::Buffering;
+                    let now = Instant::now();
+                    engine.buffering_started_at = Some(now);
+                    engine.buffering_last_progress_at = Some(now);
+                    engine.buffering_last_samples = available_samples;
+                } else {
+                    engine.base_position = seek_target;
+                    engine.playback_started_at = None;
+                    engine.buffering_started_at = None;
+                    engine.buffering_last_progress_at = None;
+                    engine.buffering_last_samples = 0;
+                }
+
+                engine.current_position = seek_target;
+            };
 
         if let Some(streaming) = &self.streaming {
             if resume_playing {
@@ -1608,32 +1634,60 @@ impl NativeAudioEngine {
                 }
             }
 
-            streaming.buffer.clear();
-            streaming.render_queue.clear();
             self.spectrum_pre_tap.clear();
             self.spectrum_post_tap.clear();
             self.dsp_runtime.request_reset();
-            let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
 
-            if resume_playing {
-                self.base_position = target;
-                self.playback_started_at = None;
-                self.desired_playback_state = PlaybackState::Playing;
-                self.playback_state = PlaybackState::Buffering;
-                let now = Instant::now();
-                self.buffering_started_at = Some(now);
-                self.buffering_last_progress_at = Some(now);
-                self.buffering_last_samples = self.streaming_available_samples(streaming);
-            } else {
-                self.base_position = target;
-                self.playback_started_at = None;
-                self.buffering_started_at = None;
-                self.buffering_last_progress_at = None;
-                self.buffering_last_samples = 0;
+            match streaming.command_tx.send(DecoderCommand::Seek(target)) {
+                Ok(()) => {
+                    streaming.buffer.clear();
+                    streaming.render_queue.clear();
+                    let available_samples = self.streaming_available_samples(streaming);
+                    apply_streaming_seek_state(self, target, resume_playing, available_samples);
+                    return Ok(());
+                }
+                Err(_) => {
+                    info_log(
+                        "[NativeAudio] Streaming seek channel disconnected; rebuilding stream pipeline.",
+                    );
+                }
             }
 
-            self.current_position = target;
-            return Ok(());
+            self.load(track_path.clone())?;
+            if resume_playing {
+                self.desired_playback_state = PlaybackState::Playing;
+            }
+
+            if let Some(reloaded_streaming) = &self.streaming {
+                match reloaded_streaming
+                    .command_tx
+                    .send(DecoderCommand::Seek(target))
+                {
+                    Ok(()) => {
+                        reloaded_streaming.buffer.clear();
+                        reloaded_streaming.render_queue.clear();
+                        let available_samples =
+                            self.streaming_available_samples(reloaded_streaming);
+                        apply_streaming_seek_state(self, target, resume_playing, available_samples);
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        info_log(
+                            "[NativeAudio] Rebuilt streaming decoder exited immediately; using direct source seek.",
+                        );
+                        self.shutdown_streaming();
+                        force_non_streaming_seek = true;
+                    }
+                }
+            } else {
+                force_non_streaming_seek = true;
+            }
+        }
+
+        if force_non_streaming_seek {
+            self.buffering_started_at = None;
+            self.buffering_last_progress_at = None;
+            self.buffering_last_samples = 0;
         }
 
         let (sink, output_info) = self.output_backend.create_sink()?;
@@ -2327,19 +2381,36 @@ impl NativeAudioEngine {
         self.dsp_runtime.request_reset();
 
         let (source, channels, sample_rate) = if let Some(streaming) = &self.streaming {
-            streaming.buffer.clear();
-            streaming.render_queue.clear();
-            let _ = streaming.command_tx.send(DecoderCommand::Seek(target));
-            (
-                Box::new(StreamingSamplesSource::new(
-                    streaming.render_queue.clone(),
-                    self.decoded_channels.max(1),
-                    self.decoded_sample_rate.max(1),
-                    self.duration,
-                )) as crate::audio::output::BoxedSource,
-                self.decoded_channels,
-                self.decoded_sample_rate,
-            )
+            let seek_dispatched = streaming
+                .command_tx
+                .send(DecoderCommand::Seek(target))
+                .is_ok();
+            if seek_dispatched {
+                streaming.buffer.clear();
+                streaming.render_queue.clear();
+                (
+                    Box::new(StreamingSamplesSource::new(
+                        streaming.render_queue.clone(),
+                        self.decoded_channels.max(1),
+                        self.decoded_sample_rate.max(1),
+                        self.duration,
+                    )) as crate::audio::output::BoxedSource,
+                    self.decoded_channels,
+                    self.decoded_sample_rate,
+                )
+            } else {
+                info_log(
+                    "[NativeAudio] Streaming decoder is unavailable while rebuilding sink; reloading stream pipeline.",
+                );
+                self.load(track_path.clone())?;
+                if target > 0.0 {
+                    self.seek(target)?;
+                }
+                if resume_playing {
+                    self.play()?;
+                }
+                return Ok(());
+            }
         } else if let Some(samples) = self.decoded_samples.clone() {
             let channels = self.decoded_channels.max(1);
             let sample_rate = self.decoded_sample_rate.max(1);
@@ -2854,6 +2925,56 @@ mod tests {
 
         // Legacy callers without sequence remain compatible.
         assert!(engine.should_accept_seek_command(None, None));
+    }
+
+    #[test]
+    fn seek_rebuilds_stream_when_decoder_channel_is_disconnected() {
+        let backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_nanos();
+        let tmp_dir = std::env::temp_dir();
+        let path = tmp_dir.join(format!("pmp_seek_rebuild_{nonce}.wav"));
+        write_wav_i16_stereo(&path, 48_000, 48_000);
+
+        let buffer = crate::audio::buffer::AudioRingBuffer::new(48_000);
+        let render_queue = crate::audio::buffer::AudioRingBuffer::new(24_000);
+        buffer.mark_finished();
+        render_queue.mark_finished();
+
+        let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+        drop(command_rx);
+        let (transfer_tx, _transfer_rx) = mpsc::channel();
+
+        engine.current_track = Some(path.clone());
+        engine.streaming = Some(StreamingPlayback {
+            buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
+            command_tx,
+            error: Arc::new(Mutex::new(None)),
+        });
+        engine.desired_playback_state = PlaybackState::Playing;
+
+        let seek_result = engine.seek(0.8);
+        assert!(
+            seek_result.is_ok(),
+            "seek should recover from disconnected channel: {seek_result:?}"
+        );
+        assert!(engine.current_position >= 0.79 && engine.current_position <= 0.81);
+        assert!(
+            matches!(
+                engine.playback_state,
+                PlaybackState::Buffering | PlaybackState::Playing | PlaybackState::Paused
+            ),
+            "recovered seek should continue transport"
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
