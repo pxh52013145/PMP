@@ -316,13 +316,16 @@ describe('NativeAudioService', () => {
 
     await vi.advanceTimersByTimeAsync(200);
 
-    expect(invoke).toHaveBeenCalledWith('native_audio_seek', { time: 30 });
+    expect(invoke).toHaveBeenCalledWith(
+      'native_audio_seek',
+      expect.objectContaining({ time: 30, seekSeq: expect.any(Number) })
+    );
 
     vi.useRealTimers();
     service.destroy();
   });
 
-  it('keeps only latest seek while backend seek is in-flight', async () => {
+  it('keeps latest seek target while an earlier seek promise is unresolved', async () => {
     vi.useFakeTimers();
 
     const firstSeekGate: { release: (() => void) | null } = { release: null };
@@ -348,14 +351,20 @@ describe('NativeAudioService', () => {
     service.seek(10);
     await vi.advanceTimersByTimeAsync(80);
 
-    expect(invoke).toHaveBeenCalledWith('native_audio_seek', { time: 10 });
+    expect(invoke).toHaveBeenCalledWith(
+      'native_audio_seek',
+      expect.objectContaining({ time: 10, seekSeq: expect.any(Number) })
+    );
 
     service.seek(50);
     service.seek(80);
     await vi.advanceTimersByTimeAsync(80);
 
     const seekCallsBeforeResolve = invokeMock.mock.calls.filter((call) => call[0] === 'native_audio_seek');
-    expect(seekCallsBeforeResolve).toHaveLength(1);
+    expect(seekCallsBeforeResolve).toHaveLength(2);
+    expect(seekCallsBeforeResolve[1]?.[1]).toEqual(
+      expect.objectContaining({ time: 80, seekSeq: expect.any(Number) })
+    );
 
     if (firstSeekGate.release) {
       firstSeekGate.release();
@@ -364,7 +373,44 @@ describe('NativeAudioService', () => {
 
     const seekCallsAfterResolve = invokeMock.mock.calls.filter((call) => call[0] === 'native_audio_seek');
     expect(seekCallsAfterResolve).toHaveLength(2);
-    expect(seekCallsAfterResolve[1]).toEqual(['native_audio_seek', { time: 80 }]);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('throttles rapid seek bursts and keeps latest target without event pile-up', async () => {
+    vi.useFakeTimers();
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue(undefined);
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    (service as unknown as { state: { duration: number } }).state.duration = 500;
+    invokeMock.mockClear();
+
+    for (let i = 0; i < 80; i += 1) {
+      service.seek(i * 2);
+      await vi.advanceTimersByTimeAsync(5);
+    }
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    const seekCalls = invokeMock.mock.calls.filter((call) => call[0] === 'native_audio_seek');
+    expect(seekCalls.length).toBeLessThanOrEqual(25);
+
+    const lastPayload = seekCalls[seekCalls.length - 1]?.[1] as
+      | { time?: number; seekSeq?: number }
+      | undefined;
+    expect(lastPayload?.time).toBe(158);
+
+    const seqs = seekCalls
+      .map((call) => (call[1] as { seekSeq?: number } | undefined)?.seekSeq)
+      .filter((value): value is number => typeof value === 'number');
+    for (let i = 1; i < seqs.length; i += 1) {
+      expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    }
 
     service.destroy();
     vi.useRealTimers();

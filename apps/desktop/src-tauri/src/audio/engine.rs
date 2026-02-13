@@ -238,6 +238,7 @@ pub(crate) struct NativeAudioEngine {
     muted: bool,
     playback_state: PlaybackState,
     desired_playback_state: PlaybackState,
+    latest_seek_command_seq: u64,
     operation_seq_counter: u64,
     pending_operation_seq: u64,
     error_seq_counter: u64,
@@ -422,6 +423,7 @@ impl NativeAudioEngine {
             muted: false,
             playback_state: PlaybackState::Idle,
             desired_playback_state: PlaybackState::Idle,
+            latest_seek_command_seq: 0,
             operation_seq_counter: 0,
             pending_operation_seq: 0,
             error_seq_counter: 1,
@@ -450,6 +452,29 @@ impl NativeAudioEngine {
         matches!(self.playback_state, PlaybackState::Playing)
             || (matches!(self.playback_state, PlaybackState::Buffering)
                 && matches!(self.desired_playback_state, PlaybackState::Playing))
+    }
+
+    pub(crate) fn should_accept_seek_command(
+        &mut self,
+        seek_seq: Option<u64>,
+        latest_requested_seek_seq: Option<u64>,
+    ) -> bool {
+        match seek_seq {
+            Some(0) => true,
+            Some(seq) => {
+                if let Some(latest_requested) = latest_requested_seek_seq {
+                    if latest_requested > 0 && seq < latest_requested {
+                        return false;
+                    }
+                }
+                if seq < self.latest_seek_command_seq {
+                    return false;
+                }
+                self.latest_seek_command_seq = seq;
+                true
+            }
+            None => true,
+        }
     }
 
     pub(crate) fn output_backend(&self) -> Arc<dyn AudioOutputBackend> {
@@ -2815,6 +2840,20 @@ mod tests {
             next.output_quantization_mode,
             NativeAudioOutputQuantizationMode::Tpdf
         ));
+    }
+
+    #[test]
+    fn seek_sequence_rejects_stale_commands() {
+        let mut engine = NativeAudioEngine::new();
+
+        assert!(engine.should_accept_seek_command(Some(1), Some(1)));
+        assert!(engine.should_accept_seek_command(Some(2), Some(2)));
+        assert!(!engine.should_accept_seek_command(Some(1), Some(2)));
+        assert!(engine.should_accept_seek_command(Some(3), Some(3)));
+        assert!(!engine.should_accept_seek_command(Some(4), Some(5)));
+
+        // Legacy callers without sequence remain compatible.
+        assert!(engine.should_accept_seek_command(None, None));
     }
 
     #[test]

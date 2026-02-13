@@ -194,11 +194,14 @@ export class NativeAudioService implements IAudioService {
   private underrunRecoveryUntilMs: number = 0;
   private underrunSpikeTimestampsMs: number[] = [];
   private pendingSeekTime: number | null = null;
+  private pendingSeekSeq: number | null = null;
   private pendingSeekTimer: number | null = null;
   private pendingSeekTarget: number | null = null;
   private pendingSeekDirection: 'forward' | 'backward' | null = null;
   private pendingSeekSettleUntilMs = 0;
-  private seekInvokeInFlight = false;
+  private activeSeekInvokeCount = 0;
+  private seekCommandSeqCounter = Math.max(1, Date.now());
+  private lastSeekDispatchAtMs = 0;
   private desiredPlayIndex: number | null = null;
   private playIndexQueue: Promise<void> = Promise.resolve();
   private bufferedAheadRollingWindow: number[] = [];
@@ -282,7 +285,9 @@ export class NativeAudioService implements IAudioService {
   private sharedStressReason: string | null = null;
   private sharedStressEscalationCount = 0;
 
-  private static readonly SEEK_COALESCE_MS = 24;
+  private static readonly SEEK_COALESCE_MS = 12;
+  private static readonly SEEK_DISPATCH_MIN_INTERVAL_MS = 20;
+  private static readonly SEEK_MAX_PARALLEL_INVOCATIONS = 3;
   private static readonly SEEK_STALE_GUARD_WINDOW_MS = 8_000;
   private static readonly SEEK_STALE_GUARD_TOLERANCE_SECONDS = 0.45;
   private static readonly UNDERRUN_RECOVERY_WINDOW_MS = 20_000;
@@ -338,6 +343,7 @@ export class NativeAudioService implements IAudioService {
 
   private clearPendingSeek(): void {
     this.pendingSeekTime = null;
+    this.pendingSeekSeq = null;
     if (this.pendingSeekTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(this.pendingSeekTimer);
     }
@@ -366,7 +372,7 @@ export class NativeAudioService implements IAudioService {
     const tolerance = NativeAudioService.SEEK_STALE_GUARD_TOLERANCE_SECONDS;
     const direction = this.pendingSeekDirection;
     const waitingForSeekCommit =
-      this.seekInvokeInFlight || typeof this.pendingSeekTime === 'number';
+      this.activeSeekInvokeCount > 0 || typeof this.pendingSeekTime === 'number';
 
     if (Math.abs(nextTime - target) <= tolerance) {
       this.clearPendingSeekGuard();
@@ -401,14 +407,38 @@ export class NativeAudioService implements IAudioService {
   }
 
   private flushPendingSeekCommand(): void {
-    if (this.seekInvokeInFlight) return;
-
     const target = this.pendingSeekTime;
-    this.pendingSeekTime = null;
+    const seekSeq = this.pendingSeekSeq;
     if (typeof target !== 'number' || !isFinite(target)) return;
 
-    this.seekInvokeInFlight = true;
-    void this.invokeCommand('native_audio_seek', { time: target })
+    if (
+      this.activeSeekInvokeCount >=
+      NativeAudioService.SEEK_MAX_PARALLEL_INVOCATIONS
+    ) {
+      this.scheduleSeekFlush(8);
+      return;
+    }
+
+    const nowMs = Date.now();
+    const elapsedSinceLastDispatch = nowMs - this.lastSeekDispatchAtMs;
+    const remainingThrottleMs =
+      NativeAudioService.SEEK_DISPATCH_MIN_INTERVAL_MS - elapsedSinceLastDispatch;
+    if (remainingThrottleMs > 0) {
+      this.scheduleSeekFlush(remainingThrottleMs);
+      return;
+    }
+
+    this.pendingSeekTime = null;
+    this.pendingSeekSeq = null;
+    this.lastSeekDispatchAtMs = nowMs;
+
+    this.activeSeekInvokeCount += 1;
+    const payload: Record<string, unknown> = { time: target };
+    if (typeof seekSeq === 'number' && Number.isFinite(seekSeq)) {
+      payload.seekSeq = Math.max(1, Math.floor(seekSeq));
+    }
+
+    void this.invokeCommand('native_audio_seek', payload)
       .catch(() => {
         const hasQueuedSeek = typeof this.pendingSeekTime === 'number';
         const isSameGuardTarget =
@@ -421,41 +451,31 @@ export class NativeAudioService implements IAudioService {
         // invokeCommand already emits structured error.
       })
       .finally(() => {
-        this.seekInvokeInFlight = false;
+        this.activeSeekInvokeCount = Math.max(0, this.activeSeekInvokeCount - 1);
         if (typeof this.pendingSeekTime !== 'number') return;
 
-        if (typeof window !== 'undefined') {
-          if (this.pendingSeekTimer !== null) {
-            window.clearTimeout(this.pendingSeekTimer);
-          }
-          this.pendingSeekTimer = window.setTimeout(() => {
-            this.pendingSeekTimer = null;
-            this.flushPendingSeekCommand();
-          }, 0);
-          return;
-        }
-
-        this.flushPendingSeekCommand();
+        this.scheduleSeekFlush(0);
       });
   }
 
-  private scheduleSeekFlush(): void {
-    if (this.pendingSeekTimer !== null) return;
-    const scheduled =
-      typeof window !== 'undefined'
-        ? window.setTimeout(() => {
-            this.pendingSeekTimer = null;
-            this.flushPendingSeekCommand();
-          }, NativeAudioService.SEEK_COALESCE_MS)
-        : null;
-
-    // Non-browser (tests) fallback: flush immediately.
-    if (scheduled === null) {
+  private scheduleSeekFlush(delayMs: number = NativeAudioService.SEEK_COALESCE_MS): void {
+    if (typeof window === 'undefined') {
       this.flushPendingSeekCommand();
       return;
     }
 
-    this.pendingSeekTimer = scheduled;
+    if (this.pendingSeekTimer !== null) {
+      window.clearTimeout(this.pendingSeekTimer);
+    }
+
+    const safeDelayMs = Number.isFinite(delayMs)
+      ? Math.max(0, Math.floor(delayMs))
+      : NativeAudioService.SEEK_COALESCE_MS;
+
+    this.pendingSeekTimer = window.setTimeout(() => {
+      this.pendingSeekTimer = null;
+      this.flushPendingSeekCommand();
+    }, safeDelayMs);
   }
 
   private isProbablyAbsolutePath(value: string): boolean {
@@ -3243,6 +3263,8 @@ export class NativeAudioService implements IAudioService {
     const clamped = Math.max(0, Math.min(time, duration));
     this.markPendingSeekGuard(clamped);
     this.pendingSeekTime = clamped;
+    this.seekCommandSeqCounter = this.seekCommandSeqCounter + 1;
+    this.pendingSeekSeq = this.seekCommandSeqCounter;
     const effective = this.getEffectiveDynamicSrcTiming();
     this.withDynamicSrcHold('seek', effective.seekHoldMs);
     this.scheduleSeekFlush();

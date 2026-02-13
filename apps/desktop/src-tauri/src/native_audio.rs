@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -38,6 +38,27 @@ pub use crate::audio::policy::{
 };
 
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
+
+static LATEST_REQUESTED_SEEK_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn record_latest_requested_seek_seq(seq: u64) {
+    if seq == 0 {
+        return;
+    }
+
+    let mut observed = LATEST_REQUESTED_SEEK_SEQ.load(Ordering::Relaxed);
+    while seq > observed {
+        match LATEST_REQUESTED_SEEK_SEQ.compare_exchange_weak(
+            observed,
+            seq,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(current) => observed = current,
+        }
+    }
+}
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1462,17 +1483,35 @@ pub fn sync_queue(
     Ok(())
 }
 
-pub fn seek(app_handle: &AppHandle, time: f64) -> Result<(), String> {
+pub fn seek(app_handle: &AppHandle, time: f64, seek_seq: Option<u64>) -> Result<(), String> {
     emitter::ensure_started(app_handle);
+
+    if let Some(seq) = seek_seq {
+        record_latest_requested_seek_seq(seq);
+    }
+
     let (result, payload) = {
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        let result = engine.seek(time).map_err(|err| {
-            engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
-            err
+
+        let latest_requested_seek_seq = seek_seq.and_then(|seq| {
+            if seq == 0 {
+                None
+            } else {
+                Some(LATEST_REQUESTED_SEEK_SEQ.load(Ordering::Relaxed))
+            }
         });
-        (result, engine.build_state_payload(false))
+
+        if !engine.should_accept_seek_command(seek_seq, latest_requested_seek_seq) {
+            (Ok(()), engine.build_state_payload(false))
+        } else {
+            let result = engine.seek(time).map_err(|err| {
+                engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
+                err
+            });
+            (result, engine.build_state_payload(false))
+        }
     };
     let maybe_error = match (
         payload.error_seq,
