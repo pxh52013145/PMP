@@ -5,8 +5,9 @@ import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useLocale, useT } from '../../i18n';
 import { AudioRobustnessSnapshot, Track } from '../../services/audio';
-import { AudioVisualizer } from '../magnet/AudioVisualizer';
 import { NativeDebugQueuePanel } from './native-debug/NativeDebugQueuePanel';
+import { NativeDebugPlaybackDspPanel } from './native-debug/NativeDebugPlaybackDspPanel';
+import { NativeDebugEnginePanel } from './native-debug/NativeDebugEnginePanel';
 import { NativeDebugRobustnessPanel, type NativeDebugRobustnessMetricsView } from './native-debug/NativeDebugRobustnessPanel';
 import { NativeDebugStatePanel } from './native-debug/NativeDebugStatePanel';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
@@ -1244,625 +1245,70 @@ export const NativeDebugPage: React.FC = () => {
             <span className={`state-pill state-${state.playbackState}`}>{state.playbackState}</span>
           </header>
 
-          <div className="native-debug-panel-group native-debug-panel-group--playback">
-          <div className="current-track">
-            <p className="current-track-title">{currentTrackLabel}</p>
-            {state.currentTrack?.originalPath && (
-              <p className="current-track-path">{state.currentTrack.originalPath}</p>
-            )}
-          </div>
+          <NativeDebugPlaybackDspPanel
+            t={t}
+            state={state}
+            currentTrackLabel={currentTrackLabel}
+            isSelectingFile={isSelectingFile}
+            dspGainDb={dspGainDb}
+            crossfadeSettings={crossfadeSettings}
+            replayGainSettings={replayGainSettings}
+            nativeMeta={nativeMeta}
+            eqBands={eqBands}
+            limiterEnabled={limiterEnabled}
+            limiterThresholdDb={limiterThresholdDb}
+            setCrossfadeSettings={setCrossfadeSettings}
+            setReplayGainSettings={setReplayGainSettings}
+            handleSelectTrack={handleSelectTrack}
+            handlePrev={handlePrev}
+            handleTogglePlayPause={handleTogglePlayPause}
+            handleStop={handleStop}
+            handleNext={handleNext}
+            handleVolumeChange={handleVolumeChange}
+            handleToggleMute={handleToggleMute}
+            handleGainChange={handleGainChange}
+            handleApplyCrossfadeSettings={handleApplyCrossfadeSettings}
+            handleApplyReplayGainSettings={handleApplyReplayGainSettings}
+            eqBandKindLabel={eqBandKindLabel}
+            handleEqReset={handleEqReset}
+            handleEqBandGainChange={handleEqBandGainChange}
+            handleLimiterToggle={handleLimiterToggle}
+            handleLimiterThresholdChange={handleLimiterThresholdChange}
+          />
 
-          <div className="control-row">
-            <button type="button" onClick={handleSelectTrack} disabled={isSelectingFile}>
-              {isSelectingFile ? t('common.state.loading') : t('pages.native-debug.action.selectAudioFile')}
-            </button>
-            <div className="transport-buttons">
-              <button type="button" onClick={handlePrev} disabled={!state.queue.length}>
-                {t('pages.native-debug.transport.prev')}
-              </button>
-              <button type="button" onClick={() => void handleTogglePlayPause()}>
-                {state.playbackState === 'playing'
-                  ? t('pages.native-debug.transport.pause')
-                  : t('pages.native-debug.transport.play')}
-              </button>
-              <button type="button" onClick={handleStop}>
-                {t('pages.native-debug.transport.stop')}
-              </button>
-              <button type="button" onClick={handleNext} disabled={!state.queue.length}>
-                {t('pages.native-debug.transport.next')}
-              </button>
-            </div>
-          </div>
-
-          <div className="volume-row">
-            <label htmlFor="native-debug-volume">
-              {t('pages.native-debug.volume.label', { percent: Math.round(state.volume * 100) })}
-            </label>
-            <input
-              id="native-debug-volume"
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={state.volume}
-              onChange={handleVolumeChange}
-            />
-            <button type="button" onClick={handleToggleMute}>
-              {state.muted ? t('common.action.unmute') : t('common.action.mute')}
-            </button>
-          </div>
-
-          <div className="volume-row">
-            <label htmlFor="native-debug-gain">{t('pages.native-debug.gain.label', { db: dspGainDb.toFixed(1) })}</label>
-            <input
-              id="native-debug-gain"
-              type="range"
-              min={-24}
-              max={12}
-              step={0.5}
-              value={dspGainDb}
-              onChange={(e) => void handleGainChange(Number(e.target.value))}
-            />
-            <button type="button" onClick={() => void handleGainChange(0)}>
-              {t('pages.native-debug.gain.action.reset')}
-            </button>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.crossfade.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.crossfade.desc')}</p>
-            </div>
-            <div className="device-controls" style={{ gap: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={crossfadeSettings.enabled}
-                  onChange={(e) =>
-                    setCrossfadeSettings((prev) => ({ ...prev, enabled: e.target.checked }))
-                  }
-                />
-                {t('common.action.enable')}
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>{t('pages.native-debug.crossfade.duration')}</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={100}
-                  value={crossfadeSettings.durationMs}
-                  onChange={(e) =>
-                    setCrossfadeSettings((prev) => ({ ...prev, durationMs: Number(e.target.value) }))
-                  }
-                  style={{ width: 88 }}
-                />
-                <span>ms</span>
-              </label>
-              <button type="button" onClick={() => void handleApplyCrossfadeSettings()}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.replayGain.title')}</p>
-              <p className="device-value">
-                {t('pages.native-debug.replayGain.applied', {
-                  value:
-                    nativeMeta.replayGainDb === null ? '--' : `${nativeMeta.replayGainDb.toFixed(1)} dB`,
-                })}
-              </p>
-              <p className="device-hint">
-                {t('pages.native-debug.replayGain.trackTag', {
-                  value:
-                    typeof state.currentTrack?.replayGainTrackGainDb === 'number'
-                      ? `${state.currentTrack.replayGainTrackGainDb.toFixed(1)} dB`
-                      : '--',
-                })}{' '}
-                {' / '}
-                {t('pages.native-debug.replayGain.albumTag', {
-                  value:
-                    typeof state.currentTrack?.replayGainAlbumGainDb === 'number'
-                      ? `${state.currentTrack.replayGainAlbumGainDb.toFixed(1)} dB`
-                      : '--',
-                })}
-              </p>
-            </div>
-            <div className="device-controls" style={{ gap: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={replayGainSettings.enabled}
-                  onChange={(e) =>
-                    setReplayGainSettings((prev) => ({ ...prev, enabled: e.target.checked }))
-                  }
-                />
-                {t('common.action.enable')}
-              </label>
-              <select
-                value={replayGainSettings.mode}
-                onChange={(e) =>
-                  setReplayGainSettings((prev) => ({
-                    ...prev,
-                    mode: (e.target.value === 'album' ? 'album' : 'track') as ReplayGainMode,
-                  }))
-                }
-                aria-label={t('pages.native-debug.replayGain.mode.ariaLabel')}
-              >
-                <option value="track">{t('pages.native-debug.replayGain.mode.track')}</option>
-                <option value="album">{t('pages.native-debug.replayGain.mode.album')}</option>
-              </select>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>{t('pages.native-debug.replayGain.preamp')}</span>
-                <input
-                  type="number"
-                  step={0.5}
-                  value={replayGainSettings.preampDb}
-                  onChange={(e) =>
-                    setReplayGainSettings((prev) => ({ ...prev, preampDb: Number(e.target.value) }))
-                  }
-                  style={{ width: 72 }}
-                />
-                <span>dB</span>
-              </label>
-              <button type="button" onClick={() => void handleApplyReplayGainSettings()}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.eq.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.eq.desc')}</p>
-            </div>
-            <div className="device-controls" style={{ gap: 10 }}>
-              <button type="button" onClick={() => void handleEqReset()}>
-                {t('pages.native-debug.eq.action.zeroAll')}
-              </button>
-            </div>
-          </div>
-
-          {eqBands.map((band, index) => (
-            <div key={`${band.kind}-${band.frequencyHz}`} className="volume-row">
-              <label htmlFor={`native-debug-eq-${index}`}>
-                {t('pages.native-debug.eq.bandLabel', {
-                  kind: eqBandKindLabel(band.kind),
-                  frequencyHz: Math.round(band.frequencyHz),
-                  gainDb: band.gainDb.toFixed(1),
-                })}
-              </label>
-              <input
-                id={`native-debug-eq-${index}`}
-                type="range"
-                min={-12}
-                max={12}
-                step={0.5}
-                value={band.gainDb}
-                onChange={(e) => void handleEqBandGainChange(index, Number(e.target.value))}
-              />
-              <button type="button" onClick={() => void handleEqBandGainChange(index, 0)}>
-                {t('pages.native-debug.eq.action.zero')}
-              </button>
-            </div>
-          ))}
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.limiter.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.limiter.desc')}</p>
-            </div>
-            <div className="device-controls" style={{ gap: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={limiterEnabled}
-                  onChange={(e) => void handleLimiterToggle(e.target.checked)}
-                />
-                {t('common.action.enable')}
-              </label>
-              <button
-                type="button"
-                onClick={() => void handleLimiterThresholdChange(-1)}
-                disabled={!limiterEnabled}
-              >
-                {t('pages.native-debug.limiter.action.defaultThreshold')}
-              </button>
-            </div>
-          </div>
-
-          <div className="volume-row">
-            <label htmlFor="native-debug-limiter-threshold">
-              {t('pages.native-debug.limiter.thresholdLabel', { db: limiterThresholdDb.toFixed(1) })}
-            </label>
-            <input
-              id="native-debug-limiter-threshold"
-              type="range"
-              min={-24}
-              max={0}
-              step={0.5}
-              value={limiterThresholdDb}
-              disabled={!limiterEnabled}
-              onChange={(e) => void handleLimiterThresholdChange(Number(e.target.value))}
-            />
-          </div>
-
-          </div>
-
-          <div className="native-debug-panel-group native-debug-panel-group--engine">
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.outputBackend.title')}</p>
-              <p className="device-value">
-                {componentsState.outputBackendId ?? t('pages.native-debug.outputBackend.default')}
-              </p>
-              <p className="device-hint">{t('pages.native-debug.outputBackend.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <select
-                value={selectedBackend}
-                onChange={(e) => setSelectedBackend(e.target.value)}
-                aria-label={t('pages.native-debug.outputBackend.select.ariaLabel')}
-              >
-                <option value="">{t('pages.native-debug.outputBackend.default')}</option>
-                {outputBackends.map((backendId) => (
-                  <option key={backendId} value={backendId}>
-                    {backendId}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => void handleRefreshAudioComponents()}>
-                {t('common.action.refresh')}
-              </button>
-              <button type="button" onClick={() => void handleApplyOutputBackend()}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.audioInput.title')}</p>
-              <p className="device-value">
-                {t('pages.native-debug.audioInput.preferred', {
-                  id: componentsState.preferredInputId ?? t('pages.native-debug.audioInput.auto'),
-                })}
-              </p>
-              <p className="device-hint">
-                {t('pages.native-debug.audioInput.active', {
-                  id:
-                    componentsState.activeInputId ??
-                    t('pages.native-debug.audioInput.active.none'),
-                })}
-              </p>
-            </div>
-            <div className="device-controls">
-              <select
-                value={selectedInput}
-                onChange={(e) => setSelectedInput(e.target.value)}
-                aria-label={t('pages.native-debug.audioInput.select.ariaLabel')}
-              >
-                <option value="">{t('pages.native-debug.audioInput.auto')}</option>
-                {audioInputs.map((inputId) => (
-                  <option key={inputId} value={inputId}>
-                    {inputId}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => void handleRefreshAudioComponents()}>
-                {t('common.action.refresh')}
-              </button>
-              <button type="button" onClick={() => void handleApplyAudioInput()}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.title')}</p>
-              <p className="device-value">{t(`pages.native-debug.src.preset.${srcPresetId}`)}</p>
-              <p className="device-hint">{t('pages.native-debug.src.desc')}</p>
-            </div>
-            <div className="device-controls src-preset-controls">
-              <button type="button" onClick={() => void handleApplySrcPreset('balanced')}>
-                {t('pages.native-debug.src.preset.balanced')}
-              </button>
-              <button type="button" onClick={() => void handleApplySrcPreset('hi-end')}>
-                {t('pages.native-debug.src.preset.hi-end')}
-              </button>
-              <button type="button" onClick={() => void handleApplySrcPreset('low-latency')}>
-                {t('pages.native-debug.src.preset.low-latency')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.mode.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.src.mode.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <select
-                value={srcMode}
-                onChange={(e) => setSrcMode(e.target.value as NativeAudioSrcMode)}
-                aria-label={t('pages.native-debug.src.mode.title')}
-              >
-                <option value="source-native">{t('pages.native-debug.src.mode.source-native')}</option>
-                <option value="match-output">{t('pages.native-debug.src.mode.match-output')}</option>
-                <option value="target-rate">{t('pages.native-debug.src.mode.target-rate')}</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.backend.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.src.backend.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <select
-                value={srcBackend}
-                onChange={(e) => setSrcBackend(e.target.value as NativeAudioSrcBackend)}
-                aria-label={t('pages.native-debug.src.backend.title')}
-              >
-                <option value="rubato">{t('pages.native-debug.src.backend.rubato')}</option>
-                <option value="linear-simd">{t('pages.native-debug.src.backend.linear-simd')}</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.targetRate.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.src.targetRate.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <input
-                type="number"
-                min={8000}
-                max={768000}
-                step={1000}
-                value={srcTargetRate}
-                onChange={(e) => setSrcTargetRate(e.target.value)}
-                disabled={srcMode !== 'target-rate'}
-                aria-label={t('pages.native-debug.src.targetRate.title')}
-                className="src-target-rate-input"
-              />
-              <button type="button" onClick={() => void handleApplySrcPolicy()}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.dynamic.title')}</p>
-              <p className="device-value">
-                {dynamicSrcSettings.enabled ? t('common.state.on') : t('common.state.off')}
-              </p>
-              <p className="device-hint">{t('pages.native-debug.src.dynamic.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <button
-                type="button"
-                className={dynamicSrcSettings.enabled ? 'is-active-toggle' : ''}
-                onClick={() => void applyDynamicSrcAutoSettings({ enabled: true })}
-              >
-                {t('common.state.on')}
-              </button>
-              <button
-                type="button"
-                className={!dynamicSrcSettings.enabled ? 'is-active-toggle' : ''}
-                onClick={() => void applyDynamicSrcAutoSettings({ enabled: false })}
-              >
-                {t('common.state.off')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.dynamic.adaptive.title')}</p>
-              <p className="device-value">
-                {dynamicSrcSettings.adaptiveEnabled ? t('common.state.on') : t('common.state.off')}
-              </p>
-              <p className="device-hint">{t('pages.native-debug.src.dynamic.adaptive.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <button
-                type="button"
-                className={dynamicSrcSettings.adaptiveEnabled ? 'is-active-toggle' : ''}
-                onClick={() => void applyDynamicSrcAutoSettings({ adaptiveEnabled: true })}
-              >
-                {t('common.state.on')}
-              </button>
-              <button
-                type="button"
-                className={!dynamicSrcSettings.adaptiveEnabled ? 'is-active-toggle' : ''}
-                onClick={() => void applyDynamicSrcAutoSettings({ adaptiveEnabled: false })}
-              >
-                {t('common.state.off')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.dynamic.learning.title')}</p>
-              <p className="device-value">
-                {dynamicSrcSettings.learningEnabled ? t('common.state.on') : t('common.state.off')}
-              </p>
-              <p className="device-hint">{t('pages.native-debug.src.dynamic.learning.desc')}</p>
-            </div>
-            <div className="device-controls">
-              <button
-                type="button"
-                className={dynamicSrcSettings.learningEnabled ? 'is-active-toggle' : ''}
-                onClick={() => void applyDynamicSrcAutoSettings({ learningEnabled: true })}
-              >
-                {t('common.state.on')}
-              </button>
-              <button
-                type="button"
-                className={!dynamicSrcSettings.learningEnabled ? 'is-active-toggle' : ''}
-                onClick={() => void applyDynamicSrcAutoSettings({ learningEnabled: false })}
-              >
-                {t('common.state.off')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.src.dynamic.params.title')}</p>
-              <p className="device-hint">{t('pages.native-debug.src.dynamic.params.desc')}</p>
-            </div>
-            <div className="device-controls dynamic-src-param-controls">
-              <label className="dynamic-src-param-item">
-                <span>{t('pages.native-debug.src.dynamic.params.restoreDebounceMs')}</span>
-                <input
-                  type="number"
-                  min={500}
-                  max={30000}
-                  step={100}
-                  value={dynamicSrcSettings.restoreDebounceMs}
-                  onChange={(event) =>
-                    setDynamicSrcSettings((prev) => ({
-                      ...prev,
-                      restoreDebounceMs: Number(event.target.value) || prev.restoreDebounceMs,
-                    }))
-                  }
-                />
-              </label>
-              <label className="dynamic-src-param-item">
-                <span>{t('pages.native-debug.src.dynamic.params.minSwitchIntervalMs')}</span>
-                <input
-                  type="number"
-                  min={100}
-                  max={10000}
-                  step={50}
-                  value={dynamicSrcSettings.minSwitchIntervalMs}
-                  onChange={(event) =>
-                    setDynamicSrcSettings((prev) => ({
-                      ...prev,
-                      minSwitchIntervalMs: Number(event.target.value) || prev.minSwitchIntervalMs,
-                    }))
-                  }
-                />
-              </label>
-              <label className="dynamic-src-param-item">
-                <span>{t('pages.native-debug.src.dynamic.params.seekHoldMs')}</span>
-                <input
-                  type="number"
-                  min={500}
-                  max={20000}
-                  step={100}
-                  value={dynamicSrcSettings.seekHoldMs}
-                  onChange={(event) =>
-                    setDynamicSrcSettings((prev) => ({
-                      ...prev,
-                      seekHoldMs: Number(event.target.value) || prev.seekHoldMs,
-                    }))
-                  }
-                />
-              </label>
-              <label className="dynamic-src-param-item">
-                <span>{t('pages.native-debug.src.dynamic.params.underrunHoldMs')}</span>
-                <input
-                  type="number"
-                  min={2000}
-                  max={120000}
-                  step={500}
-                  value={dynamicSrcSettings.underrunHoldMs}
-                  onChange={(event) =>
-                    setDynamicSrcSettings((prev) => ({
-                      ...prev,
-                      underrunHoldMs: Number(event.target.value) || prev.underrunHoldMs,
-                    }))
-                  }
-                />
-              </label>
-              <label className="dynamic-src-param-item">
-                <span>{t('pages.native-debug.src.dynamic.params.sharedStressHoldMs')}</span>
-                <input
-                  type="number"
-                  min={1000}
-                  max={90000}
-                  step={500}
-                  value={dynamicSrcSettings.sharedStressHoldMs}
-                  onChange={(event) =>
-                    setDynamicSrcSettings((prev) => ({
-                      ...prev,
-                      sharedStressHoldMs: Number(event.target.value) || prev.sharedStressHoldMs,
-                    }))
-                  }
-                />
-              </label>
-              <label className="dynamic-src-param-item">
-                <span>{t('pages.native-debug.src.dynamic.params.outputErrorHoldMs')}</span>
-                <input
-                  type="number"
-                  min={1000}
-                  max={120000}
-                  step={500}
-                  value={dynamicSrcSettings.outputErrorHoldMs}
-                  onChange={(event) =>
-                    setDynamicSrcSettings((prev) => ({
-                      ...prev,
-                      outputErrorHoldMs: Number(event.target.value) || prev.outputErrorHoldMs,
-                    }))
-                  }
-                />
-              </label>
-              <button type="button" onClick={() => void applyDynamicSrcAutoSettings(dynamicSrcSettings)}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="device-row native-debug-system-group">
-            <div className="device-meta">
-              <p className="device-label">{t('pages.native-debug.outputDevice.title')}</p>
-              <p className="device-value">{nativeMeta.device ?? t('pages.native-debug.outputDevice.default')}</p>
-              <p className="device-hint">
-                {nativeMeta.sampleRate ? `${nativeMeta.sampleRate} Hz` : '--'} {' / '}
-                {nativeMeta.bitDepth ? `${nativeMeta.bitDepth} bit` : '--'}
-              </p>
-            </div>
-            <div className="device-controls">
-              <select
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                aria-label={t('pages.native-debug.outputDevice.select.ariaLabel')}
-              >
-                <option value="">{t('pages.native-debug.outputDevice.default')}</option>
-                {outputDevices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.name}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => void handleRefreshDevices()}>
-                {t('common.action.refresh')}
-              </button>
-              <button type="button" onClick={() => void handleApplyDevice()}>
-                {t('common.action.apply')}
-              </button>
-            </div>
-          </div>
-
-          <div className="native-debug-visual-card">
-            <AudioVisualizer
-              getFrequencyData={getFrequencyData}
-              isPlaying={state.playbackState === 'playing'}
-            />
-          </div>
-
-          </div>
-
+          <NativeDebugEnginePanel
+            t={t}
+            componentsState={componentsState}
+            selectedBackend={selectedBackend}
+            outputBackends={outputBackends}
+            selectedInput={selectedInput}
+            audioInputs={audioInputs}
+            srcPresetId={srcPresetId}
+            srcMode={srcMode}
+            srcBackend={srcBackend}
+            srcTargetRate={srcTargetRate}
+            dynamicSrcSettings={dynamicSrcSettings}
+            nativeMeta={nativeMeta}
+            selectedDeviceId={selectedDeviceId}
+            outputDevices={outputDevices}
+            isPlaying={state.playbackState === 'playing'}
+            getFrequencyData={getFrequencyData}
+            setSelectedBackend={setSelectedBackend}
+            setSelectedInput={setSelectedInput}
+            setSrcMode={setSrcMode}
+            setSrcBackend={setSrcBackend}
+            setSrcTargetRate={setSrcTargetRate}
+            setDynamicSrcSettings={setDynamicSrcSettings}
+            setSelectedDeviceId={setSelectedDeviceId}
+            handleRefreshAudioComponents={handleRefreshAudioComponents}
+            handleApplyOutputBackend={handleApplyOutputBackend}
+            handleApplyAudioInput={handleApplyAudioInput}
+            handleApplySrcPreset={handleApplySrcPreset}
+            handleApplySrcPolicy={handleApplySrcPolicy}
+            applyDynamicSrcAutoSettings={applyDynamicSrcAutoSettings}
+            handleRefreshDevices={handleRefreshDevices}
+            handleApplyDevice={handleApplyDevice}
+          />
           <NativeDebugRobustnessPanel
             t={t}
             robustness={robustness}
