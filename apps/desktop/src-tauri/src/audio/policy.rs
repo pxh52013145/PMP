@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum NativeAudioTransportMode {
     Robust,
+    #[serde(alias = "transportExact")]
     TransportExact,
 }
 
@@ -119,5 +120,31 @@ impl NativeAudioEnginePolicyPatch {
             && self.src_backend.is_none()
             && self.src_target_sample_rate.is_none()
             && self.output_quantization_mode.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_mode_accepts_kebab_and_camel_case() {
+        let kebab = serde_json::from_str::<NativeAudioEnginePolicyPatch>(
+            r#"{"transportMode":"transport-exact"}"#,
+        )
+        .expect("deserialize kebab-case transport mode");
+        assert!(matches!(
+            kebab.transport_mode,
+            Some(NativeAudioTransportMode::TransportExact)
+        ));
+
+        let camel = serde_json::from_str::<NativeAudioEnginePolicyPatch>(
+            r#"{"transportMode":"transportExact"}"#,
+        )
+        .expect("deserialize camelCase transport mode");
+        assert!(matches!(
+            camel.transport_mode,
+            Some(NativeAudioTransportMode::TransportExact)
+        ));
     }
 }
