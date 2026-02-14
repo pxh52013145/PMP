@@ -1639,7 +1639,6 @@ impl NativeAudioEngine {
 
     pub(crate) fn seek(&mut self, seconds: f64) -> Result<(), String> {
         self.cancel_crossfade();
-        self.bump_seek_epoch();
         self.sync_clock();
         self.spectrum_pre_tap.clear();
         self.spectrum_post_tap.clear();
@@ -1685,6 +1684,10 @@ impl NativeAudioEngine {
                 Ok(()) => {
                     streaming.buffer.clear();
                     streaming.render_queue.clear();
+                    // Flush shared render-ahead queues only after the upstream decoder state has been
+                    // updated/cleared. Otherwise the producer can refill the buffer with old audio
+                    // before we switch sources, causing a noticeable seek delay ("rubber banding").
+                    self.bump_seek_epoch();
                     if let Some(sink) = &self.sink {
                         sink.flush();
                     }
@@ -1717,6 +1720,7 @@ impl NativeAudioEngine {
                     Ok(()) => {
                         reloaded_streaming.buffer.clear();
                         reloaded_streaming.render_queue.clear();
+                        self.bump_seek_epoch();
                         if let Some(sink) = &self.sink {
                             sink.flush();
                         }
@@ -1777,6 +1781,9 @@ impl NativeAudioEngine {
                 seek_fade_frames,
             )?;
 
+            // Bump the shared seek epoch only after the mixer has been updated so any shared
+            // render-ahead producer refills using the new source position.
+            self.bump_seek_epoch();
             sink.flush();
             sink.set_volume(self.effective_volume());
             if resume_playing {

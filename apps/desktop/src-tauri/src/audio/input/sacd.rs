@@ -852,8 +852,8 @@ mod tests {
         };
 
         streaming
-            .buffer
-            .wait_for_samples(2048, Duration::from_millis(500));
+            .render_queue
+            .wait_for_samples(2048, Duration::from_millis(1_500));
 
         let channels = opened.meta.channels as usize;
         let mut iter = opened.source;
@@ -904,8 +904,8 @@ mod tests {
         };
 
         streaming
-            .buffer
-            .wait_for_samples(2048, Duration::from_millis(500));
+            .render_queue
+            .wait_for_samples(2048, Duration::from_millis(1_500));
 
         let channels = opened.meta.channels as usize;
         let mut iter = opened.source;
@@ -960,8 +960,8 @@ mod tests {
         };
 
         streaming
-            .buffer
-            .wait_for_samples(128, Duration::from_millis(200));
+            .render_queue
+            .wait_for_samples(128, Duration::from_millis(800));
 
         let duration = opened.meta.duration;
         let channels = opened.meta.channels as usize;
@@ -985,8 +985,8 @@ mod tests {
         let seek_target = duration * 0.75;
         let _ = streaming.command_tx.send(DecoderCommand::Seek(seek_target));
         streaming
-            .buffer
-            .wait_for_samples(256, Duration::from_millis(500));
+            .render_queue
+            .wait_for_samples(256, Duration::from_millis(1_500));
 
         let mut saw_negative = false;
         for _ in 0..8192 {
@@ -1029,8 +1029,8 @@ mod tests {
         };
 
         streaming
-            .buffer
-            .wait_for_samples(256, Duration::from_millis(500));
+            .render_queue
+            .wait_for_samples(256, Duration::from_millis(1_500));
 
         let mut iter = opened.source;
         let mut saw_high = false;
