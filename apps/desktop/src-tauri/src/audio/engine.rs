@@ -63,6 +63,31 @@ fn should_wrap_source_for_shared_backend(backend_id: &str) -> bool {
     is_shared_output_backend(backend_id)
 }
 
+pub(crate) fn effective_src_policy_for_backend_open(
+    backend_id: &str,
+    mut src_policy: AudioInputSrcPolicy,
+) -> AudioInputSrcPolicy {
+    // Shared backends cannot reliably open arbitrary sample rates / integer PCM formats.
+    // Always request the device mix/output sample rate so the sink can be initialized without
+    // format negotiation failures (e.g. wasapi-shared-raw unsupported PCM16@192k).
+    if is_shared_output_backend(backend_id) {
+        src_policy.src_mode = NativeAudioSrcMode::MatchOutput;
+        src_policy.src_target_sample_rate = None;
+    }
+    src_policy
+}
+
+pub(crate) fn resolve_requested_output_sample_rate_for_backend(
+    backend_id: &str,
+    output_sample_rate: Option<u32>,
+    src_policy: AudioInputSrcPolicy,
+) -> Option<u32> {
+    resolve_audio_input_target_sample_rate(
+        output_sample_rate,
+        effective_src_policy_for_backend_open(backend_id, src_policy),
+    )
+}
+
 fn decode_mode_id(mode: AudioInputDecodeMode) -> &'static str {
     match mode {
         AudioInputDecodeMode::Streaming => "streaming",
@@ -703,18 +728,8 @@ impl NativeAudioEngine {
         }
     }
 
-    fn resolve_requested_output_sample_rate_for_open(&self) -> Option<u32> {
-        let mut policy = self.current_src_policy();
-
-        // Shared backends cannot reliably open arbitrary sample rates / integer PCM formats.
-        // Always request the device mix/output sample rate so the sink can be initialized without
-        // format negotiation failures (e.g. wasapi-shared-raw unsupported PCM16@192k).
-        if is_shared_output_backend(self.output_backend.id()) {
-            policy.src_mode = NativeAudioSrcMode::MatchOutput;
-            policy.src_target_sample_rate = None;
-        }
-
-        resolve_audio_input_target_sample_rate(self.output_sample_rate, policy)
+    fn effective_src_policy_for_open(&self) -> AudioInputSrcPolicy {
+        effective_src_policy_for_backend_open(self.output_backend.id(), self.current_src_policy())
     }
 
     fn streaming_available_samples(&self, streaming: &StreamingPlayback) -> usize {
@@ -1209,14 +1224,15 @@ impl NativeAudioEngine {
             .or_else(|| self.output_backend.default_device_name());
         sink.pause();
 
+        let open_src_policy = self.effective_src_policy_for_open();
         let opened = self
             .input_registry
             .open_prefer(
                 &path,
-                self.resolve_requested_output_sample_rate_for_open(),
+                resolve_audio_input_target_sample_rate(self.output_sample_rate, open_src_policy),
                 self.preferred_input_id.as_deref(),
                 self.current_decode_mode(),
-                self.current_src_policy(),
+                open_src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
 
@@ -1327,7 +1343,9 @@ impl NativeAudioEngine {
 
         let target_channels = self.decoded_channels.max(1);
         let target_sample_rate = self.decoded_sample_rate.max(1);
-        let open_sample_rate = self.resolve_requested_output_sample_rate_for_open();
+        let open_src_policy = self.effective_src_policy_for_open();
+        let open_sample_rate =
+            resolve_audio_input_target_sample_rate(self.output_sample_rate, open_src_policy);
 
         let opened = self
             .input_registry
@@ -1336,7 +1354,7 @@ impl NativeAudioEngine {
                 open_sample_rate,
                 self.preferred_input_id.as_deref(),
                 self.current_decode_mode(),
-                self.current_src_policy(),
+                open_src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
 
@@ -2694,6 +2712,42 @@ mod tests {
         }
 
         fn set_volume(&self, _value: f32) {}
+    }
+
+    #[test]
+    fn resolve_requested_output_sample_rate_for_backend_forces_shared_match_output() {
+        let policy = AudioInputSrcPolicy {
+            hq_src_enabled: true,
+            hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
+            src_mode: NativeAudioSrcMode::TargetRate,
+            src_backend: NativeAudioSrcBackend::Rubato,
+            src_target_sample_rate: Some(192_000),
+        };
+
+        assert_eq!(
+            resolve_requested_output_sample_rate_for_backend(
+                "wasapi-shared-raw",
+                Some(48_000),
+                policy,
+            ),
+            Some(48_000)
+        );
+        assert_eq!(
+            resolve_requested_output_sample_rate_for_backend("wasapi", Some(48_000), policy),
+            Some(48_000)
+        );
+        assert_eq!(
+            resolve_requested_output_sample_rate_for_backend("rodio-cpal", Some(48_000), policy),
+            Some(48_000)
+        );
+        assert_eq!(
+            resolve_requested_output_sample_rate_for_backend(
+                "wasapi-exclusive",
+                Some(48_000),
+                policy,
+            ),
+            Some(192_000)
+        );
     }
 
     #[test]

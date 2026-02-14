@@ -12,7 +12,7 @@ use crate::audio::emitter;
 use crate::audio::engine::{PlaybackState, PreparedCrossfade, PreparedLoad, ENGINE};
 use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
 use crate::audio::input::{
-    resolve_audio_input_target_sample_rate, AudioInputKind, AudioInputRegistry,
+    AudioInputKind, AudioInputRegistry,
 };
 use crate::audio::mixer::coerce_source_format;
 use crate::audio::mixer::PlaybackMixerSource;
@@ -1301,16 +1301,21 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
         let (sink, output_info) = op.output_backend.create_sink()?;
         sink.pause();
 
+        let open_src_policy = crate::audio::engine::effective_src_policy_for_backend_open(
+            op.output_backend.id(),
+            op.src_policy,
+        );
         let opened = AudioInputRegistry::default()
             .open_prefer(
                 &track_path,
-                resolve_audio_input_target_sample_rate(
+                crate::audio::engine::resolve_requested_output_sample_rate_for_backend(
+                    op.output_backend.id(),
                     output_info.output_sample_rate,
                     op.src_policy,
                 ),
                 op.preferred_input_id.as_deref(),
                 op.decode_mode,
-                op.src_policy,
+                open_src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
 
@@ -1427,13 +1432,21 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
     };
 
     let prepared = (|| -> Result<PreparedCrossfade, String> {
+        let open_src_policy = crate::audio::engine::effective_src_policy_for_backend_open(
+            &op.output_backend_id,
+            op.src_policy,
+        );
         let opened = AudioInputRegistry::default()
             .open_prefer(
                 &track_path,
-                resolve_audio_input_target_sample_rate(Some(op.target_sample_rate), op.src_policy),
+                crate::audio::engine::resolve_requested_output_sample_rate_for_backend(
+                    &op.output_backend_id,
+                    Some(op.target_sample_rate),
+                    op.src_policy,
+                ),
                 op.preferred_input_id.as_deref(),
                 op.decode_mode,
-                op.src_policy,
+                open_src_policy,
             )
             .map_err(|err| format!("[{}] {}", err.code, err.message))?;
 
