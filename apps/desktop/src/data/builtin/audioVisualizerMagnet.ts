@@ -2,7 +2,7 @@ import { Magnet } from '../../types/pixel';
 
 /**
  * Audio Visualizer Magnet
- * Renders a pixel-style frequency spectrum driven by IAudioService.getFrequencyData().
+ * Renders an audio spectrum visualization driven by IAudioService.getFrequencyData().
  */
 export const AUDIO_VISUALIZER_MAGNET: Magnet = {
   id: 'audio-visualizer',
@@ -39,3 +39,4 @@ export const AUDIO_VISUALIZER_MAGNET: Magnet = {
     clickable: false,
   },
 };
+

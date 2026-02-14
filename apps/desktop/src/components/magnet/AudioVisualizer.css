@@ -1,18 +1,14 @@
 .audio-visualizer {
   width: 100%;
-  height: 120px;
+  height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.3) 100%);
-  border-radius: 8px;
+  align-items: stretch;
+  justify-content: stretch;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .visualizer-canvas {
   width: 100%;
   height: 100%;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+  display: block;
 }
