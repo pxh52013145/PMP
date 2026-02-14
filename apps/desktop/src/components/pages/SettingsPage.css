@@ -959,6 +959,173 @@
   padding: 0.38vw 0 0.56vw;
 }
 
+.page-settings--deltaforce .settings-audio-panel--advanced {
+  --settings-advanced-item-border: rgb(103 148 184 / 40%);
+  --settings-advanced-item-bg: rgb(9 23 35 / 72%);
+  --settings-inline-choice-gap: clamp(8px, 0.48vw, 12px);
+  --settings-inline-meter-track: rgb(28 39 53 / 84%);
+  --settings-inline-meter-fill: #b0bec5;
+  --settings-inline-meter-fill-glow: rgb(176 190 197 / 34%);
+  --settings-inline-meter-text-color: rgb(220 244 255 / 94%);
+  --settings-inline-meter-badge-bg: rgb(12 27 40 / 72%);
+  --settings-inline-meter-badge-border: rgb(118 160 189 / 44%);
+  --settings-inline-meter: 0%;
+  gap: clamp(10px, 0.74vw, 16px);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-audio-block {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0.38vw 0 0.56vw;
+  gap: 0.62vw;
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-audio-block .settings-param-divider {
+  margin: 0 0 clamp(8px, 0.54vw, 12px);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head--meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(180px, 24vw, 420px);
+  align-items: end;
+  gap: clamp(14px, 1vw, 20px);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22vw;
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head-meter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: clamp(8px, 0.54vw, 12px);
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head-meter-track {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: clamp(2px, 0.16vw, 3px);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgb(255 255 255 / 18%) 0 1px, transparent 1px 8px),
+    var(--settings-inline-meter-track);
+  background-size:
+    8px 100%,
+    100% 100%;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 7%),
+    0 0 8px rgb(0 0 0 / 34%);
+  overflow: hidden;
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(226 238 244 / 96%) 0%, var(--settings-inline-meter-fill) 100%);
+  box-shadow: 0 0 10px var(--settings-inline-meter-fill-glow);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head-meter-value {
+  min-width: clamp(48px, 3.1vw, 64px);
+  padding: clamp(2px, 0.14vw, 4px) clamp(6px, 0.44vw, 10px);
+  border: 1px solid var(--settings-inline-meter-badge-border);
+  background: var(--settings-inline-meter-badge-bg);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
+  font-size: clamp(10px, 0.7vw, 13px);
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  letter-spacing: 0.03em;
+  color: var(--settings-inline-meter-text-color);
+  text-align: center;
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(12px, 0.84vw, 18px);
+  min-height: 0;
+  padding: clamp(10px, 0.72vw, 15px) clamp(12px, 0.9vw, 18px);
+  border: 1px solid var(--settings-advanced-item-border);
+  background: var(--settings-advanced-item-bg);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row + .settings-inline-row {
+  margin-top: clamp(6px, 0.44vw, 10px);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-copy {
+  grid-column: 1;
+  align-items: center;
+  padding-top: 0;
+  max-width: min(100%, clamp(220px, 36vw, 520px));
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-controls {
+  grid-column: 2;
+  width: auto;
+  min-width: 0;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--settings-inline-choice-gap);
+}
+
+.page-settings--deltaforce
+  .settings-audio-panel--advanced
+  .settings-inline-row-controls
+  .settings-choice-btn {
+  flex: 0 0 auto;
+  width: clamp(114px, 8.4vw, 160px);
+  min-width: clamp(114px, 8.4vw, 160px);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-controls:has(.settings-choice-btn) {
+  width: clamp(256px, 27vw, 430px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-items: stretch;
+  align-items: center;
+  gap: var(--settings-inline-choice-gap);
+}
+
+.page-settings--deltaforce
+  .settings-audio-panel--advanced
+  .settings-inline-row-controls:has(.settings-choice-btn)
+  .settings-choice-btn {
+  width: 100%;
+  min-width: 0;
+}
+
+.page-settings--deltaforce
+  .settings-audio-panel--advanced
+  .settings-inline-row-controls
+  .settings-number-input {
+  width: clamp(136px, 9vw, 188px);
+}
+
+.page-settings--deltaforce .settings-audio-panel--advanced .settings-section-controls {
+  width: 100%;
+  margin-left: 0;
+  justify-content: center;
+  margin-top: clamp(10px, 0.74vw, 18px);
+  padding-top: clamp(2px, 0.18vw, 5px);
+}
+
+.page-settings--deltaforce
+  .settings-audio-panel--advanced
+  .settings-section-controls
+  .settings-action-btn {
+  min-width: clamp(92px, 6.2vw, 132px);
+}
+
 .page-settings--deltaforce .settings-language-block {
   gap: 0.34vw;
   padding-top: 0.18vw;
@@ -2013,6 +2180,52 @@
 
   .page-settings--deltaforce .settings-section-controls--stretch {
     width: 100%;
+  }
+
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-section-controls {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head--meter {
+    grid-template-columns: 1fr;
+    gap: clamp(8px, 1.8vw, 14px);
+    align-items: start;
+  }
+
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-param-head-meter {
+    width: 100%;
+  }
+
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-copy,
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-controls {
+    grid-column: 1;
+  }
+
+  .page-settings--deltaforce
+    .settings-audio-panel--advanced
+    .settings-inline-row-controls
+    .settings-choice-btn {
+    flex: 1 1 calc(50% - clamp(8px, 2vw, 12px));
+    min-width: min(180px, 100%);
+  }
+
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-controls:has(.settings-choice-btn) {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-settings--deltaforce
+    .settings-audio-panel--advanced
+    .settings-inline-row-controls
+    .settings-choice-btn {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .page-settings--deltaforce .settings-audio-panel--advanced .settings-inline-row-controls:has(.settings-choice-btn) {
+    grid-template-columns: 1fr;
   }
 }
 

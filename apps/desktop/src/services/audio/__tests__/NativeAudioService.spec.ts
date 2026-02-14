@@ -1295,6 +1295,117 @@ describe('NativeAudioService', () => {
     vi.useRealTimers();
   });
 
+  it('defers latency SRC switch until active seek command settles', async () => {
+    vi.useFakeTimers();
+
+    const seekGate: { release: (() => void) | null } = { release: null };
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_get_engine_policy') {
+        return Promise.resolve({
+          srcMode: 'target-rate',
+          srcBackend: 'rubato',
+          srcTargetSampleRate: 96000,
+        });
+      }
+      if (cmd === 'native_audio_set_engine_policy') {
+        return Promise.resolve({
+          srcMode: payload?.srcMode,
+          srcBackend: payload?.srcBackend,
+          srcTargetSampleRate: payload?.srcTargetSampleRate ?? null,
+        });
+      }
+      if (cmd === 'native_audio_seek') {
+        return new Promise<void>((resolve) => {
+          seekGate.release = () => resolve();
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    invokeMock.mockClear();
+    (service as unknown as { state: { duration: number } }).state.duration = 200;
+    service.seek(48);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(invoke).toHaveBeenCalledWith(
+      'native_audio_seek',
+      expect.objectContaining({ time: 48, seekSeq: expect.any(Number) })
+    );
+
+    const policyCallsWhileSeekInFlight = invokeMock.mock.calls.filter(
+      (call) => call[0] === 'native_audio_set_engine_policy'
+    );
+    expect(policyCallsWhileSeekInFlight).toHaveLength(0);
+
+    if (seekGate.release) {
+      seekGate.release();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_engine_policy', {
+      srcMode: 'match-output',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: null,
+    });
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('deduplicates deferred latency SRC switching during rapid seek bursts', async () => {
+    vi.useFakeTimers();
+
+    const pendingPolicyResolvers: Array<() => void> = [];
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_get_engine_policy') {
+        return Promise.resolve({
+          srcMode: 'target-rate',
+          srcBackend: 'rubato',
+          srcTargetSampleRate: 96000,
+        });
+      }
+      if (cmd === 'native_audio_set_engine_policy') {
+        return new Promise((resolve) => {
+          pendingPolicyResolvers.push(() =>
+            resolve({
+              srcMode: payload?.srcMode,
+              srcBackend: payload?.srcBackend,
+              srcTargetSampleRate: payload?.srcTargetSampleRate ?? null,
+            })
+          );
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    invokeMock.mockClear();
+    (service as unknown as { state: { duration: number } }).state.duration = 300;
+
+    for (let i = 0; i < 10; i += 1) {
+      service.seek(12 + i * 8);
+      await vi.advanceTimersByTimeAsync(30);
+    }
+
+    const latencyPolicyCalls = invokeMock.mock.calls.filter(
+      (call) => call[0] === 'native_audio_set_engine_policy'
+    );
+    expect(latencyPolicyCalls).toHaveLength(1);
+
+    pendingPolicyResolvers.forEach((resolve) => resolve());
+    await vi.advanceTimersByTimeAsync(0);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
   it('does not auto-switch SRC while manual SRC lock is active', async () => {
     vi.useFakeTimers();
 

@@ -248,6 +248,8 @@ export class NativeAudioService implements IAudioService {
     srcBackend: 'rubato',
     srcTargetSampleRate: null,
   };
+  private dynamicSrcPendingPolicy: NativeAudioSrcPolicy | null = null;
+  private dynamicSrcDeferredLatencyReason: string | null = null;
   private hqSrcStopbandDb: number = 140;
   private hqSrcActive = false;
   private hqSrcRatio = 1;
@@ -353,11 +355,16 @@ export class NativeAudioService implements IAudioService {
   private clearPendingSeek(): void {
     this.pendingSeekTime = null;
     this.pendingSeekSeq = null;
+    this.dynamicSrcDeferredLatencyReason = null;
     if (this.pendingSeekTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(this.pendingSeekTimer);
     }
     this.pendingSeekTimer = null;
     this.clearPendingSeekGuard();
+  }
+
+  private hasPendingSeekWork(): boolean {
+    return this.activeSeekInvokeCount > 0 || typeof this.pendingSeekTime === 'number';
   }
 
   private markPendingSeekGuard(target: number): void {
@@ -461,9 +468,12 @@ export class NativeAudioService implements IAudioService {
       })
       .finally(() => {
         this.activeSeekInvokeCount = Math.max(0, this.activeSeekInvokeCount - 1);
-        if (typeof this.pendingSeekTime !== 'number') return;
+        if (typeof this.pendingSeekTime === 'number') {
+          this.scheduleSeekFlush(0);
+          return;
+        }
 
-        this.scheduleSeekFlush(0);
+        this.flushDeferredLatencySrcPolicy('seek-settled');
       });
   }
 
@@ -1241,8 +1251,22 @@ export class NativeAudioService implements IAudioService {
     this.dynamicSrcHoldUntilMs = Math.max(this.dynamicSrcHoldUntilMs, nowMs + adaptiveHoldMs);
     this.dynamicSrcLastSwitchReason = reason;
     this.dynamicSrcAdaptiveProfile = effective.profile;
-    void this.ensureLatencySrcPolicy(reason);
+    if (reason === 'seek' && this.hasPendingSeekWork()) {
+      this.dynamicSrcDeferredLatencyReason = reason;
+    } else {
+      this.dynamicSrcDeferredLatencyReason = null;
+      void this.ensureLatencySrcPolicy(reason);
+    }
     this.scheduleDynamicSrcRestoreEvaluation();
+  }
+
+  private flushDeferredLatencySrcPolicy(trigger: string): void {
+    const deferredReason = this.dynamicSrcDeferredLatencyReason;
+    if (!deferredReason) return;
+    if (this.hasPendingSeekWork()) return;
+
+    this.dynamicSrcDeferredLatencyReason = null;
+    void this.ensureLatencySrcPolicy(`${deferredReason}:${trigger}`);
   }
 
   private canApplyDynamicSrcNow(nowMs: number): boolean {
@@ -1270,22 +1294,39 @@ export class NativeAudioService implements IAudioService {
       return false;
     }
 
+    if (
+      this.dynamicSrcPendingPolicy &&
+      this.isSameSrcPolicy(this.dynamicSrcPendingPolicy, target)
+    ) {
+      this.dynamicSrcProfile = profile;
+      return false;
+    }
+
     const nowMs = Date.now();
     if (!this.canApplyDynamicSrcNow(nowMs)) {
       this.scheduleDynamicSrcRestoreEvaluation();
       return false;
     }
 
+    this.dynamicSrcPendingPolicy = { ...target };
+    this.dynamicSrcLastApplyAtMs = nowMs;
+
     try {
       await this.setEnginePolicyInternal(target, { fromDynamicAuto: true });
       this.dynamicSrcProfile = profile;
       this.dynamicSrcLastSwitchAtMs = nowMs;
       this.dynamicSrcLastSwitchReason = reason;
-      this.dynamicSrcLastApplyAtMs = nowMs;
       this.emitRobustnessSnapshot(true);
       return true;
     } catch {
       return false;
+    } finally {
+      if (
+        this.dynamicSrcPendingPolicy &&
+        this.isSameSrcPolicy(this.dynamicSrcPendingPolicy, target)
+      ) {
+        this.dynamicSrcPendingPolicy = null;
+      }
     }
   }
 

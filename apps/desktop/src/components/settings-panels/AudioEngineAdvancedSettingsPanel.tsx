@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/tauri';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
@@ -266,9 +266,92 @@ function resolvePolicyPresetId(policy: EnginePolicyState): AudioPolicyPresetId |
   return 'custom';
 }
 
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function buildInlineMeterStyle(value: number): CSSProperties {
+  const percent = clampPercent(value);
+  return {
+    '--settings-inline-meter': `${percent}%`,
+  } as CSSProperties;
+}
+
+function normalizeRange(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value) || max <= min) return 0;
+  const clamped = clampNumber(value, min, max);
+  return (clamped - min) / (max - min);
+}
+
+function estimateEnginePolicyCost(policy: EnginePolicyState): number {
+  let cost = policy.transportMode === 'robust' ? 12 : 8;
+
+  if (policy.srcMode === 'source-native') {
+    cost += 6;
+  } else if (policy.srcMode === 'match-output') {
+    cost += policy.srcBackend === 'rubato' ? 24 : 12;
+  } else {
+    cost += policy.srcBackend === 'rubato' ? 34 : 18;
+    const targetRate = policy.srcTargetSampleRate ?? 48_000;
+    if (targetRate >= 192_000) {
+      cost += 14;
+    } else if (targetRate >= 96_000) {
+      cost += 8;
+    } else if (targetRate >= 88_200) {
+      cost += 6;
+    } else if (targetRate >= 48_000) {
+      cost += 3;
+    }
+  }
+
+  if (policy.outputQuantizationMode === 'tpdf') {
+    cost += 6;
+  }
+
+  return clampPercent(cost);
+}
+
+function estimateDynamicSrcCost(dynamicSrc: DynamicSrcSettings): number {
+  if (!dynamicSrc.enabled) return 0;
+
+  let cost = 9;
+  if (dynamicSrc.adaptiveEnabled) cost += 9;
+  if (dynamicSrc.learningEnabled) cost += 7;
+
+  cost += normalizeRange(dynamicSrc.restoreDebounceMs, 200, 30_000) * 6;
+  cost += normalizeRange(dynamicSrc.minSwitchIntervalMs, 100, 10_000) * 5;
+  cost += normalizeRange(dynamicSrc.seekHoldMs, 500, 20_000) * 9;
+  cost += normalizeRange(dynamicSrc.underrunHoldMs, 2_000, 120_000) * 8;
+  cost += normalizeRange(dynamicSrc.sharedStressHoldMs, 1_000, 90_000) * 7;
+  cost += normalizeRange(dynamicSrc.outputErrorHoldMs, 1_000, 120_000) * 6;
+
+  return clampPercent(cost);
+}
+
+function estimateCrossfadeCost(crossfade: CrossfadeSettings): number {
+  if (!crossfade.enabled) return 0;
+  const durationFactor = normalizeRange(crossfade.durationMs, 100, 10_000);
+  return clampPercent(8 + durationFactor * 28);
+}
+
+function estimateReplayGainCost(replayGain: ReplayGainSettings): number {
+  if (!replayGain.enabled) return 0;
+  const modeCost = replayGain.mode === 'album' ? 3 : 2;
+  const preampCost = Math.min(8, Math.abs(replayGain.preampDb) / 2.5);
+  return clampPercent(4 + modeCost + preampCost);
+}
+
 type SettingHelpLabelProps = {
   title: string;
   help: string;
+};
+
+type AdvancedParamHeadProps = {
+  eyebrow: string;
+  title: string;
+  subtitle: string;
+  costPercent: number;
 };
 
 function SettingHelpLabel({ title, help }: SettingHelpLabelProps) {
@@ -283,6 +366,26 @@ function SettingHelpLabel({ title, help }: SettingHelpLabelProps) {
       >
         ?
       </button>
+    </div>
+  );
+}
+
+function AdvancedParamHead({ eyebrow, title, subtitle, costPercent }: AdvancedParamHeadProps) {
+  const percent = clampPercent(costPercent);
+
+  return (
+    <div className="settings-param-head settings-param-head--meter">
+      <div className="settings-param-head-copy">
+        <p className="settings-param-eyebrow">{eyebrow}</p>
+        <h3 className="settings-param-title">{title}</h3>
+        <p className="settings-param-subtitle">{subtitle}</p>
+      </div>
+      <div className="settings-param-head-meter" role="presentation" aria-hidden="true">
+        <span className="settings-param-head-meter-track">
+          <span className="settings-param-head-meter-fill" style={{ width: `${percent}%` }} />
+        </span>
+        <span className="settings-param-head-meter-value">{percent}%</span>
+      </div>
     </div>
   );
 }
@@ -309,6 +412,11 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [dynamicSrc, setDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
 
   const sourceRateChoices = useMemo(() => [44100, 48000, 88200, 96000, 176400, 192000], []);
+  const replayGainCost = useMemo(() => estimateReplayGainCost(replayGain), [replayGain]);
+  const crossfadeCost = useMemo(() => estimateCrossfadeCost(crossfade), [crossfade]);
+  const srcPolicyCost = useMemo(() => estimateEnginePolicyCost(enginePolicy), [enginePolicy]);
+  const dynamicSrcCost = useMemo(() => estimateDynamicSrcCost(dynamicSrc), [dynamicSrc]);
+  const targetRateFallback = DEFAULT_ENGINE_POLICY.srcTargetSampleRate ?? sourceRateChoices[0] ?? 48000;
 
   const refresh = useCallback(async () => {
     if (!canUse) return;
@@ -447,14 +555,15 @@ export function AudioEngineAdvancedSettingsPanel() {
   }, [audioService, canUse, dynamicSrc, refresh]);
 
   return (
-    <div className="settings-audio-panel">
-      <div className="settings-audio-block">
+    <div className="settings-audio-panel settings-audio-panel--advanced">
+      <div className="settings-audio-block" style={buildInlineMeterStyle(replayGainCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
-        <div className="settings-param-head">
-          <p className="settings-param-eyebrow">PLAYBACK GAIN</p>
-          <h3 className="settings-param-title">{t('settings.audioAdvanced.replayGain.title')}</h3>
-          <p className="settings-param-subtitle">ReplayGain & Loudness Calibration</p>
-        </div>
+        <AdvancedParamHead
+          eyebrow="PLAYBACK GAIN"
+          title={t('settings.audioAdvanced.replayGain.title')}
+          subtitle="ReplayGain & Loudness Calibration"
+          costPercent={replayGainCost}
+        />
 
         {canUse ? (
           <>
@@ -544,13 +653,14 @@ export function AudioEngineAdvancedSettingsPanel() {
         )}
       </div>
 
-      <div className="settings-audio-block">
+      <div className="settings-audio-block" style={buildInlineMeterStyle(crossfadeCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
-        <div className="settings-param-head">
-          <p className="settings-param-eyebrow">TRANSITION</p>
-          <h3 className="settings-param-title">{t('settings.audioAdvanced.crossfade.title')}</h3>
-          <p className="settings-param-subtitle">{t('settings.audioAdvanced.crossfade.subtitle')}</p>
-        </div>
+        <AdvancedParamHead
+          eyebrow="TRANSITION"
+          title={t('settings.audioAdvanced.crossfade.title')}
+          subtitle={t('settings.audioAdvanced.crossfade.subtitle')}
+          costPercent={crossfadeCost}
+        />
 
         {canUse ? (
           <>
@@ -614,13 +724,14 @@ export function AudioEngineAdvancedSettingsPanel() {
         )}
       </div>
 
-      <div className="settings-audio-block">
+      <div className="settings-audio-block" style={buildInlineMeterStyle(srcPolicyCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
-        <div className="settings-param-head">
-          <p className="settings-param-eyebrow">SRC POLICY</p>
-          <h3 className="settings-param-title">{t('settings.audioAdvanced.enginePolicy.title')}</h3>
-          <p className="settings-param-subtitle">Transport & Sample Rate Conversion</p>
-        </div>
+        <AdvancedParamHead
+          eyebrow="SRC POLICY"
+          title={t('settings.audioAdvanced.enginePolicy.title')}
+          subtitle="Transport & Sample Rate Conversion"
+          costPercent={srcPolicyCost}
+        />
 
         {canUse ? (
           <>
@@ -631,52 +742,28 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.enginePolicy.help.presets')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={policyPreset === 'reference'}
-                  onClick={() => applyPolicyPreset('reference')}
+              <div className="settings-inline-row-controls settings-section-controls--stretch">
+                <select
+                  className="settings-select"
+                  value={policyPreset}
+                  onChange={(e) => {
+                    const nextPreset = e.target.value as AudioPolicyPresetId | 'custom';
+                    if (nextPreset === 'custom') {
+                      setPolicyPreset('custom');
+                      return;
+                    }
+                    applyPolicyPreset(nextPreset);
+                  }}
+                  aria-label={t('settings.audioAdvanced.enginePolicy.presets.label')}
                   disabled={busy}
                 >
-                  {t('settings.audioAdvanced.enginePolicy.presets.reference')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={policyPreset === 'hifi'}
-                  onClick={() => applyPolicyPreset('hifi')}
-                  disabled={busy}
-                >
-                  {t('settings.audioAdvanced.enginePolicy.presets.hifi')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={policyPreset === 'balanced'}
-                  onClick={() => applyPolicyPreset('balanced')}
-                  disabled={busy}
-                >
-                  {t('settings.audioAdvanced.enginePolicy.presets.balanced')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={policyPreset === 'stable'}
-                  onClick={() => applyPolicyPreset('stable')}
-                  disabled={busy}
-                >
-                  {t('settings.audioAdvanced.enginePolicy.presets.stable')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={policyPreset === 'low-power'}
-                  onClick={() => applyPolicyPreset('low-power')}
-                  disabled={busy}
-                >
-                  {t('settings.audioAdvanced.enginePolicy.presets.lowPower')}
-                </button>
+                  <option value="hifi">{t('settings.audioAdvanced.enginePolicy.presets.hifi')}</option>
+                  <option value="balanced">{t('settings.audioAdvanced.enginePolicy.presets.balanced')}</option>
+                  <option value="reference">{t('settings.audioAdvanced.enginePolicy.presets.reference')}</option>
+                  <option value="stable">{t('settings.audioAdvanced.enginePolicy.presets.stable')}</option>
+                  <option value="low-power">{t('settings.audioAdvanced.enginePolicy.presets.lowPower')}</option>
+                  <option value="custom">{t('settings.audioAdvanced.enginePolicy.presets.custom')}</option>
+                </select>
               </div>
             </div>
 
@@ -739,13 +826,51 @@ export function AudioEngineAdvancedSettingsPanel() {
                   type="button"
                   className="settings-choice-btn"
                   data-active={enginePolicy.srcMode === 'target-rate'}
-                  onClick={() => setEnginePolicy((prev) => ({ ...prev, srcMode: 'target-rate' }))}
+                  onClick={() =>
+                    setEnginePolicy((prev) => ({
+                      ...prev,
+                      srcMode: 'target-rate',
+                      srcTargetSampleRate: prev.srcTargetSampleRate ?? targetRateFallback,
+                    }))
+                  }
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcMode.targetRate')}
                 </button>
               </div>
             </div>
+
+            {enginePolicy.srcMode === 'target-rate' && (
+              <div className="settings-inline-row">
+                <div className="settings-inline-row-copy">
+                  <SettingHelpLabel
+                    title={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
+                    help={t('settings.audioAdvanced.enginePolicy.help.srcTargetRate')}
+                  />
+                </div>
+                <div className="settings-inline-row-controls settings-section-controls--stretch">
+                  <select
+                    className="settings-select"
+                    value={String(enginePolicy.srcTargetSampleRate ?? targetRateFallback)}
+                    onChange={(e) => {
+                      const nextRate = Number(e.target.value);
+                      setEnginePolicy((prev) => ({
+                        ...prev,
+                        srcTargetSampleRate: Number.isFinite(nextRate) ? Math.floor(nextRate) : targetRateFallback,
+                      }));
+                    }}
+                    aria-label={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
+                    disabled={busy}
+                  >
+                    {sourceRateChoices.map((rate) => (
+                      <option key={rate} value={rate}>
+                        {rate / 1000}k
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
@@ -773,29 +898,6 @@ export function AudioEngineAdvancedSettingsPanel() {
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcBackend.linearSimd')}
                 </button>
-              </div>
-            </div>
-
-            <div className="settings-inline-row">
-              <div className="settings-inline-row-copy">
-                <SettingHelpLabel
-                  title={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
-                  help={t('settings.audioAdvanced.enginePolicy.help.srcTargetRate')}
-                />
-              </div>
-              <div className="settings-inline-row-controls">
-                {sourceRateChoices.map((rate) => (
-                  <button
-                    key={rate}
-                    type="button"
-                    className="settings-choice-btn"
-                    data-active={enginePolicy.srcTargetSampleRate === rate}
-                    onClick={() => setEnginePolicy((prev) => ({ ...prev, srcTargetSampleRate: rate }))}
-                    disabled={busy || enginePolicy.srcMode !== 'target-rate'}
-                  >
-                    {rate / 1000}k
-                  </button>
-                ))}
               </div>
             </div>
 
@@ -843,13 +945,14 @@ export function AudioEngineAdvancedSettingsPanel() {
         )}
       </div>
 
-      <div className="settings-audio-block">
+      <div className="settings-audio-block" style={buildInlineMeterStyle(dynamicSrcCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
-        <div className="settings-param-head">
-          <p className="settings-param-eyebrow">DYNAMIC SRC</p>
-          <h3 className="settings-param-title">{t('settings.audioAdvanced.dynamicSrc.title')}</h3>
-          <p className="settings-param-subtitle">Adaptive Stability Strategy</p>
-        </div>
+        <AdvancedParamHead
+          eyebrow="DYNAMIC SRC"
+          title={t('settings.audioAdvanced.dynamicSrc.title')}
+          subtitle="Adaptive Stability Strategy"
+          costPercent={dynamicSrcCost}
+        />
 
         {canUse ? (
           <>
