@@ -125,16 +125,36 @@ mod tests {
             .iter()
             .filter(|event| event.kind == "test.timeline" && event.value == 1 && event.aux == 2)
             .count();
-        record_event("test.timeline", 1, 2);
-        let after = snapshot_recent_default();
+        let dropped_before = before.dropped_events;
+
+        // `record_event` is best-effort (it uses a try_lock). Under contention the event can be
+        // dropped, so retry a few times and accept either "recorded" or "dropped increased".
+        let mut after = snapshot_recent_default();
+        for _ in 0..64 {
+            record_event("test.timeline", 1, 2);
+            after = snapshot_recent_default();
+            let after_count = after
+                .events
+                .iter()
+                .filter(|event| event.kind == "test.timeline" && event.value == 1 && event.aux == 2)
+                .count();
+            if after_count >= before_count.saturating_add(1)
+                || after.dropped_events > dropped_before
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
         let after_count = after
             .events
             .iter()
             .filter(|event| event.kind == "test.timeline" && event.value == 1 && event.aux == 2)
             .count();
 
-        assert!(after.events.len() >= before.events.len());
-        assert!(after_count >= before_count.saturating_add(1));
+        assert!(
+            after_count >= before_count.saturating_add(1) || after.dropped_events > dropped_before
+        );
     }
 
     #[test]

@@ -1955,7 +1955,13 @@ impl NativeAudioEngine {
                     && matches!(self.playback_state, PlaybackState::Playing)
                 {
                     let available = self.streaming_available_samples(streaming);
-                    if available < min_start_samples && !self.streaming_is_finished(streaming) {
+                    // During interactive seek we keep the sink running (the streaming source emits
+                    // silence) and avoid entering the buffering state, otherwise shared backends
+                    // can "pause then resume" with large perceived latency.
+                    if self.playback_started_at.is_some()
+                        && available < min_start_samples
+                        && !self.streaming_is_finished(streaming)
+                    {
                         sink.pause();
                         self.sync_clock();
                         self.playback_state = PlaybackState::Buffering;
@@ -1963,6 +1969,44 @@ impl NativeAudioEngine {
                         self.buffering_started_at = Some(now);
                         self.buffering_last_progress_at = Some(now);
                         self.buffering_last_samples = available;
+                        return true;
+                    }
+                }
+
+                if matches!(self.desired_playback_state, PlaybackState::Playing)
+                    && matches!(self.playback_state, PlaybackState::Playing)
+                    && self.playback_started_at.is_none()
+                {
+                    // Seek-in-flight: keep playing (silence) but still detect a decoder stall.
+                    let available = self.streaming_available_samples(streaming);
+                    let finished = self.streaming_is_finished(streaming);
+                    let now = Instant::now();
+
+                    if self.buffering_started_at.is_none() {
+                        self.buffering_started_at = Some(now);
+                        self.buffering_last_progress_at = Some(now);
+                        self.buffering_last_samples = available;
+                    } else if available != self.buffering_last_samples {
+                        self.buffering_last_samples = available;
+                        self.buffering_last_progress_at = Some(now);
+                    }
+
+                    let stall_timeout = Duration::from_secs(15);
+                    let no_progress_for = self
+                        .buffering_last_progress_at
+                        .map(|instant| now.saturating_duration_since(instant))
+                        .unwrap_or(Duration::from_secs(0));
+                    if !finished && available < min_start_samples && no_progress_for >= stall_timeout
+                    {
+                        sink.pause();
+                        self.sync_clock();
+                        self.buffering_started_at = None;
+                        self.buffering_last_progress_at = None;
+                        self.buffering_last_samples = 0;
+                        self.set_error(
+                            "NATIVE_AUDIO_SEEK_STALLED",
+                            "Audio seek stalled (no decoder progress)".to_string(),
+                        );
                         return true;
                     }
                 }
