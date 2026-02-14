@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 

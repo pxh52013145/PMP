@@ -2059,7 +2059,9 @@ impl NativeAudioEngine {
                         .buffering_last_progress_at
                         .map(|instant| now.saturating_duration_since(instant))
                         .unwrap_or(Duration::from_secs(0));
-                    if !finished && available < min_start_samples && no_progress_for >= stall_timeout
+                    if !finished
+                        && available < min_start_samples
+                        && no_progress_for >= stall_timeout
                     {
                         sink.pause();
                         self.sync_clock();
@@ -2811,10 +2813,15 @@ mod tests {
         play_calls: AtomicUsize,
         pause_calls: AtomicUsize,
         flush_calls: AtomicUsize,
+        sources: Mutex<Vec<crate::audio::output::BoxedSource>>,
     }
 
     impl AudioSink for CallSink {
-        fn append(&self, _source: crate::audio::output::BoxedSource) {}
+        fn append(&self, source: crate::audio::output::BoxedSource) {
+            if let Ok(mut guard) = self.sources.lock() {
+                guard.push(source);
+            }
+        }
 
         fn play(&self) {
             self.play_calls.fetch_add(1, Ordering::Relaxed);
@@ -2828,7 +2835,11 @@ mod tests {
             self.flush_calls.fetch_add(1, Ordering::Relaxed);
         }
 
-        fn stop(&self) {}
+        fn stop(&self) {
+            if let Ok(mut guard) = self.sources.lock() {
+                guard.clear();
+            }
+        }
 
         fn empty(&self) -> bool {
             false
@@ -3058,14 +3069,25 @@ mod tests {
                 engine.active_input_id.as_deref(),
                 Some(super::SYMPHONIA_INPUT_ID)
             );
-            assert!(
-                engine.streaming.is_some(),
-                "expected streaming for {decode_mode}"
-            );
-            assert!(
-                engine.decoded_samples.is_none(),
-                "decoded buffer should be empty for {decode_mode}"
-            );
+            if decode_mode == "full-track" {
+                assert!(
+                    engine.streaming.is_none(),
+                    "full-track should not use streaming pipeline"
+                );
+                assert!(
+                    engine.decoded_samples.is_some(),
+                    "decoded buffer should be present for full-track"
+                );
+            } else {
+                assert!(
+                    engine.streaming.is_some(),
+                    "expected streaming for {decode_mode}"
+                );
+                assert!(
+                    engine.decoded_samples.is_none(),
+                    "decoded buffer should be empty for {decode_mode}"
+                );
+            }
             assert!(matches!(engine.playback_state, PlaybackState::Paused));
 
             let switched_backend: Arc<dyn AudioOutputBackend> =
@@ -3079,14 +3101,25 @@ mod tests {
                 engine.active_input_id.as_deref(),
                 Some(super::SYMPHONIA_INPUT_ID)
             );
-            assert!(
-                engine.streaming.is_some(),
-                "switch should preserve streaming pipeline"
-            );
-            assert!(
-                engine.decoded_samples.is_none(),
-                "switch should keep streaming mode"
-            );
+            if decode_mode == "full-track" {
+                assert!(
+                    engine.decoded_samples.is_some(),
+                    "switch should preserve decoded buffer"
+                );
+                assert!(
+                    engine.streaming.is_none(),
+                    "switch should keep full-track decode mode"
+                );
+            } else {
+                assert!(
+                    engine.streaming.is_some(),
+                    "switch should preserve streaming pipeline"
+                );
+                assert!(
+                    engine.decoded_samples.is_none(),
+                    "switch should keep streaming mode"
+                );
+            }
 
             let expected_mode = if decode_mode == "full-track" {
                 AudioInputDecodeMode::FullTrack
@@ -3247,19 +3280,30 @@ mod tests {
                 engine
                     .load(path.clone())
                     .expect("load track for mode matrix");
-                assert!(
-                    engine.streaming.is_some(),
-                    "expected streaming pipeline for decode_mode={decode_mode}"
-                );
+                if decode_mode == "streaming" {
+                    assert!(
+                        engine.streaming.is_some(),
+                        "expected streaming pipeline for decode_mode={decode_mode}"
+                    );
 
-                let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
-                drop(command_rx);
-                let (transfer_tx, _transfer_rx) = mpsc::channel();
-                {
-                    let streaming = engine.streaming.as_mut().expect("streaming pipeline");
-                    streaming.command_tx = command_tx.clone();
-                    streaming.shutdown_tx =
-                        StreamingShutdownTx::new(command_tx.clone(), transfer_tx);
+                    let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+                    drop(command_rx);
+                    let (transfer_tx, _transfer_rx) = mpsc::channel();
+                    {
+                        let streaming = engine.streaming.as_mut().expect("streaming pipeline");
+                        streaming.command_tx = command_tx.clone();
+                        streaming.shutdown_tx =
+                            StreamingShutdownTx::new(command_tx.clone(), transfer_tx);
+                    }
+                } else {
+                    assert!(
+                        engine.decoded_samples.is_some(),
+                        "expected decoded buffer for decode_mode={decode_mode}"
+                    );
+                    assert!(
+                        engine.streaming.is_none(),
+                        "decoded mode should not keep streaming pipeline"
+                    );
                 }
 
                 engine.desired_playback_state = PlaybackState::Playing;

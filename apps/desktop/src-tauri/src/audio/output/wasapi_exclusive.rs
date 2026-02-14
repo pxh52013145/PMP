@@ -1386,6 +1386,7 @@ struct SinkInner {
     device_id: Option<String>,
     queue: Mutex<VecDeque<BoxedSource>>,
     render_queue: AudioRingBuffer,
+    flush_epoch: AtomicU64,
     producer_thread: Mutex<Option<JoinHandle<()>>>,
     producer_stop_tx: Mutex<Option<mpsc::Sender<()>>>,
     producer_source: Mutex<Option<BoxedSource>>,
@@ -1405,6 +1406,7 @@ struct SharedRawSinkInner {
     device_id: Option<String>,
     queue: Mutex<VecDeque<BoxedSource>>,
     render_queue: AudioRingBuffer,
+    flush_epoch: AtomicU64,
     producer_thread: Mutex<Option<JoinHandle<()>>>,
     producer_stop_tx: Mutex<Option<mpsc::Sender<()>>>,
     producer_source: Mutex<Option<BoxedSource>>,
@@ -1469,6 +1471,7 @@ impl WasapiExclusiveSink {
                 device_id,
                 queue: Mutex::new(VecDeque::new()),
                 render_queue: AudioRingBuffer::new(48_000 * 2 * 2),
+                flush_epoch: AtomicU64::new(0),
                 producer_thread: Mutex::new(None),
                 producer_stop_tx: Mutex::new(None),
                 producer_source: Mutex::new(None),
@@ -1649,6 +1652,7 @@ impl AudioSink for WasapiExclusiveSink {
     }
 
     fn flush(&self) {
+        self.inner.flush_epoch.fetch_add(1, Ordering::Release);
         self.inner.render_queue.clear();
     }
 }
@@ -1708,6 +1712,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
         let mut active_sample_rate: u32 = 0;
         let mut render_scratch = Vec::<f32>::new();
         let mut callback_timing = CallbackTimingState::default();
+        let mut observed_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
 
         while !inner.stopped.load(Ordering::Acquire) {
             let queued = match inner.queue.lock() {
@@ -1781,6 +1786,14 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
             let Some(stream) = stream.as_mut() else {
                 continue;
             };
+
+            let current_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
+            if current_flush_epoch != observed_flush_epoch {
+                observed_flush_epoch = current_flush_epoch;
+                stream.stop();
+                callback_timing.clear_last_wake();
+                inner.render_queue.clear();
+            }
 
             let playing = inner.playing.load(Ordering::Acquire);
             if playing && !stream.started {
@@ -1893,6 +1906,7 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
         let mut active_sample_rate: u32 = 0;
         let mut render_scratch = Vec::<f32>::new();
         let mut callback_timing = CallbackTimingState::default();
+        let mut observed_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
 
         while !inner.stopped.load(Ordering::Acquire) {
             let queued = match inner.queue.lock() {
@@ -1967,6 +1981,14 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 continue;
             };
 
+            let current_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
+            if current_flush_epoch != observed_flush_epoch {
+                observed_flush_epoch = current_flush_epoch;
+                stream.stop();
+                callback_timing.clear_last_wake();
+                inner.render_queue.clear();
+            }
+
             let playing = inner.playing.load(Ordering::Acquire);
             if playing && !stream.started {
                 if let Err(err) = start_stream_with_prefill_shared_raw(
@@ -2037,6 +2059,7 @@ impl WasapiSharedRawSink {
                 device_id,
                 queue: Mutex::new(VecDeque::new()),
                 render_queue: AudioRingBuffer::new(48_000 * 2 * 4),
+                flush_epoch: AtomicU64::new(0),
                 producer_thread: Mutex::new(None),
                 producer_stop_tx: Mutex::new(None),
                 producer_source: Mutex::new(None),
@@ -2219,6 +2242,7 @@ impl AudioSink for WasapiSharedRawSink {
     }
 
     fn flush(&self) {
+        self.inner.flush_epoch.fetch_add(1, Ordering::Release);
         self.inner.render_queue.clear();
     }
 }

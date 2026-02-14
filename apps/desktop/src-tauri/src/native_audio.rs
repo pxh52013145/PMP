@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
     path::PathBuf,
@@ -6,14 +7,11 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
-use once_cell::sync::Lazy;
 
 use crate::audio::emitter;
 use crate::audio::engine::{PlaybackState, PreparedCrossfade, PreparedLoad, ENGINE};
 use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
-use crate::audio::input::{
-    AudioInputKind, AudioInputRegistry,
-};
+use crate::audio::input::{AudioInputKind, AudioInputRegistry};
 use crate::audio::mixer::coerce_source_format;
 use crate::audio::mixer::PlaybackMixerSource;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -136,7 +134,8 @@ impl SeekExecutor {
         });
 
         record_latest_requested_seek_seq(seq);
-        self.pending_time_bits.store(time.to_bits(), Ordering::Release);
+        self.pending_time_bits
+            .store(time.to_bits(), Ordering::Release);
         self.pending_seq.store(seq, Ordering::Release);
 
         let mut guard = match self.wake_lock.lock() {
@@ -222,7 +221,9 @@ fn seek_worker_loop() {
             payload.error_code.clone(),
             payload.error_message.clone(),
         ) {
-            (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+            (Some(seq), Some(code), Some(message)) => {
+                Some(NativeAudioErrorPayload { seq, code, message })
+            }
             _ => None,
         };
 
