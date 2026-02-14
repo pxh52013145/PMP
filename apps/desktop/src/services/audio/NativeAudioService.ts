@@ -353,6 +353,18 @@ export class NativeAudioService implements IAudioService {
     );
   }
 
+  private hasPinnedOutputBackendChoice(): boolean {
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as unknown;
+      if (typeof parsed !== 'string') return false;
+      return parsed.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   private clearPendingSeek(): void {
     this.pendingSeekTime = null;
     this.pendingSeekSeq = null;
@@ -1866,6 +1878,10 @@ export class NativeAudioService implements IAudioService {
     if (this.backendSwitchInFlight) return;
 
     if (!this.isSharedOutputBackend(this.currentOutputBackendId)) {
+      return;
+    }
+
+    if (this.hasPinnedOutputBackendChoice()) {
       return;
     }
 

@@ -685,18 +685,18 @@ export const NativeDebugPage: React.FC = () => {
     const backendId = selectedBackend.length > 0 ? selectedBackend : null;
 
     try {
-      await broadcastDataUpdate(
-        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND,
-        backendId,
-        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
-      );
-
       const payload = await invoke<unknown>('native_audio_select_output_backend', {
         backendId,
       });
       const parsed = parseNativeAudioComponentsState(payload);
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
+
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_BACKEND,
+        parsed.outputBackendId,
+        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
+      );
 
       appendLog(
         t('pages.native-debug.log.outputBackendSwitched', {

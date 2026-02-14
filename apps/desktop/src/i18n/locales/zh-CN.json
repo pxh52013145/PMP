@@ -359,7 +359,7 @@
   "settings.audioAdvanced.enginePolicy.outputQuantizationMode.tpdf": "TPDF Dither",
   "settings.audioAdvanced.enginePolicy.help.presets": "作用：按典型目标快速套用参数组合。注意：预设会覆盖当前引擎策略参数，切换后建议试听并点击应用。",
   "settings.audioAdvanced.enginePolicy.help.transport": "作用：选择传输策略。稳态传输偏向兼容与稳定；传输精确偏向位级一致。注意：传输精确会约束部分处理链路，以减少不必要改动。",
-  "settings.audioAdvanced.enginePolicy.help.srcMode": "作用：决定何时执行重采样。原始采样率尽量保持源采样率；匹配输出跟随设备采样率；目标采样率强制转换到指定值。注意：强制重采样会增加 CPU 开销。",
+  "settings.audioAdvanced.enginePolicy.help.srcMode": "作用：决定何时执行重采样。原始采样率尽量保持源采样率；匹配输出跟随设备采样率；目标采样率强制转换到指定值。注意：强制重采样会增加 CPU 开销。提示：在 Shared 输出后端下（如 WASAPI Shared / Rodio），为避免格式不兼容，目标采样率会被禁用并按设备混音采样率输出。",
   "settings.audioAdvanced.enginePolicy.help.srcBackend": "作用：选择重采样算法后端。Rubato 偏音质优先，Linear SIMD 偏性能优先。注意：低性能设备建议优先选择 Linear SIMD，通常更稳。",
   "settings.audioAdvanced.enginePolicy.help.srcTargetRate": "作用：设置“目标采样率”模式下的输出采样率。注意：采样率越高，资源占用越高；设备不支持时可能回退。",
   "settings.audioAdvanced.enginePolicy.help.outputQuantizationMode": "作用：控制浮点到整数输出时的量化方式。四舍五入（Round）开销低；抖动量化（TPDF Dither）可降低低电平量化失真。注意：传输精确模式下会被约束为四舍五入（Round）。",

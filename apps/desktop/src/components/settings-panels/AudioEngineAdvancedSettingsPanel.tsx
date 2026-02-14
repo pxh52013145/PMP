@@ -249,6 +249,12 @@ function parseEnginePolicy(raw: unknown): EnginePolicyState {
   };
 }
 
+function parseOutputBackendId(raw: unknown): string | null {
+  const record = toRecord(raw);
+  const backendId = typeof record?.outputBackendId === 'string' ? record.outputBackendId.trim() : '';
+  return backendId.length > 0 ? backendId : null;
+}
+
 function resolvePolicyPresetId(policy: EnginePolicyState): AudioPolicyPresetId | 'custom' {
   const keys = Object.keys(AUDIO_POLICY_PRESETS) as AudioPolicyPresetId[];
   for (const key of keys) {
@@ -410,6 +416,7 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [enginePolicy, setEnginePolicy] = useState<EnginePolicyState>(DEFAULT_ENGINE_POLICY);
   const [policyPreset, setPolicyPreset] = useState<AudioPolicyPresetId | 'custom'>('custom');
   const [dynamicSrc, setDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
+  const [outputBackendId, setOutputBackendId] = useState<string | null>(null);
 
   const sourceRateChoices = useMemo(() => [44100, 48000, 88200, 96000, 176400, 192000], []);
   const replayGainCost = useMemo(() => estimateReplayGainCost(replayGain), [replayGain]);
@@ -418,12 +425,23 @@ export function AudioEngineAdvancedSettingsPanel() {
   const dynamicSrcCost = useMemo(() => estimateDynamicSrcCost(dynamicSrc), [dynamicSrc]);
   const targetRateFallback = DEFAULT_ENGINE_POLICY.srcTargetSampleRate ?? sourceRateChoices[0] ?? 48000;
 
+  const isSharedOutputBackend = useMemo(() => {
+    return (
+      outputBackendId === 'wasapi' ||
+      outputBackendId === 'wasapi-shared-raw' ||
+      outputBackendId === 'rodio-cpal'
+    );
+  }, [outputBackendId]);
+
   const refresh = useCallback(async () => {
     if (!canUse) return;
 
     setBusy(true);
     setError(null);
     try {
+      const componentsPayload = await invoke<unknown>('native_audio_get_audio_components_state');
+      setOutputBackendId(parseOutputBackendId(componentsPayload));
+
       const policyPayload = await invoke<unknown>('native_audio_get_engine_policy');
       const parsedPolicy = parseEnginePolicy(policyPayload);
       setEnginePolicy(parsedPolicy);
@@ -464,6 +482,13 @@ export function AudioEngineAdvancedSettingsPanel() {
       setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'round' }));
     }
   }, [enginePolicy.transportMode, enginePolicy.outputQuantizationMode]);
+
+  useEffect(() => {
+    if (!isSharedOutputBackend) return;
+    if (enginePolicy.srcMode === 'target-rate') {
+      setEnginePolicy((prev) => ({ ...prev, srcMode: 'match-output', srcTargetSampleRate: null }));
+    }
+  }, [enginePolicy.srcMode, isSharedOutputBackend]);
 
   const applyReplayGain = useCallback(async () => {
     if (!canUse) return;
@@ -757,11 +782,15 @@ export function AudioEngineAdvancedSettingsPanel() {
                   aria-label={t('settings.audioAdvanced.enginePolicy.presets.label')}
                   disabled={busy}
                 >
-                  <option value="hifi">{t('settings.audioAdvanced.enginePolicy.presets.hifi')}</option>
+                  <option value="hifi" disabled={isSharedOutputBackend}>
+                    {t('settings.audioAdvanced.enginePolicy.presets.hifi')}
+                  </option>
                   <option value="balanced">{t('settings.audioAdvanced.enginePolicy.presets.balanced')}</option>
                   <option value="reference">{t('settings.audioAdvanced.enginePolicy.presets.reference')}</option>
                   <option value="stable">{t('settings.audioAdvanced.enginePolicy.presets.stable')}</option>
-                  <option value="low-power">{t('settings.audioAdvanced.enginePolicy.presets.lowPower')}</option>
+                  <option value="low-power" disabled={isSharedOutputBackend}>
+                    {t('settings.audioAdvanced.enginePolicy.presets.lowPower')}
+                  </option>
                   <option value="custom">{t('settings.audioAdvanced.enginePolicy.presets.custom')}</option>
                 </select>
               </div>
@@ -833,7 +862,7 @@ export function AudioEngineAdvancedSettingsPanel() {
                       srcTargetSampleRate: prev.srcTargetSampleRate ?? targetRateFallback,
                     }))
                   }
-                  disabled={busy}
+                  disabled={busy || isSharedOutputBackend}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcMode.targetRate')}
                 </button>
