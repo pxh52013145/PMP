@@ -2,7 +2,10 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -202,6 +205,7 @@ pub(crate) struct NativeAudioEngine {
     preferred_input_id: Option<String>,
     active_input_id: Option<String>,
     output_backend: Arc<dyn AudioOutputBackend>,
+    seek_epoch: Arc<AtomicU64>,
     sink: Option<Arc<dyn AudioSink>>,
     mixer: Option<PlaybackMixerController>,
     current_track: Option<PathBuf>,
@@ -387,6 +391,7 @@ impl NativeAudioEngine {
             preferred_input_id: None,
             active_input_id: None,
             output_backend,
+            seek_epoch: Arc::new(AtomicU64::new(1)),
             sink: None,
             mixer: None,
             current_track: None,
@@ -442,6 +447,10 @@ impl NativeAudioEngine {
             output_quantization_mode: NativeAudioOutputQuantizationMode::Round,
             spectrum_frame_counter: 0,
         }
+    }
+
+    fn bump_seek_epoch(&self) {
+        self.seek_epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     pub(crate) fn playback_state(&self) -> PlaybackState {
@@ -542,7 +551,10 @@ impl NativeAudioEngine {
             self.spectrum_post_tap.clone(),
         );
         let output_source = if should_wrap_source_for_shared_backend(self.output_backend.id()) {
-            crate::audio::output::wrap_source_for_shared_backend(dsp_source)
+            crate::audio::output::wrap_source_for_shared_backend(
+                dsp_source,
+                self.seek_epoch.clone(),
+            )
         } else {
             dsp_source
         };
@@ -691,7 +703,17 @@ impl NativeAudioEngine {
     }
 
     fn resolve_requested_output_sample_rate_for_open(&self) -> Option<u32> {
-        resolve_audio_input_target_sample_rate(self.output_sample_rate, self.current_src_policy())
+        let mut policy = self.current_src_policy();
+
+        // Shared backends cannot reliably open arbitrary sample rates / integer PCM formats.
+        // Always request the device mix/output sample rate so the sink can be initialized without
+        // format negotiation failures (e.g. wasapi-shared-raw unsupported PCM16@192k).
+        if is_shared_output_backend(self.output_backend.id()) {
+            policy.src_mode = NativeAudioSrcMode::MatchOutput;
+            policy.src_target_sample_rate = None;
+        }
+
+        resolve_audio_input_target_sample_rate(self.output_sample_rate, policy)
     }
 
     fn streaming_available_samples(&self, streaming: &StreamingPlayback) -> usize {
@@ -1598,6 +1620,7 @@ impl NativeAudioEngine {
 
     pub(crate) fn seek(&mut self, seconds: f64) -> Result<(), String> {
         self.cancel_crossfade();
+        self.bump_seek_epoch();
         self.sync_clock();
         self.spectrum_pre_tap.clear();
         self.spectrum_post_tap.clear();
@@ -1610,29 +1633,32 @@ impl NativeAudioEngine {
         let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
         let mut force_non_streaming_seek = false;
 
+        // IMPORTANT: pause the currently playing sink immediately so rapid seek bursts do not keep
+        // emitting audio from the previous position while we rebuild the pipeline/source.
+        if resume_playing {
+            if let Some(sink) = &self.sink {
+                sink.pause();
+            }
+        }
+
         let apply_streaming_seek_state =
             |engine: &mut NativeAudioEngine,
              seek_target: f64,
              should_resume_playing: bool,
-             available_samples: usize| {
-                if should_resume_playing {
-                    engine.base_position = seek_target;
-                    engine.playback_started_at = None;
-                    engine.desired_playback_state = PlaybackState::Playing;
-                    engine.playback_state = PlaybackState::Buffering;
-                    let now = Instant::now();
-                    engine.buffering_started_at = Some(now);
-                    engine.buffering_last_progress_at = Some(now);
-                    engine.buffering_last_samples = available_samples;
-                } else {
-                    engine.base_position = seek_target;
-                    engine.playback_started_at = None;
-                    engine.buffering_started_at = None;
-                    engine.buffering_last_progress_at = None;
-                    engine.buffering_last_samples = 0;
-                }
-
+             _available_samples: usize| {
+                // Interactive seek requirement: resume output immediately (ms-level perceived seek),
+                // but keep the clock paused until the decoder has produced samples for the new position.
+                engine.base_position = seek_target;
                 engine.current_position = seek_target;
+                engine.playback_started_at = None;
+                engine.buffering_started_at = None;
+                engine.buffering_last_progress_at = None;
+                engine.buffering_last_samples = 0;
+
+                if should_resume_playing {
+                    engine.desired_playback_state = PlaybackState::Playing;
+                    engine.playback_state = PlaybackState::Playing;
+                }
             };
 
         if let Some(streaming) = &self.streaming {
@@ -1652,6 +1678,11 @@ impl NativeAudioEngine {
                     streaming.render_queue.clear();
                     let available_samples = self.streaming_available_samples(streaming);
                     apply_streaming_seek_state(self, target, resume_playing, available_samples);
+                    if resume_playing {
+                        if let Some(sink) = &self.sink {
+                            sink.play();
+                        }
+                    }
                     return Ok(());
                 }
                 Err(_) => {
@@ -1677,6 +1708,11 @@ impl NativeAudioEngine {
                         let available_samples =
                             self.streaming_available_samples(reloaded_streaming);
                         apply_streaming_seek_state(self, target, resume_playing, available_samples);
+                        if resume_playing {
+                            if let Some(sink) = &self.sink {
+                                sink.play();
+                            }
+                        }
                         return Ok(());
                     }
                     Err(_) => {
@@ -2019,6 +2055,19 @@ impl NativeAudioEngine {
 
         if !matches!(self.playback_state, PlaybackState::Playing) {
             return false;
+        }
+
+        // For streaming playback we intentionally resume the sink immediately after seek and let
+        // the source output silence until decoded samples arrive. Start the clock only once the
+        // decoder has produced samples for the new position, so UI time doesn't drift ahead.
+        if self.playback_started_at.is_none() {
+            if let Some(streaming) = &self.streaming {
+                let available = self.streaming_available_samples(streaming);
+                if available > (self.decoded_channels.max(1) as usize * 32) {
+                    self.base_position = self.current_position;
+                    self.playback_started_at = Some(Instant::now());
+                }
+            }
         }
 
         self.update_position_from_clock();
@@ -2578,6 +2627,29 @@ mod tests {
         assert_eq!(err, "create_sink failed");
         assert!(engine.sink.is_some());
         assert!(!old_sink.stopped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn seek_pauses_existing_sink_in_non_streaming_mode() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(FailBackend);
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        // Use a stable decoded buffer path so we don't depend on file IO for this regression test.
+        engine.current_track = Some(PathBuf::from("dummy.wav"));
+        engine.decoded_samples = Some(Arc::new(vec![0.0f32; 48_000]));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.playback_state = PlaybackState::Playing;
+        engine.desired_playback_state = PlaybackState::Playing;
+        engine.playback_started_at = Some(Instant::now());
+
+        let old_sink = Arc::new(CallSink::default());
+        engine.sink = Some(old_sink.clone());
+
+        // This seek will fail later because create_sink fails, but it should still pause the old sink
+        // immediately at the start of the seek path.
+        let _ = engine.seek(0.25);
+        assert!(old_sink.pause_calls.load(Ordering::Acquire) >= 1);
     }
 
     #[derive(Default)]

@@ -2,10 +2,11 @@ use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
-    sync::Arc,
+    sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
+use once_cell::sync::Lazy;
 
 use crate::audio::emitter;
 use crate::audio::engine::{PlaybackState, PreparedCrossfade, PreparedLoad, ENGINE};
@@ -76,6 +77,162 @@ fn is_stale_seek_sequence(seek_seq: Option<u64>) -> bool {
 
     let latest = LATEST_REQUESTED_SEEK_SEQ.load(Ordering::Relaxed);
     latest > 0 && seq < latest
+}
+
+static SEEK_EXECUTOR: Lazy<SeekExecutor> = Lazy::new(SeekExecutor::new);
+
+struct SeekExecutor {
+    pending_seq: AtomicU64,
+    pending_time_bits: AtomicU64,
+    wake_lock: Mutex<u64>,
+    wake_cv: Condvar,
+    started: AtomicBool,
+    seek_seq_fallback: AtomicU64,
+    app_handle: Mutex<Option<AppHandle>>,
+}
+
+impl SeekExecutor {
+    fn new() -> Self {
+        Self {
+            pending_seq: AtomicU64::new(0),
+            pending_time_bits: AtomicU64::new(0.0f64.to_bits()),
+            wake_lock: Mutex::new(0),
+            wake_cv: Condvar::new(),
+            started: AtomicBool::new(false),
+            seek_seq_fallback: AtomicU64::new(1),
+            app_handle: Mutex::new(None),
+        }
+    }
+
+    fn ensure_started(&self, app_handle: &AppHandle) {
+        {
+            let mut guard = match self.app_handle.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if guard.is_none() {
+                *guard = Some(app_handle.clone());
+            }
+        }
+
+        if self
+            .started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        std::thread::spawn(|| seek_worker_loop());
+    }
+
+    fn request_seek(&self, app_handle: &AppHandle, time: f64, seek_seq: Option<u64>) {
+        self.ensure_started(app_handle);
+
+        let seq = seek_seq.unwrap_or_else(|| {
+            self.seek_seq_fallback
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1)
+        });
+
+        record_latest_requested_seek_seq(seq);
+        self.pending_time_bits.store(time.to_bits(), Ordering::Release);
+        self.pending_seq.store(seq, Ordering::Release);
+
+        let mut guard = match self.wake_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = guard.saturating_add(1);
+        self.wake_cv.notify_all();
+    }
+
+    fn wait_for_next(&self, last_seq: u64) {
+        let mut guard = match self.wake_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        loop {
+            let seq = self.pending_seq.load(Ordering::Acquire);
+            if seq != 0 && seq != last_seq {
+                return;
+            }
+
+            guard = match self.wake_cv.wait(guard) {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+    }
+
+    fn snapshot_request(&self) -> (u64, f64) {
+        let seq = self.pending_seq.load(Ordering::Acquire);
+        let bits = self.pending_time_bits.load(Ordering::Acquire);
+        (seq, f64::from_bits(bits))
+    }
+
+    fn app_handle(&self) -> Option<AppHandle> {
+        match self.app_handle.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
+fn seek_worker_loop() {
+    let mut last_processed_seq = 0u64;
+
+    loop {
+        SEEK_EXECUTOR.wait_for_next(last_processed_seq);
+        let Some(app_handle) = SEEK_EXECUTOR.app_handle() else {
+            continue;
+        };
+
+        let (result, payload) = {
+            let mut engine = match ENGINE.lock() {
+                Ok(engine) => engine,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            // Coalesce at the last possible moment (after we acquired the engine lock) to avoid
+            // doing work for an already superseded seek request.
+            let (exec_seq, exec_time) = SEEK_EXECUTOR.snapshot_request();
+            last_processed_seq = exec_seq;
+
+            if exec_seq == 0 || !exec_time.is_finite() || is_stale_seek_sequence(Some(exec_seq)) {
+                (Ok(()), engine.build_state_payload(false))
+            } else {
+                let latest_requested_seek_seq =
+                    Some(LATEST_REQUESTED_SEEK_SEQ.load(Ordering::Relaxed));
+                if !engine.should_accept_seek_command(Some(exec_seq), latest_requested_seek_seq) {
+                    (Ok(()), engine.build_state_payload(false))
+                } else {
+                    let result = engine.seek(exec_time).map_err(|err| {
+                        engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
+                        err
+                    });
+                    (result, engine.build_state_payload(false))
+                }
+            }
+        };
+
+        let maybe_error = match (
+            payload.error_seq,
+            payload.error_code.clone(),
+            payload.error_message.clone(),
+        ) {
+            (Some(seq), Some(code), Some(message)) => Some(NativeAudioErrorPayload { seq, code, message }),
+            _ => None,
+        };
+
+        let _ = emitter::emit_state(&app_handle, payload);
+        if let Err(_err) = result {
+            if let Some(error_payload) = maybe_error {
+                let _ = emitter::emit_error(&app_handle, error_payload);
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1503,55 +1660,7 @@ pub fn sync_queue(
 
 pub fn seek(app_handle: &AppHandle, time: f64, seek_seq: Option<u64>) -> Result<(), String> {
     emitter::ensure_started(app_handle);
-
-    if let Some(seq) = seek_seq {
-        record_latest_requested_seek_seq(seq);
-    }
-
-    if is_stale_seek_sequence(seek_seq) {
-        return Ok(());
-    }
-
-    let (result, payload) = {
-        let mut engine = ENGINE
-            .lock()
-            .map_err(|_| "Audio engine is locked".to_string())?;
-
-        let latest_requested_seek_seq = seek_seq.and_then(|seq| {
-            if seq == 0 {
-                None
-            } else {
-                Some(LATEST_REQUESTED_SEEK_SEQ.load(Ordering::Relaxed))
-            }
-        });
-
-        if !engine.should_accept_seek_command(seek_seq, latest_requested_seek_seq) {
-            (Ok(()), engine.build_state_payload(false))
-        } else {
-            let result = engine.seek(time).map_err(|err| {
-                engine.set_error("NATIVE_AUDIO_SEEK_FAILED", err.clone());
-                err
-            });
-            (result, engine.build_state_payload(false))
-        }
-    };
-    let maybe_error = match (
-        payload.error_seq,
-        payload.error_code.clone(),
-        payload.error_message.clone(),
-    ) {
-        (Some(seq), Some(code), Some(message)) => {
-            Some(NativeAudioErrorPayload { seq, code, message })
-        }
-        _ => None,
-    };
-    emitter::emit_state(app_handle, payload)?;
-    if let Err(err) = result {
-        if let Some(error_payload) = maybe_error {
-            emitter::emit_error(app_handle, error_payload)?;
-        }
-        return Err(err);
-    }
+    SEEK_EXECUTOR.request_seek(app_handle, time, seek_seq);
     Ok(())
 }
 

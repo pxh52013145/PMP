@@ -155,8 +155,16 @@ pub(crate) fn spawn_render_transfer_worker(
                 let backoff = transfer_backoff(profile);
 
                 if decode_reservoir.is_finished_and_empty() {
+                    // Keep the transfer worker alive even after end-of-stream so a subsequent
+                    // interactive seek can clear the reservoir and resume playback without
+                    // forcing a full pipeline rebuild.
                     render_queue.mark_finished();
-                    break;
+                    if backoff.is_zero() {
+                        thread::sleep(Duration::from_millis(10));
+                    } else {
+                        thread::sleep(backoff.max(Duration::from_millis(5)));
+                    }
+                    continue;
                 }
 
                 let render_len = render_queue.len_samples();

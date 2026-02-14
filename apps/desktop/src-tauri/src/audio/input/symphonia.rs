@@ -293,9 +293,66 @@ fn start_symphonia_stream(
                             *guard = Some(message.clone());
                         }
                         let _ = meta_tx.send(Err(message));
+                        buffer_clone.mark_finished();
+                        return;
                     }
+
+                    // End-of-stream: keep decoder alive so interactive seeks near the tail do not
+                    // disconnect the command channel and force slow pipeline rebuilds.
                     buffer_clone.mark_finished();
-                    return;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(10));
+                        let drained = drain_decoder_commands(&command_rx);
+                        if drained.shutdown {
+                            return;
+                        }
+                        if let Some(target) = drained.seek_target {
+                            buffer_clone.clear();
+                            render_queue_clone.clear();
+                            pending_trim_frames_out = 0;
+
+                            let seek_to = SeekTo::Time {
+                                time: Time::from(target.max(0.0)),
+                                track_id: Some(track_id),
+                            };
+
+                            if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
+                                if let Some(time_base) = track.codec_params.time_base {
+                                    let required = time_base.calc_time(seeked.required_ts);
+                                    let actual = time_base.calc_time(seeked.actual_ts);
+                                    let required_seconds = required.seconds as f64 + required.frac;
+                                    let actual_seconds = actual.seconds as f64 + actual.frac;
+                                    let delta = (required_seconds - actual_seconds).max(0.0);
+                                    pending_trim_frames_out =
+                                        (delta * effective_sample_rate as f64) as usize;
+                                }
+
+                                decoder = match symphonia::default::get_codecs()
+                                    .make(&track.codec_params, &DecoderOptions::default())
+                                {
+                                    Ok(decoder) => decoder,
+                                    Err(err) => {
+                                        if let Ok(mut guard) = error_clone.lock() {
+                                            if guard.is_none() {
+                                                *guard =
+                                                    Some(format!("Failed to create decoder: {err}"));
+                                            }
+                                        }
+                                        buffer_clone.mark_finished();
+                                        return;
+                                    }
+                                };
+                                sample_buf = None;
+                                if let Some(r) = resampler.as_mut() {
+                                    r.reset();
+                                    pending_trim_frames_out =
+                                        pending_trim_frames_out.saturating_add(r.output_delay());
+                                }
+                            }
+
+                            continue 'decode_loop;
+                        }
+                    }
                 }
                 Err(SymphoniaError::ResetRequired) => {
                     if !meta_delivered {
@@ -503,9 +560,59 @@ fn start_symphonia_stream(
                             *guard = Some(message.clone());
                         }
                         let _ = meta_tx.send(Err(message));
+                        buffer_clone.mark_finished();
+                        return;
                     }
+
                     buffer_clone.mark_finished();
-                    return;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(10));
+                        let drained = drain_decoder_commands(&command_rx);
+                        if drained.shutdown {
+                            return;
+                        }
+                        if let Some(target) = drained.seek_target {
+                            buffer_clone.clear();
+                            render_queue_clone.clear();
+                            pending_trim_frames_out = 0;
+
+                            let seek_to = SeekTo::Time {
+                                time: Time::from(target.max(0.0)),
+                                track_id: Some(track_id),
+                            };
+
+                            if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
+                                if let Some(time_base) = track.codec_params.time_base {
+                                    let required = time_base.calc_time(seeked.required_ts);
+                                    let actual = time_base.calc_time(seeked.actual_ts);
+                                    let required_seconds = required.seconds as f64 + required.frac;
+                                    let actual_seconds = actual.seconds as f64 + actual.frac;
+                                    let delta = (required_seconds - actual_seconds).max(0.0);
+                                    pending_trim_frames_out =
+                                        (delta * effective_sample_rate as f64) as usize;
+                                }
+
+                                decoder = match symphonia::default::get_codecs().make(
+                                    &track.codec_params,
+                                    &DecoderOptions::default(),
+                                ) {
+                                    Ok(decoder) => decoder,
+                                    Err(_) => {
+                                        buffer_clone.mark_finished();
+                                        return;
+                                    }
+                                };
+                                sample_buf = None;
+                                if let Some(r) = resampler.as_mut() {
+                                    r.reset();
+                                    pending_trim_frames_out = pending_trim_frames_out
+                                        .saturating_add(r.output_delay());
+                                }
+                            }
+
+                            continue 'decode_loop;
+                        }
+                    }
                 }
                 Err(err) => {
                     if !meta_delivered {

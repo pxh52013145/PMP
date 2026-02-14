@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -83,7 +84,10 @@ fn render_pop_wait_timeout(profile: RealtimePressureProfile) -> Duration {
     Duration::from_millis(0)
 }
 
-pub(crate) fn wrap_source_for_shared_backend(source: BoxedSource) -> BoxedSource {
+pub(crate) fn wrap_source_for_shared_backend(
+    source: BoxedSource,
+    seek_epoch: Arc<AtomicU64>,
+) -> BoxedSource {
     if !parse_env_bool("PMP_AUDIO_SHARED_RENDER_AHEAD", true) {
         return source;
     }
@@ -107,7 +111,7 @@ pub(crate) fn wrap_source_for_shared_backend(source: BoxedSource) -> BoxedSource
     );
 
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let producer = spawn_producer_thread(source, queue.clone(), stop_rx);
+    let producer = spawn_producer_thread(source, queue.clone(), stop_rx, seek_epoch.clone());
 
     let prebuffer_target_seconds = parse_env_seconds(
         "PMP_AUDIO_SHARED_RENDER_AHEAD_PREROLL_SECONDS",
@@ -122,11 +126,15 @@ pub(crate) fn wrap_source_for_shared_backend(source: BoxedSource) -> BoxedSource
         Duration::from_millis(300),
     );
 
+    let observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
+
     Box::new(RenderAheadSource {
         queue,
         channels,
         sample_rate,
         duration,
+        seek_epoch,
+        observed_seek_epoch,
         local: Vec::with_capacity(8192),
         local_index: 0,
         last_samples: vec![0.0; channels as usize],
@@ -140,6 +148,7 @@ fn spawn_producer_thread(
     mut source: BoxedSource,
     queue: AudioRingBuffer,
     stop_rx: mpsc::Receiver<()>,
+    seek_epoch: Arc<AtomicU64>,
 ) -> JoinHandle<()> {
     let name = "pmpm-shared-render-ahead".to_string();
     let builder = thread::Builder::new().name(name);
@@ -155,10 +164,18 @@ fn spawn_producer_thread(
                 .min(queue.capacity_samples());
 
             let mut block = Vec::<f32>::with_capacity(4096);
+            let mut observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
 
             loop {
                 if stop_rx.try_recv().is_ok() {
                     break;
+                }
+
+                let current_epoch = seek_epoch.load(Ordering::Acquire);
+                if current_epoch != observed_seek_epoch {
+                    observed_seek_epoch = current_epoch;
+                    queue.clear();
+                    block.clear();
                 }
 
                 let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
@@ -176,11 +193,24 @@ fn spawn_producer_thread(
 
                 let chunk_samples = producer_chunk_samples(profile);
                 block.clear();
+                let mut seek_flushed = false;
                 for _ in 0..chunk_samples {
+                    let current_epoch = seek_epoch.load(Ordering::Acquire);
+                    if current_epoch != observed_seek_epoch {
+                        observed_seek_epoch = current_epoch;
+                        queue.clear();
+                        block.clear();
+                        seek_flushed = true;
+                        break;
+                    }
                     match source.next() {
                         Some(sample) => block.push(sample),
                         None => break,
                     }
+                }
+
+                if seek_flushed {
+                    continue;
                 }
 
                 if block.is_empty() {
@@ -193,6 +223,13 @@ fn spawn_producer_thread(
                     if stop_rx.try_recv().is_ok() {
                         queue.mark_finished();
                         return;
+                    }
+
+                    let current_epoch = seek_epoch.load(Ordering::Acquire);
+                    if current_epoch != observed_seek_epoch {
+                        observed_seek_epoch = current_epoch;
+                        queue.clear();
+                        break;
                     }
 
                     let pushed_frames = queue.push_interleaved(&block[start..], channels);
@@ -218,6 +255,8 @@ struct RenderAheadSource {
     channels: u16,
     sample_rate: u32,
     duration: Option<Duration>,
+    seek_epoch: Arc<AtomicU64>,
+    observed_seek_epoch: u64,
     local: Vec<f32>,
     local_index: usize,
     last_samples: Vec<f32>,
@@ -231,6 +270,18 @@ impl RenderAheadSource {
     const SILENCE_FRAMES_ON_UNDERRUN: usize = 96;
 
     fn refill_local(&mut self) -> bool {
+        let current_epoch = self.seek_epoch.load(Ordering::Acquire);
+        if current_epoch != self.observed_seek_epoch {
+            self.observed_seek_epoch = current_epoch;
+            self.queue.clear();
+            self.local.clear();
+            self.local_index = 0;
+            for sample in &mut self.last_samples {
+                *sample = 0.0;
+            }
+            self.needs_fade_in = true;
+        }
+
         self.local.clear();
         self.local_index = 0;
 
@@ -404,7 +455,8 @@ mod tests {
             sample_rate: 48_000,
         });
 
-        let mut wrapped = wrap_source_for_shared_backend(source);
+        let seek_epoch = Arc::new(AtomicU64::new(1));
+        let mut wrapped = wrap_source_for_shared_backend(source, seek_epoch);
         let mut count = 0usize;
         while wrapped.next().is_some() {
             count += 1;

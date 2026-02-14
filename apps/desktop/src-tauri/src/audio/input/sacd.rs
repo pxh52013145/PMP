@@ -416,7 +416,38 @@ fn start_dsf_stream(
                     if pcm8_chunk.is_empty() {
                         if reached_eof {
                             buffer_clone.mark_finished();
-                            return;
+                            loop {
+                                std::thread::sleep(Duration::from_millis(10));
+                                let drained = drain_decoder_commands(&command_rx);
+                                if drained.shutdown {
+                                    return;
+                                }
+                                if let Some(target) = drained.seek_target {
+                                    buffer_clone.clear();
+                                    render_queue_clone.clear();
+                                    pcm8_chunk.clear();
+                                    for ctx in &mut dsd2pcm {
+                                        ctx.reset();
+                                    }
+                                    decimator.reset();
+                                    if let Some(r) = resampler.as_mut() {
+                                        r.reset();
+                                    }
+
+                                    let desired_dsd_sample =
+                                        (target.max(0.0) * dsd_rate as f64) as u64;
+                                    let desired_dsd_sample =
+                                        desired_dsd_sample.min(sample_count.saturating_sub(1));
+                                    let aligned = if decimation_factor > 0 {
+                                        decimation_factor as u64
+                                            * (desired_dsd_sample / decimation_factor as u64)
+                                    } else {
+                                        0
+                                    };
+                                    let _ = iter.set_sample_index(aligned);
+                                    continue 'decode_loop;
+                                }
+                            }
                         }
                         continue;
                     }
@@ -443,7 +474,38 @@ fn start_dsf_stream(
                     if out_interleaved.is_empty() {
                         if reached_eof {
                             buffer_clone.mark_finished();
-                            return;
+                            loop {
+                                std::thread::sleep(Duration::from_millis(10));
+                                let drained = drain_decoder_commands(&command_rx);
+                                if drained.shutdown {
+                                    return;
+                                }
+                                if let Some(target) = drained.seek_target {
+                                    buffer_clone.clear();
+                                    render_queue_clone.clear();
+                                    pcm8_chunk.clear();
+                                    for ctx in &mut dsd2pcm {
+                                        ctx.reset();
+                                    }
+                                    decimator.reset();
+                                    if let Some(r) = resampler.as_mut() {
+                                        r.reset();
+                                    }
+
+                                    let desired_dsd_sample =
+                                        (target.max(0.0) * dsd_rate as f64) as u64;
+                                    let desired_dsd_sample =
+                                        desired_dsd_sample.min(sample_count.saturating_sub(1));
+                                    let aligned = if decimation_factor > 0 {
+                                        decimation_factor as u64
+                                            * (desired_dsd_sample / decimation_factor as u64)
+                                    } else {
+                                        0
+                                    };
+                                    let _ = iter.set_sample_index(aligned);
+                                    continue 'decode_loop;
+                                }
+                            }
                         }
                         continue;
                     }
@@ -491,7 +553,37 @@ fn start_dsf_stream(
 
                     if reached_eof {
                         buffer_clone.mark_finished();
-                        return;
+                        loop {
+                            std::thread::sleep(Duration::from_millis(10));
+                            let drained = drain_decoder_commands(&command_rx);
+                            if drained.shutdown {
+                                return;
+                            }
+                            if let Some(target) = drained.seek_target {
+                                buffer_clone.clear();
+                                render_queue_clone.clear();
+                                pcm8_chunk.clear();
+                                for ctx in &mut dsd2pcm {
+                                    ctx.reset();
+                                }
+                                decimator.reset();
+                                if let Some(r) = resampler.as_mut() {
+                                    r.reset();
+                                }
+
+                                let desired_dsd_sample = (target.max(0.0) * dsd_rate as f64) as u64;
+                                let desired_dsd_sample =
+                                    desired_dsd_sample.min(sample_count.saturating_sub(1));
+                                let aligned = if decimation_factor > 0 {
+                                    decimation_factor as u64
+                                        * (desired_dsd_sample / decimation_factor as u64)
+                                } else {
+                                    0
+                                };
+                                let _ = iter.set_sample_index(aligned);
+                                continue 'decode_loop;
+                            }
+                        }
                     }
                 }
             }));

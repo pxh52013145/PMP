@@ -53,6 +53,7 @@ pub async fn native_audio_seek(
     time: f64,
     seek_seq: Option<u64>,
 ) -> Result<(), String> {
+    // `native_audio::seek` is now a fast enqueue into the backend coalescer.
     native_audio::seek(&app, time, seek_seq)
 }
 
