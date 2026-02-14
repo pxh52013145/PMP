@@ -95,6 +95,9 @@ tmp/
 # Agent / local automation
 .sisyphus/
 
+# Local references (do not commit)
+reference/
+
 # Windows reserved / accidental files (can break tooling)
 NUL
 

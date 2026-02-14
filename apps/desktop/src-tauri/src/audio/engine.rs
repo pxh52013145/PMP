@@ -1633,14 +1633,6 @@ impl NativeAudioEngine {
         let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
         let mut force_non_streaming_seek = false;
 
-        // IMPORTANT: pause the currently playing sink immediately so rapid seek bursts do not keep
-        // emitting audio from the previous position while we rebuild the pipeline/source.
-        if resume_playing {
-            if let Some(sink) = &self.sink {
-                sink.pause();
-            }
-        }
-
         let apply_streaming_seek_state =
             |engine: &mut NativeAudioEngine,
              seek_target: f64,
@@ -1662,12 +1654,6 @@ impl NativeAudioEngine {
             };
 
         if let Some(streaming) = &self.streaming {
-            if resume_playing {
-                if let Some(sink) = &self.sink {
-                    sink.pause();
-                }
-            }
-
             self.spectrum_pre_tap.clear();
             self.spectrum_post_tap.clear();
             self.dsp_runtime.request_reset();
@@ -1732,6 +1718,48 @@ impl NativeAudioEngine {
             self.buffering_started_at = None;
             self.buffering_last_progress_at = None;
             self.buffering_last_samples = 0;
+        }
+
+        if let (Some(samples), Some(sink), Some(mixer)) = (
+            self.decoded_samples.clone(),
+            self.sink.as_ref(),
+            self.mixer.as_ref(),
+        ) {
+            let channels = self.decoded_channels.max(1);
+            let sample_rate = self.decoded_sample_rate.max(1);
+            let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
+            let start_sample = start_sample.min(samples.len());
+
+            // In-memory seek must never recreate the sink/output stream; it should be a fast
+            // pointer jump (VCP-style). Switch the mixer source in-place with a ~1ms crossfade
+            // to avoid clicks without introducing a perceptible gap.
+            let seek_fade_frames = 64u64;
+            mixer.crossfade_to(
+                Box::new(SharedSamplesSource::new(
+                    samples,
+                    channels,
+                    sample_rate,
+                    start_sample,
+                )) as crate::audio::output::BoxedSource,
+                None,
+                seek_fade_frames,
+            )?;
+
+            sink.set_volume(self.effective_volume());
+            if resume_playing {
+                sink.play();
+                self.base_position = target;
+                self.playback_started_at = Some(Instant::now());
+                self.set_state(PlaybackState::Playing);
+            } else {
+                sink.pause();
+                self.base_position = target;
+                self.playback_started_at = None;
+                self.set_state(PlaybackState::Paused);
+            }
+
+            self.current_position = target;
+            return Ok(());
         }
 
         let (sink, output_info) = self.output_backend.create_sink()?;
@@ -2674,7 +2702,7 @@ mod tests {
     }
 
     #[test]
-    fn seek_pauses_existing_sink_in_non_streaming_mode() {
+    fn seek_in_memory_path_does_not_recreate_sink() {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(FailBackend);
         let mut engine = NativeAudioEngine::new_with_backend(backend);
 
@@ -2690,10 +2718,20 @@ mod tests {
         let old_sink = Arc::new(CallSink::default());
         engine.sink = Some(old_sink.clone());
 
-        // This seek will fail later because create_sink fails, but it should still pause the old sink
-        // immediately at the start of the seek path.
-        let _ = engine.seek(0.25);
-        assert!(old_sink.pause_calls.load(Ordering::Acquire) >= 1);
+        // Provide a live mixer receiver so seek can switch sources without touching create_sink.
+        let initial_source = Box::new(SharedSamplesSource::new(
+            engine.decoded_samples.clone().expect("decoded samples"),
+            engine.decoded_channels,
+            engine.decoded_sample_rate,
+            0,
+        )) as crate::audio::output::BoxedSource;
+        let (controller, _mixer_source) = PlaybackMixerSource::new(initial_source, 2, 48_000);
+        engine.mixer = Some(controller);
+
+        // create_sink always fails for this backend; seek must still succeed via the in-memory path.
+        engine.seek(0.25).expect("seek should succeed");
+        assert_eq!(old_sink.pause_calls.load(Ordering::Acquire), 0);
+        assert!(old_sink.play_calls.load(Ordering::Acquire) >= 1);
     }
 
     #[derive(Default)]
