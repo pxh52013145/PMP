@@ -1647,6 +1647,10 @@ impl AudioSink for WasapiExclusiveSink {
             .volume_bits
             .store(value.clamp(0.0, 4.0).to_bits(), Ordering::Release);
     }
+
+    fn flush(&self) {
+        self.inner.render_queue.clear();
+    }
 }
 
 fn run_sink_thread(inner: Arc<SinkInner>) {
@@ -2212,6 +2216,10 @@ impl AudioSink for WasapiSharedRawSink {
         self.inner
             .volume_bits
             .store(value.clamp(0.0, 4.0).to_bits(), Ordering::Release);
+    }
+
+    fn flush(&self) {
+        self.inner.render_queue.clear();
     }
 }
 

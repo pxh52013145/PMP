@@ -100,6 +100,7 @@ pub trait AudioSink: Send + Sync {
     fn stop(&self);
     fn empty(&self) -> bool;
     fn set_volume(&self, value: f32);
+    fn flush(&self) {}
 }
 
 impl AudioSink for rodio::Sink {

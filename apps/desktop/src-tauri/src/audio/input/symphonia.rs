@@ -978,10 +978,7 @@ mod tests {
         write_wav_i16_stereo_lcg(&path, 48_000, 4_800);
 
         let input = SymphoniaInput::default();
-        for decode_mode in [
-            AudioInputDecodeMode::Streaming,
-            AudioInputDecodeMode::FullTrack,
-        ] {
+        for decode_mode in [AudioInputDecodeMode::Streaming, AudioInputDecodeMode::FullTrack] {
             let opened = input
                 .open(
                     &path,
@@ -1001,10 +998,7 @@ mod tests {
                     panic!("decode mode {:?} should use streaming path", decode_mode)
                 }
                 AudioInputKind::Rodio => {
-                    panic!(
-                        "decode mode {:?} should not fall back to rodio",
-                        decode_mode
-                    )
+                    panic!("decode mode {:?} should not fall back to rodio", decode_mode)
                 }
             }
         }

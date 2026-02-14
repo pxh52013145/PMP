@@ -1630,7 +1630,11 @@ impl NativeAudioEngine {
             .current_track
             .clone()
             .ok_or_else(|| "No track loaded".to_string())?;
-        let target = seconds.max(0.0);
+        let mut target = seconds.max(0.0);
+        if self.duration.is_finite() && self.duration > 0.0 {
+            // Avoid edge-case failures when seeking to (or slightly past) the exact end.
+            target = target.min((self.duration - 0.000_5).max(0.0));
+        }
         let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
         let mut force_non_streaming_seek = false;
 
@@ -1663,6 +1667,9 @@ impl NativeAudioEngine {
                 Ok(()) => {
                     streaming.buffer.clear();
                     streaming.render_queue.clear();
+                    if let Some(sink) = &self.sink {
+                        sink.flush();
+                    }
                     let available_samples = self.streaming_available_samples(streaming);
                     apply_streaming_seek_state(self, target, resume_playing, available_samples);
                     if resume_playing {
@@ -1692,6 +1699,9 @@ impl NativeAudioEngine {
                     Ok(()) => {
                         reloaded_streaming.buffer.clear();
                         reloaded_streaming.render_queue.clear();
+                        if let Some(sink) = &self.sink {
+                            sink.flush();
+                        }
                         let available_samples =
                             self.streaming_available_samples(reloaded_streaming);
                         apply_streaming_seek_state(self, target, resume_playing, available_samples);
@@ -1729,7 +1739,10 @@ impl NativeAudioEngine {
             let channels = self.decoded_channels.max(1);
             let sample_rate = self.decoded_sample_rate.max(1);
             let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
-            let start_sample = start_sample.min(samples.len());
+            let max_start_sample = samples.len().saturating_sub(channels as usize);
+            let start_sample = start_sample.min(max_start_sample);
+            let actual_target =
+                (start_sample as f64) / (sample_rate as f64 * channels as f64).max(1.0);
 
             // In-memory seek must never recreate the sink/output stream; it should be a fast
             // pointer jump (VCP-style). Switch the mixer source in-place with a ~1ms crossfade
@@ -1746,20 +1759,21 @@ impl NativeAudioEngine {
                 seek_fade_frames,
             )?;
 
+            sink.flush();
             sink.set_volume(self.effective_volume());
             if resume_playing {
                 sink.play();
-                self.base_position = target;
+                self.base_position = actual_target;
                 self.playback_started_at = Some(Instant::now());
                 self.set_state(PlaybackState::Playing);
             } else {
                 sink.pause();
-                self.base_position = target;
+                self.base_position = actual_target;
                 self.playback_started_at = None;
                 self.set_state(PlaybackState::Paused);
             }
 
-            self.current_position = target;
+            self.current_position = actual_target;
             return Ok(());
         }
 
@@ -1778,6 +1792,8 @@ impl NativeAudioEngine {
             self.decoded_sample_rate,
         ) {
             let start_sample = ((target * sample_rate as f64) as usize) * channels as usize;
+            let max_start_sample = samples.len().saturating_sub(channels.max(1) as usize);
+            let start_sample = start_sample.min(max_start_sample);
             (
                 Box::new(SharedSamplesSource::new(
                     samples,
@@ -2732,6 +2748,7 @@ mod tests {
         // create_sink always fails for this backend; seek must still succeed via the in-memory path.
         engine.seek(0.25).expect("seek should succeed");
         assert_eq!(old_sink.pause_calls.load(Ordering::Acquire), 0);
+        assert!(old_sink.flush_calls.load(Ordering::Acquire) >= 1);
         assert!(old_sink.play_calls.load(Ordering::Acquire) >= 1);
     }
 
@@ -2739,6 +2756,7 @@ mod tests {
     struct CallSink {
         play_calls: AtomicUsize,
         pause_calls: AtomicUsize,
+        flush_calls: AtomicUsize,
     }
 
     impl AudioSink for CallSink {
@@ -2750,6 +2768,10 @@ mod tests {
 
         fn pause(&self) {
             self.pause_calls.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn flush(&self) {
+            self.flush_calls.fetch_add(1, Ordering::Relaxed);
         }
 
         fn stop(&self) {}
