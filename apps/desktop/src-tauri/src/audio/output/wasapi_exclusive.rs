@@ -1356,6 +1356,7 @@ struct WasapiStream {
     sample_rate: u32,
     sample_format: WasapiSampleFormat,
     transport_mode: NativeAudioTransportMode,
+    mode: WasapiStreamMode,
     started: bool,
 }
 
@@ -1364,7 +1365,12 @@ impl WasapiStream {
     fn stop(&mut self) {
         if self.started {
             let _ = unsafe { self.audio_client.Stop() };
-            let _ = unsafe { self.audio_client.Reset() };
+            // Some shared RAW drivers hang on Reset() under rapid seeks / state changes.
+            // Exclusive mode relies on Reset() to drop already-queued frames, but shared RAW
+            // will instead clear our render queue and let the engine drain naturally.
+            if matches!(self.mode, WasapiStreamMode::Exclusive) {
+                let _ = unsafe { self.audio_client.Reset() };
+            }
             self.started = false;
         }
     }
@@ -1375,7 +1381,9 @@ impl Drop for WasapiStream {
     fn drop(&mut self) {
         self.stop();
         unsafe {
-            let _ = self.audio_client.Reset();
+            if matches!(self.mode, WasapiStreamMode::Exclusive) {
+                let _ = self.audio_client.Reset();
+            }
             let _ = windows::Win32::Foundation::CloseHandle(self.event_handle);
         }
     }
@@ -1790,7 +1798,6 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
             let current_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
             if current_flush_epoch != observed_flush_epoch {
                 observed_flush_epoch = current_flush_epoch;
-                stream.stop();
                 callback_timing.clear_last_wake();
                 inner.render_queue.clear();
             }
@@ -1810,11 +1817,6 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                     inner.is_empty.store(true, Ordering::Release);
                     return;
                 }
-            } else if !playing && stream.started {
-                stream.stop();
-                callback_timing.clear_last_wake();
-                thread::sleep(Duration::from_millis(10));
-                continue;
             }
 
             if !stream.started {
@@ -3417,6 +3419,7 @@ fn open_wasapi_stream(
                             sample_rate,
                             sample_format: attempt.sample_format,
                             transport_mode,
+                            mode: stream_mode,
                             started: false,
                         });
                     }
@@ -3474,6 +3477,7 @@ fn open_wasapi_stream(
                     sample_rate,
                     sample_format: attempt.sample_format,
                     transport_mode,
+                    mode: stream_mode,
                     started: false,
                 });
             }
