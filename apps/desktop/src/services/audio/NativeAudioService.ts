@@ -212,7 +212,8 @@ export class NativeAudioService implements IAudioService {
   private storedStreamingBufferSettings: StreamingBufferSettings = {
     startOrSeekSeconds: null,
     crossfadeSeconds: null,
-    decodeMode: 'streaming',
+    // Default to full-track decoding to achieve VCP-like scrub/seek responsiveness.
+    decodeMode: 'full-track',
   };
   private lastAppliedStreamingBufferSettings: StreamingBufferSettings | null = null;
   private protectionWindowRefCount = 0;
@@ -576,11 +577,11 @@ export class NativeAudioService implements IAudioService {
       const decodeMode =
         decodeModeRaw === 'full-track' || decodeModeRaw === 'streaming'
           ? decodeModeRaw
-          : 'streaming';
+          : 'full-track';
 
       return { startOrSeekSeconds: start, crossfadeSeconds: crossfade, decodeMode };
     } catch {
-      return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' };
+      return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'full-track' };
     }
   }
 

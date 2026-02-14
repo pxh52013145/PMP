@@ -437,7 +437,8 @@ impl NativeAudioEngine {
             last_error_message: None,
             streaming_prebuffer_start_or_seek_seconds: None,
             streaming_prebuffer_crossfade_seconds: None,
-            streaming_decode_mode: AudioInputDecodeMode::Streaming,
+            // Default to full-track decoding for VCP-like, seek-heavy interactions.
+            streaming_decode_mode: AudioInputDecodeMode::FullTrack,
             transport_mode: NativeAudioTransportMode::Robust,
             hq_src_enabled: true,
             hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
