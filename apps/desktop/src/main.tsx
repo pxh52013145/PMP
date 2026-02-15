@@ -8,6 +8,33 @@ import { STORAGE_KEYS } from './utils/windowCommunication';
 import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
 import './index.css';
 
+function applyRuntimePlatformDataset(): void {
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return;
+
+  try {
+    const ua = navigator.userAgent || '';
+    const root = document.documentElement;
+
+    if (/windows/i.test(ua)) {
+      root.dataset.pmpPlatform = 'windows';
+      return;
+    }
+
+    if (/macintosh|mac os/i.test(ua)) {
+      root.dataset.pmpPlatform = 'mac';
+      return;
+    }
+
+    if (/linux/i.test(ua)) {
+      root.dataset.pmpPlatform = 'linux';
+    }
+  } catch {
+    // best-effort
+  }
+}
+
+applyRuntimePlatformDataset();
+
 setLocale(readPersistedLocale());
 bootstrapPerformanceRuntimeProfileStorage();
 

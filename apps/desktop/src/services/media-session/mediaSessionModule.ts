@@ -1,5 +1,6 @@
 import type { AppEvents } from '../../contracts/events';
 import type { KernelModule } from '../../kernel';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { AUDIO_ENGINE_SERVICE_TOKEN, type AudioState, type Track } from '../audio';
 import { KEYBINDINGS_SERVICE_TOKEN } from '../keybindings';
 
@@ -209,6 +210,13 @@ export function createMediaSessionModule(options: { enabled?: boolean } = {}): K
       const enabled = options.enabled !== false;
       if (!enabled) return () => {};
       if (!isMainWindowHash()) return () => {};
+
+      // Desktop/Tauri (Windows/WebView2): rely on the native SMTC integration for media keys / OS controls.
+      // WebView2 mediaSession + WebAudio keepalive has shown significant memory overhead during playback.
+      if (isTauriRuntime() && typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent)) {
+        return () => {};
+      }
+
       if (!isMediaSessionAvailable()) return () => {};
 
       const audioEngine = services.getOptional(AUDIO_ENGINE_SERVICE_TOKEN);
