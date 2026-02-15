@@ -7,6 +7,19 @@ pub async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> R
         .map_err(|e| format!("Native audio load task failed: {e}"))?
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_load_and_play(
+    app: tauri::AppHandle,
+    path: String,
+    replay_gain_db: Option<f32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::load_and_play(&app, path, replay_gain_db)
+    })
+    .await
+    .map_err(|e| format!("Native audio load+play task failed: {e}"))?
+}
+
 #[tauri::command]
 pub async fn native_audio_play(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || native_audio::play(&app))
@@ -162,6 +175,16 @@ pub async fn native_audio_set_streaming_buffer_settings(
     })
     .await
     .map_err(|e| format!("Native audio set streaming buffer settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_spectrum_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || native_audio::set_spectrum_enabled(&app, enabled))
+        .await
+        .map_err(|e| format!("Native audio set spectrum enabled task failed: {e}"))?
 }
 
 #[tauri::command]

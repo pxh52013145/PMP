@@ -123,15 +123,17 @@ describe('NativeAudioService', () => {
 
     await service.play();
 
-    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
-    expect(invoke).toHaveBeenCalledWith('native_audio_play', undefined);
+    expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
+      path: 'C:\\\\Music\\\\a.mp3',
+      replayGainDb: null,
+    });
     service.destroy();
   });
 
   it('avoids calling play() when the backend fails to load the selected track', async () => {
     const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
     invokeMock.mockImplementation((cmd: string) => {
-      if (cmd === 'native_audio_load') {
+      if (cmd === 'native_audio_load_and_play') {
         return Promise.reject(new Error('load failed'));
       }
       return Promise.resolve(undefined);
@@ -145,8 +147,10 @@ describe('NativeAudioService', () => {
 
     await service.playTrackAtIndex(0);
 
-    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
-    expect(invoke).not.toHaveBeenCalledWith('native_audio_play', undefined);
+    expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
+      path: 'C:\\\\Music\\\\a.mp3',
+      replayGainDb: null,
+    });
     service.destroy();
   });
 
@@ -249,7 +253,10 @@ describe('NativeAudioService', () => {
 
     await service.playPrevious();
 
-    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
+    expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
+      path: 'C:\\\\Music\\\\a.mp3',
+      replayGainDb: null,
+    });
     service.destroy();
   });
 
@@ -293,8 +300,10 @@ describe('NativeAudioService', () => {
     handlers.native_audio_state?.({ payload: { playbackState: 'stopped', ended: true } });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(invoke).toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\a.mp3' });
-    expect(invoke).toHaveBeenCalledWith('native_audio_play', undefined);
+    expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
+      path: 'C:\\\\Music\\\\a.mp3',
+      replayGainDb: null,
+    });
     service.destroy();
   });
 
@@ -772,6 +781,32 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('defaults decodeMode to streaming when legacy buffer settings omit decodeMode', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS,
+      JSON.stringify({
+        startOrSeekSeconds: 1.2,
+        crossfadeSeconds: 0.6,
+        // decodeMode omitted (legacy payload)
+      })
+    );
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    const streamSettingCalls = invokeMock.mock.calls.filter(
+      ([cmd]) => cmd === 'native_audio_set_streaming_buffer_settings'
+    );
+
+    expect(streamSettingCalls.length).toBeGreaterThan(0);
+    expect(streamSettingCalls.at(-1)?.[1]).toMatchObject({
+      decodeMode: 'streaming',
+    });
+
+    service.destroy();
+  });
+
   it('keeps full-track decode mode when recovery policy escalates buffering', async () => {
     localStorage.setItem(
       STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS,
@@ -779,6 +814,7 @@ describe('NativeAudioService', () => {
         startOrSeekSeconds: 1.4,
         crossfadeSeconds: 0.7,
         decodeMode: 'full-track',
+        userSetDecodeMode: true,
       })
     );
 

@@ -490,15 +490,26 @@ impl StreamingResampler {
         }
     }
 
-    pub fn process_interleaved(&mut self, input_interleaved: &[f32]) -> Vec<f32> {
+    pub fn process_interleaved_into(&mut self, input_interleaved: &[f32], out_interleaved: &mut Vec<f32>) {
+        out_interleaved.clear();
         let frames = input_interleaved.len() / self.channels;
+        if frames == 0 {
+            return;
+        }
+
+        if out_interleaved.capacity() < input_interleaved.len() {
+            out_interleaved.reserve(
+                input_interleaved
+                    .len()
+                    .saturating_sub(out_interleaved.capacity()),
+            );
+        }
         for frame in 0..frames {
             for ch in 0..self.channels {
                 self.input[ch].push(input_interleaved[frame * self.channels + ch]);
             }
         }
 
-        let mut out_interleaved: Vec<f32> = Vec::new();
         while self
             .input
             .iter()
@@ -615,7 +626,11 @@ impl StreamingResampler {
                 }
             }
         }
+    }
 
+    pub fn process_interleaved(&mut self, input_interleaved: &[f32]) -> Vec<f32> {
+        let mut out_interleaved: Vec<f32> = Vec::new();
+        self.process_interleaved_into(input_interleaved, &mut out_interleaved);
         out_interleaved
     }
 }

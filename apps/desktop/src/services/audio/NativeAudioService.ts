@@ -172,6 +172,11 @@ export class NativeAudioService implements IAudioService {
   private dynamicSrcSettingsListenerInitPromise: Promise<void> | null = null;
   private spectrumData: Uint8Array | null = null;
   private spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>> = {};
+  private spectrumEnabled = false;
+  private spectrumEnablePending = false;
+  private spectrumDisableTimer: number | null = null;
+  private lastSpectrumTouchAtMs = 0;
+  private readonly spectrumIdleTimeoutMs = 2500;
   private restoredOutputBackend = false;
   private restoredOutputDevice = false;
   private restoredInputId = false;
@@ -212,8 +217,9 @@ export class NativeAudioService implements IAudioService {
   private storedStreamingBufferSettings: StreamingBufferSettings = {
     startOrSeekSeconds: null,
     crossfadeSeconds: null,
-    // Default to full-track decoding to achieve VCP-like scrub/seek responsiveness.
-    decodeMode: 'full-track',
+    // Default to streaming for low memory usage + fast click-to-play startup.
+    // Full-track decoding can still be enabled via settings for seek/scrub-heavy workflows.
+    decodeMode: 'streaming',
   };
   private lastAppliedStreamingBufferSettings: StreamingBufferSettings | null = null;
   private protectionWindowRefCount = 0;
@@ -559,19 +565,31 @@ export class NativeAudioService implements IAudioService {
     await this.restoreGainDbFromStorage();
   }
 
-  private readStreamingBufferSettings(): StreamingBufferSettings {
+  private readStreamingBufferSettings(): {
+    settings: StreamingBufferSettings;
+    migratedLegacyFullTrack: boolean;
+  } {
     try {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
-      if (!raw) return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' };
+      if (!raw) {
+        return {
+          settings: { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' },
+          migratedLegacyFullTrack: false,
+        };
+      }
       const parsed = JSON.parse(raw) as unknown;
       if (!parsed || typeof parsed !== 'object') {
-        return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' };
+        return {
+          settings: { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' },
+          migratedLegacyFullTrack: false,
+        };
       }
       const record = parsed as Record<string, unknown>;
 
       const startRaw = record.startOrSeekSeconds;
       const crossfadeRaw = record.crossfadeSeconds;
       const decodeModeRaw = record.decodeMode;
+      const userSetDecodeMode = record.userSetDecodeMode === true;
 
       const start =
         startRaw === null
@@ -586,14 +604,32 @@ export class NativeAudioService implements IAudioService {
             ? Math.max(0, Math.min(3, crossfadeRaw))
             : null;
 
-      const decodeMode =
-        decodeModeRaw === 'full-track' || decodeModeRaw === 'streaming'
-          ? decodeModeRaw
-          : 'full-track';
+      const isDecodeMode = (
+        value: unknown
+      ): value is StreamingBufferSettings['decodeMode'] =>
+        value === 'full-track' || value === 'streaming';
 
-      return { startOrSeekSeconds: start, crossfadeSeconds: crossfade, decodeMode };
+      let decodeMode: StreamingBufferSettings['decodeMode'] = isDecodeMode(decodeModeRaw)
+        ? decodeModeRaw
+        : 'streaming';
+
+      let migratedLegacyFullTrack = false;
+      if (decodeMode === 'full-track' && !userSetDecodeMode) {
+        // Older builds defaulted to full-track. Migrate to streaming for instant click-to-play and
+        // much lower memory usage unless the user explicitly opted into full-track.
+        decodeMode = 'streaming';
+        migratedLegacyFullTrack = true;
+      }
+
+      return {
+        settings: { startOrSeekSeconds: start, crossfadeSeconds: crossfade, decodeMode },
+        migratedLegacyFullTrack,
+      };
     } catch {
-      return { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'full-track' };
+      return {
+        settings: { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' },
+        migratedLegacyFullTrack: false,
+      };
     }
   }
 
@@ -602,10 +638,22 @@ export class NativeAudioService implements IAudioService {
     this.restoredStreamingBufferSettings = true;
 
     try {
-      const settings = this.readStreamingBufferSettings();
+      const { settings, migratedLegacyFullTrack } = this.readStreamingBufferSettings();
       this.storedStreamingBufferSettings = settings;
       this.attachVisibilityAwareStreamingBufferPolicy();
       this.applyStreamingBufferPolicy();
+
+      if (migratedLegacyFullTrack) {
+        void broadcastDataUpdate(
+          STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS,
+          {
+            ...settings,
+            userSetDecodeMode: false,
+            migratedAtMs: Date.now(),
+          },
+          TAURI_EVENTS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS_UPDATED
+        );
+      }
     } catch {
       // ignore
     }
@@ -800,23 +848,23 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  private async applyReplayGainForTrack(track: Track): Promise<void> {
+  private computeReplayGainDbForTrack(track: Track): number | null {
     const settings = this.readReplayGainSettings();
-    if (!settings.enabled) {
-      await this.invokeCommand('native_audio_set_replay_gain', { db: null });
-      return;
-    }
+    if (!settings.enabled) return null;
 
     const base =
       settings.mode === 'album' ? track.replayGainAlbumGainDb : track.replayGainTrackGainDb;
     if (typeof base !== 'number' || !isFinite(base)) {
-      await this.invokeCommand('native_audio_set_replay_gain', { db: null });
-      return;
+      return null;
     }
 
     const effective = base + (typeof settings.preampDb === 'number' ? settings.preampDb : 0);
-    const clamped = Math.max(-30, Math.min(30, effective));
-    await this.invokeCommand('native_audio_set_replay_gain', { db: clamped });
+    return Math.max(-30, Math.min(30, effective));
+  }
+
+  private async applyReplayGainForTrack(track: Track): Promise<void> {
+    const db = this.computeReplayGainDbForTrack(track);
+    await this.invokeCommand('native_audio_set_replay_gain', { db });
   }
 
   private sanitizeBackendId(value: unknown): string | null {
@@ -2477,13 +2525,48 @@ export class NativeAudioService implements IAudioService {
     return queue.map((track) => this.getTrackPath(track)).filter(Boolean) as string[];
   }
 
+  private disposed = false;
+  private pendingQueueSync: { queue: Track[]; currentIndex: number } | null = null;
+  private queueSyncScheduled = false;
+
+  private scheduleQueueSyncFlush(): void {
+    if (this.disposed) {
+      this.pendingQueueSync = null;
+      return;
+    }
+    if (this.queueSyncScheduled) return;
+    this.queueSyncScheduled = true;
+
+    const flush = () => {
+      this.queueSyncScheduled = false;
+      if (this.disposed) {
+        this.pendingQueueSync = null;
+        return;
+      }
+      const pending = this.pendingQueueSync;
+      this.pendingQueueSync = null;
+      if (!pending) return;
+
+      void invoke('native_audio_sync_queue', {
+        queue: this.buildQueuePaths(pending.queue),
+        currentIndex: pending.currentIndex,
+      }).catch((error) => {
+        console.warn('[NativeAudio] Failed to sync queue state:', error);
+      });
+    };
+
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(flush);
+      return;
+    }
+
+    void Promise.resolve().then(flush);
+  }
+
   private syncQueueToNative(queue: Track[] = this.state.queue, currentIndex = this.state.currentIndex): void {
-    void invoke('native_audio_sync_queue', {
-      queue: this.buildQueuePaths(queue),
-      currentIndex,
-    }).catch((error) => {
-      console.warn('[NativeAudio] Failed to sync queue state:', error);
-    });
+    if (this.disposed) return;
+    this.pendingQueueSync = { queue, currentIndex };
+    this.scheduleQueueSyncFlush();
   }
 
   private resolveQueueFromPaths(queuePaths: string[]): Track[] {
@@ -2944,24 +3027,28 @@ export class NativeAudioService implements IAudioService {
         if (!payload?.bins || !Array.isArray(payload.bins)) return;
         const bins = payload.bins;
 
-        if (!this.spectrumData || this.spectrumData.length !== bins.length) {
-          this.spectrumData = new Uint8Array(bins.length);
-        }
-        const next = this.spectrumData;
-
-        for (let i = 0; i < bins.length; i++) {
-          const value = typeof bins[i] === 'number' ? bins[i] : 0;
-          const clamped = Math.max(0, Math.min(1, value));
-          next[i] = Math.round(clamped * 255);
-        }
-
         const tap =
           payload.tapId === 'pre-dsp' || payload.tap === 'pre-dsp'
             ? 'pre-dsp'
             : payload.tapId === 'post-dsp' || payload.tap === 'post-dsp'
               ? 'post-dsp'
               : null;
-        if (!tap) return;
+
+        const ensureBuffer = (current: Uint8Array | null | undefined): Uint8Array => {
+          if (current && current.length === bins.length) return current;
+          return new Uint8Array(bins.length);
+        };
+
+        if (!tap) {
+          const target = ensureBuffer(this.spectrumData);
+          for (let i = 0; i < bins.length; i++) {
+            const value = typeof bins[i] === 'number' ? bins[i] : 0;
+            const clamped = Math.max(0, Math.min(1, value));
+            target[i] = Math.round(clamped * 255);
+          }
+          this.spectrumData = target;
+          return;
+        }
 
         const frameId =
           typeof payload.frameId === 'number' && Number.isFinite(payload.frameId)
@@ -2976,13 +3063,26 @@ export class NativeAudioService implements IAudioService {
             ? payload.sampleRate
             : this.outputSampleRate || this.sourceSampleRate || 0;
 
+        const existingBins = this.spectrumFrames[tap]?.bins;
+        const target = ensureBuffer(existingBins);
+        for (let i = 0; i < bins.length; i++) {
+          const value = typeof bins[i] === 'number' ? bins[i] : 0;
+          const clamped = Math.max(0, Math.min(1, value));
+          target[i] = Math.round(clamped * 255);
+        }
+
         this.spectrumFrames[tap] = {
           frameId,
           timestampMs,
           tap,
           sampleRate,
-          bins: new Uint8Array(next),
+          bins: target,
         };
+
+        // Default frequency data drives most visualizers: prefer post-dsp when available.
+        if (tap === 'post-dsp' || !this.spectrumData) {
+          this.spectrumData = target;
+        }
       });
 
       this.errorListener = await listen('native_audio_error', (event) => {
@@ -3279,6 +3379,53 @@ export class NativeAudioService implements IAudioService {
     return true;
   }
 
+  private async loadAndPlayTrackInternal(track: Track): Promise<boolean> {
+    this.clearPendingSeek();
+    if (!track) return false;
+
+    const trackPath = this.getTrackPath(track);
+    if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
+      const error = new Error(
+        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+      ) as Error & { code?: string };
+      error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+      this.emitError(error);
+      return false;
+    }
+
+    let queue = this.state.queue;
+    let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
+    if (index === -1) {
+      queue = [...queue, track];
+      index = queue.length - 1;
+    }
+
+    const nextState = this.updateState({
+      currentTrack: track,
+      queue,
+      currentIndex: index,
+      playbackState: 'loading',
+      duration: track.duration ?? 0,
+      currentTime: 0,
+      bufferedTime: 0,
+      bufferedAhead: 0,
+    });
+    this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+
+    this.syncQueueToNative(queue, index);
+
+    const replayGainDb = this.computeReplayGainDbForTrack(track);
+
+    try {
+      await this.invokeCommand('native_audio_load_and_play', { path: trackPath, replayGainDb });
+    } catch {
+      // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.
+      return false;
+    }
+
+    return true;
+  }
+
   async loadTrack(track: Track): Promise<void> {
     try {
       await this.loadTrackInternal(track);
@@ -3506,9 +3653,8 @@ export class NativeAudioService implements IAudioService {
         return;
       }
 
-      const loaded = await this.loadTrackInternal(track);
+      const loaded = await this.loadAndPlayTrackInternal(track);
       if (!loaded) return;
-      await this.play();
     } catch {
       // invokeCommand already emits error; swallow to avoid breaking the coalescing queue.
     }
@@ -3694,17 +3840,73 @@ export class NativeAudioService implements IAudioService {
     this.addMultipleToQueue(playlist.tracks);
   }
 
+  private touchSpectrumUsage(): void {
+    if (this.disposed) return;
+    this.lastSpectrumTouchAtMs = Date.now();
+    this.ensureSpectrumEnabled();
+    this.scheduleSpectrumDisable();
+  }
+
+  private ensureSpectrumEnabled(): void {
+    if (this.spectrumEnabled || this.spectrumEnablePending) return;
+    this.spectrumEnablePending = true;
+    void this.setSpectrumEnabled(true).finally(() => {
+      this.spectrumEnablePending = false;
+    });
+  }
+
+  private scheduleSpectrumDisable(): void {
+    if (typeof window === 'undefined') return;
+    if (this.spectrumDisableTimer !== null) return;
+    const timeout = Math.max(500, this.spectrumIdleTimeoutMs + 100);
+    this.spectrumDisableTimer = window.setTimeout(() => {
+      this.spectrumDisableTimer = null;
+      this.maybeDisableSpectrum();
+    }, timeout);
+  }
+
+  private maybeDisableSpectrum(): void {
+    if (this.disposed) return;
+    const idleMs = Date.now() - this.lastSpectrumTouchAtMs;
+    if (idleMs < this.spectrumIdleTimeoutMs) {
+      this.scheduleSpectrumDisable();
+      return;
+    }
+    if (!this.spectrumEnabled) return;
+    void this.setSpectrumEnabled(false);
+  }
+
+  private async setSpectrumEnabled(enabled: boolean): Promise<void> {
+    if (this.spectrumEnabled === enabled) return;
+    this.spectrumEnabled = enabled;
+    try {
+      await invoke('native_audio_set_spectrum_enabled', { enabled });
+    } catch (error) {
+      console.warn('[audio] Failed to set spectrum enabled', error);
+    }
+    if (!enabled) {
+      this.spectrumData = null;
+      this.spectrumFrames = {};
+    }
+  }
+
   // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸劍閺呮繈鏌曟径娑橆洭缂佺姵鍎抽埞鎴︽偐閸欏鍋嶉梺閫炲苯澧柛濠傜仢閻ｉ攱绺界粙鍨祮闂佺粯鍔楅弫鎼佸储椤掍椒绻嗛柣鎰典簻閳ь剚鐗犻幃褍螖閸愨晛搴婇悗骞垮劚閹峰鎮炴禒瀣厵闁绘垶锕╁▓鏇㈡煟?(placeholder) =====
   getFrequencyData(): Uint8Array | null {
+    this.touchSpectrumUsage();
     return this.spectrumData;
   }
 
   getSpectrumFrame(tap: AudioSpectrumTap = 'post-dsp'): AudioSpectrumFrame | null {
+    this.touchSpectrumUsage();
     return this.spectrumFrames[tap] ?? null;
   }
 
   // ===== 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈缁犱即鏌熼梻瀵割槮缂佺姷濞€閺岀喖鎮ч崼鐔哄嚒缂?=====
   destroy(): void {
+    this.disposed = true;
+    this.pendingQueueSync = null;
+    this.queueSyncScheduled = false;
+
     this.stop();
     this.stopFallbackTicker();
     this.clearProtectionWindowTimer();
@@ -3739,6 +3941,13 @@ export class NativeAudioService implements IAudioService {
     if (this.errorListener) {
       this.errorListener();
       this.errorListener = undefined;
+    }
+    if (this.spectrumDisableTimer !== null) {
+      window.clearTimeout(this.spectrumDisableTimer);
+      this.spectrumDisableTimer = null;
+    }
+    if (this.spectrumEnabled) {
+      void this.setSpectrumEnabled(false);
     }
     this.spectrumData = null;
     this.spectrumFrames = {};

@@ -62,7 +62,10 @@ fn pick_audio_track<'a>(format: &'a dyn FormatReader) -> Option<&'a Track> {
 }
 
 fn full_track_buffer_budget_samples() -> usize {
-    const DEFAULT_BUDGET_MIB: usize = 512;
+    // Default budget is intentionally conservative: full-track decoding can easily allocate
+    // hundreds of MB for longer tracks (f32 interleaved PCM). Streaming is the preferred
+    // decode mode for desktop playback; this budget is only for the optional full-track path.
+    const DEFAULT_BUDGET_MIB: usize = 96;
     const MIN_BUDGET_MIB: usize = 64;
     const MAX_BUDGET_MIB: usize = 4096;
 
@@ -210,6 +213,7 @@ fn start_symphonia_stream(
 
         let mut sample_buf: Option<SampleBuffer<f32>> = None;
         let mut pending_trim_frames_out: usize = 0;
+        let mut out_interleaved: Vec<f32> = Vec::with_capacity(16_384);
 
         let resample_chunk_frames = 1024usize;
         let mut resampler: Option<crate::audio::resample::StreamingResampler> = None;
@@ -439,18 +443,77 @@ fn start_symphonia_stream(
                         if total_frames > 0 {
                             let slice = all;
 
-                            // Resample to device mix rate to avoid rodio's low-quality resampler artifacts.
-                            let mut out_interleaved: Vec<f32> = Vec::new();
-                            let mut offset = 0usize;
-                            if let Some(resampler) = resampler.as_mut() {
-                                out_interleaved = resampler.process_interleaved(slice);
+                            if let Some(active_resampler) = resampler.as_mut() {
+                                // Resample to device mix rate to avoid rodio's low-quality resampler artifacts.
+                                active_resampler
+                                    .process_interleaved_into(slice, &mut out_interleaved);
 
                                 let out_frames = out_interleaved.len() / channels_usize.max(1);
+                                let mut offset_samples = 0usize;
                                 if pending_trim_frames_out > 0 && channels_usize > 0 {
                                     let trim_now = pending_trim_frames_out.min(out_frames);
-                                    offset = trim_now * channels_usize;
+                                    offset_samples = trim_now * channels_usize;
                                     pending_trim_frames_out =
                                         pending_trim_frames_out.saturating_sub(trim_now);
+                                }
+
+                                while offset_samples < out_interleaved.len() {
+                                    let drained = drain_decoder_commands(&command_rx);
+                                    if drained.shutdown {
+                                        buffer_clone.mark_finished();
+                                        return;
+                                    }
+                                    if let Some(target) = drained.seek_target {
+                                        buffer_clone.clear();
+                                        pending_trim_frames_out = 0;
+
+                                        let seek_to = SeekTo::Time {
+                                            time: Time::from(target.max(0.0)),
+                                            track_id: Some(track_id),
+                                        };
+
+                                        if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to)
+                                        {
+                                            if let Some(time_base) = track.codec_params.time_base {
+                                                let required =
+                                                    time_base.calc_time(seeked.required_ts);
+                                                let actual = time_base.calc_time(seeked.actual_ts);
+                                                let required_seconds =
+                                                    required.seconds as f64 + required.frac;
+                                                let actual_seconds =
+                                                    actual.seconds as f64 + actual.frac;
+                                                let delta =
+                                                    (required_seconds - actual_seconds).max(0.0);
+                                                pending_trim_frames_out =
+                                                    (delta * effective_sample_rate as f64) as usize;
+                                            }
+
+                                            decoder = match symphonia::default::get_codecs().make(
+                                                &track.codec_params,
+                                                &DecoderOptions::default(),
+                                            ) {
+                                                Ok(decoder) => decoder,
+                                                Err(_) => {
+                                                    buffer_clone.mark_finished();
+                                                    return;
+                                                }
+                                            };
+                                            sample_buf = None;
+                                            active_resampler.reset();
+                                            pending_trim_frames_out = pending_trim_frames_out
+                                                .saturating_add(active_resampler.output_delay());
+                                        }
+
+                                        continue 'decode_loop;
+                                    }
+
+                                    let remaining = &out_interleaved[offset_samples..];
+                                    let frames_pushed =
+                                        buffer_clone.push_interleaved(remaining, channels);
+                                    if frames_pushed == 0 {
+                                        continue;
+                                    }
+                                    offset_samples += frames_pushed * channels;
                                 }
                             } else {
                                 // No resampling: apply pending trim in input frames.
@@ -461,78 +524,68 @@ fn start_symphonia_stream(
                                     pending_trim_frames_out =
                                         pending_trim_frames_out.saturating_sub(trim_now);
                                 }
-                                let start_index = start_frame * channels;
-                                if start_index < slice.len() {
-                                    out_interleaved.extend_from_slice(&slice[start_index..]);
-                                }
-                            }
+                                let mut offset_samples = start_frame * channels;
 
-                            if offset > 0 {
-                                if offset >= out_interleaved.len() {
-                                    continue;
-                                }
-                                out_interleaved = out_interleaved.split_off(offset);
-                                offset = 0;
-                            }
+                                while offset_samples < slice.len() {
+                                    let drained = drain_decoder_commands(&command_rx);
+                                    if drained.shutdown {
+                                        buffer_clone.mark_finished();
+                                        return;
+                                    }
+                                    if let Some(target) = drained.seek_target {
+                                        buffer_clone.clear();
+                                        pending_trim_frames_out = 0;
 
-                            while offset < out_interleaved.len() {
-                                let drained = drain_decoder_commands(&command_rx);
-                                if drained.shutdown {
-                                    buffer_clone.mark_finished();
-                                    return;
-                                }
-                                if let Some(target) = drained.seek_target {
-                                    buffer_clone.clear();
-                                    pending_trim_frames_out = 0;
-
-                                    let seek_to = SeekTo::Time {
-                                        time: Time::from(target.max(0.0)),
-                                        track_id: Some(track_id),
-                                    };
-
-                                    if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to) {
-                                        if let Some(time_base) = track.codec_params.time_base {
-                                            let required =
-                                                time_base.calc_time(seeked.required_ts);
-                                            let actual = time_base.calc_time(seeked.actual_ts);
-                                            let required_seconds =
-                                                required.seconds as f64 + required.frac;
-                                            let actual_seconds =
-                                                actual.seconds as f64 + actual.frac;
-                                            let delta =
-                                                (required_seconds - actual_seconds).max(0.0);
-                                            pending_trim_frames_out =
-                                                (delta * effective_sample_rate as f64) as usize;
-                                        }
-
-                                        decoder = match symphonia::default::get_codecs().make(
-                                            &track.codec_params,
-                                            &DecoderOptions::default(),
-                                        ) {
-                                            Ok(decoder) => decoder,
-                                            Err(_) => {
-                                                buffer_clone.mark_finished();
-                                                return;
-                                            }
+                                        let seek_to = SeekTo::Time {
+                                            time: Time::from(target.max(0.0)),
+                                            track_id: Some(track_id),
                                         };
-                                        sample_buf = None;
-                                        if let Some(r) = resampler.as_mut() {
-                                            r.reset();
-                                            pending_trim_frames_out = pending_trim_frames_out
-                                                .saturating_add(r.output_delay());
+
+                                        if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_to)
+                                        {
+                                            if let Some(time_base) = track.codec_params.time_base {
+                                                let required =
+                                                    time_base.calc_time(seeked.required_ts);
+                                                let actual = time_base.calc_time(seeked.actual_ts);
+                                                let required_seconds =
+                                                    required.seconds as f64 + required.frac;
+                                                let actual_seconds =
+                                                    actual.seconds as f64 + actual.frac;
+                                                let delta =
+                                                    (required_seconds - actual_seconds).max(0.0);
+                                                pending_trim_frames_out =
+                                                    (delta * effective_sample_rate as f64) as usize;
+                                            }
+
+                                            decoder = match symphonia::default::get_codecs().make(
+                                                &track.codec_params,
+                                                &DecoderOptions::default(),
+                                            ) {
+                                                Ok(decoder) => decoder,
+                                                Err(_) => {
+                                                    buffer_clone.mark_finished();
+                                                    return;
+                                                }
+                                            };
+                                            sample_buf = None;
+                                            if let Some(r) = resampler.as_mut() {
+                                                r.reset();
+                                                pending_trim_frames_out = pending_trim_frames_out
+                                                    .saturating_add(r.output_delay());
+                                            }
                                         }
+
+                                        continue 'decode_loop;
                                     }
 
-                                    continue 'decode_loop;
+                                    let remaining = &slice[offset_samples..];
+                                    let frames_pushed =
+                                        buffer_clone.push_interleaved(remaining, channels);
+                                    if frames_pushed == 0 {
+                                        continue;
+                                    }
+                                    offset_samples += frames_pushed * channels;
                                 }
-
-                                let remaining = &out_interleaved[offset..];
-                                let frames_pushed =
-                                    buffer_clone.push_interleaved(remaining, channels);
-                                if frames_pushed == 0 {
-                                    continue;
-                                }
-                                offset += frames_pushed * channels;
                             }
                         }
                     }
@@ -1150,5 +1203,21 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn full_track_budget_default_is_conservative() {
+        let prev = std::env::var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB").ok();
+        std::env::remove_var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB");
+
+        let budget = full_track_buffer_budget_samples();
+
+        if let Some(prev) = prev {
+            std::env::set_var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB", prev);
+        } else {
+            std::env::remove_var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB");
+        }
+
+        assert_eq!(budget, 96 * 1024 * 1024 / std::mem::size_of::<f32>());
     }
 }

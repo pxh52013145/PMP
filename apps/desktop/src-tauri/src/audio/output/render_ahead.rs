@@ -97,7 +97,7 @@ pub(crate) fn wrap_source_for_shared_backend(
     let duration = source.total_duration();
 
     let prebuffer_seconds =
-        parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 1.8, 0.3, 6.0);
+        parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 0.6, 0.3, 6.0);
     let prebuffer_samples =
         ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
     let capacity_samples = prebuffer_samples.clamp(16_384, 2_000_000);

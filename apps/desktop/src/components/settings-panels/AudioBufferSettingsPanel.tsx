@@ -84,7 +84,9 @@ export function AudioBufferSettingsPanel() {
   const isWasapiExclusive = componentsState.outputBackendId === 'wasapi-exclusive';
   const defaults = useMemo(
     () => ({
-      startOrSeekSeconds: isWasapiExclusive ? 3 : 2,
+      // Keep "Auto" startup buffer low for instant click-to-play; runtime policy will still
+      // raise the buffer under underruns/background/protection windows.
+      startOrSeekSeconds: isWasapiExclusive ? 0.3 : 0.35,
       crossfadeSeconds: isWasapiExclusive ? 1 : 0.5,
     }),
     [isWasapiExclusive]
@@ -153,10 +155,11 @@ export function AudioBufferSettingsPanel() {
       if (typeof window === 'undefined') return;
       applyTimer.current = window.setTimeout(() => {
         const latest = pendingSettingsRef.current;
+        const persisted = { ...latest, userSetDecodeMode: true };
 
         void broadcastDataUpdate(
           STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS,
-          latest,
+          persisted,
           TAURI_EVENTS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS_UPDATED
         );
 

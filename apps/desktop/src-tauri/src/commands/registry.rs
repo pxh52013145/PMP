@@ -39,6 +39,7 @@ pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
 
 pub const AUDIO_COMMAND_NAMES: &[&str] = &[
     "native_audio_load",
+    "native_audio_load_and_play",
     "native_audio_play",
     "native_audio_crossfade_to",
     "native_audio_pause",
@@ -57,6 +58,7 @@ pub const AUDIO_COMMAND_NAMES: &[&str] = &[
     "native_audio_get_audio_components_state",
     "native_audio_get_streaming_buffer_settings",
     "native_audio_set_streaming_buffer_settings",
+    "native_audio_set_spectrum_enabled",
     "native_audio_get_engine_policy",
     "native_audio_set_engine_policy",
     "native_audio_list_devices",
@@ -217,6 +219,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::library::music_library_remove_cover,
             crate::commands::library::music_library_cancel_scan,
             crate::commands::audio::native_audio_load,
+            crate::commands::audio::native_audio_load_and_play,
             crate::commands::audio::native_audio_play,
             crate::commands::audio::native_audio_crossfade_to,
             crate::commands::audio::native_audio_pause,
@@ -276,6 +279,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::audio::native_audio_get_audio_components_state,
             crate::commands::audio::native_audio_get_streaming_buffer_settings,
             crate::commands::audio::native_audio_set_streaming_buffer_settings,
+            crate::commands::audio::native_audio_set_spectrum_enabled,
             crate::commands::audio::native_audio_get_engine_policy,
             crate::commands::audio::native_audio_set_engine_policy,
             crate::commands::audio::native_audio_list_devices,

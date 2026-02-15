@@ -122,6 +122,7 @@ pub(crate) trait AudioInput: Send + Sync {
     ) -> Result<AudioInputOpenResult, AudioInputError>;
 }
 
+#[derive(Clone)]
 pub(crate) struct AudioInputRegistry {
     inputs: Vec<Arc<dyn AudioInput>>,
 }

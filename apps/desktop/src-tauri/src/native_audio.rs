@@ -11,7 +11,7 @@ use tauri::AppHandle;
 use crate::audio::emitter;
 use crate::audio::engine::{PlaybackState, PreparedCrossfade, PreparedLoad, ENGINE};
 use crate::audio::events::{NativeAudioErrorPayload, NativeAudioStatePayload};
-use crate::audio::input::{AudioInputKind, AudioInputRegistry};
+use crate::audio::input::AudioInputKind;
 use crate::audio::mixer::coerce_source_format;
 use crate::audio::mixer::PlaybackMixerSource;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
@@ -1291,6 +1291,7 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
     let track_path = path.ok_or_else(|| "No path provided".to_string())?;
     let track_path = PathBuf::from(track_path);
 
+    let prepare_path = track_path.clone();
     let op = {
         let mut engine = ENGINE
             .lock()
@@ -1298,72 +1299,7 @@ pub fn load(app_handle: &AppHandle, path: Option<String>) -> Result<(), String> 
         engine.begin_load_operation()
     };
 
-    let prepared = (|| -> Result<PreparedLoad, String> {
-        let (sink, output_info) = op.output_backend.create_sink()?;
-        sink.pause();
-
-        let open_src_policy = crate::audio::engine::effective_src_policy_for_backend_open(
-            op.output_backend.id(),
-            op.src_policy,
-        );
-        let opened = AudioInputRegistry::default()
-            .open_prefer(
-                &track_path,
-                crate::audio::engine::resolve_requested_output_sample_rate_for_backend(
-                    op.output_backend.id(),
-                    output_info.output_sample_rate,
-                    op.src_policy,
-                ),
-                op.preferred_input_id.as_deref(),
-                op.decode_mode,
-                open_src_policy,
-            )
-            .map_err(|err| format!("[{}] {}", err.code, err.message))?;
-
-        let crate::audio::input::AudioInputOpenResult {
-            input_id,
-            meta,
-            kind,
-            source,
-        } = opened;
-
-        eprintln!("[NativeAudio] Input: {input_id}");
-
-        let mut streaming: Option<crate::audio::input::StreamingPlayback> = None;
-        let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
-
-        match kind {
-            AudioInputKind::Streaming(playback) => {
-                streaming = Some(playback);
-            }
-            AudioInputKind::Decoded { samples } => {
-                decoded_samples = Some(samples);
-            }
-            AudioInputKind::Rodio => {}
-        }
-
-        let (controller, mixer_source) =
-            PlaybackMixerSource::new(source, meta.channels, meta.sample_rate);
-        sink.append(boxed_with_dsp(
-            mixer_source,
-            op.dsp_runtime.clone(),
-            op.spectrum_pre_tap.clone(),
-            op.spectrum_post_tap.clone(),
-        ));
-        sink.pause();
-        sink.set_volume(op.effective_volume);
-
-        Ok(PreparedLoad {
-            track_path: track_path.clone(),
-            sink,
-            output_info,
-            mixer: controller,
-            input_id,
-            meta,
-            streaming,
-            decoded_samples,
-        })
-    })();
+    let prepared = prepare_load_for_operation(&op, &prepare_path);
 
     let (result, payload) = match prepared {
         Ok(prepared) => {
@@ -1437,7 +1373,8 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
             &op.output_backend_id,
             op.src_policy,
         );
-        let opened = AudioInputRegistry::default()
+        let opened = op
+            .input_registry
             .open_prefer(
                 &track_path,
                 crate::audio::engine::resolve_requested_output_sample_rate_for_backend(
@@ -1561,6 +1498,148 @@ pub fn crossfade_to(app_handle: &AppHandle, path: String, duration_ms: u64) -> R
     }
 
     Ok(())
+}
+
+pub fn load_and_play(
+    app_handle: &AppHandle,
+    path: String,
+    replay_gain_db: Option<f32>,
+) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let track_path = PathBuf::from(path);
+
+    let prepare_path = track_path.clone();
+    let op = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.begin_load_operation()
+    };
+
+    let prepared = prepare_load_for_operation(&op, &prepare_path);
+
+    let (result, payload) = match prepared {
+        Ok(prepared) => {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            let committed = engine
+                .commit_load_operation(op.token, prepared)
+                .map_err(|err| {
+                    engine.abandon_operation(op.token);
+                    engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
+                    err
+                })?;
+
+            if committed {
+                engine.set_replay_gain(replay_gain_db.unwrap_or(0.0));
+                if let Err(err) = engine.play() {
+                    engine.set_error("NATIVE_AUDIO_PLAY_FAILED", err);
+                }
+            }
+
+            (Ok(()), engine.build_state_payload(false))
+        }
+        Err(err) => {
+            let mut engine = ENGINE
+                .lock()
+                .map_err(|_| "Audio engine is locked".to_string())?;
+            engine.abandon_operation(op.token);
+            engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
+            (Err(err), engine.build_state_payload(false))
+        }
+    };
+
+    let maybe_error = match (
+        payload.error_seq,
+        payload.error_code.clone(),
+        payload.error_message.clone(),
+    ) {
+        (Some(seq), Some(code), Some(message)) => {
+            Some(NativeAudioErrorPayload { seq, code, message })
+        }
+        _ => None,
+    };
+
+    emitter::emit_state(app_handle, payload)?;
+    if let Err(err) = result {
+        if let Some(error_payload) = maybe_error {
+            emitter::emit_error(app_handle, error_payload)?;
+        }
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn prepare_load_for_operation(
+    op: &crate::audio::engine::LoadOperation,
+    track_path: &PathBuf,
+) -> Result<PreparedLoad, String> {
+    let (sink, output_info) = op.output_backend.create_sink()?;
+    sink.pause();
+
+    let open_src_policy = crate::audio::engine::effective_src_policy_for_backend_open(
+        op.output_backend.id(),
+        op.src_policy,
+    );
+    let opened = op
+        .input_registry
+        .open_prefer(
+            track_path,
+            crate::audio::engine::resolve_requested_output_sample_rate_for_backend(
+                op.output_backend.id(),
+                output_info.output_sample_rate,
+                op.src_policy,
+            ),
+            op.preferred_input_id.as_deref(),
+            op.decode_mode,
+            open_src_policy,
+        )
+        .map_err(|err| format!("[{}] {}", err.code, err.message))?;
+
+    let crate::audio::input::AudioInputOpenResult {
+        input_id,
+        meta,
+        kind,
+        source,
+    } = opened;
+
+    eprintln!("[NativeAudio] Input: {input_id}");
+
+    let mut streaming: Option<crate::audio::input::StreamingPlayback> = None;
+    let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
+
+    match kind {
+        AudioInputKind::Streaming(playback) => {
+            streaming = Some(playback);
+        }
+        AudioInputKind::Decoded { samples } => {
+            decoded_samples = Some(samples);
+        }
+        AudioInputKind::Rodio => {}
+    }
+
+    let (controller, mixer_source) = PlaybackMixerSource::new(source, meta.channels, meta.sample_rate);
+    sink.append(boxed_with_dsp(
+        mixer_source,
+        op.dsp_runtime.clone(),
+        op.spectrum_pre_tap.clone(),
+        op.spectrum_post_tap.clone(),
+    ));
+    sink.pause();
+    sink.set_volume(op.effective_volume);
+
+    Ok(PreparedLoad {
+        track_path: track_path.clone(),
+        sink,
+        output_info,
+        mixer: controller,
+        input_id,
+        meta,
+        streaming,
+        decoded_samples,
+    })
 }
 
 pub fn play(app_handle: &AppHandle) -> Result<(), String> {
@@ -2413,6 +2492,12 @@ pub fn set_streaming_buffer_settings(
     Ok(engine.streaming_buffer_settings_payload())
 }
 
+pub fn set_spectrum_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    emitter::set_spectrum_enabled(enabled);
+    Ok(())
+}
+
 pub fn get_engine_policy() -> Result<NativeAudioEnginePolicyPayload, String> {
     let engine = ENGINE
         .lock()
@@ -2429,10 +2514,80 @@ pub fn set_engine_policy(
         return get_engine_policy();
     }
 
-    let mut engine = ENGINE
-        .lock()
-        .map_err(|_| "Audio engine is locked".to_string())?;
-    Ok(engine.apply_engine_policy_patch(patch))
+    struct SrcPolicyRebuildContext {
+        op: crate::audio::engine::LoadOperation,
+        track_path: PathBuf,
+        seek_target: f64,
+        resume_playing: bool,
+    }
+
+    let (policy_payload, maybe_rebuild) = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        let (payload, src_changed) = engine.apply_engine_policy_patch(patch);
+
+        if !src_changed {
+            return Ok(payload);
+        }
+
+        let Some(track_path) = engine.current_track() else {
+            return Ok(payload);
+        };
+
+        let resume_playing =
+            matches!(engine.desired_playback_state(), PlaybackState::Playing);
+        if resume_playing {
+            engine.sync_clock();
+        }
+        let seek_target = engine.current_position().max(0.0);
+        let op = engine.begin_load_operation();
+
+        (payload, Some(SrcPolicyRebuildContext {
+            op,
+            track_path,
+            seek_target,
+            resume_playing,
+        }))
+    };
+
+    if let Some(context) = maybe_rebuild {
+        let prepared = prepare_load_for_operation(&context.op, &context.track_path);
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+
+        match prepared {
+            Ok(prepared) => {
+                let committed = engine
+                    .commit_load_operation(context.op.token, prepared)
+                    .map_err(|err| {
+                        engine.abandon_operation(context.op.token);
+                        engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err.clone());
+                        err
+                    })?;
+
+                if committed {
+                    if context.seek_target > 0.0 {
+                        if let Err(err) = engine.seek(context.seek_target) {
+                            engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
+                        }
+                    }
+                    if context.resume_playing {
+                        if let Err(err) = engine.play() {
+                            engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                engine.abandon_operation(context.op.token);
+                engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
+            }
+        }
+    }
+
+    Ok(policy_payload)
 }
 
 pub fn select_output_backend(

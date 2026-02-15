@@ -19,6 +19,8 @@ use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTranspo
 pub const WASAPI_EXCLUSIVE_BACKEND_ID: &str = "wasapi-exclusive";
 pub const WASAPI_SHARED_RAW_BACKEND_ID: &str = "wasapi-shared-raw";
 
+const DECLICK_FADE_FRAMES: u32 = 128;
+
 const AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND: &str =
     "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND";
 const AUDIO_OUTPUT_WASAPI_EXCLUSIVE_NO_DEVICE_SELECTED: &str =
@@ -56,6 +58,271 @@ static CALLBACK_INTERVAL_OVERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0)
 static CALLBACK_WAIT_TIMEOUT_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static QUANTIZATION_RNG_STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
+
+#[derive(Debug)]
+struct UnderrunDeclicker {
+    last_frame: Vec<f32>,
+    fade_in_pos: u32,
+}
+
+impl UnderrunDeclicker {
+    fn new(channels: usize) -> Self {
+        Self {
+            last_frame: vec![0.0; channels],
+            fade_in_pos: DECLICK_FADE_FRAMES,
+        }
+    }
+
+    fn ensure_channels(&mut self, channels: usize) {
+        if self.last_frame.len() != channels {
+            self.last_frame = vec![0.0; channels];
+        } else {
+            self.last_frame.fill(0.0);
+        }
+        self.fade_in_pos = DECLICK_FADE_FRAMES;
+    }
+
+    fn on_intentional_silence(&mut self, channels: usize) {
+        if self.last_frame.len() != channels {
+            self.last_frame = vec![0.0; channels];
+        } else {
+            self.last_frame.fill(0.0);
+        }
+        self.fade_in_pos = 0;
+    }
+
+    fn apply_fade_in(&mut self, scratch: &mut [f32], available_frames: u32, channels: usize) {
+        if DECLICK_FADE_FRAMES <= 1 || self.fade_in_pos >= DECLICK_FADE_FRAMES {
+            self.fade_in_pos = DECLICK_FADE_FRAMES;
+            return;
+        }
+
+        let remaining = DECLICK_FADE_FRAMES - self.fade_in_pos;
+        let frames_to_apply = remaining.min(available_frames);
+        if frames_to_apply == 0 {
+            return;
+        }
+
+        let denom = (DECLICK_FADE_FRAMES - 1) as f32;
+        for frame in 0..frames_to_apply {
+            let idx = (self.fade_in_pos + frame) as f32;
+            let gain = (idx / denom).clamp(0.0, 1.0);
+            let offset = frame as usize * channels;
+            for channel in 0..channels {
+                scratch[offset + channel] *= gain;
+            }
+        }
+
+        self.fade_in_pos = self
+            .fade_in_pos
+            .saturating_add(frames_to_apply)
+            .min(DECLICK_FADE_FRAMES);
+    }
+
+    fn snapshot_tail_frame(&mut self, scratch: &[f32], available_frames: u32, channels: usize) {
+        if self.last_frame.len() != channels {
+            self.last_frame = vec![0.0; channels];
+        }
+
+        if available_frames == 0 {
+            return;
+        }
+
+        let base = available_frames.saturating_sub(1) as usize * channels;
+        self.last_frame
+            .copy_from_slice(&scratch[base..base + channels]);
+    }
+
+    fn apply_underrun_fade_out(
+        &mut self,
+        scratch: &mut [f32],
+        frames: u32,
+        available_frames: u32,
+        channels: usize,
+    ) {
+        let fade_frames = DECLICK_FADE_FRAMES.min(frames).max(1);
+        if fade_frames <= 1 {
+            return;
+        }
+
+        let missing_frames = frames.saturating_sub(available_frames);
+        let ramp_start = if missing_frames >= fade_frames {
+            available_frames
+        } else {
+            frames.saturating_sub(fade_frames)
+        };
+        let ramp_end = (ramp_start + fade_frames).min(frames);
+
+        let denom = (fade_frames - 1) as f32;
+        for frame in ramp_start..ramp_end {
+            let idx = (frame - ramp_start) as f32;
+            let gain = (1.0 - (idx / denom)).clamp(0.0, 1.0);
+            let offset = frame as usize * channels;
+
+            if frame < available_frames {
+                for channel in 0..channels {
+                    scratch[offset + channel] *= gain;
+                }
+            } else {
+                for channel in 0..channels {
+                    scratch[offset + channel] = self.last_frame[channel] * gain;
+                }
+            }
+        }
+
+        for frame in ramp_end..frames {
+            let offset = frame as usize * channels;
+            scratch[offset..offset + channels].fill(0.0);
+        }
+    }
+
+    fn store_last_frame(&mut self, scratch: &[f32], frames: u32, channels: usize) {
+        if channels == 0 || frames == 0 {
+            return;
+        }
+
+        if self.last_frame.len() != channels {
+            self.last_frame = vec![0.0; channels];
+        }
+
+        let base = (frames.saturating_sub(1) as usize) * channels;
+        self.last_frame
+            .copy_from_slice(&scratch[base..base + channels]);
+    }
+
+    fn process_render_buffer(
+        &mut self,
+        scratch: &mut Vec<f32>,
+        frames: u32,
+        channels: usize,
+        available_samples: usize,
+        underrun: bool,
+    ) {
+        if channels == 0 {
+            scratch.clear();
+            return;
+        }
+
+        let total_samples = frames as usize * channels;
+        let available_frames = (available_samples / channels).min(frames as usize) as u32;
+
+        if scratch.len() < total_samples {
+            scratch.resize(total_samples, 0.0);
+        } else if scratch.len() > total_samples {
+            scratch.truncate(total_samples);
+        }
+
+        self.apply_fade_in(scratch, available_frames, channels);
+
+        if underrun {
+            self.snapshot_tail_frame(scratch, available_frames, channels);
+            self.apply_underrun_fade_out(scratch, frames, available_frames, channels);
+            self.on_intentional_silence(channels);
+        } else {
+            self.store_last_frame(scratch, frames, channels);
+        }
+    }
+}
+
+#[cfg(test)]
+mod declicker_tests {
+    use super::{UnderrunDeclicker, DECLICK_FADE_FRAMES};
+
+    const EPS: f32 = 1e-6;
+
+    #[test]
+    fn fade_in_progresses_across_small_buffers() {
+        let frames = 16u32;
+        let channels = 1usize;
+        let step = 1.0 / (DECLICK_FADE_FRAMES.saturating_sub(1) as f32);
+
+        let mut declicker = UnderrunDeclicker::new(channels);
+        declicker.on_intentional_silence(channels);
+
+        let mut scratch = vec![1.0f32; frames as usize * channels];
+        let available_samples = scratch.len();
+        declicker.process_render_buffer(
+            &mut scratch,
+            frames,
+            channels,
+            available_samples,
+            false,
+        );
+        assert!((scratch[0] - 0.0).abs() <= EPS);
+        assert!((scratch[15] - (15.0 * step)).abs() <= EPS);
+
+        let mut scratch2 = vec![1.0f32; frames as usize * channels];
+        let available_samples2 = scratch2.len();
+        declicker.process_render_buffer(
+            &mut scratch2,
+            frames,
+            channels,
+            available_samples2,
+            false,
+        );
+        assert!((scratch2[0] - (16.0 * step)).abs() <= EPS);
+        assert!((scratch2[15] - (31.0 * step)).abs() <= EPS);
+    }
+
+    #[test]
+    fn underrun_ramps_to_zero_without_click_when_missing_large() {
+        let frames = 256u32;
+        let channels = 1usize;
+        let available_frames = 64usize;
+
+        let mut declicker = UnderrunDeclicker::new(channels);
+
+        let mut scratch = vec![1.0f32; available_frames * channels];
+        let available_samples = scratch.len();
+        declicker.process_render_buffer(
+            &mut scratch,
+            frames,
+            channels,
+            available_samples,
+            true,
+        );
+
+        assert_eq!(scratch.len(), frames as usize * channels);
+        assert!((scratch[63] - 1.0).abs() <= EPS);
+        assert!((scratch[64] - 1.0).abs() <= EPS);
+        assert!((scratch[191] - 0.0).abs() <= EPS);
+        assert!((scratch[200] - 0.0).abs() <= EPS);
+
+        let step = 1.0 / (DECLICK_FADE_FRAMES.saturating_sub(1) as f32);
+        let max_expected_step = step + 1e-4;
+        for idx in 64..191 {
+            let delta = (scratch[idx] - scratch[idx + 1]).abs();
+            assert!(delta <= max_expected_step);
+        }
+    }
+
+    #[test]
+    fn underrun_fade_out_spreads_into_audio_when_missing_small() {
+        let frames = 256u32;
+        let channels = 1usize;
+        let available_frames = 240usize;
+
+        let mut declicker = UnderrunDeclicker::new(channels);
+
+        let mut scratch = vec![1.0f32; available_frames * channels];
+        let available_samples = scratch.len();
+        declicker.process_render_buffer(
+            &mut scratch,
+            frames,
+            channels,
+            available_samples,
+            true,
+        );
+
+        assert!((scratch[128] - 1.0).abs() <= EPS);
+        assert!((scratch[239] - (16.0 / 127.0)).abs() <= EPS);
+        assert!((scratch[240] - (15.0 / 127.0)).abs() <= EPS);
+        assert!((scratch[255] - 0.0).abs() <= EPS);
+
+        let expected_step = 1.0 / 127.0;
+        assert!((scratch[239] - scratch[240] - expected_step).abs() <= 1e-4);
+    }
+}
 
 fn p99_like_u32(total_us: u64, sample_count: u64, max_us: u64) -> u32 {
     if sample_count == 0 {
@@ -1473,12 +1740,14 @@ impl WasapiExclusiveSink {
             .ok()
             .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
+        let render_queue = AudioRingBuffer::new(48_000 * 2 * 2);
+        render_queue.try_lock_memory_pages();
         Self {
             inner: Arc::new(SinkInner {
                 backend_state,
                 device_id,
                 queue: Mutex::new(VecDeque::new()),
-                render_queue: AudioRingBuffer::new(48_000 * 2 * 2),
+                render_queue,
                 flush_epoch: AtomicU64::new(0),
                 producer_thread: Mutex::new(None),
                 producer_stop_tx: Mutex::new(None),
@@ -1719,6 +1988,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
         let mut active_channels: u16 = 0;
         let mut active_sample_rate: u32 = 0;
         let mut render_scratch = Vec::<f32>::new();
+        let mut declicker = UnderrunDeclicker::new(0);
         let mut callback_timing = CallbackTimingState::default();
         let mut observed_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
 
@@ -1764,6 +2034,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                             );
                             active_channels = new_stream.channels;
                             active_sample_rate = new_stream.sample_rate;
+                            declicker.ensure_channels(active_channels as usize);
                             stream = Some(new_stream);
                         }
                         Err(err) => {
@@ -1804,12 +2075,14 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
 
             let playing = inner.playing.load(Ordering::Acquire);
             if playing && !stream.started {
+                declicker.on_intentional_silence(active_channels as usize);
                 if let Err(err) = start_stream_with_prefill(
                     stream,
                     inner.as_ref(),
                     active_channels,
                     active_sample_rate,
                     &mut render_scratch,
+                    &mut declicker,
                 ) {
                     if let Ok(mut state) = inner.backend_state.lock() {
                         state.error = Some(err);
@@ -1829,6 +2102,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 inner.as_ref(),
                 &mut render_scratch,
                 &mut callback_timing,
+                &mut declicker,
             ) {
                 if let Ok(mut state) = inner.backend_state.lock() {
                     state.error = Some(err);
@@ -1907,6 +2181,7 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
         let mut active_channels: u16 = 0;
         let mut active_sample_rate: u32 = 0;
         let mut render_scratch = Vec::<f32>::new();
+        let mut declicker = UnderrunDeclicker::new(0);
         let mut callback_timing = CallbackTimingState::default();
         let mut observed_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
 
@@ -1952,6 +2227,7 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                             );
                             active_channels = new_stream.channels;
                             active_sample_rate = new_stream.sample_rate;
+                            declicker.ensure_channels(active_channels as usize);
                             stream = Some(new_stream);
                         }
                         Err(err) => {
@@ -1993,12 +2269,14 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
 
             let playing = inner.playing.load(Ordering::Acquire);
             if playing && !stream.started {
+                declicker.on_intentional_silence(active_channels as usize);
                 if let Err(err) = start_stream_with_prefill_shared_raw(
                     stream,
                     inner.as_ref(),
                     active_channels,
                     active_sample_rate,
                     &mut render_scratch,
+                    &mut declicker,
                 ) {
                     if let Ok(mut state) = inner.backend_state.lock() {
                         state.error = Some(err);
@@ -2023,6 +2301,7 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 inner.as_ref(),
                 &mut render_scratch,
                 &mut callback_timing,
+                &mut declicker,
             ) {
                 if let Ok(mut state) = inner.backend_state.lock() {
                     state.error = Some(err);
@@ -2055,12 +2334,14 @@ impl WasapiSharedRawSink {
             .ok()
             .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
+        let render_queue = AudioRingBuffer::new(48_000 * 2 * 4);
+        render_queue.try_lock_memory_pages();
         Self {
             inner: Arc::new(SharedRawSinkInner {
                 backend_state,
                 device_id,
                 queue: Mutex::new(VecDeque::new()),
-                render_queue: AudioRingBuffer::new(48_000 * 2 * 4),
+                render_queue,
                 flush_epoch: AtomicU64::new(0),
                 producer_thread: Mutex::new(None),
                 producer_stop_tx: Mutex::new(None),
@@ -2256,6 +2537,7 @@ fn start_stream_with_prefill(
     channels: u16,
     _sample_rate: u32,
     scratch: &mut Vec<f32>,
+    declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
     inner
         .render_queue
@@ -2276,6 +2558,7 @@ fn start_stream_with_prefill(
         volume,
         output_quantization_mode,
         scratch,
+        declicker,
     )?;
     unsafe {
         stream.audio_client.Start().map_err(|e| AudioOutputError {
@@ -2294,6 +2577,7 @@ fn start_stream_with_prefill_shared_raw(
     channels: u16,
     _sample_rate: u32,
     scratch: &mut Vec<f32>,
+    declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
     inner
         .render_queue
@@ -2314,6 +2598,7 @@ fn start_stream_with_prefill_shared_raw(
         volume,
         output_quantization_mode,
         scratch,
+        declicker,
     )?;
     unsafe {
         stream.audio_client.Start().map_err(|e| AudioOutputError {
@@ -2331,6 +2616,7 @@ fn render_once(
     inner: &SinkInner,
     scratch: &mut Vec<f32>,
     callback_timing: &mut CallbackTimingState,
+    declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
     use windows::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT;
@@ -2366,6 +2652,7 @@ fn render_once(
     let frames = stream.buffer_frame_count;
 
     if !playing || inner.render_queue.is_finished_and_empty() {
+        declicker.on_intentional_silence(stream.channels.max(1) as usize);
         unsafe {
             stream
                 .render_client
@@ -2396,6 +2683,7 @@ fn render_once(
         volume,
         output_quantization_mode,
         scratch,
+        declicker,
     )?;
     let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
     record_callback_render_cost(elapsed_us);
@@ -2408,6 +2696,7 @@ fn render_once_shared_raw(
     inner: &SharedRawSinkInner,
     scratch: &mut Vec<f32>,
     callback_timing: &mut CallbackTimingState,
+    declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
     use windows::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT;
@@ -2457,6 +2746,7 @@ fn render_once_shared_raw(
     }
 
     if !playing || inner.render_queue.is_finished_and_empty() {
+        declicker.on_intentional_silence(stream.channels.max(1) as usize);
         unsafe {
             stream
                 .render_client
@@ -2487,6 +2777,7 @@ fn render_once_shared_raw(
         volume,
         output_quantization_mode,
         scratch,
+        declicker,
     )?;
     let elapsed_us = started.elapsed().as_micros().min(u32::MAX as u128) as u32;
     record_callback_render_cost(elapsed_us);
@@ -2502,6 +2793,7 @@ fn render_frames(
     volume: f32,
     output_quantization_mode: NativeAudioOutputQuantizationMode,
     scratch: &mut Vec<f32>,
+    declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
     let channels = stream.channels.max(1) as usize;
     let total_samples = frames as usize * channels;
@@ -2510,15 +2802,19 @@ fn render_frames(
         scratch.reserve(total_samples.saturating_sub(scratch.capacity()));
     }
 
+    let mut available_samples = 0usize;
+    let mut underrun = false;
     if consume {
         let popped =
             inner
                 .render_queue
                 .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        available_samples = popped.popped;
         if popped.popped == 0 && popped.finished {
             return Ok(());
         }
         if popped.popped < total_samples {
+            underrun = true;
             let missing_samples = total_samples.saturating_sub(popped.popped);
             let missing_frames = (missing_samples / channels.max(1)).max(1) as u64;
             CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -2530,9 +2826,16 @@ fn render_frames(
                 &CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS,
                 120,
             );
-            scratch.resize(total_samples, 0.0);
         }
     }
+
+    declicker.process_render_buffer(
+        scratch,
+        frames,
+        channels,
+        available_samples,
+        underrun && consume,
+    );
 
     unsafe {
         let mut dither_state = QUANTIZATION_RNG_STATE
@@ -2666,6 +2969,7 @@ fn render_frames_shared_raw(
     volume: f32,
     output_quantization_mode: NativeAudioOutputQuantizationMode,
     scratch: &mut Vec<f32>,
+    declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
     let channels = stream.channels.max(1) as usize;
     let total_samples = frames as usize * channels;
@@ -2674,15 +2978,19 @@ fn render_frames_shared_raw(
         scratch.reserve(total_samples.saturating_sub(scratch.capacity()));
     }
 
+    let mut available_samples = 0usize;
+    let mut underrun = false;
     if consume {
         let popped =
             inner
                 .render_queue
                 .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        available_samples = popped.popped;
         if popped.popped == 0 && popped.finished {
             return Ok(());
         }
         if popped.popped < total_samples {
+            underrun = true;
             let missing_samples = total_samples.saturating_sub(popped.popped);
             let missing_frames = (missing_samples / channels.max(1)).max(1) as u64;
             CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -2694,9 +3002,16 @@ fn render_frames_shared_raw(
                 &CALLBACK_RENDER_UNDERRUN_TIMELINE_GATE_MS,
                 120,
             );
-            scratch.resize(total_samples, 0.0);
         }
     }
+
+    declicker.process_render_buffer(
+        scratch,
+        frames,
+        channels,
+        available_samples,
+        underrun && consume,
+    );
 
     unsafe {
         let mut dither_state = QUANTIZATION_RNG_STATE

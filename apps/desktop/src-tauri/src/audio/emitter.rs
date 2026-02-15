@@ -15,6 +15,7 @@ static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 static EMITTER_STARTED: OnceCell<()> = OnceCell::new();
 static LAST_EMITTED_ERROR_SEQ: AtomicU64 = AtomicU64::new(0);
 static EMITTER_STOP: AtomicBool = AtomicBool::new(false);
+static SPECTRUM_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn ensure_started(app_handle: &AppHandle) {
     let _ = APP_HANDLE.set(app_handle.clone());
@@ -40,6 +41,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 continue;
             };
 
+            let spectrum_enabled = SPECTRUM_ENABLED.load(Ordering::Acquire);
             let Some((state_payload, spectrum_snapshot, dual_spectrum_snapshot)) = (|| {
                 let mut engine = ENGINE.try_lock().ok()?;
                 let was_playing = engine.is_playing_or_rebuffering();
@@ -51,8 +53,16 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 let ended = was_playing && is_stopped;
                 Some((
                     engine.build_tick_state_payload(ended),
-                    engine.snapshot_for_spectrum(),
-                    engine.snapshot_for_dual_spectrum(),
+                    if spectrum_enabled {
+                        engine.snapshot_for_spectrum()
+                    } else {
+                        None
+                    },
+                    if spectrum_enabled {
+                        engine.snapshot_for_dual_spectrum()
+                    } else {
+                        None
+                    },
                 ))
             })() else {
                 continue;
@@ -103,6 +113,10 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
 
 pub(crate) fn shutdown() {
     EMITTER_STOP.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn set_spectrum_enabled(enabled: bool) {
+    SPECTRUM_ENABLED.store(enabled, Ordering::Release);
 }
 
 pub(crate) fn emit_state(

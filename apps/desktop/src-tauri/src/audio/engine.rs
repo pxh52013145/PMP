@@ -60,7 +60,10 @@ fn is_shared_output_backend(backend_id: &str) -> bool {
 }
 
 fn should_wrap_source_for_shared_backend(backend_id: &str) -> bool {
-    is_shared_output_backend(backend_id)
+    // Some shared backends already maintain their own render queues (e.g. wasapi-shared-raw).
+    // Wrapping sources again with a generic render-ahead layer increases latency and can make
+    // play/pause/seek feel sluggish.
+    backend_id == "wasapi" || backend_id == "rodio-cpal"
 }
 
 pub(crate) fn effective_src_policy_for_backend_open(
@@ -122,9 +125,9 @@ pub(crate) fn streaming_prebuffer_target_samples(
         StreamingPrebufferKind::StartOrSeek => (
             "PMP_AUDIO_STREAM_PREBUFFER_SECONDS",
             if output_backend_id == "wasapi-exclusive" {
-                3.0
+                0.30
             } else {
-                2.0
+                0.35
             },
         ),
         StreamingPrebufferKind::Crossfade => (
@@ -177,32 +180,19 @@ fn streaming_min_start_bounds(
 
     if is_exclusive {
         if underrun_recovery_active {
-            (1.40, 0.55)
+            // Exclusive mode can start fairly quickly, but after underruns we want a more conservative
+            // prebuffer to avoid immediate rebuffer loops.
+            (0.75, 0.25)
         } else {
-            (0.95, 0.35)
+            // Low-latency startup: do not block the first play for ~1s of prebuffer.
+            (0.30, 0.10)
         }
     } else if underrun_recovery_active {
-        (1.90, 0.75)
+        // Shared backends are more sensitive to scheduling jitter; keep recovery startup conservative.
+        (1.05, 0.35)
     } else {
-        (1.20, 0.45)
-    }
-}
-
-fn streaming_buffering_fallback_after(
-    output_backend_id: &str,
-    underrun_recovery_active: bool,
-) -> Duration {
-    let is_exclusive = output_backend_id == "wasapi-exclusive";
-    if underrun_recovery_active {
-        if is_exclusive {
-            Duration::from_secs(7)
-        } else {
-            Duration::from_secs(10)
-        }
-    } else if is_exclusive {
-        Duration::from_secs(4)
-    } else {
-        Duration::from_secs(5)
+        // Normal startup should feel instant (sub-500ms) while still preventing most underruns.
+        (0.35, 0.12)
     }
 }
 
@@ -290,6 +280,7 @@ pub(crate) struct NativeAudioEngine {
 pub(crate) struct LoadOperation {
     pub token: u64,
     pub output_backend: Arc<dyn AudioOutputBackend>,
+    pub input_registry: AudioInputRegistry,
     pub preferred_input_id: Option<String>,
     pub decode_mode: AudioInputDecodeMode,
     pub src_policy: AudioInputSrcPolicy,
@@ -343,6 +334,7 @@ impl PreparedLoad {
 
 pub(crate) struct CrossfadeOperation {
     pub token: u64,
+    pub input_registry: AudioInputRegistry,
     pub preferred_input_id: Option<String>,
     pub decode_mode: AudioInputDecodeMode,
     pub src_policy: AudioInputSrcPolicy,
@@ -407,10 +399,19 @@ impl NativeAudioEngine {
     fn new_with_backend(output_backend: Arc<dyn AudioOutputBackend>) -> Self {
         output_backend.set_transport_mode(NativeAudioTransportMode::Robust);
         output_backend.set_output_quantization_mode(NativeAudioOutputQuantizationMode::Round);
+        let shared_output_backend = is_shared_output_backend(output_backend.id());
         info_log(format!(
             "[NativeAudio] Output backend: {}",
             output_backend.id()
         ));
+
+        // Shared backends already incur an extra mixing pipeline; default SRC to a cheap SIMD path
+        // to keep click-to-play and interactive seeks snappy (HQ can still be enabled via policy).
+        let (default_hq_src_enabled, default_src_backend) = if shared_output_backend {
+            (false, NativeAudioSrcBackend::LinearSimd)
+        } else {
+            (true, NativeAudioSrcBackend::Rubato)
+        };
         Self {
             input_registry: AudioInputRegistry::default(),
             preferred_input_id: None,
@@ -462,13 +463,15 @@ impl NativeAudioEngine {
             last_error_message: None,
             streaming_prebuffer_start_or_seek_seconds: None,
             streaming_prebuffer_crossfade_seconds: None,
-            // Default to full-track decoding for VCP-like, seek-heavy interactions.
-            streaming_decode_mode: AudioInputDecodeMode::FullTrack,
+            // Default to streaming for low latency startup + low memory usage.
+            // Full-track decoding can still be enabled via streaming buffer settings for
+            // seek/scrub-heavy workflows.
+            streaming_decode_mode: AudioInputDecodeMode::Streaming,
             transport_mode: NativeAudioTransportMode::Robust,
-            hq_src_enabled: true,
+            hq_src_enabled: default_hq_src_enabled,
             hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
             src_mode: NativeAudioSrcMode::MatchOutput,
-            src_backend: NativeAudioSrcBackend::Rubato,
+            src_backend: default_src_backend,
             src_target_sample_rate: None,
             output_quantization_mode: NativeAudioOutputQuantizationMode::Round,
             spectrum_frame_counter: 0,
@@ -481,6 +484,18 @@ impl NativeAudioEngine {
 
     pub(crate) fn playback_state(&self) -> PlaybackState {
         self.playback_state
+    }
+
+    pub(crate) fn desired_playback_state(&self) -> PlaybackState {
+        self.desired_playback_state
+    }
+
+    pub(crate) fn current_track(&self) -> Option<PathBuf> {
+        self.current_track.clone()
+    }
+
+    pub(crate) fn current_position(&self) -> f64 {
+        self.current_position
     }
 
     pub(crate) fn is_playing_or_rebuffering(&self) -> bool {
@@ -659,7 +674,7 @@ impl NativeAudioEngine {
     pub(crate) fn apply_engine_policy_patch(
         &mut self,
         patch: NativeAudioEnginePolicyPatch,
-    ) -> NativeAudioEnginePolicyPayload {
+    ) -> (NativeAudioEnginePolicyPayload, bool) {
         let mut src_changed = false;
 
         if let Some(mode) = patch.transport_mode {
@@ -705,13 +720,7 @@ impl NativeAudioEngine {
             }
         }
 
-        if src_changed {
-            if let Err(err) = self.rebuild_source_for_src_policy_change() {
-                self.record_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
-            }
-        }
-
-        self.engine_policy_payload()
+        (self.engine_policy_payload(), src_changed)
     }
 
     fn sanitize_src_target_sample_rate(sample_rate: u32) -> Option<u32> {
@@ -791,6 +800,7 @@ impl NativeAudioEngine {
         LoadOperation {
             token,
             output_backend: self.output_backend.clone(),
+            input_registry: self.input_registry.clone(),
             preferred_input_id: self.preferred_input_id.clone(),
             decode_mode: self.current_decode_mode(),
             src_policy: self.current_src_policy(),
@@ -885,6 +895,7 @@ impl NativeAudioEngine {
         let token = self.begin_operation();
         Some(CrossfadeOperation {
             token,
+            input_registry: self.input_registry.clone(),
             preferred_input_id: self.preferred_input_id.clone(),
             decode_mode: self.current_decode_mode(),
             src_policy: self.current_src_policy(),
@@ -1271,14 +1282,16 @@ impl NativeAudioEngine {
                 self.output_backend.id(),
                 meta.sample_rate,
                 channels,
-                streaming.buffer.capacity_samples(),
+                streaming.render_queue.capacity_samples(),
                 meta.duration,
                 StreamingPrebufferKind::StartOrSeek,
                 self.streaming_prebuffer_start_or_seek_seconds,
             );
-            let available = self.streaming_available_samples(streaming);
+            let available = streaming.render_queue.len_samples();
             if available < target_samples {
-                streaming.buffer.wait_for_samples(target_samples, timeout);
+                streaming
+                    .render_queue
+                    .wait_for_samples(target_samples, timeout);
             }
         }
 
@@ -1385,13 +1398,15 @@ impl NativeAudioEngine {
                 self.output_backend.id(),
                 meta.sample_rate,
                 channels,
-                streaming.buffer.capacity_samples(),
+                streaming.render_queue.capacity_samples(),
                 meta.duration,
                 StreamingPrebufferKind::Crossfade,
                 self.streaming_prebuffer_crossfade_seconds,
             );
-            if self.streaming_available_samples(streaming) < target_samples {
-                streaming.buffer.wait_for_samples(target_samples, timeout);
+            if streaming.render_queue.len_samples() < target_samples {
+                streaming
+                    .render_queue
+                    .wait_for_samples(target_samples, timeout);
             }
         }
 
@@ -1449,76 +1464,96 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn play(&mut self) -> Result<(), String> {
-        if let Some(sink) = &self.sink {
-            if let Some(streaming) = &self.streaming {
-                let now_for_recovery = Instant::now();
-                let underrun_recovery_active = self
-                    .underrun_recovery_until
-                    .is_some_and(|until| until > now_for_recovery);
-                if !underrun_recovery_active {
-                    self.underrun_recovery_until = None;
-                }
+        let sink = self
+            .sink
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "No track loaded".to_string())?;
 
-                let channels = self.decoded_channels.max(1) as usize;
-                let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
-                    (self.duration - self.current_position).max(0.0)
-                } else {
-                    self.duration
-                };
-                let (target_samples, _timeout) = streaming_prebuffer_target_samples(
-                    self.output_backend.id(),
-                    self.decoded_sample_rate,
-                    channels,
-                    streaming.buffer.capacity_samples(),
-                    remaining_duration,
-                    StreamingPrebufferKind::StartOrSeek,
-                    self.streaming_prebuffer_start_or_seek_seconds,
-                );
+        if let Some(streaming) = self.streaming.as_ref() {
+            let now_for_recovery = Instant::now();
+            let underrun_recovery_active = self
+                .underrun_recovery_until
+                .is_some_and(|until| until > now_for_recovery);
+            if !underrun_recovery_active {
+                self.underrun_recovery_until = None;
+            }
 
-                if target_samples > 0 {
-                    let sample_rate = self.decoded_sample_rate.max(1) as f64;
-                    let channels_f64 = channels.max(1) as f64;
-                    let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
-                    let (min_seconds_cap, min_seconds_floor) = streaming_min_start_bounds(
-                        self.output_backend.id(),
-                        underrun_recovery_active,
-                    );
-                    let min_start_seconds = target_seconds
-                        .min(min_seconds_cap)
-                        .max(min_seconds_floor)
-                        .min(target_seconds);
-                    let min_start_samples =
-                        ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
-                            .clamp(1, target_samples);
+            let channels = self.decoded_channels.max(1) as usize;
+            let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
+                (self.duration - self.current_position).max(0.0)
+            } else {
+                self.duration
+            };
 
-                    let available = self.streaming_available_samples(streaming);
-                    self.desired_playback_state = PlaybackState::Playing;
-                    if available < min_start_samples && !self.streaming_is_finished(streaming) {
-                        sink.pause();
-                        self.sync_clock();
-                        self.playback_state = PlaybackState::Buffering;
-                        let now = Instant::now();
-                        self.buffering_started_at = Some(now);
-                        self.buffering_last_progress_at = Some(now);
-                        self.buffering_last_samples = available;
-                        return Ok(());
+            let decode_reservoir = streaming.buffer.clone();
+            let render_queue = streaming.render_queue.clone();
+            let (target_samples, _timeout) = streaming_prebuffer_target_samples(
+                self.output_backend.id(),
+                self.decoded_sample_rate,
+                channels,
+                render_queue.capacity_samples(),
+                remaining_duration,
+                StreamingPrebufferKind::StartOrSeek,
+                self.streaming_prebuffer_start_or_seek_seconds,
+            );
+
+            if target_samples > 0 {
+                let sample_rate = self.decoded_sample_rate.max(1) as f64;
+                let channels_f64 = channels.max(1) as f64;
+                let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
+                let (min_seconds_cap, min_seconds_floor) =
+                    streaming_min_start_bounds(self.output_backend.id(), underrun_recovery_active);
+                let min_start_seconds = target_seconds
+                    .min(min_seconds_cap)
+                    .max(min_seconds_floor)
+                    .min(target_seconds);
+                let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil()
+                    as usize)
+                    .clamp(1, target_samples);
+
+                let available = render_queue.len_samples();
+                self.desired_playback_state = PlaybackState::Playing;
+                let finished = decode_reservoir.is_finished() && render_queue.is_finished();
+                if available < min_start_samples && !finished {
+                    sink.pause();
+                    self.sync_clock();
+                    self.playback_state = PlaybackState::Buffering;
+                    let now = Instant::now();
+                    self.buffering_started_at = Some(now);
+                    self.buffering_last_progress_at = Some(now);
+                    self.buffering_last_samples = available;
+
+                    // Fast-path: wait briefly for initial decoded samples so click-to-play does
+                    // not depend on the emitter tick cadence.
+                    render_queue.wait_for_samples(min_start_samples, Duration::from_millis(200));
+
+                    let available = render_queue.len_samples();
+                    let finished = decode_reservoir.is_finished() && render_queue.is_finished();
+                    if available >= min_start_samples || (finished && available > 0) {
+                        sink.play();
+                        self.buffering_started_at = None;
+                        self.buffering_last_progress_at = None;
+                        self.buffering_last_samples = 0;
+                        self.set_state(PlaybackState::Playing);
+                        self.base_position = self.current_position;
+                        self.playback_started_at = Some(Instant::now());
                     }
+                    return Ok(());
                 }
             }
-
-            sink.play();
-            self.buffering_started_at = None;
-            self.buffering_last_progress_at = None;
-            self.buffering_last_samples = 0;
-            self.set_state(PlaybackState::Playing);
-            if self.playback_started_at.is_none() {
-                self.base_position = self.current_position;
-                self.playback_started_at = Some(Instant::now());
-            }
-            Ok(())
-        } else {
-            Err("No track loaded".into())
         }
+
+        sink.play();
+        self.buffering_started_at = None;
+        self.buffering_last_progress_at = None;
+        self.buffering_last_samples = 0;
+        self.set_state(PlaybackState::Playing);
+        if self.playback_started_at.is_none() {
+            self.base_position = self.current_position;
+            self.playback_started_at = Some(Instant::now());
+        }
+        Ok(())
     }
 
     pub(crate) fn pause(&mut self) -> Result<(), String> {
@@ -1990,7 +2025,7 @@ impl NativeAudioEngine {
                 self.output_backend.id(),
                 self.decoded_sample_rate,
                 channels,
-                streaming.buffer.capacity_samples(),
+                streaming.render_queue.capacity_samples(),
                 remaining_duration,
                 StreamingPrebufferKind::StartOrSeek,
                 self.streaming_prebuffer_start_or_seek_seconds,
@@ -2010,21 +2045,17 @@ impl NativeAudioEngine {
                     as usize)
                     .clamp(1, target_samples);
                 let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
-                    (self.streaming_available_samples(streaming) as f64)
+                    (streaming.render_queue.len_samples() as f64)
                         / (sample_rate * channels_f64)
                 } else {
                     0.0
                 };
                 let _ = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
-                let fallback_after = streaming_buffering_fallback_after(
-                    self.output_backend.id(),
-                    robust_recovery_active,
-                );
 
                 if matches!(self.desired_playback_state, PlaybackState::Playing)
                     && matches!(self.playback_state, PlaybackState::Playing)
                 {
-                    let available = self.streaming_available_samples(streaming);
+                    let available = streaming.render_queue.len_samples();
                     // During interactive seek we keep the sink running (the streaming source emits
                     // silence) and avoid entering the buffering state, otherwise shared backends
                     // can "pause then resume" with large perceived latency.
@@ -2048,7 +2079,7 @@ impl NativeAudioEngine {
                     && self.playback_started_at.is_none()
                 {
                     // Seek-in-flight: keep playing (silence) but still detect a decoder stall.
-                    let available = self.streaming_available_samples(streaming);
+                    let available = streaming.render_queue.len_samples();
                     let finished = self.streaming_is_finished(streaming);
                     let now = Instant::now();
 
@@ -2086,7 +2117,7 @@ impl NativeAudioEngine {
                 if matches!(self.desired_playback_state, PlaybackState::Playing)
                     && matches!(self.playback_state, PlaybackState::Buffering)
                 {
-                    let available = self.streaming_available_samples(streaming);
+                    let available = streaming.render_queue.len_samples();
                     let finished = self.streaming_is_finished(streaming);
                     let now = Instant::now();
                     if available != self.buffering_last_samples {
@@ -2116,11 +2147,7 @@ impl NativeAudioEngine {
                         return true;
                     }
 
-                    let ready_full = available >= target_samples;
                     let ready_min = available >= min_start_samples;
-                    let waited_long_enough = self
-                        .buffering_started_at
-                        .is_some_and(|started| started.elapsed() >= fallback_after);
 
                     let stall_timeout = Duration::from_secs(15);
                     let no_progress_for = self
@@ -2140,7 +2167,7 @@ impl NativeAudioEngine {
                         return true;
                     }
 
-                    if ready_full || (waited_long_enough && ready_min) {
+                    if ready_min {
                         sink.play();
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
@@ -2178,7 +2205,7 @@ impl NativeAudioEngine {
         // decoder has produced samples for the new position, so UI time doesn't drift ahead.
         if self.playback_started_at.is_none() {
             if let Some(streaming) = &self.streaming {
-                let available = self.streaming_available_samples(streaming);
+                let available = streaming.render_queue.len_samples();
                 if available > (self.decoded_channels.max(1) as usize * 32) {
                     self.base_position = self.current_position;
                     self.playback_started_at = Some(Instant::now());
@@ -2259,29 +2286,6 @@ impl NativeAudioEngine {
         }
 
         self.preferred_input_id = input_id;
-        Ok(())
-    }
-
-    fn rebuild_source_for_src_policy_change(&mut self) -> Result<(), String> {
-        let Some(track_path) = self.current_track.clone() else {
-            return Ok(());
-        };
-
-        let resume_playing = matches!(self.desired_playback_state, PlaybackState::Playing);
-        if resume_playing {
-            self.update_position_from_clock();
-        }
-        let target = self.current_position.max(0.0);
-
-        self.load(track_path)?;
-        if target > 0.0 {
-            self.seek(target)?;
-        }
-
-        if resume_playing {
-            self.play()?;
-        }
-
         Ok(())
     }
 
@@ -2626,13 +2630,15 @@ impl NativeAudioEngine {
                     self.output_backend.id(),
                     self.decoded_sample_rate,
                     channels,
-                    streaming.buffer.capacity_samples(),
+                    streaming.render_queue.capacity_samples(),
                     remaining_duration,
                     StreamingPrebufferKind::StartOrSeek,
                     self.streaming_prebuffer_start_or_seek_seconds,
                 );
-                if self.streaming_available_samples(streaming) < target_samples {
-                    streaming.buffer.wait_for_samples(target_samples, timeout);
+                if streaming.render_queue.len_samples() < target_samples {
+                    streaming
+                        .render_queue
+                        .wait_for_samples(target_samples, timeout);
                 }
             }
 
@@ -2757,6 +2763,151 @@ mod tests {
             ),
             Some(192_000)
         );
+    }
+
+    #[test]
+    fn shared_render_ahead_wrap_excludes_shared_raw_backend() {
+        assert!(should_wrap_source_for_shared_backend("wasapi"));
+        assert!(should_wrap_source_for_shared_backend("rodio-cpal"));
+        assert!(!should_wrap_source_for_shared_backend("wasapi-shared-raw"));
+        assert!(!should_wrap_source_for_shared_backend("wasapi-exclusive"));
+    }
+
+    #[test]
+    fn play_buffers_until_render_queue_has_min_start_samples() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(TransportModeBackend::new("wasapi"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 120.0;
+        engine.current_position = 0.0;
+        engine.set_streaming_buffer_settings(Some(0.2), None, Some("streaming"));
+
+        let sink = Arc::new(CallSink::default());
+        engine.sink = Some(sink.clone());
+
+        // Decoder reservoir has data, but the render queue (the only queue the streaming source
+        // actually reads from) is empty. play() should enter buffering instead of starting output
+        // with silence.
+        let capacity_samples = 48_000usize * 2 * 10;
+        let buffer = crate::audio::buffer::AudioRingBuffer::new(capacity_samples);
+        let render_queue = crate::audio::buffer::AudioRingBuffer::new(
+            (capacity_samples / 4).clamp(16_384, 262_144),
+        );
+
+        let seed_frames = 12_000usize;
+        let seed = vec![0.1f32; seed_frames * 2];
+        let pushed = buffer.push_interleaved(&seed, 2);
+        assert!(pushed > 0, "expected seed frames to be pushed");
+
+        let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = mpsc::channel();
+        let streaming = StreamingPlayback {
+            buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
+            command_tx,
+            error: Arc::new(Mutex::new(None)),
+        };
+        engine.streaming = Some(streaming);
+
+        engine.playback_state = PlaybackState::Paused;
+        engine.desired_playback_state = PlaybackState::Paused;
+
+        engine.play().expect("play");
+        assert!(matches!(engine.playback_state, PlaybackState::Buffering));
+        assert!(engine.buffering_started_at.is_some());
+        assert!(sink.pause_calls.load(Ordering::Acquire) >= 1);
+        assert_eq!(sink.play_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn buffering_resumes_once_min_start_samples_are_available() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 120.0;
+        engine.current_position = 0.0;
+        // Large target so `target_samples` stays above the min-start bound.
+        engine.set_streaming_buffer_settings(Some(2.4), None, Some("streaming"));
+
+        let sink = Arc::new(CallSink::default());
+        engine.sink = Some(sink.clone());
+
+        let channels = engine.decoded_channels.max(1) as usize;
+        let capacity_samples = 48_000usize * channels * 10;
+        let buffer = crate::audio::buffer::AudioRingBuffer::new(capacity_samples);
+        let render_queue = crate::audio::buffer::AudioRingBuffer::new(
+            (capacity_samples / 4).clamp(16_384, 262_144),
+        );
+
+        let remaining_duration = engine.duration;
+        let (target_samples, _) = streaming_prebuffer_target_samples(
+            engine.output_backend.id(),
+            engine.decoded_sample_rate,
+            channels,
+            render_queue.capacity_samples(),
+            remaining_duration,
+            StreamingPrebufferKind::StartOrSeek,
+            engine.streaming_prebuffer_start_or_seek_seconds,
+        );
+        assert!(
+            target_samples > 0,
+            "expected a non-zero target_samples for this test"
+        );
+
+        let sample_rate = engine.decoded_sample_rate.max(1) as f64;
+        let channels_f64 = channels.max(1) as f64;
+        let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
+        let (min_seconds_cap, min_seconds_floor) =
+            streaming_min_start_bounds(engine.output_backend.id(), false);
+        let min_start_seconds = target_seconds
+            .min(min_seconds_cap)
+            .max(min_seconds_floor)
+            .min(target_seconds);
+        let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+            .clamp(1, target_samples);
+
+        let frames_to_push = (min_start_samples + channels - 1) / channels;
+        let samples_to_push = frames_to_push * channels;
+        assert!(samples_to_push >= min_start_samples);
+        assert!(
+            samples_to_push < target_samples,
+            "expected min_start_samples ({samples_to_push}) to stay below target_samples ({target_samples})"
+        );
+
+        let seed = vec![0.1f32; samples_to_push];
+        let pushed = render_queue.push_interleaved(&seed, channels);
+        assert_eq!(pushed, frames_to_push);
+
+        let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = mpsc::channel();
+        engine.streaming = Some(StreamingPlayback {
+            buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
+            command_tx,
+            error: Arc::new(Mutex::new(None)),
+        });
+
+        engine.playback_state = PlaybackState::Buffering;
+        engine.desired_playback_state = PlaybackState::Playing;
+        engine.buffering_started_at = Some(Instant::now() - Duration::from_secs(1));
+        engine.buffering_last_progress_at = engine.buffering_started_at;
+        engine.buffering_last_samples = 0;
+        // Avoid accidental recovery mode from global underrun counters in other tests.
+        engine.last_observed_underrun_events = crate::audio::input::streaming_underrun_stats().0;
+        engine.underrun_recovery_until = None;
+        engine.shared_timeline_stress_until = None;
+
+        let ticked = engine.tick();
+        assert!(ticked);
+        assert!(matches!(engine.playback_state, PlaybackState::Playing));
+        assert!(sink.play_calls.load(Ordering::Relaxed) > 0);
+        assert!(!matches!(engine.playback_state, PlaybackState::Error));
     }
 
     #[test]
@@ -3045,10 +3196,43 @@ mod tests {
         );
 
         let samples_per_second = sample_rate as usize * channels;
-        assert_eq!(shared_start_samples, samples_per_second * 2);
+        assert_eq!(shared_start_samples, samples_per_second * 35 / 100);
         assert_eq!(shared_cross_samples, samples_per_second / 2);
-        assert_eq!(exclusive_start_samples, samples_per_second * 3);
+        assert_eq!(exclusive_start_samples, samples_per_second * 30 / 100);
         assert_eq!(exclusive_cross_samples, samples_per_second);
+    }
+
+    #[test]
+    fn default_decode_mode_is_streaming() {
+        let engine = NativeAudioEngine::new();
+        assert_eq!(engine.streaming_buffer_settings_payload().decode_mode, "streaming");
+        assert_eq!(engine.current_decode_mode(), AudioInputDecodeMode::Streaming);
+    }
+
+    #[test]
+    fn streaming_min_start_bounds_allow_fast_click_to_play() {
+        let (shared_cap, shared_floor) = streaming_min_start_bounds("rodio-cpal", false);
+        let (exclusive_cap, exclusive_floor) = streaming_min_start_bounds("wasapi-exclusive", false);
+
+        assert!(
+            shared_cap <= 0.50,
+            "shared backend min-start cap too high: cap={shared_cap} floor={shared_floor}"
+        );
+        assert!(
+            exclusive_cap <= 0.50,
+            "exclusive backend min-start cap too high: cap={exclusive_cap} floor={exclusive_floor}"
+        );
+
+        let (shared_recovery_cap, _) = streaming_min_start_bounds("rodio-cpal", true);
+        let (exclusive_recovery_cap, _) = streaming_min_start_bounds("wasapi-exclusive", true);
+        assert!(
+            shared_recovery_cap >= shared_cap,
+            "recovery cap should not be lower than normal cap"
+        );
+        assert!(
+            exclusive_recovery_cap >= exclusive_cap,
+            "recovery cap should not be lower than normal cap"
+        );
     }
 
     #[test]
@@ -3170,7 +3354,7 @@ mod tests {
             output_quantization_mode: Some(NativeAudioOutputQuantizationMode::Tpdf),
         };
 
-        let next = engine.apply_engine_policy_patch(patch);
+        let (next, _) = engine.apply_engine_policy_patch(patch);
         assert!(matches!(
             next.transport_mode,
             NativeAudioTransportMode::TransportExact
@@ -3279,7 +3463,7 @@ mod tests {
                     .set_preferred_input_id(Some(super::SYMPHONIA_INPUT_ID.to_string()))
                     .expect("set input");
                 engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode));
-                engine.apply_engine_policy_patch(NativeAudioEnginePolicyPatch {
+                let _ = engine.apply_engine_policy_patch(NativeAudioEnginePolicyPatch {
                     transport_mode: Some(transport_mode),
                     ..Default::default()
                 });
