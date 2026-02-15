@@ -12,17 +12,28 @@ interface AudioVisualizerProps {
 /**
  * Audio spectrum visualizer.
  *
- * Inspired by VCP's smoother "curve + glow" style:
- * - Uses easing to smooth FFT bins over time
- * - Draws a filled bezier curve with a subtle glow
- * - Responsive canvas sizing (ResizeObserver + DPR-aware)
+ * Inspired by "017-audio-wave" radial waveform:
+ * - Maps spectrum bins onto radial spokes
+ * - Uses log-frequency mapping + perceptual tilt to avoid low-end dominance
+ * - Smooths levels for a fluid pulse
  */
 export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyData, isPlaying }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>();
+  const isPlayingRef = useRef(isPlaying);
+  const animatingRef = useRef(false);
+  const tickRef = useRef<((now: number) => void) | null>(null);
   const { renderMode } = useWindowActivity();
   const { effective: quality } = useQuality();
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+    if (isPlaying && !animatingRef.current && tickRef.current) {
+      animatingRef.current = true;
+      rafRef.current = requestAnimationFrame(tickRef.current);
+    }
+  }, [isPlaying]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -60,155 +71,151 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
         : null;
     resizeObserver?.observe(container);
 
-    // Smoothed spectrum data (VCP-style easing).
-    let currentCurve: number[] = [];
-    let targetCurve: number[] = [];
+    // Smoothed radial levels.
+    let currentLevels: number[] = [];
+    let targetLevels: number[] = [];
+    let noiseSeeds: number[] = [];
+    let phaseSeeds: number[] = [];
+    let gainSeeds: number[] = [];
+    let angleCache: Array<[number, number]> = [];
+    let cachedLineCount = 0;
 
-    const ensureLength = (len: number) => {
-      if (targetCurve.length !== len) targetCurve = new Array(len).fill(0);
-      if (currentCurve.length !== len) currentCurve = new Array(len).fill(0);
+    const hash01 = (value: number) => {
+      const s = Math.sin(value * 12.9898) * 43758.5453;
+      return s - Math.floor(s);
     };
 
-    const resolveTargetCurve = (bins: Uint8Array, points: number) => {
-      ensureLength(points);
-      const binsPerPoint = bins.length / points;
-
-      for (let i = 0; i < points; i++) {
-        const start = Math.floor(i * binsPerPoint);
-        const end = Math.max(start + 1, Math.floor((i + 1) * binsPerPoint));
-
-        let max = 0;
-        for (let j = start; j < end && j < bins.length; j++) {
-          const v = bins[j] ?? 0;
-          if (v > max) max = v;
+    const ensureLength = (len: number) => {
+      if (targetLevels.length !== len) targetLevels = new Array(len).fill(0);
+      if (currentLevels.length !== len) currentLevels = new Array(len).fill(0);
+      if (noiseSeeds.length !== len) noiseSeeds = new Array(len).fill(0);
+      if (phaseSeeds.length !== len) phaseSeeds = new Array(len).fill(0);
+      if (gainSeeds.length !== len) gainSeeds = new Array(len).fill(0);
+      if (cachedLineCount !== len) {
+        cachedLineCount = len;
+        angleCache = new Array(len);
+        for (let i = 0; i < len; i++) {
+          const angle = (i / len) * Math.PI * 2 - Math.PI / 2;
+          angleCache[i] = [Math.cos(angle), Math.sin(angle)];
+          const h1 = hash01(i * 1.37 + 0.1);
+          const h2 = hash01(i * 2.17 + 0.7);
+          noiseSeeds[i] = h1;
+          phaseSeeds[i] = h2 * Math.PI * 2;
+          gainSeeds[i] = 0.85 + 0.3 * h1;
         }
+      }
+    };
 
-        let normalized = max / 255;
-        normalized = Math.pow(normalized, 0.72); // perceptual shaping
-        targetCurve[i] = normalized;
+    const resolveTargetLevels = (bins: Uint8Array, lineCount: number, timeSec: number) => {
+      ensureLength(lineCount);
+      const binCount = bins.length;
+      if (binCount <= 0) return;
+
+      const minBin = 1;
+      const maxBin = Math.max(minBin + 1, binCount - 1);
+      const logMin = Math.log(minBin);
+      const logMax = Math.log(maxBin);
+      const logSpan = logMax - logMin;
+
+      for (let i = 0; i < lineCount; i++) {
+        const scramble = (i * 0.61803398875 + noiseSeeds[i] * 0.12) % 1;
+        const t0 = scramble;
+        const t1 = (scramble + 1 / lineCount) % 1;
+        const idx0 = Math.floor(Math.exp(logMin + logSpan * t0));
+        const idx1 = Math.max(idx0 + 1, Math.floor(Math.exp(logMin + logSpan * t1)));
+
+        let acc = 0;
+        let count = 0;
+        for (let j = idx0; j < idx1 && j < binCount; j++) {
+          acc += bins[j] ?? 0;
+          count++;
+        }
+        const avg = count > 0 ? acc / count : 0;
+
+        let normalized = avg / 255;
+        normalized = Math.pow(normalized, 0.68); // compress dynamic range
+        normalized = Math.min(1, normalized * gainSeeds[i]);
+
+        const shimmer = Math.sin(timeSec * 3.2 + phaseSeeds[i]) * 0.04 * normalized;
+        normalized = Math.max(0, Math.min(1, normalized + shimmer));
+
+        targetLevels[i] = normalized;
       }
     };
 
     const applyEasing = (factor: number) => {
-      for (let i = 0; i < targetCurve.length; i++) {
-        currentCurve[i] += (targetCurve[i] - currentCurve[i]) * factor;
+      for (let i = 0; i < targetLevels.length; i++) {
+        currentLevels[i] += (targetLevels[i] - currentLevels[i]) * factor;
       }
     };
 
     const decay = (factor: number) => {
-      for (let i = 0; i < currentCurve.length; i++) {
-        currentCurve[i] *= factor;
+      for (let i = 0; i < currentLevels.length; i++) {
+        currentLevels[i] *= factor;
       }
     };
 
-    const drawCurve = () => {
+    const drawRadial = () => {
       const width = cssWidth;
       const height = cssHeight;
       if (width <= 1 || height <= 1) return;
 
       ctx.clearRect(0, 0, width, height);
 
-      // Soft overlay so the curve reads consistently on top of the magnet background.
+      // Soft overlay so the spokes read consistently on top of the magnet background.
       ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
       ctx.fillRect(0, 0, width, height);
 
-      if (currentCurve.length < 2) return;
+      if (currentLevels.length < 2) return;
 
       // Bass energy drives a subtle glow.
-      const bassBins = Math.max(1, Math.floor(currentCurve.length * 0.06));
+      const bassBins = Math.max(1, Math.floor(currentLevels.length * 0.08));
       let bassEnergy = 0;
-      for (let i = 0; i < bassBins; i++) bassEnergy += currentCurve[i] ?? 0;
+      for (let i = 0; i < bassBins; i++) bassEnergy += currentLevels[i] ?? 0;
       bassEnergy /= bassBins;
       const pulse = Math.min(1, bassEnergy * 1.8);
 
-      const r = 0;
-      const g = 255;
-      const b = 136;
+      const r = 23;
+      const g = 247;
+      const b = 0;
 
-      const gradient = ctx.createLinearGradient(0, 0, 0, height);
-      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.65 + 0.25 * pulse})`);
-      gradient.addColorStop(0.6, `rgba(${r}, ${g}, ${b}, ${0.22 + 0.12 * pulse})`);
-      gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.02)`);
+      const minSide = Math.min(width, height);
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const outerRadius = minSide * 0.48;
+      const bandThickness = Math.max(8, outerRadius * 0.32);
+      const midRadius = outerRadius - bandThickness * 0.5;
 
-      const amplitude = 1.18;
-      const points = currentCurve.length;
-      const sliceWidth = width / (points - 1);
-
-      const getPoint = (index: number) => {
-        const value = currentCurve[index] ?? 0;
-        const x = index * sliceWidth;
-        const y = height - Math.min(1, value) * height * amplitude;
-        return [x, Math.max(0, Math.min(height, y))] as const;
-      };
-
-      const tension = 0.5;
-
-      // Filled smooth curve.
+      // Spokes + glow.
       ctx.save();
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.moveTo(0, height);
-      const [startX, startY] = getPoint(0);
-      ctx.lineTo(startX, startY);
-      for (let i = 0; i < points - 1; i++) {
-        const [x1, y1] = getPoint(i);
-        const [x2, y2] = getPoint(i + 1);
-        const [prevX, prevY] = i > 0 ? getPoint(i - 1) : [x1, y1];
-        const [nextX, nextY] = i < points - 2 ? getPoint(i + 2) : [x2, y2];
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.82 + 0.16 * pulse})`;
+      ctx.lineWidth = Math.max(0.9, Math.min(1.8, bandThickness * 0.02));
+      ctx.lineJoin = 'miter';
+      ctx.lineCap = 'butt';
+      ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.16 + 0.28 * pulse})`;
+      ctx.shadowBlur = 3 + pulse * 5;
 
-        const cp1x = x1 + ((x2 - prevX) / 6) * tension;
-        const cp1y = y1 + ((y2 - prevY) / 6) * tension;
-        const cp2x = x2 - ((nextX - x1) / 6) * tension;
-        const cp2y = y2 - ((nextY - y1) / 6) * tension;
-
-        if (i === 0) ctx.lineTo(x1, y1);
-        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x2, y2);
-      }
-      ctx.lineTo(width, height);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-
-      // Stroke + dots.
-      ctx.save();
-      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.82 + 0.15 * pulse})`;
-      ctx.lineWidth = 1.6;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.35 + 0.35 * pulse})`;
-      ctx.shadowBlur = 6 + pulse * 8;
-
-      ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      for (let i = 0; i < points - 1; i++) {
-        const [x1, y1] = getPoint(i);
-        const [x2, y2] = getPoint(i + 1);
-        const [prevX, prevY] = i > 0 ? getPoint(i - 1) : [x1, y1];
-        const [nextX, nextY] = i < points - 2 ? getPoint(i + 2) : [x2, y2];
-
-        const cp1x = x1 + ((x2 - prevX) / 6) * tension;
-        const cp1y = y1 + ((y2 - prevY) / 6) * tension;
-        const cp2x = x2 - ((nextX - x1) / 6) * tension;
-        const cp2y = y2 - ((nextY - y1) / 6) * tension;
-
-        if (i === 0) ctx.lineTo(x1, y1);
-        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x2, y2);
-      }
-      ctx.stroke();
-
-      const dotRadius = 0.9 + 0.6 * pulse;
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.7 + 0.2 * pulse})`;
-      for (let i = 0; i < points; i += 2) {
-        const [x, y] = getPoint(i);
+      for (let i = 0; i < currentLevels.length; i++) {
+        const raw = currentLevels[i] ?? 0;
+        const level = Math.max(0, Math.min(1, raw));
+        const length = Math.min(bandThickness, level * bandThickness);
+        const half = length * 0.5;
+        const [cos, sin] = angleCache[i] ?? [1, 0];
+        const x1 = centerX + cos * (midRadius + half);
+        const y1 = centerY + sin * (midRadius + half);
+        const x2 = centerX + cos * (midRadius - half);
+        const y2 = centerY + sin * (midRadius - half);
         ctx.beginPath();
-        ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
       }
 
       ctx.restore();
     };
 
     let lastFrameAt = 0;
+    let lastTickAt = 0;
 
     const baseFps = Math.max(1, Math.min(240, quality.fpsEffects));
     const targetFps =
@@ -232,34 +239,44 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
         lastFrameAt = now - (sinceLast % minDeltaMs);
       }
 
-      const frequencyData = getFrequencyData();
-      const maxPoints = Math.max(12, Math.min(64, quality.visualizerBars));
-      const pointCount = Math.min(maxPoints, frequencyData?.length ?? 0);
+      const elapsedMs = lastTickAt ? now - lastTickAt : targetFps ? 1000 / targetFps : 16.7;
+      lastTickAt = now;
 
-      if (frequencyData && isPlaying && pointCount > 1) {
-        resolveTargetCurve(frequencyData, pointCount);
-        applyEasing(0.18);
+      const frequencyData = getFrequencyData();
+      const maxLines = Math.max(180, Math.min(260, quality.visualizerBars * 5));
+      const lineCount = Math.min(maxLines, frequencyData?.length ? maxLines : 0);
+
+      const playing = isPlayingRef.current;
+      if (frequencyData && playing && lineCount > 1) {
+        resolveTargetLevels(frequencyData, lineCount, now / 1000);
+        applyEasing(0.24);
       } else {
-        decay(0.88);
+        const decaySeconds = 1.1;
+        const decayFactor = Math.exp(-elapsedMs / 1000 / decaySeconds);
+        decay(decayFactor);
       }
 
-      drawCurve();
+      drawRadial();
 
-      const shouldContinue = isPlaying || currentCurve.some((value) => value > 0.002);
+      const shouldContinue = playing || currentLevels.some((value) => value > 0.002);
       if (shouldContinue) {
         rafRef.current = requestAnimationFrame(tick);
+      } else {
+        animatingRef.current = false;
       }
     };
 
+    tickRef.current = tick;
+    animatingRef.current = true;
     rafRef.current = requestAnimationFrame(tick);
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      animatingRef.current = false;
       resizeObserver?.disconnect();
     };
   }, [
     getFrequencyData,
-    isPlaying,
     quality.fpsBackground,
     quality.fpsEffects,
     quality.fpsForeground,
