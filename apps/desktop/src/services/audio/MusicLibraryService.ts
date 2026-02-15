@@ -78,6 +78,9 @@ export class MusicLibraryService {
   private coverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
   private albumCoverUrlCache: Map<string, string> = new Map();
   private albumCoverUrlInflight: Map<string, Promise<string | undefined>> = new Map();
+  private legacyCoverUrlDropIds: Set<string> = new Set();
+  private legacyCoverUrlDropScheduled = false;
+  private legacyCoverUrlDropInFlight = false;
   private readonly DEFAULT_COVER_URL_CACHE_MAX_ENTRIES = 320;
   private readonly DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES = 96;
   private readonly DEFAULT_COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024;
@@ -320,6 +323,100 @@ export class MusicLibraryService {
     return undefined;
   }
 
+  private sanitizeStoredCoverUrlForPath(raw: unknown, trackPath: unknown): string | undefined {
+    const coverUrl = this.sanitizeCoverUrl(raw);
+    if (!coverUrl) return undefined;
+
+    // Desktop/Tauri: embedded `data:`/`blob:` cover payloads for absolute-path tracks are a major
+    // memory multiplier (especially when they leak into `MediaMetadata` or UI state). Prefer the
+    // Rust cover cache instead.
+    if (
+      isTauriRuntime() &&
+      typeof trackPath === 'string' &&
+      this.isLikelyAbsolutePath(trackPath) &&
+      (coverUrl.startsWith('data:') || coverUrl.startsWith('blob:'))
+    ) {
+      return undefined;
+    }
+
+    return coverUrl;
+  }
+
+  private scheduleLegacyCoverUrlDrop(trackId: string): void {
+    if (!trackId) return;
+    if (!isTauriRuntime()) return;
+    if (typeof window === 'undefined') return;
+
+    this.legacyCoverUrlDropIds.add(trackId);
+    if (this.legacyCoverUrlDropScheduled) return;
+    this.legacyCoverUrlDropScheduled = true;
+
+    window.setTimeout(() => {
+      void this.flushLegacyCoverUrlDrops().catch(() => {});
+    }, 1200);
+  }
+
+  private async flushLegacyCoverUrlDrops(): Promise<void> {
+    if (this.legacyCoverUrlDropInFlight) {
+      if (!this.legacyCoverUrlDropScheduled && typeof window !== 'undefined') {
+        this.legacyCoverUrlDropScheduled = true;
+        window.setTimeout(() => {
+          void this.flushLegacyCoverUrlDrops().catch(() => {});
+        }, 1200);
+      }
+      return;
+    }
+
+    const ids = Array.from(this.legacyCoverUrlDropIds);
+    this.legacyCoverUrlDropIds.clear();
+    this.legacyCoverUrlDropScheduled = false;
+    if (ids.length === 0) return;
+
+    this.legacyCoverUrlDropInFlight = true;
+    try {
+      const db = await this.ensureDB();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction(['tracks'], 'readwrite');
+        const store = transaction.objectStore('tracks');
+
+        for (const id of ids) {
+          const request = store.get(id);
+          request.onsuccess = () => {
+            const record = request.result as unknown;
+            if (!record || typeof record !== 'object') return;
+            const value = record as Record<string, unknown>;
+            const coverUrl = typeof value.coverUrl === 'string' ? value.coverUrl.trim() : '';
+            if (!coverUrl) return;
+
+            const trackPath =
+              typeof value.filePath === 'string'
+                ? value.filePath
+                : typeof value.path === 'string'
+                  ? value.path
+                  : '';
+            if (!trackPath || !this.isLikelyAbsolutePath(trackPath)) return;
+
+            const lower = coverUrl.toLowerCase();
+            const isLegacy =
+              lower.startsWith('data:') ||
+              lower.startsWith('blob:') ||
+              lower.startsWith('asset:') ||
+              lower.startsWith('tauri:');
+            if (!isLegacy) return;
+
+            delete value.coverUrl;
+            store.put(value);
+          };
+        }
+
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+    } finally {
+      this.legacyCoverUrlDropInFlight = false;
+    }
+  }
+
   private guessMimeTypeFromPath(path: string): string | undefined {
     const lower = path.toLowerCase();
     if (lower.endsWith('.mp3')) return 'audio/mpeg';
@@ -409,8 +506,14 @@ export class MusicLibraryService {
     coverUrl: string,
     coverKey: string
   ): Promise<void> {
-    // Blob URLs are session-only; never persist them into IndexedDB.
-    if (String(coverUrl).startsWith('blob:')) {
+    const coverUrlString = String(coverUrl || '');
+    const isSessionOnlyUrl =
+      coverUrlString.startsWith('blob:') ||
+      coverUrlString.startsWith('asset:') ||
+      coverUrlString.startsWith('tauri:');
+
+    // Blob/asset/tauri URLs are session-only; never persist them into IndexedDB.
+    if (isSessionOnlyUrl) {
       const db = await this.ensureDB();
       await new Promise<void>((resolve, reject) => {
         const transaction = db.transaction(['tracks'], 'readwrite');
@@ -425,9 +528,20 @@ export class MusicLibraryService {
         request.onsuccess = () => {
           const existing = request.result;
           if (existing) {
+            const prevCoverUrl = String(existing.coverUrl || '');
+            const lower = prevCoverUrl.toLowerCase();
+            const shouldDropLegacyCoverUrl =
+              lower.startsWith('data:') ||
+              lower.startsWith('blob:') ||
+              lower.startsWith('asset:') ||
+              lower.startsWith('tauri:');
+
+            const next = { ...existing, coverKey } as Record<string, unknown>;
+            if (shouldDropLegacyCoverUrl && 'coverUrl' in next) {
+              delete next.coverUrl;
+            }
             store.put({
-              ...existing,
-              coverKey,
+              ...next,
             });
           }
           resolve();
@@ -636,13 +750,16 @@ export class MusicLibraryService {
   ): Promise<string | undefined> {
     const allowAlbumFallback = options?.allowAlbumFallback !== false;
     const existingUrl = track.coverUrl;
+    const inTauri = isTauriRuntime();
 
     const audioPath = track.filePath || track.path;
+    const isAbsoluteAudioPath = Boolean(audioPath && this.isLikelyAbsolutePath(audioPath));
     const normalizedAudioPath =
       audioPath && this.isLikelyAbsolutePath(audioPath) ? this.normalizePathForCompare(audioPath) : null;
     const cacheKey = normalizedAudioPath ? `${normalizedAudioPath}|edge=${this.coverMaxEdgePx}` : null;
 
     if (
+      (!inTauri || !isAbsoluteAudioPath) &&
       existingUrl &&
       (String(existingUrl).startsWith('data:') || String(existingUrl).startsWith('blob:')) &&
       track.coverKey &&
@@ -655,9 +772,9 @@ export class MusicLibraryService {
       return existingUrl;
     }
 
-    if (!isTauriRuntime()) return existingUrl;
+    if (!inTauri) return existingUrl;
 
-    if (!audioPath || !this.isLikelyAbsolutePath(audioPath)) return existingUrl;
+    if (!audioPath || !isAbsoluteAudioPath) return existingUrl;
 
     const effectiveCacheKey = cacheKey ?? `${this.normalizePathForCompare(audioPath)}|edge=${this.coverMaxEdgePx}`;
     const cached = this.coverUrlCache.get(effectiveCacheKey);
@@ -677,7 +794,7 @@ export class MusicLibraryService {
     }
 
     const promise = (async () => {
-      const { invoke } = await import('@tauri-apps/api/tauri');
+      const { invoke, convertFileSrc } = await import('@tauri-apps/api/tauri');
 
       const result = await invoke<
         | {
@@ -685,7 +802,6 @@ export class MusicLibraryService {
             path: string;
             size: number;
             mediaType?: string | null;
-            bytesBase64?: string | null;
           }
         | null
       >('music_library_get_cover', {
@@ -696,18 +812,10 @@ export class MusicLibraryService {
 
       if (!result) return undefined;
 
-      const rawBase64 = String(result.bytesBase64 || '').trim();
-      if (!rawBase64) return undefined;
+      const coverPath = String(result.path || '').trim();
+      if (!coverPath) return undefined;
 
-      const mime = result.mediaType || 'image/jpeg';
-      const binary = atob(rawBase64);
-      const buffer = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        buffer[i] = binary.charCodeAt(i);
-      }
-
-      const blob = new Blob([buffer], { type: mime });
-      const url = URL.createObjectURL(blob);
+      const url = convertFileSrc(coverPath);
       this.coverUrlCache.set(effectiveCacheKey, url);
       this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
       this.pruneUrlCaches();
@@ -2006,7 +2114,27 @@ export class MusicLibraryService {
     const { addedAt, ...rest } = storedTrack;
     const track: Track = { ...rest };
 
-    track.coverUrl = this.sanitizeCoverUrl(track.coverUrl);
+    const rawCoverUrl = storedTrack.coverUrl;
+    track.coverUrl = this.sanitizeStoredCoverUrlForPath(rawCoverUrl, track.filePath || track.path);
+    if (
+      typeof storedTrack.id === 'string' &&
+      !track.coverUrl &&
+      typeof rawCoverUrl === 'string' &&
+      rawCoverUrl.length > 0
+    ) {
+      const audioPath = String(track.filePath || track.path || '');
+      if (audioPath && this.isLikelyAbsolutePath(audioPath)) {
+        const lower = rawCoverUrl.trim().toLowerCase();
+        if (
+          lower.startsWith('data:') ||
+          lower.startsWith('blob:') ||
+          lower.startsWith('asset:') ||
+          lower.startsWith('tauri:')
+        ) {
+          this.scheduleLegacyCoverUrlDrop(storedTrack.id);
+        }
+      }
+    }
 
     if (typeof addedAt === 'number') {
       track.addedAt = new Date(addedAt);
@@ -2250,12 +2378,14 @@ export class MusicLibraryService {
               const key = `${track.album}::${track.artist || ''}`;
               if (albumMap.has(key)) return;
               albumMap.set(key, {
-                album: track.album,
-                artist: track.artist || 'Unknown Artist',
-                cover: includeStoredCover ? this.sanitizeCoverUrl(track.coverUrl) : undefined,
-                coverTrackPath: track.filePath || track.path,
-                coverTrackId: track.id,
-              });
+              album: track.album,
+              artist: track.artist || 'Unknown Artist',
+              cover: includeStoredCover
+                ? this.sanitizeStoredCoverUrlForPath(track.coverUrl, track.filePath || track.path)
+                : undefined,
+              coverTrackPath: track.filePath || track.path,
+              coverTrackId: track.id,
+            });
             });
             resolve(
               Array.from(albumMap.values()).sort((a, b) => a.album.localeCompare(b.album))
@@ -2284,7 +2414,9 @@ export class MusicLibraryService {
               albumMap.set(key, {
                 album,
                 artist,
-                cover: includeStoredCover ? this.sanitizeCoverUrl(value.coverUrl) : undefined,
+                cover: includeStoredCover
+                  ? this.sanitizeStoredCoverUrlForPath(value.coverUrl, value.filePath || value.path)
+                  : undefined,
                 coverTrackPath: value.filePath || value.path,
                 coverTrackId: value.id,
               });

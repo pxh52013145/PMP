@@ -44,7 +44,8 @@ type MainScrollAnchor =
   | { kind: 'track'; id: string; offset: number }
   | { kind: 'album'; key: string; offset: number };
 
-type MainScrollMemory = { scrollTop: number; anchor?: MainScrollAnchor };
+type MainScrollRootKind = 'main' | 'navigation';
+type MainScrollMemory = { scrollTop: number; anchor?: MainScrollAnchor; rootKind?: MainScrollRootKind };
 
 type ViewScrollMemory = Partial<Record<ViewMode, MainScrollMemory>>;
 const moduleScrollMemory: ViewScrollMemory = {};
@@ -75,6 +76,35 @@ const trackTextInternPool = new Map<string, string>();
 function trimTracksForModuleCache(tracks: Track[]): Track[] {
   if (tracks.length <= MODULE_CACHE_TRACK_CAP) return tracks;
   return tracks.slice(0, MODULE_CACHE_TRACK_CAP);
+}
+
+function buildModuleCacheSnapshot(input: {
+  tracks: Track[];
+  artists: string[];
+  albums: AlbumSummary[];
+  genres: string[];
+  trackNextOffset: number;
+  hasMoreTracks: boolean;
+  normalizeForIncrementalLoad?: boolean;
+}): ModuleCacheSnapshot {
+  const trimmedTracks = trimTracksForModuleCache(input.tracks);
+  const normalizedOffset = Math.min(
+    Math.max(0, Number.isFinite(input.trackNextOffset) ? Math.floor(input.trackNextOffset) : 0),
+    trimmedTracks.length
+  );
+  const normalizedHasMore = input.normalizeForIncrementalLoad
+    ? input.hasMoreTracks || input.trackNextOffset > trimmedTracks.length
+    : input.hasMoreTracks;
+
+  return {
+    tracks: trimmedTracks,
+    artists: input.artists,
+    albums: input.albums,
+    genres: input.genres,
+    trackNextOffset: normalizedOffset,
+    hasMoreTracks: normalizedHasMore,
+    timestamp: Date.now(),
+  };
 }
 
 function trimTrackText(value: unknown, maxChars: number = TRACK_TEXT_MAX_CHARS): string | undefined {
@@ -228,6 +258,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   // ? 鐠佹澘绻傚姘З娴ｅ秶鐤嗛敍姘瘻 viewMode 缂佸瓨濮㈡稉缁樼泊閸斻劍娼?scrollTop + 闁挎氨鍋ｉ敍宀勪缉閸忓秷娉曟い鐢告桨/閸掑洦宕?tab 娑撱垹銇戞担宥囩枂
   const isRestoringMainScrollRef = useRef(false);
   const mainScrollUserDirtyRef = useRef(false);
+  const mainScrollAnchorDebounceRef = useRef<number | null>(null);
   const mainScrollRestoreStateRef = useRef<{ viewMode: ViewMode | null; done: boolean }>({
     viewMode: null,
     done: false,
@@ -239,20 +270,37 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return value.replace(/["\\]/g, '\\$&');
   }, []);
 
-  const getMainScrollRoot = useCallback((): HTMLElement | null => {
-    const main = mainScrollRef.current;
-    if (!main) return null;
+  const getMainScrollRoot = useCallback(
+    (preferred?: MainScrollRootKind): HTMLElement | null => {
+      const main = mainScrollRef.current;
+      if (!main) return null;
 
-    const isScrollable = (element: HTMLElement): boolean =>
-      element.scrollHeight > element.clientHeight + 1;
+      const navigationContent =
+        typeof main.closest === 'function'
+          ? main.closest<HTMLElement>('.navigation-content')
+          : null;
 
-    if (isScrollable(main)) return main;
+      const isScrollable = (element: HTMLElement): boolean =>
+        element.scrollHeight > element.clientHeight + 1;
 
-    const navigationContent = main.closest<HTMLElement>('.navigation-content');
-    if (navigationContent && isScrollable(navigationContent)) return navigationContent;
+      // If one of the roots is already scrolled, treat that as the active scroll root.
+      if (navigationContent && navigationContent.scrollTop > 0) return navigationContent;
+      if (main.scrollTop > 0) return main;
 
-    return main;
-  }, []);
+      if (preferred === 'navigation' && navigationContent && isScrollable(navigationContent)) {
+        return navigationContent;
+      }
+      if (preferred === 'main' && isScrollable(main)) {
+        return main;
+      }
+
+      if (isScrollable(main)) return main;
+      if (navigationContent && isScrollable(navigationContent)) return navigationContent;
+
+      return main;
+    },
+    []
+  );
 
   const computeMainScrollAnchor = useCallback(
     (root: HTMLElement, mode: ViewMode): MainScrollAnchor | null => {
@@ -293,6 +341,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       const memory: MainScrollMemory = {
         scrollTop: root.scrollTop,
       };
+      const main = mainScrollRef.current;
+      const navigationContent = main?.closest<HTMLElement>('.navigation-content') ?? null;
+      memory.rootKind = navigationContent && root === navigationContent ? 'navigation' : 'main';
 
       const anchor = computeMainScrollAnchor(root, mode);
       if (anchor) memory.anchor = anchor;
@@ -302,102 +353,74 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [computeMainScrollAnchor, getMainScrollRoot]
   );
 
+  const scheduleMainScrollAnchorUpdate = useCallback(
+    (mode: ViewMode) => {
+      if (typeof window === 'undefined') return;
+      if (mainScrollAnchorDebounceRef.current !== null) {
+        window.clearTimeout(mainScrollAnchorDebounceRef.current);
+      }
+
+      mainScrollAnchorDebounceRef.current = window.setTimeout(() => {
+        mainScrollAnchorDebounceRef.current = null;
+
+        const root = getMainScrollRoot(moduleScrollMemory[mode]?.rootKind);
+        if (!root) return;
+
+        const anchor = computeMainScrollAnchor(root, mode);
+        if (!anchor) return;
+
+        const previous = moduleScrollMemory[mode];
+        moduleScrollMemory[mode] = {
+          ...(previous ?? { scrollTop: root.scrollTop }),
+          scrollTop: root.scrollTop,
+          anchor,
+        };
+      }, 140);
+    },
+    [computeMainScrollAnchor, getMainScrollRoot]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      if (mainScrollAnchorDebounceRef.current !== null) {
+        window.clearTimeout(mainScrollAnchorDebounceRef.current);
+        mainScrollAnchorDebounceRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     moduleLastViewMode = viewMode;
   }, [viewMode]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
-    const root = getMainScrollRoot();
-    if (!root) return;
-
-    if (mainScrollRestoreStateRef.current.viewMode !== viewMode) {
-      mainScrollRestoreStateRef.current = { viewMode, done: false };
-      mainScrollUserDirtyRef.current = false;
-    }
-
-    if (mainScrollRestoreStateRef.current.done) return;
-
-    const memory = moduleScrollMemory[viewMode];
-    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
-
-    const setScrollTop = (target: number) => {
-      const clamped = Math.min(Math.max(0, target), maxScrollTop);
-      if (root.scrollTop === clamped) return;
-      isRestoringMainScrollRef.current = true;
-      root.scrollTop = clamped;
-      window.requestAnimationFrame(() => {
-        isRestoringMainScrollRef.current = false;
-      });
-    };
-
-    const tryRestoreFromScrollTop = (scrollTop: number): boolean => {
-      setScrollTop(scrollTop);
-      return scrollTop === 0 || scrollTop <= maxScrollTop;
-    };
-
-    if (!memory) {
-      setScrollTop(0);
-      mainScrollRestoreStateRef.current.done = true;
-      return;
-    }
-
-    const anchor = memory.anchor;
-    if (anchor) {
-      if (anchor.kind === 'track') {
-        const selector = `[data-track-id="${escapeCssSelector(anchor.id)}"]`;
-        const element = root.querySelector<HTMLElement>(selector);
-        if (element) {
-          const rootRect = root.getBoundingClientRect();
-          const elementRect = element.getBoundingClientRect();
-          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
-          const targetScrollTop = elementTopInContent - anchor.offset;
-          setScrollTop(targetScrollTop);
-          mainScrollRestoreStateRef.current.done = true;
-          return;
-        }
-      } else if (anchor.kind === 'album') {
-        const selector = `[data-album-key="${escapeCssSelector(anchor.key)}"]`;
-        const element = root.querySelector<HTMLElement>(selector);
-        if (element) {
-          const rootRect = root.getBoundingClientRect();
-          const elementRect = element.getBoundingClientRect();
-          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
-          const targetScrollTop = elementTopInContent - anchor.offset;
-          setScrollTop(targetScrollTop);
-          mainScrollRestoreStateRef.current.done = true;
-          return;
-        }
-      }
-    }
-
-    if (tryRestoreFromScrollTop(memory.scrollTop)) {
-      mainScrollRestoreStateRef.current.done = true;
-    }
-  }, [
-    albums.length,
-    artists.length,
-    escapeCssSelector,
-    genres.length,
-    getMainScrollRoot,
-    isOpen,
-    libraryStats.totalTracks,
-    tracks.length,
-    viewMode,
-  ]);
-
-  useEffect(() => {
-    if (!isOpen) return;
     return () => {
-      const root = getMainScrollRoot();
+      const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
       const currentScrollTop = root?.scrollTop ?? 0;
       const existing = moduleScrollMemory[viewMode];
-      const shouldCapture =
-        mainScrollUserDirtyRef.current ||
-        !existing ||
-        (currentScrollTop > 0 && existing.scrollTop !== currentScrollTop);
 
-      if (shouldCapture) captureMainScrollMemory(viewMode);
+      // When the Music Library unmounts, the shared `.navigation-content` container can reset its
+      // scroll position to 0 before this cleanup runs. Avoid overwriting a previously recorded
+      // non-zero scroll memory with that transient reset.
+      if (existing && existing.scrollTop > 0 && currentScrollTop === 0) {
+        return;
+      }
+
+      if (!existing) {
+        if (currentScrollTop > 0) captureMainScrollMemory(viewMode);
+        return;
+      }
+
+      if (mainScrollUserDirtyRef.current && currentScrollTop > 0) {
+        captureMainScrollMemory(viewMode);
+        return;
+      }
+
+      if (currentScrollTop > 0 && existing.scrollTop !== currentScrollTop) {
+        captureMainScrollMemory(viewMode);
+      }
     };
   }, [captureMainScrollMemory, getMainScrollRoot, isOpen, viewMode]);
 
@@ -680,13 +703,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       setTracks((prev) => {
         const merged = [...prev, ...compactChunk];
         if (moduleCache) {
-          moduleCache = {
-            ...moduleCache,
-            tracks: trimTracksForModuleCache(merged),
+          moduleCache = buildModuleCacheSnapshot({
+            tracks: merged,
+            artists: moduleCache.artists,
+            albums: moduleCache.albums,
+            genres: moduleCache.genres,
             trackNextOffset: trackNextOffsetRef.current,
             hasMoreTracks: chunkHasMore,
-            timestamp: Date.now(),
-          };
+            normalizeForIncrementalLoad: true,
+          });
         }
         return merged;
       });
@@ -719,7 +744,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const handleMainScroll = useCallback(() => {
     if (isRestoringMainScrollRef.current) return;
-    const root = getMainScrollRoot();
+    const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
     if (!root) return;
     mainScrollUserDirtyRef.current = true;
 
@@ -727,6 +752,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     moduleScrollMemory[viewMode] = {
       ...(previous ?? { scrollTop: 0 }),
       scrollTop: root.scrollTop,
+      rootKind:
+        (() => {
+          const main = mainScrollRef.current;
+          const navigationContent = main?.closest<HTMLElement>('.navigation-content') ?? null;
+          return navigationContent && root === navigationContent ? 'navigation' : 'main';
+        })(),
     };
 
     if (viewMode !== 'albums') {
@@ -736,7 +767,26 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       }
       maybeLoadTrackChunkFromScroll();
     }
-  }, [getMainScrollRoot, maybeLoadTrackChunkFromScroll, viewMode]);
+
+    scheduleMainScrollAnchorUpdate(viewMode);
+  }, [getMainScrollRoot, maybeLoadTrackChunkFromScroll, scheduleMainScrollAnchorUpdate, viewMode]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const main = mainScrollRef.current;
+    if (!main) return;
+
+    const navigationContent = main.closest<HTMLElement>('.navigation-content');
+    const handler = () => handleMainScroll();
+
+    main.addEventListener('scroll', handler, { passive: true });
+    navigationContent?.addEventListener('scroll', handler, { passive: true });
+
+    return () => {
+      main.removeEventListener('scroll', handler);
+      navigationContent?.removeEventListener('scroll', handler);
+    };
+  }, [handleMainScroll, isOpen]);
 
   // 鍒囨崲瑙嗗浘妯″紡鏃舵竻闄ょ瓫閫夌姸鎬?
   const handleViewModeChange = (
@@ -806,15 +856,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       });
 
       // 閺囧瓨鏌婇弰鍓с仛閺佺増宓侀崪灞灸侀崸妤冪处鐎?
-      moduleCache = {
-        tracks: trimTracksForModuleCache(compactInitialTracks),
+      moduleCache = buildModuleCacheSnapshot({
+        tracks: compactInitialTracks,
         artists: [],
         albums: [],
         genres: [],
         trackNextOffset: trackNextOffsetRef.current,
         hasMoreTracks: hasMore,
-        timestamp: Date.now(),
-      };
+        normalizeForIncrementalLoad: true,
+      });
 
       setTracks(compactInitialTracks);
       setArtists([]);
@@ -958,6 +1008,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (!isOpen) return;
     if (!isTauriRuntime()) return;
     if (viewMode !== 'albums') return;
+    if (typeof IntersectionObserver === 'undefined') return;
 
     const root = mainScrollRef.current;
     if (!root) return;
@@ -1197,15 +1248,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       setGenres(uniqueGenres as string[]);
       requestedAlbumCoversRef.current.clear();
       setAlbums(uniqueAlbums);
-      moduleCache = {
-        tracks: trimTracksForModuleCache(compactResults),
+      moduleCache = buildModuleCacheSnapshot({
+        tracks: compactResults,
         artists: uniqueArtists as string[],
         albums: uniqueAlbums,
         genres: uniqueGenres as string[],
         trackNextOffset: trackNextOffsetRef.current,
         hasMoreTracks: false,
-        timestamp: Date.now(),
-      };
+      });
     } else {
       await resetLibraryDataFromStorage();
       if (token !== searchTokenRef.current) return;
@@ -1324,6 +1374,133 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
     return filteredTracks.slice(0, renderedTrackLimit);
   }, [filteredTracks, renderedTrackLimit]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+
+    if (mainScrollRestoreStateRef.current.viewMode !== viewMode) {
+      mainScrollRestoreStateRef.current = { viewMode, done: false };
+      mainScrollUserDirtyRef.current = false;
+    }
+
+    if (mainScrollRestoreStateRef.current.done) return;
+
+    const memory = moduleScrollMemory[viewMode];
+    const root = getMainScrollRoot(memory?.rootKind);
+    if (!root) return;
+    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+
+    if (viewMode !== 'albums' && memory) {
+      const anchor = memory.anchor;
+      if (anchor?.kind === 'track') {
+        const anchorIndex = filteredTracks.findIndex((track) => track.id === anchor.id);
+        if (anchorIndex >= 0) {
+          const desiredLimit = Math.min(
+            filteredTracks.length,
+            Math.max(renderedTrackLimit, anchorIndex + TRACK_RENDER_CHUNK_SIZE)
+          );
+          if (desiredLimit > renderedTrackLimit) {
+            setRenderedTrackLimit(desiredLimit);
+            return;
+          }
+        } else if (hasMoreTracks) {
+          void scheduleTrackChunkLoad();
+          return;
+        }
+      }
+
+      const desiredScrollTop = memory.scrollTop;
+      if (
+        desiredScrollTop > 0 &&
+        desiredScrollTop > maxScrollTop + 1 &&
+        (renderedTrackLimit < filteredTracks.length || hasMoreTracks)
+      ) {
+        if (renderedTrackLimit < filteredTracks.length) {
+          setRenderedTrackLimit((prev) => {
+            if (prev >= filteredTracks.length) return prev;
+            return Math.min(filteredTracks.length, prev + TRACK_RENDER_CHUNK_SIZE);
+          });
+          return;
+        }
+
+        if (hasMoreTracks) {
+          void scheduleTrackChunkLoad();
+          return;
+        }
+      }
+    }
+
+    const setScrollTop = (target: number) => {
+      const clamped = Math.min(Math.max(0, target), maxScrollTop);
+      if (root.scrollTop === clamped) return;
+      isRestoringMainScrollRef.current = true;
+      root.scrollTop = clamped;
+      window.requestAnimationFrame(() => {
+        isRestoringMainScrollRef.current = false;
+      });
+    };
+
+    const tryRestoreFromScrollTop = (scrollTop: number): boolean => {
+      if (scrollTop !== 0 && scrollTop > maxScrollTop) {
+        return false;
+      }
+      setScrollTop(scrollTop);
+      return true;
+    };
+
+    if (!memory) {
+      setScrollTop(0);
+      mainScrollRestoreStateRef.current.done = true;
+      return;
+    }
+
+    const anchor = memory.anchor;
+    if (anchor) {
+      if (anchor.kind === 'track') {
+        const selector = `[data-track-id="${escapeCssSelector(anchor.id)}"]`;
+        const element = root.querySelector<HTMLElement>(selector);
+        if (element) {
+          const rootRect = root.getBoundingClientRect();
+          const elementRect = element.getBoundingClientRect();
+          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
+          const targetScrollTop = elementTopInContent - anchor.offset;
+          setScrollTop(targetScrollTop);
+          mainScrollRestoreStateRef.current.done = true;
+          return;
+        }
+      } else if (anchor.kind === 'album') {
+        const selector = `[data-album-key="${escapeCssSelector(anchor.key)}"]`;
+        const element = root.querySelector<HTMLElement>(selector);
+        if (element) {
+          const rootRect = root.getBoundingClientRect();
+          const elementRect = element.getBoundingClientRect();
+          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
+          const targetScrollTop = elementTopInContent - anchor.offset;
+          setScrollTop(targetScrollTop);
+          mainScrollRestoreStateRef.current.done = true;
+          return;
+        }
+      }
+    }
+
+    if (tryRestoreFromScrollTop(memory.scrollTop)) {
+      mainScrollRestoreStateRef.current.done = true;
+    }
+  }, [
+    albums.length,
+    artists.length,
+    escapeCssSelector,
+    filteredTracks,
+    genres.length,
+    getMainScrollRoot,
+    hasMoreTracks,
+    isOpen,
+    libraryStats.totalTracks,
+    renderedTrackLimit,
+    scheduleTrackChunkLoad,
+    tracks.length,
+    viewMode,
+  ]);
 
   // 閸楁洖鍤稉鎾圭帆 - 鐎佃壈鍩呴崚棰佺瑩鏉堟垼顕涢幆鍛淬€?
   const handleAlbumClick = (albumName: string, artist: string) => {
@@ -1692,7 +1869,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           </div>
         )}
 
-          <div className="music-library-main" ref={mainScrollRef} onScroll={handleMainScroll}>
+          <div className="music-library-main" ref={mainScrollRef}>
           {libraryStats.totalTracks === 0 ? (
             <div className="music-library-empty">
               <div className="music-library-empty-icon">♪</div>

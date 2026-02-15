@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import type { Track } from '../../../services/audio';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
+import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import { trackKey } from './trackKey';
 
 type CoverUrlState = { key: string; url?: string };
@@ -13,6 +14,12 @@ function isNonEmptyString(value: unknown): value is string {
 export function useCoverUrlForTrack(track: Track | null): string | undefined {
   const key = useMemo(() => trackKey(track), [track]);
   const embeddedCoverUrl = isNonEmptyString(track?.coverUrl) ? track.coverUrl : undefined;
+  const isAbsolutePath = useMemo(() => {
+    const candidate = String(track?.filePath || track?.path || '');
+    if (!candidate) return false;
+    if (candidate.startsWith('/')) return true;
+    return /^[a-zA-Z]:[\\/]/.test(candidate);
+  }, [track?.filePath, track?.path]);
 
   const [resolved, setResolved] = useState<CoverUrlState>({ key: 'none' });
 
@@ -46,7 +53,15 @@ export function useCoverUrlForTrack(track: Track | null): string | undefined {
 
   const resolvedUrl = resolved.key === key ? resolved.url : undefined;
 
-  if (embeddedCoverUrl && (embeddedCoverUrl.startsWith('blob:') || embeddedCoverUrl.startsWith('data:'))) {
+  const embeddedIsEphemeral =
+    embeddedCoverUrl && (embeddedCoverUrl.startsWith('blob:') || embeddedCoverUrl.startsWith('data:'));
+
+  if (embeddedIsEphemeral) {
+    // Desktop/Tauri: avoid keeping large embedded cover payloads in memory for absolute-path tracks.
+    // Prefer resolving via Rust cover cache (asset protocol) instead.
+    if (isTauriRuntime() && isAbsolutePath) {
+      return resolvedUrl;
+    }
     return embeddedCoverUrl;
   }
 

@@ -18,11 +18,11 @@ use symphonia::core::{
     probe::Hint,
 };
 
-use base64::{engine::general_purpose, Engine as _};
 
 pub const EVENT_MUSIC_LIBRARY_SCAN_PROGRESS: &str = "music-library-scan-progress";
 
 static MUSIC_LIBRARY_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+static COVER_ASSET_SCOPE_READY: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 
 pub fn request_cancel_scan() {
     MUSIC_LIBRARY_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
@@ -66,7 +66,6 @@ pub struct CachedCover {
     pub path: String,
     pub size: u64,
     pub media_type: Option<String>,
-    pub bytes_base64: Option<String>,
 }
 
 fn is_supported_audio(path: &Path, exts: &HashSet<&'static str>) -> bool {
@@ -604,12 +603,24 @@ fn stable_hash_for_path(path: &str) -> u32 {
 fn cover_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let resolver = app.path_resolver();
     let base = resolver
-        .app_cache_dir()
-        .or_else(|| resolver.app_data_dir())
-        .ok_or_else(|| "Failed to resolve app cache dir".to_string())?;
+        // Use AppData as the stable location for cached covers so the `asset://` protocol scope
+        // can be configured once across platforms. (Some platforms map `app_cache_dir` into
+        // per-user local locations that are harder to glob reliably.)
+        .app_data_dir()
+        .or_else(|| resolver.app_cache_dir())
+        .ok_or_else(|| "Failed to resolve app data dir".to_string())?;
 
     let dir = base.join("music-covers");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create cover cache dir: {e}"))?;
+
+    // `convertFileSrc()` uses the asset protocol which enforces a strict filesystem scope.
+    // Ensure this session allows the cover cache directory even if the static glob patterns
+    // in `tauri.conf.json` don't match the platform-specific resolved path.
+    if !COVER_ASSET_SCOPE_READY.load(Ordering::Acquire) {
+        if app.asset_protocol_scope().allow_directory(&dir, true).is_ok() {
+            COVER_ASSET_SCOPE_READY.store(true, Ordering::Release);
+        }
+    }
     Ok(dir)
 }
 
@@ -704,14 +715,12 @@ fn cache_cover_variant(
 
     let out_path = dir.join(format!("{key}.{ext}"));
     fs::write(&out_path, &out_bytes).map_err(|e| format!("Failed to write cover: {e}"))?;
-    let bytes_base64 = general_purpose::STANDARD.encode(&out_bytes);
 
     Ok(Some(CachedCover {
         key,
         path: out_path.to_string_lossy().to_string(),
         size: out_bytes.len() as u64,
         media_type: Some(out_media_type),
-        bytes_base64: Some(bytes_base64),
     }))
 }
 
@@ -794,15 +803,11 @@ pub fn get_or_create_cover(
             return Ok(None);
         }
 
-        let bytes = fs::read(&existing).map_err(|e| format!("Failed to read cached cover: {e}"))?;
-        let bytes_base64 = general_purpose::STANDARD.encode(&bytes);
-
         return Ok(Some(CachedCover {
             key,
             path: existing.to_string_lossy().to_string(),
             size: existing_meta.len(),
             media_type: media_type_from_cover_path(&existing),
-            bytes_base64: Some(bytes_base64),
         }));
     }
 

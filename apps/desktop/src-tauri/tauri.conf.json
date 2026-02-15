@@ -16,11 +16,17 @@
       "protocol": {
         "all": false,
         "asset": true,
-        "assetScope": [
-          "$APPDATA/background-media/*",
-          "$APPDATA/background-media/**"
-        ]
-      },
+          "assetScope": [
+            "$APPDATA/background-media/*",
+            "$APPDATA/background-media/**",
+            "$APPDATA/music-covers/*",
+            "$APPDATA/music-covers/**",
+            "$APPLOCALDATA/music-covers/*",
+            "$APPLOCALDATA/music-covers/**",
+            "$APPCACHE/music-covers/*",
+            "$APPCACHE/music-covers/**"
+          ]
+        },
       "shell": {
         "all": false,
         "open": true

@@ -317,6 +317,7 @@
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0;
 }
 
 .music-library-sidebar {
@@ -325,6 +326,7 @@
   border-right: 1px solid rgba(255, 255, 255, 0.1);
   overflow-y: auto;
   padding: 10px;
+  min-height: 0;
 }
 
 /* 侧边栏滚动条样式 */
@@ -389,6 +391,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 20px;
+  min-height: 0;
 }
 
 /* 主区域滚动条样式 */
