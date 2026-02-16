@@ -2202,47 +2202,6 @@ export class MusicLibraryService {
       return false;
     }
   }
-
-  // ✅ 批量刷新所有文件夹的权限
-  async refreshAllPermissions(): Promise<{
-    total: number;
-    granted: number;
-    denied: number;
-  }> {
-    const paths = await this.getLibraryPaths();
-    let granted = 0;
-    let denied = 0;
-
-    for (const path of paths) {
-      if (path.folderHandle) {
-        try {
-          type PermissionCapableDirectoryHandle = FileSystemDirectoryHandle & {
-            requestPermission?: (descriptor: { mode: 'read' | 'readwrite' }) => Promise<PermissionState>;
-          };
-          const handle = path.folderHandle as unknown as PermissionCapableDirectoryHandle;
-          if (typeof handle.requestPermission === 'function') {
-            const permission = await handle.requestPermission({ mode: 'read' });
-            if (permission === 'granted') {
-              granted++;
-              console.log(`[MusicLibrary] ✅ Permission granted for: ${path.path}`);
-            } else {
-              denied++;
-              console.warn(`[MusicLibrary] ❌ Permission denied for: ${path.path}`);
-            }
-          } else {
-            // 不支持权限 API，跳过
-            granted++;
-          }
-        } catch (error) {
-          denied++;
-          console.error(`[MusicLibrary] Error requesting permission for ${path.path}:`, error);
-        }
-      }
-    }
-
-    return { total: paths.length, granted, denied };
-  }
-
   // 检查文件是否存在
   async checkTrackAvailability(track: Track): Promise<boolean> {
     if (!track.filePath) {

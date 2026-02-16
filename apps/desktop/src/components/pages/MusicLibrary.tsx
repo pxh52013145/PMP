@@ -212,7 +212,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [libraryPaths, setLibraryPaths] = useState<LibraryPath[]>([]);
   const [showPathsManager, setShowPathsManager] = useState(false);
-  const [isRefreshingPermissions, setIsRefreshingPermissions] = useState(false);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
   const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
   const [renderedTrackLimit, setRenderedTrackLimit] = useState(TRACK_RENDER_CHUNK_SIZE);
@@ -1151,51 +1150,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       console.error('Failed to cancel scan:', error);
     }
   };
-
-  // 濞撳懐鈹栨惔?
   const handleClearLibrary = async () => {
     await musicLibraryService.clearLibrary();
-    clearModuleCache(); // 閴?濞撳懘娅庣紓鎾崇摠
+    clearModuleCache();
     await loadLibraryData();
     setShowClearConfirm(false);
   };
 
-  // 閴?閸掗攱鏌婇幍鈧張澶嬫瀮娴犺泛銇欓惃鍕綀闂?
-  const handleRefreshPermissions = async () => {
-    const releaseProtection = beginAudioProtection('music-library-refresh-permissions', 45_000);
-    setIsRefreshingPermissions(true);
-    try {
-      console.log('Refreshing all folder permissions...');
-      const result = await musicLibraryService.refreshAllPermissions();
-      console.log('Permission refresh result:', result);
-
-      if (result.granted === result.total) {
-        setErrorMessage(null);
-        console.log(`閴?All ${result.granted} folder permissions granted`);
-      } else if (result.granted > 0) {
-        setErrorMessage(
-          t('pages.music-library.refreshPermissions.partial', {
-            granted: result.granted,
-            total: result.total,
-          })
-        );
-      } else {
-        setErrorMessage(t('pages.music-library.refreshPermissions.failed'));
-      }
-    } catch (error) {
-      console.error('Failed to refresh permissions:', error);
-      setErrorMessage(
-        t('pages.music-library.refreshPermissions.failedWithReason', {
-          message: error instanceof Error ? error.message : String(error),
-        })
-      );
-    } finally {
-      setIsRefreshingPermissions(false);
-      releaseProtection();
-    }
-  };
-
-  // 閹兼粎鍌ㄦ径鍕倞
   const handleSearch = useCallback(async (query: string) => {
     bumpAudioProtection('music-library-search', 20_000);
     const token = ++searchTokenRef.current;
@@ -2057,20 +2018,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             <div className="paths-manager-header">
               <h3>{t('pages.music-library.pathsManager.title')}</h3>
               <div className="paths-manager-header-actions">
-                <button
-                  className="paths-scan-btn"
-                  onClick={handleRefreshPermissions}
-                  disabled={isRefreshingPermissions || libraryPaths.length === 0}
-                  title={t('pages.music-library.pathsManager.refreshPermissionsTitle')}
-                  style={{
-                    background: 'rgba(0, 200, 100, 0.2)',
-                    border: '1px solid rgba(0, 200, 100, 0.5)',
-                  }}
-                >
-                  {isRefreshingPermissions
-                    ? t('pages.music-library.pathsManager.refreshingButton')
-                    : t('pages.music-library.pathsManager.refreshPermissionsButton')}
-                </button>
                 <button
                   className="paths-scan-btn"
                   onClick={async () => {
