@@ -22,6 +22,12 @@ pub struct NativeAudioStatePayload {
     pub buffered_time: f64,
     /// How many seconds of audio are currently available ahead of `current_time`.
     pub buffered_ahead: f64,
+    /// Decode-reservoir ahead seconds. For streaming inputs this represents decoded PCM waiting to
+    /// be transferred into the render queue.
+    pub decode_buffered_ahead: f64,
+    /// Output-side render-queue ahead seconds. For streaming inputs this is the immediate queue
+    /// consumed by the source feeding the sink.
+    pub output_buffered_ahead: f64,
     pub sample_rate: Option<u32>,
     pub source_sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,

@@ -64,10 +64,17 @@
   top: 0;
   left: 0;
   height: 100%;
-  background: color-mix(in srgb, var(--progress-fill-color) 30%, transparent);
   border-radius: 2px;
   transition: width 0.15s ease-out;
   pointer-events: none;
+}
+
+.progress-bar-buffered-decode {
+  background: color-mix(in srgb, var(--progress-fill-color) 20%, transparent);
+}
+
+.progress-bar-buffered-output {
+  background: color-mix(in srgb, var(--progress-fill-color) 40%, transparent);
 }
 
 .progress-bar-thumb {

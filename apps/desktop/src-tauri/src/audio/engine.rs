@@ -2360,23 +2360,32 @@ impl NativeAudioEngine {
             Some(SYMPHONIA_INPUT_ID) | Some(SACD_INPUT_ID)
         );
 
-        let (buffered_time, buffered_ahead) = if let Some(streaming) = &self.streaming {
-            let channels = self.decoded_channels.max(1) as f64;
-            let sample_rate = self.decoded_sample_rate.max(1) as f64;
-            let buffered_seconds =
-                (self.streaming_available_samples(streaming) as f64 / channels) / sample_rate;
-            let buffered_time = if self.duration > 0.0 {
-                (self.current_position + buffered_seconds).min(self.duration)
+        let (buffered_time, buffered_ahead, decode_buffered_ahead, output_buffered_ahead) =
+            if let Some(streaming) = &self.streaming {
+                let channels = self.decoded_channels.max(1) as f64;
+                let sample_rate = self.decoded_sample_rate.max(1) as f64;
+                let decode_seconds =
+                    (streaming.buffer.len_samples() as f64 / channels) / sample_rate;
+                let output_seconds =
+                    (streaming.render_queue.len_samples() as f64 / channels) / sample_rate;
+                let buffered_seconds = decode_seconds + output_seconds;
+                let buffered_time = if self.duration > 0.0 {
+                    (self.current_position + buffered_seconds).min(self.duration)
+                } else {
+                    self.current_position + buffered_seconds
+                };
+                (
+                    buffered_time,
+                    buffered_seconds,
+                    decode_seconds,
+                    output_seconds,
+                )
+            } else if self.decoded_samples.is_some() && self.duration > 0.0 {
+                let ahead = (self.duration - self.current_position).max(0.0);
+                (self.duration, ahead, ahead, ahead)
             } else {
-                self.current_position + buffered_seconds
+                (self.current_position, 0.0, 0.0, 0.0)
             };
-            (buffered_time, buffered_seconds)
-        } else if self.decoded_samples.is_some() && self.duration > 0.0 {
-            let ahead = (self.duration - self.current_position).max(0.0);
-            (self.duration, ahead)
-        } else {
-            (self.current_position, 0.0)
-        };
 
         NativeAudioStatePayload {
             playback_state: self.playback_state.as_str().to_string(),
@@ -2392,6 +2401,8 @@ impl NativeAudioEngine {
             duration: self.duration,
             buffered_time,
             buffered_ahead,
+            decode_buffered_ahead,
+            output_buffered_ahead,
             sample_rate: if self.decoded_sample_rate > 0 {
                 Some(self.decoded_sample_rate)
             } else {

@@ -1,6 +1,6 @@
 # Native Audio Engine Policy Contract
 
-Updated: 2026-02-12
+Updated: 2026-02-16
 Scope: `apps/desktop/src-tauri/src/audio/*`, `apps/desktop/src/services/audio/*`
 
 ## 1. Purpose
@@ -77,3 +77,52 @@ Implementation reference:
 - `streaming_prebuffer_interactive_wait(...)` in `apps/desktop/src-tauri/src/audio/engine.rs`
 
 This guardrail is intentionally independent from steady-state robustness policy so that transport responsiveness remains deterministic.
+
+## 7. Streaming Buffer Observability Contract (State Event)
+
+`native_audio_state` now exposes split buffer-headroom signals to separate decode-side pressure from output-side pressure:
+
+- `decodeBufferedAhead`: seconds currently buffered in decoder reservoir.
+- `outputBufferedAhead`: seconds currently buffered in render/output queue.
+
+Compatibility notes:
+
+- Existing `bufferedTime` / `bufferedAhead` semantics remain unchanged for backward compatibility.
+- New fields are additive and optional for clients; legacy clients can ignore them.
+
+Policy rationale:
+
+- UI can render dual indicators (`decode` vs `output`) to avoid false confidence from aggregate buffered progress.
+- Runtime troubleshooting can quickly identify whether glitches stem from decoder throughput or output scheduling jitter.
+
+Host-side robustness snapshot mapping (TypeScript):
+
+- `AudioRobustnessSnapshot.decodeBufferedAheadSeconds`
+- `AudioRobustnessSnapshot.outputBufferedAheadSeconds`
+
+These values are derived from `native_audio_state` fields and exposed to debug/monitor panels.
+
+## 8. Underrun Masking and Render-Pop Wait Tuning Contract
+
+To reduce audible click/crackle under transient underruns, underrun masking and render-pop wait use bounded tunables.
+
+Underrun masking env vars (milliseconds):
+
+- `PMP_AUDIO_UNDERRUN_MASK_NORMAL_MS` (default `8`)
+- `PMP_AUDIO_UNDERRUN_MASK_GUARDED_MS` (default `14`)
+- `PMP_AUDIO_UNDERRUN_MASK_CRITICAL_MS` (default `24`)
+- `PMP_AUDIO_UNDERRUN_MASK_STREAK_BOOST_MS` (default `3`)
+- `PMP_AUDIO_UNDERRUN_MASK_MIN_MS` (default `4`)
+- `PMP_AUDIO_UNDERRUN_MASK_MAX_MS` (default `64`)
+
+Render queue pop wait env vars (milliseconds):
+
+- `PMP_AUDIO_RENDER_POP_WAIT_NORMAL_MS` (default `1`)
+- `PMP_AUDIO_RENDER_POP_WAIT_GUARDED_MS` (default `2`)
+- `PMP_AUDIO_RENDER_POP_WAIT_CRITICAL_MS` (default `3`)
+
+Contract guarantees:
+
+- Masking is sample-rate aware (duration is normalized by ms instead of fixed frame count).
+- Higher pressure profile and repeated underrun streak increase mask duration within safe bounds.
+- Render-pop wait remains bounded and profile-aware to reduce false underrun declaration without unbounded callback blocking.

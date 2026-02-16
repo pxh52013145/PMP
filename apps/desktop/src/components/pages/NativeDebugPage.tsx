@@ -140,6 +140,8 @@ const EMPTY_ROBUSTNESS: AudioRobustnessSnapshot = {
   lastAutoSwitchAtMs: null,
   lastAutoSwitchReason: null,
   bufferedAheadSeconds: 0,
+  decodeBufferedAheadSeconds: 0,
+  outputBufferedAheadSeconds: 0,
   bufferedAheadMinSeconds: null,
   bufferedAheadAvgSeconds: null,
   rebufferCount: 0,
@@ -1141,6 +1143,10 @@ export const NativeDebugPage: React.FC = () => {
           : unknown;
 
     const bufferNowValue = formatSecondsValue(robustness.bufferedAheadSeconds) ?? 0;
+    const decodeBufferNowValue =
+      formatSecondsValue(robustness.decodeBufferedAheadSeconds) ?? 0;
+    const outputBufferNowValue =
+      formatSecondsValue(robustness.outputBufferedAheadSeconds) ?? 0;
     const bufferReferenceValue =
       typeof robustness.bufferedAheadMinSeconds === 'number' &&
       Number.isFinite(robustness.bufferedAheadMinSeconds) &&
@@ -1178,6 +1184,8 @@ export const NativeDebugPage: React.FC = () => {
       bufferPercent,
       bufferStatus,
       bufferNow: formatSecondsLabel(robustness.bufferedAheadSeconds),
+      decodeBufferNow: formatSecondsLabel(decodeBufferNowValue),
+      outputBufferNow: formatSecondsLabel(outputBufferNowValue),
       bufferMin: formatSecondsLabel(robustness.bufferedAheadMinSeconds),
       bufferAvg: formatSecondsLabel(robustness.bufferedAheadAvgSeconds),
       rebuffer: formatCount(robustness.rebufferCount),

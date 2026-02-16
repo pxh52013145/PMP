@@ -18,8 +18,31 @@ export interface ProgressBarData {
    * decoder has produced contiguous PCM for the UI.
    */
   buffered: number;
+  /**
+   * Decode-reservoir buffered ratio [0, 1].
+   */
+  decodeBuffered: number;
+  /**
+   * Output/render-queue buffered ratio [0, 1].
+   */
+  outputBuffered: number;
   coverUrl?: string;
 }
+
+const clampRatio = (value: number): number => Math.max(0, Math.min(1, value));
+
+const computeAheadRatio = (
+  aheadSeconds: number | undefined,
+  currentSeconds: number,
+  totalSeconds: number,
+  fallback: number
+): number => {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return clampRatio(fallback);
+  if (!Number.isFinite(currentSeconds)) return clampRatio(fallback);
+  if (typeof aheadSeconds !== 'number' || !Number.isFinite(aheadSeconds)) return clampRatio(fallback);
+  const absoluteBufferedTime = Math.max(0, currentSeconds + Math.max(0, aheadSeconds));
+  return clampRatio(absoluteBufferedTime / totalSeconds);
+};
 
 export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const audioService = useAudioService();
@@ -27,6 +50,8 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
+  const [decodeBuffered, setDecodeBuffered] = useState(0);
+  const [outputBuffered, setOutputBuffered] = useState(0);
   const [track, setTrack] = useState<Track | null>(null);
   const coverUrl = useCoverUrlForTrack(track);
   const fallbackRef = useRef<{
@@ -42,8 +67,14 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
       setDuration(state.duration);
       const nextBufferedTime = typeof state.bufferedTime === 'number' && isFinite(state.bufferedTime) ? state.bufferedTime : 0;
       const nextDuration = typeof state.duration === 'number' && isFinite(state.duration) ? state.duration : 0;
-      const ratio = nextDuration > 0 ? Math.max(0, Math.min(1, nextBufferedTime / nextDuration)) : 0;
+      const ratio = nextDuration > 0 ? clampRatio(nextBufferedTime / nextDuration) : 0;
       setBuffered(ratio);
+      setDecodeBuffered(
+        computeAheadRatio(state.decodeBufferedAhead, state.currentTime, nextDuration, ratio)
+      );
+      setOutputBuffered(
+        computeAheadRatio(state.outputBufferedAhead, state.currentTime, nextDuration, ratio)
+      );
 
       const nextTrack = state.currentTrack;
       const nextKey = trackKey(nextTrack);
@@ -72,8 +103,14 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     setCurrentTime(state.currentTime);
     setDuration(state.duration);
     const bufferedTime = typeof state.bufferedTime === 'number' && isFinite(state.bufferedTime) ? state.bufferedTime : 0;
-    const ratio = state.duration > 0 ? Math.max(0, Math.min(1, bufferedTime / state.duration)) : 0;
+    const ratio = state.duration > 0 ? clampRatio(bufferedTime / state.duration) : 0;
     setBuffered(ratio);
+    setDecodeBuffered(
+      computeAheadRatio(state.decodeBufferedAhead, state.currentTime, state.duration, ratio)
+    );
+    setOutputBuffered(
+      computeAheadRatio(state.outputBufferedAhead, state.currentTime, state.duration, ratio)
+    );
     setTrack(state.currentTrack);
     lastTrackKeyRef.current = trackKey(state.currentTrack);
 
@@ -143,6 +180,8 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     currentTime,
     duration,
     buffered,
+    decodeBuffered,
+    outputBuffered,
     coverUrl,
   };
 }

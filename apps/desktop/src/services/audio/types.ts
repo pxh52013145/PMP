@@ -69,6 +69,8 @@ export interface AudioState {
   duration: number;
   bufferedTime: number;
   bufferedAhead: number;
+  decodeBufferedAhead?: number;
+  outputBufferedAhead?: number;
   volume: number;
   muted: boolean;
   playMode: PlayMode;
@@ -172,6 +174,8 @@ export interface AudioRobustnessSnapshot {
   lastAutoSwitchAtMs: number | null;
   lastAutoSwitchReason: string | null;
   bufferedAheadSeconds: number;
+  decodeBufferedAheadSeconds: number;
+  outputBufferedAheadSeconds: number;
   bufferedAheadMinSeconds: number | null;
   bufferedAheadAvgSeconds: number | null;
   rebufferCount: number;

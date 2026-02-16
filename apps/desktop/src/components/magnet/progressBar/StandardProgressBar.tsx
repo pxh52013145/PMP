@@ -119,6 +119,24 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
     return Math.max(0, Math.min(1, ratio)) * 100;
   }, [data.buffered, data.duration]);
 
+  const decodeBuffered = useMemo(() => {
+    if (!data.duration) return buffered;
+    const ratio =
+      typeof data.decodeBuffered === 'number' && isFinite(data.decodeBuffered)
+        ? data.decodeBuffered
+        : data.buffered;
+    return Math.max(0, Math.min(1, ratio)) * 100;
+  }, [buffered, data.buffered, data.decodeBuffered, data.duration]);
+
+  const outputBuffered = useMemo(() => {
+    if (!data.duration) return buffered;
+    const ratio =
+      typeof data.outputBuffered === 'number' && isFinite(data.outputBuffered)
+        ? data.outputBuffered
+        : data.buffered;
+    return Math.max(0, Math.min(1, ratio)) * 100;
+  }, [buffered, data.buffered, data.duration, data.outputBuffered]);
+
   const effect = dynamicColorConfig?.effect ?? 'tone';
   const gradientAngle = typeof dynamicColorConfig?.gradientAngle === 'number' ? dynamicColorConfig.gradientAngle : 90;
   const dynamicSpeed = typeof dynamicColorConfig?.dynamicSpeed === 'number' ? dynamicColorConfig.dynamicSpeed : 6;
@@ -154,7 +172,8 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
         onLostPointerCapture={endDrag}
       >
         <div className="progress-bar-bg">
-          <div className="progress-bar-buffered" style={{ width: `${buffered}%` }} />
+          <div className="progress-bar-buffered progress-bar-buffered-decode" style={{ width: `${decodeBuffered}%` }} />
+          <div className="progress-bar-buffered progress-bar-buffered-output" style={{ width: `${outputBuffered}%` }} />
           <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
           <div className="progress-bar-thumb" style={{ left: `${progress}%` }} />
         </div>

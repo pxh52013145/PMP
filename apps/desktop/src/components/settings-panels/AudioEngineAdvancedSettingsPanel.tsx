@@ -10,6 +10,7 @@ type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
 type NativeAudioSrcBackend = 'rubato' | 'linear-simd';
 type NativeAudioOutputQuantizationMode = 'round' | 'tpdf';
 type AudioPolicyPresetId = 'reference' | 'hifi' | 'balanced' | 'stable' | 'low-power';
+type DynamicSrcPresetId = 'responsive' | 'balanced' | 'resilient' | 'extreme';
 
 type ReplayGainSettings = {
   enabled: boolean;
@@ -63,6 +64,43 @@ const DEFAULT_DYNAMIC_SRC: DynamicSrcSettings = {
   underrunHoldMs: 12000,
   sharedStressHoldMs: 8000,
   outputErrorHoldMs: 10000,
+};
+
+const DYNAMIC_SRC_PRESETS: Record<DynamicSrcPresetId, DynamicSrcSettings> = {
+  responsive: {
+    enabled: true,
+    adaptiveEnabled: true,
+    learningEnabled: true,
+    restoreDebounceMs: 2500,
+    minSwitchIntervalMs: 500,
+    seekHoldMs: 1400,
+    underrunHoldMs: 9000,
+    sharedStressHoldMs: 6000,
+    outputErrorHoldMs: 8000,
+  },
+  balanced: { ...DEFAULT_DYNAMIC_SRC },
+  resilient: {
+    enabled: true,
+    adaptiveEnabled: true,
+    learningEnabled: true,
+    restoreDebounceMs: 6000,
+    minSwitchIntervalMs: 700,
+    seekHoldMs: 2600,
+    underrunHoldMs: 18000,
+    sharedStressHoldMs: 12000,
+    outputErrorHoldMs: 15000,
+  },
+  extreme: {
+    enabled: true,
+    adaptiveEnabled: true,
+    learningEnabled: true,
+    restoreDebounceMs: 9000,
+    minSwitchIntervalMs: 900,
+    seekHoldMs: 3600,
+    underrunHoldMs: 30000,
+    sharedStressHoldMs: 20000,
+    outputErrorHoldMs: 26000,
+  },
 };
 
 const DEFAULT_ENGINE_POLICY: EnginePolicyState = {
@@ -272,6 +310,27 @@ function resolvePolicyPresetId(policy: EnginePolicyState): AudioPolicyPresetId |
   return 'custom';
 }
 
+function resolveDynamicSrcPresetId(settings: DynamicSrcSettings): DynamicSrcPresetId | 'custom' {
+  const keys = Object.keys(DYNAMIC_SRC_PRESETS) as DynamicSrcPresetId[];
+  for (const key of keys) {
+    const preset = DYNAMIC_SRC_PRESETS[key];
+    if (
+      preset.enabled === settings.enabled &&
+      preset.adaptiveEnabled === settings.adaptiveEnabled &&
+      preset.learningEnabled === settings.learningEnabled &&
+      preset.restoreDebounceMs === settings.restoreDebounceMs &&
+      preset.minSwitchIntervalMs === settings.minSwitchIntervalMs &&
+      preset.seekHoldMs === settings.seekHoldMs &&
+      preset.underrunHoldMs === settings.underrunHoldMs &&
+      preset.sharedStressHoldMs === settings.sharedStressHoldMs &&
+      preset.outputErrorHoldMs === settings.outputErrorHoldMs
+    ) {
+      return key;
+    }
+  }
+  return 'custom';
+}
+
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -416,6 +475,7 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [enginePolicy, setEnginePolicy] = useState<EnginePolicyState>(DEFAULT_ENGINE_POLICY);
   const [policyPreset, setPolicyPreset] = useState<AudioPolicyPresetId | 'custom'>('custom');
   const [dynamicSrc, setDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
+  const [dynamicSrcPreset, setDynamicSrcPreset] = useState<DynamicSrcPresetId | 'custom'>('custom');
   const [outputBackendId, setOutputBackendId] = useState<string | null>(null);
 
   const sourceRateChoices = useMemo(() => [44100, 48000, 88200, 96000, 176400, 192000], []);
@@ -450,11 +510,15 @@ export function AudioEngineAdvancedSettingsPanel() {
       const getter = audioService.getDynamicSrcAutoSettings;
       if (typeof getter === 'function') {
         const settings = getter.call(audioService);
-        setDynamicSrc(parseDynamicSrcSettings(settings));
+        const parsedDynamicSrc = parseDynamicSrcSettings(settings);
+        setDynamicSrc(parsedDynamicSrc);
+        setDynamicSrcPreset(resolveDynamicSrcPresetId(parsedDynamicSrc));
       } else {
-        setDynamicSrc(
-          parseDynamicSrcSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS))
+        const parsedDynamicSrc = parseDynamicSrcSettings(
+          readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS)
         );
+        setDynamicSrc(parsedDynamicSrc);
+        setDynamicSrcPreset(resolveDynamicSrcPresetId(parsedDynamicSrc));
       }
 
       setReplayGain(parseReplayGainSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)));
@@ -473,6 +537,10 @@ export function AudioEngineAdvancedSettingsPanel() {
   useEffect(() => {
     setPolicyPreset(resolvePolicyPresetId(enginePolicy));
   }, [enginePolicy]);
+
+  useEffect(() => {
+    setDynamicSrcPreset(resolveDynamicSrcPresetId(dynamicSrc));
+  }, [dynamicSrc]);
 
   useEffect(() => {
     if (
@@ -564,6 +632,11 @@ export function AudioEngineAdvancedSettingsPanel() {
     []
   );
 
+  const applyDynamicSrcPreset = useCallback((presetId: DynamicSrcPresetId) => {
+    setDynamicSrcPreset(presetId);
+    setDynamicSrc(DYNAMIC_SRC_PRESETS[presetId]);
+  }, []);
+
   const applyDynamicSrc = useCallback(async () => {
     if (!canUse || typeof audioService.setDynamicSrcAutoSettings !== 'function') return;
 
@@ -592,6 +665,37 @@ export function AudioEngineAdvancedSettingsPanel() {
 
         {canUse ? (
           <>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.dynamicSrc.presets.label')}
+                  help={t('settings.audioAdvanced.dynamicSrc.help.presets')}
+                />
+              </div>
+              <div className="settings-inline-row-controls settings-section-controls--stretch">
+                <select
+                  className="settings-select"
+                  value={dynamicSrcPreset}
+                  onChange={(e) => {
+                    const nextPreset = e.target.value as DynamicSrcPresetId | 'custom';
+                    if (nextPreset === 'custom') {
+                      setDynamicSrcPreset('custom');
+                      return;
+                    }
+                    applyDynamicSrcPreset(nextPreset);
+                  }}
+                  aria-label={t('settings.audioAdvanced.dynamicSrc.presets.label')}
+                  disabled={busy}
+                >
+                  <option value="responsive">{t('settings.audioAdvanced.dynamicSrc.presets.responsive')}</option>
+                  <option value="balanced">{t('settings.audioAdvanced.dynamicSrc.presets.balanced')}</option>
+                  <option value="resilient">{t('settings.audioAdvanced.dynamicSrc.presets.resilient')}</option>
+                  <option value="extreme">{t('settings.audioAdvanced.dynamicSrc.presets.extreme')}</option>
+                  <option value="custom">{t('settings.audioAdvanced.dynamicSrc.presets.custom')}</option>
+                </select>
+              </div>
+            </div>
+
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
                 <p className="settings-inline-row-title">{t('common.state.label')}</p>

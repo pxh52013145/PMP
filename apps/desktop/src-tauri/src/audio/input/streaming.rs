@@ -1,9 +1,11 @@
+use std::f32::consts::FRAC_PI_2;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use once_cell::sync::Lazy;
 use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
@@ -78,6 +80,52 @@ fn env_bool(name: &str, default_value: bool) -> bool {
         }
         Err(_) => default_value,
     }
+}
+
+fn env_u32(name: &str, default_value: u32, min: u32, max: u32) -> u32 {
+    match std::env::var(name) {
+        Ok(value) => value
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .unwrap_or(default_value)
+            .clamp(min, max),
+        Err(_) => default_value,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnderrunMaskPolicy {
+    normal_ms: u32,
+    guarded_ms: u32,
+    critical_ms: u32,
+    streak_boost_ms: u32,
+    min_ms: u32,
+    max_ms: u32,
+}
+
+impl UnderrunMaskPolicy {
+    fn from_env() -> Self {
+        let min_ms = env_u32("PMP_AUDIO_UNDERRUN_MASK_MIN_MS", 4, 1, 120);
+        let max_ms = env_u32("PMP_AUDIO_UNDERRUN_MASK_MAX_MS", 64, min_ms, 200);
+        Self {
+            normal_ms: env_u32("PMP_AUDIO_UNDERRUN_MASK_NORMAL_MS", 8, min_ms, max_ms),
+            guarded_ms: env_u32("PMP_AUDIO_UNDERRUN_MASK_GUARDED_MS", 14, min_ms, max_ms),
+            critical_ms: env_u32("PMP_AUDIO_UNDERRUN_MASK_CRITICAL_MS", 24, min_ms, max_ms),
+            streak_boost_ms: env_u32("PMP_AUDIO_UNDERRUN_MASK_STREAK_BOOST_MS", 3, 0, 40),
+            min_ms,
+            max_ms,
+        }
+    }
+}
+
+static UNDERRUN_MASK_POLICY: Lazy<UnderrunMaskPolicy> = Lazy::new(UnderrunMaskPolicy::from_env);
+
+fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
+    let rate = sample_rate.max(8_000) as f64;
+    ((rate * milliseconds as f64) / 1000.0)
+        .round()
+        .max(1.0) as usize
 }
 
 fn transfer_wait(profile: RealtimePressureProfile) -> Duration {
@@ -292,6 +340,43 @@ pub(crate) fn drain_decoder_commands(
     result
 }
 
+fn adaptive_underrun_silence_frames(
+    profile: RealtimePressureProfile,
+    underrun_streak: u32,
+    sample_rate: u32,
+) -> usize {
+    let policy = *UNDERRUN_MASK_POLICY;
+    let base_ms = match profile {
+        RealtimePressureProfile::Normal => policy.normal_ms,
+        RealtimePressureProfile::Guarded => policy.guarded_ms,
+        RealtimePressureProfile::Critical => policy.critical_ms,
+    };
+    let streak_boost = underrun_streak
+        .saturating_sub(1)
+        .min(8)
+        .saturating_mul(policy.streak_boost_ms);
+    let mask_ms = base_ms
+        .saturating_add(streak_boost)
+        .clamp(policy.min_ms, policy.max_ms);
+    ms_to_frames(sample_rate, mask_ms)
+}
+
+fn equal_power_fade_out_gain(frame: usize, frames: usize) -> f32 {
+    if frames <= 1 {
+        return 0.0;
+    }
+    let t = frame as f32 / (frames.saturating_sub(1)) as f32;
+    ((1.0 - t).clamp(0.0, 1.0) * FRAC_PI_2).sin()
+}
+
+fn equal_power_fade_in_gain(frame: usize, frames: usize) -> f32 {
+    if frames <= 1 {
+        return 1.0;
+    }
+    let t = frame as f32 / (frames.saturating_sub(1)) as f32;
+    (t.clamp(0.0, 1.0) * FRAC_PI_2).sin()
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamingSamplesSource {
     render_queue: AudioRingBuffer,
@@ -302,11 +387,12 @@ pub(crate) struct StreamingSamplesSource {
     local_index: usize,
     last_samples: Vec<f32>,
     needs_fade_in: bool,
+    pending_fade_in_frames: usize,
+    underrun_streak: u32,
 }
 
 impl StreamingSamplesSource {
     const CHUNK_SAMPLES: usize = 8192;
-    const SILENCE_FRAMES: usize = 64;
 
     pub fn new(
         render_queue: AudioRingBuffer,
@@ -324,6 +410,8 @@ impl StreamingSamplesSource {
             local_index: 0,
             last_samples: vec![0.0; channels as usize],
             needs_fade_in: false,
+            pending_fade_in_frames: 0,
+            underrun_streak: 0,
         }
     }
 }
@@ -346,35 +434,42 @@ impl Iterator for StreamingSamplesSource {
                     return None;
                 }
 
+                self.underrun_streak = self.underrun_streak.saturating_add(1);
+                let silence_frames = adaptive_underrun_silence_frames(
+                    crate::audio::realtime_scheduler::SCHEDULER.profile(),
+                    self.underrun_streak,
+                    self.sample_rate,
+                );
+
                 STREAMING_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
-                STREAMING_UNDERRUN_FRAMES.fetch_add(Self::SILENCE_FRAMES as u64, Ordering::Relaxed);
+                STREAMING_UNDERRUN_FRAMES.fetch_add(silence_frames as u64, Ordering::Relaxed);
                 diagnostics::record_event_throttled(
                     "shared.output.render_underrun",
-                    Self::SILENCE_FRAMES as u64,
+                    silence_frames as u64,
                     channels as u64,
                     &STREAMING_UNDERRUN_TIMELINE_GATE_MS,
                     120,
                 );
 
                 self.needs_fade_in = true;
-                let silence_frames = Self::SILENCE_FRAMES.max(1);
+                self.pending_fade_in_frames = silence_frames;
                 let silence_samples = (silence_frames * channels).max(1);
                 self.local.resize(silence_samples, 0.0);
 
-                let denom = (silence_frames.saturating_sub(1)).max(1) as f32;
                 for frame in 0..silence_frames {
-                    let gain = 1.0 - (frame as f32 / denom);
+                    let gain = equal_power_fade_out_gain(frame, silence_frames);
                     let base = frame * channels;
                     for channel in 0..channels {
                         self.local[base + channel] = self.last_samples[channel] * gain;
                     }
                 }
             } else if self.needs_fade_in {
-                let fade_frames = (self.local.len() / channels).min(Self::SILENCE_FRAMES);
+                self.underrun_streak = 0;
+                let fade_frames =
+                    (self.local.len() / channels).min(self.pending_fade_in_frames.max(1));
                 if fade_frames > 0 {
-                    let denom = (fade_frames.saturating_sub(1)).max(1) as f32;
                     for frame in 0..fade_frames {
-                        let gain = frame as f32 / denom;
+                        let gain = equal_power_fade_in_gain(frame, fade_frames);
                         let base = frame * channels;
                         for channel in 0..channels {
                             self.local[base + channel] *= gain;
@@ -382,6 +477,9 @@ impl Iterator for StreamingSamplesSource {
                     }
                 }
                 self.needs_fade_in = false;
+                self.pending_fade_in_frames = 0;
+            } else {
+                self.underrun_streak = 0;
             }
         }
 
@@ -509,7 +607,7 @@ mod tests {
         render_queue.wait_for_samples(2, Duration::from_millis(50));
 
         let mut saw_sample = false;
-        for _ in 0..1024 {
+        for _ in 0..16_384 {
             let Some(value) = source.next() else {
                 break;
             };
@@ -556,5 +654,25 @@ mod tests {
         let drained = drain_decoder_commands(&rx);
         assert!(drained.shutdown);
         assert_eq!(drained.seek_target, None);
+    }
+
+    #[test]
+    fn adaptive_underrun_silence_frames_scales_with_pressure_and_streak() {
+        let normal = adaptive_underrun_silence_frames(RealtimePressureProfile::Normal, 1, 48_000);
+        let guarded = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 48_000);
+        let critical = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 1, 48_000);
+
+        assert!(normal < guarded);
+        assert!(guarded < critical);
+
+        let streaked = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 8, 48_000);
+        assert!(streaked >= critical);
+    }
+
+    #[test]
+    fn adaptive_underrun_silence_frames_scale_with_sample_rate() {
+        let low_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 44_100);
+        let high_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
+        assert!(high_rate > low_rate);
     }
 }

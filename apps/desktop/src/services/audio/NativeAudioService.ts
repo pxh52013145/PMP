@@ -35,6 +35,8 @@ type NativeAudioStatePayload = {
   duration?: number;
   bufferedTime?: number;
   bufferedAhead?: number;
+  decodeBufferedAhead?: number;
+  outputBufferedAhead?: number;
   sampleRate?: number;
   sourceSampleRate?: number;
   underrunEvents?: number;
@@ -532,6 +534,8 @@ export class NativeAudioService implements IAudioService {
       duration: 0,
       bufferedTime: 0,
       bufferedAhead: 0,
+      decodeBufferedAhead: 0,
+      outputBufferedAhead: 0,
       volume: 0.7,
       muted: false,
       playMode: 'sequence',
@@ -2332,6 +2336,16 @@ export class NativeAudioService implements IAudioService {
       typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
         ? Math.max(0, this.state.bufferedAhead)
         : 0;
+    const decodeBufferedAheadNow =
+      typeof this.state.decodeBufferedAhead === 'number' &&
+      Number.isFinite(this.state.decodeBufferedAhead)
+        ? Math.max(0, this.state.decodeBufferedAhead)
+        : 0;
+    const outputBufferedAheadNow =
+      typeof this.state.outputBufferedAhead === 'number' &&
+      Number.isFinite(this.state.outputBufferedAhead)
+        ? Math.max(0, this.state.outputBufferedAhead)
+        : 0;
     const bufferedAheadAvg =
       this.bufferedAheadRollingWindow.length > 0
         ? this.bufferedAheadRollingSum / this.bufferedAheadRollingWindow.length
@@ -2391,6 +2405,8 @@ export class NativeAudioService implements IAudioService {
       lastAutoSwitchAtMs: this.lastAutoBackendSwitchAtMs,
       lastAutoSwitchReason: this.lastAutoBackendSwitchReason,
       bufferedAheadSeconds: bufferedAheadNow,
+      decodeBufferedAheadSeconds: decodeBufferedAheadNow,
+      outputBufferedAheadSeconds: outputBufferedAheadNow,
       bufferedAheadMinSeconds: this.bufferedAheadMinSeconds,
       bufferedAheadAvgSeconds: bufferedAheadAvg,
       rebufferCount: this.rebufferCount,
@@ -2649,6 +2665,12 @@ export class NativeAudioService implements IAudioService {
         if (typeof next.duration !== 'undefined') update.duration = next.duration;
         if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
         if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
+        if (typeof next.decodeBufferedAhead !== 'undefined') {
+          update.decodeBufferedAhead = next.decodeBufferedAhead;
+        }
+        if (typeof next.outputBufferedAhead !== 'undefined') {
+          update.outputBufferedAhead = next.outputBufferedAhead;
+        }
 
         if (typeof next.sampleRate === 'number' && Number.isFinite(next.sampleRate)) {
           this.outputSampleRate = Math.max(0, Math.floor(next.sampleRate));
@@ -2987,7 +3009,12 @@ export class NativeAudioService implements IAudioService {
         const transientOnlyStateUpdate =
           Object.keys(update).length > 0 &&
           Object.keys(update).every(
-            (key) => key === 'currentTime' || key === 'bufferedTime' || key === 'bufferedAhead'
+            (key) =>
+              key === 'currentTime' ||
+              key === 'bufferedTime' ||
+              key === 'bufferedAhead' ||
+              key === 'decodeBufferedAhead' ||
+              key === 'outputBufferedAhead'
           );
 
         const merged = this.updateState(update, { emitStateChange: !transientOnlyStateUpdate });
@@ -3359,6 +3386,8 @@ export class NativeAudioService implements IAudioService {
       currentTime: 0,
       bufferedTime: 0,
       bufferedAhead: 0,
+      decodeBufferedAhead: 0,
+      outputBufferedAhead: 0,
     });
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
 
@@ -3409,6 +3438,8 @@ export class NativeAudioService implements IAudioService {
       currentTime: 0,
       bufferedTime: 0,
       bufferedAhead: 0,
+      decodeBufferedAhead: 0,
+      outputBufferedAhead: 0,
     });
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
 
@@ -3642,6 +3673,8 @@ export class NativeAudioService implements IAudioService {
           currentTime: 0,
           bufferedTime: 0,
           bufferedAhead: 0,
+          decodeBufferedAhead: 0,
+          outputBufferedAhead: 0,
         });
         this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
 

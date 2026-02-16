@@ -79,6 +79,13 @@ Policy intent:
   - native crossfade prepare path in `apps/desktop/src-tauri/src/native_audio.rs`
 - Introduced dedicated transport orchestration module `apps/desktop/src-tauri/src/audio/kernel.rs` and moved load/crossfade/load-and-play/policy-rebuild operation sequencing out of `native_audio.rs`.
 - Continued path unification by routing `play`, `pause`, `stop`, crossfade fallback load/play sequence, and seek command execution through kernel orchestration helpers.
+- Added split streaming buffer telemetry in `native_audio_state` (`decodeBufferedAhead`, `outputBufferedAhead`) so UI and diagnostics can distinguish decode headroom vs output headroom.
+- Upgraded underrun masking from fixed short ramps to adaptive equal-power ramps (profile + streak aware) in:
+  - `apps/desktop/src-tauri/src/audio/input/streaming.rs`
+  - `apps/desktop/src-tauri/src/audio/output/render_ahead.rs`
+- Phase-2 hardening: underrun masking moved to sample-rate-aware millisecond policy with bounded env knobs, avoiding fixed 96-frame ultra-short ramps that can be perceived as clicks.
+- Phase-2 hardening: shared render-ahead pop wait now uses bounded profile-aware waits (`normal/guarded/critical`) to reduce false underrun declaration during short scheduler jitter.
+- Native debug robustness panel now shows split headroom (`decodeBufferedAheadSeconds` / `outputBufferedAheadSeconds`) alongside aggregate buffer metrics.
 
 ### 5.2 Contract documentation
 

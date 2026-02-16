@@ -1183,6 +1183,39 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('tracks split decode/output buffered ahead metrics in robustness snapshot', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        bufferedAhead: 1.4,
+        decodeBufferedAhead: 0.9,
+        outputBufferedAhead: 0.5,
+      },
+    });
+
+    const state = service.getState();
+    expect(state.bufferedAhead).toBe(1.4);
+    expect(state.decodeBufferedAhead).toBe(0.9);
+    expect(state.outputBufferedAhead).toBe(0.5);
+
+    const snapshot = service.getRobustnessSnapshot?.();
+    expect(snapshot?.bufferedAheadSeconds).toBe(1.4);
+    expect(snapshot?.decodeBufferedAheadSeconds).toBe(0.9);
+    expect(snapshot?.outputBufferedAheadSeconds).toBe(0.5);
+
+    service.destroy();
+  });
+
   it('applies stronger shared-mode buffer policy when timeline shows sustained pressure', async () => {
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
     const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};

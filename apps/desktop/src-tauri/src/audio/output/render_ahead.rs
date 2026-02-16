@@ -1,9 +1,11 @@
+use std::f32::consts::FRAC_PI_2;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use once_cell::sync::Lazy;
 use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
@@ -63,6 +65,74 @@ fn parse_env_bool(key: &str, default_value: bool) -> bool {
         .unwrap_or(default_value)
 }
 
+fn parse_env_u64(key: &str, default_value: u64, min: u64, max: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default_value)
+        .clamp(min, max)
+}
+
+fn parse_env_u32(key: &str, default_value: u32, min: u32, max: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(default_value)
+        .clamp(min, max)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RenderPopWaitPolicy {
+    normal_ms: u64,
+    guarded_ms: u64,
+    critical_ms: u64,
+}
+
+impl RenderPopWaitPolicy {
+    fn from_env() -> Self {
+        Self {
+            normal_ms: parse_env_u64("PMP_AUDIO_RENDER_POP_WAIT_NORMAL_MS", 1, 0, 12),
+            guarded_ms: parse_env_u64("PMP_AUDIO_RENDER_POP_WAIT_GUARDED_MS", 2, 0, 12),
+            critical_ms: parse_env_u64("PMP_AUDIO_RENDER_POP_WAIT_CRITICAL_MS", 3, 0, 12),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnderrunMaskPolicy {
+    normal_ms: u32,
+    guarded_ms: u32,
+    critical_ms: u32,
+    streak_boost_ms: u32,
+    min_ms: u32,
+    max_ms: u32,
+}
+
+impl UnderrunMaskPolicy {
+    fn from_env() -> Self {
+        let min_ms = parse_env_u32("PMP_AUDIO_UNDERRUN_MASK_MIN_MS", 4, 1, 120);
+        let max_ms = parse_env_u32("PMP_AUDIO_UNDERRUN_MASK_MAX_MS", 64, min_ms, 200);
+        Self {
+            normal_ms: parse_env_u32("PMP_AUDIO_UNDERRUN_MASK_NORMAL_MS", 8, min_ms, max_ms),
+            guarded_ms: parse_env_u32("PMP_AUDIO_UNDERRUN_MASK_GUARDED_MS", 14, min_ms, max_ms),
+            critical_ms: parse_env_u32("PMP_AUDIO_UNDERRUN_MASK_CRITICAL_MS", 24, min_ms, max_ms),
+            streak_boost_ms: parse_env_u32("PMP_AUDIO_UNDERRUN_MASK_STREAK_BOOST_MS", 3, 0, 40),
+            min_ms,
+            max_ms,
+        }
+    }
+}
+
+static RENDER_POP_WAIT_POLICY: Lazy<RenderPopWaitPolicy> = Lazy::new(RenderPopWaitPolicy::from_env);
+static UNDERRUN_MASK_POLICY: Lazy<UnderrunMaskPolicy> = Lazy::new(UnderrunMaskPolicy::from_env);
+
+fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
+    let rate = sample_rate.max(8_000) as f64;
+    ((rate * milliseconds as f64) / 1000.0)
+        .round()
+        .max(1.0) as usize
+}
+
 fn producer_chunk_samples(profile: RealtimePressureProfile) -> usize {
     match profile {
         RealtimePressureProfile::Normal => 8192,
@@ -80,8 +150,50 @@ fn producer_backoff_duration(profile: RealtimePressureProfile) -> Duration {
 }
 
 fn render_pop_wait_timeout(profile: RealtimePressureProfile) -> Duration {
-    let _ = profile;
-    Duration::from_millis(0)
+    let policy = *RENDER_POP_WAIT_POLICY;
+    let wait_ms = match profile {
+        RealtimePressureProfile::Normal => policy.normal_ms,
+        RealtimePressureProfile::Guarded => policy.guarded_ms,
+        RealtimePressureProfile::Critical => policy.critical_ms,
+    };
+    Duration::from_millis(wait_ms)
+}
+
+fn adaptive_underrun_silence_frames(
+    profile: RealtimePressureProfile,
+    underrun_streak: u32,
+    sample_rate: u32,
+) -> usize {
+    let policy = *UNDERRUN_MASK_POLICY;
+    let base_ms = match profile {
+        RealtimePressureProfile::Normal => policy.normal_ms,
+        RealtimePressureProfile::Guarded => policy.guarded_ms,
+        RealtimePressureProfile::Critical => policy.critical_ms,
+    };
+    let streak_boost = underrun_streak
+        .saturating_sub(1)
+        .min(8)
+        .saturating_mul(policy.streak_boost_ms);
+    let mask_ms = base_ms
+        .saturating_add(streak_boost)
+        .clamp(policy.min_ms, policy.max_ms);
+    ms_to_frames(sample_rate, mask_ms)
+}
+
+fn equal_power_fade_out_gain(frame: usize, frames: usize) -> f32 {
+    if frames <= 1 {
+        return 0.0;
+    }
+    let t = frame as f32 / (frames.saturating_sub(1)) as f32;
+    ((1.0 - t).clamp(0.0, 1.0) * FRAC_PI_2).sin()
+}
+
+fn equal_power_fade_in_gain(frame: usize, frames: usize) -> f32 {
+    if frames <= 1 {
+        return 1.0;
+    }
+    let t = frame as f32 / (frames.saturating_sub(1)) as f32;
+    (t.clamp(0.0, 1.0) * FRAC_PI_2).sin()
 }
 
 pub(crate) fn wrap_source_for_shared_backend(
@@ -139,6 +251,8 @@ pub(crate) fn wrap_source_for_shared_backend(
         local_index: 0,
         last_samples: vec![0.0; channels as usize],
         needs_fade_in: false,
+        pending_fade_in_frames: 0,
+        underrun_streak: 0,
         stop_tx: Some(stop_tx),
         producer: Some(producer),
     })
@@ -261,13 +375,14 @@ struct RenderAheadSource {
     local_index: usize,
     last_samples: Vec<f32>,
     needs_fade_in: bool,
+    pending_fade_in_frames: usize,
+    underrun_streak: u32,
     stop_tx: Option<mpsc::Sender<()>>,
     producer: Option<JoinHandle<()>>,
 }
 
 impl RenderAheadSource {
     const POP_CHUNK_SAMPLES: usize = 4096;
-    const SILENCE_FRAMES_ON_UNDERRUN: usize = 96;
 
     fn refill_local(&mut self) -> bool {
         let current_epoch = self.seek_epoch.load(Ordering::Acquire);
@@ -280,6 +395,8 @@ impl RenderAheadSource {
                 *sample = 0.0;
             }
             self.needs_fade_in = true;
+            self.pending_fade_in_frames = 0;
+            self.underrun_streak = 0;
         }
 
         self.local.clear();
@@ -307,11 +424,10 @@ impl RenderAheadSource {
             if self.needs_fade_in {
                 let channels = self.channels.max(1) as usize;
                 let fade_frames =
-                    (self.local.len() / channels).min(Self::SILENCE_FRAMES_ON_UNDERRUN);
+                    (self.local.len() / channels).min(self.pending_fade_in_frames.max(1));
                 if fade_frames > 0 {
-                    let denom = (fade_frames.saturating_sub(1)).max(1) as f32;
                     for frame in 0..fade_frames {
-                        let gain = frame as f32 / denom;
+                        let gain = equal_power_fade_in_gain(frame, fade_frames);
                         let base = frame * channels;
                         for channel in 0..channels {
                             self.local[base + channel] *= gain;
@@ -319,7 +435,9 @@ impl RenderAheadSource {
                     }
                 }
                 self.needs_fade_in = false;
+                self.pending_fade_in_frames = 0;
             }
+            self.underrun_streak = 0;
             return true;
         }
 
@@ -328,23 +446,28 @@ impl RenderAheadSource {
         }
 
         let channels = self.channels.max(1) as usize;
+        self.underrun_streak = self.underrun_streak.saturating_add(1);
+        let silence_frames = adaptive_underrun_silence_frames(
+            crate::audio::realtime_scheduler::SCHEDULER.profile(),
+            self.underrun_streak,
+            self.sample_rate,
+        );
         self.needs_fade_in = true;
-        let silence_samples = channels * Self::SILENCE_FRAMES_ON_UNDERRUN;
+        self.pending_fade_in_frames = silence_frames;
+        let silence_samples = channels * silence_frames;
         self.local.resize(silence_samples, 0.0);
-        let denom = (Self::SILENCE_FRAMES_ON_UNDERRUN.saturating_sub(1)).max(1) as f32;
-        for frame in 0..Self::SILENCE_FRAMES_ON_UNDERRUN {
-            let gain = 1.0 - (frame as f32 / denom);
+        for frame in 0..silence_frames {
+            let gain = equal_power_fade_out_gain(frame, silence_frames);
             let base = frame * channels;
             for channel in 0..channels {
                 self.local[base + channel] = self.last_samples[channel] * gain;
             }
         }
         SHARED_RENDER_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
-        SHARED_RENDER_UNDERRUN_FRAMES
-            .fetch_add(Self::SILENCE_FRAMES_ON_UNDERRUN as u64, Ordering::Relaxed);
+        SHARED_RENDER_UNDERRUN_FRAMES.fetch_add(silence_frames as u64, Ordering::Relaxed);
         diagnostics::record_event_throttled(
             "shared.render_ahead.underrun",
-            Self::SILENCE_FRAMES_ON_UNDERRUN as u64,
+            silence_frames as u64,
             channels as u64,
             &SHARED_RENDER_UNDERRUN_TIMELINE_GATE_MS,
             120,
@@ -466,5 +589,34 @@ mod tests {
         }
 
         assert!(count > 0);
+    }
+
+    #[test]
+    fn adaptive_underrun_silence_frames_scales_with_pressure_and_streak() {
+        let normal = adaptive_underrun_silence_frames(RealtimePressureProfile::Normal, 1, 48_000);
+        let guarded = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 48_000);
+        let critical = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 1, 48_000);
+
+        assert!(normal < guarded);
+        assert!(guarded < critical);
+
+        let streaked = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 8, 48_000);
+        assert!(streaked >= critical);
+    }
+
+    #[test]
+    fn adaptive_underrun_silence_frames_scale_with_sample_rate() {
+        let low_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 44_100);
+        let high_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
+        assert!(high_rate > low_rate);
+    }
+
+    #[test]
+    fn render_pop_wait_timeout_scales_with_pressure_profile() {
+        let normal = render_pop_wait_timeout(RealtimePressureProfile::Normal);
+        let guarded = render_pop_wait_timeout(RealtimePressureProfile::Guarded);
+        let critical = render_pop_wait_timeout(RealtimePressureProfile::Critical);
+        assert!(normal <= guarded);
+        assert!(guarded <= critical);
     }
 }

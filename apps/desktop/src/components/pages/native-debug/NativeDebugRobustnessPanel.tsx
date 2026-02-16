@@ -17,6 +17,8 @@ export type NativeDebugRobustnessMetricsView = {
   bufferPercent: number;
   bufferStatus: string;
   bufferNow: string;
+  decodeBufferNow: string;
+  outputBufferNow: string;
   bufferMin: string;
   bufferAvg: string;
   rebuffer: string;
@@ -146,6 +148,14 @@ export function NativeDebugRobustnessPanel({
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.now')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.bufferNow}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.decode')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.decodeBufferNow}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.output')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.outputBufferNow}</span>
           </div>
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.buffer.min')}</span>
@@ -430,6 +440,14 @@ export function NativeDebugRobustnessPanel({
         <div className="robustness-item">
           <p className="device-label">{t('pages.native-debug.robustness.buffer.now')}</p>
           <p className="device-value">{formatSeconds(robustness.bufferedAheadSeconds)}</p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.buffer.decode')}</p>
+          <p className="device-value">{formatSeconds(robustness.decodeBufferedAheadSeconds)}</p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.buffer.output')}</p>
+          <p className="device-value">{formatSeconds(robustness.outputBufferedAheadSeconds)}</p>
         </div>
         <div className="robustness-item">
           <p className="device-label">{t('pages.native-debug.robustness.buffer.min')}</p>
