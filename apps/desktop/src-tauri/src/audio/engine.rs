@@ -112,6 +112,119 @@ pub(crate) enum StreamingPrebufferKind {
     Crossfade,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InteractivePrebufferProfile {
+    Fast,
+    Balanced,
+    Stable,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InteractivePrebufferWaitPolicy {
+    start_seek_cap_seconds: f64,
+    crossfade_cap_seconds: f64,
+    start_seek_timeout_ms: u64,
+    crossfade_timeout_ms: u64,
+}
+
+fn interactive_prebuffer_profile_id(profile: InteractivePrebufferProfile) -> &'static str {
+    match profile {
+        InteractivePrebufferProfile::Fast => "fast",
+        InteractivePrebufferProfile::Balanced => "balanced",
+        InteractivePrebufferProfile::Stable => "stable",
+    }
+}
+
+fn parse_interactive_prebuffer_profile_id(value: &str) -> Option<InteractivePrebufferProfile> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "fast" => Some(InteractivePrebufferProfile::Fast),
+        "balanced" => Some(InteractivePrebufferProfile::Balanced),
+        "stable" => Some(InteractivePrebufferProfile::Stable),
+        _ => None,
+    }
+}
+
+fn parse_env_f64(name: &str, default_value: f64, min: f64, max: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default_value)
+        .clamp(min, max)
+}
+
+fn parse_env_u64(name: &str, default_value: u64, min: u64, max: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default_value)
+        .clamp(min, max)
+}
+
+fn parse_interactive_prebuffer_profile() -> InteractivePrebufferProfile {
+    std::env::var("PMP_AUDIO_STREAM_INTERACTIVE_PROFILE")
+        .ok()
+        .and_then(|value| parse_interactive_prebuffer_profile_id(&value))
+        .unwrap_or(InteractivePrebufferProfile::Balanced)
+}
+
+impl InteractivePrebufferWaitPolicy {
+    fn from_profile(profile: InteractivePrebufferProfile) -> Self {
+        let (
+            start_seek_cap_seconds,
+            crossfade_cap_seconds,
+            start_seek_timeout_ms,
+            crossfade_timeout_ms,
+        ) = match profile {
+            InteractivePrebufferProfile::Fast => (0.24, 0.36, 180, 260),
+            InteractivePrebufferProfile::Balanced => (0.30, 0.45, 220, 320),
+            InteractivePrebufferProfile::Stable => (0.42, 0.65, 320, 450),
+        };
+
+        Self {
+            start_seek_cap_seconds,
+            crossfade_cap_seconds,
+            start_seek_timeout_ms,
+            crossfade_timeout_ms,
+        }
+    }
+
+    fn from_env() -> Self {
+        let profile = parse_interactive_prebuffer_profile();
+        let defaults = Self::from_profile(profile);
+
+        Self {
+            start_seek_cap_seconds: parse_env_f64(
+                "PMP_AUDIO_STREAM_INTERACTIVE_START_CAP_SECONDS",
+                defaults.start_seek_cap_seconds,
+                0.10,
+                2.00,
+            ),
+            crossfade_cap_seconds: parse_env_f64(
+                "PMP_AUDIO_STREAM_INTERACTIVE_CROSSFADE_CAP_SECONDS",
+                defaults.crossfade_cap_seconds,
+                0.15,
+                3.00,
+            ),
+            start_seek_timeout_ms: parse_env_u64(
+                "PMP_AUDIO_STREAM_INTERACTIVE_START_TIMEOUT_MS",
+                defaults.start_seek_timeout_ms,
+                80,
+                2000,
+            ),
+            crossfade_timeout_ms: parse_env_u64(
+                "PMP_AUDIO_STREAM_INTERACTIVE_CROSSFADE_TIMEOUT_MS",
+                defaults.crossfade_timeout_ms,
+                120,
+                3000,
+            ),
+        }
+    }
+}
+
+static INTERACTIVE_PREBUFFER_WAIT_POLICY: Lazy<InteractivePrebufferWaitPolicy> =
+    Lazy::new(InteractivePrebufferWaitPolicy::from_env);
+
 pub(crate) fn streaming_prebuffer_target_samples(
     output_backend_id: &str,
     sample_rate: u32,
@@ -181,6 +294,28 @@ pub(crate) fn streaming_prebuffer_interactive_wait(
     kind: StreamingPrebufferKind,
     override_seconds: Option<f64>,
 ) -> (usize, Duration) {
+    streaming_prebuffer_interactive_wait_with_policy(
+        output_backend_id,
+        sample_rate,
+        channels,
+        capacity_samples,
+        duration_seconds,
+        kind,
+        override_seconds,
+        *INTERACTIVE_PREBUFFER_WAIT_POLICY,
+    )
+}
+
+pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
+    output_backend_id: &str,
+    sample_rate: u32,
+    channels: usize,
+    capacity_samples: usize,
+    duration_seconds: f64,
+    kind: StreamingPrebufferKind,
+    override_seconds: Option<f64>,
+    wait_policy: InteractivePrebufferWaitPolicy,
+) -> (usize, Duration) {
     let (target_samples, timeout) = streaming_prebuffer_target_samples(
         output_backend_id,
         sample_rate,
@@ -199,8 +334,8 @@ pub(crate) fn streaming_prebuffer_interactive_wait(
     let sample_rate = sample_rate.max(1) as f64;
     let channels_f64 = channels as f64;
     let cap_seconds = match kind {
-        StreamingPrebufferKind::StartOrSeek => 0.30,
-        StreamingPrebufferKind::Crossfade => 0.45,
+        StreamingPrebufferKind::StartOrSeek => wait_policy.start_seek_cap_seconds,
+        StreamingPrebufferKind::Crossfade => wait_policy.crossfade_cap_seconds,
     };
     let mut cap_samples = ((sample_rate * channels_f64 * cap_seconds).ceil() as usize)
         .clamp(channels * 32, capacity_samples.max(1));
@@ -213,8 +348,12 @@ pub(crate) fn streaming_prebuffer_interactive_wait(
 
     let capped_target = target_samples.min(cap_samples.max(1));
     let timeout_cap = match kind {
-        StreamingPrebufferKind::StartOrSeek => Duration::from_millis(220),
-        StreamingPrebufferKind::Crossfade => Duration::from_millis(320),
+        StreamingPrebufferKind::StartOrSeek => {
+            Duration::from_millis(wait_policy.start_seek_timeout_ms)
+        }
+        StreamingPrebufferKind::Crossfade => {
+            Duration::from_millis(wait_policy.crossfade_timeout_ms)
+        }
     };
 
     (capped_target, timeout.min(timeout_cap))
@@ -261,6 +400,7 @@ pub struct NativeAudioStreamingBufferSettingsPayload {
     pub start_or_seek_seconds: Option<f64>,
     pub crossfade_seconds: Option<f64>,
     pub decode_mode: String,
+    pub interactive_profile: String,
 }
 
 pub(crate) struct NativeAudioEngine {
@@ -315,6 +455,7 @@ pub(crate) struct NativeAudioEngine {
     streaming_prebuffer_start_or_seek_seconds: Option<f64>,
     streaming_prebuffer_crossfade_seconds: Option<f64>,
     streaming_decode_mode: AudioInputDecodeMode,
+    streaming_interactive_profile: InteractivePrebufferProfile,
     transport_mode: NativeAudioTransportMode,
     hq_src_enabled: bool,
     hq_src_phase_mode: NativeAudioHqSrcPhaseMode,
@@ -390,6 +531,7 @@ pub(crate) struct CrossfadeOperation {
     pub target_channels: u16,
     pub target_sample_rate: u32,
     pub streaming_prebuffer_crossfade_seconds: Option<f64>,
+    pub interactive_wait_policy: InteractivePrebufferWaitPolicy,
     pub old_shutdown_tx: Option<StreamingShutdownTx>,
 }
 
@@ -515,6 +657,7 @@ impl NativeAudioEngine {
             // Full-track decoding can still be enabled via streaming buffer settings for
             // seek/scrub-heavy workflows.
             streaming_decode_mode: AudioInputDecodeMode::Streaming,
+            streaming_interactive_profile: parse_interactive_prebuffer_profile(),
             transport_mode: NativeAudioTransportMode::Robust,
             hq_src_enabled: default_hq_src_enabled,
             hq_src_phase_mode: NativeAudioHqSrcPhaseMode::Linear,
@@ -598,6 +741,10 @@ impl NativeAudioEngine {
             start_or_seek_seconds: self.streaming_prebuffer_start_or_seek_seconds,
             crossfade_seconds: self.streaming_prebuffer_crossfade_seconds,
             decode_mode: decode_mode_id(self.streaming_decode_mode).to_string(),
+            interactive_profile: interactive_prebuffer_profile_id(
+                self.streaming_interactive_profile,
+            )
+            .to_string(),
         }
     }
 
@@ -610,6 +757,7 @@ impl NativeAudioEngine {
         start_or_seek_seconds: Option<f64>,
         crossfade_seconds: Option<f64>,
         decode_mode: Option<&str>,
+        interactive_profile: Option<&str>,
     ) {
         fn sanitize(value: Option<f64>) -> Option<f64> {
             value
@@ -622,6 +770,51 @@ impl NativeAudioEngine {
         if let Some(mode) = decode_mode.and_then(parse_decode_mode) {
             self.streaming_decode_mode = mode;
         }
+        if let Some(profile) = interactive_profile.and_then(parse_interactive_prebuffer_profile_id) {
+            self.streaming_interactive_profile = profile;
+        }
+    }
+
+    fn interactive_prebuffer_wait_policy(&self) -> InteractivePrebufferWaitPolicy {
+        let env_profile = parse_interactive_prebuffer_profile();
+        if self.streaming_interactive_profile == env_profile {
+            *INTERACTIVE_PREBUFFER_WAIT_POLICY
+        } else {
+            InteractivePrebufferWaitPolicy::from_profile(self.streaming_interactive_profile)
+        }
+    }
+
+    fn streaming_prebuffer_interactive_wait(
+        &self,
+        sample_rate: u32,
+        channels: usize,
+        capacity_samples: usize,
+        duration_seconds: f64,
+        kind: StreamingPrebufferKind,
+        override_seconds: Option<f64>,
+    ) -> (usize, Duration) {
+        if self.streaming_interactive_profile == parse_interactive_prebuffer_profile() {
+            return streaming_prebuffer_interactive_wait(
+                self.output_backend.id(),
+                sample_rate,
+                channels,
+                capacity_samples,
+                duration_seconds,
+                kind,
+                override_seconds,
+            );
+        }
+
+        streaming_prebuffer_interactive_wait_with_policy(
+            self.output_backend.id(),
+            sample_rate,
+            channels,
+            capacity_samples,
+            duration_seconds,
+            kind,
+            override_seconds,
+            self.interactive_prebuffer_wait_policy(),
+        )
     }
 
     fn append_source_with_pipeline(
@@ -951,6 +1144,7 @@ impl NativeAudioEngine {
             target_channels: self.decoded_channels.max(1),
             target_sample_rate: self.decoded_sample_rate.max(1),
             streaming_prebuffer_crossfade_seconds: self.streaming_prebuffer_crossfade_seconds,
+            interactive_wait_policy: self.interactive_prebuffer_wait_policy(),
             old_shutdown_tx: self
                 .streaming
                 .as_ref()
@@ -1326,8 +1520,7 @@ impl NativeAudioEngine {
         // For streaming playback, prebuffer some decoded samples before attaching the source to the sink.
         if let Some(streaming) = &self.streaming {
             let channels = meta.channels.max(1) as usize;
-            let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
-                self.output_backend.id(),
+            let (target_samples, timeout) = self.streaming_prebuffer_interactive_wait(
                 meta.sample_rate,
                 channels,
                 streaming.render_queue.capacity_samples(),
@@ -1442,8 +1635,7 @@ impl NativeAudioEngine {
         // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
         if let Some(streaming) = &new_streaming {
             let channels = meta.channels.max(1) as usize;
-            let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
-                self.output_backend.id(),
+            let (target_samples, timeout) = self.streaming_prebuffer_interactive_wait(
                 meta.sample_rate,
                 channels,
                 streaming.render_queue.capacity_samples(),
@@ -2684,8 +2876,7 @@ impl NativeAudioEngine {
                 } else {
                     self.duration
                 };
-                let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
-                    self.output_backend.id(),
+                let (target_samples, timeout) = self.streaming_prebuffer_interactive_wait(
                     self.decoded_sample_rate,
                     channels,
                     streaming.render_queue.capacity_samples(),
@@ -2840,7 +3031,7 @@ mod tests {
         engine.decoded_sample_rate = 48_000;
         engine.duration = 120.0;
         engine.current_position = 0.0;
-        engine.set_streaming_buffer_settings(Some(0.2), None, Some("streaming"));
+        engine.set_streaming_buffer_settings(Some(0.2), None, Some("streaming"), None);
 
         let sink = Arc::new(CallSink::default());
         engine.sink = Some(sink.clone());
@@ -2890,7 +3081,7 @@ mod tests {
         engine.duration = 120.0;
         engine.current_position = 0.0;
         // Large target so `target_samples` stays above the min-start bound.
-        engine.set_streaming_buffer_settings(Some(2.4), None, Some("streaming"));
+        engine.set_streaming_buffer_settings(Some(2.4), None, Some("streaming"), None);
 
         let sink = Arc::new(CallSink::default());
         engine.sink = Some(sink.clone());
@@ -3353,6 +3544,27 @@ mod tests {
     }
 
     #[test]
+    fn streaming_buffer_settings_updates_interactive_profile() {
+        let mut engine = NativeAudioEngine::new();
+        engine.set_streaming_buffer_settings(None, None, None, Some("stable"));
+
+        assert_eq!(
+            engine.streaming_buffer_settings_payload().interactive_profile,
+            "stable"
+        );
+
+        let policy = engine.interactive_prebuffer_wait_policy();
+        assert_eq!(policy.start_seek_timeout_ms, 320);
+        assert_eq!(policy.crossfade_timeout_ms, 450);
+
+        engine.set_streaming_buffer_settings(None, None, None, Some("invalid"));
+        assert_eq!(
+            engine.streaming_buffer_settings_payload().interactive_profile,
+            "stable"
+        );
+    }
+
+    #[test]
     fn streaming_min_start_bounds_allow_fast_click_to_play() {
         let (shared_cap, shared_floor) = streaming_min_start_bounds("rodio-cpal", false);
         let (exclusive_cap, exclusive_floor) =
@@ -3397,7 +3609,7 @@ mod tests {
             engine
                 .set_preferred_input_id(Some(super::SYMPHONIA_INPUT_ID.to_string()))
                 .expect("set input");
-            engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode));
+            engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode), None);
 
             engine.load(path.clone()).expect("load on initial backend");
             assert_eq!(
@@ -3648,7 +3860,7 @@ mod tests {
                 engine
                     .set_preferred_input_id(Some(super::SYMPHONIA_INPUT_ID.to_string()))
                     .expect("set input");
-                engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode));
+                engine.set_streaming_buffer_settings(Some(0.2), Some(0.1), Some(decode_mode), None);
                 let _ = engine.apply_engine_policy_patch(NativeAudioEnginePolicyPatch {
                     transport_mode: Some(transport_mode),
                     ..Default::default()

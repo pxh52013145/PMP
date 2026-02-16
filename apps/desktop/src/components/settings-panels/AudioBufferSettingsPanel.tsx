@@ -15,6 +15,7 @@ type StreamingBufferSettings = {
   startOrSeekSeconds: number | null;
   crossfadeSeconds: number | null;
   decodeMode: 'streaming' | 'full-track';
+  interactiveProfile: 'fast' | 'balanced' | 'stable';
 };
 
 type NativeAudioComponentsState = {
@@ -39,12 +40,18 @@ function parseDecodeMode(value: unknown): 'streaming' | 'full-track' | null {
   return null;
 }
 
+function parseInteractiveProfile(value: unknown): 'fast' | 'balanced' | 'stable' {
+  if (value === 'fast' || value === 'balanced' || value === 'stable') return value;
+  return 'balanced';
+}
+
 function parseStreamingBufferSettings(payload: unknown): StreamingBufferSettings {
   const record = asRecord(payload);
   return {
     startOrSeekSeconds: parseSecondsOrNull(record?.startOrSeekSeconds),
     crossfadeSeconds: parseSecondsOrNull(record?.crossfadeSeconds),
     decodeMode: parseDecodeMode(record?.decodeMode) ?? 'streaming',
+    interactiveProfile: parseInteractiveProfile(record?.interactiveProfile),
   };
 }
 
@@ -168,6 +175,7 @@ export function AudioBufferSettingsPanel() {
           startOrSeekSeconds: latest.startOrSeekSeconds,
           crossfadeSeconds: latest.crossfadeSeconds,
           decodeMode: latest.decodeMode,
+          interactiveProfile: latest.interactiveProfile,
         }).catch((err) => {
           setError(err instanceof Error ? err.message : String(err));
         });
@@ -219,12 +227,24 @@ export function AudioBufferSettingsPanel() {
   );
 
   const handleReset = useCallback(() => {
-    scheduleApply({ startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' });
+    scheduleApply({
+      startOrSeekSeconds: null,
+      crossfadeSeconds: null,
+      decodeMode: 'streaming',
+      interactiveProfile: 'balanced',
+    });
   }, [scheduleApply]);
 
   const handleDecodeModeChange = useCallback(
     (mode: 'streaming' | 'full-track') => {
       scheduleApply({ ...settings, decodeMode: mode });
+    },
+    [scheduleApply, settings]
+  );
+
+  const handleInteractiveProfileChange = useCallback(
+    (profile: 'fast' | 'balanced' | 'stable') => {
+      scheduleApply({ ...settings, interactiveProfile: profile });
     },
     [scheduleApply, settings]
   );
@@ -272,6 +292,44 @@ export function AudioBufferSettingsPanel() {
                       onClick={() => handleDecodeModeChange('full-track')}
                     >
                       {t('settings.audioBuffer.decodeMode.fullTrack')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-row settings-row--audio-preprocess">
+                <div className="settings-row-left">
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.section.interactive.title')}</div>
+                  <div className="settings-row-title settings-row-title--audio-preprocess">
+                    {t('settings.audioBuffer.interactiveProfile.label')}
+                  </div>
+                  <div className="settings-row-desc">{t('settings.audioBuffer.interactiveProfile.desc')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.interactiveProfile.fast')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.interactiveProfile.balanced')}</div>
+                  <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.interactiveProfile.stable')}</div>
+                </div>
+                <div className="settings-row-right">
+                  <div className="settings-toggle settings-toggle--compact settings-toggle--audio-preprocess">
+                    <button
+                      type="button"
+                      data-active={settings.interactiveProfile === 'fast'}
+                      onClick={() => handleInteractiveProfileChange('fast')}
+                    >
+                      {t('settings.audioBuffer.interactiveProfile.mode.fast')}
+                    </button>
+                    <button
+                      type="button"
+                      data-active={settings.interactiveProfile === 'balanced'}
+                      onClick={() => handleInteractiveProfileChange('balanced')}
+                    >
+                      {t('settings.audioBuffer.interactiveProfile.mode.balanced')}
+                    </button>
+                    <button
+                      type="button"
+                      data-active={settings.interactiveProfile === 'stable'}
+                      onClick={() => handleInteractiveProfileChange('stable')}
+                    >
+                      {t('settings.audioBuffer.interactiveProfile.mode.stable')}
                     </button>
                   </div>
                 </div>

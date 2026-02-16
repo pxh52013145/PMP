@@ -45,12 +45,17 @@ No new extension is allowed to bypass these contracts.
 
 ### 4.1 Interactive wait cap (implemented)
 
-Interactive command path now enforces hard caps regardless of robustness escalation:
+Interactive command path enforces bounded caps regardless of robustness escalation.
 
-- Start/seek prebuffer target cap: `0.30s`
-- Start/seek timeout cap: `220ms`
-- Crossfade prebuffer target cap: `0.45s`
-- Crossfade timeout cap: `320ms`
+Profiles (`PMP_AUDIO_STREAM_INTERACTIVE_PROFILE`):
+
+- `fast`: start/seek `0.24s` + `180ms`, crossfade `0.36s` + `260ms`
+- `balanced` (default): start/seek `0.30s` + `220ms`, crossfade `0.45s` + `320ms`
+- `stable`: start/seek `0.42s` + `320ms`, crossfade `0.65s` + `450ms`
+
+All values can be overridden by env knobs for device-specific tuning.
+
+Host runtime can also switch profile at runtime via streaming buffer settings (`interactiveProfile`), without requiring process restart.
 
 Implementation entry:
 
@@ -83,6 +88,7 @@ Policy intent:
 - Upgraded underrun masking from fixed short ramps to adaptive equal-power ramps (profile + streak aware) in:
   - `apps/desktop/src-tauri/src/audio/input/streaming.rs`
   - `apps/desktop/src-tauri/src/audio/output/render_ahead.rs`
+- Applied the same adaptive equal-power declick strategy to WASAPI exclusive/shared-raw render callback path in `apps/desktop/src-tauri/src/audio/output/wasapi_exclusive.rs`, with ms-based env tunables and underrun-streak awareness.
 - Phase-2 hardening: underrun masking moved to sample-rate-aware millisecond policy with bounded env knobs, avoiding fixed 96-frame ultra-short ramps that can be perceived as clicks.
 - Phase-2 hardening: shared render-ahead pop wait now uses bounded profile-aware waits (`normal/guarded/critical`) to reduce false underrun declaration during short scheduler jitter.
 - Native debug robustness panel now shows split headroom (`decodeBufferedAheadSeconds` / `outputBufferedAheadSeconds`) alongside aggregate buffer metrics.

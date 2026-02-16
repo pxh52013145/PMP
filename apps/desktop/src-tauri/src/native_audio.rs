@@ -2099,6 +2099,7 @@ pub fn set_streaming_buffer_settings(
     start_or_seek_seconds: Option<f64>,
     crossfade_seconds: Option<f64>,
     decode_mode: Option<String>,
+    interactive_profile: Option<String>,
 ) -> Result<NativeAudioStreamingBufferSettingsPayload, String> {
     emitter::ensure_started(app_handle);
     let mut engine = ENGINE
@@ -2108,6 +2109,7 @@ pub fn set_streaming_buffer_settings(
         start_or_seek_seconds,
         crossfade_seconds,
         decode_mode.as_deref(),
+        interactive_profile.as_deref(),
     );
     Ok(engine.streaming_buffer_settings_payload())
 }

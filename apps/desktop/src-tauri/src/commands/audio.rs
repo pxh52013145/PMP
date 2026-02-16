@@ -164,6 +164,7 @@ pub async fn native_audio_set_streaming_buffer_settings(
     start_or_seek_seconds: Option<f64>,
     crossfade_seconds: Option<f64>,
     decode_mode: Option<String>,
+    interactive_profile: Option<String>,
 ) -> Result<native_audio::NativeAudioStreamingBufferSettingsPayload, String> {
     tauri::async_runtime::spawn_blocking(move || {
         native_audio::set_streaming_buffer_settings(
@@ -171,6 +172,7 @@ pub async fn native_audio_set_streaming_buffer_settings(
             start_or_seek_seconds,
             crossfade_seconds,
             decode_mode,
+            interactive_profile,
         )
     })
     .await

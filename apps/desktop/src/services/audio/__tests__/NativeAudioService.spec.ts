@@ -750,6 +750,7 @@ describe('NativeAudioService', () => {
       startOrSeekSeconds: 3.2,
       crossfadeSeconds: 1.4,
       decodeMode: 'streaming',
+      interactiveProfile: 'balanced',
     });
 
     service.destroy();
@@ -844,6 +845,7 @@ describe('NativeAudioService', () => {
       startOrSeekSeconds: 3.2,
       crossfadeSeconds: 1.4,
       decodeMode: 'full-track',
+      interactiveProfile: 'balanced',
     });
 
     service.destroy();
@@ -1287,6 +1289,7 @@ describe('NativeAudioService', () => {
         startOrSeekSeconds: 3.6,
         crossfadeSeconds: 1.9,
         decodeMode: 'streaming',
+        interactiveProfile: 'balanced',
       },
     ]);
 

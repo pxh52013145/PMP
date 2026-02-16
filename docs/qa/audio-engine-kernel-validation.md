@@ -9,11 +9,13 @@ Run in `apps/desktop/src-tauri`:
 
 - `cargo test interactive_prebuffer_wait_caps_start_seek_to_sub_second_target`
 - `cargo test interactive_prebuffer_wait_caps_crossfade_to_short_timeout`
+- `cargo test streaming_buffer_settings_updates_interactive_profile`
 - `cargo test load_operation_latest_token_wins_and_stale_prepare_is_aborted`
 - `cargo test crossfade_returns_fallback_when_transport_is_not_playing`
 - `cargo test seek_command_ignores_invalid_sequence_without_error`
 - `cargo test seek_in_memory_path_does_not_recreate_sink`
 - `cargo test buffering_finished_stream_resumes_instead_of_timeout`
+- `cargo test declicker_tests`
 
 Expected:
 
@@ -22,6 +24,7 @@ Expected:
 - New kernel orchestration fallback path remains deterministic.
 - Seek command orchestration handles invalid/stale sequence safely.
 - Existing seek/buffering regressions remain green.
+- Adaptive declicker coverage remains green for fade-in continuity and underrun tail shaping.
 
 ## 2. Integration test (Rust)
 

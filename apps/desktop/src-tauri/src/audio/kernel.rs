@@ -146,7 +146,7 @@ fn prepare_crossfade_for_operation(
 
     if let Some(streaming) = &streaming {
         let channels = meta.channels.max(1) as usize;
-        let (target_samples, timeout) = engine::streaming_prebuffer_interactive_wait(
+        let (target_samples, timeout) = engine::streaming_prebuffer_interactive_wait_with_policy(
             &op.output_backend_id,
             op.target_sample_rate,
             channels,
@@ -154,6 +154,7 @@ fn prepare_crossfade_for_operation(
             meta.duration,
             StreamingPrebufferKind::Crossfade,
             op.streaming_prebuffer_crossfade_seconds,
+            op.interactive_wait_policy,
         );
         if streaming.buffer.len_samples() < target_samples {
             streaming.buffer.wait_for_samples(target_samples, timeout);

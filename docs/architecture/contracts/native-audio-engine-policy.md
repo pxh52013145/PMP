@@ -65,18 +65,35 @@ These presets are UI-layer combinations only; policy remains a stable host contr
 
 ## 6. Interactive Wait Cap Contract (Transport UX Guardrail)
 
-To prevent slow click-to-play/track-switch behavior under stressed robustness policy, interactive transport operations must obey bounded wait caps on command path:
+To prevent slow click-to-play / track-switch behavior under stressed robustness policy, interactive transport operations obey bounded wait caps on command path.
 
-- Start/seek interactive prebuffer target cap: `0.30s`
-- Start/seek interactive wait timeout cap: `220ms`
-- Crossfade interactive prebuffer target cap: `0.45s`
-- Crossfade interactive wait timeout cap: `320ms`
+Default profiles (selected by `PMP_AUDIO_STREAM_INTERACTIVE_PROFILE`):
+
+- `fast`: start/seek `0.24s` + `180ms`, crossfade `0.36s` + `260ms`
+- `balanced` (default): start/seek `0.30s` + `220ms`, crossfade `0.45s` + `320ms`
+- `stable`: start/seek `0.42s` + `320ms`, crossfade `0.65s` + `450ms`
+
+Optional env overrides:
+
+- `PMP_AUDIO_STREAM_INTERACTIVE_START_CAP_SECONDS`
+- `PMP_AUDIO_STREAM_INTERACTIVE_CROSSFADE_CAP_SECONDS`
+- `PMP_AUDIO_STREAM_INTERACTIVE_START_TIMEOUT_MS`
+- `PMP_AUDIO_STREAM_INTERACTIVE_CROSSFADE_TIMEOUT_MS`
+
+Runtime host setting (persisted in streaming buffer settings):
+
+- `interactiveProfile`: `fast` | `balanced` | `stable`
+
+Runtime command integration:
+
+- `native_audio_set_streaming_buffer_settings` accepts `interactiveProfile` as an optional field.
+- `native_audio_get_streaming_buffer_settings` / payload now exposes `interactiveProfile`.
 
 Implementation reference:
 
 - `streaming_prebuffer_interactive_wait(...)` in `apps/desktop/src-tauri/src/audio/engine.rs`
 
-This guardrail is intentionally independent from steady-state robustness policy so that transport responsiveness remains deterministic.
+This guardrail remains intentionally independent from steady-state robustness policy so interactive transport latency stays deterministic while allowing profile/env tuning per machine.
 
 ## 7. Streaming Buffer Observability Contract (State Event)
 
@@ -126,3 +143,18 @@ Contract guarantees:
 - Masking is sample-rate aware (duration is normalized by ms instead of fixed frame count).
 - Higher pressure profile and repeated underrun streak increase mask duration within safe bounds.
 - Render-pop wait remains bounded and profile-aware to reduce false underrun declaration without unbounded callback blocking.
+
+Exclusive/shared-raw output declick env vars (milliseconds):
+
+- `PMP_AUDIO_EXCLUSIVE_DECLICK_NORMAL_MS` (default `8`)
+- `PMP_AUDIO_EXCLUSIVE_DECLICK_GUARDED_MS` (default `14`)
+- `PMP_AUDIO_EXCLUSIVE_DECLICK_CRITICAL_MS` (default `24`)
+- `PMP_AUDIO_EXCLUSIVE_DECLICK_STREAK_BOOST_MS` (default `3`)
+- `PMP_AUDIO_EXCLUSIVE_DECLICK_MIN_MS` (default `4`)
+- `PMP_AUDIO_EXCLUSIVE_DECLICK_MAX_MS` (default `64`)
+
+Exclusive/shared-raw declick guarantees:
+
+- Uses adaptive equal-power fade-in/fade-out (instead of fixed linear 96-frame masking).
+- Fade duration is sample-rate / pressure-profile / underrun-streak aware and clamped by safe bounds.
+- Tail zeroing keeps underrun recovery transitions smooth and reduces audible crackle under jitter.

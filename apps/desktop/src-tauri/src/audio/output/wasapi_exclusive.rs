@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::f32::consts::FRAC_PI_2;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -15,11 +16,94 @@ use super::{
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::diagnostics;
 use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTransportMode};
+use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
 pub const WASAPI_EXCLUSIVE_BACKEND_ID: &str = "wasapi-exclusive";
 pub const WASAPI_SHARED_RAW_BACKEND_ID: &str = "wasapi-shared-raw";
 
-const DECLICK_FADE_FRAMES: u32 = 128;
+#[derive(Clone, Copy, Debug)]
+struct UnderrunDeclickPolicy {
+    normal_ms: u32,
+    guarded_ms: u32,
+    critical_ms: u32,
+    streak_boost_ms: u32,
+    min_ms: u32,
+    max_ms: u32,
+}
+
+fn parse_env_u32(key: &str, default_value: u32, min: u32, max: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(default_value)
+        .clamp(min, max)
+}
+
+impl UnderrunDeclickPolicy {
+    fn from_env() -> Self {
+        let min_ms = parse_env_u32("PMP_AUDIO_EXCLUSIVE_DECLICK_MIN_MS", 4, 1, 120);
+        let max_ms = parse_env_u32("PMP_AUDIO_EXCLUSIVE_DECLICK_MAX_MS", 64, min_ms, 200);
+
+        Self {
+            normal_ms: parse_env_u32("PMP_AUDIO_EXCLUSIVE_DECLICK_NORMAL_MS", 8, min_ms, max_ms),
+            guarded_ms: parse_env_u32("PMP_AUDIO_EXCLUSIVE_DECLICK_GUARDED_MS", 14, min_ms, max_ms),
+            critical_ms: parse_env_u32(
+                "PMP_AUDIO_EXCLUSIVE_DECLICK_CRITICAL_MS",
+                24,
+                min_ms,
+                max_ms,
+            ),
+            streak_boost_ms: parse_env_u32("PMP_AUDIO_EXCLUSIVE_DECLICK_STREAK_BOOST_MS", 3, 0, 40),
+            min_ms,
+            max_ms,
+        }
+    }
+}
+
+static UNDERRUN_DECLICK_POLICY: Lazy<UnderrunDeclickPolicy> =
+    Lazy::new(UnderrunDeclickPolicy::from_env);
+
+fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
+    let rate = sample_rate.max(8_000) as f64;
+    ((rate * milliseconds as f64) / 1000.0).round().max(1.0) as usize
+}
+
+fn adaptive_declick_frames(
+    sample_rate: u32,
+    profile: RealtimePressureProfile,
+    underrun_streak: u32,
+) -> usize {
+    let policy = *UNDERRUN_DECLICK_POLICY;
+    let base_ms = match profile {
+        RealtimePressureProfile::Normal => policy.normal_ms,
+        RealtimePressureProfile::Guarded => policy.guarded_ms,
+        RealtimePressureProfile::Critical => policy.critical_ms,
+    };
+    let streak_boost = underrun_streak
+        .saturating_sub(1)
+        .min(8)
+        .saturating_mul(policy.streak_boost_ms);
+    let mask_ms = base_ms
+        .saturating_add(streak_boost)
+        .clamp(policy.min_ms, policy.max_ms);
+    ms_to_frames(sample_rate, mask_ms)
+}
+
+fn equal_power_fade_out_gain(frame: usize, frames: usize) -> f32 {
+    if frames <= 1 {
+        return 0.0;
+    }
+    let t = frame as f32 / (frames.saturating_sub(1)) as f32;
+    ((1.0 - t).clamp(0.0, 1.0) * FRAC_PI_2).sin()
+}
+
+fn equal_power_fade_in_gain(frame: usize, frames: usize) -> f32 {
+    if frames <= 1 {
+        return 1.0;
+    }
+    let t = frame as f32 / (frames.saturating_sub(1)) as f32;
+    (t.clamp(0.0, 1.0) * FRAC_PI_2).sin()
+}
 
 const AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND: &str =
     "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_DEVICE_NOT_FOUND";
@@ -62,14 +146,18 @@ static QUANTIZATION_RNG_STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15)
 #[derive(Debug)]
 struct UnderrunDeclicker {
     last_frame: Vec<f32>,
-    fade_in_pos: u32,
+    fade_in_pos: usize,
+    fade_in_total_frames: usize,
+    underrun_streak: u32,
 }
 
 impl UnderrunDeclicker {
     fn new(channels: usize) -> Self {
         Self {
             last_frame: vec![0.0; channels],
-            fade_in_pos: DECLICK_FADE_FRAMES,
+            fade_in_pos: 0,
+            fade_in_total_frames: 0,
+            underrun_streak: 0,
         }
     }
 
@@ -79,35 +167,39 @@ impl UnderrunDeclicker {
         } else {
             self.last_frame.fill(0.0);
         }
-        self.fade_in_pos = DECLICK_FADE_FRAMES;
+        self.fade_in_pos = 0;
+        self.fade_in_total_frames = 0;
+        self.underrun_streak = 0;
     }
 
-    fn on_intentional_silence(&mut self, channels: usize) {
+    fn on_intentional_silence(&mut self, channels: usize, sample_rate: u32) {
         if self.last_frame.len() != channels {
             self.last_frame = vec![0.0; channels];
         } else {
             self.last_frame.fill(0.0);
         }
+        self.fade_in_total_frames =
+            adaptive_declick_frames(sample_rate, RealtimePressureProfile::Normal, 1);
         self.fade_in_pos = 0;
+        self.underrun_streak = 0;
     }
 
     fn apply_fade_in(&mut self, scratch: &mut [f32], available_frames: u32, channels: usize) {
-        if DECLICK_FADE_FRAMES <= 1 || self.fade_in_pos >= DECLICK_FADE_FRAMES {
-            self.fade_in_pos = DECLICK_FADE_FRAMES;
+        if self.fade_in_total_frames <= 1 || self.fade_in_pos >= self.fade_in_total_frames {
+            self.fade_in_pos = self.fade_in_total_frames;
             return;
         }
 
-        let remaining = DECLICK_FADE_FRAMES - self.fade_in_pos;
-        let frames_to_apply = remaining.min(available_frames);
+        let remaining = self.fade_in_total_frames.saturating_sub(self.fade_in_pos);
+        let frames_to_apply = remaining.min(available_frames as usize);
         if frames_to_apply == 0 {
             return;
         }
 
-        let denom = (DECLICK_FADE_FRAMES - 1) as f32;
         for frame in 0..frames_to_apply {
-            let idx = (self.fade_in_pos + frame) as f32;
-            let gain = (idx / denom).clamp(0.0, 1.0);
-            let offset = frame as usize * channels;
+            let gain =
+                equal_power_fade_in_gain(self.fade_in_pos + frame, self.fade_in_total_frames);
+            let offset = frame * channels;
             for channel in 0..channels {
                 scratch[offset + channel] *= gain;
             }
@@ -116,7 +208,7 @@ impl UnderrunDeclicker {
         self.fade_in_pos = self
             .fade_in_pos
             .saturating_add(frames_to_apply)
-            .min(DECLICK_FADE_FRAMES);
+            .min(self.fade_in_total_frames);
     }
 
     fn snapshot_tail_frame(&mut self, scratch: &[f32], available_frames: u32, channels: usize) {
@@ -139,25 +231,32 @@ impl UnderrunDeclicker {
         frames: u32,
         available_frames: u32,
         channels: usize,
+        requested_fade_frames: usize,
     ) {
-        let fade_frames = DECLICK_FADE_FRAMES.min(frames).max(1);
+        let frames = frames as usize;
+        let available_frames = available_frames.min(frames as u32) as usize;
+        let missing_frames = frames.saturating_sub(available_frames);
+        let adaptive_ceiling = missing_frames.saturating_mul(8);
+        let fade_frames = requested_fade_frames
+            .min(adaptive_ceiling.max(32))
+            .min(frames)
+            .max(1);
+
         if fade_frames <= 1 {
             return;
         }
 
-        let missing_frames = frames.saturating_sub(available_frames);
-        let ramp_start = if missing_frames >= fade_frames {
+        let ramp_start = if missing_frames.saturating_mul(2) >= fade_frames {
             available_frames
         } else {
             frames.saturating_sub(fade_frames)
         };
         let ramp_end = (ramp_start + fade_frames).min(frames);
-
-        let denom = (fade_frames - 1) as f32;
+        let ramp_len = ramp_end.saturating_sub(ramp_start).max(1);
         for frame in ramp_start..ramp_end {
-            let idx = (frame - ramp_start) as f32;
-            let gain = (1.0 - (idx / denom)).clamp(0.0, 1.0);
-            let offset = frame as usize * channels;
+            let idx = frame.saturating_sub(ramp_start);
+            let gain = equal_power_fade_out_gain(idx, ramp_len);
+            let offset = frame * channels;
 
             if frame < available_frames {
                 for channel in 0..channels {
@@ -171,7 +270,7 @@ impl UnderrunDeclicker {
         }
 
         for frame in ramp_end..frames {
-            let offset = frame as usize * channels;
+            let offset = frame * channels;
             scratch[offset..offset + channels].fill(0.0);
         }
     }
@@ -194,6 +293,7 @@ impl UnderrunDeclicker {
         &mut self,
         scratch: &mut Vec<f32>,
         frames: u32,
+        sample_rate: u32,
         channels: usize,
         available_samples: usize,
         underrun: bool,
@@ -212,13 +312,17 @@ impl UnderrunDeclicker {
             scratch.truncate(total_samples);
         }
 
-        self.apply_fade_in(scratch, available_frames, channels);
-
         if underrun {
+            self.underrun_streak = self.underrun_streak.saturating_add(1);
             self.snapshot_tail_frame(scratch, available_frames, channels);
-            self.apply_underrun_fade_out(scratch, frames, available_frames, channels);
-            self.on_intentional_silence(channels);
+            let fade_frames =
+                adaptive_declick_frames(sample_rate, SCHEDULER.profile(), self.underrun_streak);
+            self.apply_underrun_fade_out(scratch, frames, available_frames, channels, fade_frames);
+            self.fade_in_total_frames = fade_frames.max(1);
+            self.fade_in_pos = 0;
         } else {
+            self.underrun_streak = 0;
+            self.apply_fade_in(scratch, available_frames, channels);
             self.store_last_frame(scratch, frames, channels);
         }
     }
@@ -226,46 +330,53 @@ impl UnderrunDeclicker {
 
 #[cfg(test)]
 mod declicker_tests {
-    use super::{UnderrunDeclicker, DECLICK_FADE_FRAMES};
+    use super::{adaptive_declick_frames, UnderrunDeclicker};
+    use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
-    const EPS: f32 = 1e-6;
+    const EPS: f32 = 1e-4;
+    const SAMPLE_RATE: u32 = 48_000;
 
     #[test]
     fn fade_in_progresses_across_small_buffers() {
-        let frames = 16u32;
+        let frames = 64u32;
         let channels = 1usize;
-        let step = 1.0 / (DECLICK_FADE_FRAMES.saturating_sub(1) as f32);
 
         let mut declicker = UnderrunDeclicker::new(channels);
-        declicker.on_intentional_silence(channels);
+        declicker.on_intentional_silence(channels, SAMPLE_RATE);
 
         let mut scratch = vec![1.0f32; frames as usize * channels];
         let available_samples = scratch.len();
         declicker.process_render_buffer(
             &mut scratch,
             frames,
+            SAMPLE_RATE,
             channels,
             available_samples,
             false,
         );
-        assert!((scratch[0] - 0.0).abs() <= EPS);
-        assert!((scratch[15] - (15.0 * step)).abs() <= EPS);
+        assert!(scratch[0].abs() <= EPS);
+        assert!(scratch[frames as usize - 1] < 1.0);
+        for idx in 0..(frames as usize - 1) {
+            assert!(scratch[idx + 1] + EPS >= scratch[idx]);
+        }
 
         let mut scratch2 = vec![1.0f32; frames as usize * channels];
         let available_samples2 = scratch2.len();
         declicker.process_render_buffer(
             &mut scratch2,
             frames,
+            SAMPLE_RATE,
             channels,
             available_samples2,
             false,
         );
-        assert!((scratch2[0] - (16.0 * step)).abs() <= EPS);
-        assert!((scratch2[15] - (31.0 * step)).abs() <= EPS);
+        assert!(scratch2[0] + EPS >= scratch[frames as usize - 1]);
+        assert!(scratch2[frames as usize - 1] > scratch2[0]);
+        assert!(scratch2[frames as usize - 1] < 1.0);
     }
 
     #[test]
-    fn underrun_ramps_to_zero_without_click_when_missing_large() {
+    fn underrun_ramps_down_and_zeros_tail_when_missing_large() {
         let frames = 256u32;
         let channels = 1usize;
         let available_frames = 64usize;
@@ -277,22 +388,21 @@ mod declicker_tests {
         declicker.process_render_buffer(
             &mut scratch,
             frames,
+            SAMPLE_RATE,
             channels,
             available_samples,
             true,
         );
 
         assert_eq!(scratch.len(), frames as usize * channels);
-        assert!((scratch[63] - 1.0).abs() <= EPS);
-        assert!((scratch[64] - 1.0).abs() <= EPS);
-        assert!((scratch[191] - 0.0).abs() <= EPS);
-        assert!((scratch[200] - 0.0).abs() <= EPS);
+        assert!((scratch[0] - 1.0).abs() <= EPS);
+        assert!(scratch[available_frames - 1] <= 1.0 + EPS);
+        assert!(scratch[available_frames] <= scratch[available_frames - 1] + EPS);
+        assert!(scratch[frames as usize - 1].abs() <= EPS);
 
-        let step = 1.0 / (DECLICK_FADE_FRAMES.saturating_sub(1) as f32);
-        let max_expected_step = step + 1e-4;
-        for idx in 64..191 {
-            let delta = (scratch[idx] - scratch[idx + 1]).abs();
-            assert!(delta <= max_expected_step);
+        for idx in available_frames..(frames as usize - 1) {
+            assert!(scratch[idx + 1] <= scratch[idx] + 1e-3);
+            assert!(scratch[idx] >= -EPS);
         }
     }
 
@@ -309,18 +419,31 @@ mod declicker_tests {
         declicker.process_render_buffer(
             &mut scratch,
             frames,
+            SAMPLE_RATE,
             channels,
             available_samples,
             true,
         );
 
-        assert!((scratch[128] - 1.0).abs() <= EPS);
-        assert!((scratch[239] - (16.0 / 127.0)).abs() <= EPS);
-        assert!((scratch[240] - (15.0 / 127.0)).abs() <= EPS);
-        assert!((scratch[255] - 0.0).abs() <= EPS);
+        assert!((scratch[96] - 1.0).abs() <= EPS);
+        assert!(scratch[239] <= 1.0 + EPS);
+        assert!(scratch[240] <= scratch[239] + EPS);
+        assert!(scratch[255].abs() <= EPS);
+    }
 
-        let expected_step = 1.0 / 127.0;
-        assert!((scratch[239] - scratch[240] - expected_step).abs() <= 1e-4);
+    #[test]
+    fn adaptive_declick_frames_track_profile_and_streak() {
+        let low_sr = adaptive_declick_frames(24_000, RealtimePressureProfile::Normal, 1);
+        let normal = adaptive_declick_frames(SAMPLE_RATE, RealtimePressureProfile::Normal, 1);
+        let guarded = adaptive_declick_frames(SAMPLE_RATE, RealtimePressureProfile::Guarded, 1);
+        let critical = adaptive_declick_frames(SAMPLE_RATE, RealtimePressureProfile::Critical, 1);
+        let streak = adaptive_declick_frames(SAMPLE_RATE, RealtimePressureProfile::Normal, 4);
+
+        assert!(normal >= 1);
+        assert!(normal >= low_sr);
+        assert!(guarded >= normal);
+        assert!(critical >= guarded);
+        assert!(streak >= normal);
     }
 }
 
@@ -2075,7 +2198,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
 
             let playing = inner.playing.load(Ordering::Acquire);
             if playing && !stream.started {
-                declicker.on_intentional_silence(active_channels as usize);
+                declicker.on_intentional_silence(active_channels as usize, active_sample_rate);
                 if let Err(err) = start_stream_with_prefill(
                     stream,
                     inner.as_ref(),
@@ -2269,7 +2392,7 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
 
             let playing = inner.playing.load(Ordering::Acquire);
             if playing && !stream.started {
-                declicker.on_intentional_silence(active_channels as usize);
+                declicker.on_intentional_silence(active_channels as usize, active_sample_rate);
                 if let Err(err) = start_stream_with_prefill_shared_raw(
                     stream,
                     inner.as_ref(),
@@ -2652,7 +2775,7 @@ fn render_once(
     let frames = stream.buffer_frame_count;
 
     if !playing || inner.render_queue.is_finished_and_empty() {
-        declicker.on_intentional_silence(stream.channels.max(1) as usize);
+        declicker.on_intentional_silence(stream.channels.max(1) as usize, stream.sample_rate);
         unsafe {
             stream
                 .render_client
@@ -2746,7 +2869,7 @@ fn render_once_shared_raw(
     }
 
     if !playing || inner.render_queue.is_finished_and_empty() {
-        declicker.on_intentional_silence(stream.channels.max(1) as usize);
+        declicker.on_intentional_silence(stream.channels.max(1) as usize, stream.sample_rate);
         unsafe {
             stream
                 .render_client
@@ -2832,6 +2955,7 @@ fn render_frames(
     declicker.process_render_buffer(
         scratch,
         frames,
+        stream.sample_rate,
         channels,
         available_samples,
         underrun && consume,
@@ -3008,6 +3132,7 @@ fn render_frames_shared_raw(
     declicker.process_render_buffer(
         scratch,
         frames,
+        stream.sample_rate,
         channels,
         available_samples,
         underrun && consume,

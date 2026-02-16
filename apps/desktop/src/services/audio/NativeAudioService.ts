@@ -140,6 +140,7 @@ type StreamingBufferSettings = {
   startOrSeekSeconds: number | null;
   crossfadeSeconds: number | null;
   decodeMode: 'streaming' | 'full-track';
+  interactiveProfile: 'fast' | 'balanced' | 'stable';
 };
 
 type DynamicSrcLearningRecord = {
@@ -222,6 +223,7 @@ export class NativeAudioService implements IAudioService {
     // Default to streaming for low memory usage + fast click-to-play startup.
     // Full-track decoding can still be enabled via settings for seek/scrub-heavy workflows.
     decodeMode: 'streaming',
+    interactiveProfile: 'balanced',
   };
   private lastAppliedStreamingBufferSettings: StreamingBufferSettings | null = null;
   private protectionWindowRefCount = 0;
@@ -577,14 +579,24 @@ export class NativeAudioService implements IAudioService {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
       if (!raw) {
         return {
-          settings: { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' },
+          settings: {
+            startOrSeekSeconds: null,
+            crossfadeSeconds: null,
+            decodeMode: 'streaming',
+            interactiveProfile: 'balanced',
+          },
           migratedLegacyFullTrack: false,
         };
       }
       const parsed = JSON.parse(raw) as unknown;
       if (!parsed || typeof parsed !== 'object') {
         return {
-          settings: { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' },
+          settings: {
+            startOrSeekSeconds: null,
+            crossfadeSeconds: null,
+            decodeMode: 'streaming',
+            interactiveProfile: 'balanced',
+          },
           migratedLegacyFullTrack: false,
         };
       }
@@ -593,6 +605,7 @@ export class NativeAudioService implements IAudioService {
       const startRaw = record.startOrSeekSeconds;
       const crossfadeRaw = record.crossfadeSeconds;
       const decodeModeRaw = record.decodeMode;
+      const interactiveProfileRaw = record.interactiveProfile;
       const userSetDecodeMode = record.userSetDecodeMode === true;
 
       const start =
@@ -613,9 +626,16 @@ export class NativeAudioService implements IAudioService {
       ): value is StreamingBufferSettings['decodeMode'] =>
         value === 'full-track' || value === 'streaming';
 
+      const isInteractiveProfile = (
+        value: unknown
+      ): value is StreamingBufferSettings['interactiveProfile'] =>
+        value === 'fast' || value === 'balanced' || value === 'stable';
+
       let decodeMode: StreamingBufferSettings['decodeMode'] = isDecodeMode(decodeModeRaw)
         ? decodeModeRaw
         : 'streaming';
+      const interactiveProfile: StreamingBufferSettings['interactiveProfile'] =
+        isInteractiveProfile(interactiveProfileRaw) ? interactiveProfileRaw : 'balanced';
 
       let migratedLegacyFullTrack = false;
       if (decodeMode === 'full-track' && !userSetDecodeMode) {
@@ -626,12 +646,22 @@ export class NativeAudioService implements IAudioService {
       }
 
       return {
-        settings: { startOrSeekSeconds: start, crossfadeSeconds: crossfade, decodeMode },
+        settings: {
+          startOrSeekSeconds: start,
+          crossfadeSeconds: crossfade,
+          decodeMode,
+          interactiveProfile,
+        },
         migratedLegacyFullTrack,
       };
     } catch {
       return {
-        settings: { startOrSeekSeconds: null, crossfadeSeconds: null, decodeMode: 'streaming' },
+        settings: {
+          startOrSeekSeconds: null,
+          crossfadeSeconds: null,
+          decodeMode: 'streaming',
+          interactiveProfile: 'balanced',
+        },
         migratedLegacyFullTrack: false,
       };
     }
@@ -2041,6 +2071,12 @@ export class NativeAudioService implements IAudioService {
       startOrSeekSeconds: normalize(settings.startOrSeekSeconds, 0, 4),
       crossfadeSeconds: normalize(settings.crossfadeSeconds, 0, 3),
       decodeMode: settings.decodeMode === 'full-track' ? 'full-track' : 'streaming',
+      interactiveProfile:
+        settings.interactiveProfile === 'fast' ||
+        settings.interactiveProfile === 'stable' ||
+        settings.interactiveProfile === 'balanced'
+          ? settings.interactiveProfile
+          : 'balanced',
     };
   }
 
@@ -2055,6 +2091,7 @@ export class NativeAudioService implements IAudioService {
           ? Math.min(1.8, Math.max(0.4, base.crossfadeSeconds))
           : 1.0,
       decodeMode: base.decodeMode,
+      interactiveProfile: base.interactiveProfile,
     };
   }
 
@@ -2064,6 +2101,7 @@ export class NativeAudioService implements IAudioService {
       startOrSeekSeconds: Math.min(4, Math.max(background.startOrSeekSeconds ?? 2.4, 3.2)),
       crossfadeSeconds: Math.min(3, Math.max(background.crossfadeSeconds ?? 1.0, 1.4)),
       decodeMode: background.decodeMode,
+      interactiveProfile: background.interactiveProfile,
     };
   }
 
@@ -2073,6 +2111,7 @@ export class NativeAudioService implements IAudioService {
       startOrSeekSeconds: Math.min(4, Math.max(recovery.startOrSeekSeconds ?? 3.2, 3.8)),
       crossfadeSeconds: Math.min(3, Math.max(recovery.crossfadeSeconds ?? 1.4, 1.8)),
       decodeMode: recovery.decodeMode,
+      interactiveProfile: recovery.interactiveProfile,
     };
   }
 
@@ -2175,6 +2214,7 @@ export class NativeAudioService implements IAudioService {
         startOrSeekSeconds: Math.min(4, Math.max(target.startOrSeekSeconds ?? 2.4, 3.6)),
         crossfadeSeconds: Math.min(3, Math.max(target.crossfadeSeconds ?? 1.0, 1.9)),
         decodeMode: target.decodeMode,
+        interactiveProfile: target.interactiveProfile,
       };
     }
 
@@ -2189,7 +2229,8 @@ export class NativeAudioService implements IAudioService {
     return (
       left.startOrSeekSeconds === right.startOrSeekSeconds &&
       left.crossfadeSeconds === right.crossfadeSeconds &&
-      left.decodeMode === right.decodeMode
+      left.decodeMode === right.decodeMode &&
+      left.interactiveProfile === right.interactiveProfile
     );
   }
 
