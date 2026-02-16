@@ -172,6 +172,54 @@ pub(crate) fn streaming_prebuffer_target_samples(
     (target_samples, timeout)
 }
 
+pub(crate) fn streaming_prebuffer_interactive_wait(
+    output_backend_id: &str,
+    sample_rate: u32,
+    channels: usize,
+    capacity_samples: usize,
+    duration_seconds: f64,
+    kind: StreamingPrebufferKind,
+    override_seconds: Option<f64>,
+) -> (usize, Duration) {
+    let (target_samples, timeout) = streaming_prebuffer_target_samples(
+        output_backend_id,
+        sample_rate,
+        channels,
+        capacity_samples,
+        duration_seconds,
+        kind,
+        override_seconds,
+    );
+
+    if target_samples == 0 {
+        return (0, Duration::from_millis(0));
+    }
+
+    let channels = channels.max(1);
+    let sample_rate = sample_rate.max(1) as f64;
+    let channels_f64 = channels as f64;
+    let cap_seconds = match kind {
+        StreamingPrebufferKind::StartOrSeek => 0.30,
+        StreamingPrebufferKind::Crossfade => 0.45,
+    };
+    let mut cap_samples = ((sample_rate * channels_f64 * cap_seconds).ceil() as usize)
+        .clamp(channels * 32, capacity_samples.max(1));
+
+    if duration_seconds.is_finite() && duration_seconds > 0.0 {
+        let max_samples_by_duration =
+            (sample_rate * duration_seconds * channels_f64).ceil() as usize;
+        cap_samples = cap_samples.min(max_samples_by_duration.max(1));
+    }
+
+    let capped_target = target_samples.min(cap_samples.max(1));
+    let timeout_cap = match kind {
+        StreamingPrebufferKind::StartOrSeek => Duration::from_millis(220),
+        StreamingPrebufferKind::Crossfade => Duration::from_millis(320),
+    };
+
+    (capped_target, timeout.min(timeout_cap))
+}
+
 fn streaming_min_start_bounds(
     output_backend_id: &str,
     underrun_recovery_active: bool,
@@ -1278,7 +1326,7 @@ impl NativeAudioEngine {
         // For streaming playback, prebuffer some decoded samples before attaching the source to the sink.
         if let Some(streaming) = &self.streaming {
             let channels = meta.channels.max(1) as usize;
-            let (target_samples, timeout) = streaming_prebuffer_target_samples(
+            let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
                 self.output_backend.id(),
                 meta.sample_rate,
                 channels,
@@ -1394,7 +1442,7 @@ impl NativeAudioEngine {
         // For streaming playback, wait for a small prebuffer to reduce underrun clicks/noise.
         if let Some(streaming) = &new_streaming {
             let channels = meta.channels.max(1) as usize;
-            let (target_samples, timeout) = streaming_prebuffer_target_samples(
+            let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
                 self.output_backend.id(),
                 meta.sample_rate,
                 channels,
@@ -2045,8 +2093,7 @@ impl NativeAudioEngine {
                     as usize)
                     .clamp(1, target_samples);
                 let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
-                    (streaming.render_queue.len_samples() as f64)
-                        / (sample_rate * channels_f64)
+                    (streaming.render_queue.len_samples() as f64) / (sample_rate * channels_f64)
                 } else {
                     0.0
                 };
@@ -2626,7 +2673,7 @@ impl NativeAudioEngine {
                 } else {
                     self.duration
                 };
-                let (target_samples, timeout) = streaming_prebuffer_target_samples(
+                let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
                     self.output_backend.id(),
                     self.decoded_sample_rate,
                     channels,
@@ -3151,6 +3198,43 @@ mod tests {
         }
     }
 
+    fn make_prepared_load_fixture(
+        track_path: &str,
+        sink: Arc<dyn AudioSink>,
+        channels: u16,
+        sample_rate: u32,
+    ) -> PreparedLoad {
+        let decoded = Arc::new(vec![0.0f32; channels as usize * 1024]);
+        let source = Box::new(SharedSamplesSource::new(
+            decoded.clone(),
+            channels,
+            sample_rate,
+            0,
+        )) as crate::audio::output::BoxedSource;
+        let (mixer, _mixer_source) = PlaybackMixerSource::new(source, channels, sample_rate);
+
+        PreparedLoad {
+            track_path: PathBuf::from(track_path),
+            sink,
+            output_info: OutputStreamInfo {
+                device_id: Some("fixture-device-id".to_string()),
+                device_name: Some("fixture-device-name".to_string()),
+                output_sample_rate: Some(sample_rate),
+            },
+            mixer,
+            input_id: super::SYMPHONIA_INPUT_ID,
+            meta: crate::audio::input::AudioInputMeta {
+                channels,
+                sample_rate,
+                source_sample_rate: sample_rate,
+                bit_depth: Some(24),
+                duration: 180.0,
+            },
+            streaming: None,
+            decoded_samples: Some(decoded),
+        }
+    }
+
     #[test]
     fn prebuffer_defaults_follow_output_backend_profiles() {
         let sample_rate = 48_000u32;
@@ -3203,16 +3287,65 @@ mod tests {
     }
 
     #[test]
+    fn interactive_prebuffer_wait_caps_start_seek_to_sub_second_target() {
+        let sample_rate = 48_000u32;
+        let channels = 2usize;
+        let capacity = sample_rate as usize * channels * 10;
+
+        let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
+            "rodio-cpal",
+            sample_rate,
+            channels,
+            capacity,
+            120.0,
+            StreamingPrebufferKind::StartOrSeek,
+            Some(4.0),
+        );
+
+        assert!(target_samples > 0);
+        assert!(target_samples <= (sample_rate as usize * channels * 3) / 10);
+        assert!(timeout <= Duration::from_millis(220));
+    }
+
+    #[test]
+    fn interactive_prebuffer_wait_caps_crossfade_to_short_timeout() {
+        let sample_rate = 48_000u32;
+        let channels = 2usize;
+        let capacity = sample_rate as usize * channels * 10;
+
+        let (target_samples, timeout) = streaming_prebuffer_interactive_wait(
+            "rodio-cpal",
+            sample_rate,
+            channels,
+            capacity,
+            120.0,
+            StreamingPrebufferKind::Crossfade,
+            Some(3.0),
+        );
+
+        assert!(target_samples > 0);
+        assert!(target_samples <= (sample_rate as usize * channels * 9) / 20);
+        assert!(timeout <= Duration::from_millis(320));
+    }
+
+    #[test]
     fn default_decode_mode_is_streaming() {
         let engine = NativeAudioEngine::new();
-        assert_eq!(engine.streaming_buffer_settings_payload().decode_mode, "streaming");
-        assert_eq!(engine.current_decode_mode(), AudioInputDecodeMode::Streaming);
+        assert_eq!(
+            engine.streaming_buffer_settings_payload().decode_mode,
+            "streaming"
+        );
+        assert_eq!(
+            engine.current_decode_mode(),
+            AudioInputDecodeMode::Streaming
+        );
     }
 
     #[test]
     fn streaming_min_start_bounds_allow_fast_click_to_play() {
         let (shared_cap, shared_floor) = streaming_min_start_bounds("rodio-cpal", false);
-        let (exclusive_cap, exclusive_floor) = streaming_min_start_bounds("wasapi-exclusive", false);
+        let (exclusive_cap, exclusive_floor) =
+            streaming_min_start_bounds("wasapi-exclusive", false);
 
         assert!(
             shared_cap <= 0.50,
@@ -3388,6 +3521,48 @@ mod tests {
 
         // Legacy callers without sequence remain compatible.
         assert!(engine.should_accept_seek_command(None, None));
+    }
+
+    #[test]
+    fn load_operation_latest_token_wins_and_stale_prepare_is_aborted() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let stale_op = engine.begin_load_operation();
+        let stale_sink = Arc::new(FlagSink::default());
+        let stale_sink_dyn: Arc<dyn AudioSink> = stale_sink.clone();
+        let stale_prepared = make_prepared_load_fixture("stale.wav", stale_sink_dyn, 2, 48_000);
+
+        let latest_op = engine.begin_load_operation();
+        let latest_sink = Arc::new(FlagSink::default());
+        let latest_sink_dyn: Arc<dyn AudioSink> = latest_sink.clone();
+        let latest_prepared = make_prepared_load_fixture("latest.wav", latest_sink_dyn, 2, 48_000);
+
+        let latest_committed = engine
+            .commit_load_operation(latest_op.token, latest_prepared)
+            .expect("latest load commit should succeed");
+        assert!(latest_committed);
+        assert_eq!(
+            engine.current_track.as_deref(),
+            Some(Path::new("latest.wav"))
+        );
+
+        let stale_committed = engine
+            .commit_load_operation(stale_op.token, stale_prepared)
+            .expect("stale load commit should return false");
+        assert!(!stale_committed);
+        assert!(
+            stale_sink.stopped.load(Ordering::Acquire),
+            "stale prepared sink should be stopped during abort"
+        );
+        assert!(
+            !latest_sink.stopped.load(Ordering::Acquire),
+            "latest committed sink must remain active"
+        );
+        assert_eq!(
+            engine.current_track.as_deref(),
+            Some(Path::new("latest.wav"))
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub(crate) mod emitter;
 pub(crate) mod engine;
 pub(crate) mod events;
 pub mod input;
+pub(crate) mod kernel;
 pub(crate) mod mixer;
 pub mod output;
 pub(crate) mod pipeline;

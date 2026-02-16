@@ -63,3 +63,17 @@ These presets are UI-layer combinations only; policy remains a stable host contr
 - New clients should treat unknown enum values defensively and fallback to `round`.
 - Contract additions must keep backward-compatible defaults unless a major version migration is explicitly introduced.
 
+## 6. Interactive Wait Cap Contract (Transport UX Guardrail)
+
+To prevent slow click-to-play/track-switch behavior under stressed robustness policy, interactive transport operations must obey bounded wait caps on command path:
+
+- Start/seek interactive prebuffer target cap: `0.30s`
+- Start/seek interactive wait timeout cap: `220ms`
+- Crossfade interactive prebuffer target cap: `0.45s`
+- Crossfade interactive wait timeout cap: `320ms`
+
+Implementation reference:
+
+- `streaming_prebuffer_interactive_wait(...)` in `apps/desktop/src-tauri/src/audio/engine.rs`
+
+This guardrail is intentionally independent from steady-state robustness policy so that transport responsiveness remains deterministic.
