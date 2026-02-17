@@ -85,11 +85,51 @@ const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
   { stage: 'post-playback', delayMs: 20_000 },
 ];
 
+const COMMIT_HASH_ENV_KEYS: ReadonlyArray<string> = [
+  'PMP_GIT_COMMIT',
+  'PMP_COMMIT_SHA',
+  'VITE_GIT_COMMIT',
+  'VITE_COMMIT_SHA',
+  'GIT_COMMIT',
+  'COMMIT_SHA',
+  'CI_COMMIT_SHA',
+  'SOURCE_VERSION',
+  'VERCEL_GIT_COMMIT_SHA',
+  'GITHUB_SHA',
+];
+
 function formatBytesToMb(value: number | undefined | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   const mb = value / 1024 / 1024;
   const normalized = Object.is(mb, -0) ? 0 : mb;
   return normalized.toFixed(1);
+}
+
+function sanitizeFileSegment(value: string, fallback: string): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return fallback;
+  const safe = normalized.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-');
+  return safe || fallback;
+}
+
+function resolveCommitHash(snapshot: DebugEnvSnapshot): string {
+  for (const key of COMMIT_HASH_ENV_KEYS) {
+    const value = snapshot[key];
+    if (typeof value !== 'string') continue;
+    const normalized = value.trim();
+    if (!normalized) continue;
+    return normalized;
+  }
+  return 'unknown';
+}
+
+function shortCommitHash(value: string): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return 'unknown';
+  if (/^[0-9a-fA-F]{12,40}$/.test(normalized)) {
+    return normalized.slice(0, 12);
+  }
+  return normalized;
 }
 
 function formatTriBool(value: TriBool): 'auto' | 'on' | 'off' {
@@ -302,6 +342,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [busy, setBusy] = useState(false);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmRestartIntoDebug, setConfirmRestartIntoDebug] = useState(false);
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
@@ -512,6 +553,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     const comparison = latestThreeStageComparison;
     if (!comparison) {
       setError(t('debug.center.memory.baselines.copySummary.emptyError'));
+      setStatusMessage(null);
       return;
     }
 
@@ -532,8 +574,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     try {
       await navigator.clipboard.writeText(summary);
       setError(null);
+      setStatusMessage(t('debug.center.memory.baselines.copySummary.copied'));
     } catch {
       setError(t('debug.center.memory.baselines.copySummary.copyFailed'));
+      setStatusMessage(null);
     }
   }, [latestThreeStageComparison, t]);
 
@@ -555,6 +599,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const handleExportBaselinesJson = useCallback(() => {
     if (memoryBaselines.length === 0) {
       setError(t('debug.center.memory.baselines.export.emptyError'));
+      setStatusMessage(null);
       return;
     }
 
@@ -565,11 +610,14 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       json,
       'application/json;charset=utf-8'
     );
+    setError(null);
+    setStatusMessage(t('debug.center.memory.baselines.export.jsonDone'));
   }, [downloadTextFile, memoryBaselines, t]);
 
   const handleExportBaselinesCsv = useCallback(() => {
     if (memoryBaselines.length === 0) {
       setError(t('debug.center.memory.baselines.export.emptyError'));
+      setStatusMessage(null);
       return;
     }
 
@@ -580,7 +628,118 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       csv,
       'text/csv;charset=utf-8'
     );
+    setError(null);
+    setStatusMessage(t('debug.center.memory.baselines.export.csvDone'));
   }, [downloadTextFile, memoryBaselines, t]);
+
+  const handleWriteLatestScenarioReport = useCallback(async () => {
+    const comparison = latestThreeStageComparison;
+    if (!comparison) {
+      setError(t('debug.center.memory.baselines.writeReport.emptyError'));
+      setStatusMessage(null);
+      return;
+    }
+
+    const commit = shortCommitHash(resolveCommitHash(envSnapshot));
+    const reportAtMs = Date.now();
+    const reportAtIso = new Date(reportAtMs).toISOString();
+    const scenarioSamples = memoryBaselines
+      .filter((item) => item.scenarioId === comparison.scenarioId)
+      .slice()
+      .sort((left, right) => left.capturedAtMs - right.capturedAtMs);
+
+    const summaryLine = t('debug.center.memory.baselines.copySummary.line', {
+      scenarioId: comparison.scenarioId,
+      sampleCount: comparison.sampleCount,
+      startAt: new Date(comparison.startAtMs).toLocaleString(),
+      endAt: new Date(comparison.endAtMs).toLocaleString(),
+      startStage: t(`debug.center.memory.baselines.stage.${comparison.startStage}`),
+      endStage: t(`debug.center.memory.baselines.stage.${comparison.endStage}`),
+      jsHeapDeltaMb: formatBytesToMb(comparison.deltaJsHeapUsedBytes),
+      webview2PrivateDeltaMb: formatBytesToMb(comparison.deltaWebview2PrivateBytes),
+      webview2WsDeltaMb: formatBytesToMb(comparison.deltaWebview2WorkingSetBytes),
+      coverBlobDeltaMb: formatBytesToMb(comparison.deltaCoverBlobUrlTotalBytes),
+      coverDecodedDeltaMb: formatBytesToMb(comparison.deltaCoverDecodedEstimateTotalBytes),
+    });
+
+    const lines: string[] = [
+      '# PMP Memory Baseline Scenario Report',
+      '',
+      `- generated_at: ${reportAtIso}`,
+      `- commit: ${commit}`,
+      `- scenario_id: ${comparison.scenarioId}`,
+      `- sample_count: ${comparison.sampleCount}`,
+      '',
+      '## Summary',
+      '',
+      summaryLine,
+      '',
+      '## Deltas (bytes)',
+      '',
+      `- navigation_history_bytes: ${comparison.deltaNavigationHistoryBytes}`,
+      `- cover_blob_bytes: ${comparison.deltaCoverBlobUrlTotalBytes}`,
+      `- cover_decoded_bytes: ${comparison.deltaCoverDecodedEstimateTotalBytes}`,
+      `- js_heap_bytes: ${comparison.deltaJsHeapUsedBytes ?? 'n/a'}`,
+      `- webview2_private_bytes: ${comparison.deltaWebview2PrivateBytes ?? 'n/a'}`,
+      `- webview2_working_set_bytes: ${comparison.deltaWebview2WorkingSetBytes ?? 'n/a'}`,
+      `- tree_private_bytes: ${comparison.deltaTreePrivateBytes ?? 'n/a'}`,
+      `- tree_working_set_bytes: ${comparison.deltaTreeWorkingSetBytes ?? 'n/a'}`,
+      '',
+      '## Samples',
+      '',
+      '| stage | captured_at | js_heap_mb | webview2_private_mb | webview2_ws_mb | cover_blob_mb | cover_decoded_mb |',
+      '| --- | --- | ---: | ---: | ---: | ---: | ---: |',
+      ...scenarioSamples.map(
+        (sample) =>
+          `| ${sample.stage} | ${new Date(sample.capturedAtMs).toISOString()} | ${formatBytesToMb(
+            sample.jsHeapUsedBytes
+          )} | ${formatBytesToMb(sample.webview2PrivateBytes)} | ${formatBytesToMb(
+            sample.webview2WorkingSetBytes
+          )} | ${formatBytesToMb(sample.coverBlobUrlTotalBytes)} | ${formatBytesToMb(
+            sample.coverDecodedEstimateTotalBytes
+          )} |`
+      ),
+      '',
+    ];
+
+    const reportText = lines.join('\n');
+    const safeTs = new Date(reportAtMs).toISOString().replace(/[:.]/g, '-');
+    const safeScenario = sanitizeFileSegment(comparison.scenarioId, 'scenario');
+    const safeCommit = sanitizeFileSegment(commit, 'unknown');
+    const fileName = `memory-baseline-${safeTs}-${safeScenario}-${safeCommit}.md`;
+
+    if (isTauri) {
+      try {
+        const fs = await import('@tauri-apps/api/fs');
+        const relativePath = `logs/${fileName}`;
+        await fs.createDir('logs', { dir: fs.BaseDirectory.AppData, recursive: true });
+        await fs.writeFile({ path: relativePath, contents: reportText }, { dir: fs.BaseDirectory.AppData });
+        setError(null);
+        setStatusMessage(
+          t('debug.center.memory.baselines.writeReport.saved', {
+            path: relativePath,
+            commit,
+          })
+        );
+        return;
+      } catch {
+        setError(t('debug.center.memory.baselines.writeReport.failed'));
+        setStatusMessage(null);
+        return;
+      }
+    }
+
+    downloadTextFile(fileName, reportText, 'text/markdown;charset=utf-8');
+    setError(null);
+    setStatusMessage(t('debug.center.memory.baselines.writeReport.downloaded', { commit }));
+  }, [
+    downloadTextFile,
+    envSnapshot,
+    isTauri,
+    latestThreeStageComparison,
+    memoryBaselines,
+    t,
+  ]);
 
   const persist = useCallback(
     async (next: DebugConfig) => {
@@ -743,6 +902,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
           {pendingRestart ? <p className="settings-card-note">{t('debug.center.mode.note.restartRequired')}</p> : null}
           {busy ? <p className="settings-card-note">{t('debug.center.mode.note.saving')}</p> : null}
+          {statusMessage ? (
+            <p className="settings-card-note" style={{ color: 'rgba(140,255,190,0.9)' }}>
+              {statusMessage}
+            </p>
+          ) : null}
           {error ? <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>{error}</p> : null}
         </div>
 
@@ -1048,6 +1212,16 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 disabled={!latestThreeStageComparison}
               >
                 {t('debug.center.memory.actions.copyLatestScenarioSummary')}
+              </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void handleWriteLatestScenarioReport();
+                }}
+                disabled={!latestThreeStageComparison}
+              >
+                {t('debug.center.memory.actions.writeLatestScenarioReport')}
               </button>
               <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
                 {t('debug.center.memory.actions.clearCoverCaches')}
