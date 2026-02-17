@@ -76,6 +76,7 @@ pub struct LibraryTrackQueryInput {
     pub search_query: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub track_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -642,6 +643,11 @@ pub fn query_tracks(
             .and_then(|item| item.album.as_ref())
             .map(|value| value.trim().to_ascii_lowercase())
             .filter(|value| !value.is_empty());
+        let normalized_track_id = query
+            .as_ref()
+            .and_then(|item| item.track_id.as_ref())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         let search_enabled_flag = if normalized_search_query.is_some() {
             1_i64
         } else {
@@ -657,11 +663,17 @@ pub fn query_tracks(
         } else {
             0_i64
         };
+        let track_id_enabled_flag = if normalized_track_id.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let search_like_pattern = normalized_search_query
             .map(|value| format!("%{value}%"))
             .unwrap_or_else(|| "%".to_string());
         let artist_exact_value = normalized_artist.unwrap_or_default();
         let album_exact_value = normalized_album.unwrap_or_default();
+        let track_id_exact_value = normalized_track_id.unwrap_or_default();
 
         let mut stmt = conn
             .prepare(
@@ -697,6 +709,7 @@ pub fn query_tracks(
                   )
                   AND (?7 = 0 OR LOWER(TRIM(COALESCE(t.artist, ''))) = ?8)
                   AND (?9 = 0 OR LOWER(TRIM(COALESCE(t.album, ''))) = ?10)
+                  AND (?11 = 0 OR t.id = ?12)
                 ORDER BY
                   LOWER(COALESCE(t.title, t.file_path)) ASC,
                   t.updated_at_ms DESC,
@@ -720,6 +733,8 @@ pub fn query_tracks(
                     artist_exact_value,
                     album_enabled_flag,
                     album_exact_value,
+                    track_id_enabled_flag,
+                    track_id_exact_value,
                 ],
                 |row| {
                     Ok(LibraryTrackRecord {

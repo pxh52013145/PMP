@@ -577,6 +577,31 @@ export class MusicLibraryService {
     }
   }
 
+  private async tryGetTrackByIdFromNativeDb(trackId: string): Promise<Track | null> {
+    if (!isTauriRuntime()) return null;
+    const normalizedTrackId = trackId.trim();
+    if (!normalizedTrackId) return null;
+
+    try {
+      const nativeTracks = await queryNativeLibraryTracks({
+        limit: 1,
+        offset: 0,
+        includeMissing: true,
+        visibleOnly: false,
+        trackId: normalizedTrackId,
+      });
+
+      if (nativeTracks.length === 0) {
+        return null;
+      }
+
+      return this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(nativeTracks[0]));
+    } catch (error) {
+      console.warn('[MusicLibraryService] native track-by-id query failed, fallback to IndexedDB:', error);
+      return null;
+    }
+  }
+
   private async tryGetTracksByArtistFromNativeDb(artist: string): Promise<Track[] | null> {
     if (!isTauriRuntime()) return null;
     const normalizedArtist = artist.trim();
@@ -3116,6 +3141,11 @@ export class MusicLibraryService {
   }
 
   async getTrackById(trackId: string): Promise<Track | null> {
+    const nativeTrack = await this.tryGetTrackByIdFromNativeDb(trackId);
+    if (nativeTrack) {
+      return nativeTrack;
+    }
+
     const db = await this.ensureDB();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');

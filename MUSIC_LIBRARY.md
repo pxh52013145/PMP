@@ -282,6 +282,20 @@ Boundary in this phase:
 
 - Fallback remains active for empty/error native path to preserve current UX during migration convergence.
 
+### 4.15 Native read-path expansion (`getTrackById`)
+
+This round migrates single-track detail lookup to native-first:
+
+- Track query contract now supports exact `trackId` filter.
+- Backend `query_tracks` supports optional `track_id` equality filter while keeping existing behavior for
+  visibility/missing/search/artist/album constraints.
+- Frontend bridge supports `trackId` in `NativeLibraryTrackQuery`.
+- `MusicLibraryService.getTrackById(...)` now uses native-first lookup and falls back to IndexedDB on miss/error.
+
+Boundary in this phase:
+
+- Empty native result still falls back to IndexedDB to keep migration-safe behavior.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
