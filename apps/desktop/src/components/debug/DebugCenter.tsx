@@ -51,6 +51,30 @@ type MemoryBaselineSample = {
   treePrivateBytes?: number;
 };
 
+type MemoryBaselineScenarioComparison = {
+  scenarioId: string;
+  sampleCount: number;
+  startAtMs: number;
+  endAtMs: number;
+  startStage: MemoryBaselineSample['stage'];
+  endStage: MemoryBaselineSample['stage'];
+  deltaNavigationHistoryBytes: number;
+  deltaCoverBlobUrlTotalBytes: number;
+  deltaCoverDecodedEstimateTotalBytes: number;
+  deltaJsHeapUsedBytes?: number;
+  deltaWebview2WorkingSetBytes?: number;
+  deltaWebview2PrivateBytes?: number;
+  deltaTreeWorkingSetBytes?: number;
+  deltaTreePrivateBytes?: number;
+};
+
+type MemoryBaselineExportPayload = {
+  exportedAtMs: number;
+  sampleCount: number;
+  samples: MemoryBaselineSample[];
+  scenarioComparisons: MemoryBaselineScenarioComparison[];
+};
+
 const MEMORY_BASELINE_MAX_ENTRIES = 20;
 const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
   stage: MemoryBaselineSample['stage'];
@@ -108,6 +132,163 @@ function buildPowerShellSnippet(config: DebugConfig): string {
 
   lines.push('pnpm --filter @pixel-matrix/desktop dev');
   return lines.join('\n');
+}
+
+function diffOptionalNumber(current?: number, previous?: number): number | undefined {
+  if (typeof current !== 'number' || !Number.isFinite(current)) return undefined;
+  if (typeof previous !== 'number' || !Number.isFinite(previous)) return undefined;
+  return current - previous;
+}
+
+function computeScenarioComparisons(
+  samples: MemoryBaselineSample[]
+): MemoryBaselineScenarioComparison[] {
+  const grouped = new Map<string, MemoryBaselineSample[]>();
+  for (const sample of samples) {
+    if (!sample.scenarioId) continue;
+    const list = grouped.get(sample.scenarioId) ?? [];
+    list.push(sample);
+    grouped.set(sample.scenarioId, list);
+  }
+
+  const comparisons: MemoryBaselineScenarioComparison[] = [];
+  for (const [scenarioId, list] of grouped.entries()) {
+    if (list.length < 2) continue;
+    const ordered = list.slice().sort((left, right) => left.capturedAtMs - right.capturedAtMs);
+    const start = ordered[0];
+    const end = ordered[ordered.length - 1];
+    if (!start || !end) continue;
+
+    comparisons.push({
+      scenarioId,
+      sampleCount: ordered.length,
+      startAtMs: start.capturedAtMs,
+      endAtMs: end.capturedAtMs,
+      startStage: start.stage,
+      endStage: end.stage,
+      deltaNavigationHistoryBytes: end.navigationHistoryBytes - start.navigationHistoryBytes,
+      deltaCoverBlobUrlTotalBytes: end.coverBlobUrlTotalBytes - start.coverBlobUrlTotalBytes,
+      deltaCoverDecodedEstimateTotalBytes:
+        end.coverDecodedEstimateTotalBytes - start.coverDecodedEstimateTotalBytes,
+      deltaJsHeapUsedBytes: diffOptionalNumber(end.jsHeapUsedBytes, start.jsHeapUsedBytes),
+      deltaWebview2WorkingSetBytes: diffOptionalNumber(
+        end.webview2WorkingSetBytes,
+        start.webview2WorkingSetBytes
+      ),
+      deltaWebview2PrivateBytes: diffOptionalNumber(end.webview2PrivateBytes, start.webview2PrivateBytes),
+      deltaTreeWorkingSetBytes: diffOptionalNumber(end.treeWorkingSetBytes, start.treeWorkingSetBytes),
+      deltaTreePrivateBytes: diffOptionalNumber(end.treePrivateBytes, start.treePrivateBytes),
+    });
+  }
+
+  return comparisons.sort((left, right) => right.endAtMs - left.endAtMs);
+}
+
+function buildMemoryBaselineExportPayload(samples: MemoryBaselineSample[]): MemoryBaselineExportPayload {
+  return {
+    exportedAtMs: Date.now(),
+    sampleCount: samples.length,
+    samples: samples.slice(),
+    scenarioComparisons: computeScenarioComparisons(samples),
+  };
+}
+
+function toCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const raw = String(value);
+  if (!/[",\n\r]/.test(raw)) return raw;
+  return `"${raw.replace(/"/g, '""')}"`;
+}
+
+function buildMemoryBaselineCsv(payload: MemoryBaselineExportPayload): string {
+  const sampleHeader = [
+    'sample_id',
+    'captured_at_iso',
+    'captured_at_ms',
+    'stage',
+    'scenario_id',
+    'navigation_history_bytes',
+    'js_heap_used_bytes',
+    'cover_blob_total_bytes',
+    'cover_decoded_total_bytes',
+    'cover_blob_entries',
+    'cover_decoded_entries',
+    'cover_url_entries',
+    'album_cover_entries',
+    'webview2_working_set_bytes',
+    'webview2_private_bytes',
+    'tree_working_set_bytes',
+    'tree_private_bytes',
+  ];
+
+  const sampleRows = payload.samples.map((sample) => [
+    sample.id,
+    new Date(sample.capturedAtMs).toISOString(),
+    sample.capturedAtMs,
+    sample.stage,
+    sample.scenarioId ?? '',
+    sample.navigationHistoryBytes,
+    sample.jsHeapUsedBytes,
+    sample.coverBlobUrlTotalBytes,
+    sample.coverDecodedEstimateTotalBytes,
+    sample.coverBlobUrlCacheEntries,
+    sample.coverDecodedEstimateEntries,
+    sample.coverUrlCacheEntries,
+    sample.albumCoverUrlCacheEntries,
+    sample.webview2WorkingSetBytes,
+    sample.webview2PrivateBytes,
+    sample.treeWorkingSetBytes,
+    sample.treePrivateBytes,
+  ]);
+
+  const comparisonHeader = [
+    'scenario_id',
+    'sample_count',
+    'start_at_iso',
+    'end_at_iso',
+    'start_stage',
+    'end_stage',
+    'delta_navigation_history_bytes',
+    'delta_cover_blob_total_bytes',
+    'delta_cover_decoded_total_bytes',
+    'delta_js_heap_used_bytes',
+    'delta_webview2_working_set_bytes',
+    'delta_webview2_private_bytes',
+    'delta_tree_working_set_bytes',
+    'delta_tree_private_bytes',
+  ];
+
+  const comparisonRows = payload.scenarioComparisons.map((item) => [
+    item.scenarioId,
+    item.sampleCount,
+    new Date(item.startAtMs).toISOString(),
+    new Date(item.endAtMs).toISOString(),
+    item.startStage,
+    item.endStage,
+    item.deltaNavigationHistoryBytes,
+    item.deltaCoverBlobUrlTotalBytes,
+    item.deltaCoverDecodedEstimateTotalBytes,
+    item.deltaJsHeapUsedBytes,
+    item.deltaWebview2WorkingSetBytes,
+    item.deltaWebview2PrivateBytes,
+    item.deltaTreeWorkingSetBytes,
+    item.deltaTreePrivateBytes,
+  ]);
+
+  const section = (header: string[], rows: unknown[][]): string => {
+    const headerLine = header.map(toCsvCell).join(',');
+    const rowLines = rows.map((row) => row.map(toCsvCell).join(','));
+    return [headerLine, ...rowLines].join('\n');
+  };
+
+  return [
+    '# memory_baseline_samples',
+    section(sampleHeader, sampleRows),
+    '',
+    '# memory_baseline_scenario_comparisons',
+    section(comparisonHeader, comparisonRows),
+    '',
+  ].join('\n');
 }
 
 export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings' }) {
@@ -329,6 +510,51 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       ),
     };
   }, [lastThreeStageScenarioId, memoryBaselines]);
+
+  const downloadTextFile = useCallback((fileName: string, content: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 0);
+  }, []);
+
+  const handleExportBaselinesJson = useCallback(() => {
+    if (memoryBaselines.length === 0) {
+      setError(t('debug.center.memory.baselines.export.emptyError'));
+      return;
+    }
+
+    const payload = buildMemoryBaselineExportPayload(memoryBaselines);
+    const json = JSON.stringify(payload, null, 2);
+    downloadTextFile(
+      `memory-baselines-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+      json,
+      'application/json;charset=utf-8'
+    );
+  }, [downloadTextFile, memoryBaselines, t]);
+
+  const handleExportBaselinesCsv = useCallback(() => {
+    if (memoryBaselines.length === 0) {
+      setError(t('debug.center.memory.baselines.export.emptyError'));
+      return;
+    }
+
+    const payload = buildMemoryBaselineExportPayload(memoryBaselines);
+    const csv = buildMemoryBaselineCsv(payload);
+    downloadTextFile(
+      `memory-baselines-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      csv,
+      'text/csv;charset=utf-8'
+    );
+  }, [downloadTextFile, memoryBaselines, t]);
 
   const persist = useCallback(
     async (next: DebugConfig) => {
@@ -770,6 +996,22 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </button>
               <button type="button" className="settings-action-btn" onClick={clearMemoryBaselines}>
                 {t('debug.center.memory.actions.clearBaselines')}
+              </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={handleExportBaselinesJson}
+                disabled={memoryBaselines.length === 0}
+              >
+                {t('debug.center.memory.actions.exportBaselinesJson')}
+              </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={handleExportBaselinesCsv}
+                disabled={memoryBaselines.length === 0}
+              >
+                {t('debug.center.memory.actions.exportBaselinesCsv')}
               </button>
               <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
                 {t('debug.center.memory.actions.clearCoverCaches')}

@@ -441,6 +441,7 @@ Operational helper now available in Debug Center:
 
 - `Debug Center -> Memory / Cache -> Capture baseline`
 - `Debug Center -> Memory / Cache -> Capture 3-stage baseline`
+- `Debug Center -> Memory / Cache -> Export baselines JSON / CSV`
 - Samples are persisted at storage key:
   - `STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1`
   - value type: array of manual memory snapshots (latest-first, capped)
@@ -455,6 +456,15 @@ Operational helper now available in Debug Center:
   - JS heap
   - WebView2 Private/WS
   - cover blob/decoded estimates
+
+Export payload notes:
+
+- JSON includes:
+  - raw baseline samples
+  - scenario-level comparisons (start/end + byte deltas)
+- CSV includes two sections:
+  - `memory_baseline_samples`
+  - `memory_baseline_scenario_comparisons`
 
 Only after this evidence loop should we decide whether to prioritize:
 
