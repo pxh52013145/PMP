@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
@@ -35,6 +35,8 @@ type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats
 type MemoryBaselineSample = {
   id: string;
   capturedAtMs: number;
+  stage: 'manual' | 'pre-library' | 'post-library' | 'post-playback';
+  scenarioId?: string;
   navigationHistoryBytes: number;
   jsHeapUsedBytes?: number;
   coverBlobUrlTotalBytes: number;
@@ -50,10 +52,20 @@ type MemoryBaselineSample = {
 };
 
 const MEMORY_BASELINE_MAX_ENTRIES = 20;
+const THREE_STAGE_CAPTURE_PLAN: ReadonlyArray<{
+  stage: MemoryBaselineSample['stage'];
+  delayMs: number;
+}> = [
+  { stage: 'pre-library', delayMs: 0 },
+  { stage: 'post-library', delayMs: 8_000 },
+  { stage: 'post-playback', delayMs: 20_000 },
+];
 
 function formatBytesToMb(value: number | undefined | null): string {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '-';
-  return (value / 1024 / 1024).toFixed(1);
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  const mb = value / 1024 / 1024;
+  const normalized = Object.is(mb, -0) ? 0 : mb;
+  return normalized.toFixed(1);
 }
 
 function formatTriBool(value: TriBool): 'auto' | 'on' | 'off' {
@@ -117,6 +129,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
     readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
   );
+  const [threeStageBaselineRunning, setThreeStageBaselineRunning] = useState(false);
+  const [lastThreeStageScenarioId, setLastThreeStageScenarioId] = useState<string | null>(null);
+  const threeStageCaptureTimersRef = useRef<number[]>([]);
 
   const [windowCommDebug, setWindowCommDebug] = usePersistentSetting<string>(
     WINDOW_COMM_DEBUG_KEY,
@@ -157,7 +172,18 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     }
   }, [isTauri]);
 
-  const captureMemoryBaseline = useCallback(async () => {
+  const clearThreeStageCaptureTimers = useCallback(() => {
+    if (threeStageCaptureTimersRef.current.length === 0) return;
+    for (const timer of threeStageCaptureTimersRef.current) {
+      window.clearTimeout(timer);
+    }
+    threeStageCaptureTimersRef.current = [];
+  }, []);
+
+  const captureMemoryBaseline = useCallback(async (options?: {
+    stage?: MemoryBaselineSample['stage'];
+    scenarioId?: string;
+  }) => {
     const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
     let processTotals: ProcessPerfTotalsSnapshot | null = null;
     if (isTauri) {
@@ -177,6 +203,8 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     const sample: MemoryBaselineSample = {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       capturedAtMs: Date.now(),
+      stage: options?.stage ?? 'manual',
+      scenarioId: options?.scenarioId,
       navigationHistoryBytes: navigationHistoryStats.bytes,
       jsHeapUsedBytes,
       coverBlobUrlTotalBytes: coverStats.coverBlobUrlTotalBytes,
@@ -196,12 +224,38 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       writeJson(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, next, { mode: 'idle', debounceMs: 200 });
       return next;
     });
+    return sample;
   }, [isTauri, navigationHistoryStats.bytes]);
 
+  const runThreeStageBaselineCapture = useCallback(async () => {
+    if (threeStageBaselineRunning) return;
+
+    clearThreeStageCaptureTimers();
+
+    const scenarioId = `baseline-${Date.now().toString(36)}`;
+    setLastThreeStageScenarioId(scenarioId);
+    setThreeStageBaselineRunning(true);
+
+    for (const [index, item] of THREE_STAGE_CAPTURE_PLAN.entries()) {
+      const isLast = index === THREE_STAGE_CAPTURE_PLAN.length - 1;
+      const timer = window.setTimeout(() => {
+        void captureMemoryBaseline({ stage: item.stage, scenarioId }).finally(() => {
+          if (isLast) {
+            setThreeStageBaselineRunning(false);
+          }
+        });
+      }, item.delayMs);
+      threeStageCaptureTimersRef.current.push(timer);
+    }
+  }, [captureMemoryBaseline, clearThreeStageCaptureTimers, threeStageBaselineRunning]);
+
   const clearMemoryBaselines = useCallback(() => {
+    clearThreeStageCaptureTimers();
+    setThreeStageBaselineRunning(false);
+    setLastThreeStageScenarioId(null);
     setMemoryBaselines([]);
     writeJson(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [], { mode: 'idle', debounceMs: 200 });
-  }, []);
+  }, [clearThreeStageCaptureTimers]);
 
   const refresh = useCallback(async () => {
     if (!isTauri) return;
@@ -239,6 +293,42 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   useEffect(() => {
     void refreshMemory();
   }, [refreshMemory]);
+
+  useEffect(() => {
+    return () => {
+      clearThreeStageCaptureTimers();
+    };
+  }, [clearThreeStageCaptureTimers]);
+
+  const latestThreeStageDelta = useMemo(() => {
+    const scenarioId = lastThreeStageScenarioId;
+    if (!scenarioId) return null;
+    const scenarioSamples = memoryBaselines
+      .filter((sample) => sample.scenarioId === scenarioId)
+      .slice()
+      .sort((left, right) => left.capturedAtMs - right.capturedAtMs);
+    if (scenarioSamples.length < 2) return null;
+
+    const start = scenarioSamples[0];
+    const end = scenarioSamples[scenarioSamples.length - 1];
+
+    return {
+      sampleCount: scenarioSamples.length,
+      jsHeapDeltaMb: formatBytesToMb((end.jsHeapUsedBytes ?? 0) - (start.jsHeapUsedBytes ?? 0)),
+      webview2PrivateDeltaMb: formatBytesToMb(
+        (end.webview2PrivateBytes ?? 0) - (start.webview2PrivateBytes ?? 0)
+      ),
+      webview2WsDeltaMb: formatBytesToMb(
+        (end.webview2WorkingSetBytes ?? 0) - (start.webview2WorkingSetBytes ?? 0)
+      ),
+      coverBlobDeltaMb: formatBytesToMb(
+        end.coverBlobUrlTotalBytes - start.coverBlobUrlTotalBytes
+      ),
+      coverDecodedDeltaMb: formatBytesToMb(
+        end.coverDecodedEstimateTotalBytes - start.coverDecodedEstimateTotalBytes
+      ),
+    };
+  }, [lastThreeStageScenarioId, memoryBaselines]);
 
   const persist = useCallback(
     async (next: DebugConfig) => {
@@ -668,6 +758,16 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               >
                 {t('debug.center.memory.actions.captureBaseline')}
               </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void runThreeStageBaselineCapture();
+                }}
+                disabled={threeStageBaselineRunning}
+              >
+                {t('debug.center.memory.actions.captureThreeStage')}
+              </button>
               <button type="button" className="settings-action-btn" onClick={clearMemoryBaselines}>
                 {t('debug.center.memory.actions.clearBaselines')}
               </button>
@@ -684,6 +784,10 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </button>
             </div>
           </div>
+
+          {threeStageBaselineRunning && (
+            <p className="settings-card-note">{t('debug.center.memory.baselines.running')}</p>
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>
@@ -759,6 +863,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   {memoryBaselines.slice(0, 8).map((sample) => (
                     <p className="settings-card-note" key={sample.id}>
                       {t('debug.center.memory.baselines.item', {
+                        stage: t(`debug.center.memory.baselines.stage.${sample.stage}`),
                         at: new Date(sample.capturedAtMs).toLocaleString(),
                         jsHeapMb: formatBytesToMb(sample.jsHeapUsedBytes),
                         webview2PrivateMb: formatBytesToMb(sample.webview2PrivateBytes),
@@ -769,6 +874,18 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                     </p>
                   ))}
                 </div>
+              )}
+              {latestThreeStageDelta && (
+                <p className="settings-card-note">
+                  {t('debug.center.memory.baselines.lastScenarioDelta', {
+                    sampleCount: latestThreeStageDelta.sampleCount,
+                    jsHeapDeltaMb: latestThreeStageDelta.jsHeapDeltaMb,
+                    webview2PrivateDeltaMb: latestThreeStageDelta.webview2PrivateDeltaMb,
+                    webview2WsDeltaMb: latestThreeStageDelta.webview2WsDeltaMb,
+                    coverBlobDeltaMb: latestThreeStageDelta.coverBlobDeltaMb,
+                    coverDecodedDeltaMb: latestThreeStageDelta.coverDecodedDeltaMb,
+                  })}
+                </p>
               )}
             </div>
           </div>

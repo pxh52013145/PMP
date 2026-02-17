@@ -440,9 +440,21 @@ This gives a concrete, repeatable baseline:
 Operational helper now available in Debug Center:
 
 - `Debug Center -> Memory / Cache -> Capture baseline`
+- `Debug Center -> Memory / Cache -> Capture 3-stage baseline`
 - Samples are persisted at storage key:
   - `STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1`
   - value type: array of manual memory snapshots (latest-first, capped)
+
+3-stage capture behavior:
+
+- Stage timeline:
+  - `pre-library` at `t+0s`
+  - `post-library` at `t+8s`
+  - `post-playback` at `t+20s`
+- Debug Center also shows latest scenario delta for:
+  - JS heap
+  - WebView2 Private/WS
+  - cover blob/decoded estimates
 
 Only after this evidence loop should we decide whether to prioritize:
 
