@@ -74,6 +74,8 @@ pub struct LibraryTrackQueryInput {
     pub include_missing: Option<bool>,
     pub visible_only: Option<bool>,
     pub search_query: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,6 +239,14 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
         ));
     }
+
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS local_tracks_artist_idx ON local_tracks(artist);
+        CREATE INDEX IF NOT EXISTS local_tracks_album_idx ON local_tracks(album);
+        "#,
+    )
+    .map_err(|error| format!("Failed to ensure music library query indexes: {error}"))?;
 
     Ok(())
 }
@@ -622,7 +632,27 @@ pub fn query_tracks(
             .and_then(|item| item.search_query.as_ref())
             .map(|value| value.trim().to_ascii_lowercase())
             .filter(|value| !value.is_empty());
+        let normalized_artist = query
+            .as_ref()
+            .and_then(|item| item.artist.as_ref())
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
+        let normalized_album = query
+            .as_ref()
+            .and_then(|item| item.album.as_ref())
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
         let search_enabled_flag = if normalized_search_query.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
+        let artist_enabled_flag = if normalized_artist.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
+        let album_enabled_flag = if normalized_album.is_some() {
             1_i64
         } else {
             0_i64
@@ -630,6 +660,8 @@ pub fn query_tracks(
         let search_like_pattern = normalized_search_query
             .map(|value| format!("%{value}%"))
             .unwrap_or_else(|| "%".to_string());
+        let artist_exact_value = normalized_artist.unwrap_or_default();
+        let album_exact_value = normalized_album.unwrap_or_default();
 
         let mut stmt = conn
             .prepare(
@@ -663,6 +695,8 @@ pub fn query_tracks(
                     OR LOWER(COALESCE(t.album, '')) LIKE ?6
                     OR LOWER(t.file_path) LIKE ?6
                   )
+                  AND (?7 = 0 OR LOWER(TRIM(COALESCE(t.artist, ''))) = ?8)
+                  AND (?9 = 0 OR LOWER(TRIM(COALESCE(t.album, ''))) = ?10)
                 ORDER BY
                   LOWER(COALESCE(t.title, t.file_path)) ASC,
                   t.updated_at_ms DESC,
@@ -682,6 +716,10 @@ pub fn query_tracks(
                     normalized_offset,
                     search_enabled_flag,
                     search_like_pattern,
+                    artist_enabled_flag,
+                    artist_exact_value,
+                    album_enabled_flag,
+                    album_exact_value,
                 ],
                 |row| {
                     Ok(LibraryTrackRecord {

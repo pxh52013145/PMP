@@ -261,6 +261,27 @@ Boundary in this phase:
 - Native album list is only used when `includeStoredCover` is `false`.
 - Any native empty/error path still falls back to IndexedDB to keep existing UX stable.
 
+### 4.14 Native read-path expansion (`getTracksByArtist/getTracksByAlbum`)
+
+This round extends native-first reads for artist/album track-detail views:
+
+- Track query contract now supports exact facet filters:
+  - `artist`
+  - `album`
+- Backend implementation (`music_library_db::query_tracks`) now applies optional
+  case-insensitive exact matching for artist/album while keeping existing visibility/missing/search rules.
+- Added query indexes to improve facet-detail lookup performance:
+  - `local_tracks_artist_idx`
+  - `local_tracks_album_idx`
+- Frontend bridge (`queryNativeLibraryTracks`) now passes optional `artist/album` payload fields.
+- `MusicLibraryService` integration:
+  - `getTracksByArtist(...)` -> native-first + IndexedDB fallback
+  - `getTracksByAlbum(...)` -> native-first + IndexedDB fallback
+
+Boundary in this phase:
+
+- Fallback remains active for empty/error native path to preserve current UX during migration convergence.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

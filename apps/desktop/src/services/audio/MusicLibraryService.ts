@@ -577,6 +577,62 @@ export class MusicLibraryService {
     }
   }
 
+  private async tryGetTracksByArtistFromNativeDb(artist: string): Promise<Track[] | null> {
+    if (!isTauriRuntime()) return null;
+    const normalizedArtist = artist.trim();
+    if (!normalizedArtist) return [];
+
+    try {
+      const nativeTracks = await queryNativeLibraryTracks({
+        includeMissing: false,
+        visibleOnly: true,
+        artist: normalizedArtist,
+      });
+
+      if (nativeTracks.length === 0) {
+        return null;
+      }
+
+      return nativeTracks.map((item) =>
+        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+      );
+    } catch (error) {
+      console.warn(
+        '[MusicLibraryService] native artist track query failed, fallback to IndexedDB:',
+        error
+      );
+      return null;
+    }
+  }
+
+  private async tryGetTracksByAlbumFromNativeDb(album: string): Promise<Track[] | null> {
+    if (!isTauriRuntime()) return null;
+    const normalizedAlbum = album.trim();
+    if (!normalizedAlbum) return [];
+
+    try {
+      const nativeTracks = await queryNativeLibraryTracks({
+        includeMissing: false,
+        visibleOnly: true,
+        album: normalizedAlbum,
+      });
+
+      if (nativeTracks.length === 0) {
+        return null;
+      }
+
+      return nativeTracks.map((item) =>
+        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+      );
+    } catch (error) {
+      console.warn(
+        '[MusicLibraryService] native album track query failed, fallback to IndexedDB:',
+        error
+      );
+      return null;
+    }
+  }
+
   private async tryGetAllArtistsFromNativeDb(): Promise<string[] | null> {
     if (!isTauriRuntime()) return null;
     try {
@@ -3080,6 +3136,11 @@ export class MusicLibraryService {
 
   // 按艺术家获取轨道
   async getTracksByArtist(artist: string): Promise<Track[]> {
+    const nativeTracks = await this.tryGetTracksByArtistFromNativeDb(artist);
+    if (nativeTracks) {
+      return nativeTracks;
+    }
+
     const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {
@@ -3103,6 +3164,11 @@ export class MusicLibraryService {
 
   // 按专辑获取轨道
   async getTracksByAlbum(album: string): Promise<Track[]> {
+    const nativeTracks = await this.tryGetTracksByAlbumFromNativeDb(album);
+    if (nativeTracks) {
+      return nativeTracks;
+    }
+
     const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {
