@@ -354,6 +354,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   );
   const [threeStageBaselineRunning, setThreeStageBaselineRunning] = useState(false);
   const [lastThreeStageScenarioId, setLastThreeStageScenarioId] = useState<string | null>(null);
+  const [pendingAutoWriteScenarioId, setPendingAutoWriteScenarioId] = useState<string | null>(null);
   const threeStageCaptureTimersRef = useRef<number[]>([]);
 
   const [windowCommDebug, setWindowCommDebug] = usePersistentSetting<string>(
@@ -457,6 +458,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
     const scenarioId = `baseline-${Date.now().toString(36)}`;
     setLastThreeStageScenarioId(scenarioId);
+    setPendingAutoWriteScenarioId(null);
     setThreeStageBaselineRunning(true);
 
     for (const [index, item] of THREE_STAGE_CAPTURE_PLAN.entries()) {
@@ -465,6 +467,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         void captureMemoryBaseline({ stage: item.stage, scenarioId }).finally(() => {
           if (isLast) {
             setThreeStageBaselineRunning(false);
+            setPendingAutoWriteScenarioId(scenarioId);
           }
         });
       }, item.delayMs);
@@ -476,6 +479,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     clearThreeStageCaptureTimers();
     setThreeStageBaselineRunning(false);
     setLastThreeStageScenarioId(null);
+    setPendingAutoWriteScenarioId(null);
     setMemoryBaselines([]);
     writeJson(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [], { mode: 'idle', debounceMs: 200 });
   }, [clearThreeStageCaptureTimers]);
@@ -633,11 +637,18 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     setStatusMessage(t('debug.center.memory.baselines.export.csvDone'));
   }, [downloadTextFile, memoryBaselines, t]);
 
-  const handleWriteLatestScenarioReport = useCallback(async () => {
-    const comparison = latestThreeStageComparison;
+  const handleWriteLatestScenarioReport = useCallback(async (options?: {
+    scenarioId?: string;
+    suppressEmptyError?: boolean;
+  }) => {
+    const comparison = options?.scenarioId
+      ? scenarioComparisons.find((item) => item.scenarioId === options.scenarioId) ?? null
+      : latestThreeStageComparison;
     if (!comparison) {
-      setError(t('debug.center.memory.baselines.writeReport.emptyError'));
-      setStatusMessage(null);
+      if (!options?.suppressEmptyError) {
+        setError(t('debug.center.memory.baselines.writeReport.emptyError'));
+        setStatusMessage(null);
+      }
       return;
     }
 
@@ -753,7 +764,27 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     isTauri,
     latestThreeStageComparison,
     memoryBaselines,
+    scenarioComparisons,
     t,
+  ]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    if (!pendingAutoWriteScenarioId) return;
+
+    const target = scenarioComparisons.find((item) => item.scenarioId === pendingAutoWriteScenarioId);
+    if (!target || target.sampleCount < THREE_STAGE_CAPTURE_PLAN.length) return;
+
+    setPendingAutoWriteScenarioId(null);
+    void handleWriteLatestScenarioReport({
+      scenarioId: target.scenarioId,
+      suppressEmptyError: true,
+    });
+  }, [
+    handleWriteLatestScenarioReport,
+    isTauri,
+    pendingAutoWriteScenarioId,
+    scenarioComparisons,
   ]);
 
   const persist = useCallback(

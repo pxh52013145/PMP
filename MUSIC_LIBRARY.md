@@ -444,6 +444,8 @@ Operational helper now available in Debug Center:
 - `Debug Center -> Memory / Cache -> Export baselines JSON / CSV`
 - `Debug Center -> Memory / Cache -> Copy latest scenario summary`
 - `Debug Center -> Memory / Cache -> Write latest scenario report`
+- 3-stage capture now auto-writes the latest scenario report (best-effort) when stage collection completes
+  in Tauri runtime; manual write button remains available for ad-hoc snapshots.
 - Samples are persisted at storage key:
   - `STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1`
   - value type: array of manual memory snapshots (latest-first, capped)
