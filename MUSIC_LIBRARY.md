@@ -307,6 +307,9 @@ This round migrates library source listing to native-first while preserving brow
 - Native/IndexedDB merge behavior for source list:
   - source identity and flags (`isVisible/isScanned/addedAt/lastScanned`) come from native sqlite.
   - legacy-only fields (`folderHandle`, `trackCount`) are best-effort merged from IndexedDB by `id/path`.
+- Path toggle resilience:
+  - `setLibraryPathVisibility` / `setLibraryPathScanning` now recover when a source exists in native sqlite
+    but is absent in IndexedDB, then backfill IndexedDB metadata and upsert native state.
 
 Boundary in this phase:
 

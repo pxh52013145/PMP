@@ -798,6 +798,22 @@ export class MusicLibraryService {
     });
   }
 
+  private async upsertLibraryPathInIndexedDb(pathInfo: LibraryPath): Promise<void> {
+    const db = await this.ensureDB();
+    const transaction = db.transaction(['libraryPaths'], 'readwrite');
+    const store = transaction.objectStore('libraryPaths');
+    store.put({
+      ...pathInfo,
+      addedAt: pathInfo.addedAt instanceof Date ? pathInfo.addedAt.getTime() : Date.now(),
+      lastScanned: pathInfo.lastScanned instanceof Date ? pathInfo.lastScanned.getTime() : undefined,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
   private mergeNativeLibraryPath(
     source: NativeLibrarySourceRecord,
     storedById: Map<string, LibraryPath>,
@@ -1991,8 +2007,21 @@ export class MusicLibraryService {
       transaction.onerror = () => reject(transaction.error);
     });
 
+    if (!updatedPath) {
+      const fallback = (await this.getLibraryPaths()).find((path) => path.id === pathId);
+      if (fallback) {
+        updatedPath = {
+          ...fallback,
+          isVisible,
+        };
+      }
+    }
+
     this.clearCache();
     if (updatedPath) {
+      await this.upsertLibraryPathInIndexedDb(updatedPath).catch((error) => {
+        console.warn('[MusicLibraryService] failed to upsert path visibility in IndexedDB:', error);
+      });
       await this.tryUpsertNativeLibrarySource(updatedPath);
     }
   }
@@ -2029,7 +2058,20 @@ export class MusicLibraryService {
       transaction.onerror = () => reject(transaction.error);
     });
 
+    if (!updatedPath) {
+      const fallback = (await this.getLibraryPaths()).find((path) => path.id === pathId);
+      if (fallback) {
+        updatedPath = {
+          ...fallback,
+          isScanned,
+        };
+      }
+    }
+
     if (updatedPath) {
+      await this.upsertLibraryPathInIndexedDb(updatedPath).catch((error) => {
+        console.warn('[MusicLibraryService] failed to upsert path scanning in IndexedDB:', error);
+      });
       await this.tryUpsertNativeLibrarySource(updatedPath);
     }
   }
