@@ -92,3 +92,43 @@ pub async fn music_library_db_query_tracks(
         .await
         .map_err(|e| format!("Music library track query task failed: {e}"))?
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_artists(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_artists(&app, query))
+        .await
+        .map_err(|e| format!("Music library artist list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_genres(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_genres(&app, query))
+        .await
+        .map_err(|e| format!("Music library genre list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_albums(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryFacetQueryInput>,
+) -> Result<Vec<music_library_db::LibraryAlbumRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_albums(&app, query))
+        .await
+        .map_err(|e| format!("Music library album list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_get_stats(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryFacetQueryInput>,
+) -> Result<music_library_db::LibraryStatsRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::get_stats(&app, query))
+        .await
+        .map_err(|e| format!("Music library stats task failed: {e}"))?
+}

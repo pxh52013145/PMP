@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 1;
+const DB_VERSION: i32 = 2;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -49,6 +49,7 @@ pub struct LibraryTrackUpsertInput {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub genre: Option<String>,
     pub duration: Option<f64>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
@@ -85,6 +86,7 @@ pub struct LibraryTrackRecord {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    pub genre: Option<String>,
     pub duration_seconds: Option<f64>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
@@ -94,6 +96,32 @@ pub struct LibraryTrackRecord {
     pub replay_gain_album_db: Option<f32>,
     pub status: String,
     pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFacetQueryInput {
+    pub include_missing: Option<bool>,
+    pub visible_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryAlbumRecord {
+    pub album: String,
+    pub artist: String,
+    pub cover_track_id: String,
+    pub cover_track_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStatsRecord {
+    pub total_tracks: u64,
+    pub total_artists: u64,
+    pub total_albums: u64,
+    pub total_size: u64,
+    pub total_duration: f64,
 }
 
 fn now_ms() -> i64 {
@@ -166,6 +194,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
               title TEXT,
               artist TEXT,
               album TEXT,
+              genre TEXT,
               duration_seconds REAL,
               sample_rate INTEGER,
               bit_depth INTEGER,
@@ -185,11 +214,22 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS local_tracks_quick_fingerprint_idx ON local_tracks(quick_fingerprint);
             CREATE INDEX IF NOT EXISTS local_tracks_status_idx ON local_tracks(status);
 
-            PRAGMA user_version = 1;
+            PRAGMA user_version = 2;
             "#,
         )
         .map_err(|error| format!("Failed to initialize music library schema: {error}"))?;
-        version = 1;
+        version = 2;
+    }
+
+    if version == 1 {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE local_tracks ADD COLUMN genre TEXT;
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .map_err(|error| format!("Failed to migrate music library schema to v2: {error}"))?;
+        version = 2;
     }
 
     if version != DB_VERSION {
@@ -429,6 +469,7 @@ pub fn sync_source_tracks(
                   title,
                   artist,
                   album,
+                  genre,
                   duration_seconds,
                   sample_rate,
                   bit_depth,
@@ -456,10 +497,11 @@ pub fn sync_source_tracks(
                   ?12,
                   ?13,
                   ?14,
-                  'available',
                   ?15,
+                  'available',
                   ?16,
-                  ?17
+                  ?17,
+                  ?18
                 )
                 ON CONFLICT(id) DO UPDATE SET
                   source_id = excluded.source_id,
@@ -468,6 +510,7 @@ pub fn sync_source_tracks(
                   title = excluded.title,
                   artist = excluded.artist,
                   album = excluded.album,
+                  genre = excluded.genre,
                   duration_seconds = excluded.duration_seconds,
                   sample_rate = excluded.sample_rate,
                   bit_depth = excluded.bit_depth,
@@ -487,6 +530,7 @@ pub fn sync_source_tracks(
                     normalize_text(item.title.as_deref()),
                     normalize_text(item.artist.as_deref()),
                     normalize_text(item.album.as_deref()),
+                    normalize_text(item.genre.as_deref()),
                     item.duration,
                     item.sample_rate.map(|value| value as i64),
                     item.bit_depth.map(|value| value as i64),
@@ -598,6 +642,7 @@ pub fn query_tracks(
                   t.title,
                   t.artist,
                   t.album,
+                  t.genre,
                   t.duration_seconds,
                   t.sample_rate,
                   t.bit_depth,
@@ -647,15 +692,16 @@ pub fn query_tracks(
                         title: row.get(4)?,
                         artist: row.get(5)?,
                         album: row.get(6)?,
-                        duration_seconds: row.get(7)?,
-                        sample_rate: row.get::<_, Option<i64>>(8)?.map(|value| value as u32),
-                        bit_depth: row.get::<_, Option<i64>>(9)?.map(|value| value as u32),
-                        file_size: row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
-                        mtime_ms: row.get(11)?,
-                        replay_gain_track_db: row.get(12)?,
-                        replay_gain_album_db: row.get(13)?,
-                        status: row.get(14)?,
-                        updated_at_ms: row.get(15)?,
+                        genre: row.get(7)?,
+                        duration_seconds: row.get(8)?,
+                        sample_rate: row.get::<_, Option<i64>>(9)?.map(|value| value as u32),
+                        bit_depth: row.get::<_, Option<i64>>(10)?.map(|value| value as u32),
+                        file_size: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+                        mtime_ms: row.get(12)?,
+                        replay_gain_track_db: row.get(13)?,
+                        replay_gain_album_db: row.get(14)?,
+                        status: row.get(15)?,
+                        updated_at_ms: row.get(16)?,
                     })
                 },
             )
@@ -667,5 +713,190 @@ pub fn query_tracks(
         }
 
         Ok(items)
+    })
+}
+
+fn resolve_facet_flags(query: Option<&LibraryFacetQueryInput>) -> (i64, i64) {
+    let include_missing_flag = if query.and_then(|item| item.include_missing).unwrap_or(false) {
+        1_i64
+    } else {
+        0_i64
+    };
+    let visible_only_flag = if query.and_then(|item| item.visible_only).unwrap_or(true) {
+        1_i64
+    } else {
+        0_i64
+    };
+    (include_missing_flag, visible_only_flag)
+}
+
+pub fn list_artists(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT DISTINCT TRIM(t.artist) AS artist
+                FROM local_tracks t
+                JOIN sources s ON s.id = t.source_id
+                WHERE (?1 = 0 OR s.is_visible = 1)
+                  AND (?2 = 1 OR t.status = 'available')
+                  AND TRIM(COALESCE(t.artist, '')) <> ''
+                ORDER BY LOWER(TRIM(t.artist)) ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare list artists statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(params![visible_only_flag, include_missing_flag], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| format!("Failed to query artists: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            let value = row.map_err(|error| format!("Failed to parse artist row: {error}"))?;
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            items.push(normalized.to_string());
+        }
+        Ok(items)
+    })
+}
+
+pub fn list_genres(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT DISTINCT TRIM(t.genre) AS genre
+                FROM local_tracks t
+                JOIN sources s ON s.id = t.source_id
+                WHERE (?1 = 0 OR s.is_visible = 1)
+                  AND (?2 = 1 OR t.status = 'available')
+                  AND TRIM(COALESCE(t.genre, '')) <> ''
+                ORDER BY LOWER(TRIM(t.genre)) ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare list genres statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(params![visible_only_flag, include_missing_flag], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| format!("Failed to query genres: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            let value = row.map_err(|error| format!("Failed to parse genre row: {error}"))?;
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            items.push(normalized.to_string());
+        }
+        Ok(items)
+    })
+}
+
+pub fn list_albums(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<Vec<LibraryAlbumRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  TRIM(t.album) AS album,
+                  COALESCE(NULLIF(TRIM(t.artist), ''), 'Unknown Artist') AS artist,
+                  MIN(t.id) AS cover_track_id,
+                  MIN(t.file_path) AS cover_track_path
+                FROM local_tracks t
+                JOIN sources s ON s.id = t.source_id
+                WHERE (?1 = 0 OR s.is_visible = 1)
+                  AND (?2 = 1 OR t.status = 'available')
+                  AND TRIM(COALESCE(t.album, '')) <> ''
+                GROUP BY
+                  LOWER(TRIM(t.album)),
+                  LOWER(COALESCE(NULLIF(TRIM(t.artist), ''), 'Unknown Artist'))
+                ORDER BY
+                  LOWER(TRIM(t.album)) ASC,
+                  LOWER(COALESCE(NULLIF(TRIM(t.artist), ''), 'Unknown Artist')) ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare list albums statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(params![visible_only_flag, include_missing_flag], |row| {
+                Ok(LibraryAlbumRecord {
+                    album: row.get(0)?,
+                    artist: row.get(1)?,
+                    cover_track_id: row.get(2)?,
+                    cover_track_path: row.get(3)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query albums: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse album row: {error}"))?);
+        }
+        Ok(items)
+    })
+}
+
+pub fn get_stats(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<LibraryStatsRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+
+        conn.query_row(
+            r#"
+            SELECT
+              COUNT(*) AS total_tracks,
+              COUNT(DISTINCT CASE
+                WHEN TRIM(COALESCE(t.artist, '')) <> '' THEN LOWER(TRIM(t.artist))
+                ELSE NULL
+              END) AS total_artists,
+              COUNT(DISTINCT CASE
+                WHEN TRIM(COALESCE(t.album, '')) <> '' THEN LOWER(TRIM(t.album))
+                ELSE NULL
+              END) AS total_albums,
+              COALESCE(SUM(COALESCE(t.file_size, 0)), 0) AS total_size,
+              COALESCE(SUM(COALESCE(t.duration_seconds, 0.0)), 0.0) AS total_duration
+            FROM local_tracks t
+            JOIN sources s ON s.id = t.source_id
+            WHERE (?1 = 0 OR s.is_visible = 1)
+              AND (?2 = 1 OR t.status = 'available')
+            "#,
+            params![visible_only_flag, include_missing_flag],
+            |row| {
+                Ok(LibraryStatsRecord {
+                    total_tracks: row.get::<_, i64>(0)?.max(0) as u64,
+                    total_artists: row.get::<_, i64>(1)?.max(0) as u64,
+                    total_albums: row.get::<_, i64>(2)?.max(0) as u64,
+                    total_size: row.get::<_, i64>(3)?.max(0) as u64,
+                    total_duration: row.get::<_, f64>(4)?.max(0.0),
+                })
+            },
+        )
+        .map_err(|error| format!("Failed to query library stats: {error}"))
     })
 }

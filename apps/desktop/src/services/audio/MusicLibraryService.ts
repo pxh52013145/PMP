@@ -6,10 +6,16 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
 import {
+  getNativeLibraryStats,
+  listNativeLibraryAlbums,
+  listNativeLibraryArtists,
+  listNativeLibraryGenres,
   queryNativeLibraryTracks,
   removeNativeLibrarySource,
   syncNativeLibraryTracks,
   upsertNativeLibrarySource,
+  type NativeLibraryAlbumRecord,
+  type NativeLibraryStatsRecord,
   type NativeLibraryTrackRecord,
   type NativeLibraryTrackUpsertInput,
 } from '../../modules/music-library';
@@ -420,6 +426,7 @@ export class MusicLibraryService {
       title: typeof track.title === 'string' ? track.title : undefined,
       artist: typeof track.artist === 'string' ? track.artist : undefined,
       album: typeof track.album === 'string' ? track.album : undefined,
+      genre: typeof track.genre === 'string' ? track.genre : undefined,
       duration: typeof track.duration === 'number' ? track.duration : undefined,
       sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : undefined,
       bitDepth,
@@ -490,6 +497,7 @@ export class MusicLibraryService {
       title: normalizedTitle,
       artist: record.artist,
       album: record.album,
+      genre: record.genre,
       duration: record.durationSeconds,
       sampleRate: record.sampleRate,
       fileSize: record.fileSize,
@@ -565,6 +573,96 @@ export class MusicLibraryService {
       );
     } catch (error) {
       console.warn('[MusicLibraryService] native search query failed, fallback to IndexedDB:', error);
+      return null;
+    }
+  }
+
+  private async tryGetAllArtistsFromNativeDb(): Promise<string[] | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      const artists = await listNativeLibraryArtists({
+        includeMissing: false,
+        visibleOnly: true,
+      });
+      if (artists.length === 0) return null;
+      return artists;
+    } catch (error) {
+      console.warn('[MusicLibraryService] native artist list failed, fallback to IndexedDB:', error);
+      return null;
+    }
+  }
+
+  private async tryGetAllGenresFromNativeDb(): Promise<string[] | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      const genres = await listNativeLibraryGenres({
+        includeMissing: false,
+        visibleOnly: true,
+      });
+      if (genres.length === 0) return null;
+      return genres;
+    } catch (error) {
+      console.warn('[MusicLibraryService] native genre list failed, fallback to IndexedDB:', error);
+      return null;
+    }
+  }
+
+  private toAlbumSummaryFromNativeRecord(record: NativeLibraryAlbumRecord): AlbumSummary {
+    return {
+      album: record.album,
+      artist: record.artist,
+      coverTrackPath: record.coverTrackPath,
+      coverTrackId: record.coverTrackId,
+    };
+  }
+
+  private async tryGetAllAlbumsFromNativeDb(
+    includeStoredCover: boolean
+  ): Promise<AlbumSummary[] | null> {
+    if (!isTauriRuntime()) return null;
+    if (includeStoredCover) return null;
+
+    try {
+      const albums = await listNativeLibraryAlbums({
+        includeMissing: false,
+        visibleOnly: true,
+      });
+      if (albums.length === 0) return null;
+      return albums
+        .map((item) => this.toAlbumSummaryFromNativeRecord(item))
+        .sort((a, b) => a.album.localeCompare(b.album));
+    } catch (error) {
+      console.warn('[MusicLibraryService] native album list failed, fallback to IndexedDB:', error);
+      return null;
+    }
+  }
+
+  private toLibraryStatsFromNativeRecord(record: NativeLibraryStatsRecord): LibraryStats {
+    return {
+      totalTracks: Math.max(0, Math.floor(Number(record.totalTracks) || 0)),
+      totalArtists: Math.max(0, Math.floor(Number(record.totalArtists) || 0)),
+      totalAlbums: Math.max(0, Math.floor(Number(record.totalAlbums) || 0)),
+      totalSize: Math.max(0, Math.floor(Number(record.totalSize) || 0)),
+      totalDuration: Math.max(0, Number(record.totalDuration) || 0),
+    };
+  }
+
+  private async tryGetLibraryStatsFromNativeDb(): Promise<LibraryStats | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      const stats = await getNativeLibraryStats({
+        includeMissing: false,
+        visibleOnly: true,
+      });
+      if (!stats) return null;
+
+      const normalized = this.toLibraryStatsFromNativeRecord(stats);
+      if (normalized.totalTracks === 0) {
+        return null;
+      }
+      return normalized;
+    } catch (error) {
+      console.warn('[MusicLibraryService] native library stats failed, fallback to IndexedDB:', error);
       return null;
     }
   }
@@ -3028,6 +3126,11 @@ export class MusicLibraryService {
 
   // 获取所有艺术家
   async getAllArtists(): Promise<string[]> {
+    const nativeArtists = await this.tryGetAllArtistsFromNativeDb();
+    if (nativeArtists) {
+      return nativeArtists;
+    }
+
     const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();
 
@@ -3060,8 +3163,13 @@ export class MusicLibraryService {
 
   // 获取所有专辑
   async getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
-    const db = await this.ensureDB();
     const includeStoredCover = options?.includeStoredCover ?? true;
+    const nativeAlbums = await this.tryGetAllAlbumsFromNativeDb(includeStoredCover);
+    if (nativeAlbums) {
+      return nativeAlbums;
+    }
+
+    const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();
 
     return new Promise((resolve, reject) => {
@@ -3134,6 +3242,11 @@ export class MusicLibraryService {
 
   // 获取所有流派
   async getAllGenres(): Promise<string[]> {
+    const nativeGenres = await this.tryGetAllGenresFromNativeDb();
+    if (nativeGenres) {
+      return nativeGenres;
+    }
+
     const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();
 
@@ -3170,6 +3283,13 @@ export class MusicLibraryService {
     const now = Date.now();
     if (this.cachedStats && now - this.cacheTimestamp < this.CACHE_TTL) {
       return this.cachedStats;
+    }
+
+    const nativeStats = await this.tryGetLibraryStatsFromNativeDb();
+    if (nativeStats) {
+      this.cachedStats = nativeStats;
+      this.cacheTimestamp = now;
+      return nativeStats;
     }
 
     const artists = new Set<string>();

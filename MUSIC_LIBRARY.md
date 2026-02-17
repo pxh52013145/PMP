@@ -231,6 +231,36 @@ Boundary in this pilot:
 - Scope currently covers `getAllTracks` + `searchTracks` only (facets/stats remain on IndexedDB).
 - Fallback keeps old behavior intact while native sqlite coverage is still converging.
 
+### 4.13 Native read-path expansion (`artists/albums/genres/stats`)
+
+This round extends native-first reads for facet and stats APIs while preserving compatibility fallbacks:
+
+- Backend SQLite schema/queries:
+  - `local_tracks` now includes `genre` column.
+  - schema version bumped to `v2` with in-place migration (`ALTER TABLE ... ADD COLUMN genre`).
+  - added native read queries:
+    - `list_artists`
+    - `list_genres`
+    - `list_albums`
+    - `get_stats`
+- Added Tauri commands:
+  - `music_library_db_list_artists`
+  - `music_library_db_list_genres`
+  - `music_library_db_list_albums`
+  - `music_library_db_get_stats`
+- Frontend bridge (`nativeLibraryDb.ts`) now supports typed calls for facet/stats query payloads.
+- `MusicLibraryService` integration:
+  - `getAllArtists()` -> native-first + IndexedDB fallback
+  - `getAllGenres()` -> native-first + IndexedDB fallback
+  - `getAllAlbums({ includeStoredCover: false })` -> native-first + IndexedDB fallback
+  - `getLibraryStats()` -> native-first + IndexedDB fallback (with existing cache behavior preserved)
+  - write-through payload now also syncs `genre` into native sqlite.
+
+Boundary in this phase:
+
+- Native album list is only used when `includeStoredCover` is `false`.
+- Any native empty/error path still falls back to IndexedDB to keep existing UX stable.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

@@ -31,6 +31,7 @@ export interface NativeLibraryTrackUpsertInput {
   title?: string;
   artist?: string;
   album?: string;
+  genre?: string;
   duration?: number;
   sampleRate?: number;
   bitDepth?: number;
@@ -61,6 +62,7 @@ export interface NativeLibraryTrackRecord {
   title?: string;
   artist?: string;
   album?: string;
+  genre?: string;
   durationSeconds?: number;
   sampleRate?: number;
   bitDepth?: number;
@@ -70,6 +72,26 @@ export interface NativeLibraryTrackRecord {
   replayGainAlbumDb?: number;
   status: string;
   updatedAtMs: number;
+}
+
+export interface NativeLibraryFacetQuery {
+  includeMissing?: boolean;
+  visibleOnly?: boolean;
+}
+
+export interface NativeLibraryAlbumRecord {
+  album: string;
+  artist: string;
+  coverTrackId: string;
+  coverTrackPath: string;
+}
+
+export interface NativeLibraryStatsRecord {
+  totalTracks: number;
+  totalArtists: number;
+  totalAlbums: number;
+  totalSize: number;
+  totalDuration: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -148,6 +170,7 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     title: asOptionalString(value.title),
     artist: asOptionalString(value.artist),
     album: asOptionalString(value.album),
+    genre: asOptionalString(value.genre),
     durationSeconds: asNumber(value.durationSeconds),
     sampleRate: asNumber(value.sampleRate),
     bitDepth: asNumber(value.bitDepth),
@@ -157,6 +180,57 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     replayGainAlbumDb: asNumber(value.replayGainAlbumDb),
     status,
     updatedAtMs,
+  };
+}
+
+function normalizeFacetQuery(query?: NativeLibraryFacetQuery): NativeLibraryFacetQuery {
+  return {
+    includeMissing: query?.includeMissing === true,
+    visibleOnly: query?.visibleOnly !== false,
+  };
+}
+
+function ensureAlbumRecord(value: unknown): NativeLibraryAlbumRecord | null {
+  if (!isRecord(value)) return null;
+
+  const album = asTrimmedString(value.album);
+  const artist = asTrimmedString(value.artist);
+  const coverTrackId = asTrimmedString(value.coverTrackId);
+  const coverTrackPath = asTrimmedString(value.coverTrackPath);
+  if (!album || !artist || !coverTrackId || !coverTrackPath) return null;
+
+  return {
+    album,
+    artist,
+    coverTrackId,
+    coverTrackPath,
+  };
+}
+
+function ensureStatsRecord(value: unknown): NativeLibraryStatsRecord | null {
+  if (!isRecord(value)) return null;
+
+  const totalTracks = asNumber(value.totalTracks);
+  const totalArtists = asNumber(value.totalArtists);
+  const totalAlbums = asNumber(value.totalAlbums);
+  const totalSize = asNumber(value.totalSize);
+  const totalDuration = asNumber(value.totalDuration);
+  if (
+    totalTracks === undefined ||
+    totalArtists === undefined ||
+    totalAlbums === undefined ||
+    totalSize === undefined ||
+    totalDuration === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    totalTracks,
+    totalArtists,
+    totalAlbums,
+    totalSize,
+    totalDuration,
   };
 }
 
@@ -241,4 +315,64 @@ export async function queryNativeLibraryTracks(
     tracks.push(parsed);
   }
   return tracks;
+}
+
+export async function listNativeLibraryArtists(query?: NativeLibraryFacetQuery): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_db_list_artists', {
+    query: normalizeFacetQuery(query),
+  }).catch(() => null);
+
+  if (!Array.isArray(raw)) return [];
+  const artists: string[] = [];
+  for (const item of raw) {
+    const normalized = asTrimmedString(item);
+    if (!normalized) continue;
+    artists.push(normalized);
+  }
+  return artists;
+}
+
+export async function listNativeLibraryGenres(query?: NativeLibraryFacetQuery): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_db_list_genres', {
+    query: normalizeFacetQuery(query),
+  }).catch(() => null);
+
+  if (!Array.isArray(raw)) return [];
+  const genres: string[] = [];
+  for (const item of raw) {
+    const normalized = asTrimmedString(item);
+    if (!normalized) continue;
+    genres.push(normalized);
+  }
+  return genres;
+}
+
+export async function listNativeLibraryAlbums(
+  query?: NativeLibraryFacetQuery
+): Promise<NativeLibraryAlbumRecord[]> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_db_list_albums', {
+    query: normalizeFacetQuery(query),
+  }).catch(() => null);
+
+  if (!Array.isArray(raw)) return [];
+  const albums: NativeLibraryAlbumRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureAlbumRecord(item);
+    if (!parsed) continue;
+    albums.push(parsed);
+  }
+  return albums;
+}
+
+export async function getNativeLibraryStats(
+  query?: NativeLibraryFacetQuery
+): Promise<NativeLibraryStatsRecord | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_db_get_stats', {
+    query: normalizeFacetQuery(query),
+  }).catch(() => null);
+  return ensureStatsRecord(raw);
 }
