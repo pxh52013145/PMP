@@ -223,10 +223,12 @@ This round adds a controlled read-path pilot:
   - `queryNativeLibraryTracks(...)`
 - `MusicLibraryService.getAllTracks(...)` now tries native sqlite query first in Tauri runtime,
   then falls back to existing IndexedDB path when native result is empty/unavailable.
+- `MusicLibraryService.searchTracks(...)` now follows the same native-first + IndexedDB fallback path
+  with backend-side search predicate (`title/artist/album/file_path`, case-insensitive).
 
 Boundary in this pilot:
 
-- Scope is limited to `getAllTracks` only (search/facets/stats remain on IndexedDB in this phase).
+- Scope currently covers `getAllTracks` + `searchTracks` only (facets/stats remain on IndexedDB).
 - Fallback keeps old behavior intact while native sqlite coverage is still converging.
 
 ---

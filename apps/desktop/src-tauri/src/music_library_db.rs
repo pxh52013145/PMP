@@ -72,6 +72,7 @@ pub struct LibraryTrackQueryInput {
     pub offset: Option<u32>,
     pub include_missing: Option<bool>,
     pub visible_only: Option<bool>,
+    pub search_query: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -572,6 +573,19 @@ pub fn query_tracks(
         } else {
             0_i64
         };
+        let normalized_search_query = query
+            .as_ref()
+            .and_then(|item| item.search_query.as_ref())
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
+        let search_enabled_flag = if normalized_search_query.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
+        let search_like_pattern = normalized_search_query
+            .map(|value| format!("%{value}%"))
+            .unwrap_or_else(|| "%".to_string());
 
         let mut stmt = conn
             .prepare(
@@ -597,6 +611,13 @@ pub fn query_tracks(
                 JOIN sources s ON s.id = t.source_id
                 WHERE (?1 = 0 OR s.is_visible = 1)
                   AND (?2 = 1 OR t.status = 'available')
+                  AND (
+                    ?5 = 0
+                    OR LOWER(COALESCE(t.title, '')) LIKE ?6
+                    OR LOWER(COALESCE(t.artist, '')) LIKE ?6
+                    OR LOWER(COALESCE(t.album, '')) LIKE ?6
+                    OR LOWER(t.file_path) LIKE ?6
+                  )
                 ORDER BY
                   LOWER(COALESCE(t.title, t.file_path)) ASC,
                   t.updated_at_ms DESC,
@@ -614,6 +635,8 @@ pub fn query_tracks(
                     include_missing_flag,
                     normalized_limit,
                     normalized_offset,
+                    search_enabled_flag,
+                    search_like_pattern,
                 ],
                 |row| {
                     Ok(LibraryTrackRecord {

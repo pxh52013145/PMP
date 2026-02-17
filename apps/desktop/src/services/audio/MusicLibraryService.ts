@@ -538,6 +538,37 @@ export class MusicLibraryService {
     }
   }
 
+  private async trySearchTracksFromNativeDb(query: string, limit?: number): Promise<Track[] | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) return null;
+
+    const normalizedLimit =
+      typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+
+    try {
+      const nativeTracks = await queryNativeLibraryTracks({
+        limit: normalizedLimit,
+        offset: 0,
+        includeMissing: false,
+        visibleOnly: true,
+        searchQuery: normalizedQuery,
+      });
+
+      if (nativeTracks.length === 0) {
+        return null;
+      }
+
+      return nativeTracks.map((item) =>
+        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+      );
+    } catch (error) {
+      console.warn('[MusicLibraryService] native search query failed, fallback to IndexedDB:', error);
+      return null;
+    }
+  }
+
   private scheduleNativeSourceBootstrap(): void {
     if (!isTauriRuntime()) return;
     if (this.nativeSourceBootstrapScheduled) return;
@@ -2710,6 +2741,11 @@ export class MusicLibraryService {
   async searchTracks(query: string, limit?: number): Promise<Track[]> {
     const q = query.trim().toLowerCase();
     if (!q) return typeof limit === 'number' ? this.getAllTracks(limit) : this.getAllTracks();
+
+    const nativeTracks = await this.trySearchTracksFromNativeDb(q, limit);
+    if (nativeTracks) {
+      return nativeTracks;
+    }
 
     const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();

@@ -50,6 +50,7 @@ export interface NativeLibraryTrackQuery {
   offset?: number;
   includeMissing?: boolean;
   visibleOnly?: boolean;
+  searchQuery?: string;
 }
 
 export interface NativeLibraryTrackRecord {
@@ -222,6 +223,10 @@ export async function queryNativeLibraryTracks(
         : undefined,
     includeMissing: query?.includeMissing === true,
     visibleOnly: query?.visibleOnly !== false,
+    searchQuery:
+      typeof query?.searchQuery === 'string' && query.searchQuery.trim().length > 0
+        ? query.searchQuery.trim()
+        : undefined,
   };
 
   const raw = await invoke<unknown>('music_library_db_query_tracks', { query: payload }).catch(
