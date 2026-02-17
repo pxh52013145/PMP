@@ -481,35 +481,61 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
     };
   }, [clearThreeStageCaptureTimers]);
 
+  const scenarioComparisons = useMemo(
+    () => computeScenarioComparisons(memoryBaselines),
+    [memoryBaselines]
+  );
+
+  const latestThreeStageComparison = useMemo(() => {
+    if (scenarioComparisons.length === 0) return null;
+    if (!lastThreeStageScenarioId) return scenarioComparisons[0];
+    return (
+      scenarioComparisons.find((item) => item.scenarioId === lastThreeStageScenarioId) ??
+      scenarioComparisons[0]
+    );
+  }, [lastThreeStageScenarioId, scenarioComparisons]);
+
   const latestThreeStageDelta = useMemo(() => {
-    const scenarioId = lastThreeStageScenarioId;
-    if (!scenarioId) return null;
-    const scenarioSamples = memoryBaselines
-      .filter((sample) => sample.scenarioId === scenarioId)
-      .slice()
-      .sort((left, right) => left.capturedAtMs - right.capturedAtMs);
-    if (scenarioSamples.length < 2) return null;
-
-    const start = scenarioSamples[0];
-    const end = scenarioSamples[scenarioSamples.length - 1];
-
+    const comparison = latestThreeStageComparison;
+    if (!comparison) return null;
     return {
-      sampleCount: scenarioSamples.length,
-      jsHeapDeltaMb: formatBytesToMb((end.jsHeapUsedBytes ?? 0) - (start.jsHeapUsedBytes ?? 0)),
-      webview2PrivateDeltaMb: formatBytesToMb(
-        (end.webview2PrivateBytes ?? 0) - (start.webview2PrivateBytes ?? 0)
-      ),
-      webview2WsDeltaMb: formatBytesToMb(
-        (end.webview2WorkingSetBytes ?? 0) - (start.webview2WorkingSetBytes ?? 0)
-      ),
-      coverBlobDeltaMb: formatBytesToMb(
-        end.coverBlobUrlTotalBytes - start.coverBlobUrlTotalBytes
-      ),
-      coverDecodedDeltaMb: formatBytesToMb(
-        end.coverDecodedEstimateTotalBytes - start.coverDecodedEstimateTotalBytes
-      ),
+      sampleCount: comparison.sampleCount,
+      jsHeapDeltaMb: formatBytesToMb(comparison.deltaJsHeapUsedBytes),
+      webview2PrivateDeltaMb: formatBytesToMb(comparison.deltaWebview2PrivateBytes),
+      webview2WsDeltaMb: formatBytesToMb(comparison.deltaWebview2WorkingSetBytes),
+      coverBlobDeltaMb: formatBytesToMb(comparison.deltaCoverBlobUrlTotalBytes),
+      coverDecodedDeltaMb: formatBytesToMb(comparison.deltaCoverDecodedEstimateTotalBytes),
     };
-  }, [lastThreeStageScenarioId, memoryBaselines]);
+  }, [latestThreeStageComparison]);
+
+  const handleCopyLatestScenarioSummary = useCallback(async () => {
+    const comparison = latestThreeStageComparison;
+    if (!comparison) {
+      setError(t('debug.center.memory.baselines.copySummary.emptyError'));
+      return;
+    }
+
+    const summary = t('debug.center.memory.baselines.copySummary.line', {
+      scenarioId: comparison.scenarioId,
+      sampleCount: comparison.sampleCount,
+      startAt: new Date(comparison.startAtMs).toLocaleString(),
+      endAt: new Date(comparison.endAtMs).toLocaleString(),
+      startStage: t(`debug.center.memory.baselines.stage.${comparison.startStage}`),
+      endStage: t(`debug.center.memory.baselines.stage.${comparison.endStage}`),
+      jsHeapDeltaMb: formatBytesToMb(comparison.deltaJsHeapUsedBytes),
+      webview2PrivateDeltaMb: formatBytesToMb(comparison.deltaWebview2PrivateBytes),
+      webview2WsDeltaMb: formatBytesToMb(comparison.deltaWebview2WorkingSetBytes),
+      coverBlobDeltaMb: formatBytesToMb(comparison.deltaCoverBlobUrlTotalBytes),
+      coverDecodedDeltaMb: formatBytesToMb(comparison.deltaCoverDecodedEstimateTotalBytes),
+    });
+
+    try {
+      await navigator.clipboard.writeText(summary);
+      setError(null);
+    } catch {
+      setError(t('debug.center.memory.baselines.copySummary.copyFailed'));
+    }
+  }, [latestThreeStageComparison, t]);
 
   const downloadTextFile = useCallback((fileName: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType });
@@ -1012,6 +1038,16 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 disabled={memoryBaselines.length === 0}
               >
                 {t('debug.center.memory.actions.exportBaselinesCsv')}
+              </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void handleCopyLatestScenarioSummary();
+                }}
+                disabled={!latestThreeStageComparison}
+              >
+                {t('debug.center.memory.actions.copyLatestScenarioSummary')}
               </button>
               <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
                 {t('debug.center.memory.actions.clearCoverCaches')}
