@@ -33,6 +33,7 @@ pub struct LibrarySourceRecord {
     pub path: String,
     pub display_name: Option<String>,
     pub category: String,
+    pub track_count: u64,
     pub is_visible: bool,
     pub is_scanned: bool,
     pub added_at_ms: i64,
@@ -306,6 +307,12 @@ fn source_record_by_id(conn: &Connection, source_id: &str) -> Result<LibrarySour
           path,
           display_name,
           category,
+          (
+            SELECT COUNT(*)
+            FROM local_tracks t
+            WHERE t.source_id = sources.id
+              AND t.status = 'available'
+          ) AS track_count,
           is_visible,
           is_scanned,
           added_at_ms,
@@ -321,11 +328,12 @@ fn source_record_by_id(conn: &Connection, source_id: &str) -> Result<LibrarySour
                 path: row.get(1)?,
                 display_name: row.get(2)?,
                 category: row.get(3)?,
-                is_visible: row.get::<_, i64>(4)? != 0,
-                is_scanned: row.get::<_, i64>(5)? != 0,
-                added_at_ms: row.get(6)?,
-                last_scanned_at_ms: row.get(7)?,
-                updated_at_ms: row.get(8)?,
+                track_count: row.get::<_, i64>(4)?.max(0) as u64,
+                is_visible: row.get::<_, i64>(5)? != 0,
+                is_scanned: row.get::<_, i64>(6)? != 0,
+                added_at_ms: row.get(7)?,
+                last_scanned_at_ms: row.get(8)?,
+                updated_at_ms: row.get(9)?,
             })
         },
     )
@@ -405,6 +413,12 @@ pub fn list_sources(app: &AppHandle) -> Result<Vec<LibrarySourceRecord>, String>
                   path,
                   display_name,
                   category,
+                  (
+                    SELECT COUNT(*)
+                    FROM local_tracks t
+                    WHERE t.source_id = sources.id
+                      AND t.status = 'available'
+                  ) AS track_count,
                   is_visible,
                   is_scanned,
                   added_at_ms,
@@ -423,11 +437,12 @@ pub fn list_sources(app: &AppHandle) -> Result<Vec<LibrarySourceRecord>, String>
                     path: row.get(1)?,
                     display_name: row.get(2)?,
                     category: row.get(3)?,
-                    is_visible: row.get::<_, i64>(4)? != 0,
-                    is_scanned: row.get::<_, i64>(5)? != 0,
-                    added_at_ms: row.get(6)?,
-                    last_scanned_at_ms: row.get(7)?,
-                    updated_at_ms: row.get(8)?,
+                    track_count: row.get::<_, i64>(4)?.max(0) as u64,
+                    is_visible: row.get::<_, i64>(5)? != 0,
+                    is_scanned: row.get::<_, i64>(6)? != 0,
+                    added_at_ms: row.get(7)?,
+                    last_scanned_at_ms: row.get(8)?,
+                    updated_at_ms: row.get(9)?,
                 })
             })
             .map_err(|error| format!("Failed to query source rows: {error}"))?;

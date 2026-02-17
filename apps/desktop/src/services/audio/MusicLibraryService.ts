@@ -835,9 +835,11 @@ export class MusicLibraryService {
           ? new Date(source.lastScannedAtMs)
           : fallback?.lastScanned,
       trackCount:
-        typeof fallback?.trackCount === 'number' && Number.isFinite(fallback.trackCount)
-          ? fallback.trackCount
-          : 0,
+        typeof source.trackCount === 'number' && Number.isFinite(source.trackCount)
+          ? Math.max(0, Math.floor(source.trackCount))
+          : typeof fallback?.trackCount === 'number' && Number.isFinite(fallback.trackCount)
+            ? fallback.trackCount
+            : 0,
       isVisible: source.isVisible !== false,
       isScanned: source.isScanned !== false,
       folderHandle: fallback?.folderHandle,

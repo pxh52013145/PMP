@@ -17,6 +17,7 @@ export interface NativeLibrarySourceRecord {
   path: string;
   displayName?: string;
   category: string;
+  trackCount: number;
   isVisible: boolean;
   isScanned: boolean;
   addedAtMs: number;
@@ -126,6 +127,7 @@ function ensureSourceRecord(value: unknown): NativeLibrarySourceRecord | null {
   const category = asTrimmedString(value.category) || 'music';
   const isVisible = asBool(value.isVisible);
   const isScanned = asBool(value.isScanned);
+  const trackCount = asNumber(value.trackCount);
   const addedAtMs = asNumber(value.addedAtMs);
   const updatedAtMs = asNumber(value.updatedAtMs);
 
@@ -137,6 +139,7 @@ function ensureSourceRecord(value: unknown): NativeLibrarySourceRecord | null {
     path,
     displayName: asOptionalString(value.displayName),
     category,
+    trackCount: trackCount === undefined ? 0 : Math.max(0, Math.floor(trackCount)),
     isVisible,
     isScanned,
     addedAtMs,
