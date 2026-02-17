@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
-import { usePersistentSetting } from '../../modules/storage';
+import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
 import {
   getDebugConfig,
   getDebugEnvSnapshot,
   getDefaultDebugConfig,
+  getProcessPerfTotalsSnapshot,
   restartApp,
   setDebugConfig,
   type DebugConfig,
   type DebugEnvSnapshot,
+  type ProcessPerfTotalsSnapshot,
   type VstSidechainModeOverride,
 } from '../../modules/debug';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { calculateWindowPosition, openEditorWindow } from '../../utils/editorWindows';
 import { openVstManagerWindow } from '../../utils/vstManagerWindows';
 import { MusicLibraryService } from '../../services/audio/MusicLibraryService';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 
 const WINDOW_COMM_DEBUG_KEY = 'pixel-matrix-debug-window-comm';
@@ -28,6 +31,30 @@ type EditorWindowsDebugState = {
 };
 
 type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats']>;
+
+type MemoryBaselineSample = {
+  id: string;
+  capturedAtMs: number;
+  navigationHistoryBytes: number;
+  jsHeapUsedBytes?: number;
+  coverBlobUrlTotalBytes: number;
+  coverDecodedEstimateTotalBytes: number;
+  coverBlobUrlCacheEntries: number;
+  coverDecodedEstimateEntries: number;
+  coverUrlCacheEntries: number;
+  albumCoverUrlCacheEntries: number;
+  webview2WorkingSetBytes?: number;
+  webview2PrivateBytes?: number;
+  treeWorkingSetBytes?: number;
+  treePrivateBytes?: number;
+};
+
+const MEMORY_BASELINE_MAX_ENTRIES = 20;
+
+function formatBytesToMb(value: number | undefined | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '-';
+  return (value / 1024 / 1024).toFixed(1);
+}
 
 function formatTriBool(value: TriBool): 'auto' | 'on' | 'off' {
   if (value === null) return 'auto';
@@ -87,6 +114,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
   const [confirmClearCoverCaches, setConfirmClearCoverCaches] = useState(false);
   const [minidumpDirDraft, setMinidumpDirDraft] = useState('');
+  const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
+    readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
+  );
 
   const [windowCommDebug, setWindowCommDebug] = usePersistentSetting<string>(
     WINDOW_COMM_DEBUG_KEY,
@@ -126,6 +156,52 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       setEditorWindowsState(null);
     }
   }, [isTauri]);
+
+  const captureMemoryBaseline = useCallback(async () => {
+    const coverStats = MusicLibraryService.getInstance().getCoverRuntimeCacheStats();
+    let processTotals: ProcessPerfTotalsSnapshot | null = null;
+    if (isTauri) {
+      processTotals = await getProcessPerfTotalsSnapshot();
+    }
+
+    const jsHeapUsedBytes = (() => {
+      try {
+        const memory = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory;
+        const value = memory?.usedJSHeapSize;
+        return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+
+    const sample: MemoryBaselineSample = {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      capturedAtMs: Date.now(),
+      navigationHistoryBytes: navigationHistoryStats.bytes,
+      jsHeapUsedBytes,
+      coverBlobUrlTotalBytes: coverStats.coverBlobUrlTotalBytes,
+      coverDecodedEstimateTotalBytes: coverStats.coverDecodedEstimateTotalBytes,
+      coverBlobUrlCacheEntries: coverStats.coverBlobUrlCacheEntries,
+      coverDecodedEstimateEntries: coverStats.coverDecodedEstimateEntries,
+      coverUrlCacheEntries: coverStats.coverUrlCacheEntries,
+      albumCoverUrlCacheEntries: coverStats.albumCoverUrlCacheEntries,
+      webview2WorkingSetBytes: processTotals?.totals.webview2WorkingSetBytes,
+      webview2PrivateBytes: processTotals?.totals.webview2PrivateBytes,
+      treeWorkingSetBytes: processTotals?.totals.workingSetBytes,
+      treePrivateBytes: processTotals?.totals.privateBytes,
+    };
+
+    setMemoryBaselines((previous) => {
+      const next = [sample, ...previous].slice(0, MEMORY_BASELINE_MAX_ENTRIES);
+      writeJson(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, next, { mode: 'idle', debounceMs: 200 });
+      return next;
+    });
+  }, [isTauri, navigationHistoryStats.bytes]);
+
+  const clearMemoryBaselines = useCallback(() => {
+    setMemoryBaselines([]);
+    writeJson(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [], { mode: 'idle', debounceMs: 200 });
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!isTauri) return;
@@ -583,6 +659,18 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               >
                 {t('common.action.refresh')}
               </button>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void captureMemoryBaseline();
+                }}
+              >
+                {t('debug.center.memory.actions.captureBaseline')}
+              </button>
+              <button type="button" className="settings-action-btn" onClick={clearMemoryBaselines}>
+                {t('debug.center.memory.actions.clearBaselines')}
+              </button>
               <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
                 {t('debug.center.memory.actions.clearCoverCaches')}
               </button>
@@ -659,6 +747,29 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   kb: (navigationHistoryStats.bytes / 1024).toFixed(1),
                 })}
               </p>
+            </div>
+
+            <div>
+              <p className="settings-card-label">{t('debug.center.memory.baselines.label')}</p>
+              <p className="settings-card-desc">{t('debug.center.memory.baselines.desc')}</p>
+              {memoryBaselines.length === 0 ? (
+                <p className="settings-card-note">{t('debug.center.memory.baselines.empty')}</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {memoryBaselines.slice(0, 8).map((sample) => (
+                    <p className="settings-card-note" key={sample.id}>
+                      {t('debug.center.memory.baselines.item', {
+                        at: new Date(sample.capturedAtMs).toLocaleString(),
+                        jsHeapMb: formatBytesToMb(sample.jsHeapUsedBytes),
+                        webview2PrivateMb: formatBytesToMb(sample.webview2PrivateBytes),
+                        webview2WsMb: formatBytesToMb(sample.webview2WorkingSetBytes),
+                        coverBlobMb: formatBytesToMb(sample.coverBlobUrlTotalBytes),
+                        coverDecodedMb: formatBytesToMb(sample.coverDecodedEstimateTotalBytes),
+                      })}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

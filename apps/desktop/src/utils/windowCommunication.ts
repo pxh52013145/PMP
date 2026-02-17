@@ -226,6 +226,7 @@ export const STORAGE_KEYS = {
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean
   MEMORY_GOVERNANCE_AUDIT_V1: 'pixel-matrix-memory-governance-audit-v1', // MemoryGovernanceAuditEntry[]
+  MEMORY_BASELINE_SAMPLES_V1: 'pixel-matrix-memory-baseline-samples-v1', // MemoryBaselineSample[]
 
   // === Background GIF Optimization ===
   BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',

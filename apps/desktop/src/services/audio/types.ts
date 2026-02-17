@@ -28,6 +28,7 @@ export interface Track {
   originalPath?: string; // 原始文件路径（用于显示）
   libraryPathId?: string; // Music library folder id (IndexedDB.libraryPaths.id)
   mtimeMs?: number; // last modified time (ms) - library change detection
+  quickFingerprint?: string; // metadata-resilient sparse audio fingerprint (v2)
   metadataScannedAtMs?: number; // when metadata probe last ran (avoid repeated probing on unchanged files)
   title: string;
   artist?: string;

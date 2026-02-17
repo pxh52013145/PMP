@@ -7,17 +7,20 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{
+    http::{Request as HttpRequest, Response as HttpResponse, ResponseBuilder as HttpResponseBuilder},
+    AppHandle, Manager, Runtime,
+};
 
 use dsf::DsfFile;
 use once_cell::sync::Lazy;
+use sha2::{Digest, Sha256};
 use symphonia::core::{
     formats::{FormatOptions, FormatReader, Track},
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::{Limit, MetadataOptions, StandardVisualKey},
     probe::Hint,
 };
-
 
 pub const EVENT_MUSIC_LIBRARY_SCAN_PROGRESS: &str = "music-library-scan-progress";
 
@@ -43,6 +46,7 @@ pub struct ScannedTrack {
     pub file_name: String,
     pub size: u64,
     pub mtime_ms: i64,
+    pub quick_fingerprint: Option<String>,
     pub duration: Option<f64>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
@@ -104,6 +108,234 @@ fn system_time_to_millis(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn parse_synchsafe_u32(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    if bytes.iter().any(|value| value & 0x80 != 0) {
+        return None;
+    }
+
+    Some(
+        ((bytes[0] as u32) << 21)
+            | ((bytes[1] as u32) << 14)
+            | ((bytes[2] as u32) << 7)
+            | (bytes[3] as u32),
+    )
+}
+
+fn detect_audio_start_offset(file: &mut fs::File, total_len: u64) -> u64 {
+    if total_len < 16 {
+        return 0;
+    }
+
+    let mut header = [0u8; 12];
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        return 0;
+    }
+    if file.read_exact(&mut header).is_err() {
+        return 0;
+    }
+
+    if &header[0..3] == b"ID3" {
+        let flags = header[5];
+        if let Some(size) = parse_synchsafe_u32(&header[6..10]) {
+            let footer_len = if (flags & 0x10) != 0 { 10_u64 } else { 0_u64 };
+            let offset = 10_u64
+                .saturating_add(size as u64)
+                .saturating_add(footer_len);
+            if offset > 0 && offset < total_len {
+                return offset;
+            }
+        }
+    }
+
+    if &header[0..4] == b"fLaC" {
+        if file.seek(SeekFrom::Start(4)).is_ok() {
+            let mut block_header = [0u8; 4];
+            for _ in 0..64 {
+                if file.read_exact(&mut block_header).is_err() {
+                    break;
+                }
+
+                let is_last = (block_header[0] & 0x80) != 0;
+                let length = ((block_header[1] as u32) << 16)
+                    | ((block_header[2] as u32) << 8)
+                    | block_header[3] as u32;
+
+                if file.seek(SeekFrom::Current(length as i64)).is_err() {
+                    break;
+                }
+
+                if is_last {
+                    if let Ok(position) = file.stream_position() {
+                        if position < total_len {
+                            return position;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if &header[0..4] == b"RIFF" && &header[8..12] == b"WAVE" {
+        if file.seek(SeekFrom::Start(12)).is_ok() {
+            let mut chunk_header = [0u8; 8];
+            for _ in 0..4096 {
+                if file.read_exact(&mut chunk_header).is_err() {
+                    break;
+                }
+
+                let chunk_id = &chunk_header[0..4];
+                let chunk_size = u32::from_le_bytes([
+                    chunk_header[4],
+                    chunk_header[5],
+                    chunk_header[6],
+                    chunk_header[7],
+                ]) as u64;
+
+                if chunk_id == b"data" {
+                    if let Ok(position) = file.stream_position() {
+                        if position < total_len {
+                            return position;
+                        }
+                    }
+                    break;
+                }
+
+                let padding = chunk_size % 2;
+                if file
+                    .seek(SeekFrom::Current(
+                        (chunk_size.saturating_add(padding)) as i64,
+                    ))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    0
+}
+
+fn detect_audio_end_offset(file: &mut fs::File, total_len: u64) -> u64 {
+    let mut end = total_len;
+
+    if total_len >= 128 {
+        let mut tail = [0u8; 3];
+        if file.seek(SeekFrom::Start(total_len - 128)).is_ok() && file.read_exact(&mut tail).is_ok()
+        {
+            if &tail == b"TAG" {
+                end = end.saturating_sub(128);
+            }
+        }
+    }
+
+    if end >= 32 {
+        let mut footer = [0u8; 32];
+        if file.seek(SeekFrom::Start(end - 32)).is_ok() && file.read_exact(&mut footer).is_ok() {
+            if &footer[0..8] == b"APETAGEX" {
+                let tag_size =
+                    u32::from_le_bytes([footer[12], footer[13], footer[14], footer[15]]) as u64;
+                if tag_size >= 32 && tag_size < end {
+                    end = end.saturating_sub(tag_size);
+                }
+            }
+        }
+    }
+
+    end
+}
+
+fn compute_quick_fingerprint(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let total_len = file.metadata().ok()?.len();
+    if total_len < 16 * 1024 {
+        return None;
+    }
+
+    let start = detect_audio_start_offset(&mut file, total_len);
+    let mut end = detect_audio_end_offset(&mut file, total_len);
+
+    if end <= start.saturating_add(8 * 1024) {
+        end = total_len;
+    }
+
+    if end <= start.saturating_add(8 * 1024) {
+        return None;
+    }
+
+    let audio_len = end.saturating_sub(start);
+    if audio_len < 8 * 1024 {
+        return None;
+    }
+
+    let sample_window = 12 * 1024_u64;
+    let sample_positions = [
+        0_u64,
+        audio_len / 8,
+        audio_len / 4,
+        audio_len / 2,
+        (audio_len * 3) / 4,
+        (audio_len * 7) / 8,
+    ];
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"pmp-quickfp-v2");
+
+    if let Some(ext) = path.extension().and_then(|value| value.to_str()) {
+        hasher.update(ext.to_ascii_lowercase().as_bytes());
+    }
+
+    let mut sampled_total = 0usize;
+    let mut previous_abs_pos: Option<u64> = None;
+    let mut buffer = vec![0u8; sample_window as usize];
+
+    for relative in sample_positions {
+        let half = sample_window / 2;
+        let mut abs_pos = start.saturating_add(relative.saturating_sub(half));
+        let max_pos = end.saturating_sub(1);
+        if abs_pos > max_pos {
+            abs_pos = max_pos;
+        }
+
+        if previous_abs_pos == Some(abs_pos) {
+            continue;
+        }
+        previous_abs_pos = Some(abs_pos);
+
+        if file.seek(SeekFrom::Start(abs_pos)).is_err() {
+            continue;
+        }
+
+        let max_read = std::cmp::min(sample_window, end.saturating_sub(abs_pos)) as usize;
+        if max_read == 0 {
+            continue;
+        }
+
+        if file.read_exact(&mut buffer[..max_read]).is_err() {
+            continue;
+        }
+
+        hasher.update(&buffer[..max_read]);
+        sampled_total += max_read;
+    }
+
+    if sampled_total < 8 * 1024 {
+        return None;
+    }
+
+    let digest = hasher.finalize();
+    let hex = digest
+        .iter()
+        .take(20)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Some(format!("qf2:{hex}"))
 }
 
 #[derive(Debug, Clone)]
@@ -600,7 +832,7 @@ fn stable_hash_for_path(path: &str) -> u32 {
     hash
 }
 
-fn cover_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn cover_cache_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let resolver = app.path_resolver();
     let base = resolver
         // Use AppData as the stable location for cached covers so the `asset://` protocol scope
@@ -617,7 +849,11 @@ fn cover_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     // Ensure this session allows the cover cache directory even if the static glob patterns
     // in `tauri.conf.json` don't match the platform-specific resolved path.
     if !COVER_ASSET_SCOPE_READY.load(Ordering::Acquire) {
-        if app.asset_protocol_scope().allow_directory(&dir, true).is_ok() {
+        if app
+            .asset_protocol_scope()
+            .allow_directory(&dir, true)
+            .is_ok()
+        {
             COVER_ASSET_SCOPE_READY.store(true, Ordering::Release);
         }
     }
@@ -653,6 +889,153 @@ fn media_type_from_cover_path(path: &Path) -> Option<String> {
         "jpg" | "jpeg" => Some("image/jpeg".to_string()),
         _ => None,
     }
+}
+
+fn parse_cover_key_from_protocol_uri(uri: &str) -> Option<String> {
+    let uri_without_fragment = uri.split('#').next().unwrap_or(uri);
+    let uri_without_query = uri_without_fragment.split('?').next().unwrap_or(uri_without_fragment);
+
+    let candidate = if let Some(rest) = uri_without_query.strip_prefix("pmp://cover/") {
+        rest
+    } else if let Some(rest) = uri_without_query.strip_prefix("pmp://localhost/cover/") {
+        rest
+    } else {
+        return None;
+    };
+
+    let key = candidate.trim_matches('/');
+    if key.is_empty() || key.len() > 192 {
+        return None;
+    }
+    if key.contains('/') || key.contains('\\') {
+        return None;
+    }
+    if !key
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+    {
+        return None;
+    }
+
+    Some(key.to_string())
+}
+
+fn parse_cover_size_edge_from_protocol_uri(uri: &str) -> Option<u32> {
+    let query = uri.split('?').nth(1)?.split('#').next().unwrap_or("");
+    if query.is_empty() {
+        return None;
+    }
+
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        if key != "size" {
+            continue;
+        }
+
+        let value = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        return match value.as_str() {
+            "small" => Some(160),
+            "medium" => Some(256),
+            "large" => Some(384),
+            _ => None,
+        };
+    }
+
+    None
+}
+
+fn strip_cover_thumb_suffix(key: &str) -> &str {
+    let Some(prefix_end) = key.rfind("-thumb-") else {
+        return key;
+    };
+
+    let suffix = &key[(prefix_end + "-thumb-".len())..];
+    let Some(px_digits) = suffix.strip_suffix("px") else {
+        return key;
+    };
+    if px_digits.is_empty() || !px_digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return key;
+    }
+
+    &key[..prefix_end]
+}
+
+fn candidate_cover_keys_for_protocol_request(request_key: &str, preferred_edge_px: Option<u32>) -> Vec<String> {
+    if let Some(edge_px) = preferred_edge_px {
+        let base_key = strip_cover_thumb_suffix(request_key);
+        let preferred_variant = cover_variant_key(base_key, edge_px);
+        if preferred_variant == request_key {
+            return vec![preferred_variant];
+        }
+        return vec![preferred_variant, request_key.to_string()];
+    }
+
+    vec![request_key.to_string()]
+}
+
+fn build_protocol_response(
+    status: u16,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> Result<HttpResponse, Box<dyn std::error::Error>> {
+    let mut response = HttpResponseBuilder::new().status(status);
+    if let Some(content_type) = content_type {
+        response = response.header("Content-Type", content_type);
+    }
+    response = response.header("Access-Control-Allow-Origin", "*");
+    response = response.header("Cache-Control", "public, max-age=604800, immutable");
+    response.header("Content-Length", body.len().to_string()).body(body)
+}
+
+pub fn handle_pmp_protocol_request<R: Runtime>(
+    app: &AppHandle<R>,
+    request: &HttpRequest,
+) -> Result<HttpResponse, Box<dyn std::error::Error>> {
+    let Some(cover_key) = parse_cover_key_from_protocol_uri(request.uri()) else {
+        return build_protocol_response(404, Some("text/plain; charset=utf-8"), Vec::new());
+    };
+    let preferred_edge_px = parse_cover_size_edge_from_protocol_uri(request.uri());
+
+    let dir = match cover_cache_dir(app) {
+        Ok(dir) => dir,
+        Err(_) => {
+            return build_protocol_response(500, Some("text/plain; charset=utf-8"), Vec::new());
+        }
+    };
+
+    let cover_path = candidate_cover_keys_for_protocol_request(&cover_key, preferred_edge_px)
+        .into_iter()
+        .find_map(|candidate_key| find_cached_cover_file(&dir, &candidate_key));
+
+    let Some(cover_path) = cover_path else {
+        return build_protocol_response(404, Some("text/plain; charset=utf-8"), Vec::new());
+    };
+
+    let metadata = match fs::metadata(&cover_path) {
+        Ok(meta) if meta.is_file() => meta,
+        _ => {
+            return build_protocol_response(404, Some("text/plain; charset=utf-8"), Vec::new());
+        }
+    };
+
+    if metadata.len() > 12 * 1024 * 1024 {
+        return build_protocol_response(413, Some("text/plain; charset=utf-8"), Vec::new());
+    }
+
+    let bytes = match fs::read(&cover_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return build_protocol_response(500, Some("text/plain; charset=utf-8"), Vec::new());
+        }
+    };
+
+    let mime = media_type_from_cover_path(&cover_path)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    build_protocol_response(200, Some(mime.as_str()), bytes)
 }
 
 fn cover_variant_key(base_key: &str, max_edge_px: u32) -> String {
@@ -1088,6 +1471,7 @@ pub fn scan_library_paths(
         let meta = fs::metadata(&path).map_err(|e| format!("Failed to stat {path:?}: {e}"))?;
         let size = meta.len();
         let mtime_ms = meta.modified().map(system_time_to_millis).unwrap_or(0);
+        let quick_fingerprint = compute_quick_fingerprint(&path);
         let file_name = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -1148,6 +1532,7 @@ pub fn scan_library_paths(
             file_name: file_name.clone(),
             size,
             mtime_ms,
+            quick_fingerprint,
             duration,
             sample_rate,
             bit_depth,
@@ -1176,7 +1561,11 @@ pub fn scan_library_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_quick_metadata, parse_replaygain_db};
+    use super::{
+        candidate_cover_keys_for_protocol_request, compute_quick_fingerprint, extract_quick_metadata,
+        parse_cover_key_from_protocol_uri, parse_cover_size_edge_from_protocol_uri,
+        parse_replaygain_db, strip_cover_thumb_suffix,
+    };
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
@@ -1261,5 +1650,131 @@ mod tests {
         assert_eq!(bit_depth, Some(1));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn write_fake_mp3_payload(path: &Path, payload: &[u8], id3_tag_len: usize) {
+        let mut file = File::create(path).expect("create fake mp3");
+
+        if id3_tag_len > 0 {
+            let mut header = [0u8; 10];
+            header[0..3].copy_from_slice(b"ID3");
+            header[3] = 4;
+            header[4] = 0;
+            header[5] = 0;
+
+            let size = id3_tag_len as u32;
+            header[6] = ((size >> 21) & 0x7F) as u8;
+            header[7] = ((size >> 14) & 0x7F) as u8;
+            header[8] = ((size >> 7) & 0x7F) as u8;
+            header[9] = (size & 0x7F) as u8;
+            file.write_all(&header).expect("write id3 header");
+            file.write_all(&vec![0xEE; id3_tag_len])
+                .expect("write id3 payload");
+        }
+
+        file.write_all(payload).expect("write payload");
+    }
+
+    #[test]
+    fn quick_fingerprint_ignores_id3v2_size_changes() {
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+
+        let base_path = tmp_dir.join(format!("pmp_qf_base_{nonce}.mp3"));
+        let tagged_path = tmp_dir.join(format!("pmp_qf_tagged_{nonce}.mp3"));
+
+        let payload = (0..(320 * 1024))
+            .map(|idx| (idx % 251) as u8)
+            .collect::<Vec<_>>();
+        write_fake_mp3_payload(&base_path, &payload, 0);
+        write_fake_mp3_payload(&tagged_path, &payload, 4096);
+
+        let base_fp = compute_quick_fingerprint(&base_path).expect("base fingerprint");
+        let tagged_fp = compute_quick_fingerprint(&tagged_path).expect("tagged fingerprint");
+        assert_eq!(base_fp, tagged_fp);
+
+        let _ = std::fs::remove_file(&base_path);
+        let _ = std::fs::remove_file(&tagged_path);
+    }
+
+    #[test]
+    fn quick_fingerprint_changes_when_audio_payload_changes() {
+        let tmp_dir = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time ok")
+            .as_nanos();
+
+        let a_path = tmp_dir.join(format!("pmp_qf_a_{nonce}.mp3"));
+        let b_path = tmp_dir.join(format!("pmp_qf_b_{nonce}.mp3"));
+
+        let payload_a = (0..(320 * 1024))
+            .map(|idx| (idx % 251) as u8)
+            .collect::<Vec<_>>();
+        let payload_b = (0..(320 * 1024))
+            .map(|idx: usize| ((idx.wrapping_mul(3)) % 251) as u8)
+            .collect::<Vec<_>>();
+
+        write_fake_mp3_payload(&a_path, &payload_a, 2048);
+        write_fake_mp3_payload(&b_path, &payload_b, 2048);
+
+        let a_fp = compute_quick_fingerprint(&a_path).expect("fingerprint a");
+        let b_fp = compute_quick_fingerprint(&b_path).expect("fingerprint b");
+        assert_ne!(a_fp, b_fp);
+
+        let _ = std::fs::remove_file(&a_path);
+        let _ = std::fs::remove_file(&b_path);
+    }
+
+    #[test]
+    fn parse_cover_key_from_protocol_uri_accepts_cover_key_path() {
+        let key = parse_cover_key_from_protocol_uri("pmp://cover/cover-abc-thumb-256px")
+            .expect("expected key");
+        assert_eq!(key, "cover-abc-thumb-256px");
+    }
+
+    #[test]
+    fn parse_cover_key_from_protocol_uri_rejects_path_traversal() {
+        assert!(parse_cover_key_from_protocol_uri("pmp://cover/../../secret").is_none());
+        assert!(parse_cover_key_from_protocol_uri("pmp://cover/cover%2fsecret").is_none());
+    }
+
+    #[test]
+    fn parse_cover_size_edge_from_protocol_uri_reads_size_query() {
+        assert_eq!(
+            parse_cover_size_edge_from_protocol_uri("pmp://cover/cover-abc?size=small"),
+            Some(160)
+        );
+        assert_eq!(
+            parse_cover_size_edge_from_protocol_uri("pmp://cover/cover-abc?size=medium"),
+            Some(256)
+        );
+        assert_eq!(
+            parse_cover_size_edge_from_protocol_uri("pmp://cover/cover-abc?size=large"),
+            Some(384)
+        );
+        assert_eq!(
+            parse_cover_size_edge_from_protocol_uri("pmp://cover/cover-abc?size=unknown"),
+            None
+        );
+    }
+
+    #[test]
+    fn strip_cover_thumb_suffix_extracts_base_key() {
+        assert_eq!(strip_cover_thumb_suffix("cover-abc-thumb-256px"), "cover-abc");
+        assert_eq!(strip_cover_thumb_suffix("cover-abc"), "cover-abc");
+    }
+
+    #[test]
+    fn candidate_cover_keys_for_protocol_request_prefers_sized_variant() {
+        let candidates =
+            candidate_cover_keys_for_protocol_request("cover-abc-thumb-256px", Some(160));
+        assert_eq!(
+            candidates,
+            vec!["cover-abc-thumb-160px".to_string(), "cover-abc-thumb-256px".to_string()]
+        );
     }
 }

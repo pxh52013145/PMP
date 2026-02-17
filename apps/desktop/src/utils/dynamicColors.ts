@@ -38,28 +38,15 @@ function clampByte(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
 
-async function blobUrlToDataUrl(blobUrl: string): Promise<string | null> {
-  try {
-    const response = await fetch(blobUrl);
-    const blob = await response.blob();
-    return await new Promise<string | null>((resolve) => {
-      const reader = new FileReader();
-      reader.onerror = () => resolve(null);
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
-}
-
 function toPortableImageUrl(imageUrl: string): Promise<string | null> {
   if (!imageUrl) return Promise.resolve(null);
 
   const lower = imageUrl.toLowerCase();
   if (lower.startsWith('data:')) return Promise.resolve(imageUrl);
   if (lower.startsWith('http:') || lower.startsWith('https:')) return Promise.resolve(imageUrl);
-  if (lower.startsWith('blob:')) return blobUrlToDataUrl(imageUrl);
+  if (lower.startsWith('blob:')) return Promise.resolve(imageUrl);
+  if (lower.startsWith('asset:') || lower.startsWith('tauri:')) return Promise.resolve(imageUrl);
+  if (lower.startsWith('pmp://')) return Promise.resolve(imageUrl);
 
   return Promise.resolve(null);
 }
@@ -83,8 +70,34 @@ async function extractColorsFromImageUrl(imageUrl: string, cacheKey?: string): P
 
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
+      let settled = false;
+
+      const finalize = (value: DynamicColors) => {
+        if (settled) return;
+        settled = true;
+
+        try {
+          img.onload = null;
+          img.onerror = null;
+          if (!portableUrl.startsWith('data:')) {
+            img.src = '';
+          }
+        } catch {
+          // best-effort
+        }
+
+        try {
+          canvas.width = 0;
+          canvas.height = 0;
+        } catch {
+          // best-effort
+        }
+
+        resolve(value);
+      };
+
       if (!ctx) {
-        resolve(DEFAULT_DYNAMIC_COLORS);
+        finalize(DEFAULT_DYNAMIC_COLORS);
         return;
       }
 
@@ -145,7 +158,7 @@ async function extractColorsFromImageUrl(imageUrl: string, cacheKey?: string): P
           }
 
           if (count <= 0) {
-            resolve(DEFAULT_DYNAMIC_COLORS);
+            finalize(DEFAULT_DYNAMIC_COLORS);
             return;
           }
 
@@ -194,13 +207,13 @@ async function extractColorsFromImageUrl(imageUrl: string, cacheKey?: string): P
 
           const textColor = `rgba(${clampByte(enhanced.r * 1.5)}, ${clampByte(enhanced.g * 1.5)}, ${clampByte(enhanced.b * 1.5)}, 0.95)`;
 
-          resolve({ dominantColor, accentColor, textColor });
+          finalize({ dominantColor, accentColor, textColor });
         } catch {
-          resolve(DEFAULT_DYNAMIC_COLORS);
+          finalize(DEFAULT_DYNAMIC_COLORS);
         }
       };
 
-      img.onerror = () => resolve(DEFAULT_DYNAMIC_COLORS);
+      img.onerror = () => finalize(DEFAULT_DYNAMIC_COLORS);
       img.src = portableUrl;
     });
   })()

@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@tauri-apps/api/tauri', () => ({
   invoke: vi.fn(),
-  convertFileSrc: vi.fn((path: string) => `asset://localhost/${String(path).replace(/\\/g, '/')}`),
 }));
 
 vi.mock('@tauri-apps/api/dialog', () => ({
@@ -14,7 +13,7 @@ vi.mock('@tauri-apps/api/fs', () => ({
   exists: vi.fn(),
 }));
 
-import { invoke, convertFileSrc } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/tauri';
 import { MusicLibraryService } from '../MusicLibraryService';
 
 describe('MusicLibraryService.getCoverUrlForTrack', () => {
@@ -59,10 +58,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\\\Music\\\\song.mp3' })
     );
-    expect(convertFileSrc).toHaveBeenCalledWith(
-      'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-abc-thumb-256px.jpg'
-    );
-    expect(url).toBe('asset://localhost/C:/AppData/com.pixelmatrix.player/music-covers/cover-abc-thumb-256px.jpg');
+    expect(url).toBe('pmp://cover/cover-abc-thumb-256px');
   });
 
   it('keeps embedded base64 coverUrl for non-absolute paths in Tauri', async () => {
@@ -83,5 +79,37 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
 
     expect(url).toBe(embedded);
     expect(invoke).not.toHaveBeenCalledWith('music_library_get_cover', expect.anything());
+  });
+
+  it('builds pmp cover url with size hint and requests matching thumbnail edge', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({
+      key: 'cover-small-thumb-160px',
+      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-small-thumb-160px.jpg',
+      size: 8192,
+      mediaType: 'image/jpeg',
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    (service as unknown as { upsertCoverCacheEntry: unknown }).upsertCoverCacheEntry = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { maybeUpdateTrackCoverInDB: unknown }).maybeUpdateTrackCoverInDB = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { pruneCoverCacheIfNeeded: unknown }).pruneCoverCacheIfNeeded = vi.fn().mockResolvedValue(undefined);
+
+    const url = await service.getCoverUrlForTrack(
+      {
+        id: 't3',
+        title: 'Sized',
+        filePath: 'C:\\Music\\sized.mp3',
+      },
+      { coverSizeHint: 'small' }
+    );
+
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_get_cover',
+      expect.objectContaining({ path: 'C:\\Music\\sized.mp3', maxEdgePx: 160 })
+    );
+    expect(url).toBe('pmp://cover/cover-small-thumb-160px?size=small');
   });
 });

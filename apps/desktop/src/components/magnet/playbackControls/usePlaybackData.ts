@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react';
 import type { Track } from '../../../services/audio';
 import { PlaybackState } from '../../../services/audio';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
+import { isSameTrackRenderIdentity, sanitizeTrackForRuntime } from '../shared/sanitizeTrackForRuntime';
 
 export interface PlaybackData {
   playbackState: PlaybackState;
@@ -29,7 +30,10 @@ export function usePlaybackData(): PlaybackData {
     const unsubscribe = audioService.onStateChange((state) => {
       setPlaybackState(state.playbackState);
       setHasQueue(state.queue.length > 0);
-      setCurrentTrack(state.currentTrack);
+      const sanitizedTrack = sanitizeTrackForRuntime(state.currentTrack);
+      setCurrentTrack((previousTrack) =>
+        isSameTrackRenderIdentity(previousTrack, sanitizedTrack) ? previousTrack : sanitizedTrack
+      );
       setQueueLength(state.queue.length);
     });
 
@@ -37,7 +41,7 @@ export function usePlaybackData(): PlaybackData {
     const state = audioService.getState();
     setPlaybackState(state.playbackState);
     setHasQueue(state.queue.length > 0);
-    setCurrentTrack(state.currentTrack);
+    setCurrentTrack(sanitizeTrackForRuntime(state.currentTrack));
     setQueueLength(state.queue.length);
 
     return unsubscribe;

@@ -1,0 +1,451 @@
+# MUSIC_LIBRARY Baseline (PMP Local-First -> Hydra-Ready)
+
+Updated: 2026-02-17
+
+Scope:
+- `apps/desktop/src/services/audio/MusicLibraryService.ts`
+- `apps/desktop/src/components/pages/MusicLibrary.tsx`
+- `apps/desktop/src/components/pages/MusicLibrary.css`
+- `apps/desktop/src-tauri/src/music_library.rs`
+- `apps/desktop/src/i18n/locales/zh-CN.json`
+- `apps/desktop/src/i18n/locales/en-US.json`
+
+---
+
+## 1) Product intent and architecture boundary
+
+This baseline follows your target direction:
+
+1. **PMP now is local-first** (single-user desktop player, high performance).
+2. **Hydra is the next layer** (networked/user-centric logical library, not tied to physical folder structure).
+3. **Scan layer and display layer must be decoupled**:
+   - Scan: ingest physical files from sources.
+   - Display: controlled by source visibility + logical view rules.
+4. **Identity split**:
+   - Local identity: fast, metadata-resilient fingerprint (`quickFingerprint`, qf2).
+   - Cloud identity: expensive full-content hash, generated lazily only when needed.
+
+---
+
+## 2) Decisions confirmed in this round
+
+### A. No migration burden now
+
+You explicitly confirmed no legacy migration is needed for now.
+
+Therefore:
+- No IndexedDB -> SQLite migration script in current phase.
+- Rebuild/rescan is acceptable.
+
+### B. Memory and UX first, protocol after
+
+Before heavy backend migration, prioritize:
+- list pressure reduction,
+- source toggles,
+- query/path filtering correctness,
+- cover/image memory governance.
+
+### C. Add explicit playback-time semantics
+
+Future logical table should include explicit `last_played_at` (not only generic `updated_at`).
+
+---
+
+## 3) Evidence from current code (not theory)
+
+### 3.1 Fingerprint pipeline (already aligned with your requirement)
+
+`apps/desktop/src-tauri/src/music_library.rs` already provides qf2 quick fingerprinting and metadata-tolerant behavior.
+
+Important point: **this path is not based on full-file hash for first scan**.
+
+### 3.2 Memory pressure hotspots observed in frontend architecture
+
+From `apps/desktop/src/components/pages/MusicLibrary.tsx` and `MusicLibraryService.ts`:
+
+- Initial and incremental loading still move sizable data into WebView state.
+- Search used to execute on every input change (now changed to debounce in this round).
+- Large track/album collections still require strict render/caching controls.
+- Cover and list rendering pressure remains a primary WebView memory risk area.
+
+Conclusion: your judgment is correct — WebView pressure is a major contributor when entering library/play flows.
+
+### 3.3 Source control model was incomplete before this patch
+
+The service had path records, but query/filter behavior was not fully consistent with source visibility goals.
+
+This round completes key filtering paths so source visibility affects:
+- all track list,
+- search,
+- artist/album/genre facets,
+- stats.
+
+---
+
+## 4) Implemented in this patch round
+
+## 4.1 Source toggle model in service layer
+
+`LibraryPath` now carries two switches:
+- `isVisible`: controls display inclusion.
+- `isScanned`: controls scan participation.
+
+Implemented methods:
+- `setLibraryPathVisibility(pathId, isVisible)`
+- `setLibraryPathScanning(pathId, isScanned)`
+
+Default normalization for existing records:
+- missing flags are treated as `true`.
+
+### 4.2 Query/filter consistency (visibility-aware)
+
+`MusicLibraryService.ts` now applies visibility context in:
+- `getAllTracks`
+- `searchTracks`
+- `getTracksByArtist`
+- `getTracksByAlbum`
+- `getAllArtists`
+- `getAllAlbums`
+- `getAllGenres`
+- `getLibraryStats`
+
+This makes “scan != display” behavior operational at data-query level.
+
+### 4.3 Startup and full-scan respect scan switch
+
+Startup refresh and `scanAllLibraryPaths` only process `isScanned=true` sources.
+
+### 4.4 Music library UI: source controls
+
+`MusicLibrary.tsx` path manager now supports:
+- visibility toggle (show/hide source in library),
+- scan toggle (enable/disable auto scan),
+- state badges (hidden / scan paused),
+- immediate data refresh after visibility/remove actions.
+
+### 4.5 Search debounce (quick memory/CPU win)
+
+Search input now uses debounce (`SEARCH_DEBOUNCE_MS`) instead of immediate query on every keystroke.
+
+### 4.6 Viewport windowing (DOM pressure reduction)
+
+`MusicLibrary.tsx` now uses viewport-based render windows:
+- track list is rendered with top/bottom virtual spacers + overscan rows,
+- album grid is rendered with row-window slicing + top/bottom spacers,
+- scroll snapshot (`scrollTop/clientHeight/clientWidth`) drives the visible window.
+
+This directly limits long-lived DOM node count when library size grows.
+
+### 4.7 Cover payload tightening (runtime state)
+
+Cover handling on playback-side hooks now avoids retaining heavyweight embedded payloads:
+- runtime track sanitization removes oversized/ephemeral cover payloads from long-lived UI state,
+- `useCoverUrlForTrack` uses compact fetch signatures instead of full cover-url strings in lookup keys,
+- media-session metadata skips `data:`/`blob:` artwork payloads,
+- dynamic color extraction no longer converts `blob:` covers into duplicated data URLs.
+
+### 4.8 P2 cover reclamation (playback + album view)
+
+Additional memory-control behavior is now in place:
+- playback-side cover hooks keep only a small hot set and schedule delayed release for stale cover URLs,
+- album view drops offscreen cover URLs (and clears request marks) after a short debounce,
+- leaving album view clears album cover URLs from UI state and releases them from runtime caches.
+
+### 4.9 Code-grounded memory budgets (current implementation)
+
+The following values are **not assumptions**; they are from current code constants in
+`apps/desktop/src/services/audio/MusicLibraryService.ts`:
+
+- Default runtime cover budgets:
+  - `coverUrlCacheMaxEntries = 320`
+  - `albumCoverUrlCacheMaxEntries = 96`
+  - `coverBlobCacheMaxBytes = 12 MB`
+  - `coverDecodedEstimateMaxEntries = 160`
+  - `coverDecodedEstimateMaxBytes = 36 MB`
+  - `coverCacheMaxBytes = 80 MB`
+  - `coverMaxImageBytes = 5 MB`
+- Policy downshift budgets:
+  - `watch`: blob `8 MB`, decoded `24 MB`
+  - `high`: blob `6 MB`, decoded `16 MB`, max image `3 MB`
+  - `critical`: blob `4 MB`, decoded `10 MB`, max image `2 MB`
+  - `hidden`: blob `1 MB`, decoded `2 MB`, max image `1.5 MB`
+
+Interpretation:
+- This confirms current architecture already has cache ceilings and policy-based downshift.
+- WebView memory spikes are therefore more likely from **render/data lifecycle pressure**
+  (list/card retention, long-lived object references, large IPC payloads), not only from an
+  unbounded cache map.
+
+### 4.10 P2 verification matrix (implementation vs. target)
+
+| Area | Target behavior | Current implementation status |
+|---|---|---|
+| Source visibility | `scan != display`; hide source without delete | ✅ service query layer + UI toggle are wired |
+| Source scanning switch | source can be paused from auto-scan | ✅ `isScanned` path-level control is active |
+| Search pressure | avoid per-keystroke full search | ✅ debounce (`180ms`) is active |
+| Track list DOM pressure | render only viewport window | ✅ virtual window + spacers |
+| Album grid DOM pressure | row windowing + spacers | ✅ virtual row window + spacers |
+| Cover payload in runtime state | avoid retaining heavy embedded payloads | ✅ playback hooks sanitize and compact |
+| Cover URL lifecycle | stale/offscreen URL reclaim | ✅ delayed release + offscreen reclaim + leave-view cleanup |
+| Media Session artwork | avoid large `data:`/`blob:` payload | ✅ artwork source guard active |
+| Dynamic color extraction | avoid blob->dataURL duplication | ✅ conversion path removed |
+
+---
+
+## 5) Why this architecture is correct for Hydra evolution
+
+This is the intended bridge:
+
+1. **Physical source layer** (local folders/NAS etc.)
+2. **Local track registry** keyed by quick fingerprint
+3. **Logical user entry layer** (owner-aware metadata, tags, ratings, future cloud sync)
+
+Resolver strategy:
+- Play request -> resolve local by fingerprint/path first.
+- If missing locally and cloud-enabled entry exists -> network fetch fallback.
+
+This enables future “metaverse concert / shared listening” without forcing heavy cloud logic now.
+
+---
+
+## 6) Target schema (next phase, SQLite track)
+
+When moving to SQLite, use this practical model (flat enough for local speed, extensible for cloud):
+
+```sql
+CREATE TABLE sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  path TEXT NOT NULL UNIQUE,
+  display_name TEXT,
+  category TEXT NOT NULL DEFAULT 'music',
+  is_visible INTEGER NOT NULL DEFAULT 1,
+  is_scanned INTEGER NOT NULL DEFAULT 1,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE local_tracks (
+  id TEXT PRIMARY KEY,
+  source_id INTEGER NOT NULL,
+  file_path TEXT NOT NULL,
+  quick_fingerprint TEXT,
+  cloud_full_hash TEXT,
+  title TEXT,
+  artist TEXT,
+  album TEXT,
+  duration_ms INTEGER,
+  metadata_json TEXT,
+  file_size INTEGER,
+  mtime_ms INTEGER,
+  status TEXT NOT NULL DEFAULT 'available',
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE(source_id, file_path)
+);
+
+CREATE TABLE user_entries (
+  id TEXT PRIMARY KEY,              -- e.g. <owner_uid>::<uuidv7>
+  owner_uid TEXT NOT NULL,
+  track_id TEXT NOT NULL,
+  rating INTEGER,
+  tags_json TEXT,
+  in_cloud INTEGER NOT NULL DEFAULT 0,
+  is_missing INTEGER NOT NULL DEFAULT 0,
+  last_played_at_ms INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+```
+
+Notes:
+- Full hash should stay **lazy** (`cloud_full_hash` nullable).
+- `owner_uid` belongs to logical/user layer, not physical source identity.
+
+---
+
+## 7) Memory optimization baseline (execution order)
+
+### P0 (now / immediate)
+
+1. Keep source visibility filtering in all list/facet/stats queries.
+2. Keep debounced search path.
+3. Avoid passing/keeping heavyweight payloads in UI state.
+4. Continue strict cover cache limits and reclaim policies.
+
+### P1 (next)
+
+1. Introduce true virtualized list/grid for large collections.
+2. Move more expensive metadata/cover-side computations off hot UI path.
+3. Keep source manager as first-class control surface.
+
+### P2 (Hydra-ready)
+
+1. Add logical user library tables with `owner_uid` + `last_played_at_ms`.
+2. Lazy full-hash computation for share/sync actions.
+3. Resolver fallback: local-first, network-second.
+
+---
+
+## 8) Anti-patterns explicitly rejected
+
+1. Full-file hash for every file during initial local scan.
+2. Coupling physical folder scan result directly to final display list.
+3. Treating heavy cover payloads as long-lived frontend state.
+4. Forcing cloud-level normalization complexity into current local-first phase.
+
+---
+
+## 9) Acceptance criteria for this baseline
+
+1. Toggling a source to hidden removes its tracks from list/search/facets/stats without deleting source data.
+2. Toggling source scanning off prevents auto scan participation.
+3. Search no longer runs at every keystroke (debounced).
+4. Functional behavior remains consistent for existing local playback flows.
+
+---
+
+## 10) Validation executed for this baseline
+
+Executed on current workspace:
+
+1. `pnpm --filter @pixel-matrix/desktop type-check`
+2. `pnpm --filter @pixel-matrix/desktop lint`
+3. `pnpm --filter @pixel-matrix/desktop test -- src/services/audio/__tests__/MusicLibraryService.spec.ts`
+4. `cargo test` (under `apps/desktop/src-tauri`)
+
+Result: all passed in current patch state.
+
+---
+
+## 11) `pmp://cover` protocol baseline (P2 extension)
+
+To reduce WebView image-memory pressure from file-path based cover URLs, cover rendering now
+uses a dedicated custom protocol.
+
+- URL format:
+  - `pmp://cover/<coverKey>`
+- Frontend behavior:
+  - `MusicLibraryService.getCoverUrlForTrack` still calls `music_library_get_cover`.
+  - The command still returns `{ key, path, size, mediaType }`.
+  - Frontend now builds URL from `key` (`pmp://cover/...`) and no longer depends on `convertFileSrc`.
+- Backend behavior:
+  - Tauri registers `register_uri_scheme_protocol("pmp", ...)`.
+  - Protocol handler validates cover key format and rejects traversal-style requests.
+  - Handler resolves cached cover file by key and returns binary bytes with content type.
+  - Response includes cache headers (`Cache-Control`, `Content-Length`).
+
+Boundary:
+- Protocol input is **cover key only**, not arbitrary file path.
+- File path -> cover key/variant resolve stays in `music_library_get_cover` command.
+
+### 11.1 Size hint routing
+
+Protocol now supports optional size hints:
+
+- `pmp://cover/<coverKey>?size=small`
+- `pmp://cover/<coverKey>?size=medium`
+- `pmp://cover/<coverKey>?size=large`
+
+Backend behavior:
+- Size-to-edge mapping:
+  - `small -> 160px`
+  - `medium -> 256px`
+  - `large -> 384px`
+- If requested variant file exists, serve it first.
+- If not, fall back to the original requested key.
+
+Frontend behavior:
+- `MusicLibraryService.getCoverUrlForTrack` accepts `coverSizeHint` and forwards matching `maxEdgePx` to `music_library_get_cover`.
+- UI usage baseline:
+  - Album grid: `small`
+  - Progress bar / play-pause dynamic color: `small`
+  - Track info: `medium`
+
+### 11.2 Dynamic-color sampling and release lifecycle
+
+Code-grounded behavior:
+
+- `useDynamicColor` now supports:
+  - `sampleSize: small|medium|large`
+  - `releaseAfterExtract`
+  - `cacheKey`
+- Dynamic-color sampling for playback magnets uses `small` size.
+- For non-image dynamic-color surfaces (play/pause, progress), extraction path can release cover URL after sampling.
+- `dynamicColors.ts` now treats `pmp://...` as a portable image source, so extraction works directly against protocol URLs.
+
+Memory implication:
+
+- The old risk path (`blob -> dataURL` duplication) is avoided.
+- Cover bytes stay in protocol/cache pipeline, and dynamic color keeps only tiny color values in React state.
+
+### 11.3 Audio chain vs WebView memory (code-backed conclusion)
+
+Current code shows native audio is not routed through WebView decode by default:
+
+- Frontend audio service default decode mode is `streaming` (not full-track predecode).
+- Rust audio engine default is also `streaming` for low startup latency and lower memory.
+
+So when WebView memory rises sharply, primary suspects are UI-side assets/lifecycle, not PCM decode buffers:
+
+1. Cover decode/render surfaces (JS image objects + GPU textures).
+2. Long-lived list/card state retention and derived-array churn.
+3. Dynamic-color sampling bursts during rapid track switches.
+
+Current mitigation already landed:
+
+- Size-hinted protocol covers (`small/medium/large`).
+- Playback/album cover URL reclaim paths.
+- Viewport windowing in library list/grid.
+- Runtime track sanitization (drop heavy ephemeral payload fields).
+
+---
+
+## 12) Baseline metrics and evidence sources
+
+To avoid guess-based tuning, use these built-in signals as optimization baseline:
+
+1. Cover runtime cache snapshot
+   - Source: `MusicLibraryService.getCoverRuntimeCacheStats()`
+   - Fields:
+     - `coverUrlCacheEntries`
+     - `coverBlobUrlCacheEntries`
+     - `coverBlobUrlTotalBytes`
+     - `coverDecodedEstimateEntries`
+     - `coverDecodedEstimateTotalBytes`
+     - `albumCoverUrlCacheEntries`
+
+2. Governance memory snapshot
+   - Source: `DefaultMemoryGovernanceService.collectSnapshot()`
+   - Includes:
+     - `jsHeapUsedBytes`
+     - `webview2.webview2WorkingSetBytes`
+     - `webview2.webview2PrivateBytes`
+     - `webview2.treeWorkingSetBytes`
+     - `webview2.treePrivateBytes`
+
+3. Tier thresholds already codified (`contracts/memoryGovernance.ts`)
+   - Tier-1 trigger includes any of:
+     - JS heap >= `700 MB`
+     - WebView2 private >= `650 MB`
+     - WebView2 working set >= `800 MB`
+   - Tier-2/3 escalate from there and can trigger hidden-window destroy actions.
+
+This gives a concrete, repeatable baseline:
+
+- Measure before opening library.
+- Measure after opening library and after starting playback.
+- Compare cache bytes + WebView2 private/working-set deltas.
+- Apply policy/manual reclaim and re-measure.
+
+Operational helper now available in Debug Center:
+
+- `Debug Center -> Memory / Cache -> Capture baseline`
+- Samples are persisted at storage key:
+  - `STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1`
+  - value type: array of manual memory snapshots (latest-first, capped)
+
+Only after this evidence loop should we decide whether to prioritize:
+
+1. deeper list pagination/data slicing,
+2. stricter cover cache ceilings,
+3. dynamic-color extraction throttling.

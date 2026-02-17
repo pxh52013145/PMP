@@ -12,8 +12,13 @@ export const PlayPauseButton: React.FC = () => {
   const themeConfig = useComponentTheme('btn-play-pause');
 
   const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false;
-  const coverUrl = useCoverUrlForTrack(dynamicColorEnabled ? data.currentTrack : null);
-  const dynamicColors = useDynamicColor(coverUrl, dynamicColorEnabled);
+  const coverUrl = useCoverUrlForTrack(dynamicColorEnabled ? data.currentTrack : null, {
+    coverSizeHint: 'small',
+  });
+  const dynamicColors = useDynamicColor(coverUrl, dynamicColorEnabled, {
+    sampleSize: 'small',
+    releaseAfterExtract: true,
+  });
   const dynamicColorConfig = themeConfig.dynamicColor;
 
   if (themeConfig.customRenderer) {

@@ -46,7 +46,14 @@ function buildMediaMetadata(track: Track | null): MediaMetadata | null {
   const title = track.title ?? '';
   const artist = track.artist ?? track.albumArtist ?? '';
   const album = track.album ?? '';
-  const artworkSrc = typeof track.coverUrl === 'string' ? track.coverUrl : '';
+  const artworkSrc = (() => {
+    const raw = typeof track.coverUrl === 'string' ? track.coverUrl.trim() : '';
+    if (!raw) return '';
+    if (raw.length > 8 * 1024) return '';
+    const lower = raw.toLowerCase();
+    if (lower.startsWith('data:') || lower.startsWith('blob:')) return '';
+    return raw;
+  })();
   const artwork = artworkSrc ? [{ src: artworkSrc, sizes: '512x512' }] : undefined;
 
   try {

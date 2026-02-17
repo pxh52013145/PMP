@@ -14,7 +14,9 @@ export const TrackInfo: React.FC = () => {
 
   const dynamicColorEnabled =
     !lowRenderMode && themeConfig.dynamicColor?.extractFromCover !== false;
-  const dynamicColors = useDynamicColor(data.track?.coverUrl, dynamicColorEnabled);
+  const dynamicColors = useDynamicColor(data.track?.coverUrl, dynamicColorEnabled, {
+    sampleSize: 'small',
+  });
   const dynamicColorConfig = themeConfig.dynamicColor;
 
   const VariantComponent = lowRenderMode ? MinimalView : SpinningVinylView;

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Track } from '../../../services/audio';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
+import { isSameTrackRenderIdentity, sanitizeTrackForRuntime } from '../shared/sanitizeTrackForRuntime';
 
 export interface TrackInfoData {
   track: Track | null;
@@ -23,14 +24,17 @@ export interface TrackInfoData {
 export function useTrackInfoData(): TrackInfoData {
   const audioService = useAudioService();
   const [baseTrack, setBaseTrack] = useState<Track | null>(null);
-  const coverUrl = useCoverUrlForTrack(baseTrack);
+  const coverUrl = useCoverUrlForTrack(baseTrack, { coverSizeHint: 'medium' });
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
   useEffect(() => {
     const unsubscribe = audioService.onStateChange((state) => {
-      setBaseTrack(state.currentTrack);
+      const sanitizedTrack = sanitizeTrackForRuntime(state.currentTrack);
+      setBaseTrack((previousTrack) =>
+        isSameTrackRenderIdentity(previousTrack, sanitizedTrack) ? previousTrack : sanitizedTrack
+      );
       setIsPlaying(state.playbackState === 'playing');
       setCurrentTime(state.currentTime);
       setDuration(state.duration);
@@ -38,7 +42,7 @@ export function useTrackInfoData(): TrackInfoData {
 
     // 初始化
     const state = audioService.getState();
-    setBaseTrack(state.currentTrack);
+    setBaseTrack(sanitizeTrackForRuntime(state.currentTrack));
     setIsPlaying(state.playbackState === 'playing');
     setCurrentTime(state.currentTime);
     setDuration(state.duration);

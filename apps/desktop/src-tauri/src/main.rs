@@ -66,6 +66,9 @@ fn main() {
 
     if is_minimal_boot_enabled() || is_blank_baseline_profile(&context) {
         tauri::Builder::default()
+            .register_uri_scheme_protocol("pmp", |app, request| {
+                crate::music_library::handle_pmp_protocol_request(app, request)
+            })
             .run(context)
             .expect("error while running tauri application");
         return;
@@ -79,6 +82,9 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .register_uri_scheme_protocol("pmp", |app, request| {
+            crate::music_library::handle_pmp_protocol_request(app, request)
+        })
         .manage(ExitFlag::new())
         .manage(EditorEffectsState::new(true))
         .manage(Arc::new(perf_monitor::PerfMonitor::new()))

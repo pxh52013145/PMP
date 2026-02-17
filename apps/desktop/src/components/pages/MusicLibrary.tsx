@@ -62,6 +62,12 @@ type SidebarScrollMemory = { scrollTop: number; anchor?: SidebarScrollAnchor };
 type SidebarViewScrollMemory = Partial<Record<SidebarViewMode, SidebarScrollMemory>>;
 const moduleSidebarScrollMemory: SidebarViewScrollMemory = {};
 
+type MainViewportSnapshot = {
+  scrollTop: number;
+  clientHeight: number;
+  clientWidth: number;
+};
+
 const CACHE_DURATION = 5 * 60 * 1000; // 5閸掑棝鎸撶紓鎾崇摠
 const INITIAL_TRACK_LOAD_LIMIT = 180;
 const TRACK_LOAD_CHUNK_SIZE = 120;
@@ -70,6 +76,14 @@ const TRACK_SCROLL_LOAD_TRIGGER_PX = 320;
 const MODULE_CACHE_TRACK_CAP = 300;
 const TRACK_TEXT_MAX_CHARS = 200;
 const TRACK_TEXT_INTERN_POOL_MAX = 4096;
+const SEARCH_DEBOUNCE_MS = 180;
+const TRACK_ROW_HEIGHT_PX = 46;
+const TRACK_LIST_HEADER_HEIGHT_PX = 52;
+const TRACK_WINDOW_OVERSCAN_ROWS = 20;
+const ALBUM_CARD_MIN_WIDTH_PX = 150;
+const ALBUM_GRID_GAP_PX = 15;
+const ALBUM_CARD_VERTICAL_EXTRA_PX = 72;
+const ALBUM_WINDOW_OVERSCAN_ROWS = 3;
 
 const trackTextInternPool = new Map<string, string>();
 
@@ -133,7 +147,8 @@ function compactTrackForLibrary(track: Track): Track {
   const safeCoverUrl =
     normalizedCoverLower.startsWith('blob:') ||
     normalizedCoverLower.startsWith('http://') ||
-    normalizedCoverLower.startsWith('https://')
+    normalizedCoverLower.startsWith('https://') ||
+    normalizedCoverLower.startsWith('pmp://cover/')
       ? normalizedCoverUrl
       : undefined;
   const safeTitle = internTrackText(trimTrackText(track.title) || track.id) || track.id;
@@ -142,6 +157,7 @@ function compactTrackForLibrary(track: Track): Track {
   const safeGenre = internTrackText(trimTrackText(track.genre));
   const safeCoverKey = internTrackText(trimTrackText(track.coverKey, 256));
   const safeOriginalPath = internTrackText(trimTrackText(track.originalPath, 512));
+  const safeQuickFingerprint = internTrackText(trimTrackText(track.quickFingerprint, 80));
 
   return {
     id: track.id,
@@ -157,6 +173,7 @@ function compactTrackForLibrary(track: Track): Track {
     fileHandle: safePath ? undefined : track.fileHandle,
     coverKey: safeCoverKey,
     coverUrl: safeCoverUrl,
+    quickFingerprint: safeQuickFingerprint,
     replayGainTrackGainDb:
       typeof track.replayGainTrackGainDb === 'number' ? track.replayGainTrackGainDb : undefined,
     replayGainAlbumGainDb:
@@ -218,7 +235,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const trackNextOffsetRef = useRef(0);
   const trackChunkLoadingRef = useRef(false);
   const searchTokenRef = useRef(0);
+  const searchDebounceTimerRef = useRef<number | null>(null);
   const libraryLoadTokenRef = useRef(0);
+  const [mainViewport, setMainViewport] = useState<MainViewportSnapshot>({
+    scrollTop: 0,
+    clientHeight: 0,
+    clientWidth: 0,
+  });
   const facetLoadingRef = useRef<{ artists: boolean; albums: boolean; genres: boolean }>({
     artists: false,
     albums: false,
@@ -238,6 +261,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const albumCoverDrainRafRef = useRef<number | null>(null);
   const albumInfoByKeyRef = useRef<Map<string, AlbumSummary>>(new Map());
   const albumCoverGenerationRef = useRef<number>(0);
+  const albumOffscreenReclaimTimerRef = useRef<number | null>(null);
 
   const beginAudioProtection = useCallback(
     (reason: string, durationMs: number = 20_000): (() => void) => {
@@ -300,6 +324,26 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     },
     []
   );
+
+  const syncMainViewport = useCallback((root: HTMLElement | null) => {
+    if (!root) return;
+    const next: MainViewportSnapshot = {
+      scrollTop: root.scrollTop,
+      clientHeight: root.clientHeight,
+      clientWidth: root.clientWidth,
+    };
+
+    setMainViewport((prev) => {
+      if (
+        prev.scrollTop === next.scrollTop &&
+        prev.clientHeight === next.clientHeight &&
+        prev.clientWidth === next.clientWidth
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, []);
 
   const computeMainScrollAnchor = useCallback(
     (root: HTMLElement, mode: ViewMode): MainScrollAnchor | null => {
@@ -742,9 +786,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [getMainScrollRoot, hasMoreTracks, scheduleTrackChunkLoad]);
 
   const handleMainScroll = useCallback(() => {
-    if (isRestoringMainScrollRef.current) return;
     const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
     if (!root) return;
+
+    if (isRestoringMainScrollRef.current) {
+      syncMainViewport(root);
+      return;
+    }
+
     mainScrollUserDirtyRef.current = true;
 
     const previous = moduleScrollMemory[viewMode];
@@ -767,8 +816,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       maybeLoadTrackChunkFromScroll();
     }
 
+    syncMainViewport(root);
     scheduleMainScrollAnchorUpdate(viewMode);
-  }, [getMainScrollRoot, maybeLoadTrackChunkFromScroll, scheduleMainScrollAnchorUpdate, viewMode]);
+  }, [
+    getMainScrollRoot,
+    maybeLoadTrackChunkFromScroll,
+    scheduleMainScrollAnchorUpdate,
+    syncMainViewport,
+    viewMode,
+  ]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -786,6 +842,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       navigationContent?.removeEventListener('scroll', handler);
     };
   }, [handleMainScroll, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const refreshViewport = () => {
+      const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
+      syncMainViewport(root);
+    };
+
+    refreshViewport();
+    window.addEventListener('resize', refreshViewport);
+
+    return () => {
+      window.removeEventListener('resize', refreshViewport);
+    };
+  }, [albums.length, getMainScrollRoot, isOpen, syncMainViewport, tracks.length, viewMode]);
 
   // 鍒囨崲瑙嗗浘妯″紡鏃舵竻闄ょ瓫閫夌姸鎬?
   const handleViewModeChange = (
@@ -1043,7 +1115,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         path: info.coverTrackPath,
       };
 
-      const url = await musicLibraryService.getCoverUrlForTrack(stub);
+      const url = await musicLibraryService.getCoverUrlForTrack(stub, { coverSizeHint: 'small' });
       if (!url) return;
       if (disposed) return;
       if (albumCoverGenerationRef.current !== generation) return;
@@ -1160,7 +1232,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const handleSearch = useCallback(async (query: string) => {
     bumpAudioProtection('music-library-search', 20_000);
     const token = ++searchTokenRef.current;
-    setSearchQuery(query);
     setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
 
     if (query.trim()) {
@@ -1195,7 +1266,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             (track.coverUrl.toLowerCase().startsWith('data:') ||
               track.coverUrl.toLowerCase().startsWith('blob:') ||
               track.coverUrl.toLowerCase().startsWith('http:') ||
-              track.coverUrl.toLowerCase().startsWith('https:'))
+              track.coverUrl.toLowerCase().startsWith('https:') ||
+              track.coverUrl.toLowerCase().startsWith('pmp://cover/'))
               ? track.coverUrl
               : undefined,
           coverTrackPath: track.filePath || track.path,
@@ -1232,6 +1304,29 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     viewMode,
     t,
   ]);
+
+  const handleSearchInputChange = useCallback(
+    (query: string) => {
+      setSearchQuery(query);
+      if (searchDebounceTimerRef.current != null) {
+        window.clearTimeout(searchDebounceTimerRef.current);
+      }
+      searchDebounceTimerRef.current = window.setTimeout(() => {
+        void handleSearch(query);
+      }, SEARCH_DEBOUNCE_MS);
+    },
+    [handleSearch]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (searchDebounceTimerRef.current != null) {
+        window.clearTimeout(searchDebounceTimerRef.current);
+        searchDebounceTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return;
     if (viewMode === 'albums') return;
@@ -1335,6 +1430,146 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
     return filteredTracks.slice(0, renderedTrackLimit);
   }, [filteredTracks, renderedTrackLimit]);
+
+  const trackVirtualWindow = useMemo(() => {
+    const viewportHeight = mainViewport.clientHeight > 0 ? mainViewport.clientHeight : 720;
+    const effectiveScrollTop = Math.max(0, mainViewport.scrollTop - TRACK_LIST_HEADER_HEIGHT_PX);
+    const visibleRows = Math.max(1, Math.ceil(viewportHeight / TRACK_ROW_HEIGHT_PX));
+    const start = Math.max(
+      0,
+      Math.floor(effectiveScrollTop / TRACK_ROW_HEIGHT_PX) - TRACK_WINDOW_OVERSCAN_ROWS
+    );
+    const end = Math.min(
+      renderedTracks.length,
+      start + visibleRows + TRACK_WINDOW_OVERSCAN_ROWS * 2
+    );
+
+    return {
+      start,
+      end,
+      topSpacerPx: start * TRACK_ROW_HEIGHT_PX,
+      bottomSpacerPx: Math.max(0, (renderedTracks.length - end) * TRACK_ROW_HEIGHT_PX),
+    };
+  }, [mainViewport.clientHeight, mainViewport.scrollTop, renderedTracks.length]);
+
+  const virtualizedTracks = useMemo(
+    () => renderedTracks.slice(trackVirtualWindow.start, trackVirtualWindow.end),
+    [renderedTracks, trackVirtualWindow.end, trackVirtualWindow.start]
+  );
+
+  const albumVirtualWindow = useMemo(() => {
+    const viewportHeight = mainViewport.clientHeight > 0 ? mainViewport.clientHeight : 720;
+    const contentWidth = Math.max(240, (mainViewport.clientWidth || 900) - 40);
+    const columns = Math.max(
+      1,
+      Math.floor((contentWidth + ALBUM_GRID_GAP_PX) / (ALBUM_CARD_MIN_WIDTH_PX + ALBUM_GRID_GAP_PX))
+    );
+    const cardWidth =
+      (contentWidth - (columns - 1) * ALBUM_GRID_GAP_PX) / Math.max(1, columns);
+    const rowHeight = Math.max(180, cardWidth + ALBUM_CARD_VERTICAL_EXTRA_PX);
+    const totalRows = Math.ceil(sortedAlbums.length / columns);
+    const visibleRows = Math.max(1, Math.ceil(viewportHeight / rowHeight));
+    const startRow = Math.max(
+      0,
+      Math.floor(mainViewport.scrollTop / rowHeight) - ALBUM_WINDOW_OVERSCAN_ROWS
+    );
+    const endRow = Math.min(
+      totalRows,
+      startRow + visibleRows + ALBUM_WINDOW_OVERSCAN_ROWS * 2
+    );
+    const start = Math.min(sortedAlbums.length, startRow * columns);
+    const end = Math.min(sortedAlbums.length, endRow * columns);
+
+    return {
+      start,
+      end,
+      topSpacerPx: startRow * rowHeight,
+      bottomSpacerPx: Math.max(0, (totalRows - endRow) * rowHeight),
+    };
+  }, [
+    mainViewport.clientHeight,
+    mainViewport.clientWidth,
+    mainViewport.scrollTop,
+    sortedAlbums.length,
+  ]);
+
+  const virtualizedAlbums = useMemo(
+    () => sortedAlbums.slice(albumVirtualWindow.start, albumVirtualWindow.end),
+    [albumVirtualWindow.end, albumVirtualWindow.start, sortedAlbums]
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (viewMode !== 'albums') {
+      const releaseUrls: string[] = [];
+      setAlbums((previousAlbums) => {
+        let changed = false;
+        const nextAlbums = previousAlbums.map((albumItem) => {
+          if (!albumItem.cover) return albumItem;
+          const coverUrl = albumItem.cover.trim();
+          if (coverUrl) releaseUrls.push(coverUrl);
+          changed = true;
+          return { ...albumItem, cover: undefined };
+        });
+        return changed ? nextAlbums : previousAlbums;
+      });
+
+      requestedAlbumCoversRef.current.clear();
+      if (releaseUrls.length > 0) {
+        musicLibraryService.releaseCoverUrls(releaseUrls);
+      }
+      return;
+    }
+
+    if (albumOffscreenReclaimTimerRef.current != null) {
+      window.clearTimeout(albumOffscreenReclaimTimerRef.current);
+    }
+
+    albumOffscreenReclaimTimerRef.current = window.setTimeout(() => {
+      albumOffscreenReclaimTimerRef.current = null;
+
+      const keepAlbumKeys = new Set<string>(
+        virtualizedAlbums.map((albumItem) => albumKey(albumItem.album, albumItem.artist))
+      );
+      const releaseUrls: string[] = [];
+      const droppedAlbumKeys: string[] = [];
+
+      setAlbums((previousAlbums) => {
+        let changed = false;
+        const nextAlbums = previousAlbums.map((albumItem) => {
+          if (!albumItem.cover) return albumItem;
+
+          const key = albumKey(albumItem.album, albumItem.artist);
+          if (keepAlbumKeys.has(key)) return albumItem;
+
+          const coverUrl = albumItem.cover.trim();
+          if (coverUrl) releaseUrls.push(coverUrl);
+          droppedAlbumKeys.push(key);
+          changed = true;
+          return { ...albumItem, cover: undefined };
+        });
+
+        return changed ? nextAlbums : previousAlbums;
+      });
+
+      if (droppedAlbumKeys.length > 0) {
+        for (const key of droppedAlbumKeys) {
+          requestedAlbumCoversRef.current.delete(key);
+        }
+      }
+
+      if (releaseUrls.length > 0) {
+        musicLibraryService.releaseCoverUrls(releaseUrls);
+      }
+    }, 450);
+
+    return () => {
+      if (albumOffscreenReclaimTimerRef.current != null) {
+        window.clearTimeout(albumOffscreenReclaimTimerRef.current);
+        albumOffscreenReclaimTimerRef.current = null;
+      }
+    };
+  }, [isOpen, viewMode, virtualizedAlbums]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -1688,7 +1923,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             type="text"
             placeholder={t('pages.music-library.search.placeholder')}
             value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
+            onChange={(e) => handleSearchInputChange(e.target.value)}
           />
           <span className="music-library-search-icon">🔍</span>
         </div>
@@ -1842,8 +2077,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           ) : (
             <>
               {viewMode === 'albums' && (
-                <div className="music-library-grid">
-                  {sortedAlbums.map(({ album, artist, cover }) => {
+                <>
+                  {albumVirtualWindow.topSpacerPx > 0 && (
+                    <div
+                      className="music-library-virtual-spacer"
+                      style={{ height: `${albumVirtualWindow.topSpacerPx}px` }}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <div className="music-library-grid">
+                  {virtualizedAlbums.map(({ album, artist, cover }) => {
                     const key = albumKey(album, artist);
                     return (
                       <div
@@ -1880,7 +2123,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       </div>
                     );
                   })}
-                </div>
+                  </div>
+                  {albumVirtualWindow.bottomSpacerPx > 0 && (
+                    <div
+                      className="music-library-virtual-spacer"
+                      style={{ height: `${albumVirtualWindow.bottomSpacerPx}px` }}
+                      aria-hidden="true"
+                    />
+                  )}
+                </>
               )}
 
               {(viewMode === 'all' || viewMode === 'artists' || viewMode === 'genres') && (
@@ -1893,16 +2144,25 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                     <div>{t('pages.music-library.tracks.header.duration')}</div>
                     <div>{t('pages.music-library.tracks.header.actions')}</div>
                   </div>
-                  {renderedTracks.map((track, index) => (
+                  {trackVirtualWindow.topSpacerPx > 0 && (
+                    <div
+                      className="music-library-virtual-spacer"
+                      style={{ height: `${trackVirtualWindow.topSpacerPx}px` }}
+                      aria-hidden="true"
+                    />
+                  )}
+                  {virtualizedTracks.map((track, index) => {
+                    const absoluteIndex = trackVirtualWindow.start + index;
+                    return (
                     <div
                       key={track.id}
                       data-track-id={track.id}
                       className="music-library-track"
-                      onDoubleClick={() => handleTrackDoubleClick(track, index)}
-                      onContextMenu={(e) => handleTrackContextMenu(track, index, e)}
+                      onDoubleClick={() => handleTrackDoubleClick(track, absoluteIndex)}
+                      onContextMenu={(e) => handleTrackContextMenu(track, absoluteIndex, e)}
                       title={t('pages.music-library.tracks.rowTooltip')}
                     >
-                      <div className="music-library-track-number">{index + 1}</div>
+                      <div className="music-library-track-number">{absoluteIndex + 1}</div>
                       <div className="music-library-track-title">{track.title}</div>
                       <div className="music-library-track-artist">{track.artist || '-'}</div>
                       <div className="music-library-track-album">{track.album || '-'}</div>
@@ -1930,7 +2190,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
+                  {trackVirtualWindow.bottomSpacerPx > 0 && (
+                    <div
+                      className="music-library-virtual-spacer"
+                      style={{ height: `${trackVirtualWindow.bottomSpacerPx}px` }}
+                      aria-hidden="true"
+                    />
+                  )}
                   {(isTrackChunkLoading || hasMoreTracks || renderedTracks.length < filteredTracksTotal) && (
                     <div className="music-library-track-load-hint" role="status" aria-live="polite">
                       {isTrackChunkLoading
@@ -2054,6 +2322,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               {t('pages.music-library.pathsManager.path.trackCount', { count: path.trackCount })}
                             </span>
                           )}
+                          {!path.isVisible && (
+                            <span className="path-meta-hidden">
+                              {t('pages.music-library.pathsManager.path.hiddenBadge')}
+                            </span>
+                          )}
+                          {!path.isScanned && (
+                            <span className="path-meta-scan-paused">
+                              {t('pages.music-library.pathsManager.path.scanPausedBadge')}
+                            </span>
+                          )}
                           {path.lastScanned && (
                             <span className="path-meta-time">
                               🕒{' '}
@@ -2073,6 +2351,50 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         </div>
                       </div>
                       <div className="path-item-actions">
+                        <button
+                          className={`path-item-action-btn ${path.isVisible ? 'path-item-visibility-on' : 'path-item-visibility-off'}`}
+                          onClick={async () => {
+                            const releaseProtection = beginAudioProtection(
+                              'music-library-toggle-path-visibility',
+                              20_000
+                            );
+                            try {
+                              await musicLibraryService.setLibraryPathVisibility(path.id, !path.isVisible);
+                              await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+                            } finally {
+                              releaseProtection();
+                            }
+                          }}
+                          title={
+                            path.isVisible
+                              ? t('pages.music-library.pathsManager.path.hideTitle')
+                              : t('pages.music-library.pathsManager.path.showTitle')
+                          }
+                        >
+                          {path.isVisible ? '👁' : '🙈'}
+                        </button>
+                        <button
+                          className={`path-item-action-btn ${path.isScanned ? 'path-item-scanning-on' : 'path-item-scanning-off'}`}
+                          onClick={async () => {
+                            const releaseProtection = beginAudioProtection(
+                              'music-library-toggle-path-scanning',
+                              20_000
+                            );
+                            try {
+                              await musicLibraryService.setLibraryPathScanning(path.id, !path.isScanned);
+                              await loadLibraryPaths();
+                            } finally {
+                              releaseProtection();
+                            }
+                          }}
+                          title={
+                            path.isScanned
+                              ? t('pages.music-library.pathsManager.path.disableScanTitle')
+                              : t('pages.music-library.pathsManager.path.enableScanTitle')
+                          }
+                        >
+                          {path.isScanned ? '🔄' : '⏸'}
+                        </button>
                         <button
                           className="path-item-action-btn path-item-rescan"
                           onClick={async () => {
@@ -2098,7 +2420,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             const releaseProtection = beginAudioProtection('music-library-remove-path', 20_000);
                             try {
                               await musicLibraryService.removeLibraryPath(path.id);
-                              await loadLibraryPaths();
+                              await Promise.all([loadLibraryPaths(), loadLibraryData()]);
                             } finally {
                               releaseProtection();
                             }
@@ -2154,4 +2476,3 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     </>
   );
 };
-

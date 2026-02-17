@@ -8,7 +8,7 @@ import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../mod
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 // 音乐库数据库版本
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const DB_NAME = 'MusicLibrary';
 
 // 库统计信息
@@ -35,6 +35,8 @@ export interface LibraryPath {
   addedAt: Date;
   lastScanned?: Date;
   trackCount: number;
+  isVisible: boolean;
+  isScanned: boolean;
   folderHandle?: FileSystemDirectoryHandle; // ✅ 存储文件夹句柄用于权限管理
 }
 
@@ -45,6 +47,11 @@ type StoredLibraryPathRecord = Omit<LibraryPath, 'addedAt' | 'lastScanned'> & {
 };
 
 type StoredTrackRecord = Omit<Track, 'addedAt'> & { addedAt?: number };
+
+type PathVisibilityContext = {
+  visiblePathIds: Set<string>;
+  hiddenPathPrefixes: string[];
+};
 
 export interface ScanProgress {
   total: number;
@@ -63,6 +70,7 @@ export type ViewMode = 'artists' | 'albums' | 'folders' | 'genres' | 'years' | '
 export type SortBy = 'title' | 'artist' | 'album' | 'duration' | 'addedAt' | 'year';
 
 export type CoverRuntimeCachePolicy = 'default' | 'watch' | 'high' | 'critical' | 'hidden';
+export type CoverSizeHint = 'small' | 'medium' | 'large';
 
 export class MusicLibraryService {
   private static instance: MusicLibraryService;
@@ -285,9 +293,104 @@ export class MusicLibraryService {
     return path.replace(/\\/g, '/').toLowerCase();
   }
 
+  private sanitizeQuickFingerprint(raw: unknown): string | undefined {
+    const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (!value) return undefined;
+
+    const normalized = value.replace(/^qf2:/, '');
+    if (!/^[0-9a-f]{16,128}$/.test(normalized)) return undefined;
+    return `qf2:${normalized}`;
+  }
+
+  private sanitizeTrackRecordForStorage(track: StoredTrackRecord): StoredTrackRecord {
+    const next: StoredTrackRecord = { ...track };
+
+    delete (next as unknown as { file?: unknown }).file;
+    delete (next as unknown as { fileContent?: unknown }).fileContent;
+
+    const pathCandidate =
+      typeof next.filePath === 'string' && next.filePath
+        ? next.filePath
+        : typeof next.path === 'string' && next.path
+          ? next.path
+          : undefined;
+
+    if (pathCandidate) {
+      next.filePath = pathCandidate;
+      next.path = pathCandidate;
+    }
+
+    if (isTauriRuntime() && pathCandidate && this.isLikelyAbsolutePath(pathCandidate)) {
+      delete (next as unknown as { fileHandle?: unknown }).fileHandle;
+    }
+
+    const coverUrl = typeof next.coverUrl === 'string' ? next.coverUrl.trim() : '';
+    if (coverUrl) {
+      const lower = coverUrl.toLowerCase();
+      const isEphemeral =
+        lower.startsWith('data:') ||
+        lower.startsWith('blob:') ||
+        lower.startsWith('asset:') ||
+        lower.startsWith('tauri:') ||
+        lower.includes('music-covers');
+      const isAbsolutePath = Boolean(pathCandidate && this.isLikelyAbsolutePath(pathCandidate));
+      if (isEphemeral && isAbsolutePath) {
+        delete next.coverUrl;
+      }
+    }
+
+    const quickFingerprint = this.sanitizeQuickFingerprint(next.quickFingerprint);
+    if (quickFingerprint) {
+      next.quickFingerprint = quickFingerprint;
+    } else {
+      delete (next as unknown as { quickFingerprint?: unknown }).quickFingerprint;
+    }
+
+    return next;
+  }
+
   private normalizeFolderPrefix(folderPath: string): string {
     const normalized = this.normalizePathForCompare(folderPath);
     return normalized.endsWith('/') ? normalized : `${normalized}/`;
+  }
+
+  private async buildPathVisibilityContext(): Promise<PathVisibilityContext> {
+    const paths = await this.getLibraryPaths();
+    const visiblePathIds = new Set<string>();
+    const hiddenPathPrefixes: string[] = [];
+
+    for (const path of paths) {
+      if (!path?.id) continue;
+      if (path.isVisible) {
+        visiblePathIds.add(path.id);
+      } else if (typeof path.path === 'string' && path.path.trim().length > 0) {
+        hiddenPathPrefixes.push(this.normalizeFolderPrefix(path.path));
+      }
+    }
+
+    return {
+      visiblePathIds,
+      hiddenPathPrefixes,
+    };
+  }
+
+  private isStoredTrackVisible(storedTrack: StoredTrackRecord, context: PathVisibilityContext): boolean {
+    const pathId = typeof storedTrack.libraryPathId === 'string' ? storedTrack.libraryPathId : '';
+    if (pathId) {
+      return context.visiblePathIds.has(pathId);
+    }
+
+    if (context.hiddenPathPrefixes.length === 0) {
+      return true;
+    }
+
+    const pathValue = String(storedTrack.filePath || storedTrack.path || '').trim();
+    if (!pathValue) {
+      return true;
+    }
+
+    const normalizedPath = this.normalizePathForCompare(pathValue);
+    return !context.hiddenPathPrefixes.some((prefix) => normalizedPath.startsWith(prefix));
   }
 
   private albumKeyForTrack(track: Track): string | null {
@@ -313,6 +416,7 @@ export class MusicLibraryService {
     if (lower.startsWith('data:')) return value;
     if (lower.startsWith('blob:')) return value;
     if (lower.startsWith('http:') || lower.startsWith('https:')) return value;
+    if (lower.startsWith('pmp://cover/')) return value;
 
     if (lower.startsWith('asset:') || lower.startsWith('tauri:')) return undefined;
 
@@ -354,6 +458,57 @@ export class MusicLibraryService {
     window.setTimeout(() => {
       void this.flushLegacyCoverUrlDrops().catch(() => {});
     }, 1200);
+  }
+
+  private buildPmpCoverUrl(coverKey: string): string {
+    const normalizedKey = String(coverKey || '').trim();
+    if (!normalizedKey) return '';
+    return `pmp://cover/${encodeURIComponent(normalizedKey)}`;
+  }
+
+  private resolveCoverEdgePx(coverSizeHint?: CoverSizeHint): number {
+    switch (coverSizeHint) {
+      case 'small':
+        return 160;
+      case 'medium':
+        return 256;
+      case 'large':
+        return 384;
+      default:
+        return this.coverMaxEdgePx > 0 ? this.coverMaxEdgePx : 0;
+    }
+  }
+
+  private isValidCoverKey(coverKey: string): boolean {
+    if (!coverKey) return false;
+    if (coverKey.length > 192) return false;
+    return /^[A-Za-z0-9._-]+$/.test(coverKey);
+  }
+
+  private parseCoverKeyFromPmpUrl(url: string): string | undefined {
+    const value = String(url || '').trim();
+    if (!value) return undefined;
+
+    const match = /^pmp:\/\/(?:localhost\/)?cover\/([^?#]+)/i.exec(value);
+    if (!match || !match[1]) return undefined;
+
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(match[1]);
+    } catch {
+      return undefined;
+    }
+
+    const normalized = decoded.trim();
+    if (!this.isValidCoverKey(normalized)) return undefined;
+    return normalized;
+  }
+
+  private buildPmpCoverUrlForHint(coverKey: string, coverSizeHint?: CoverSizeHint): string {
+    const base = this.buildPmpCoverUrl(coverKey);
+    if (!base) return '';
+    if (!coverSizeHint) return base;
+    return `${base}?size=${coverSizeHint}`;
   }
 
   private async flushLegacyCoverUrlDrops(): Promise<void> {
@@ -456,7 +611,7 @@ export class MusicLibraryService {
 
     const paths = await this.getLibraryPaths();
     const toRefresh = paths.filter(
-      (p) => typeof p.path === 'string' && this.isLikelyAbsolutePath(p.path)
+      (p) => p.isScanned && typeof p.path === 'string' && this.isLikelyAbsolutePath(p.path)
     );
     if (toRefresh.length === 0) return;
 
@@ -746,9 +901,11 @@ export class MusicLibraryService {
 
   async getCoverUrlForTrack(
     track: Track,
-    options?: { allowAlbumFallback?: boolean }
+    options?: { allowAlbumFallback?: boolean; coverSizeHint?: CoverSizeHint }
   ): Promise<string | undefined> {
     const allowAlbumFallback = options?.allowAlbumFallback !== false;
+    const coverSizeHint = options?.coverSizeHint;
+    const requestedEdgePx = this.resolveCoverEdgePx(coverSizeHint);
     const existingUrl = track.coverUrl;
     const inTauri = isTauriRuntime();
 
@@ -756,14 +913,14 @@ export class MusicLibraryService {
     const isAbsoluteAudioPath = Boolean(audioPath && this.isLikelyAbsolutePath(audioPath));
     const normalizedAudioPath =
       audioPath && this.isLikelyAbsolutePath(audioPath) ? this.normalizePathForCompare(audioPath) : null;
-    const cacheKey = normalizedAudioPath ? `${normalizedAudioPath}|edge=${this.coverMaxEdgePx}` : null;
+    const cacheKey = normalizedAudioPath ? `${normalizedAudioPath}|edge=${requestedEdgePx}` : null;
 
     if (
       (!inTauri || !isAbsoluteAudioPath) &&
       existingUrl &&
       (String(existingUrl).startsWith('data:') || String(existingUrl).startsWith('blob:')) &&
       track.coverKey &&
-      this.coverKeyMatchesVariant(track.coverKey, this.coverMaxEdgePx)
+      this.coverKeyMatchesVariant(track.coverKey, requestedEdgePx)
     ) {
       void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
       if (cacheKey && String(existingUrl).startsWith('blob:')) {
@@ -776,7 +933,24 @@ export class MusicLibraryService {
 
     if (!audioPath || !isAbsoluteAudioPath) return existingUrl;
 
-    const effectiveCacheKey = cacheKey ?? `${this.normalizePathForCompare(audioPath)}|edge=${this.coverMaxEdgePx}`;
+    const effectiveCacheKey = cacheKey ?? `${this.normalizePathForCompare(audioPath)}|edge=${requestedEdgePx}`;
+    const normalizedExistingUrl =
+      typeof existingUrl === 'string' && existingUrl.trim().length > 0 ? existingUrl.trim() : '';
+
+    if (normalizedExistingUrl.toLowerCase().startsWith('pmp://cover/')) {
+      const coverKeyFromUrl = this.parseCoverKeyFromPmpUrl(normalizedExistingUrl);
+      const preferredExistingUrl = coverKeyFromUrl
+        ? this.buildPmpCoverUrlForHint(coverKeyFromUrl, coverSizeHint) || normalizedExistingUrl
+        : normalizedExistingUrl;
+
+      this.coverUrlCache.set(effectiveCacheKey, preferredExistingUrl);
+      this.touchCoverBlobCache(effectiveCacheKey);
+      if (track.coverKey) {
+        void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+      }
+      return preferredExistingUrl;
+    }
+
     const cached = this.coverUrlCache.get(effectiveCacheKey);
     if (cached) {
       if (track.coverKey) {
@@ -794,7 +968,7 @@ export class MusicLibraryService {
     }
 
     const promise = (async () => {
-      const { invoke, convertFileSrc } = await import('@tauri-apps/api/tauri');
+      const { invoke } = await import('@tauri-apps/api/tauri');
 
       const result = await invoke<
         | {
@@ -807,7 +981,7 @@ export class MusicLibraryService {
       >('music_library_get_cover', {
         path: audioPath,
         maxBytes: this.COVER_MAX_IMAGE_BYTES,
-        maxEdgePx: this.coverMaxEdgePx > 0 ? this.coverMaxEdgePx : undefined,
+        maxEdgePx: requestedEdgePx > 0 ? requestedEdgePx : undefined,
       });
 
       if (!result) return undefined;
@@ -815,14 +989,17 @@ export class MusicLibraryService {
       const coverPath = String(result.path || '').trim();
       if (!coverPath) return undefined;
 
-      const url = convertFileSrc(coverPath);
+      const protocolUrl = this.buildPmpCoverUrlForHint(String(result.key || ''), coverSizeHint);
+      if (!protocolUrl) return undefined;
+
+      const url = protocolUrl;
       this.coverUrlCache.set(effectiveCacheKey, url);
       this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
       this.pruneUrlCaches();
 
       const albumKey = this.albumKeyForTrack(track);
       if (albumKey) {
-        this.albumCoverUrlCache.set(`${albumKey}|edge=${this.coverMaxEdgePx}`, url);
+        this.albumCoverUrlCache.set(`${albumKey}|edge=${requestedEdgePx}`, url);
         this.pruneUrlCaches();
       }
 
@@ -855,7 +1032,7 @@ export class MusicLibraryService {
 
     const albumKey = this.albumKeyForTrack(track);
     if (!albumKey) return undefined;
-    const albumCacheKey = `${albumKey}|edge=${this.coverMaxEdgePx}`;
+    const albumCacheKey = `${albumKey}|edge=${requestedEdgePx}`;
 
     const cachedAlbum = this.albumCoverUrlCache.get(albumCacheKey);
     if (cachedAlbum) return cachedAlbum;
@@ -876,7 +1053,10 @@ export class MusicLibraryService {
 
       for (const candidate of filtered) {
         if (candidate.id === track.id) continue;
-        const url = await this.getCoverUrlForTrack(candidate, { allowAlbumFallback: false });
+        const url = await this.getCoverUrlForTrack(candidate, {
+          allowAlbumFallback: false,
+          coverSizeHint,
+        });
         if (url) {
           this.albumCoverUrlCache.set(albumCacheKey, url);
           this.pruneUrlCaches();
@@ -937,6 +1117,24 @@ export class MusicLibraryService {
     this.coverBlobUrlTotalBytes = 0;
     this.coverDecodedEstimateBytes.clear();
     this.coverDecodedEstimateTotalBytes = 0;
+  }
+
+  releaseCoverUrls(urls: string[]): void {
+    if (!Array.isArray(urls) || urls.length === 0) return;
+
+    const uniqueUrls = new Set<string>();
+    for (const url of urls) {
+      if (typeof url !== 'string') continue;
+      const trimmed = url.trim();
+      if (!trimmed) continue;
+      uniqueUrls.add(trimmed);
+    }
+
+    if (uniqueUrls.size === 0) return;
+
+    for (const url of uniqueUrls) {
+      this.evictCoverUrlFromRuntimeCaches(url);
+    }
   }
 
   reportCoverDecoded(coverUrl: string, naturalWidth: number, naturalHeight: number): void {
@@ -1015,6 +1213,7 @@ export class MusicLibraryService {
           tracksStore.createIndex('addedAt', 'addedAt', { unique: false });
           tracksStore.createIndex('path', 'path', { unique: true });
           tracksStore.createIndex('libraryPathId', 'libraryPathId', { unique: false });
+          tracksStore.createIndex('quickFingerprint', 'quickFingerprint', { unique: false });
         } else if (transaction) {
           const tracksStore = transaction.objectStore('tracks');
           if (!tracksStore.indexNames.contains('libraryPathId')) {
@@ -1022,6 +1221,9 @@ export class MusicLibraryService {
           }
           if (!tracksStore.indexNames.contains('path')) {
             tracksStore.createIndex('path', 'path', { unique: true });
+          }
+          if (!tracksStore.indexNames.contains('quickFingerprint')) {
+            tracksStore.createIndex('quickFingerprint', 'quickFingerprint', { unique: false });
           }
         }
 
@@ -1096,6 +1298,73 @@ export class MusicLibraryService {
             cursor.continue();
           };
         }
+
+        // v5 migration: aggressively drop heavy legacy payload fields from track records.
+        if (transaction && oldVersion < 5 && db.objectStoreNames.contains('tracks')) {
+          const tracksStore = transaction.objectStore('tracks');
+          const cursorRequest = tracksStore.openCursor();
+          cursorRequest.onsuccess = (evt) => {
+            const cursor = (evt.target as IDBRequest).result as IDBCursorWithValue | null;
+            if (!cursor) return;
+
+            const value = cursor.value as unknown as Record<string, unknown>;
+            const next = { ...value };
+            let changed = false;
+
+            if ('file' in next) {
+              delete next.file;
+              changed = true;
+            }
+            if ('fileContent' in next) {
+              delete next.fileContent;
+              changed = true;
+            }
+            if ('fileHandle' in next) {
+              delete next.fileHandle;
+              changed = true;
+            }
+
+            const filePath = String(next.filePath ?? next.path ?? '').trim();
+            const isAbs = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('/');
+
+            const coverUrl = String(next.coverUrl ?? '').trim();
+            if (coverUrl) {
+              const lower = coverUrl.toLowerCase();
+              const isEphemeral =
+                lower.startsWith('data:') ||
+                lower.startsWith('blob:') ||
+                lower.startsWith('asset:') ||
+                lower.startsWith('tauri:') ||
+                lower.includes('music-covers');
+              if (isEphemeral && isAbs && 'coverUrl' in next) {
+                delete next.coverUrl;
+                changed = true;
+              }
+            }
+
+            const quickFingerprint =
+              typeof next.quickFingerprint === 'string' ? next.quickFingerprint.trim().toLowerCase() : '';
+            if (quickFingerprint) {
+              const normalized = quickFingerprint.replace(/^qf2:/, '');
+              if (/^[0-9a-f]{16,128}$/.test(normalized)) {
+                const canonical = `qf2:${normalized}`;
+                if (next.quickFingerprint !== canonical) {
+                  next.quickFingerprint = canonical;
+                  changed = true;
+                }
+              } else {
+                delete next.quickFingerprint;
+                changed = true;
+              }
+            }
+
+            if (changed) {
+              tracksStore.put(next);
+            }
+
+            cursor.continue();
+          };
+        }
       };
     });
   }
@@ -1129,6 +1398,8 @@ export class MusicLibraryService {
       path: folderHandle.name,
       addedAt: new Date(),
       trackCount: 0,
+      isVisible: true,
+      isScanned: true,
       folderHandle: folderHandle, // ✅ 保存文件夹句柄
     };
 
@@ -1173,6 +1444,8 @@ export class MusicLibraryService {
             ...stored,
             addedAt: stored.addedAt ? new Date(stored.addedAt) : new Date(),
             lastScanned: stored.lastScanned ? new Date(stored.lastScanned) : undefined,
+            isVisible: stored.isVisible !== false,
+            isScanned: stored.isScanned !== false,
           };
         });
         resolve(paths);
@@ -1194,9 +1467,55 @@ export class MusicLibraryService {
     });
   }
 
+  async setLibraryPathVisibility(pathId: string, isVisible: boolean): Promise<void> {
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['libraryPaths'], 'readwrite');
+      const store = transaction.objectStore('libraryPaths');
+      const request = store.get(pathId);
+
+      request.onsuccess = () => {
+        const existing = request.result as StoredLibraryPathRecord | undefined;
+        if (!existing) return;
+        store.put({
+          ...existing,
+          isVisible,
+        });
+      };
+
+      request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+
+    this.clearCache();
+  }
+
+  async setLibraryPathScanning(pathId: string, isScanned: boolean): Promise<void> {
+    const db = await this.ensureDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['libraryPaths'], 'readwrite');
+      const store = transaction.objectStore('libraryPaths');
+      const request = store.get(pathId);
+
+      request.onsuccess = () => {
+        const existing = request.result as StoredLibraryPathRecord | undefined;
+        if (!existing) return;
+        store.put({
+          ...existing,
+          isScanned,
+        });
+      };
+
+      request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  }
+
   // 扫描所有库路径
   async scanAllLibraryPaths(): Promise<void> {
-    const paths = await this.getLibraryPaths();
+    const paths = (await this.getLibraryPaths()).filter((path) => path.isScanned);
     console.log(`Found ${paths.length} library paths to scan`);
     const tauriRuntime = isTauriRuntime();
 
@@ -1576,7 +1895,13 @@ export class MusicLibraryService {
     try {
       // ML.2 Stage A: fast enumerate only (mtime/size) without metadata probing.
       const quick = await invoke<
-        Array<{ path: string; fileName: string; size: number; mtimeMs: number }>
+        Array<{
+          path: string;
+          fileName: string;
+          size: number;
+          mtimeMs: number;
+          quickFingerprint?: string | null;
+        }>
       >('music_library_scan', {
         paths: [folderPath],
         options: { includeMetadata: false },
@@ -1586,13 +1911,25 @@ export class MusicLibraryService {
 
       const existing = await this.getStoredTracksForBackendScan(folderPath, pathId);
       const existingByPath = new Map<string, StoredTrackRecord>();
+      const existingByQuickFingerprint = new Map<string, StoredTrackRecord[]>();
       for (const t of existing) {
         const p = String(t.filePath || t.path || '');
         if (!p) continue;
         existingByPath.set(this.normalizePathForCompare(p), t);
+
+        const quickFingerprint = this.sanitizeQuickFingerprint(t.quickFingerprint);
+        if (quickFingerprint) {
+          const bucket = existingByQuickFingerprint.get(quickFingerprint);
+          if (bucket) {
+            bucket.push(t);
+          } else {
+            existingByQuickFingerprint.set(quickFingerprint, [t]);
+          }
+        }
       }
 
       const seen = new Set<string>();
+      const reusedTrackIds = new Set<string>();
       const upserts: StoredTrackRecord[] = [];
       const needMetadataPaths: string[] = [];
 
@@ -1600,7 +1937,25 @@ export class MusicLibraryService {
         const normalizedPath = this.normalizePathForCompare(item.path);
         seen.add(normalizedPath);
 
-        const prev = existingByPath.get(normalizedPath);
+        const quickFingerprint = this.sanitizeQuickFingerprint(item.quickFingerprint);
+
+        let prev = existingByPath.get(normalizedPath);
+        if (!prev && quickFingerprint) {
+          const fingerprintCandidates = existingByQuickFingerprint.get(quickFingerprint) || [];
+          prev =
+            fingerprintCandidates.find((candidate) => {
+              if (!candidate?.id || reusedTrackIds.has(candidate.id)) return false;
+              const candidatePath = String(candidate.filePath || candidate.path || '');
+              if (!candidatePath) return false;
+              const normalizedCandidatePath = this.normalizePathForCompare(candidatePath);
+              return !seen.has(normalizedCandidatePath);
+            }) || undefined;
+        }
+
+        if (prev?.id) {
+          reusedTrackIds.add(prev.id);
+        }
+
         const isNew = !prev;
         const unchanged =
           prev &&
@@ -1624,6 +1979,7 @@ export class MusicLibraryService {
             title: prev?.title ?? fallbackTitle,
             fileSize: item.size,
             mtimeMs: item.mtimeMs,
+            quickFingerprint: quickFingerprint ?? prev?.quickFingerprint,
             filePath: item.path,
             originalPath: item.path,
             path: item.path,
@@ -1638,6 +1994,7 @@ export class MusicLibraryService {
 
       const deletions = existing
         .filter((t) => {
+          if (t?.id && reusedTrackIds.has(t.id)) return false;
           const p = String(t.filePath || t.path || '');
           if (!p) return false;
           const normalizedPath = this.normalizePathForCompare(p);
@@ -1654,6 +2011,7 @@ export class MusicLibraryService {
             fileName: string;
             size: number;
             mtimeMs: number;
+            quickFingerprint?: string | null;
             duration?: number | null;
             sampleRate?: number | null;
             title?: string | null;
@@ -1693,6 +2051,11 @@ export class MusicLibraryService {
           }
           if (typeof meta.replayGainAlbumDb === 'number') {
             record.replayGainAlbumGainDb = meta.replayGainAlbumDb;
+          }
+
+          const quickFingerprint = this.sanitizeQuickFingerprint(meta.quickFingerprint);
+          if (quickFingerprint) {
+            record.quickFingerprint = quickFingerprint;
           }
 
           record.metadataScannedAtMs = now;
@@ -1817,7 +2180,7 @@ export class MusicLibraryService {
       const store = transaction.objectStore('tracks');
 
       for (const item of upserts) {
-        store.put(item);
+        store.put(this.sanitizeTrackRecordForStorage(item));
       }
 
       for (const id of deletions) {
@@ -1837,29 +2200,30 @@ export class MusicLibraryService {
 
     for (const trackToStore of tracks) {
       try {
-        if (!trackToStore.path) {
+        const sanitizedTrack = this.sanitizeTrackRecordForStorage(trackToStore);
+        if (!sanitizedTrack.path) {
           await new Promise<void>((resolve, reject) => {
-            const request = store.add(trackToStore);
+            const request = store.add(sanitizedTrack);
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
           });
         } else {
           // 检查是否已存在
-          const existingRequest = store.index('path').get(trackToStore.path);
+          const existingRequest = store.index('path').get(sanitizedTrack.path);
           await new Promise<void>((resolve, reject) => {
             existingRequest.onsuccess = () => {
               try {
                 if (!existingRequest.result) {
-                  const addRequest = store.add(trackToStore);
+                  const addRequest = store.add(sanitizedTrack);
                   addRequest.onsuccess = () => resolve();
                   addRequest.onerror = () => reject(addRequest.error);
                 } else {
                   const existing = existingRequest.result as unknown as StoredTrackRecord;
-                  const updatedTrack: StoredTrackRecord = {
+                  const updatedTrack = this.sanitizeTrackRecordForStorage({
                     ...existing,
-                    ...trackToStore,
+                    ...sanitizedTrack,
                     id: existing.id,
-                  };
+                  });
                   const updateRequest = store.put(updatedTrack);
                   updateRequest.onsuccess = () => resolve();
                   updateRequest.onerror = () => reject(updateRequest.error);
@@ -1987,6 +2351,8 @@ export class MusicLibraryService {
       path: path,
       addedAt: new Date(),
       trackCount: 0,
+      isVisible: true,
+      isScanned: true,
     };
 
     // 存储时将 Date 转换为时间戳
@@ -2016,6 +2382,7 @@ export class MusicLibraryService {
   // 获取所有轨道（带限制，避免内存溢出）
   async getAllTracks(limit?: number, offset?: number): Promise<Track[]> {
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
       const store = transaction.objectStore('tracks');
@@ -2039,6 +2406,12 @@ export class MusicLibraryService {
             return;
           }
 
+          const value = cursor.value as unknown as StoredTrackRecord;
+          if (!this.isStoredTrackVisible(value, visibilityContext)) {
+            cursor.continue();
+            return;
+          }
+
           if (skipped < safeOffset) {
             skipped++;
             cursor.continue();
@@ -2046,7 +2419,7 @@ export class MusicLibraryService {
           }
 
           if (count < limit) {
-            tracks.push(this.restoreTrackForPlayback(cursor.value as unknown as StoredTrackRecord));
+            tracks.push(this.restoreTrackForPlayback(value));
             count++;
             cursor.continue();
           } else {
@@ -2059,9 +2432,11 @@ export class MusicLibraryService {
         const request = store.getAll();
         request.onsuccess = () => {
           const raw = Array.isArray(request.result) ? request.result : [];
-          const restoredTracks = raw.map((track) =>
-            this.restoreTrackForPlayback(track as unknown as StoredTrackRecord)
-          );
+          const restoredTracks = raw
+            .filter((track) =>
+              this.isStoredTrackVisible(track as unknown as StoredTrackRecord, visibilityContext)
+            )
+            .map((track) => this.restoreTrackForPlayback(track as unknown as StoredTrackRecord));
           resolve(restoredTracks);
         };
         request.onerror = () => reject(request.error);
@@ -2075,6 +2450,7 @@ export class MusicLibraryService {
     if (!q) return typeof limit === 'number' ? this.getAllTracks(limit) : this.getAllTracks();
 
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
       const store = transaction.objectStore('tracks');
@@ -2090,6 +2466,10 @@ export class MusicLibraryService {
         }
 
         const value = cursor.value as unknown as StoredTrackRecord;
+        if (!this.isStoredTrackVisible(value, visibilityContext)) {
+          cursor.continue();
+          return;
+        }
         const title = String(value.title || '').toLowerCase();
         const artist = String(value.artist || '').toLowerCase();
         const album = String(value.album || '').toLowerCase();
@@ -2111,8 +2491,58 @@ export class MusicLibraryService {
 
   // 从存储的track恢复用于播放的track对象
   private restoreTrackForPlayback(storedTrack: StoredTrackRecord): Track {
-    const { addedAt, ...rest } = storedTrack;
-    const track: Track = { ...rest };
+    const toOptionalString = (value: unknown): string | undefined => {
+      if (typeof value !== 'string') return undefined;
+      const trimmed = value.trim();
+      return trimmed ? trimmed : undefined;
+    };
+    const toOptionalNumber = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+    const normalizedPath =
+      toOptionalString(storedTrack.filePath) || toOptionalString(storedTrack.path) || undefined;
+
+    const track: Track = {
+      id: toOptionalString(storedTrack.id) || this.stableIdFromPath(normalizedPath || 'unknown'),
+      title:
+        toOptionalString(storedTrack.title) ||
+        (normalizedPath ? normalizedPath.split(/[\\/]/).pop()?.replace(/\.[^/.]+$/, '') : undefined) ||
+        'Unknown',
+      artist: toOptionalString(storedTrack.artist),
+      album: toOptionalString(storedTrack.album),
+      albumArtist: toOptionalString(storedTrack.albumArtist),
+      duration: toOptionalNumber(storedTrack.duration),
+      year: toOptionalNumber(storedTrack.year),
+      genre: toOptionalString(storedTrack.genre),
+      trackNumber: toOptionalNumber(storedTrack.trackNumber),
+      discNumber: toOptionalNumber(storedTrack.discNumber),
+      composer: toOptionalString(storedTrack.composer),
+      bitrate: toOptionalNumber(storedTrack.bitrate),
+      sampleRate: toOptionalNumber(storedTrack.sampleRate),
+      replayGainTrackGainDb: toOptionalNumber(storedTrack.replayGainTrackGainDb),
+      replayGainAlbumGainDb: toOptionalNumber(storedTrack.replayGainAlbumGainDb),
+      format: toOptionalString(storedTrack.format),
+      codecName: toOptionalString(storedTrack.codecName),
+      fileSize: toOptionalNumber(storedTrack.fileSize),
+      dateAdded: toOptionalNumber(storedTrack.dateAdded),
+      lastPlayed: toOptionalNumber(storedTrack.lastPlayed),
+      playCount: toOptionalNumber(storedTrack.playCount),
+      rating: toOptionalNumber(storedTrack.rating),
+      favorite: typeof storedTrack.favorite === 'boolean' ? storedTrack.favorite : undefined,
+      tags: Array.isArray(storedTrack.tags)
+        ? storedTrack.tags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+        : undefined,
+      comment: toOptionalString(storedTrack.comment),
+      mimeType: toOptionalString(storedTrack.mimeType),
+      quickFingerprint: this.sanitizeQuickFingerprint(storedTrack.quickFingerprint),
+      mtimeMs: toOptionalNumber(storedTrack.mtimeMs),
+      metadataScannedAtMs: toOptionalNumber(storedTrack.metadataScannedAtMs),
+      libraryPathId: toOptionalString(storedTrack.libraryPathId),
+      originalPath: toOptionalString(storedTrack.originalPath),
+      coverKey: toOptionalString(storedTrack.coverKey),
+      path: normalizedPath,
+      filePath: normalizedPath,
+    };
 
     const rawCoverUrl = storedTrack.coverUrl;
     track.coverUrl = this.sanitizeStoredCoverUrlForPath(rawCoverUrl, track.filePath || track.path);
@@ -2136,12 +2566,12 @@ export class MusicLibraryService {
       }
     }
 
-    if (typeof addedAt === 'number') {
-      track.addedAt = new Date(addedAt);
+    if (typeof storedTrack.addedAt === 'number') {
+      track.addedAt = new Date(storedTrack.addedAt);
     }
 
     // 直接使用文件路径，供播放器读取
-    if (track.filePath) {
+    if (track.filePath && track.path !== track.filePath) {
       track.path = track.filePath;
     }
 
@@ -2255,6 +2685,7 @@ export class MusicLibraryService {
   // 按艺术家获取轨道
   async getTracksByArtist(artist: string): Promise<Track[]> {
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
       const store = transaction.objectStore('tracks');
@@ -2263,9 +2694,11 @@ export class MusicLibraryService {
 
       request.onsuccess = () => {
         const raw = Array.isArray(request.result) ? request.result : [];
-        const restoredTracks = raw.map((track) =>
-          this.restoreTrackForPlayback(track as unknown as StoredTrackRecord)
-        );
+        const restoredTracks = raw
+          .filter((track) =>
+            this.isStoredTrackVisible(track as unknown as StoredTrackRecord, visibilityContext)
+          )
+          .map((track) => this.restoreTrackForPlayback(track as unknown as StoredTrackRecord));
         resolve(restoredTracks);
       };
       request.onerror = () => reject(request.error);
@@ -2275,6 +2708,7 @@ export class MusicLibraryService {
   // 按专辑获取轨道
   async getTracksByAlbum(album: string): Promise<Track[]> {
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
       const store = transaction.objectStore('tracks');
@@ -2283,9 +2717,11 @@ export class MusicLibraryService {
 
       request.onsuccess = () => {
         const raw = Array.isArray(request.result) ? request.result : [];
-        const restoredTracks = raw.map((track) =>
-          this.restoreTrackForPlayback(track as unknown as StoredTrackRecord)
-        );
+        const restoredTracks = raw
+          .filter((track) =>
+            this.isStoredTrackVisible(track as unknown as StoredTrackRecord, visibilityContext)
+          )
+          .map((track) => this.restoreTrackForPlayback(track as unknown as StoredTrackRecord));
         resolve(restoredTracks);
       };
       request.onerror = () => reject(request.error);
@@ -2295,6 +2731,7 @@ export class MusicLibraryService {
   // 获取所有艺术家
   async getAllArtists(): Promise<string[]> {
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
@@ -2309,7 +2746,11 @@ export class MusicLibraryService {
           resolve(Array.from(seen).sort());
           return;
         }
-        const value = cursor.value as unknown as Partial<Track>;
+        const value = cursor.value as unknown as StoredTrackRecord;
+        if (!this.isStoredTrackVisible(value, visibilityContext)) {
+          cursor.continue();
+          return;
+        }
         const artist = String(value.artist ?? '').trim();
         if (artist) seen.add(artist);
         cursor.continue();
@@ -2323,6 +2764,7 @@ export class MusicLibraryService {
   async getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
     const db = await this.ensureDB();
     const includeStoredCover = options?.includeStoredCover ?? true;
+    const visibilityContext = await this.buildPathVisibilityContext();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
@@ -2365,6 +2807,10 @@ export class MusicLibraryService {
         }
 
         const value = cursor.value as unknown as StoredTrackRecord;
+        if (!this.isStoredTrackVisible(value, visibilityContext)) {
+          cursor.continue();
+          return;
+        }
         const album = String(value.album ?? '');
         if (album) {
           const artist = String(value.artist ?? 'Unknown Artist');
@@ -2391,6 +2837,7 @@ export class MusicLibraryService {
   // 获取所有流派
   async getAllGenres(): Promise<string[]> {
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
@@ -2405,7 +2852,11 @@ export class MusicLibraryService {
           resolve(Array.from(seen).sort());
           return;
         }
-        const value = cursor.value as unknown as Partial<Track>;
+        const value = cursor.value as unknown as StoredTrackRecord;
+        if (!this.isStoredTrackVisible(value, visibilityContext)) {
+          cursor.continue();
+          return;
+        }
         const genre = String(value.genre ?? '').trim();
         if (genre) seen.add(genre);
         cursor.continue();
@@ -2430,6 +2881,7 @@ export class MusicLibraryService {
     let totalDuration = 0;
 
     const db = await this.ensureDB();
+    const visibilityContext = await this.buildPathVisibilityContext();
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(['tracks'], 'readonly');
       const store = transaction.objectStore('tracks');
@@ -2442,7 +2894,11 @@ export class MusicLibraryService {
           return;
         }
 
-        const value = cursor.value as unknown as Partial<Track>;
+        const value = cursor.value as unknown as StoredTrackRecord;
+        if (!this.isStoredTrackVisible(value, visibilityContext)) {
+          cursor.continue();
+          return;
+        }
         totalTracks++;
         const artist = String(value.artist ?? '').trim();
         const album = String(value.album ?? '').trim();

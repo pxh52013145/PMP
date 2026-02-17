@@ -11,7 +11,10 @@ export const ProgressBar: React.FC = () => {
   const themeConfig = useComponentTheme('progress-bar');
 
   const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false;
-  const dynamicColors = useDynamicColor(data.coverUrl, dynamicColorEnabled);
+  const dynamicColors = useDynamicColor(data.coverUrl, dynamicColorEnabled, {
+    sampleSize: 'small',
+    releaseAfterExtract: true,
+  });
   const dynamicColorConfig = themeConfig.dynamicColor;
 
   if (themeConfig.customRenderer) {

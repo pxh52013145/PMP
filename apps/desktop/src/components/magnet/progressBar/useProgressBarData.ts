@@ -8,6 +8,7 @@ import { Track } from '../../../services/audio';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { trackKey } from '../shared/trackKey';
 import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
+import { isSameTrackRenderIdentity, sanitizeTrackForRuntime } from '../shared/sanitizeTrackForRuntime';
 
 export interface ProgressBarData {
   currentTime: number;
@@ -53,7 +54,7 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
   const [decodeBuffered, setDecodeBuffered] = useState(0);
   const [outputBuffered, setOutputBuffered] = useState(0);
   const [track, setTrack] = useState<Track | null>(null);
-  const coverUrl = useCoverUrlForTrack(track);
+  const coverUrl = useCoverUrlForTrack(track, { coverSizeHint: 'small' });
   const fallbackRef = useRef<{
     lastObservedTime: number;
     lastObservedAtMs: number;
@@ -76,7 +77,7 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
         computeAheadRatio(state.outputBufferedAhead, state.currentTime, nextDuration, ratio)
       );
 
-      const nextTrack = state.currentTrack;
+      const nextTrack = sanitizeTrackForRuntime(state.currentTrack);
       const nextKey = trackKey(nextTrack);
       if (nextKey !== lastTrackKeyRef.current) {
         lastTrackKeyRef.current = nextKey;
@@ -85,14 +86,12 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
         return;
       }
 
-      const nextCoverUrl = nextTrack?.coverUrl;
-      if (typeof nextCoverUrl === 'string' && nextCoverUrl) {
-        setTrack((prev) => {
-          if (!prev || trackKey(prev) !== nextKey) return nextTrack;
-          if (prev.coverUrl === nextCoverUrl) return prev;
-          return { ...prev, coverUrl: nextCoverUrl };
-        });
-      }
+      setTrack((prev) => {
+        if (!prev) return nextTrack;
+        if (trackKey(prev) !== nextKey) return nextTrack;
+        if (isSameTrackRenderIdentity(prev, nextTrack)) return prev;
+        return nextTrack;
+      });
     });
 
     const unsubscribeTime = audioService.onTimeUpdate((time) => {
@@ -111,8 +110,9 @@ export function useProgressBarData(isSeeking: boolean): ProgressBarData {
     setOutputBuffered(
       computeAheadRatio(state.outputBufferedAhead, state.currentTime, state.duration, ratio)
     );
-    setTrack(state.currentTrack);
-    lastTrackKeyRef.current = trackKey(state.currentTrack);
+    const initialTrack = sanitizeTrackForRuntime(state.currentTrack);
+    setTrack(initialTrack);
+    lastTrackKeyRef.current = trackKey(initialTrack);
 
     return () => {
       unsubscribeTime();
