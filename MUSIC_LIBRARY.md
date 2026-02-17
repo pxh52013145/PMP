@@ -296,6 +296,23 @@ Boundary in this phase:
 
 - Empty native result still falls back to IndexedDB to keep migration-safe behavior.
 
+### 4.16 Native read-path expansion (`getLibraryPaths`)
+
+This round migrates library source listing to native-first while preserving browser/legacy compatibility:
+
+- `getLibraryPaths()` now prefers native sqlite source list in Tauri runtime.
+- IndexedDB remains fallback when native source list is empty/unavailable.
+- Startup native bootstrap now explicitly reads from IndexedDB (`readLibraryPathsFromIndexedDb`) to avoid
+  native-read recursion and keep first-run convergence deterministic.
+- Native/IndexedDB merge behavior for source list:
+  - source identity and flags (`isVisible/isScanned/addedAt/lastScanned`) come from native sqlite.
+  - legacy-only fields (`folderHandle`, `trackCount`) are best-effort merged from IndexedDB by `id/path`.
+
+Boundary in this phase:
+
+- Source list is native-first only in Tauri runtime.
+- Browser runtime remains IndexedDB-only as before.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

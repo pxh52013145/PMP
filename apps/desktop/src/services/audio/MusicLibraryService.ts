@@ -10,11 +10,13 @@ import {
   listNativeLibraryAlbums,
   listNativeLibraryArtists,
   listNativeLibraryGenres,
+  listNativeLibrarySources,
   queryNativeLibraryTracks,
   removeNativeLibrarySource,
   syncNativeLibraryTracks,
   upsertNativeLibrarySource,
   type NativeLibraryAlbumRecord,
+  type NativeLibrarySourceRecord,
   type NativeLibraryStatsRecord,
   type NativeLibraryTrackRecord,
   type NativeLibraryTrackUpsertInput,
@@ -762,9 +764,92 @@ export class MusicLibraryService {
 
   private async syncNativeSourcesFromIndexedDb(): Promise<void> {
     if (!isTauriRuntime()) return;
-    const paths = await this.getLibraryPaths();
+    const paths = await this.readLibraryPathsFromIndexedDb();
     for (const pathInfo of paths) {
       await this.tryUpsertNativeLibrarySource(pathInfo);
+    }
+  }
+
+  private toLibraryPathFromStoredRecord(stored: StoredLibraryPathRecord): LibraryPath {
+    return {
+      ...stored,
+      addedAt: stored.addedAt ? new Date(stored.addedAt) : new Date(),
+      lastScanned: stored.lastScanned ? new Date(stored.lastScanned) : undefined,
+      isVisible: stored.isVisible !== false,
+      isScanned: stored.isScanned !== false,
+    };
+  }
+
+  private async readLibraryPathsFromIndexedDb(): Promise<LibraryPath[]> {
+    const db = await this.ensureDB();
+    const transaction = db.transaction(['libraryPaths'], 'readonly');
+    const store = transaction.objectStore('libraryPaths');
+
+    return new Promise((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const raw = Array.isArray(request.result) ? request.result : [];
+        const paths: LibraryPath[] = raw.map((entry) =>
+          this.toLibraryPathFromStoredRecord(entry as unknown as StoredLibraryPathRecord)
+        );
+        resolve(paths);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  private mergeNativeLibraryPath(
+    source: NativeLibrarySourceRecord,
+    storedById: Map<string, LibraryPath>,
+    storedByNormalizedPath: Map<string, LibraryPath>
+  ): LibraryPath {
+    const matchById = storedById.get(source.id);
+    const matchByPath = storedByNormalizedPath.get(this.normalizePathForCompare(source.path));
+    const fallback = matchById ?? matchByPath;
+
+    return {
+      id: source.id,
+      path: source.path,
+      addedAt:
+        typeof source.addedAtMs === 'number' && Number.isFinite(source.addedAtMs)
+          ? new Date(source.addedAtMs)
+          : fallback?.addedAt ?? new Date(),
+      lastScanned:
+        typeof source.lastScannedAtMs === 'number' && Number.isFinite(source.lastScannedAtMs)
+          ? new Date(source.lastScannedAtMs)
+          : fallback?.lastScanned,
+      trackCount:
+        typeof fallback?.trackCount === 'number' && Number.isFinite(fallback.trackCount)
+          ? fallback.trackCount
+          : 0,
+      isVisible: source.isVisible !== false,
+      isScanned: source.isScanned !== false,
+      folderHandle: fallback?.folderHandle,
+    };
+  }
+
+  private async tryGetLibraryPathsFromNativeDb(): Promise<LibraryPath[] | null> {
+    if (!isTauriRuntime()) return null;
+
+    try {
+      const nativeSources = await listNativeLibrarySources();
+      if (nativeSources.length === 0) return null;
+
+      const storedPaths = await this.readLibraryPathsFromIndexedDb().catch(() => []);
+      const storedById = new Map<string, LibraryPath>();
+      const storedByNormalizedPath = new Map<string, LibraryPath>();
+      for (const path of storedPaths) {
+        if (!path?.id) continue;
+        storedById.set(path.id, path);
+        storedByNormalizedPath.set(this.normalizePathForCompare(path.path), path);
+      }
+
+      return nativeSources
+        .map((source) => this.mergeNativeLibraryPath(source, storedById, storedByNormalizedPath))
+        .sort((left, right) => left.addedAt.getTime() - right.addedAt.getTime());
+    } catch (error) {
+      console.warn('[MusicLibraryService] native source list failed, fallback to IndexedDB:', error);
+      return null;
     }
   }
 
@@ -1851,28 +1936,12 @@ export class MusicLibraryService {
 
   // 获取所有库路径
   async getLibraryPaths(): Promise<LibraryPath[]> {
-    const db = await this.ensureDB();
-    const transaction = db.transaction(['libraryPaths'], 'readonly');
-    const store = transaction.objectStore('libraryPaths');
+    const nativePaths = await this.tryGetLibraryPathsFromNativeDb();
+    if (nativePaths) {
+      return nativePaths;
+    }
 
-    return new Promise((resolve, reject) => {
-      const request = store.getAll();
-      request.onsuccess = () => {
-        const raw = Array.isArray(request.result) ? request.result : [];
-        const paths: LibraryPath[] = raw.map((entry) => {
-          const stored = entry as unknown as StoredLibraryPathRecord;
-          return {
-            ...stored,
-            addedAt: stored.addedAt ? new Date(stored.addedAt) : new Date(),
-            lastScanned: stored.lastScanned ? new Date(stored.lastScanned) : undefined,
-            isVisible: stored.isVisible !== false,
-            isScanned: stored.isScanned !== false,
-          };
-        });
-        resolve(paths);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return this.readLibraryPathsFromIndexedDb();
   }
 
   // 移除库路径
