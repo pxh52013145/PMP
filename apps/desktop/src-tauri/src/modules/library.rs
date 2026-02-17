@@ -9,5 +9,7 @@ pub const DESCRIPTOR: BackendModuleDescriptor = BackendModuleDescriptor {
         "music_library_scan",
         "music_library_cover",
         "music_library_cancel_scan",
+        "music_library_db_sources",
+        "music_library_db_tracks",
     ],
 };

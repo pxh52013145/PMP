@@ -104,6 +104,7 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
 
     bind_main_window_events(app, &window);
     init_vst_services(&app.handle());
+    init_music_library_services(&app.handle());
 
     Ok(())
 }
@@ -154,6 +155,12 @@ fn init_vst_services(app: &tauri::AppHandle) {
         eprintln!("[VST] Failed to init compatibility: {error}");
     }
     crate::vst_runtime::init_session_status_broadcaster(app);
+}
+
+fn init_music_library_services(app: &tauri::AppHandle) {
+    if let Err(error) = crate::music_library_db::init(app) {
+        eprintln!("[MusicLibrary] Failed to init sqlite store: {error}");
+    }
 }
 
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {

@@ -5,6 +5,12 @@ import { readDir, exists } from '@tauri-apps/api/fs';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
+import {
+  removeNativeLibrarySource,
+  syncNativeLibraryTracks,
+  upsertNativeLibrarySource,
+  type NativeLibraryTrackUpsertInput,
+} from '../../modules/music-library';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 
 // 音乐库数据库版本
@@ -107,6 +113,7 @@ export class MusicLibraryService {
 
   private currentCoverRuntimeCachePolicy: CoverRuntimeCachePolicy = 'default';
   private coverMaxEdgePx: number = 256;
+  private nativeSourceBootstrapScheduled = false;
 
   // 缓存 - 减少数据库查询
   private cachedStats: LibraryStats | null = null;
@@ -120,6 +127,7 @@ export class MusicLibraryService {
     this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
     this.setupCoverSettingsListener();
     this.setupCoverVisibilityReclaimListener();
+    this.scheduleNativeSourceBootstrap();
     this.scheduleStartupRefresh();
   }
 
@@ -347,6 +355,144 @@ export class MusicLibraryService {
     }
 
     return next;
+  }
+
+  private getSourceDisplayName(pathValue: string): string {
+    const trimmed = pathValue.trim();
+    if (!trimmed) return '';
+    const segments = trimmed.split(/[/\\]+/).filter(Boolean);
+    if (segments.length === 0) return trimmed;
+    return segments[segments.length - 1] || trimmed;
+  }
+
+  private async tryUpsertNativeLibrarySource(pathInfo: LibraryPath): Promise<void> {
+    if (!isTauriRuntime()) return;
+    const sourceId = String(pathInfo.id || '').trim();
+    const sourcePath = String(pathInfo.path || '').trim();
+    if (!sourceId || !sourcePath) return;
+
+    try {
+      await upsertNativeLibrarySource({
+        id: sourceId,
+        path: sourcePath,
+        displayName: this.getSourceDisplayName(sourcePath),
+        category: 'music',
+        isVisible: pathInfo.isVisible !== false,
+        isScanned: pathInfo.isScanned !== false,
+        addedAtMs: pathInfo.addedAt instanceof Date ? pathInfo.addedAt.getTime() : Date.now(),
+        lastScannedAtMs:
+          pathInfo.lastScanned instanceof Date ? pathInfo.lastScanned.getTime() : undefined,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to sync native source:', sourceId, error);
+    }
+  }
+
+  private async tryRemoveNativeLibrarySource(pathId: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    const sourceId = String(pathId || '').trim();
+    if (!sourceId) return;
+    try {
+      await removeNativeLibrarySource(sourceId);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to remove native source:', sourceId, error);
+    }
+  }
+
+  private toNativeTrackUpsertInput(track: StoredTrackRecord): NativeLibraryTrackUpsertInput | null {
+    const trackId = String(track.id || '').trim();
+    const filePath = String(track.filePath || track.path || '').trim();
+    if (!trackId || !filePath) return null;
+
+    const quickFingerprint = this.sanitizeQuickFingerprint(track.quickFingerprint);
+
+    const bitDepth =
+      typeof (track as unknown as { bitDepth?: unknown }).bitDepth === 'number'
+        ? ((track as unknown as { bitDepth: number }).bitDepth as number)
+        : undefined;
+
+    return {
+      id: trackId,
+      filePath,
+      quickFingerprint,
+      title: typeof track.title === 'string' ? track.title : undefined,
+      artist: typeof track.artist === 'string' ? track.artist : undefined,
+      album: typeof track.album === 'string' ? track.album : undefined,
+      duration: typeof track.duration === 'number' ? track.duration : undefined,
+      sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : undefined,
+      bitDepth,
+      fileSize: typeof track.fileSize === 'number' ? track.fileSize : undefined,
+      mtimeMs: typeof track.mtimeMs === 'number' ? track.mtimeMs : undefined,
+      replayGainTrackDb:
+        typeof track.replayGainTrackGainDb === 'number' ? track.replayGainTrackGainDb : undefined,
+      replayGainAlbumDb:
+        typeof track.replayGainAlbumGainDb === 'number' ? track.replayGainAlbumGainDb : undefined,
+    };
+  }
+
+  private async trySyncNativeLibraryTracks(
+    sourceId: string | undefined,
+    upserts: StoredTrackRecord[],
+    missingTrackIds: string[]
+  ): Promise<void> {
+    if (!isTauriRuntime()) return;
+    const normalizedSourceId = String(sourceId || '').trim();
+    if (!normalizedSourceId) return;
+
+    const upsertPayload = upserts
+      .filter((item) => {
+        const itemSourceId = String(item.libraryPathId || '').trim();
+        if (!itemSourceId) return true;
+        return itemSourceId === normalizedSourceId;
+      })
+      .map((item) => this.toNativeTrackUpsertInput(item))
+      .filter((item): item is NativeLibraryTrackUpsertInput => Boolean(item));
+
+    const normalizedMissingIds = missingTrackIds
+      .map((id) => String(id || '').trim())
+      .filter((id) => id.length > 0);
+
+    if (upsertPayload.length === 0 && normalizedMissingIds.length === 0) return;
+
+    const chunkSize = 500;
+    for (let index = 0; index < upsertPayload.length; index += chunkSize) {
+      const chunk = upsertPayload.slice(index, index + chunkSize);
+      const missing = index === 0 ? normalizedMissingIds : [];
+      try {
+        await syncNativeLibraryTracks(normalizedSourceId, chunk, missing);
+      } catch (error) {
+        console.warn('[MusicLibraryService] failed to sync native tracks:', normalizedSourceId, error);
+        return;
+      }
+    }
+
+    if (upsertPayload.length === 0 && normalizedMissingIds.length > 0) {
+      try {
+        await syncNativeLibraryTracks(normalizedSourceId, [], normalizedMissingIds);
+      } catch (error) {
+        console.warn('[MusicLibraryService] failed to sync native missing tracks:', normalizedSourceId, error);
+      }
+    }
+  }
+
+  private scheduleNativeSourceBootstrap(): void {
+    if (!isTauriRuntime()) return;
+    if (this.nativeSourceBootstrapScheduled) return;
+    this.nativeSourceBootstrapScheduled = true;
+
+    window.setTimeout(() => {
+      void this.syncNativeSourcesFromIndexedDb().catch((error) => {
+        console.warn('[MusicLibraryService] native source bootstrap failed:', error);
+      });
+    }, 0);
+  }
+
+  private async syncNativeSourcesFromIndexedDb(): Promise<void> {
+    if (!isTauriRuntime()) return;
+    const paths = await this.getLibraryPaths();
+    for (const pathInfo of paths) {
+      await this.tryUpsertNativeLibrarySource(pathInfo);
+    }
   }
 
   private normalizeFolderPrefix(folderPath: string): string {
@@ -1425,6 +1571,8 @@ export class MusicLibraryService {
       };
     });
 
+    await this.tryUpsertNativeLibrarySource(pathInfo);
+
     return pathInfo;
   }
 
@@ -1465,10 +1613,13 @@ export class MusicLibraryService {
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
     });
+
+    await this.tryRemoveNativeLibrarySource(pathId);
   }
 
   async setLibraryPathVisibility(pathId: string, isVisible: boolean): Promise<void> {
     const db = await this.ensureDB();
+    let updatedPath: LibraryPath | null = null;
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(['libraryPaths'], 'readwrite');
       const store = transaction.objectStore('libraryPaths');
@@ -1477,10 +1628,20 @@ export class MusicLibraryService {
       request.onsuccess = () => {
         const existing = request.result as StoredLibraryPathRecord | undefined;
         if (!existing) return;
-        store.put({
+        const next: StoredLibraryPathRecord = {
           ...existing,
           isVisible,
+        };
+        store.put({
+          ...next,
         });
+        updatedPath = {
+          ...next,
+          addedAt: next.addedAt ? new Date(next.addedAt) : new Date(),
+          lastScanned: next.lastScanned ? new Date(next.lastScanned) : undefined,
+          isVisible: next.isVisible !== false,
+          isScanned: next.isScanned !== false,
+        };
       };
 
       request.onerror = () => reject(request.error);
@@ -1489,10 +1650,14 @@ export class MusicLibraryService {
     });
 
     this.clearCache();
+    if (updatedPath) {
+      await this.tryUpsertNativeLibrarySource(updatedPath);
+    }
   }
 
   async setLibraryPathScanning(pathId: string, isScanned: boolean): Promise<void> {
     const db = await this.ensureDB();
+    let updatedPath: LibraryPath | null = null;
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(['libraryPaths'], 'readwrite');
       const store = transaction.objectStore('libraryPaths');
@@ -1501,16 +1666,30 @@ export class MusicLibraryService {
       request.onsuccess = () => {
         const existing = request.result as StoredLibraryPathRecord | undefined;
         if (!existing) return;
-        store.put({
+        const next: StoredLibraryPathRecord = {
           ...existing,
           isScanned,
+        };
+        store.put({
+          ...next,
         });
+        updatedPath = {
+          ...next,
+          addedAt: next.addedAt ? new Date(next.addedAt) : new Date(),
+          lastScanned: next.lastScanned ? new Date(next.lastScanned) : undefined,
+          isVisible: next.isVisible !== false,
+          isScanned: next.isScanned !== false,
+        };
       };
 
       request.onerror = () => reject(request.error);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
     });
+
+    if (updatedPath) {
+      await this.tryUpsertNativeLibrarySource(updatedPath);
+    }
   }
 
   // 扫描所有库路径
@@ -2073,6 +2252,7 @@ export class MusicLibraryService {
       }
 
       await this.applyBackendScanDiff(upserts, deletions);
+      await this.trySyncNativeLibraryTracks(pathId, upserts, deletions);
       this.clearCache();
 
       if (pathId) {
@@ -2082,18 +2262,30 @@ export class MusicLibraryService {
           const store = transaction.objectStore('libraryPaths');
           const request = store.get(pathId);
 
+          let updatedPath: LibraryPath | null = null;
           await new Promise<void>((resolve, reject) => {
             request.onsuccess = () => {
-              const pathInfo = request.result;
+              const pathInfo = request.result as StoredLibraryPathRecord | undefined;
               if (pathInfo) {
                 pathInfo.lastScanned = Date.now();
                 pathInfo.trackCount = quick.length;
                 store.put(pathInfo);
+                updatedPath = {
+                  ...pathInfo,
+                  addedAt: pathInfo.addedAt ? new Date(pathInfo.addedAt) : new Date(),
+                  lastScanned: pathInfo.lastScanned ? new Date(pathInfo.lastScanned) : undefined,
+                  isVisible: pathInfo.isVisible !== false,
+                  isScanned: pathInfo.isScanned !== false,
+                };
               }
               resolve();
             };
             request.onerror = () => reject(request.error);
           });
+
+          if (updatedPath) {
+            await this.tryUpsertNativeLibrarySource(updatedPath);
+          }
         } catch (error) {
           console.error('Failed to update library path metadata:', error);
         }
@@ -2375,6 +2567,8 @@ export class MusicLibraryService {
         reject(transaction.error);
       };
     });
+
+    await this.tryUpsertNativeLibrarySource(pathInfo);
 
     return pathInfo;
   }

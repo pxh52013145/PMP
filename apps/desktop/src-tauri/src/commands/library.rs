@@ -1,4 +1,4 @@
-use crate::music_library;
+use crate::{music_library, music_library_db};
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_scan(
@@ -38,4 +38,47 @@ pub async fn music_library_remove_cover(app: tauri::AppHandle, key: String) -> R
 pub fn music_library_cancel_scan() -> Result<(), String> {
     music_library::request_cancel_scan();
     Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_upsert_source(
+    app: tauri::AppHandle,
+    source: music_library_db::LibrarySourceUpsertInput,
+) -> Result<music_library_db::LibrarySourceRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::upsert_source(&app, source))
+        .await
+        .map_err(|e| format!("Music library source upsert task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_db_list_sources(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_library_db::LibrarySourceRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_sources(&app))
+        .await
+        .map_err(|e| format!("Music library source list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_remove_source(
+    app: tauri::AppHandle,
+    source_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::remove_source(&app, &source_id))
+        .await
+        .map_err(|e| format!("Music library source remove task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_sync_tracks(
+    app: tauri::AppHandle,
+    source_id: String,
+    upserts: Vec<music_library_db::LibraryTrackUpsertInput>,
+    missing_track_ids: Vec<String>,
+) -> Result<music_library_db::LibraryTrackSyncResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::sync_source_tracks(&app, &source_id, upserts, missing_track_ids)
+    })
+    .await
+    .map_err(|e| format!("Music library track sync task failed: {e}"))?
 }

@@ -190,6 +190,29 @@ Interpretation:
 | Media Session artwork | avoid large `data:`/`blob:` payload | ✅ artwork source guard active |
 | Dynamic color extraction | avoid blob->dataURL duplication | ✅ conversion path removed |
 
+### 4.11 Native SQLite write-through baseline (refactor kickoff)
+
+This round starts the local library data-layer refactor without breaking current UI behavior:
+
+- Added Rust-side SQLite module: `apps/desktop/src-tauri/src/music_library_db.rs`
+  - tables: `sources`, `local_tracks`
+  - pragmas: `foreign_keys`, `WAL`, `synchronous=NORMAL`
+  - schema versioning via `PRAGMA user_version`
+- Added Tauri commands:
+  - `music_library_db_upsert_source`
+  - `music_library_db_list_sources`
+  - `music_library_db_remove_source`
+  - `music_library_db_sync_tracks`
+- App startup now initializes music-library sqlite (best-effort) alongside existing services.
+- Frontend `MusicLibraryService` now write-through syncs to native sqlite when in Tauri runtime:
+  - source add/remove/visibility/scanning updates
+  - backend scan diff (`upserts` + `missing`) sync in chunks
+
+Boundary in this phase:
+
+- IndexedDB remains the current read model for UI/query behavior.
+- Native sqlite is the new persistent base being populated in parallel for next-phase read-path migration.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
