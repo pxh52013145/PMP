@@ -21,6 +21,13 @@ export type DebugConfig = {
 
 export type DebugEnvSnapshot = Record<string, string | null>;
 
+export type RecentGitCommit = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  committedAtIso: string;
+};
+
 const DEFAULT_CONFIG: DebugConfig = {
   version: 1,
   enabled: false,
@@ -129,5 +136,34 @@ export async function getDebugEnvSnapshot(): Promise<DebugEnvSnapshot> {
 export async function restartApp(): Promise<void> {
   if (!isTauriRuntime()) return;
   await invoke('app_restart');
+}
+
+function ensureRecentGitCommit(value: unknown): RecentGitCommit | null {
+  if (!isRecord(value)) return null;
+
+  const hash = typeof value.hash === 'string' ? value.hash.trim() : '';
+  const shortHash = typeof value.shortHash === 'string' ? value.shortHash.trim() : '';
+  const subject = typeof value.subject === 'string' ? value.subject.trim() : '';
+  const committedAtIso = typeof value.committedAtIso === 'string' ? value.committedAtIso.trim() : '';
+
+  if (!hash || !shortHash || !subject || !committedAtIso) return null;
+  return { hash, shortHash, subject, committedAtIso };
+}
+
+export async function getRecentGitCommits(limit: number = 3): Promise<RecentGitCommit[]> {
+  if (!isTauriRuntime()) return [];
+  const normalized = Number.isFinite(limit) ? Math.min(20, Math.max(1, Math.floor(limit))) : 3;
+  const raw = await invoke<unknown>('debug_get_recent_git_commits', { limit: normalized }).catch(
+    () => null
+  );
+  if (!Array.isArray(raw)) return [];
+
+  const commits: RecentGitCommit[] = [];
+  for (const entry of raw) {
+    const commit = ensureRecentGitCommit(entry);
+    if (!commit) continue;
+    commits.push(commit);
+  }
+  return commits;
 }
 

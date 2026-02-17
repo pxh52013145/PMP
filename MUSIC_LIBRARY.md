@@ -472,6 +472,9 @@ Export payload notes:
 - Write report stores a markdown snapshot with timestamp + best-effort commit hash:
   - Tauri runtime: writes to `AppData/logs/`
   - non-Tauri: downloads markdown file as fallback
+- Report now also attempts to include latest git commit summaries (best-effort):
+  - source: backend `debug_get_recent_git_commits`
+  - fallback: `unavailable` when git metadata cannot be resolved
 
 Only after this evidence loop should we decide whether to prioritize:
 

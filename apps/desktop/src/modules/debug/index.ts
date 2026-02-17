@@ -4,10 +4,12 @@ export {
   getDebugEnvSnapshot,
   getDefaultDebugConfig,
   restartApp,
+  getRecentGitCommits,
   setDebugConfig,
   type DebugConfig,
   type DebugEnvSnapshot,
   type DebugVstBridgeConfig,
+  type RecentGitCommit,
   type VstSidechainModeOverride,
 } from './debugConfig';
 

@@ -7,6 +7,7 @@ import {
   getDebugEnvSnapshot,
   getDefaultDebugConfig,
   getProcessPerfTotalsSnapshot,
+  getRecentGitCommits,
   restartApp,
   setDebugConfig,
   type DebugConfig,
@@ -640,7 +641,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       return;
     }
 
-    const commit = shortCommitHash(resolveCommitHash(envSnapshot));
+    const commitFromEnv = shortCommitHash(resolveCommitHash(envSnapshot));
+    const recentCommits = await getRecentGitCommits(3).catch(() => []);
+    const commit =
+      recentCommits.length > 0
+        ? shortCommitHash(recentCommits[0]?.shortHash || recentCommits[0]?.hash || commitFromEnv)
+        : commitFromEnv;
     const reportAtMs = Date.now();
     const reportAtIso = new Date(reportAtMs).toISOString();
     const scenarioSamples = memoryBaselines
@@ -669,6 +675,15 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       `- commit: ${commit}`,
       `- scenario_id: ${comparison.scenarioId}`,
       `- sample_count: ${comparison.sampleCount}`,
+      '',
+      '## Recent Git Commits (best-effort)',
+      '',
+      ...(recentCommits.length > 0
+        ? recentCommits.map(
+            (item) =>
+              `- ${shortCommitHash(item.shortHash || item.hash)} @ ${item.committedAtIso} :: ${item.subject}`
+          )
+        : ['- unavailable']),
       '',
       '## Summary',
       '',
