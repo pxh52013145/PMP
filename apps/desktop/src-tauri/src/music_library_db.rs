@@ -65,6 +65,36 @@ pub struct LibraryTrackSyncResult {
     pub marked_missing: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackQueryInput {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub include_missing: Option<bool>,
+    pub visible_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackRecord {
+    pub id: String,
+    pub source_id: String,
+    pub file_path: String,
+    pub quick_fingerprint: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u32>,
+    pub file_size: Option<u64>,
+    pub mtime_ms: Option<i64>,
+    pub replay_gain_track_db: Option<f32>,
+    pub replay_gain_album_db: Option<f32>,
+    pub status: String,
+    pub updated_at_ms: i64,
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -505,5 +535,114 @@ pub fn sync_source_tracks(
             upserted,
             marked_missing,
         })
+    })
+}
+
+pub fn query_tracks(
+    app: &AppHandle,
+    query: Option<LibraryTrackQueryInput>,
+) -> Result<Vec<LibraryTrackRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = query
+            .as_ref()
+            .and_then(|item| item.limit)
+            .map(|value| value.clamp(1, 2000) as i64)
+            .unwrap_or(i64::MAX);
+        let normalized_offset = query
+            .as_ref()
+            .and_then(|item| item.offset)
+            .map(|value| value.max(0) as i64)
+            .unwrap_or(0);
+        let include_missing_flag = if query
+            .as_ref()
+            .and_then(|item| item.include_missing)
+            .unwrap_or(false)
+        {
+            1_i64
+        } else {
+            0_i64
+        };
+        let visible_only_flag = if query
+            .as_ref()
+            .and_then(|item| item.visible_only)
+            .unwrap_or(true)
+        {
+            1_i64
+        } else {
+            0_i64
+        };
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  t.id,
+                  t.source_id,
+                  t.file_path,
+                  t.quick_fingerprint,
+                  t.title,
+                  t.artist,
+                  t.album,
+                  t.duration_seconds,
+                  t.sample_rate,
+                  t.bit_depth,
+                  t.file_size,
+                  t.mtime_ms,
+                  t.replay_gain_track_db,
+                  t.replay_gain_album_db,
+                  t.status,
+                  t.updated_at_ms
+                FROM local_tracks t
+                JOIN sources s ON s.id = t.source_id
+                WHERE (?1 = 0 OR s.is_visible = 1)
+                  AND (?2 = 1 OR t.status = 'available')
+                ORDER BY
+                  LOWER(COALESCE(t.title, t.file_path)) ASC,
+                  t.updated_at_ms DESC,
+                  t.id ASC
+                LIMIT ?3
+                OFFSET ?4
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare query tracks statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(
+                params![
+                    visible_only_flag,
+                    include_missing_flag,
+                    normalized_limit,
+                    normalized_offset,
+                ],
+                |row| {
+                    Ok(LibraryTrackRecord {
+                        id: row.get(0)?,
+                        source_id: row.get(1)?,
+                        file_path: row.get(2)?,
+                        quick_fingerprint: row.get(3)?,
+                        title: row.get(4)?,
+                        artist: row.get(5)?,
+                        album: row.get(6)?,
+                        duration_seconds: row.get(7)?,
+                        sample_rate: row.get::<_, Option<i64>>(8)?.map(|value| value as u32),
+                        bit_depth: row.get::<_, Option<i64>>(9)?.map(|value| value as u32),
+                        file_size: row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
+                        mtime_ms: row.get(11)?,
+                        replay_gain_track_db: row.get(12)?,
+                        replay_gain_album_db: row.get(13)?,
+                        status: row.get(14)?,
+                        updated_at_ms: row.get(15)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query tracks: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse queried track row: {error}"))?);
+        }
+
+        Ok(items)
     })
 }

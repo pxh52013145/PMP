@@ -213,6 +213,22 @@ Boundary in this phase:
 - IndexedDB remains the current read model for UI/query behavior.
 - Native sqlite is the new persistent base being populated in parallel for next-phase read-path migration.
 
+### 4.12 Native read-path pilot (`getAllTracks`)
+
+This round adds a controlled read-path pilot:
+
+- New backend query command:
+  - `music_library_db_query_tracks`
+- New frontend bridge:
+  - `queryNativeLibraryTracks(...)`
+- `MusicLibraryService.getAllTracks(...)` now tries native sqlite query first in Tauri runtime,
+  then falls back to existing IndexedDB path when native result is empty/unavailable.
+
+Boundary in this pilot:
+
+- Scope is limited to `getAllTracks` only (search/facets/stats remain on IndexedDB in this phase).
+- Fallback keeps old behavior intact while native sqlite coverage is still converging.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

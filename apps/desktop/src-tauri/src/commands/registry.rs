@@ -40,6 +40,7 @@ pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
     "music_library_db_list_sources",
     "music_library_db_remove_source",
     "music_library_db_sync_tracks",
+    "music_library_db_query_tracks",
 ];
 
 pub const AUDIO_COMMAND_NAMES: &[&str] = &[
@@ -228,6 +229,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::library::music_library_db_list_sources,
             crate::commands::library::music_library_db_remove_source,
             crate::commands::library::music_library_db_sync_tracks,
+            crate::commands::library::music_library_db_query_tracks,
             crate::commands::audio::native_audio_load,
             crate::commands::audio::native_audio_load_and_play,
             crate::commands::audio::native_audio_play,

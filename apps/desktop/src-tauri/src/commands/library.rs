@@ -82,3 +82,13 @@ pub async fn music_library_db_sync_tracks(
     .await
     .map_err(|e| format!("Music library track sync task failed: {e}"))?
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_query_tracks(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryTrackQueryInput>,
+) -> Result<Vec<music_library_db::LibraryTrackRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::query_tracks(&app, query))
+        .await
+        .map_err(|e| format!("Music library track query task failed: {e}"))?
+}

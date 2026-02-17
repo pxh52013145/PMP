@@ -6,9 +6,11 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
 import {
+  queryNativeLibraryTracks,
   removeNativeLibrarySource,
   syncNativeLibraryTracks,
   upsertNativeLibrarySource,
+  type NativeLibraryTrackRecord,
   type NativeLibraryTrackUpsertInput,
 } from '../../modules/music-library';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
@@ -472,6 +474,67 @@ export class MusicLibraryService {
       } catch (error) {
         console.warn('[MusicLibraryService] failed to sync native missing tracks:', normalizedSourceId, error);
       }
+    }
+  }
+
+  private mapNativeTrackRecordToStoredTrack(record: NativeLibraryTrackRecord): StoredTrackRecord {
+    const normalizedTitle =
+      typeof record.title === 'string' && record.title.trim().length > 0
+        ? record.title
+        : record.filePath.split(/[\\/]/).pop()?.replace(/\.[^/.]+$/, '') || 'Unknown';
+
+    const mapped: StoredTrackRecord = {
+      id: record.id,
+      path: record.filePath,
+      filePath: record.filePath,
+      title: normalizedTitle,
+      artist: record.artist,
+      album: record.album,
+      duration: record.durationSeconds,
+      sampleRate: record.sampleRate,
+      fileSize: record.fileSize,
+      mtimeMs: record.mtimeMs,
+      quickFingerprint: this.sanitizeQuickFingerprint(record.quickFingerprint),
+      libraryPathId: record.sourceId,
+      replayGainTrackGainDb: record.replayGainTrackDb,
+      replayGainAlbumGainDb: record.replayGainAlbumDb,
+      metadataScannedAtMs: record.updatedAtMs,
+      addedAt: record.updatedAtMs,
+    };
+
+    if (typeof record.bitDepth === 'number' && Number.isFinite(record.bitDepth)) {
+      (mapped as unknown as { bitDepth?: number }).bitDepth = record.bitDepth;
+    }
+
+    return mapped;
+  }
+
+  private async tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<Track[] | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedLimit =
+      typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+    const normalizedOffset =
+      typeof offset === 'number' && Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : undefined;
+
+    try {
+      const nativeTracks = await queryNativeLibraryTracks({
+        limit: normalizedLimit,
+        offset: normalizedOffset,
+        includeMissing: false,
+        visibleOnly: true,
+      });
+
+      if (nativeTracks.length === 0) {
+        return null;
+      }
+
+      return nativeTracks.map((item) =>
+        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
+      );
+    } catch (error) {
+      console.warn('[MusicLibraryService] native track query failed, fallback to IndexedDB:', error);
+      return null;
     }
   }
 
@@ -2575,6 +2638,11 @@ export class MusicLibraryService {
 
   // 获取所有轨道（带限制，避免内存溢出）
   async getAllTracks(limit?: number, offset?: number): Promise<Track[]> {
+    const nativeTracks = await this.tryGetAllTracksFromNativeDb(limit, offset);
+    if (nativeTracks) {
+      return nativeTracks;
+    }
+
     const db = await this.ensureDB();
     const visibilityContext = await this.buildPathVisibilityContext();
     return new Promise((resolve, reject) => {

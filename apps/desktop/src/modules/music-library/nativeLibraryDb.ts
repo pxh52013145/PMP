@@ -45,6 +45,32 @@ export interface NativeLibraryTrackSyncResult {
   markedMissing: number;
 }
 
+export interface NativeLibraryTrackQuery {
+  limit?: number;
+  offset?: number;
+  includeMissing?: boolean;
+  visibleOnly?: boolean;
+}
+
+export interface NativeLibraryTrackRecord {
+  id: string;
+  sourceId: string;
+  filePath: string;
+  quickFingerprint?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  durationSeconds?: number;
+  sampleRate?: number;
+  bitDepth?: number;
+  fileSize?: number;
+  mtimeMs?: number;
+  replayGainTrackDb?: number;
+  replayGainAlbumDb?: number;
+  status: string;
+  updatedAtMs: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -104,6 +130,35 @@ function ensureTrackSyncResult(value: unknown): NativeLibraryTrackSyncResult | n
   };
 }
 
+function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
+  if (!isRecord(value)) return null;
+  const id = asTrimmedString(value.id);
+  const sourceId = asTrimmedString(value.sourceId);
+  const filePath = asTrimmedString(value.filePath);
+  const status = asTrimmedString(value.status);
+  const updatedAtMs = asNumber(value.updatedAtMs);
+  if (!id || !sourceId || !filePath || !status || updatedAtMs === undefined) return null;
+
+  return {
+    id,
+    sourceId,
+    filePath,
+    quickFingerprint: asOptionalString(value.quickFingerprint),
+    title: asOptionalString(value.title),
+    artist: asOptionalString(value.artist),
+    album: asOptionalString(value.album),
+    durationSeconds: asNumber(value.durationSeconds),
+    sampleRate: asNumber(value.sampleRate),
+    bitDepth: asNumber(value.bitDepth),
+    fileSize: asNumber(value.fileSize),
+    mtimeMs: asNumber(value.mtimeMs),
+    replayGainTrackDb: asNumber(value.replayGainTrackDb),
+    replayGainAlbumDb: asNumber(value.replayGainAlbumDb),
+    status,
+    updatedAtMs,
+  };
+}
+
 export async function upsertNativeLibrarySource(
   source: NativeLibrarySourceUpsertInput
 ): Promise<NativeLibrarySourceRecord | null> {
@@ -151,3 +206,34 @@ export async function syncNativeLibraryTracks(
   return ensureTrackSyncResult(raw);
 }
 
+export async function queryNativeLibraryTracks(
+  query?: NativeLibraryTrackQuery
+): Promise<NativeLibraryTrackRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload: NativeLibraryTrackQuery = {
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined,
+    offset:
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined,
+    includeMissing: query?.includeMissing === true,
+    visibleOnly: query?.visibleOnly !== false,
+  };
+
+  const raw = await invoke<unknown>('music_library_db_query_tracks', { query: payload }).catch(
+    () => null
+  );
+  if (!Array.isArray(raw)) return [];
+
+  const tracks: NativeLibraryTrackRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureTrackRecord(item);
+    if (!parsed) continue;
+    tracks.push(parsed);
+  }
+  return tracks;
+}
