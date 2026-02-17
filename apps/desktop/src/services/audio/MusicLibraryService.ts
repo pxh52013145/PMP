@@ -2695,6 +2695,11 @@ export class MusicLibraryService {
     folderPath: string,
     pathId?: string
   ): Promise<StoredTrackRecord[]> {
+    const nativeTracks = await this.tryGetStoredTracksForBackendScanFromNativeDb(folderPath, pathId);
+    if (nativeTracks) {
+      return nativeTracks;
+    }
+
     const db = await this.ensureDB();
 
     return new Promise((resolve, reject) => {
@@ -2744,6 +2749,39 @@ export class MusicLibraryService {
         scanByPrefix();
       }
     });
+  }
+
+  private async tryGetStoredTracksForBackendScanFromNativeDb(
+    folderPath: string,
+    pathId?: string
+  ): Promise<StoredTrackRecord[] | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedPathId = String(pathId || '').trim();
+    if (!normalizedPathId) return null;
+
+    try {
+      const nativeTracks = await queryNativeLibraryTracks({
+        includeMissing: true,
+        visibleOnly: false,
+        sourceId: normalizedPathId,
+      });
+
+      const folderPrefix = this.normalizeFolderPrefix(folderPath);
+      return nativeTracks
+        .map((item) => this.mapNativeTrackRecordToStoredTrack(item))
+        .filter((track) => {
+          const trackPath = String(track.filePath || track.path || '').trim();
+          if (!trackPath) return false;
+          return this.normalizePathForCompare(trackPath).startsWith(folderPrefix);
+        });
+    } catch (error) {
+      console.warn(
+        '[MusicLibraryService] native backend-scan source query failed, fallback to IndexedDB:',
+        error
+      );
+      return null;
+    }
   }
 
   private async applyBackendScanDiff(

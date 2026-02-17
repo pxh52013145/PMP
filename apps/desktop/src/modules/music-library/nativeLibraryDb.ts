@@ -56,6 +56,7 @@ export interface NativeLibraryTrackQuery {
   artist?: string;
   album?: string;
   trackId?: string;
+  sourceId?: string;
 }
 
 export interface NativeLibraryTrackRecord {
@@ -318,6 +319,10 @@ export async function queryNativeLibraryTracks(
     trackId:
       typeof query?.trackId === 'string' && query.trackId.trim().length > 0
         ? query.trackId.trim()
+        : undefined,
+    sourceId:
+      typeof query?.sourceId === 'string' && query.sourceId.trim().length > 0
+        ? query.sourceId.trim()
         : undefined,
   };
 

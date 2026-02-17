@@ -318,6 +318,21 @@ Boundary in this phase:
 - Source list is native-first only in Tauri runtime.
 - Browser runtime remains IndexedDB-only as before.
 
+### 4.17 Scan diff baseline optimization (`sourceId` native lookup)
+
+This round reduces IndexedDB pressure in backend-scan diff:
+
+- Track query contract now supports `sourceId` exact filter.
+- `getStoredTracksForBackendScan(...)` now prefers native sqlite source-scoped query in Tauri runtime,
+  then falls back to IndexedDB when native query fails.
+- Effect: scan diff no longer needs to rely on IndexedDB full-store traversal for the common
+  `pathId`-known backend scan path.
+
+Boundary in this phase:
+
+- Native source-scoped lookup is only used when `pathId` is present.
+- Existing fallback preserves previous behavior for legacy or error paths.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
