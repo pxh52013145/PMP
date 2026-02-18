@@ -7,6 +7,7 @@ import {
   ScanProgress,
   ViewMode,
   LibraryPath,
+  LibraryPathHealth,
   AlbumSummary,
   CoverRuntimeCachePolicy,
 } from '../../services/audio/MusicLibraryService';
@@ -228,6 +229,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [libraryPaths, setLibraryPaths] = useState<LibraryPath[]>([]);
+  const [libraryPathHealthMap, setLibraryPathHealthMap] = useState<Record<string, LibraryPathHealth>>(
+    {}
+  );
+  const [isLibraryPathHealthLoading, setIsLibraryPathHealthLoading] = useState(false);
+  const [isLibraryPathHealthAvailable, setIsLibraryPathHealthAvailable] = useState(true);
+  const [pathCleanupBusyMap, setPathCleanupBusyMap] = useState<Record<string, boolean>>({});
+  const [isCleanupAllMissingBusy, setIsCleanupAllMissingBusy] = useState(false);
   const [showPathsManager, setShowPathsManager] = useState(false);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
   const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
@@ -963,16 +971,51 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [beginAudioProtection, loadFacetCollections, updateCoverRuntimePolicy, viewMode]);
 
   // 閸旂姾娴囨惔鎾圭熅瀵?
+  const loadLibraryPathHealth = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      setLibraryPathHealthMap({});
+      setIsLibraryPathHealthAvailable(false);
+      return;
+    }
+
+    setIsLibraryPathHealthLoading(true);
+    try {
+      const healthRows = await musicLibraryService.getLibraryPathHealth();
+      if (!healthRows) {
+        setLibraryPathHealthMap({});
+        setIsLibraryPathHealthAvailable(false);
+        return;
+      }
+
+      const nextMap: Record<string, LibraryPathHealth> = {};
+      for (const row of healthRows) {
+        if (!row.sourceId) continue;
+        nextMap[row.sourceId] = row;
+      }
+      setLibraryPathHealthMap(nextMap);
+      setIsLibraryPathHealthAvailable(true);
+    } catch (error) {
+      console.warn('Failed to load library path health:', error);
+      setLibraryPathHealthMap({});
+      setIsLibraryPathHealthAvailable(false);
+    } finally {
+      setIsLibraryPathHealthLoading(false);
+    }
+  }, []);
+
   const loadLibraryPaths = useCallback(async () => {
     try {
       const paths = await musicLibraryService.getLibraryPaths();
       setLibraryPaths(paths);
+      if (showPathsManager) {
+        void loadLibraryPathHealth();
+      }
       return paths;
     } catch (error) {
       console.error('Failed to load library paths:', error);
       return [];
     }
-  }, []);
+  }, [loadLibraryPathHealth, showPathsManager]);
 
   const resetLibraryDataFromStorage = useCallback(async () => {
     clearModuleCache();
@@ -989,6 +1032,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (!isOpen) return;
     void loadLibraryPaths();
   }, [isOpen, loadLibraryPaths]);
+
+  useEffect(() => {
+    if (!showPathsManager) return;
+    void loadLibraryPathHealth();
+  }, [loadLibraryPathHealth, showPathsManager]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1885,6 +1933,77 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const totalMissingTracks = useMemo(() => {
+    return libraryPaths.reduce((sum, path) => {
+      const health = libraryPathHealthMap[path.id];
+      return sum + (health?.missingTracks ?? 0);
+    }, 0);
+  }, [libraryPathHealthMap, libraryPaths]);
+
+  const handleCleanupMissingForPath = useCallback(
+    async (pathId: string) => {
+      const normalizedPathId = String(pathId || '').trim();
+      if (!normalizedPathId) return;
+
+      setPathCleanupBusyMap((prev) => ({
+        ...prev,
+        [normalizedPathId]: true,
+      }));
+
+      const releaseProtection = beginAudioProtection('music-library-cleanup-missing-path', 45_000);
+      try {
+        const deleted = await musicLibraryService.cleanupLibraryPathTracks(normalizedPathId, {
+          missingOnly: true,
+        });
+        if (deleted > 0) {
+          await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+        } else {
+          await loadLibraryPathHealth();
+        }
+      } finally {
+        setPathCleanupBusyMap((prev) => ({
+          ...prev,
+          [normalizedPathId]: false,
+        }));
+        releaseProtection();
+      }
+    },
+    [beginAudioProtection, loadLibraryData, loadLibraryPathHealth, loadLibraryPaths]
+  );
+
+  const handleCleanupMissingForAllPaths = useCallback(async () => {
+    if (totalMissingTracks <= 0) return;
+    setIsCleanupAllMissingBusy(true);
+
+    const releaseProtection = beginAudioProtection('music-library-cleanup-missing-all-paths', 120_000);
+    try {
+      let deletedTotal = 0;
+      for (const path of libraryPaths) {
+        const missingCount = libraryPathHealthMap[path.id]?.missingTracks ?? 0;
+        if (missingCount <= 0) continue;
+        const deleted = await musicLibraryService.cleanupLibraryPathTracks(path.id, { missingOnly: true });
+        deletedTotal += deleted;
+      }
+
+      if (deletedTotal > 0) {
+        await Promise.all([loadLibraryPaths(), loadLibraryData()]);
+      } else {
+        await loadLibraryPathHealth();
+      }
+    } finally {
+      setIsCleanupAllMissingBusy(false);
+      releaseProtection();
+    }
+  }, [
+    beginAudioProtection,
+    libraryPathHealthMap,
+    libraryPaths,
+    loadLibraryData,
+    loadLibraryPathHealth,
+    loadLibraryPaths,
+    totalMissingTracks,
+  ]);
+
   if (!isOpen) return null;
 
   const libraryContent = (
@@ -2296,6 +2415,25 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 >
                   {t('pages.music-library.pathsManager.addFolderButton')}
                 </button>
+                <button
+                  className="paths-clean-missing-btn"
+                  onClick={handleCleanupMissingForAllPaths}
+                  disabled={
+                    scanProgress?.isScanning ||
+                    isCleanupAllMissingBusy ||
+                    isLibraryPathHealthLoading ||
+                    totalMissingTracks <= 0
+                  }
+                  title={t('pages.music-library.pathsManager.path.cleanupMissingAllTitle', {
+                    count: totalMissingTracks,
+                  })}
+                >
+                  {isCleanupAllMissingBusy
+                    ? t('pages.music-library.pathsManager.path.cleanupMissingBusy')
+                    : t('pages.music-library.pathsManager.path.cleanupMissingAllButton', {
+                        count: totalMissingTracks,
+                      })}
+                </button>
                 <button onClick={() => setShowPathsManager(false)}>X</button>
               </div>
             </div>
@@ -2309,7 +2447,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 </div>
               ) : (
                 <div className="paths-manager-list">
-                  {libraryPaths.map((path) => (
+                  {libraryPaths.map((path) => {
+                    const pathHealth = libraryPathHealthMap[path.id];
+                    const missingCount = pathHealth?.missingTracks ?? 0;
+                    const isPathCleanupBusy = pathCleanupBusyMap[path.id] === true;
+
+                    return (
                     <div key={path.id} className="path-item">
                       <div className="path-item-icon">📁</div>
                       <div className="path-item-info">
@@ -2320,6 +2463,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           {path.trackCount > 0 && (
                             <span className="path-meta-tracks">
                               {t('pages.music-library.pathsManager.path.trackCount', { count: path.trackCount })}
+                            </span>
+                          )}
+                          {missingCount > 0 && (
+                            <span className="path-meta-missing">
+                              {t('pages.music-library.pathsManager.path.missingCount', {
+                                count: missingCount,
+                              })}
                             </span>
                           )}
                           {!path.isVisible && (
@@ -2396,6 +2546,29 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           {path.isScanned ? '🔄' : '⏸'}
                         </button>
                         <button
+                          className="path-item-action-btn path-item-clean-missing"
+                          onClick={() => {
+                            void handleCleanupMissingForPath(path.id);
+                          }}
+                          disabled={
+                            scanProgress?.isScanning ||
+                            isLibraryPathHealthLoading ||
+                            isPathCleanupBusy ||
+                            missingCount <= 0
+                          }
+                          title={
+                            missingCount > 0
+                              ? t('pages.music-library.pathsManager.path.cleanupMissingTitle', {
+                                  count: missingCount,
+                                })
+                              : t('pages.music-library.pathsManager.path.cleanupMissingDisabledTitle')
+                          }
+                        >
+                          {isPathCleanupBusy
+                            ? t('pages.music-library.pathsManager.path.cleanupMissingBusy')
+                            : '🧹'}
+                        </button>
+                        <button
                           className="path-item-action-btn path-item-rescan"
                           onClick={async () => {
                             const releaseProtection = beginAudioProtection('music-library-rescan-path', 90_000);
@@ -2431,7 +2604,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2439,6 +2613,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             <div className="paths-manager-footer">
               <div className="paths-manager-info">
                 {t('pages.music-library.pathsManager.footer')}
+              </div>
+              <div className="paths-manager-health-info">
+                {isLibraryPathHealthLoading
+                  ? t('pages.music-library.pathsManager.health.loading')
+                  : isLibraryPathHealthAvailable
+                    ? t('pages.music-library.pathsManager.health.summary', {
+                        count: totalMissingTracks,
+                      })
+                    : t('pages.music-library.pathsManager.health.unavailable')}
               </div>
             </div>
           </div>

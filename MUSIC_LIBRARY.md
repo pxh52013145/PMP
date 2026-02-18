@@ -428,6 +428,23 @@ Expected effect:
   in WebView.
 - Enables precise cleanup before/after scan cycles and reduces legacy fallback payload pressure.
 
+### 4.22 Path manager maintenance UI baseline (`missing cleanup`)
+
+This round wires source health into the existing Library Path Manager UI for operational cleanup:
+
+- `MusicLibrary` now loads native source health map (`sourceId -> health`) when path manager is open.
+- Per-path metadata now shows missing-track badge when `missingTracks > 0`.
+- Added per-path cleanup action:
+  - button triggers `cleanupLibraryPathTracks(pathId, { missingOnly: true })`
+  - on success refreshes both path list and library data.
+- Added global header action to clean missing records across all paths in one pass.
+- Footer now surfaces health status (`loading / summary / unavailable`) to keep operator feedback explicit.
+
+Contract notes:
+
+- UI remains local-first and only enables health operations in Tauri runtime.
+- User-visible strings are i18n-based (`zh-CN` + `en-US`) and avoid hardcoded text.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
