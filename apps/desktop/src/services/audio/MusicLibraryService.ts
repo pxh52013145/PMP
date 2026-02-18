@@ -6,9 +6,11 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
 import {
+  cleanupNativeLibrarySourceTracks,
   clearNativeLibraryTracks,
   deleteNativeLibraryTracks,
   getNativeLibraryStats,
+  listNativeLibrarySourceHealth,
   listNativeLibraryAlbums,
   listNativeLibraryArtists,
   listNativeLibraryGenres,
@@ -18,6 +20,7 @@ import {
   syncNativeLibraryTracks,
   upsertNativeLibrarySource,
   type NativeLibraryAlbumRecord,
+  type NativeLibrarySourceHealthRecord,
   type NativeLibrarySourceRecord,
   type NativeLibraryStatsRecord,
   type NativeLibraryTrackRecord,
@@ -36,6 +39,20 @@ export interface LibraryStats {
   totalAlbums: number;
   totalSize: number;
   totalDuration: number;
+}
+
+export interface LibraryPathHealth {
+  sourceId: string;
+  sourcePath: string;
+  sourceDisplayName?: string;
+  totalTracks: number;
+  availableTracks: number;
+  missingTracks: number;
+  totalArtists: number;
+  totalAlbums: number;
+  totalSize: number;
+  sourceUpdatedAtMs: number;
+  lastTrackUpdatedAtMs?: number;
 }
 
 export interface AlbumSummary {
@@ -2016,6 +2033,59 @@ export class MusicLibraryService {
     }
 
     return this.readLibraryPathsFromIndexedDb();
+  }
+
+  private mapNativeSourceHealthRecord(record: NativeLibrarySourceHealthRecord): LibraryPathHealth {
+    return {
+      sourceId: record.sourceId,
+      sourcePath: record.sourcePath,
+      sourceDisplayName: record.sourceDisplayName,
+      totalTracks: record.totalTracks,
+      availableTracks: record.availableTracks,
+      missingTracks: record.missingTracks,
+      totalArtists: record.totalArtists,
+      totalAlbums: record.totalAlbums,
+      totalSize: record.totalSize,
+      sourceUpdatedAtMs: record.sourceUpdatedAtMs,
+      lastTrackUpdatedAtMs: record.lastTrackUpdatedAtMs,
+    };
+  }
+
+  async getLibraryPathHealth(pathId?: string): Promise<LibraryPathHealth[] | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedPathId =
+      typeof pathId === 'string' && pathId.trim().length > 0 ? pathId.trim() : undefined;
+
+    try {
+      const rows = await listNativeLibrarySourceHealth({ sourceId: normalizedPathId });
+      return rows.map((item) => this.mapNativeSourceHealthRecord(item));
+    } catch (error) {
+      console.warn('[MusicLibraryService] native source health query failed:', error);
+      return null;
+    }
+  }
+
+  async cleanupLibraryPathTracks(
+    pathId: string,
+    options?: { missingOnly?: boolean }
+  ): Promise<number> {
+    if (!isTauriRuntime()) return 0;
+    const normalizedPathId = String(pathId || '').trim();
+    if (!normalizedPathId) return 0;
+
+    try {
+      const deleted = await cleanupNativeLibrarySourceTracks(normalizedPathId, {
+        missingOnly: options?.missingOnly !== false,
+      });
+      if (deleted > 0) {
+        this.clearCache();
+      }
+      return deleted;
+    } catch (error) {
+      console.warn('[MusicLibraryService] native source cleanup failed:', normalizedPathId, error);
+      return 0;
+    }
   }
 
   // 移除库路径

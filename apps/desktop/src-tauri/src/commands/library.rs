@@ -101,6 +101,30 @@ pub async fn music_library_db_delete_tracks(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_source_health(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibrarySourceHealthQueryInput>,
+) -> Result<Vec<music_library_db::LibrarySourceHealthRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_source_health(&app, query))
+        .await
+        .map_err(|e| format!("Music library source health task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_cleanup_source_tracks(
+    app: tauri::AppHandle,
+    source_id: String,
+    missing_only: Option<bool>,
+) -> Result<u64, String> {
+    let normalized_missing_only = missing_only.unwrap_or(true);
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::cleanup_source_tracks(&app, &source_id, normalized_missing_only)
+    })
+    .await
+    .map_err(|e| format!("Music library source cleanup task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_query_tracks(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibraryTrackQueryInput>,

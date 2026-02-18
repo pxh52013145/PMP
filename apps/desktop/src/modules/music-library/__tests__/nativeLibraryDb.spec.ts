@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  cleanupNativeLibrarySourceTracks,
   clearNativeLibraryTracks,
   deleteNativeLibraryTracks,
+  listNativeLibrarySourceHealth,
   listNativeLibrarySources,
   queryNativeLibraryTracks,
 } from '../nativeLibraryDb';
@@ -102,5 +104,45 @@ describe('nativeLibraryDb', () => {
     const affected = await deleteNativeLibraryTracks(['', '   ']);
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
     expect(affected).toBe(0);
+  });
+
+  it('normalizes source health query payload and parses rows', async () => {
+    tauriMocks.invoke.mockResolvedValue([
+      {
+        sourceId: 'source-1',
+        sourcePath: 'D:/Music',
+        sourceDisplayName: 'Music',
+        totalTracks: 120,
+        availableTracks: 118,
+        missingTracks: 2,
+        totalArtists: 35,
+        totalAlbums: 28,
+        totalSize: 1024,
+        sourceUpdatedAtMs: 1700000000,
+        lastTrackUpdatedAtMs: 1700000123,
+      },
+    ]);
+
+    const rows = await listNativeLibrarySourceHealth({ sourceId: '  source-1  ' });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_list_source_health', {
+      query: { sourceId: 'source-1' },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].missingTracks).toBe(2);
+  });
+
+  it('normalizes source cleanup payload and parses affected count', async () => {
+    tauriMocks.invoke.mockResolvedValue(7);
+
+    const affected = await cleanupNativeLibrarySourceTracks('  source-2  ', {
+      missingOnly: false,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_cleanup_source_tracks', {
+      sourceId: 'source-2',
+      missingOnly: false,
+    });
+    expect(affected).toBe(7);
   });
 });

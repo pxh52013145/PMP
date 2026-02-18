@@ -99,6 +99,24 @@ export interface NativeLibraryStatsRecord {
   totalDuration: number;
 }
 
+export interface NativeLibrarySourceHealthQuery {
+  sourceId?: string;
+}
+
+export interface NativeLibrarySourceHealthRecord {
+  sourceId: string;
+  sourcePath: string;
+  sourceDisplayName?: string;
+  totalTracks: number;
+  availableTracks: number;
+  missingTracks: number;
+  totalArtists: number;
+  totalAlbums: number;
+  totalSize: number;
+  sourceUpdatedAtMs: number;
+  lastTrackUpdatedAtMs?: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -241,6 +259,47 @@ function ensureStatsRecord(value: unknown): NativeLibraryStatsRecord | null {
   };
 }
 
+function ensureSourceHealthRecord(value: unknown): NativeLibrarySourceHealthRecord | null {
+  if (!isRecord(value)) return null;
+
+  const sourceId = asTrimmedString(value.sourceId);
+  const sourcePath = asTrimmedString(value.sourcePath);
+  const totalTracks = asNumber(value.totalTracks);
+  const availableTracks = asNumber(value.availableTracks);
+  const missingTracks = asNumber(value.missingTracks);
+  const totalArtists = asNumber(value.totalArtists);
+  const totalAlbums = asNumber(value.totalAlbums);
+  const totalSize = asNumber(value.totalSize);
+  const sourceUpdatedAtMs = asNumber(value.sourceUpdatedAtMs);
+
+  if (!sourceId || !sourcePath) return null;
+  if (
+    totalTracks === undefined ||
+    availableTracks === undefined ||
+    missingTracks === undefined ||
+    totalArtists === undefined ||
+    totalAlbums === undefined ||
+    totalSize === undefined ||
+    sourceUpdatedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    sourceId,
+    sourcePath,
+    sourceDisplayName: asOptionalString(value.sourceDisplayName),
+    totalTracks: Math.max(0, Math.floor(totalTracks)),
+    availableTracks: Math.max(0, Math.floor(availableTracks)),
+    missingTracks: Math.max(0, Math.floor(missingTracks)),
+    totalArtists: Math.max(0, Math.floor(totalArtists)),
+    totalAlbums: Math.max(0, Math.floor(totalAlbums)),
+    totalSize: Math.max(0, Math.floor(totalSize)),
+    sourceUpdatedAtMs,
+    lastTrackUpdatedAtMs: asNumber(value.lastTrackUpdatedAtMs),
+  };
+}
+
 export async function upsertNativeLibrarySource(
   source: NativeLibrarySourceUpsertInput
 ): Promise<NativeLibrarySourceRecord | null> {
@@ -307,6 +366,51 @@ export async function deleteNativeLibraryTracks(trackIds: string[]): Promise<num
 
   const raw = await invoke<unknown>('music_library_db_delete_tracks', {
     trackIds: normalizedIds,
+  }).catch(() => null);
+
+  const parsed = asNumber(raw);
+  if (parsed === undefined) return 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
+export async function listNativeLibrarySourceHealth(
+  query?: NativeLibrarySourceHealthQuery
+): Promise<NativeLibrarySourceHealthRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const sourceId =
+    typeof query?.sourceId === 'string' && query.sourceId.trim().length > 0
+      ? query.sourceId.trim()
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_db_list_source_health', {
+    query: {
+      sourceId,
+    },
+  }).catch(() => null);
+
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeLibrarySourceHealthRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureSourceHealthRecord(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+  return result;
+}
+
+export async function cleanupNativeLibrarySourceTracks(
+  sourceId: string,
+  options?: { missingOnly?: boolean }
+): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+  const normalizedSourceId = sourceId.trim();
+  if (!normalizedSourceId) return 0;
+
+  const raw = await invoke<unknown>('music_library_db_cleanup_source_tracks', {
+    sourceId: normalizedSourceId,
+    missingOnly: options?.missingOnly !== false,
   }).catch(() => null);
 
   const parsed = asNumber(raw);

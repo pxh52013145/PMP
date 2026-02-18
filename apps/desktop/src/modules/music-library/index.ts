@@ -1,7 +1,9 @@
 export {
+  cleanupNativeLibrarySourceTracks,
   clearNativeLibraryTracks,
   deleteNativeLibraryTracks,
   getNativeLibraryStats,
+  listNativeLibrarySourceHealth,
   listNativeLibraryAlbums,
   listNativeLibraryArtists,
   listNativeLibraryGenres,
@@ -15,6 +17,8 @@ export {
   type NativeLibraryTrackQuery,
   type NativeLibraryTrackRecord,
   type NativeLibraryStatsRecord,
+  type NativeLibrarySourceHealthQuery,
+  type NativeLibrarySourceHealthRecord,
   type NativeLibrarySourceRecord,
   type NativeLibrarySourceUpsertInput,
   type NativeLibraryTrackSyncResult,

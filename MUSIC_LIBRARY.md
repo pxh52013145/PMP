@@ -399,6 +399,35 @@ Expected effect:
 - Reduces stale-data surface and lowers legacy fallback memory pressure during large library
   path removals.
 
+### 4.21 Source health + cleanup primitives (`sqlite native`)
+
+This round adds native-by-source maintenance primitives to support future library governance panel
+and dirty-data repair workflows:
+
+- Rust sqlite (`music_library_db.rs`) adds:
+  - `list_source_health(query)`
+    - per-source aggregates: `total/available/missing tracks`, `artists`, `albums`,
+      `totalSize`, `sourceUpdatedAtMs`, `lastTrackUpdatedAtMs`
+    - optional `sourceId` filter
+  - `cleanup_source_tracks(source_id, missing_only)`
+    - `missing_only=true` (default): delete only rows with `status='missing'`
+    - `missing_only=false`: clear all tracks under one source (preserve source row)
+- Tauri command registry exposes:
+  - `music_library_db_list_source_health`
+  - `music_library_db_cleanup_source_tracks`
+- TS bridge (`nativeLibraryDb.ts`) adds:
+  - `listNativeLibrarySourceHealth({ sourceId? })`
+  - `cleanupNativeLibrarySourceTracks(sourceId, { missingOnly? })`
+- `MusicLibraryService` now exposes high-level wrappers:
+  - `getLibraryPathHealth(pathId?)`
+  - `cleanupLibraryPathTracks(pathId, { missingOnly? })`
+
+Expected effect:
+
+- Enables source-scoped diagnostics (missing-rate / stale-volume) without heavy full-table scans
+  in WebView.
+- Enables precise cleanup before/after scan cycles and reduces legacy fallback payload pressure.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

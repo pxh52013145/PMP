@@ -129,6 +129,28 @@ pub struct LibraryStatsRecord {
     pub total_duration: f64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySourceHealthQueryInput {
+    pub source_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySourceHealthRecord {
+    pub source_id: String,
+    pub source_path: String,
+    pub source_display_name: Option<String>,
+    pub total_tracks: u64,
+    pub available_tracks: u64,
+    pub missing_tracks: u64,
+    pub total_artists: u64,
+    pub total_albums: u64,
+    pub total_size: u64,
+    pub source_updated_at_ms: i64,
+    pub last_track_updated_at_ms: Option<i64>,
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -649,6 +671,131 @@ pub fn delete_tracks(app: &AppHandle, track_ids: Vec<String>) -> Result<u64, Str
             .map_err(|error| format!("Failed to commit delete tracks transaction: {error}"))?;
 
         Ok(deleted)
+    })
+}
+
+pub fn list_source_health(
+    app: &AppHandle,
+    query: Option<LibrarySourceHealthQueryInput>,
+) -> Result<Vec<LibrarySourceHealthRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_source_id = query
+            .as_ref()
+            .and_then(|item| item.source_id.as_ref())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default();
+        let source_filter_enabled = if normalized_source_id.is_empty() {
+            0_i64
+        } else {
+            1_i64
+        };
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  s.id AS source_id,
+                  s.path AS source_path,
+                  s.display_name AS source_display_name,
+                  COUNT(t.id) AS total_tracks,
+                  SUM(CASE WHEN t.status = 'available' THEN 1 ELSE 0 END) AS available_tracks,
+                  SUM(CASE WHEN t.status = 'missing' THEN 1 ELSE 0 END) AS missing_tracks,
+                  COUNT(DISTINCT CASE
+                    WHEN TRIM(COALESCE(t.artist, '')) <> '' THEN LOWER(TRIM(t.artist))
+                    ELSE NULL
+                  END) AS total_artists,
+                  COUNT(DISTINCT CASE
+                    WHEN TRIM(COALESCE(t.album, '')) <> '' THEN LOWER(TRIM(t.album))
+                    ELSE NULL
+                  END) AS total_albums,
+                  COALESCE(SUM(COALESCE(t.file_size, 0)), 0) AS total_size,
+                  s.updated_at_ms AS source_updated_at_ms,
+                  MAX(t.updated_at_ms) AS last_track_updated_at_ms
+                FROM sources s
+                LEFT JOIN local_tracks t ON t.source_id = s.id
+                WHERE (?1 = 0 OR s.id = ?2)
+                GROUP BY s.id
+                ORDER BY s.updated_at_ms DESC, s.id ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare source health statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(
+                params![source_filter_enabled, normalized_source_id],
+                |row| {
+                    Ok(LibrarySourceHealthRecord {
+                        source_id: row.get(0)?,
+                        source_path: row.get(1)?,
+                        source_display_name: row.get(2)?,
+                        total_tracks: row.get::<_, i64>(3)?.max(0) as u64,
+                        available_tracks: row.get::<_, i64>(4)?.max(0) as u64,
+                        missing_tracks: row.get::<_, i64>(5)?.max(0) as u64,
+                        total_artists: row.get::<_, i64>(6)?.max(0) as u64,
+                        total_albums: row.get::<_, i64>(7)?.max(0) as u64,
+                        total_size: row.get::<_, i64>(8)?.max(0) as u64,
+                        source_updated_at_ms: row.get(9)?,
+                        last_track_updated_at_ms: row.get(10)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query source health: {error}"))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result
+                .push(row.map_err(|error| format!("Failed to parse source health row: {error}"))?);
+        }
+
+        Ok(result)
+    })
+}
+
+pub fn cleanup_source_tracks(
+    app: &AppHandle,
+    source_id: &str,
+    missing_only: bool,
+) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    let normalized_source_id = source_id.trim();
+    if normalized_source_id.is_empty() {
+        return Err("Source id is required".to_string());
+    }
+
+    with_conn(|conn| {
+        let _ = source_record_by_id(conn, normalized_source_id)?;
+        let now = now_ms();
+
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("Failed to start source cleanup transaction: {error}"))?;
+
+        let deleted = if missing_only {
+            tx.execute(
+                "DELETE FROM local_tracks WHERE source_id = ?1 AND status = 'missing'",
+                params![normalized_source_id],
+            )
+            .map_err(|error| format!("Failed to cleanup missing source tracks: {error}"))?
+        } else {
+            tx.execute(
+                "DELETE FROM local_tracks WHERE source_id = ?1",
+                params![normalized_source_id],
+            )
+            .map_err(|error| format!("Failed to cleanup source tracks: {error}"))?
+        };
+
+        tx.execute(
+            "UPDATE sources SET updated_at_ms = ?2 WHERE id = ?1",
+            params![normalized_source_id, now],
+        )
+        .map_err(|error| format!("Failed to update source cleanup timestamp: {error}"))?;
+
+        tx.commit()
+            .map_err(|error| format!("Failed to commit source cleanup transaction: {error}"))?;
+
+        Ok(deleted as u64)
     })
 }
 
