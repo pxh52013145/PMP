@@ -20,8 +20,10 @@ export {
   clearCloudPlaybackFallbackQueue,
   getCloudPlaybackFallbackAdapter,
   getCloudPlaybackFallbackQueueSnapshot,
+  subscribeCloudPlaybackFallbackQueued,
   type CloudPlaybackFallbackAdapter,
   type CloudPlaybackFallbackDispatchResult,
+  type CloudPlaybackFallbackQueuedEvent,
   type CloudPlaybackFallbackRequest,
 } from './cloudPlaybackFallbackAdapter';
 export { createAudioModule } from './audioModule';

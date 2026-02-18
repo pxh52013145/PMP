@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearCloudPlaybackFallbackQueue,
   getCloudPlaybackFallbackAdapter,
   getCloudPlaybackFallbackQueueSnapshot,
+  subscribeCloudPlaybackFallbackQueued,
 } from '../cloudPlaybackFallbackAdapter';
 
 describe('cloudPlaybackFallbackAdapter', () => {
@@ -80,5 +81,57 @@ describe('cloudPlaybackFallbackAdapter', () => {
     expect(result.queueSize).toBe(0);
     expect(getCloudPlaybackFallbackQueueSnapshot()).toHaveLength(0);
   });
-});
 
+  it('emits queued events for accepted dispatch and dedup hit', async () => {
+    const adapter = getCloudPlaybackFallbackAdapter();
+    const listener = vi.fn();
+    const unsubscribe = subscribeCloudPlaybackFallbackQueued(listener);
+
+    try {
+      await adapter.dispatch({
+        entryId: 'entry-event-1',
+        ownerUid: 'u_event',
+        trackId: 'track-event',
+        quickFingerprint: 'abcdef1234567890',
+        requestedAtMs: 1700000001,
+        reason: 'local-miss',
+      });
+
+      await adapter.dispatch({
+        entryId: 'entry-event-1',
+        ownerUid: 'u_event',
+        trackId: 'track-event',
+        quickFingerprint: 'qf2:abcdef1234567890',
+        requestedAtMs: 1700000002,
+        reason: 'local-miss',
+      });
+
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener.mock.calls[0]?.[0]).toMatchObject({
+        request: {
+          entryId: 'entry-event-1',
+          ownerUid: 'u_event',
+          quickFingerprint: 'qf2:abcdef1234567890',
+        },
+        dispatch: {
+          accepted: true,
+          deduped: false,
+          queueSize: 1,
+        },
+      });
+      expect(listener.mock.calls[1]?.[0]).toMatchObject({
+        request: {
+          entryId: 'entry-event-1',
+          ownerUid: 'u_event',
+        },
+        dispatch: {
+          accepted: true,
+          deduped: true,
+          queueSize: 1,
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+});

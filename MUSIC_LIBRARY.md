@@ -539,6 +539,27 @@ Boundary and replacement path:
 - This adapter is the only seam that will be swapped to HTTP/P2P transport later.
 - Local resolver and playback plan contract remain unchanged when transport implementation changes.
 
+### 4.27 Unified fallback dispatch event bus seam (`P2.3`)
+
+This round completes the bridge from local fallback queue to kernel-wide module events (still no
+network transport):
+
+- `cloudPlaybackFallbackAdapter` now emits queued events with payload:
+  - `request: CloudPlaybackFallbackRequest`
+  - `dispatch: CloudPlaybackFallbackDispatchResult`
+- `audioModule` subscribes to adapter queued events and re-emits them as app events:
+  - `music-library/cloudFallbackQueued`
+  - event source is module-scoped as `audio`
+- App event contract (`contracts/events.ts`) now includes this typed payload so future cloud module
+  can consume fallback requests via event subscription instead of direct audio-service coupling.
+
+Boundary:
+
+- Event bus seam only forwards normalized queue metadata.
+- It does **not** start HTTP/P2P/CDN requests.
+- Future network module can attach to `music-library/cloudFallbackQueued` and provide concrete
+  transport implementation while keeping current local resolver contracts unchanged.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

@@ -1,5 +1,10 @@
 import type { NavigationPageData } from './navigation';
-import type { AudioRobustnessSnapshot, AudioState } from '../services/audio';
+import type {
+  AudioRobustnessSnapshot,
+  AudioState,
+  CloudPlaybackFallbackDispatchResult,
+  CloudPlaybackFallbackRequest,
+} from '../services/audio';
 import type { KeybindingsSnapshot } from '../services/keybindings/types';
 import type { MemoryGovernanceRunResult } from './memoryGovernance';
 import type { PerformanceControlSnapshot } from './performanceControl';
@@ -29,5 +34,9 @@ export type AppEvents = {
     message: string;
     code?: string;
     engineType: 'native';
+  };
+  'music-library/cloudFallbackQueued': {
+    request: CloudPlaybackFallbackRequest;
+    dispatch: CloudPlaybackFallbackDispatchResult;
   };
 };

@@ -1,3 +1,5 @@
+import { EventBus } from '../../kernel';
+
 export interface CloudPlaybackFallbackRequest {
   entryId: string;
   ownerUid: string;
@@ -13,6 +15,15 @@ export interface CloudPlaybackFallbackDispatchResult {
   deduped: boolean;
   queueSize: number;
 }
+
+export interface CloudPlaybackFallbackQueuedEvent {
+  request: CloudPlaybackFallbackRequest;
+  dispatch: CloudPlaybackFallbackDispatchResult;
+}
+
+type CloudPlaybackFallbackAdapterEvents = {
+  'cloud-playback/fallback-queued': CloudPlaybackFallbackQueuedEvent;
+};
 
 export interface CloudPlaybackFallbackAdapter {
   dispatch(request: CloudPlaybackFallbackRequest): Promise<CloudPlaybackFallbackDispatchResult>;
@@ -82,21 +93,31 @@ class InMemoryCloudPlaybackFallbackAdapter implements CloudPlaybackFallbackAdapt
 
     const dedupKey = buildDedupKey(normalized);
     if (this.dedupSet.has(dedupKey)) {
-      return {
+      const result: CloudPlaybackFallbackDispatchResult = {
         accepted: true,
         deduped: true,
         queueSize: this.queue.length,
       };
+      fallbackAdapterEventBus.emit('cloud-playback/fallback-queued', {
+        request: normalized,
+        dispatch: result,
+      });
+      return result;
     }
 
     this.queue.push(normalized);
     this.dedupSet.add(dedupKey);
 
-    return {
+    const result: CloudPlaybackFallbackDispatchResult = {
       accepted: true,
       deduped: false,
       queueSize: this.queue.length,
     };
+    fallbackAdapterEventBus.emit('cloud-playback/fallback-queued', {
+      request: normalized,
+      dispatch: result,
+    });
+    return result;
   }
 
   snapshot(): CloudPlaybackFallbackRequest[] {
@@ -109,6 +130,7 @@ class InMemoryCloudPlaybackFallbackAdapter implements CloudPlaybackFallbackAdapt
   }
 }
 
+const fallbackAdapterEventBus = new EventBus<CloudPlaybackFallbackAdapterEvents>();
 const fallbackAdapter = new InMemoryCloudPlaybackFallbackAdapter();
 
 export function getCloudPlaybackFallbackAdapter(): CloudPlaybackFallbackAdapter {
@@ -123,3 +145,10 @@ export function getCloudPlaybackFallbackQueueSnapshot(): CloudPlaybackFallbackRe
   return fallbackAdapter.snapshot();
 }
 
+export function subscribeCloudPlaybackFallbackQueued(
+  listener: (payload: CloudPlaybackFallbackQueuedEvent) => void
+): () => void {
+  return fallbackAdapterEventBus.on('cloud-playback/fallback-queued', (payload) => {
+    listener(payload);
+  });
+}
