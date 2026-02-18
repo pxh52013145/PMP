@@ -88,6 +88,18 @@ const ALBUM_WINDOW_OVERSCAN_ROWS = 3;
 
 const trackTextInternPool = new Map<string, string>();
 
+type MissingCleanupConfirmTarget =
+  | {
+      mode: 'path';
+      pathId: string;
+      pathName: string;
+      count: number;
+    }
+  | {
+      mode: 'all';
+      count: number;
+    };
+
 function trimTracksForModuleCache(tracks: Track[]): Track[] {
   if (tracks.length <= MODULE_CACHE_TRACK_CAP) return tracks;
   return tracks.slice(0, MODULE_CACHE_TRACK_CAP);
@@ -236,6 +248,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [isLibraryPathHealthAvailable, setIsLibraryPathHealthAvailable] = useState(true);
   const [pathCleanupBusyMap, setPathCleanupBusyMap] = useState<Record<string, boolean>>({});
   const [isCleanupAllMissingBusy, setIsCleanupAllMissingBusy] = useState(false);
+  const [cleanupConfirmTarget, setCleanupConfirmTarget] =
+    useState<MissingCleanupConfirmTarget | null>(null);
   const [showPathsManager, setShowPathsManager] = useState(false);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
   const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
@@ -2004,6 +2018,52 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     totalMissingTracks,
   ]);
 
+  const handleRequestCleanupMissingForPath = useCallback(
+    (pathId: string, pathName: string, count: number) => {
+      const normalizedPathId = String(pathId || '').trim();
+      if (!normalizedPathId || count <= 0) return;
+      setCleanupConfirmTarget({
+        mode: 'path',
+        pathId: normalizedPathId,
+        pathName: pathName || normalizedPathId,
+        count,
+      });
+    },
+    []
+  );
+
+  const handleRequestCleanupMissingForAllPaths = useCallback(() => {
+    if (totalMissingTracks <= 0) return;
+    setCleanupConfirmTarget({
+      mode: 'all',
+      count: totalMissingTracks,
+    });
+  }, [totalMissingTracks]);
+
+  const handleConfirmCleanupMissing = useCallback(async () => {
+    if (!cleanupConfirmTarget) return;
+    const target = cleanupConfirmTarget;
+    setCleanupConfirmTarget(null);
+    if (target.mode === 'path') {
+      await handleCleanupMissingForPath(target.pathId);
+      return;
+    }
+    await handleCleanupMissingForAllPaths();
+  }, [cleanupConfirmTarget, handleCleanupMissingForAllPaths, handleCleanupMissingForPath]);
+
+  const cleanupConfirmMessage = useMemo(() => {
+    if (!cleanupConfirmTarget) return '';
+    if (cleanupConfirmTarget.mode === 'path') {
+      return t('pages.music-library.pathsManager.cleanupConfirm.pathMessage', {
+        path: cleanupConfirmTarget.pathName,
+        count: cleanupConfirmTarget.count,
+      });
+    }
+    return t('pages.music-library.pathsManager.cleanupConfirm.allMessage', {
+      count: cleanupConfirmTarget.count,
+    });
+  }, [cleanupConfirmTarget, t]);
+
   if (!isOpen) return null;
 
   const libraryContent = (
@@ -2398,6 +2458,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         onCancel={() => setShowClearConfirm(false)}
       />
 
+      <ConfirmDialog
+        isOpen={cleanupConfirmTarget !== null}
+        title={t('pages.music-library.pathsManager.cleanupConfirm.title')}
+        message={cleanupConfirmMessage}
+        confirmText={t('pages.music-library.pathsManager.cleanupConfirm.confirmButton')}
+        cancelText={t('common.action.cancel')}
+        confirmButtonStyle="danger"
+        onConfirm={() => {
+          void handleConfirmCleanupMissing();
+        }}
+        onCancel={() => setCleanupConfirmTarget(null)}
+      />
+
       {/* 鎼存捁鐭惧鍕吀閻炲棗娅?*/}
       {showPathsManager && (
         <div className="paths-manager-overlay" onClick={() => setShowPathsManager(false)}>
@@ -2417,11 +2490,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 </button>
                 <button
                   className="paths-clean-missing-btn"
-                  onClick={handleCleanupMissingForAllPaths}
+                  onClick={handleRequestCleanupMissingForAllPaths}
                   disabled={
                     scanProgress?.isScanning ||
                     isCleanupAllMissingBusy ||
                     isLibraryPathHealthLoading ||
+                    cleanupConfirmTarget !== null ||
                     totalMissingTracks <= 0
                   }
                   title={t('pages.music-library.pathsManager.path.cleanupMissingAllTitle', {
@@ -2548,12 +2622,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         <button
                           className="path-item-action-btn path-item-clean-missing"
                           onClick={() => {
-                            void handleCleanupMissingForPath(path.id);
+                            handleRequestCleanupMissingForPath(path.id, path.path, missingCount);
                           }}
                           disabled={
                             scanProgress?.isScanning ||
                             isLibraryPathHealthLoading ||
                             isPathCleanupBusy ||
+                            cleanupConfirmTarget !== null ||
                             missingCount <= 0
                           }
                           title={

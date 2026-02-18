@@ -445,6 +445,23 @@ Contract notes:
 - UI remains local-first and only enables health operations in Tauri runtime.
 - User-visible strings are i18n-based (`zh-CN` + `en-US`) and avoid hardcoded text.
 
+### 4.23 Cleanup safety confirmation (`destructive guard`)
+
+This round adds an explicit confirmation layer before deleting missing-track records from path manager:
+
+- Added `cleanupConfirmTarget` state in `MusicLibrary` to model pending cleanup scope:
+  - single path (`mode='path'`, `pathId`, `pathName`, `count`)
+  - all paths (`mode='all'`, `count`)
+- Path-level and global cleanup buttons now trigger request handlers first; deletion runs only after
+  user confirms via `ConfirmDialog`.
+- Confirmation dialog uses danger style and localized copy in both `zh-CN` and `en-US`.
+- While confirmation is open, cleanup buttons are temporarily disabled to prevent duplicate intent.
+
+Operational effect:
+
+- Prevents accidental mass cleanup from one-click actions.
+- Keeps existing cleanup implementation and refresh behavior unchanged after confirmation.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
