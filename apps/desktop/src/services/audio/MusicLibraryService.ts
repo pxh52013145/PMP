@@ -2020,17 +2020,48 @@ export class MusicLibraryService {
 
   // 移除库路径
   async removeLibraryPath(pathId: string): Promise<void> {
-    const db = await this.ensureDB();
-    const transaction = db.transaction(['libraryPaths'], 'readwrite');
-    const store = transaction.objectStore('libraryPaths');
-    store.delete(pathId);
+    const normalizedPathId = String(pathId || '').trim();
+    if (!normalizedPathId) return;
 
+    const db = await this.ensureDB();
     await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['libraryPaths', 'tracks'], 'readwrite');
+      const pathsStore = transaction.objectStore('libraryPaths');
+      const tracksStore = transaction.objectStore('tracks');
+
+      pathsStore.delete(normalizedPathId);
+
+      if (tracksStore.indexNames.contains('libraryPathId')) {
+        const libraryPathIndex = tracksStore.index('libraryPathId');
+        const cursorRequest = libraryPathIndex.openCursor(IDBKeyRange.only(normalizedPathId));
+        cursorRequest.onsuccess = (event) => {
+          const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+          if (!cursor) return;
+          cursor.delete();
+          cursor.continue();
+        };
+        cursorRequest.onerror = () => reject(cursorRequest.error);
+      } else {
+        const cursorRequest = tracksStore.openCursor();
+        cursorRequest.onsuccess = (event) => {
+          const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
+          if (!cursor) return;
+          const value = cursor.value as StoredTrackRecord;
+          if (String(value.libraryPathId || '').trim() === normalizedPathId) {
+            cursor.delete();
+          }
+          cursor.continue();
+        };
+        cursorRequest.onerror = () => reject(cursorRequest.error);
+      }
+
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
     });
 
-    await this.tryRemoveNativeLibrarySource(pathId);
+    this.clearCache();
+    await this.tryRemoveNativeLibrarySource(normalizedPathId);
   }
 
   async setLibraryPathVisibility(pathId: string, isVisible: boolean): Promise<void> {

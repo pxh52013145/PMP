@@ -379,6 +379,26 @@ Validation baseline:
   - targeted vitest (`nativeLibraryDb.spec.ts`, `MusicLibraryService.spec.ts`)
   - `cargo test` in `src-tauri`
 
+### 4.20 Source removal data convergence (`libraryPaths + tracks`)
+
+This round hardens source removal behavior to avoid stale IndexedDB fallback data:
+
+- `MusicLibraryService.removeLibraryPath(pathId)` now normalizes `pathId` and performs one
+  IndexedDB write transaction across both stores:
+  - delete source row from `libraryPaths`
+  - delete all `tracks` rows where `libraryPathId == pathId`
+- Removal uses `libraryPathId` index cursor when available, with full-store cursor fallback for
+  legacy index-missing cases.
+- Native source removal still runs via `removeNativeLibrarySource(pathId)` (sqlite FK cascade)
+  after local IndexedDB cleanup.
+- Cache invalidation (`clearCache`) is now explicit after source removal.
+
+Expected effect:
+
+- Prevents old source tracks from lingering in IndexedDB fallback path.
+- Reduces stale-data surface and lowers legacy fallback memory pressure during large library
+  path removals.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
