@@ -276,3 +276,134 @@ describe('MusicLibraryService local resolver and playback stats', () => {
     });
   });
 });
+
+describe('MusicLibraryService cloud library persistence helpers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    clearCloudPlaybackFallbackQueue();
+
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
+    (MusicLibraryService as unknown as { startupRefreshScheduled?: boolean }).startupRefreshScheduled = false;
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+  });
+
+  it('upserts cloud library entry through native db bridge', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_upsert_user_entry') {
+        return Promise.resolve({
+          id: 'entry-1',
+          ownerUid: 'u_1',
+          inCloud: true,
+          isMissing: false,
+          playCount: 0,
+          createdAtMs: 1700000000,
+          updatedAtMs: 1700000001,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const result = await service.upsertCloudLibraryEntry({
+      entryId: '  entry-1  ',
+      ownerUid: '  u_1  ',
+      quickFingerprint: '  ABCDEF1234567890  ',
+      inCloud: true,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_upsert_user_entry',
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          id: 'entry-1',
+          ownerUid: 'u_1',
+          quickFingerprint: 'qf2:abcdef1234567890',
+          inCloud: true,
+        }),
+      })
+    );
+    expect(result?.id).toBe('entry-1');
+  });
+
+  it('queues fallback task and cloud hash job via native db bridge', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_upsert_fallback_task') {
+        return Promise.resolve({
+          id: 'task-1',
+          ownerUid: 'u_2',
+          entryId: 'entry-2',
+          reason: 'local-miss',
+          status: 'queued',
+          enqueueCount: 1,
+          requestedAtMs: 1700000100,
+          lastRequestedAtMs: 1700000100,
+          updatedAtMs: 1700000101,
+        });
+      }
+      if (cmd === 'music_library_db_upsert_cloud_hash_job') {
+        return Promise.resolve({
+          id: 'job-1',
+          ownerUid: 'u_2',
+          entryId: 'entry-2',
+          status: 'pending',
+          attemptCount: 1,
+          requestedAtMs: 1700000200,
+          updatedAtMs: 1700000201,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const fallbackTask = await service.queueCloudFallbackTask({
+      entryId: 'entry-2',
+      ownerUid: 'u_2',
+      quickFingerprint: 'abcdef1234567890',
+      requestedAtMs: 1700000100,
+      reason: 'local-miss',
+    });
+
+    const hashJob = await service.upsertCloudHashJob({
+      ownerUid: 'u_2',
+      entryId: 'entry-2',
+      quickFingerprint: 'abcdef1234567890',
+      status: 'pending',
+      requestedAtMs: 1700000200,
+    });
+
+    expect(fallbackTask?.status).toBe('queued');
+    expect(hashJob?.status).toBe('pending');
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_upsert_fallback_task',
+      expect.objectContaining({
+        task: expect.objectContaining({
+          ownerUid: 'u_2',
+          entryId: 'entry-2',
+          quickFingerprint: 'qf2:abcdef1234567890',
+        }),
+      })
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_upsert_cloud_hash_job',
+      expect.objectContaining({
+        job: expect.objectContaining({
+          ownerUid: 'u_2',
+          entryId: 'entry-2',
+          quickFingerprint: 'qf2:abcdef1234567890',
+          status: 'pending',
+        }),
+      })
+    );
+  });
+});

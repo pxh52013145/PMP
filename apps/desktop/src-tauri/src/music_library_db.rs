@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 3;
+const DB_VERSION: i32 = 4;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -155,6 +155,134 @@ pub struct LibrarySourceHealthRecord {
     pub last_track_updated_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryUserEntryUpsertInput {
+    pub id: String,
+    pub owner_uid: String,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub cloud_content_id: Option<String>,
+    pub display_title: Option<String>,
+    pub display_artist: Option<String>,
+    pub rating: Option<i64>,
+    pub tags_json: Option<String>,
+    pub in_cloud: Option<bool>,
+    pub is_missing: Option<bool>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryUserEntryQueryInput {
+    pub owner_uid: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub in_cloud_only: Option<bool>,
+    pub include_missing: Option<bool>,
+    pub search_query: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryUserEntryRecord {
+    pub id: String,
+    pub owner_uid: String,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub cloud_content_id: Option<String>,
+    pub display_title: Option<String>,
+    pub display_artist: Option<String>,
+    pub rating: Option<i64>,
+    pub tags_json: Option<String>,
+    pub in_cloud: bool,
+    pub is_missing: bool,
+    pub play_count: u64,
+    pub last_played_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFallbackTaskUpsertInput {
+    pub id: Option<String>,
+    pub owner_uid: String,
+    pub entry_id: String,
+    pub cloud_content_id: Option<String>,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub reason: Option<String>,
+    pub requested_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFallbackTaskQueryInput {
+    pub owner_uid: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFallbackTaskRecord {
+    pub id: String,
+    pub owner_uid: String,
+    pub entry_id: String,
+    pub cloud_content_id: Option<String>,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub reason: String,
+    pub status: String,
+    pub enqueue_count: u64,
+    pub requested_at_ms: i64,
+    pub last_requested_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryCloudHashJobUpsertInput {
+    pub id: Option<String>,
+    pub owner_uid: String,
+    pub entry_id: String,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub status: Option<String>,
+    pub cloud_full_hash: Option<String>,
+    pub last_error: Option<String>,
+    pub requested_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryCloudHashJobQueryInput {
+    pub owner_uid: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryCloudHashJobRecord {
+    pub id: String,
+    pub owner_uid: String,
+    pub entry_id: String,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub status: String,
+    pub cloud_full_hash: Option<String>,
+    pub last_error: Option<String>,
+    pub attempt_count: u64,
+    pub requested_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -247,11 +375,76 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS local_tracks_quick_fingerprint_idx ON local_tracks(quick_fingerprint);
             CREATE INDEX IF NOT EXISTS local_tracks_status_idx ON local_tracks(status);
 
-            PRAGMA user_version = 3;
+            CREATE TABLE IF NOT EXISTS user_entries (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              track_id TEXT,
+              quick_fingerprint TEXT,
+              cloud_content_id TEXT,
+              display_title TEXT,
+              display_artist TEXT,
+              rating INTEGER,
+              tags_json TEXT,
+              in_cloud INTEGER NOT NULL DEFAULT 0,
+              is_missing INTEGER NOT NULL DEFAULT 0,
+              play_count INTEGER NOT NULL DEFAULT 0,
+              last_played_at_ms INTEGER,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS user_entries_owner_uid_idx ON user_entries(owner_uid);
+            CREATE INDEX IF NOT EXISTS user_entries_track_id_idx ON user_entries(track_id);
+            CREATE INDEX IF NOT EXISTS user_entries_quick_fingerprint_idx ON user_entries(quick_fingerprint);
+            CREATE INDEX IF NOT EXISTS user_entries_cloud_content_id_idx ON user_entries(cloud_content_id);
+            CREATE INDEX IF NOT EXISTS user_entries_last_played_at_ms_idx ON user_entries(last_played_at_ms);
+
+            CREATE TABLE IF NOT EXISTS fallback_tasks (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              entry_id TEXT NOT NULL,
+              cloud_content_id TEXT,
+              track_id TEXT,
+              quick_fingerprint TEXT,
+              reason TEXT NOT NULL DEFAULT 'local-miss',
+              status TEXT NOT NULL DEFAULT 'queued',
+              enqueue_count INTEGER NOT NULL DEFAULT 1,
+              requested_at_ms INTEGER NOT NULL,
+              last_requested_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              last_error TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS fallback_tasks_owner_uid_idx ON fallback_tasks(owner_uid);
+            CREATE INDEX IF NOT EXISTS fallback_tasks_status_idx ON fallback_tasks(status);
+            CREATE INDEX IF NOT EXISTS fallback_tasks_last_requested_at_ms_idx ON fallback_tasks(last_requested_at_ms);
+            CREATE INDEX IF NOT EXISTS fallback_tasks_entry_id_idx ON fallback_tasks(entry_id);
+
+            CREATE TABLE IF NOT EXISTS cloud_hash_jobs (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              entry_id TEXT NOT NULL,
+              track_id TEXT,
+              quick_fingerprint TEXT,
+              status TEXT NOT NULL DEFAULT 'pending',
+              cloud_full_hash TEXT,
+              last_error TEXT,
+              attempt_count INTEGER NOT NULL DEFAULT 1,
+              requested_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_owner_uid_idx ON cloud_hash_jobs(owner_uid);
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_status_idx ON cloud_hash_jobs(status);
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_requested_at_ms_idx ON cloud_hash_jobs(requested_at_ms);
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_entry_id_idx ON cloud_hash_jobs(entry_id);
+
+            PRAGMA user_version = 4;
             "#,
         )
         .map_err(|error| format!("Failed to initialize music library schema: {error}"))?;
-        version = 3;
+        version = 4;
     }
 
     if version == 1 {
@@ -275,6 +468,81 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("Failed to migrate music library schema to v3: {error}"))?;
         version = 3;
+    }
+
+    if version == 3 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS user_entries (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              track_id TEXT,
+              quick_fingerprint TEXT,
+              cloud_content_id TEXT,
+              display_title TEXT,
+              display_artist TEXT,
+              rating INTEGER,
+              tags_json TEXT,
+              in_cloud INTEGER NOT NULL DEFAULT 0,
+              is_missing INTEGER NOT NULL DEFAULT 0,
+              play_count INTEGER NOT NULL DEFAULT 0,
+              last_played_at_ms INTEGER,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              FOREIGN KEY(track_id) REFERENCES local_tracks(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS user_entries_owner_uid_idx ON user_entries(owner_uid);
+            CREATE INDEX IF NOT EXISTS user_entries_track_id_idx ON user_entries(track_id);
+            CREATE INDEX IF NOT EXISTS user_entries_quick_fingerprint_idx ON user_entries(quick_fingerprint);
+            CREATE INDEX IF NOT EXISTS user_entries_cloud_content_id_idx ON user_entries(cloud_content_id);
+            CREATE INDEX IF NOT EXISTS user_entries_last_played_at_ms_idx ON user_entries(last_played_at_ms);
+
+            CREATE TABLE IF NOT EXISTS fallback_tasks (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              entry_id TEXT NOT NULL,
+              cloud_content_id TEXT,
+              track_id TEXT,
+              quick_fingerprint TEXT,
+              reason TEXT NOT NULL DEFAULT 'local-miss',
+              status TEXT NOT NULL DEFAULT 'queued',
+              enqueue_count INTEGER NOT NULL DEFAULT 1,
+              requested_at_ms INTEGER NOT NULL,
+              last_requested_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              last_error TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS fallback_tasks_owner_uid_idx ON fallback_tasks(owner_uid);
+            CREATE INDEX IF NOT EXISTS fallback_tasks_status_idx ON fallback_tasks(status);
+            CREATE INDEX IF NOT EXISTS fallback_tasks_last_requested_at_ms_idx ON fallback_tasks(last_requested_at_ms);
+            CREATE INDEX IF NOT EXISTS fallback_tasks_entry_id_idx ON fallback_tasks(entry_id);
+
+            CREATE TABLE IF NOT EXISTS cloud_hash_jobs (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              entry_id TEXT NOT NULL,
+              track_id TEXT,
+              quick_fingerprint TEXT,
+              status TEXT NOT NULL DEFAULT 'pending',
+              cloud_full_hash TEXT,
+              last_error TEXT,
+              attempt_count INTEGER NOT NULL DEFAULT 1,
+              requested_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_owner_uid_idx ON cloud_hash_jobs(owner_uid);
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_status_idx ON cloud_hash_jobs(status);
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_requested_at_ms_idx ON cloud_hash_jobs(requested_at_ms);
+            CREATE INDEX IF NOT EXISTS cloud_hash_jobs_entry_id_idx ON cloud_hash_jobs(entry_id);
+
+            PRAGMA user_version = 4;
+            "#,
+        )
+        .map_err(|error| format!("Failed to migrate music library schema to v4: {error}"))?;
+        version = 4;
     }
 
     if version != DB_VERSION {
@@ -356,6 +624,217 @@ fn normalize_quick_fingerprint(value: Option<&str>) -> Option<String> {
     }
 
     Some(format!("qf2:{normalized}"))
+}
+
+fn normalize_owner_uid(value: Option<&str>) -> Option<String> {
+    normalize_text(value)
+}
+
+fn normalize_rating(value: Option<i64>) -> Option<i64> {
+    value.map(|score| score.clamp(0, 100))
+}
+
+fn normalize_fallback_reason(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("manual-retry") => "manual-retry".to_string(),
+        Some("sync-restore") => "sync-restore".to_string(),
+        Some("local-miss") => "local-miss".to_string(),
+        _ => "local-miss".to_string(),
+    }
+}
+
+fn normalize_fallback_status(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("queued") => "queued".to_string(),
+        Some("dispatching") => "dispatching".to_string(),
+        Some("resolved") => "resolved".to_string(),
+        Some("failed") => "failed".to_string(),
+        Some("cancelled") => "cancelled".to_string(),
+        _ => "queued".to_string(),
+    }
+}
+
+fn normalize_cloud_hash_job_status(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("pending") => "pending".to_string(),
+        Some("running") => "running".to_string(),
+        Some("completed") => "completed".to_string(),
+        Some("failed") => "failed".to_string(),
+        _ => "pending".to_string(),
+    }
+}
+
+fn normalize_limit(value: Option<u32>) -> i64 {
+    value.map(|item| item.clamp(1, 2000) as i64).unwrap_or(i64::MAX)
+}
+
+fn normalize_offset(value: Option<u32>) -> i64 {
+    value.map(|item| item as i64).unwrap_or(0)
+}
+
+fn build_fallback_task_id(
+    owner_uid: &str,
+    entry_id: &str,
+    track_id: Option<&str>,
+    quick_fingerprint: Option<&str>,
+    cloud_content_id: Option<&str>,
+) -> String {
+    format!(
+        "{}::{}::{}::{}::{}",
+        owner_uid,
+        entry_id,
+        track_id.unwrap_or_default(),
+        quick_fingerprint.unwrap_or_default(),
+        cloud_content_id.unwrap_or_default()
+    )
+}
+
+fn build_cloud_hash_job_id(owner_uid: &str, entry_id: &str, track_id: Option<&str>) -> String {
+    format!("{}::{}::{}", owner_uid, entry_id, track_id.unwrap_or_default())
+}
+
+fn user_entry_record_by_id(conn: &Connection, entry_id: &str) -> Result<LibraryUserEntryRecord, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          owner_uid,
+          track_id,
+          quick_fingerprint,
+          cloud_content_id,
+          display_title,
+          display_artist,
+          rating,
+          tags_json,
+          in_cloud,
+          is_missing,
+          play_count,
+          last_played_at_ms,
+          created_at_ms,
+          updated_at_ms
+        FROM user_entries
+        WHERE id = ?1
+        "#,
+        params![entry_id],
+        |row| {
+            Ok(LibraryUserEntryRecord {
+                id: row.get(0)?,
+                owner_uid: row.get(1)?,
+                track_id: row.get(2)?,
+                quick_fingerprint: row.get(3)?,
+                cloud_content_id: row.get(4)?,
+                display_title: row.get(5)?,
+                display_artist: row.get(6)?,
+                rating: row.get(7)?,
+                tags_json: row.get(8)?,
+                in_cloud: row.get::<_, i64>(9)? != 0,
+                is_missing: row.get::<_, i64>(10)? != 0,
+                play_count: row.get::<_, i64>(11)?.max(0) as u64,
+                last_played_at_ms: row.get(12)?,
+                created_at_ms: row.get(13)?,
+                updated_at_ms: row.get(14)?,
+            })
+        },
+    )
+    .map_err(|error| format!("Failed to load user entry record: {error}"))
+}
+
+fn fallback_task_record_by_id(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<LibraryFallbackTaskRecord, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          owner_uid,
+          entry_id,
+          cloud_content_id,
+          track_id,
+          quick_fingerprint,
+          reason,
+          status,
+          enqueue_count,
+          requested_at_ms,
+          last_requested_at_ms,
+          updated_at_ms,
+          last_error
+        FROM fallback_tasks
+        WHERE id = ?1
+        "#,
+        params![task_id],
+        |row| {
+            Ok(LibraryFallbackTaskRecord {
+                id: row.get(0)?,
+                owner_uid: row.get(1)?,
+                entry_id: row.get(2)?,
+                cloud_content_id: row.get(3)?,
+                track_id: row.get(4)?,
+                quick_fingerprint: row.get(5)?,
+                reason: row.get(6)?,
+                status: row.get(7)?,
+                enqueue_count: row.get::<_, i64>(8)?.max(0) as u64,
+                requested_at_ms: row.get(9)?,
+                last_requested_at_ms: row.get(10)?,
+                updated_at_ms: row.get(11)?,
+                last_error: row.get(12)?,
+            })
+        },
+    )
+    .map_err(|error| format!("Failed to load fallback task record: {error}"))
+}
+
+fn cloud_hash_job_record_by_id(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<LibraryCloudHashJobRecord, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          owner_uid,
+          entry_id,
+          track_id,
+          quick_fingerprint,
+          status,
+          cloud_full_hash,
+          last_error,
+          attempt_count,
+          requested_at_ms,
+          updated_at_ms
+        FROM cloud_hash_jobs
+        WHERE id = ?1
+        "#,
+        params![job_id],
+        |row| {
+            Ok(LibraryCloudHashJobRecord {
+                id: row.get(0)?,
+                owner_uid: row.get(1)?,
+                entry_id: row.get(2)?,
+                track_id: row.get(3)?,
+                quick_fingerprint: row.get(4)?,
+                status: row.get(5)?,
+                cloud_full_hash: row.get(6)?,
+                last_error: row.get(7)?,
+                attempt_count: row.get::<_, i64>(8)?.max(0) as u64,
+                requested_at_ms: row.get(9)?,
+                updated_at_ms: row.get(10)?,
+            })
+        },
+    )
+    .map_err(|error| format!("Failed to load cloud hash job record: {error}"))
 }
 
 fn source_record_by_id(conn: &Connection, source_id: &str) -> Result<LibrarySourceRecord, String> {
@@ -739,6 +1218,664 @@ pub fn mark_track_played(
                 params![normalized_track_id, now],
             )
             .map_err(|error| format!("Failed to mark track played: {error}"))?;
+        Ok(affected > 0)
+    })
+}
+
+pub fn upsert_user_entry(
+    app: &AppHandle,
+    input: LibraryUserEntryUpsertInput,
+) -> Result<LibraryUserEntryRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let entry_id = input.id.trim();
+        if entry_id.is_empty() {
+            return Err("User entry id is required".to_string());
+        }
+
+        let owner_uid = normalize_owner_uid(Some(input.owner_uid.as_str()))
+            .ok_or_else(|| "User entry ownerUid is required".to_string())?;
+
+        let now = now_ms();
+        let created_at_ms = input.created_at_ms.unwrap_or(now).max(0);
+        let updated_at_ms = input.updated_at_ms.unwrap_or(now).max(created_at_ms);
+
+        conn.execute(
+            r#"
+            INSERT INTO user_entries(
+              id,
+              owner_uid,
+              track_id,
+              quick_fingerprint,
+              cloud_content_id,
+              display_title,
+              display_artist,
+              rating,
+              tags_json,
+              in_cloud,
+              is_missing,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(id) DO UPDATE SET
+              owner_uid = excluded.owner_uid,
+              track_id = excluded.track_id,
+              quick_fingerprint = excluded.quick_fingerprint,
+              cloud_content_id = excluded.cloud_content_id,
+              display_title = excluded.display_title,
+              display_artist = excluded.display_artist,
+              rating = excluded.rating,
+              tags_json = excluded.tags_json,
+              in_cloud = excluded.in_cloud,
+              is_missing = excluded.is_missing,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                entry_id,
+                owner_uid,
+                normalize_text(input.track_id.as_deref()),
+                normalize_quick_fingerprint(input.quick_fingerprint.as_deref()),
+                normalize_text(input.cloud_content_id.as_deref()),
+                normalize_text(input.display_title.as_deref()),
+                normalize_text(input.display_artist.as_deref()),
+                normalize_rating(input.rating),
+                normalize_text(input.tags_json.as_deref()),
+                normalize_bool_flag(input.in_cloud, false),
+                normalize_bool_flag(input.is_missing, false),
+                created_at_ms,
+                updated_at_ms,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert user entry: {error}"))?;
+
+        user_entry_record_by_id(conn, entry_id)
+    })
+}
+
+pub fn list_user_entries(
+    app: &AppHandle,
+    query: Option<LibraryUserEntryQueryInput>,
+) -> Result<Vec<LibraryUserEntryRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = normalize_limit(query.as_ref().and_then(|item| item.limit));
+        let normalized_offset = normalize_offset(query.as_ref().and_then(|item| item.offset));
+        let normalized_owner_uid = query
+            .as_ref()
+            .and_then(|item| item.owner_uid.as_ref())
+            .and_then(|value| normalize_owner_uid(Some(value.as_str())));
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() { 1_i64 } else { 0_i64 };
+        let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
+        let in_cloud_only_flag = if query
+            .as_ref()
+            .and_then(|item| item.in_cloud_only)
+            .unwrap_or(false)
+        {
+            1_i64
+        } else {
+            0_i64
+        };
+        let include_missing_flag = if query
+            .as_ref()
+            .and_then(|item| item.include_missing)
+            .unwrap_or(true)
+        {
+            1_i64
+        } else {
+            0_i64
+        };
+        let normalized_search_query = query
+            .as_ref()
+            .and_then(|item| item.search_query.as_ref())
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
+        let search_enabled_flag = if normalized_search_query.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
+        let search_like_pattern = normalized_search_query
+            .map(|value| format!("%{value}%"))
+            .unwrap_or_else(|| "%".to_string());
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  owner_uid,
+                  track_id,
+                  quick_fingerprint,
+                  cloud_content_id,
+                  display_title,
+                  display_artist,
+                  rating,
+                  tags_json,
+                  in_cloud,
+                  is_missing,
+                  play_count,
+                  last_played_at_ms,
+                  created_at_ms,
+                  updated_at_ms
+                FROM user_entries
+                WHERE (?1 = 0 OR owner_uid = ?2)
+                  AND (?3 = 0 OR in_cloud = 1)
+                  AND (?4 = 1 OR is_missing = 0)
+                  AND (
+                    ?5 = 0
+                    OR LOWER(COALESCE(display_title, '')) LIKE ?6
+                    OR LOWER(COALESCE(display_artist, '')) LIKE ?6
+                    OR LOWER(COALESCE(cloud_content_id, '')) LIKE ?6
+                    OR LOWER(COALESCE(quick_fingerprint, '')) LIKE ?6
+                    OR LOWER(id) LIKE ?6
+                  )
+                ORDER BY
+                  COALESCE(last_played_at_ms, updated_at_ms) DESC,
+                  updated_at_ms DESC,
+                  id ASC
+                LIMIT ?7
+                OFFSET ?8
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare list user entries statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(
+                params![
+                    owner_uid_enabled_flag,
+                    owner_uid_exact_value,
+                    in_cloud_only_flag,
+                    include_missing_flag,
+                    search_enabled_flag,
+                    search_like_pattern,
+                    normalized_limit,
+                    normalized_offset,
+                ],
+                |row| {
+                    Ok(LibraryUserEntryRecord {
+                        id: row.get(0)?,
+                        owner_uid: row.get(1)?,
+                        track_id: row.get(2)?,
+                        quick_fingerprint: row.get(3)?,
+                        cloud_content_id: row.get(4)?,
+                        display_title: row.get(5)?,
+                        display_artist: row.get(6)?,
+                        rating: row.get(7)?,
+                        tags_json: row.get(8)?,
+                        in_cloud: row.get::<_, i64>(9)? != 0,
+                        is_missing: row.get::<_, i64>(10)? != 0,
+                        play_count: row.get::<_, i64>(11)?.max(0) as u64,
+                        last_played_at_ms: row.get(12)?,
+                        created_at_ms: row.get(13)?,
+                        updated_at_ms: row.get(14)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query user entries: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse user entry row: {error}"))?);
+        }
+        Ok(items)
+    })
+}
+
+pub fn delete_user_entry(app: &AppHandle, entry_id: &str) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_entry_id = entry_id.trim();
+        if normalized_entry_id.is_empty() {
+            return Ok(false);
+        }
+        let affected = conn
+            .execute(
+                "DELETE FROM user_entries WHERE id = ?1",
+                params![normalized_entry_id],
+            )
+            .map_err(|error| format!("Failed to delete user entry: {error}"))?;
+        Ok(affected > 0)
+    })
+}
+
+pub fn mark_user_entry_played(
+    app: &AppHandle,
+    entry_id: &str,
+    played_at_ms: Option<i64>,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_entry_id = entry_id.trim();
+        if normalized_entry_id.is_empty() {
+            return Ok(false);
+        }
+
+        let now = played_at_ms.unwrap_or_else(now_ms).max(0);
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE user_entries
+                SET
+                  play_count = COALESCE(play_count, 0) + 1,
+                  last_played_at_ms = ?2,
+                  updated_at_ms = CASE
+                    WHEN updated_at_ms > ?2 THEN updated_at_ms
+                    ELSE ?2
+                  END
+                WHERE id = ?1
+                "#,
+                params![normalized_entry_id, now],
+            )
+            .map_err(|error| format!("Failed to mark user entry played: {error}"))?;
+
+        Ok(affected > 0)
+    })
+}
+
+pub fn upsert_fallback_task(
+    app: &AppHandle,
+    input: LibraryFallbackTaskUpsertInput,
+) -> Result<LibraryFallbackTaskRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let owner_uid = normalize_owner_uid(Some(input.owner_uid.as_str()))
+            .ok_or_else(|| "Fallback task ownerUid is required".to_string())?;
+        let entry_id = normalize_text(Some(input.entry_id.as_str()))
+            .ok_or_else(|| "Fallback task entryId is required".to_string())?;
+        let track_id = normalize_text(input.track_id.as_deref());
+        let quick_fingerprint = normalize_quick_fingerprint(input.quick_fingerprint.as_deref());
+        let cloud_content_id = normalize_text(input.cloud_content_id.as_deref());
+        let reason = normalize_fallback_reason(input.reason.as_deref());
+
+        let task_id = normalize_text(input.id.as_deref()).unwrap_or_else(|| {
+            build_fallback_task_id(
+                owner_uid.as_str(),
+                entry_id.as_str(),
+                track_id.as_deref(),
+                quick_fingerprint.as_deref(),
+                cloud_content_id.as_deref(),
+            )
+        });
+
+        if task_id.is_empty() {
+            return Err("Fallback task id is required".to_string());
+        }
+
+        let now = now_ms();
+        let requested_at_ms = input.requested_at_ms.unwrap_or(now).max(0);
+
+        conn.execute(
+            r#"
+            INSERT INTO fallback_tasks(
+              id,
+              owner_uid,
+              entry_id,
+              cloud_content_id,
+              track_id,
+              quick_fingerprint,
+              reason,
+              status,
+              enqueue_count,
+              requested_at_ms,
+              last_requested_at_ms,
+              updated_at_ms,
+              last_error
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', 1, ?8, ?8, ?9, NULL)
+            ON CONFLICT(id) DO UPDATE SET
+              owner_uid = excluded.owner_uid,
+              entry_id = excluded.entry_id,
+              cloud_content_id = COALESCE(excluded.cloud_content_id, fallback_tasks.cloud_content_id),
+              track_id = COALESCE(excluded.track_id, fallback_tasks.track_id),
+              quick_fingerprint = COALESCE(excluded.quick_fingerprint, fallback_tasks.quick_fingerprint),
+              reason = excluded.reason,
+              status = 'queued',
+              enqueue_count = COALESCE(fallback_tasks.enqueue_count, 0) + 1,
+              last_requested_at_ms = excluded.last_requested_at_ms,
+              updated_at_ms = excluded.updated_at_ms,
+              last_error = NULL
+            "#,
+            params![
+                task_id,
+                owner_uid,
+                entry_id,
+                cloud_content_id,
+                track_id,
+                quick_fingerprint,
+                reason,
+                requested_at_ms,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert fallback task: {error}"))?;
+
+        fallback_task_record_by_id(conn, task_id.as_str())
+    })
+}
+
+pub fn list_fallback_tasks(
+    app: &AppHandle,
+    query: Option<LibraryFallbackTaskQueryInput>,
+) -> Result<Vec<LibraryFallbackTaskRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = normalize_limit(query.as_ref().and_then(|item| item.limit));
+        let normalized_offset = normalize_offset(query.as_ref().and_then(|item| item.offset));
+        let normalized_owner_uid = query
+            .as_ref()
+            .and_then(|item| item.owner_uid.as_ref())
+            .and_then(|value| normalize_owner_uid(Some(value.as_str())));
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() { 1_i64 } else { 0_i64 };
+        let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
+        let normalized_status = query
+            .as_ref()
+            .and_then(|item| item.status.as_ref())
+            .map(|value| normalize_fallback_status(Some(value.as_str())));
+        let status_enabled_flag = if normalized_status.is_some() { 1_i64 } else { 0_i64 };
+        let status_exact_value = normalized_status.unwrap_or_default();
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  owner_uid,
+                  entry_id,
+                  cloud_content_id,
+                  track_id,
+                  quick_fingerprint,
+                  reason,
+                  status,
+                  enqueue_count,
+                  requested_at_ms,
+                  last_requested_at_ms,
+                  updated_at_ms,
+                  last_error
+                FROM fallback_tasks
+                WHERE (?1 = 0 OR owner_uid = ?2)
+                  AND (?3 = 0 OR status = ?4)
+                ORDER BY last_requested_at_ms DESC, updated_at_ms DESC, id ASC
+                LIMIT ?5
+                OFFSET ?6
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare fallback task query statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(
+                params![
+                    owner_uid_enabled_flag,
+                    owner_uid_exact_value,
+                    status_enabled_flag,
+                    status_exact_value,
+                    normalized_limit,
+                    normalized_offset,
+                ],
+                |row| {
+                    Ok(LibraryFallbackTaskRecord {
+                        id: row.get(0)?,
+                        owner_uid: row.get(1)?,
+                        entry_id: row.get(2)?,
+                        cloud_content_id: row.get(3)?,
+                        track_id: row.get(4)?,
+                        quick_fingerprint: row.get(5)?,
+                        reason: row.get(6)?,
+                        status: row.get(7)?,
+                        enqueue_count: row.get::<_, i64>(8)?.max(0) as u64,
+                        requested_at_ms: row.get(9)?,
+                        last_requested_at_ms: row.get(10)?,
+                        updated_at_ms: row.get(11)?,
+                        last_error: row.get(12)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query fallback task rows: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse fallback task row: {error}"))?);
+        }
+        Ok(items)
+    })
+}
+
+pub fn update_fallback_task_status(
+    app: &AppHandle,
+    task_id: &str,
+    status: &str,
+    last_error: Option<String>,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_task_id = task_id.trim();
+        if normalized_task_id.is_empty() {
+            return Ok(false);
+        }
+        let normalized_status = normalize_fallback_status(Some(status));
+        let now = now_ms();
+
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE fallback_tasks
+                SET
+                  status = ?2,
+                  last_error = ?3,
+                  updated_at_ms = ?4
+                WHERE id = ?1
+                "#,
+                params![
+                    normalized_task_id,
+                    normalized_status,
+                    normalize_text(last_error.as_deref()),
+                    now
+                ],
+            )
+            .map_err(|error| format!("Failed to update fallback task status: {error}"))?;
+        Ok(affected > 0)
+    })
+}
+
+pub fn upsert_cloud_hash_job(
+    app: &AppHandle,
+    input: LibraryCloudHashJobUpsertInput,
+) -> Result<LibraryCloudHashJobRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let owner_uid = normalize_owner_uid(Some(input.owner_uid.as_str()))
+            .ok_or_else(|| "Cloud hash job ownerUid is required".to_string())?;
+        let entry_id = normalize_text(Some(input.entry_id.as_str()))
+            .ok_or_else(|| "Cloud hash job entryId is required".to_string())?;
+        let track_id = normalize_text(input.track_id.as_deref());
+        let quick_fingerprint = normalize_quick_fingerprint(input.quick_fingerprint.as_deref());
+        let status = normalize_cloud_hash_job_status(input.status.as_deref());
+        let cloud_full_hash = normalize_text(input.cloud_full_hash.as_deref());
+        let last_error = normalize_text(input.last_error.as_deref());
+
+        let job_id = normalize_text(input.id.as_deref()).unwrap_or_else(|| {
+            build_cloud_hash_job_id(owner_uid.as_str(), entry_id.as_str(), track_id.as_deref())
+        });
+        if job_id.is_empty() {
+            return Err("Cloud hash job id is required".to_string());
+        }
+
+        let now = now_ms();
+        let requested_at_ms = input.requested_at_ms.unwrap_or(now).max(0);
+
+        conn.execute(
+            r#"
+            INSERT INTO cloud_hash_jobs(
+              id,
+              owner_uid,
+              entry_id,
+              track_id,
+              quick_fingerprint,
+              status,
+              cloud_full_hash,
+              last_error,
+              attempt_count,
+              requested_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10)
+            ON CONFLICT(id) DO UPDATE SET
+              owner_uid = excluded.owner_uid,
+              entry_id = excluded.entry_id,
+              track_id = COALESCE(excluded.track_id, cloud_hash_jobs.track_id),
+              quick_fingerprint = COALESCE(excluded.quick_fingerprint, cloud_hash_jobs.quick_fingerprint),
+              status = excluded.status,
+              cloud_full_hash = COALESCE(excluded.cloud_full_hash, cloud_hash_jobs.cloud_full_hash),
+              last_error = excluded.last_error,
+              attempt_count = CASE
+                WHEN excluded.status = 'pending' OR excluded.status = 'running'
+                  THEN COALESCE(cloud_hash_jobs.attempt_count, 0) + 1
+                ELSE COALESCE(cloud_hash_jobs.attempt_count, 0)
+              END,
+              requested_at_ms = CASE
+                WHEN cloud_hash_jobs.requested_at_ms <= excluded.requested_at_ms
+                  THEN cloud_hash_jobs.requested_at_ms
+                ELSE excluded.requested_at_ms
+              END,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                job_id,
+                owner_uid,
+                entry_id,
+                track_id,
+                quick_fingerprint,
+                status,
+                cloud_full_hash,
+                last_error,
+                requested_at_ms,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert cloud hash job: {error}"))?;
+
+        cloud_hash_job_record_by_id(conn, job_id.as_str())
+    })
+}
+
+pub fn list_cloud_hash_jobs(
+    app: &AppHandle,
+    query: Option<LibraryCloudHashJobQueryInput>,
+) -> Result<Vec<LibraryCloudHashJobRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = normalize_limit(query.as_ref().and_then(|item| item.limit));
+        let normalized_offset = normalize_offset(query.as_ref().and_then(|item| item.offset));
+        let normalized_owner_uid = query
+            .as_ref()
+            .and_then(|item| item.owner_uid.as_ref())
+            .and_then(|value| normalize_owner_uid(Some(value.as_str())));
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() { 1_i64 } else { 0_i64 };
+        let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
+        let normalized_status = query
+            .as_ref()
+            .and_then(|item| item.status.as_ref())
+            .map(|value| normalize_cloud_hash_job_status(Some(value.as_str())));
+        let status_enabled_flag = if normalized_status.is_some() { 1_i64 } else { 0_i64 };
+        let status_exact_value = normalized_status.unwrap_or_default();
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  owner_uid,
+                  entry_id,
+                  track_id,
+                  quick_fingerprint,
+                  status,
+                  cloud_full_hash,
+                  last_error,
+                  attempt_count,
+                  requested_at_ms,
+                  updated_at_ms
+                FROM cloud_hash_jobs
+                WHERE (?1 = 0 OR owner_uid = ?2)
+                  AND (?3 = 0 OR status = ?4)
+                ORDER BY updated_at_ms DESC, requested_at_ms DESC, id ASC
+                LIMIT ?5
+                OFFSET ?6
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare cloud hash job query statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(
+                params![
+                    owner_uid_enabled_flag,
+                    owner_uid_exact_value,
+                    status_enabled_flag,
+                    status_exact_value,
+                    normalized_limit,
+                    normalized_offset,
+                ],
+                |row| {
+                    Ok(LibraryCloudHashJobRecord {
+                        id: row.get(0)?,
+                        owner_uid: row.get(1)?,
+                        entry_id: row.get(2)?,
+                        track_id: row.get(3)?,
+                        quick_fingerprint: row.get(4)?,
+                        status: row.get(5)?,
+                        cloud_full_hash: row.get(6)?,
+                        last_error: row.get(7)?,
+                        attempt_count: row.get::<_, i64>(8)?.max(0) as u64,
+                        requested_at_ms: row.get(9)?,
+                        updated_at_ms: row.get(10)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query cloud hash job rows: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse cloud hash job row: {error}"))?);
+        }
+        Ok(items)
+    })
+}
+
+pub fn update_cloud_hash_job_status(
+    app: &AppHandle,
+    job_id: &str,
+    status: &str,
+    cloud_full_hash: Option<String>,
+    last_error: Option<String>,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_job_id = job_id.trim();
+        if normalized_job_id.is_empty() {
+            return Ok(false);
+        }
+        let normalized_status = normalize_cloud_hash_job_status(Some(status));
+        let now = now_ms();
+
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE cloud_hash_jobs
+                SET
+                  status = ?2,
+                  cloud_full_hash = COALESCE(?3, cloud_full_hash),
+                  last_error = ?4,
+                  updated_at_ms = ?5
+                WHERE id = ?1
+                "#,
+                params![
+                    normalized_job_id,
+                    normalized_status,
+                    normalize_text(cloud_full_hash.as_deref()),
+                    normalize_text(last_error.as_deref()),
+                    now,
+                ],
+            )
+            .map_err(|error| format!("Failed to update cloud hash job status: {error}"))?;
         Ok(affected > 0)
     })
 }

@@ -4,6 +4,8 @@ import {
   CLOUD_PLAYBACK_QUEUE_SERVICE_TOKEN,
   DefaultCloudPlaybackQueueService,
 } from './CloudPlaybackQueueService';
+import { upsertNativeLibraryFallbackTask } from '../../modules/music-library';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 export function createCloudPlaybackQueueModule(): KernelModule<AppEvents> {
   return {
@@ -21,6 +23,22 @@ export function createCloudPlaybackQueueModule(): KernelModule<AppEvents> {
           dispatch: payload.dispatch,
         });
         events.emit('music-library/cloudFallbackAuditUpdated', nextSnapshot);
+
+        if (!payload.dispatch.accepted || !isTauriRuntime()) {
+          return;
+        }
+
+        void upsertNativeLibraryFallbackTask({
+          ownerUid: payload.request.ownerUid,
+          entryId: payload.request.entryId,
+          cloudContentId: payload.request.cloudContentId,
+          trackId: payload.request.trackId,
+          quickFingerprint: payload.request.quickFingerprint,
+          reason: payload.request.reason,
+          requestedAtMs: payload.request.requestedAtMs,
+        }).catch((error) => {
+          console.warn('[cloud-playback-queue] failed to persist fallback task', error);
+        });
       });
 
       return () => {
@@ -30,4 +48,3 @@ export function createCloudPlaybackQueueModule(): KernelModule<AppEvents> {
     },
   };
 }
-

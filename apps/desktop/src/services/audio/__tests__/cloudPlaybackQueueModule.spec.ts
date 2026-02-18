@@ -12,6 +12,7 @@ import {
 describe('cloudPlaybackQueueModule', () => {
   beforeEach(() => {
     clearCloudPlaybackFallbackQueue();
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
   });
 
   it('records queued fallback events and emits audit snapshot updates', async () => {
@@ -68,4 +69,3 @@ describe('cloudPlaybackQueueModule', () => {
     }
   });
 });
-

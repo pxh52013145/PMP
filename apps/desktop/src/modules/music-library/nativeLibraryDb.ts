@@ -121,6 +121,116 @@ export interface NativeLibrarySourceHealthRecord {
   lastTrackUpdatedAtMs?: number;
 }
 
+export interface NativeLibraryUserEntryUpsertInput {
+  id: string;
+  ownerUid: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  cloudContentId?: string;
+  displayTitle?: string;
+  displayArtist?: string;
+  rating?: number;
+  tagsJson?: string;
+  inCloud?: boolean;
+  isMissing?: boolean;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+
+export interface NativeLibraryUserEntryQuery {
+  ownerUid?: string;
+  limit?: number;
+  offset?: number;
+  inCloudOnly?: boolean;
+  includeMissing?: boolean;
+  searchQuery?: string;
+}
+
+export interface NativeLibraryUserEntryRecord {
+  id: string;
+  ownerUid: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  cloudContentId?: string;
+  displayTitle?: string;
+  displayArtist?: string;
+  rating?: number;
+  tagsJson?: string;
+  inCloud: boolean;
+  isMissing: boolean;
+  playCount: number;
+  lastPlayedAtMs?: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface NativeLibraryFallbackTaskUpsertInput {
+  id?: string;
+  ownerUid: string;
+  entryId: string;
+  cloudContentId?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  reason?: string;
+  requestedAtMs?: number;
+}
+
+export interface NativeLibraryFallbackTaskQuery {
+  ownerUid?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NativeLibraryFallbackTaskRecord {
+  id: string;
+  ownerUid: string;
+  entryId: string;
+  cloudContentId?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  reason: string;
+  status: string;
+  enqueueCount: number;
+  requestedAtMs: number;
+  lastRequestedAtMs: number;
+  updatedAtMs: number;
+  lastError?: string;
+}
+
+export interface NativeLibraryCloudHashJobUpsertInput {
+  id?: string;
+  ownerUid: string;
+  entryId: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  status?: string;
+  cloudFullHash?: string;
+  lastError?: string;
+  requestedAtMs?: number;
+}
+
+export interface NativeLibraryCloudHashJobQuery {
+  ownerUid?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NativeLibraryCloudHashJobRecord {
+  id: string;
+  ownerUid: string;
+  entryId: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  status: string;
+  cloudFullHash?: string;
+  lastError?: string;
+  attemptCount: number;
+  requestedAtMs: number;
+  updatedAtMs: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -321,6 +431,127 @@ function ensureSourceHealthRecord(value: unknown): NativeLibrarySourceHealthReco
     totalSize: Math.max(0, Math.floor(totalSize)),
     sourceUpdatedAtMs,
     lastTrackUpdatedAtMs: asNumber(value.lastTrackUpdatedAtMs),
+  };
+}
+
+function ensureUserEntryRecord(value: unknown): NativeLibraryUserEntryRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(value.id);
+  const ownerUid = asTrimmedString(value.ownerUid);
+  const inCloud = asBool(value.inCloud);
+  const isMissing = asBool(value.isMissing);
+  const playCount = asNumber(value.playCount);
+  const createdAtMs = asNumber(value.createdAtMs);
+  const updatedAtMs = asNumber(value.updatedAtMs);
+  if (
+    !id ||
+    !ownerUid ||
+    inCloud === undefined ||
+    isMissing === undefined ||
+    playCount === undefined ||
+    createdAtMs === undefined ||
+    updatedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    ownerUid,
+    trackId: asOptionalString(value.trackId),
+    quickFingerprint: normalizeQuickFingerprint(value.quickFingerprint),
+    cloudContentId: asOptionalString(value.cloudContentId),
+    displayTitle: asOptionalString(value.displayTitle),
+    displayArtist: asOptionalString(value.displayArtist),
+    rating: asNumber(value.rating),
+    tagsJson: asOptionalString(value.tagsJson),
+    inCloud,
+    isMissing,
+    playCount: Math.max(0, Math.floor(playCount)),
+    lastPlayedAtMs: asNumber(value.lastPlayedAtMs),
+    createdAtMs,
+    updatedAtMs,
+  };
+}
+
+function ensureFallbackTaskRecord(value: unknown): NativeLibraryFallbackTaskRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(value.id);
+  const ownerUid = asTrimmedString(value.ownerUid);
+  const entryId = asTrimmedString(value.entryId);
+  const reason = asTrimmedString(value.reason);
+  const status = asTrimmedString(value.status);
+  const enqueueCount = asNumber(value.enqueueCount);
+  const requestedAtMs = asNumber(value.requestedAtMs);
+  const lastRequestedAtMs = asNumber(value.lastRequestedAtMs);
+  const updatedAtMs = asNumber(value.updatedAtMs);
+  if (
+    !id ||
+    !ownerUid ||
+    !entryId ||
+    !reason ||
+    !status ||
+    enqueueCount === undefined ||
+    requestedAtMs === undefined ||
+    lastRequestedAtMs === undefined ||
+    updatedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    ownerUid,
+    entryId,
+    cloudContentId: asOptionalString(value.cloudContentId),
+    trackId: asOptionalString(value.trackId),
+    quickFingerprint: normalizeQuickFingerprint(value.quickFingerprint),
+    reason,
+    status,
+    enqueueCount: Math.max(0, Math.floor(enqueueCount)),
+    requestedAtMs,
+    lastRequestedAtMs,
+    updatedAtMs,
+    lastError: asOptionalString(value.lastError),
+  };
+}
+
+function ensureCloudHashJobRecord(value: unknown): NativeLibraryCloudHashJobRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(value.id);
+  const ownerUid = asTrimmedString(value.ownerUid);
+  const entryId = asTrimmedString(value.entryId);
+  const status = asTrimmedString(value.status);
+  const attemptCount = asNumber(value.attemptCount);
+  const requestedAtMs = asNumber(value.requestedAtMs);
+  const updatedAtMs = asNumber(value.updatedAtMs);
+  if (
+    !id ||
+    !ownerUid ||
+    !entryId ||
+    !status ||
+    attemptCount === undefined ||
+    requestedAtMs === undefined ||
+    updatedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    ownerUid,
+    entryId,
+    trackId: asOptionalString(value.trackId),
+    quickFingerprint: normalizeQuickFingerprint(value.quickFingerprint),
+    status,
+    cloudFullHash: asOptionalString(value.cloudFullHash),
+    lastError: asOptionalString(value.lastError),
+    attemptCount: Math.max(0, Math.floor(attemptCount)),
+    requestedAtMs,
+    updatedAtMs,
   };
 }
 
@@ -578,4 +809,284 @@ export async function getNativeLibraryStats(
     query: normalizeFacetQuery(query),
   }).catch(() => null);
   return ensureStatsRecord(raw);
+}
+
+export async function upsertNativeLibraryUserEntry(
+  entry: NativeLibraryUserEntryUpsertInput
+): Promise<NativeLibraryUserEntryRecord | null> {
+  if (!isTauriRuntime()) return null;
+
+  const payload: NativeLibraryUserEntryUpsertInput = {
+    ...entry,
+    id: asTrimmedString(entry.id),
+    ownerUid: asTrimmedString(entry.ownerUid),
+    trackId: asOptionalString(entry.trackId),
+    quickFingerprint: normalizeQuickFingerprint(entry.quickFingerprint),
+    cloudContentId: asOptionalString(entry.cloudContentId),
+    displayTitle: asOptionalString(entry.displayTitle),
+    displayArtist: asOptionalString(entry.displayArtist),
+    rating:
+      typeof entry.rating === 'number' && Number.isFinite(entry.rating)
+        ? Math.max(0, Math.min(100, Math.floor(entry.rating)))
+        : undefined,
+    tagsJson: asOptionalString(entry.tagsJson),
+    inCloud: entry.inCloud === true,
+    isMissing: entry.isMissing === true,
+    createdAtMs:
+      typeof entry.createdAtMs === 'number' && Number.isFinite(entry.createdAtMs)
+        ? Math.max(0, Math.floor(entry.createdAtMs))
+        : undefined,
+    updatedAtMs:
+      typeof entry.updatedAtMs === 'number' && Number.isFinite(entry.updatedAtMs)
+        ? Math.max(0, Math.floor(entry.updatedAtMs))
+        : undefined,
+  };
+
+  if (!payload.id || !payload.ownerUid) return null;
+
+  const raw = await invoke<unknown>('music_library_db_upsert_user_entry', {
+    entry: payload,
+  }).catch(() => null);
+  return ensureUserEntryRecord(raw);
+}
+
+export async function listNativeLibraryUserEntries(
+  query?: NativeLibraryUserEntryQuery
+): Promise<NativeLibraryUserEntryRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload: NativeLibraryUserEntryQuery = {
+    ownerUid:
+      typeof query?.ownerUid === 'string' && query.ownerUid.trim().length > 0
+        ? query.ownerUid.trim()
+        : undefined,
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined,
+    offset:
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined,
+    inCloudOnly: query?.inCloudOnly === true,
+    includeMissing: query?.includeMissing !== false,
+    searchQuery:
+      typeof query?.searchQuery === 'string' && query.searchQuery.trim().length > 0
+        ? query.searchQuery.trim()
+        : undefined,
+  };
+
+  const raw = await invoke<unknown>('music_library_db_list_user_entries', {
+    query: payload,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const entries: NativeLibraryUserEntryRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureUserEntryRecord(item);
+    if (!parsed) continue;
+    entries.push(parsed);
+  }
+  return entries;
+}
+
+export async function deleteNativeLibraryUserEntry(entryId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedEntryId = entryId.trim();
+  if (!normalizedEntryId) return false;
+
+  const raw = await invoke<unknown>('music_library_db_delete_user_entry', {
+    entryId: normalizedEntryId,
+  }).catch(() => null);
+  return raw === true;
+}
+
+export async function markNativeLibraryUserEntryPlayed(
+  entryId: string,
+  options?: { playedAtMs?: number }
+): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedEntryId = entryId.trim();
+  if (!normalizedEntryId) return false;
+
+  const playedAtMs =
+    typeof options?.playedAtMs === 'number' && Number.isFinite(options.playedAtMs)
+      ? Math.max(0, Math.floor(options.playedAtMs))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_db_mark_user_entry_played', {
+    entryId: normalizedEntryId,
+    playedAtMs,
+  }).catch(() => null);
+  return raw === true;
+}
+
+export async function upsertNativeLibraryFallbackTask(
+  task: NativeLibraryFallbackTaskUpsertInput
+): Promise<NativeLibraryFallbackTaskRecord | null> {
+  if (!isTauriRuntime()) return null;
+
+  const payload: NativeLibraryFallbackTaskUpsertInput = {
+    ...task,
+    id: asOptionalString(task.id),
+    ownerUid: asTrimmedString(task.ownerUid),
+    entryId: asTrimmedString(task.entryId),
+    cloudContentId: asOptionalString(task.cloudContentId),
+    trackId: asOptionalString(task.trackId),
+    quickFingerprint: normalizeQuickFingerprint(task.quickFingerprint),
+    reason: asOptionalString(task.reason),
+    requestedAtMs:
+      typeof task.requestedAtMs === 'number' && Number.isFinite(task.requestedAtMs)
+        ? Math.max(0, Math.floor(task.requestedAtMs))
+        : undefined,
+  };
+
+  if (!payload.ownerUid || !payload.entryId) return null;
+
+  const raw = await invoke<unknown>('music_library_db_upsert_fallback_task', {
+    task: payload,
+  }).catch(() => null);
+  return ensureFallbackTaskRecord(raw);
+}
+
+export async function listNativeLibraryFallbackTasks(
+  query?: NativeLibraryFallbackTaskQuery
+): Promise<NativeLibraryFallbackTaskRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload: NativeLibraryFallbackTaskQuery = {
+    ownerUid:
+      typeof query?.ownerUid === 'string' && query.ownerUid.trim().length > 0
+        ? query.ownerUid.trim()
+        : undefined,
+    status:
+      typeof query?.status === 'string' && query.status.trim().length > 0
+        ? query.status.trim()
+        : undefined,
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined,
+    offset:
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined,
+  };
+
+  const raw = await invoke<unknown>('music_library_db_list_fallback_tasks', {
+    query: payload,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const tasks: NativeLibraryFallbackTaskRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureFallbackTaskRecord(item);
+    if (!parsed) continue;
+    tasks.push(parsed);
+  }
+  return tasks;
+}
+
+export async function updateNativeLibraryFallbackTaskStatus(
+  taskId: string,
+  status: string,
+  options?: { lastError?: string }
+): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedTaskId = taskId.trim();
+  const normalizedStatus = status.trim();
+  if (!normalizedTaskId || !normalizedStatus) return false;
+
+  const raw = await invoke<unknown>('music_library_db_update_fallback_task_status', {
+    taskId: normalizedTaskId,
+    status: normalizedStatus,
+    lastError: asOptionalString(options?.lastError),
+  }).catch(() => null);
+  return raw === true;
+}
+
+export async function upsertNativeLibraryCloudHashJob(
+  job: NativeLibraryCloudHashJobUpsertInput
+): Promise<NativeLibraryCloudHashJobRecord | null> {
+  if (!isTauriRuntime()) return null;
+
+  const payload: NativeLibraryCloudHashJobUpsertInput = {
+    ...job,
+    id: asOptionalString(job.id),
+    ownerUid: asTrimmedString(job.ownerUid),
+    entryId: asTrimmedString(job.entryId),
+    trackId: asOptionalString(job.trackId),
+    quickFingerprint: normalizeQuickFingerprint(job.quickFingerprint),
+    status: asOptionalString(job.status),
+    cloudFullHash: asOptionalString(job.cloudFullHash),
+    lastError: asOptionalString(job.lastError),
+    requestedAtMs:
+      typeof job.requestedAtMs === 'number' && Number.isFinite(job.requestedAtMs)
+        ? Math.max(0, Math.floor(job.requestedAtMs))
+        : undefined,
+  };
+
+  if (!payload.ownerUid || !payload.entryId) return null;
+
+  const raw = await invoke<unknown>('music_library_db_upsert_cloud_hash_job', {
+    job: payload,
+  }).catch(() => null);
+  return ensureCloudHashJobRecord(raw);
+}
+
+export async function listNativeLibraryCloudHashJobs(
+  query?: NativeLibraryCloudHashJobQuery
+): Promise<NativeLibraryCloudHashJobRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload: NativeLibraryCloudHashJobQuery = {
+    ownerUid:
+      typeof query?.ownerUid === 'string' && query.ownerUid.trim().length > 0
+        ? query.ownerUid.trim()
+        : undefined,
+    status:
+      typeof query?.status === 'string' && query.status.trim().length > 0
+        ? query.status.trim()
+        : undefined,
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined,
+    offset:
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined,
+  };
+
+  const raw = await invoke<unknown>('music_library_db_list_cloud_hash_jobs', {
+    query: payload,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const jobs: NativeLibraryCloudHashJobRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureCloudHashJobRecord(item);
+    if (!parsed) continue;
+    jobs.push(parsed);
+  }
+  return jobs;
+}
+
+export async function updateNativeLibraryCloudHashJobStatus(
+  jobId: string,
+  status: string,
+  options?: { cloudFullHash?: string; lastError?: string }
+): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedJobId = jobId.trim();
+  const normalizedStatus = status.trim();
+  if (!normalizedJobId || !normalizedStatus) return false;
+
+  const raw = await invoke<unknown>('music_library_db_update_cloud_hash_job_status', {
+    jobId: normalizedJobId,
+    status: normalizedStatus,
+    cloudFullHash: asOptionalString(options?.cloudFullHash),
+    lastError: asOptionalString(options?.lastError),
+  }).catch(() => null);
+  return raw === true;
 }

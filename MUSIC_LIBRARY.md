@@ -1,12 +1,18 @@
 # MUSIC_LIBRARY Baseline (PMP Local-First -> Hydra-Ready)
 
-Updated: 2026-02-17
+Updated: 2026-02-18
 
 Scope:
 - `apps/desktop/src/services/audio/MusicLibraryService.ts`
+- `apps/desktop/src/services/audio/cloudPlaybackQueueModule.ts`
 - `apps/desktop/src/components/pages/MusicLibrary.tsx`
 - `apps/desktop/src/components/pages/MusicLibrary.css`
 - `apps/desktop/src-tauri/src/music_library.rs`
+- `apps/desktop/src-tauri/src/music_library_db.rs`
+- `apps/desktop/src-tauri/src/commands/library.rs`
+- `apps/desktop/src-tauri/src/commands/registry.rs`
+- `apps/desktop/src/modules/music-library/nativeLibraryDb.ts`
+- `apps/desktop/src/modules/music-library/index.ts`
 - `apps/desktop/src/i18n/locales/zh-CN.json`
 - `apps/desktop/src/i18n/locales/en-US.json`
 
@@ -588,6 +594,64 @@ Boundary:
 - It still does **not** issue HTTP/P2P/CDN requests.
 - Queue service is a stable handoff seam for future cloud transport module.
 
+### 4.29 P2 contract/data closure (`DB v4`, blueprint-only)
+
+This round closes the P2 persistence/contracts so Hydra blueprint data can be carried across restarts
+without introducing real network transport.
+
+Native SQLite (`music_library_db.rs`) changes:
+
+- Schema version bumped to `v4`.
+- Added logical-layer tables:
+  - `user_entries`
+  - `fallback_tasks`
+  - `cloud_hash_jobs`
+- Added strict normalization and bounded query utilities:
+  - `owner_uid`, `rating`, `reason`, `status`, `limit`, `offset` are normalized before persistence.
+  - deterministic ids:
+    - fallback task id: `<owner_uid>::<entry_id>::<track_id?>`
+    - cloud-hash job id: `<owner_uid>::<entry_id>::<track_id?>`
+- Added DB APIs:
+  - user entry: upsert/list/delete/mark-played
+  - fallback task: upsert/list/update-status
+  - cloud hash job: upsert/list/update-status
+
+Tauri command contract additions:
+
+- `music_library_db_upsert_user_entry`
+- `music_library_db_list_user_entries`
+- `music_library_db_delete_user_entry`
+- `music_library_db_mark_user_entry_played`
+- `music_library_db_upsert_fallback_task`
+- `music_library_db_list_fallback_tasks`
+- `music_library_db_update_fallback_task_status`
+- `music_library_db_upsert_cloud_hash_job`
+- `music_library_db_list_cloud_hash_jobs`
+- `music_library_db_update_cloud_hash_job_status`
+
+Frontend bridge/service closure:
+
+- `nativeLibraryDb.ts` now exposes typed bridge contracts for all three logical entities.
+- `MusicLibraryService` now exposes cloud-blueprint lifecycle APIs:
+  - cloud library entry upsert/list/delete/mark-played
+  - fallback task enqueue/list/status transitions
+  - cloud hash job upsert/list/status transitions
+- `resolvePlaybackPlanForCloudEntry(...)` remains local-first and now does best-effort logical
+  entry upsert/played mark in Tauri runtime.
+
+Event-to-durable path (`P2.3` + `P2.4` + this round):
+
+1. Resolver emits fallback request.
+2. Adapter queues + emits `music-library/cloudFallbackQueued`.
+3. Queue module records audit snapshot.
+4. `cloudPlaybackQueueModule` best-effort persists fallback task to sqlite.
+
+Boundary (kept explicit):
+
+- No HTTP/P2P/CDN transport in this phase.
+- No auth/session/token exchange in this phase.
+- Cloud hash full-content computation remains lazy job model only.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution
@@ -682,6 +746,14 @@ Notes:
 2. Lazy full-hash computation for share/sync actions.
 3. Resolver fallback: local-first, network-second.
 
+Current status:
+
+- `1` completed in baseline (`DB v4`: `user_entries`, plus explicit `last_played_at_ms`).
+- `2` completed as contract/state machine baseline (`cloud_hash_jobs` queue/status), execution still
+  lazy and transport-free.
+- `3` completed as deterministic plan + queue/event/persistence chain (still blueprint-only,
+  no network transport).
+
 ---
 
 ## 8) Anti-patterns explicitly rejected
@@ -708,8 +780,9 @@ Executed on current workspace:
 
 1. `pnpm --filter @pixel-matrix/desktop type-check`
 2. `pnpm --filter @pixel-matrix/desktop lint`
-3. `pnpm --filter @pixel-matrix/desktop test -- src/services/audio/__tests__/MusicLibraryService.spec.ts`
-4. `cargo test` (under `apps/desktop/src-tauri`)
+3. `pnpm --filter @pixel-matrix/desktop exec vitest run src/modules/music-library/__tests__/nativeLibraryDb.spec.ts src/services/audio/__tests__/MusicLibraryService.spec.ts src/services/audio/__tests__/cloudPlaybackQueueModule.spec.ts`
+4. `pnpm --filter @pixel-matrix/desktop test`
+5. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`
 
 Result: all passed in current patch state.
 

@@ -8,24 +8,40 @@ import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../mod
 import {
   cleanupNativeLibrarySourceTracks,
   clearNativeLibraryTracks,
+  deleteNativeLibraryUserEntry,
   deleteNativeLibraryTracks,
   getNativeLibraryStats,
+  listNativeLibraryCloudHashJobs,
+  listNativeLibraryFallbackTasks,
   markNativeLibraryTrackPlayed,
+  markNativeLibraryUserEntryPlayed,
   listNativeLibrarySourceHealth,
   listNativeLibraryAlbums,
   listNativeLibraryArtists,
   listNativeLibraryGenres,
   listNativeLibrarySources,
+  listNativeLibraryUserEntries,
   queryNativeLibraryTracks,
   removeNativeLibrarySource,
   syncNativeLibraryTracks,
+  updateNativeLibraryCloudHashJobStatus,
+  updateNativeLibraryFallbackTaskStatus,
+  upsertNativeLibraryCloudHashJob,
+  upsertNativeLibraryFallbackTask,
   upsertNativeLibrarySource,
+  upsertNativeLibraryUserEntry,
   type NativeLibraryAlbumRecord,
+  type NativeLibraryCloudHashJobQuery,
+  type NativeLibraryCloudHashJobRecord,
   type NativeLibrarySourceHealthRecord,
   type NativeLibrarySourceRecord,
   type NativeLibraryStatsRecord,
+  type NativeLibraryFallbackTaskQuery,
+  type NativeLibraryFallbackTaskRecord,
   type NativeLibraryTrackRecord,
   type NativeLibraryTrackUpsertInput,
+  type NativeLibraryUserEntryQuery,
+  type NativeLibraryUserEntryRecord,
 } from '../../modules/music-library';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
@@ -97,6 +113,66 @@ export interface CloudLibraryPlaybackPlan {
   strategy: 'local-trackId' | 'local-quickFingerprint' | 'local-filePath' | 'network-blueprint';
   networkFallback?: CloudLibraryNetworkFallbackRequest;
   fallbackDispatch?: CloudPlaybackFallbackDispatchResult;
+}
+
+export type CloudFallbackTaskStatus =
+  | 'queued'
+  | 'dispatching'
+  | 'resolved'
+  | 'failed'
+  | 'cancelled';
+
+export type CloudHashJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface CloudLibraryEntryUpsertInput {
+  entryId: string;
+  ownerUid: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  cloudContentId?: string;
+  displayTitle?: string;
+  displayArtist?: string;
+  rating?: number;
+  tagsJson?: string;
+  inCloud?: boolean;
+  isMissing?: boolean;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+
+export interface CloudLibraryEntryQuery {
+  ownerUid?: string;
+  limit?: number;
+  offset?: number;
+  inCloudOnly?: boolean;
+  includeMissing?: boolean;
+  searchQuery?: string;
+}
+
+export interface CloudFallbackTaskQuery {
+  ownerUid?: string;
+  status?: CloudFallbackTaskStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CloudHashJobQuery {
+  ownerUid?: string;
+  status?: CloudHashJobStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CloudHashJobUpsertInput {
+  jobId?: string;
+  ownerUid: string;
+  entryId: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  status?: CloudHashJobStatus;
+  cloudFullHash?: string;
+  lastError?: string;
+  requestedAtMs?: number;
 }
 
 export interface AlbumSummary {
@@ -3525,6 +3601,258 @@ export class MusicLibraryService {
     }
   }
 
+  async upsertCloudLibraryEntry(
+    input: CloudLibraryEntryUpsertInput
+  ): Promise<NativeLibraryUserEntryRecord | null> {
+    if (!isTauriRuntime()) return null;
+
+    const entryId = String(input.entryId || '').trim();
+    const ownerUid = String(input.ownerUid || '').trim();
+    if (!entryId || !ownerUid) return null;
+
+    try {
+      return await upsertNativeLibraryUserEntry({
+        id: entryId,
+        ownerUid,
+        trackId: typeof input.trackId === 'string' ? input.trackId.trim() : undefined,
+        quickFingerprint: this.sanitizeQuickFingerprint(input.quickFingerprint),
+        cloudContentId:
+          typeof input.cloudContentId === 'string' ? input.cloudContentId.trim() : undefined,
+        displayTitle:
+          typeof input.displayTitle === 'string' ? input.displayTitle.trim() : undefined,
+        displayArtist:
+          typeof input.displayArtist === 'string' ? input.displayArtist.trim() : undefined,
+        rating:
+          typeof input.rating === 'number' && Number.isFinite(input.rating)
+            ? Math.max(0, Math.min(100, Math.floor(input.rating)))
+            : undefined,
+        tagsJson: typeof input.tagsJson === 'string' ? input.tagsJson.trim() : undefined,
+        inCloud: input.inCloud === true,
+        isMissing: input.isMissing === true,
+        createdAtMs:
+          typeof input.createdAtMs === 'number' && Number.isFinite(input.createdAtMs)
+            ? Math.max(0, Math.floor(input.createdAtMs))
+            : undefined,
+        updatedAtMs:
+          typeof input.updatedAtMs === 'number' && Number.isFinite(input.updatedAtMs)
+            ? Math.max(0, Math.floor(input.updatedAtMs))
+            : undefined,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to upsert cloud library entry:', error);
+      return null;
+    }
+  }
+
+  async listCloudLibraryEntries(
+    query?: CloudLibraryEntryQuery
+  ): Promise<NativeLibraryUserEntryRecord[]> {
+    if (!isTauriRuntime()) return [];
+    try {
+      const payload: NativeLibraryUserEntryQuery = {
+        ownerUid: typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined,
+        limit:
+          typeof query?.limit === 'number' && Number.isFinite(query.limit)
+            ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+            : undefined,
+        offset:
+          typeof query?.offset === 'number' && Number.isFinite(query.offset)
+            ? Math.max(0, Math.floor(query.offset))
+            : undefined,
+        inCloudOnly: query?.inCloudOnly === true,
+        includeMissing: query?.includeMissing !== false,
+        searchQuery:
+          typeof query?.searchQuery === 'string' && query.searchQuery.trim().length > 0
+            ? query.searchQuery.trim()
+            : undefined,
+      };
+      return await listNativeLibraryUserEntries(payload);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to list cloud library entries:', error);
+      return [];
+    }
+  }
+
+  async deleteCloudLibraryEntry(entryId: string): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+    const normalizedEntryId = String(entryId || '').trim();
+    if (!normalizedEntryId) return false;
+
+    try {
+      return await deleteNativeLibraryUserEntry(normalizedEntryId);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to delete cloud library entry:', error);
+      return false;
+    }
+  }
+
+  async markCloudLibraryEntryPlayed(
+    entryId: string,
+    options?: { playedAtMs?: number }
+  ): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+    const normalizedEntryId = String(entryId || '').trim();
+    if (!normalizedEntryId) return false;
+
+    const playedAtMs =
+      typeof options?.playedAtMs === 'number' && Number.isFinite(options.playedAtMs)
+        ? Math.max(0, Math.floor(options.playedAtMs))
+        : Date.now();
+
+    try {
+      return await markNativeLibraryUserEntryPlayed(normalizedEntryId, { playedAtMs });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to mark cloud entry played:', error);
+      return false;
+    }
+  }
+
+  async queueCloudFallbackTask(
+    request: CloudLibraryNetworkFallbackRequest
+  ): Promise<NativeLibraryFallbackTaskRecord | null> {
+    if (!isTauriRuntime()) return null;
+
+    const ownerUid = String(request.ownerUid || '').trim();
+    const entryId = String(request.entryId || '').trim();
+    if (!ownerUid || !entryId) return null;
+
+    try {
+      return await upsertNativeLibraryFallbackTask({
+        ownerUid,
+        entryId,
+        cloudContentId:
+          typeof request.cloudContentId === 'string' ? request.cloudContentId.trim() : undefined,
+        trackId: typeof request.trackId === 'string' ? request.trackId.trim() : undefined,
+        quickFingerprint: this.sanitizeQuickFingerprint(request.quickFingerprint),
+        reason: request.reason,
+        requestedAtMs:
+          typeof request.requestedAtMs === 'number' && Number.isFinite(request.requestedAtMs)
+            ? Math.max(0, Math.floor(request.requestedAtMs))
+            : Date.now(),
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to queue cloud fallback task:', error);
+      return null;
+    }
+  }
+
+  async listCloudFallbackTasks(
+    query?: CloudFallbackTaskQuery
+  ): Promise<NativeLibraryFallbackTaskRecord[]> {
+    if (!isTauriRuntime()) return [];
+    try {
+      const payload: NativeLibraryFallbackTaskQuery = {
+        ownerUid: typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined,
+        status: typeof query?.status === 'string' ? query.status.trim() : undefined,
+        limit:
+          typeof query?.limit === 'number' && Number.isFinite(query.limit)
+            ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+            : undefined,
+        offset:
+          typeof query?.offset === 'number' && Number.isFinite(query.offset)
+            ? Math.max(0, Math.floor(query.offset))
+            : undefined,
+      };
+      return await listNativeLibraryFallbackTasks(payload);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to list cloud fallback tasks:', error);
+      return [];
+    }
+  }
+
+  async updateCloudFallbackTaskStatus(
+    taskId: string,
+    status: CloudFallbackTaskStatus,
+    options?: { lastError?: string }
+  ): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) return false;
+
+    try {
+      return await updateNativeLibraryFallbackTaskStatus(normalizedTaskId, status, {
+        lastError: typeof options?.lastError === 'string' ? options.lastError.trim() : undefined,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to update cloud fallback task status:', error);
+      return false;
+    }
+  }
+
+  async upsertCloudHashJob(
+    input: CloudHashJobUpsertInput
+  ): Promise<NativeLibraryCloudHashJobRecord | null> {
+    if (!isTauriRuntime()) return null;
+
+    const ownerUid = String(input.ownerUid || '').trim();
+    const entryId = String(input.entryId || '').trim();
+    if (!ownerUid || !entryId) return null;
+
+    try {
+      return await upsertNativeLibraryCloudHashJob({
+        id: typeof input.jobId === 'string' ? input.jobId.trim() : undefined,
+        ownerUid,
+        entryId,
+        trackId: typeof input.trackId === 'string' ? input.trackId.trim() : undefined,
+        quickFingerprint: this.sanitizeQuickFingerprint(input.quickFingerprint),
+        status: typeof input.status === 'string' ? input.status : undefined,
+        cloudFullHash:
+          typeof input.cloudFullHash === 'string' ? input.cloudFullHash.trim() : undefined,
+        lastError: typeof input.lastError === 'string' ? input.lastError.trim() : undefined,
+        requestedAtMs:
+          typeof input.requestedAtMs === 'number' && Number.isFinite(input.requestedAtMs)
+            ? Math.max(0, Math.floor(input.requestedAtMs))
+            : undefined,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to upsert cloud hash job:', error);
+      return null;
+    }
+  }
+
+  async listCloudHashJobs(query?: CloudHashJobQuery): Promise<NativeLibraryCloudHashJobRecord[]> {
+    if (!isTauriRuntime()) return [];
+    try {
+      const payload: NativeLibraryCloudHashJobQuery = {
+        ownerUid: typeof query?.ownerUid === 'string' ? query.ownerUid.trim() : undefined,
+        status: typeof query?.status === 'string' ? query.status.trim() : undefined,
+        limit:
+          typeof query?.limit === 'number' && Number.isFinite(query.limit)
+            ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+            : undefined,
+        offset:
+          typeof query?.offset === 'number' && Number.isFinite(query.offset)
+            ? Math.max(0, Math.floor(query.offset))
+            : undefined,
+      };
+      return await listNativeLibraryCloudHashJobs(payload);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to list cloud hash jobs:', error);
+      return [];
+    }
+  }
+
+  async updateCloudHashJobStatus(
+    jobId: string,
+    status: CloudHashJobStatus,
+    options?: { cloudFullHash?: string; lastError?: string }
+  ): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+    const normalizedJobId = String(jobId || '').trim();
+    if (!normalizedJobId) return false;
+
+    try {
+      return await updateNativeLibraryCloudHashJobStatus(normalizedJobId, status, {
+        cloudFullHash:
+          typeof options?.cloudFullHash === 'string' ? options.cloudFullHash.trim() : undefined,
+        lastError: typeof options?.lastError === 'string' ? options.lastError.trim() : undefined,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to update cloud hash job status:', error);
+      return false;
+    }
+  }
+
   async resolveLocalPlaybackCandidate(
     input: LocalPlaybackResolveInput
   ): Promise<LocalPlaybackResolveResult> {
@@ -3625,6 +3953,18 @@ export class MusicLibraryService {
       throw new Error('Cloud playback blueprint requires entryId and ownerUid');
     }
 
+    if (isTauriRuntime()) {
+      void this.upsertCloudLibraryEntry({
+        entryId,
+        ownerUid,
+        trackId: blueprint.trackId,
+        quickFingerprint: blueprint.quickFingerprint,
+        cloudContentId: blueprint.cloudContentId,
+        inCloud: true,
+        updatedAtMs: Date.now(),
+      });
+    }
+
     const local = await this.resolveLocalPlaybackCandidate({
       trackId: blueprint.trackId,
       quickFingerprint: blueprint.quickFingerprint,
@@ -3641,6 +3981,10 @@ export class MusicLibraryService {
           : local.strategy === 'quickFingerprint'
             ? 'local-quickFingerprint'
             : 'local-filePath';
+
+      if (isTauriRuntime()) {
+        void this.markCloudLibraryEntryPlayed(entryId, { playedAtMs: Date.now() });
+      }
 
       return {
         entryId,

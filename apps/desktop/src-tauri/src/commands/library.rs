@@ -114,6 +114,126 @@ pub async fn music_library_db_mark_track_played(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_upsert_user_entry(
+    app: tauri::AppHandle,
+    entry: music_library_db::LibraryUserEntryUpsertInput,
+) -> Result<music_library_db::LibraryUserEntryRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::upsert_user_entry(&app, entry))
+        .await
+        .map_err(|e| format!("Music library upsert user entry task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_user_entries(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryUserEntryQueryInput>,
+) -> Result<Vec<music_library_db::LibraryUserEntryRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_user_entries(&app, query))
+        .await
+        .map_err(|e| format!("Music library list user entries task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_delete_user_entry(
+    app: tauri::AppHandle,
+    entry_id: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::delete_user_entry(&app, &entry_id)
+    })
+    .await
+    .map_err(|e| format!("Music library delete user entry task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_mark_user_entry_played(
+    app: tauri::AppHandle,
+    entry_id: String,
+    played_at_ms: Option<i64>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::mark_user_entry_played(&app, &entry_id, played_at_ms)
+    })
+    .await
+    .map_err(|e| format!("Music library mark user entry played task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_upsert_fallback_task(
+    app: tauri::AppHandle,
+    task: music_library_db::LibraryFallbackTaskUpsertInput,
+) -> Result<music_library_db::LibraryFallbackTaskRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::upsert_fallback_task(&app, task))
+        .await
+        .map_err(|e| format!("Music library upsert fallback task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_fallback_tasks(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryFallbackTaskQueryInput>,
+) -> Result<Vec<music_library_db::LibraryFallbackTaskRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_fallback_tasks(&app, query))
+        .await
+        .map_err(|e| format!("Music library list fallback tasks task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_update_fallback_task_status(
+    app: tauri::AppHandle,
+    task_id: String,
+    status: String,
+    last_error: Option<String>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::update_fallback_task_status(&app, &task_id, &status, last_error)
+    })
+    .await
+    .map_err(|e| format!("Music library update fallback task status task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_upsert_cloud_hash_job(
+    app: tauri::AppHandle,
+    job: music_library_db::LibraryCloudHashJobUpsertInput,
+) -> Result<music_library_db::LibraryCloudHashJobRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::upsert_cloud_hash_job(&app, job))
+        .await
+        .map_err(|e| format!("Music library upsert cloud hash job task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_cloud_hash_jobs(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryCloudHashJobQueryInput>,
+) -> Result<Vec<music_library_db::LibraryCloudHashJobRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_cloud_hash_jobs(&app, query))
+        .await
+        .map_err(|e| format!("Music library list cloud hash jobs task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_update_cloud_hash_job_status(
+    app: tauri::AppHandle,
+    job_id: String,
+    status: String,
+    cloud_full_hash: Option<String>,
+    last_error: Option<String>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::update_cloud_hash_job_status(
+            &app,
+            &job_id,
+            &status,
+            cloud_full_hash,
+            last_error,
+        )
+    })
+    .await
+    .map_err(|e| format!("Music library update cloud hash job status task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_list_source_health(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibrarySourceHealthQueryInput>,
