@@ -516,6 +516,29 @@ Boundary:
 - It does **not** perform CDN/P2P/auth/session/network playback.
 - Caller (future network module) owns actual fetch/decrypt/stream implementation.
 
+### 4.26 Cloud fallback adapter seam (`in-memory mock queue`)
+
+This round extracts cloud fallback dispatch into a dedicated adapter seam for future network module replacement:
+
+- Added `cloudPlaybackFallbackAdapter.ts` in audio service layer.
+- Adapter contract:
+  - `CloudPlaybackFallbackRequest`
+  - `CloudPlaybackFallbackDispatchResult`
+  - `CloudPlaybackFallbackAdapter.dispatch(request)`
+- Current implementation is intentionally local-only:
+  - in-memory queue
+  - deterministic request normalization (`entryId/ownerUid/trackId/quickFingerprint`)
+  - dedup by `(ownerUid, entryId, trackId, quickFingerprint, cloudContentId)`
+- `MusicLibraryService.resolvePlaybackPlanForCloudEntry` now:
+  - builds `networkFallback` payload on local miss,
+  - dispatches payload to fallback adapter,
+  - returns `fallbackDispatch` metadata in plan.
+
+Boundary and replacement path:
+
+- This adapter is the only seam that will be swapped to HTTP/P2P transport later.
+- Local resolver and playback plan contract remain unchanged when transport implementation changes.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

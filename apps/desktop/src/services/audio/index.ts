@@ -16,4 +16,12 @@ export type { IAudioService } from './types';
 export { NativeAudioService } from './NativeAudioService';
 export type { AudioEngineService, AudioEngineSnapshot, AudioEngineType } from './AudioEngineService';
 export { AUDIO_ENGINE_SERVICE_TOKEN, DefaultAudioEngineService } from './AudioEngineService';
+export {
+  clearCloudPlaybackFallbackQueue,
+  getCloudPlaybackFallbackAdapter,
+  getCloudPlaybackFallbackQueueSnapshot,
+  type CloudPlaybackFallbackAdapter,
+  type CloudPlaybackFallbackDispatchResult,
+  type CloudPlaybackFallbackRequest,
+} from './cloudPlaybackFallbackAdapter';
 export { createAudioModule } from './audioModule';

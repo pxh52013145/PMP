@@ -28,6 +28,11 @@ import {
   type NativeLibraryTrackUpsertInput,
 } from '../../modules/music-library';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import {
+  getCloudPlaybackFallbackAdapter,
+  type CloudPlaybackFallbackDispatchResult,
+  type CloudPlaybackFallbackRequest,
+} from './cloudPlaybackFallbackAdapter';
 
 // 音乐库数据库版本
 const DB_VERSION = 5;
@@ -83,15 +88,7 @@ export interface CloudLibraryPlaybackBlueprint {
   visibleOnly?: boolean;
 }
 
-export interface CloudLibraryNetworkFallbackRequest {
-  entryId: string;
-  ownerUid: string;
-  cloudContentId?: string;
-  trackId?: string;
-  quickFingerprint?: string;
-  requestedAtMs: number;
-  reason: 'local-miss';
-}
+export type CloudLibraryNetworkFallbackRequest = CloudPlaybackFallbackRequest;
 
 export interface CloudLibraryPlaybackPlan {
   entryId: string;
@@ -99,6 +96,7 @@ export interface CloudLibraryPlaybackPlan {
   local: LocalPlaybackResolveResult;
   strategy: 'local-trackId' | 'local-quickFingerprint' | 'local-filePath' | 'network-blueprint';
   networkFallback?: CloudLibraryNetworkFallbackRequest;
+  fallbackDispatch?: CloudPlaybackFallbackDispatchResult;
 }
 
 export interface AlbumSummary {
@@ -3652,25 +3650,36 @@ export class MusicLibraryService {
       };
     }
 
+    const networkFallback: CloudLibraryNetworkFallbackRequest = {
+      entryId,
+      ownerUid,
+      cloudContentId:
+        typeof blueprint.cloudContentId === 'string' && blueprint.cloudContentId.trim().length > 0
+          ? blueprint.cloudContentId.trim()
+          : undefined,
+      trackId:
+        typeof blueprint.trackId === 'string' && blueprint.trackId.trim().length > 0
+          ? blueprint.trackId.trim()
+          : undefined,
+      quickFingerprint: this.sanitizeQuickFingerprint(blueprint.quickFingerprint),
+      requestedAtMs: Date.now(),
+      reason: 'local-miss',
+    };
+
+    let fallbackDispatch: CloudPlaybackFallbackDispatchResult | undefined;
+    try {
+      fallbackDispatch = await getCloudPlaybackFallbackAdapter().dispatch(networkFallback);
+    } catch (error) {
+      console.warn('[MusicLibraryService] cloud fallback dispatch bridge failed:', error);
+    }
+
     return {
       entryId,
       ownerUid,
       local,
       strategy: 'network-blueprint',
-      networkFallback: {
-        entryId,
-        ownerUid,
-        cloudContentId:
-          typeof blueprint.cloudContentId === 'string' && blueprint.cloudContentId.trim().length > 0
-            ? blueprint.cloudContentId.trim()
-            : undefined,
-        trackId: typeof blueprint.trackId === 'string' && blueprint.trackId.trim().length > 0
-          ? blueprint.trackId.trim()
-          : undefined,
-        quickFingerprint: this.sanitizeQuickFingerprint(blueprint.quickFingerprint),
-        requestedAtMs: Date.now(),
-        reason: 'local-miss',
-      },
+      networkFallback,
+      fallbackDispatch,
     };
   }
 

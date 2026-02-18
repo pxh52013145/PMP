@@ -15,11 +15,16 @@ vi.mock('@tauri-apps/api/fs', () => ({
 
 import { invoke } from '@tauri-apps/api/tauri';
 import { MusicLibraryService } from '../MusicLibraryService';
+import {
+  clearCloudPlaybackFallbackQueue,
+  getCloudPlaybackFallbackQueueSnapshot,
+} from '../cloudPlaybackFallbackAdapter';
 
 describe('MusicLibraryService.getCoverUrlForTrack', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    clearCloudPlaybackFallbackQueue();
 
     delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
     (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
@@ -118,6 +123,7 @@ describe('MusicLibraryService local resolver and playback stats', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    clearCloudPlaybackFallbackQueue();
 
     delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
     (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
@@ -248,6 +254,20 @@ describe('MusicLibraryService local resolver and playback stats', () => {
     expect(plan.local.track).toBeNull();
     expect(plan.local.requiresNetworkFallback).toBe(true);
     expect(plan.networkFallback).toMatchObject({
+      entryId: 'entry-miss-1',
+      ownerUid: 'u_42',
+      cloudContentId: 'cloud_hash_abc',
+      quickFingerprint: 'qf2:abcdef1234567890',
+      reason: 'local-miss',
+    });
+    expect(plan.fallbackDispatch).toMatchObject({
+      accepted: true,
+      deduped: false,
+      queueSize: 1,
+    });
+    const queued = getCloudPlaybackFallbackQueueSnapshot();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
       entryId: 'entry-miss-1',
       ownerUid: 'u_42',
       cloudContentId: 'cloud_hash_abc',
