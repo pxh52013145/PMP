@@ -333,6 +333,23 @@ Boundary in this phase:
 - Native source-scoped lookup is only used when `pathId` is present.
 - Existing fallback preserves previous behavior for legacy or error paths.
 
+### 4.18 Scan snapshot update convergence (`libraryPaths`)
+
+This round unifies scan-snapshot update behavior across both scan flows (`scanFolder` and
+`scanFolderViaTauriBackend`):
+
+- Added a shared helper to update per-source scan snapshot (`lastScanned`, `trackCount`) with
+  convergence logic.
+- If a source exists in native sqlite but not in IndexedDB, scan snapshot update now:
+  - recovers source metadata from current source list,
+  - backfills IndexedDB (`libraryPaths`) record,
+  - and upserts native source state.
+
+Boundary in this phase:
+
+- Behavior is functionally backward-compatible for existing IndexedDB-first records.
+- New path mainly improves consistency when source records originate from native-first flow.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

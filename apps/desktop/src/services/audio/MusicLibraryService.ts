@@ -814,6 +814,60 @@ export class MusicLibraryService {
     });
   }
 
+  private async updateLibraryPathScanSnapshot(pathId: string, trackCount: number): Promise<void> {
+    const normalizedPathId = String(pathId || '').trim();
+    if (!normalizedPathId) return;
+
+    const db = await this.ensureDB();
+    let updatedPath: LibraryPath | null = null;
+
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(['libraryPaths'], 'readwrite');
+      const store = transaction.objectStore('libraryPaths');
+      const request = store.get(normalizedPathId);
+
+      request.onsuccess = () => {
+        const existing = request.result as StoredLibraryPathRecord | undefined;
+        if (!existing) return;
+
+        const next: LibraryPath = {
+          ...this.toLibraryPathFromStoredRecord(existing),
+          lastScanned: new Date(),
+          trackCount: Math.max(0, Math.floor(Number(trackCount) || 0)),
+        };
+
+        store.put({
+          ...next,
+          addedAt: next.addedAt.getTime(),
+          lastScanned: next.lastScanned ? next.lastScanned.getTime() : undefined,
+        });
+        updatedPath = next;
+      };
+
+      request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+
+    if (!updatedPath) {
+      const fallback = (await this.getLibraryPaths()).find((path) => path.id === normalizedPathId);
+      if (fallback) {
+        updatedPath = {
+          ...fallback,
+          lastScanned: new Date(),
+          trackCount: Math.max(0, Math.floor(Number(trackCount) || 0)),
+        };
+      }
+    }
+
+    if (updatedPath) {
+      await this.upsertLibraryPathInIndexedDb(updatedPath).catch((error) => {
+        console.warn('[MusicLibraryService] failed to upsert scan snapshot into IndexedDB:', error);
+      });
+      await this.tryUpsertNativeLibrarySource(updatedPath);
+    }
+  }
+
   private mergeNativeLibraryPath(
     source: NativeLibrarySourceRecord,
     storedById: Map<string, LibraryPath>,
@@ -2348,31 +2402,7 @@ export class MusicLibraryService {
     // 更新路径的最后扫描时间和歌曲数量
     if (pathId) {
       try {
-        const db = await this.ensureDB();
-        const transaction = db.transaction(['libraryPaths'], 'readwrite');
-        const store = transaction.objectStore('libraryPaths');
-        const request = store.get(pathId);
-
-        await new Promise<void>((resolve, reject) => {
-          request.onsuccess = () => {
-            const pathInfo = request.result;
-            if (pathInfo) {
-              pathInfo.lastScanned = Date.now();
-              pathInfo.trackCount = current;
-              store.put(pathInfo);
-              console.log(
-                `Updated path ${pathId}: ${current} tracks, last scanned: ${new Date(pathInfo.lastScanned).toLocaleString()}`
-              );
-            }
-            resolve();
-          };
-          request.onerror = () => reject(request.error);
-        });
-
-        await new Promise<void>((resolve, reject) => {
-          transaction.oncomplete = () => resolve();
-          transaction.onerror = () => reject(transaction.error);
-        });
+        await this.updateLibraryPathScanSnapshot(pathId, current);
       } catch (error) {
         console.error('Failed to update library path:', error);
       }
@@ -2643,35 +2673,7 @@ export class MusicLibraryService {
 
       if (pathId) {
         try {
-          const db = await this.ensureDB();
-          const transaction = db.transaction(['libraryPaths'], 'readwrite');
-          const store = transaction.objectStore('libraryPaths');
-          const request = store.get(pathId);
-
-          let updatedPath: LibraryPath | null = null;
-          await new Promise<void>((resolve, reject) => {
-            request.onsuccess = () => {
-              const pathInfo = request.result as StoredLibraryPathRecord | undefined;
-              if (pathInfo) {
-                pathInfo.lastScanned = Date.now();
-                pathInfo.trackCount = quick.length;
-                store.put(pathInfo);
-                updatedPath = {
-                  ...pathInfo,
-                  addedAt: pathInfo.addedAt ? new Date(pathInfo.addedAt) : new Date(),
-                  lastScanned: pathInfo.lastScanned ? new Date(pathInfo.lastScanned) : undefined,
-                  isVisible: pathInfo.isVisible !== false,
-                  isScanned: pathInfo.isScanned !== false,
-                };
-              }
-              resolve();
-            };
-            request.onerror = () => reject(request.error);
-          });
-
-          if (updatedPath) {
-            await this.tryUpsertNativeLibrarySource(updatedPath);
-          }
+          await this.updateLibraryPathScanSnapshot(pathId, quick.length);
         } catch (error) {
           console.error('Failed to update library path metadata:', error);
         }
