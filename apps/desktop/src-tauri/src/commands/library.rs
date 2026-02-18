@@ -101,6 +101,19 @@ pub async fn music_library_db_delete_tracks(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_mark_track_played(
+    app: tauri::AppHandle,
+    track_id: String,
+    played_at_ms: Option<i64>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::mark_track_played(&app, &track_id, played_at_ms)
+    })
+    .await
+    .map_err(|e| format!("Music library mark track played task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_list_source_health(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibrarySourceHealthQueryInput>,

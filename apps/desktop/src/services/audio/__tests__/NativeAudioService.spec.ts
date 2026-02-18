@@ -127,6 +127,10 @@ describe('NativeAudioService', () => {
       path: 'C:\\\\Music\\\\a.mp3',
       replayGainDb: null,
     });
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_mark_track_played',
+      expect.objectContaining({ trackId: 't1' })
+    );
     service.destroy();
   });
 
@@ -188,6 +192,10 @@ describe('NativeAudioService', () => {
       path: 'C:\\\\Music\\\\b.mp3',
       durationMs: 1000,
     });
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_mark_track_played',
+      expect.objectContaining({ trackId: 't2' })
+    );
     expect(invoke).not.toHaveBeenCalledWith('native_audio_load', { path: 'C:\\\\Music\\\\b.mp3' });
     service.destroy();
   });

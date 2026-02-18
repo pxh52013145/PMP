@@ -5,6 +5,7 @@ import {
   deleteNativeLibraryTracks,
   listNativeLibrarySourceHealth,
   listNativeLibrarySources,
+  markNativeLibraryTrackPlayed,
   queryNativeLibraryTracks,
 } from '../nativeLibraryDb';
 
@@ -33,6 +34,8 @@ describe('nativeLibraryDb', () => {
       album: '  Album A  ',
       trackId: '  track-1  ',
       sourceId: '  source-1  ',
+      quickFingerprint: '  qf2:ABCDEF1234567890  ',
+      filePath: '  C:\\Music\\a.mp3  ',
     });
 
     expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_query_tracks', {
@@ -46,6 +49,8 @@ describe('nativeLibraryDb', () => {
         album: 'Album A',
         trackId: 'track-1',
         sourceId: 'source-1',
+        quickFingerprint: 'qf2:abcdef1234567890',
+        filePath: 'C:\\Music\\a.mp3',
       },
     });
   });
@@ -144,5 +149,19 @@ describe('nativeLibraryDb', () => {
       missingOnly: false,
     });
     expect(affected).toBe(7);
+  });
+
+  it('normalizes mark played payload and parses boolean result', async () => {
+    tauriMocks.invoke.mockResolvedValue(true);
+
+    const updated = await markNativeLibraryTrackPlayed('  t-123  ', {
+      playedAtMs: 1700000100.9,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_mark_track_played', {
+      trackId: 't-123',
+      playedAtMs: 1700000100,
+    });
+    expect(updated).toBe(true);
   });
 });

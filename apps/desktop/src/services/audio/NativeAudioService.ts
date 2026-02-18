@@ -346,6 +346,15 @@ export class NativeAudioService implements IAudioService {
     void this.invokeCommand(cmd, payload).catch(() => {});
   }
 
+  private markTrackPlayedBestEffort(track: Track): void {
+    const trackId = typeof track?.id === 'string' ? track.id.trim() : '';
+    if (!trackId) return;
+    this.fireAndForgetCommand('music_library_db_mark_track_played', {
+      trackId,
+      playedAtMs: Date.now(),
+    });
+  }
+
   private notifyLatestSeekSequence(seekSeq: number | null): void {
     if (typeof seekSeq !== 'number' || !Number.isFinite(seekSeq)) return;
 
@@ -3495,6 +3504,8 @@ export class NativeAudioService implements IAudioService {
       return false;
     }
 
+    this.markTrackPlayedBestEffort(track);
+
     return true;
   }
 
@@ -3724,6 +3735,7 @@ export class NativeAudioService implements IAudioService {
           path: trackPath,
           durationMs: crossfade.durationMs,
         });
+        this.markTrackPlayedBestEffort(track);
         return;
       }
 

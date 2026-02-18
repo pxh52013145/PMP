@@ -10,6 +10,7 @@ import {
   clearNativeLibraryTracks,
   deleteNativeLibraryTracks,
   getNativeLibraryStats,
+  markNativeLibraryTrackPlayed,
   listNativeLibrarySourceHealth,
   listNativeLibraryAlbums,
   listNativeLibraryArtists,
@@ -53,6 +54,21 @@ export interface LibraryPathHealth {
   totalSize: number;
   sourceUpdatedAtMs: number;
   lastTrackUpdatedAtMs?: number;
+}
+
+export interface LocalPlaybackResolveInput {
+  trackId?: string;
+  quickFingerprint?: string;
+  filePath?: string;
+  sourceId?: string;
+  includeMissing?: boolean;
+  visibleOnly?: boolean;
+}
+
+export interface LocalPlaybackResolveResult {
+  track: Track | null;
+  strategy: 'trackId' | 'quickFingerprint' | 'filePath' | 'none';
+  requiresNetworkFallback: boolean;
 }
 
 export interface AlbumSummary {
@@ -529,6 +545,8 @@ export class MusicLibraryService {
       replayGainAlbumGainDb: record.replayGainAlbumDb,
       metadataScannedAtMs: record.updatedAtMs,
       addedAt: record.updatedAtMs,
+      playCount: record.playCount,
+      lastPlayed: record.lastPlayedAtMs,
     };
 
     if (typeof record.bitDepth === 'number' && Number.isFinite(record.bitDepth)) {
@@ -536,6 +554,23 @@ export class MusicLibraryService {
     }
 
     return mapped;
+  }
+
+  private pickPreferredNativeTrackRecord(records: NativeLibraryTrackRecord[]): NativeLibraryTrackRecord | null {
+    if (records.length === 0) return null;
+
+    const absoluteAvailable = records.find(
+      (record) =>
+        record.status === 'available' &&
+        typeof record.filePath === 'string' &&
+        this.isLikelyAbsolutePath(record.filePath)
+    );
+    if (absoluteAvailable) return absoluteAvailable;
+
+    const available = records.find((record) => record.status === 'available');
+    if (available) return available;
+
+    return records[0] || null;
   }
 
   private async tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<Track[] | null> {
@@ -3394,6 +3429,163 @@ export class MusicLibraryService {
     }
 
     return results;
+  }
+
+  private async markTrackPlayedInIndexedDb(trackId: string, playedAtMs: number): Promise<boolean> {
+    const db = await this.ensureDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['tracks'], 'readwrite');
+      const store = transaction.objectStore('tracks');
+      const request = store.get(trackId);
+
+      request.onsuccess = () => {
+        const current = request.result as StoredTrackRecord | undefined;
+        if (!current || typeof current !== 'object') {
+          resolve(false);
+          return;
+        }
+
+        const playCountRaw =
+          typeof current.playCount === 'number' && Number.isFinite(current.playCount)
+            ? current.playCount
+            : 0;
+        const nextRecord: StoredTrackRecord = {
+          ...current,
+          playCount: Math.max(0, Math.floor(playCountRaw)) + 1,
+          lastPlayed: playedAtMs,
+        };
+
+        const putRequest = store.put(nextRecord);
+        putRequest.onsuccess = () => resolve(true);
+        putRequest.onerror = () => reject(putRequest.error);
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async markTrackPlayed(trackId: string, options?: { playedAtMs?: number }): Promise<boolean> {
+    const normalizedTrackId = String(trackId || '').trim();
+    if (!normalizedTrackId) return false;
+
+    const playedAtMs =
+      typeof options?.playedAtMs === 'number' && Number.isFinite(options.playedAtMs)
+        ? Math.max(0, Math.floor(options.playedAtMs))
+        : Date.now();
+
+    let nativeUpdated = false;
+    if (isTauriRuntime()) {
+      try {
+        nativeUpdated = await markNativeLibraryTrackPlayed(normalizedTrackId, { playedAtMs });
+      } catch (error) {
+        console.warn('[MusicLibraryService] failed to mark native track playback:', normalizedTrackId, error);
+      }
+    }
+
+    try {
+      const indexedUpdated = await this.markTrackPlayedInIndexedDb(normalizedTrackId, playedAtMs);
+      return nativeUpdated || indexedUpdated;
+    } catch (error) {
+      if (!nativeUpdated) {
+        console.warn(
+          '[MusicLibraryService] failed to mark indexeddb track playback:',
+          normalizedTrackId,
+          error
+        );
+      }
+      return nativeUpdated;
+    }
+  }
+
+  async resolveLocalPlaybackCandidate(
+    input: LocalPlaybackResolveInput
+  ): Promise<LocalPlaybackResolveResult> {
+    const normalizedTrackId = String(input.trackId || '').trim();
+    const normalizedQuickFingerprint = this.sanitizeQuickFingerprint(input.quickFingerprint);
+    const normalizedFilePath = String(input.filePath || '').trim();
+    const normalizedSourceId = String(input.sourceId || '').trim();
+    const includeMissing = input.includeMissing === true;
+    const visibleOnly = input.visibleOnly === true;
+
+    if (isTauriRuntime()) {
+      try {
+        if (normalizedTrackId) {
+          const rows = await queryNativeLibraryTracks({
+            limit: 1,
+            offset: 0,
+            includeMissing,
+            visibleOnly,
+            trackId: normalizedTrackId,
+            sourceId: normalizedSourceId || undefined,
+          });
+          const preferred = this.pickPreferredNativeTrackRecord(rows);
+          if (preferred) {
+            return {
+              track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(preferred)),
+              strategy: 'trackId',
+              requiresNetworkFallback: false,
+            };
+          }
+        }
+
+        if (normalizedQuickFingerprint) {
+          const rows = await queryNativeLibraryTracks({
+            limit: 16,
+            offset: 0,
+            includeMissing,
+            visibleOnly,
+            quickFingerprint: normalizedQuickFingerprint,
+            sourceId: normalizedSourceId || undefined,
+          });
+          const preferred = this.pickPreferredNativeTrackRecord(rows);
+          if (preferred) {
+            return {
+              track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(preferred)),
+              strategy: 'quickFingerprint',
+              requiresNetworkFallback: false,
+            };
+          }
+        }
+
+        if (normalizedFilePath) {
+          const rows = await queryNativeLibraryTracks({
+            limit: 1,
+            offset: 0,
+            includeMissing,
+            visibleOnly,
+            filePath: normalizedFilePath,
+            sourceId: normalizedSourceId || undefined,
+          });
+          const preferred = this.pickPreferredNativeTrackRecord(rows);
+          if (preferred) {
+            return {
+              track: this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(preferred)),
+              strategy: 'filePath',
+              requiresNetworkFallback: false,
+            };
+          }
+        }
+      } catch (error) {
+        console.warn('[MusicLibraryService] local playback resolve from native db failed:', error);
+      }
+    }
+
+    if (normalizedTrackId) {
+      const track = await this.getTrackById(normalizedTrackId).catch(() => null);
+      if (track) {
+        return {
+          track,
+          strategy: 'trackId',
+          requiresNetworkFallback: false,
+        };
+      }
+    }
+
+    return {
+      track: null,
+      strategy: 'none',
+      requiresNetworkFallback: true,
+    };
   }
 
   async getTrackById(trackId: string): Promise<Track | null> {

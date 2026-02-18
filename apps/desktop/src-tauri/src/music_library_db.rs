@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 2;
+const DB_VERSION: i32 = 3;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -79,6 +79,8 @@ pub struct LibraryTrackQueryInput {
     pub album: Option<String>,
     pub track_id: Option<String>,
     pub source_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +101,8 @@ pub struct LibraryTrackRecord {
     pub mtime_ms: Option<i64>,
     pub replay_gain_track_db: Option<f32>,
     pub replay_gain_album_db: Option<f32>,
+    pub play_count: u64,
+    pub last_played_at_ms: Option<i64>,
     pub status: String,
     pub updated_at_ms: i64,
 }
@@ -229,6 +233,8 @@ fn migrate(conn: &Connection) -> Result<(), String> {
               mtime_ms INTEGER,
               replay_gain_track_db REAL,
               replay_gain_album_db REAL,
+              play_count INTEGER NOT NULL DEFAULT 0,
+              last_played_at_ms INTEGER,
               status TEXT NOT NULL DEFAULT 'available',
               created_at_ms INTEGER NOT NULL,
               updated_at_ms INTEGER NOT NULL,
@@ -241,11 +247,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS local_tracks_quick_fingerprint_idx ON local_tracks(quick_fingerprint);
             CREATE INDEX IF NOT EXISTS local_tracks_status_idx ON local_tracks(status);
 
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 3;
             "#,
         )
         .map_err(|error| format!("Failed to initialize music library schema: {error}"))?;
-        version = 2;
+        version = 3;
     }
 
     if version == 1 {
@@ -259,6 +265,18 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         version = 2;
     }
 
+    if version == 2 {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE local_tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE local_tracks ADD COLUMN last_played_at_ms INTEGER;
+            PRAGMA user_version = 3;
+            "#,
+        )
+        .map_err(|error| format!("Failed to migrate music library schema to v3: {error}"))?;
+        version = 3;
+    }
+
     if version != DB_VERSION {
         return Err(format!(
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
@@ -269,6 +287,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         r#"
         CREATE INDEX IF NOT EXISTS local_tracks_artist_idx ON local_tracks(artist);
         CREATE INDEX IF NOT EXISTS local_tracks_album_idx ON local_tracks(album);
+        CREATE INDEX IF NOT EXISTS local_tracks_last_played_at_ms_idx ON local_tracks(last_played_at_ms);
         "#,
     )
     .map_err(|error| format!("Failed to ensure music library query indexes: {error}"))?;
@@ -320,6 +339,23 @@ fn normalize_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_string)
+}
+
+fn normalize_quick_fingerprint(value: Option<&str>) -> Option<String> {
+    let raw = value?.trim().to_lowercase();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let normalized = raw.strip_prefix("qf2:").unwrap_or(raw.as_str());
+    if normalized.len() < 16 || normalized.len() > 128 {
+        return None;
+    }
+    if !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    Some(format!("qf2:{normalized}"))
 }
 
 fn source_record_by_id(conn: &Connection, source_id: &str) -> Result<LibrarySourceRecord, String> {
@@ -575,7 +611,7 @@ pub fn sync_source_tracks(
                     track_id,
                     source_id,
                     file_path,
-                    normalize_text(item.quick_fingerprint.as_deref()),
+                    normalize_quick_fingerprint(item.quick_fingerprint.as_deref()),
                     normalize_text(item.title.as_deref()),
                     normalize_text(item.artist.as_deref()),
                     normalize_text(item.album.as_deref()),
@@ -671,6 +707,39 @@ pub fn delete_tracks(app: &AppHandle, track_ids: Vec<String>) -> Result<u64, Str
             .map_err(|error| format!("Failed to commit delete tracks transaction: {error}"))?;
 
         Ok(deleted)
+    })
+}
+
+pub fn mark_track_played(
+    app: &AppHandle,
+    track_id: &str,
+    played_at_ms: Option<i64>,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_track_id = track_id.trim();
+        if normalized_track_id.is_empty() {
+            return Ok(false);
+        }
+
+        let now = played_at_ms.unwrap_or_else(now_ms).max(0);
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE local_tracks
+                SET
+                  play_count = COALESCE(play_count, 0) + 1,
+                  last_played_at_ms = ?2,
+                  updated_at_ms = CASE
+                    WHEN updated_at_ms > ?2 THEN updated_at_ms
+                    ELSE ?2
+                  END
+                WHERE id = ?1
+                "#,
+                params![normalized_track_id, now],
+            )
+            .map_err(|error| format!("Failed to mark track played: {error}"))?;
+        Ok(affected > 0)
     })
 }
 
@@ -858,6 +927,15 @@ pub fn query_tracks(
             .and_then(|item| item.source_id.as_ref())
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let normalized_quick_fingerprint = query
+            .as_ref()
+            .and_then(|item| item.quick_fingerprint.as_ref())
+            .and_then(|value| normalize_quick_fingerprint(Some(value.as_str())));
+        let normalized_file_path = query
+            .as_ref()
+            .and_then(|item| item.file_path.as_ref())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         let search_enabled_flag = if normalized_search_query.is_some() {
             1_i64
         } else {
@@ -883,6 +961,16 @@ pub fn query_tracks(
         } else {
             0_i64
         };
+        let quick_fingerprint_enabled_flag = if normalized_quick_fingerprint.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
+        let file_path_enabled_flag = if normalized_file_path.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let search_like_pattern = normalized_search_query
             .map(|value| format!("%{value}%"))
             .unwrap_or_else(|| "%".to_string());
@@ -890,6 +978,8 @@ pub fn query_tracks(
         let album_exact_value = normalized_album.unwrap_or_default();
         let track_id_exact_value = normalized_track_id.unwrap_or_default();
         let source_id_exact_value = normalized_source_id.unwrap_or_default();
+        let quick_fingerprint_exact_value = normalized_quick_fingerprint.unwrap_or_default();
+        let file_path_exact_value = normalized_file_path.unwrap_or_default();
 
         let mut stmt = conn
             .prepare(
@@ -910,6 +1000,8 @@ pub fn query_tracks(
                   t.mtime_ms,
                   t.replay_gain_track_db,
                   t.replay_gain_album_db,
+                  t.play_count,
+                  t.last_played_at_ms,
                   t.status,
                   t.updated_at_ms
                 FROM local_tracks t
@@ -927,6 +1019,8 @@ pub fn query_tracks(
                   AND (?9 = 0 OR LOWER(TRIM(COALESCE(t.album, ''))) = ?10)
                   AND (?11 = 0 OR t.id = ?12)
                   AND (?13 = 0 OR t.source_id = ?14)
+                  AND (?15 = 0 OR t.quick_fingerprint = ?16)
+                  AND (?17 = 0 OR t.file_path = ?18)
                 ORDER BY
                   LOWER(COALESCE(t.title, t.file_path)) ASC,
                   t.updated_at_ms DESC,
@@ -954,6 +1048,10 @@ pub fn query_tracks(
                     track_id_exact_value,
                     source_id_enabled_flag,
                     source_id_exact_value,
+                    quick_fingerprint_enabled_flag,
+                    quick_fingerprint_exact_value,
+                    file_path_enabled_flag,
+                    file_path_exact_value,
                 ],
                 |row| {
                     Ok(LibraryTrackRecord {
@@ -972,8 +1070,10 @@ pub fn query_tracks(
                         mtime_ms: row.get(12)?,
                         replay_gain_track_db: row.get(13)?,
                         replay_gain_album_db: row.get(14)?,
-                        status: row.get(15)?,
-                        updated_at_ms: row.get(16)?,
+                        play_count: row.get::<_, i64>(15)?.max(0) as u64,
+                        last_played_at_ms: row.get(16)?,
+                        status: row.get(17)?,
+                        updated_at_ms: row.get(18)?,
                     })
                 },
             )

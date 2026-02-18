@@ -462,6 +462,35 @@ Operational effect:
 - Prevents accidental mass cleanup from one-click actions.
 - Keeps existing cleanup implementation and refresh behavior unchanged after confirmation.
 
+### 4.24 Playback stats + local-first resolver baseline (`P2 trunk`)
+
+This round lays the first executable trunk for Hydra-style playback resolution and owner-library stats:
+
+- Native sqlite schema upgraded to `v3` with playback columns:
+  - `local_tracks.play_count INTEGER NOT NULL DEFAULT 0`
+  - `local_tracks.last_played_at_ms INTEGER`
+- Added native command `music_library_db_mark_track_played`:
+  - increments `play_count`
+  - updates `last_played_at_ms`
+  - keeps `updated_at_ms` monotonic
+- `NativeAudioService` now writes playback mark best-effort when track actually starts:
+  - normal load-and-play path
+  - crossfade switch path
+- Native track query contract extends exact filters for resolver usage:
+  - `quickFingerprint`
+  - `filePath`
+- `MusicLibraryService` now exposes Hydra-oriented APIs:
+  - `markTrackPlayed(trackId, { playedAtMs? })`
+  - `resolveLocalPlaybackCandidate({ trackId?, quickFingerprint?, filePath?, sourceId?, includeMissing?, visibleOnly? })`
+    - lookup priority: `trackId -> quickFingerprint -> filePath`
+    - returns `{ track, strategy, requiresNetworkFallback }`
+
+Contract notes:
+
+- Resolver is local-first only in this phase and intentionally does **not** fetch network audio.
+- `requiresNetworkFallback=true` is the handoff signal for future Hydra cloud/P2P resolver.
+- Fingerprint matching uses canonical `qf2:<hex>` normalization at both TS and Rust boundaries.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

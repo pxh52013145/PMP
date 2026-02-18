@@ -113,3 +113,85 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     expect(url).toBe('pmp://cover/cover-small-thumb-160px?size=small');
   });
 });
+
+describe('MusicLibraryService local resolver and playback stats', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
+    (MusicLibraryService as unknown as { startupRefreshScheduled?: boolean }).startupRefreshScheduled = false;
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+  });
+
+  it('resolves local playback candidate by quick fingerprint', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_query_tracks') {
+        return Promise.resolve([
+          {
+            id: 'track-qf-1',
+            sourceId: 'source-1',
+            filePath: 'C:\\Music\\found.flac',
+            quickFingerprint: 'qf2:abcdef1234567890',
+            title: 'Found',
+            artist: 'Artist',
+            album: 'Album',
+            genre: 'Genre',
+            durationSeconds: 123,
+            status: 'available',
+            playCount: 2,
+            updatedAtMs: 1700000000,
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const resolved = await service.resolveLocalPlaybackCandidate({
+      quickFingerprint: '  ABCDEF1234567890  ',
+      includeMissing: true,
+      visibleOnly: false,
+    });
+
+    expect(invoke).toHaveBeenCalledWith('music_library_db_query_tracks', {
+      query: expect.objectContaining({
+        quickFingerprint: 'qf2:abcdef1234567890',
+      }),
+    });
+    expect(resolved.strategy).toBe('quickFingerprint');
+    expect(resolved.requiresNetworkFallback).toBe(false);
+    expect(resolved.track?.filePath).toBe('C:\\Music\\found.flac');
+    expect(resolved.track?.playCount).toBe(2);
+  });
+
+  it('marks track played through native database command', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_mark_track_played') {
+        return Promise.resolve(true);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const updated = await service.markTrackPlayed('  track-1  ', {
+      playedAtMs: 1700000123.8,
+    });
+
+    expect(updated).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('music_library_db_mark_track_played', {
+      trackId: 'track-1',
+      playedAtMs: 1700000123,
+    });
+  });
+});

@@ -57,6 +57,8 @@ export interface NativeLibraryTrackQuery {
   album?: string;
   trackId?: string;
   sourceId?: string;
+  quickFingerprint?: string;
+  filePath?: string;
 }
 
 export interface NativeLibraryTrackRecord {
@@ -75,6 +77,8 @@ export interface NativeLibraryTrackRecord {
   mtimeMs?: number;
   replayGainTrackDb?: number;
   replayGainAlbumDb?: number;
+  playCount: number;
+  lastPlayedAtMs?: number;
   status: string;
   updatedAtMs: number;
 }
@@ -138,6 +142,14 @@ function asBool(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function normalizeQuickFingerprint(value: unknown): string | undefined {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!raw) return undefined;
+  const normalized = raw.replace(/^qf2:/, '');
+  if (!/^[0-9a-f]{16,128}$/.test(normalized)) return undefined;
+  return `qf2:${normalized}`;
+}
+
 function ensureSourceRecord(value: unknown): NativeLibrarySourceRecord | null {
   if (!isRecord(value)) return null;
 
@@ -185,7 +197,17 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
   const filePath = asTrimmedString(value.filePath);
   const status = asTrimmedString(value.status);
   const updatedAtMs = asNumber(value.updatedAtMs);
-  if (!id || !sourceId || !filePath || !status || updatedAtMs === undefined) return null;
+  const playCount = asNumber(value.playCount);
+  if (
+    !id ||
+    !sourceId ||
+    !filePath ||
+    !status ||
+    updatedAtMs === undefined ||
+    playCount === undefined
+  ) {
+    return null;
+  }
 
   return {
     id,
@@ -203,6 +225,8 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     mtimeMs: asNumber(value.mtimeMs),
     replayGainTrackDb: asNumber(value.replayGainTrackDb),
     replayGainAlbumDb: asNumber(value.replayGainAlbumDb),
+    playCount: Math.max(0, Math.floor(playCount)),
+    lastPlayedAtMs: asNumber(value.lastPlayedAtMs),
     status,
     updatedAtMs,
   };
@@ -373,6 +397,27 @@ export async function deleteNativeLibraryTracks(trackIds: string[]): Promise<num
   return Math.max(0, Math.floor(parsed));
 }
 
+export async function markNativeLibraryTrackPlayed(
+  trackId: string,
+  options?: { playedAtMs?: number }
+): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedTrackId = trackId.trim();
+  if (!normalizedTrackId) return false;
+
+  const playedAtMs =
+    typeof options?.playedAtMs === 'number' && Number.isFinite(options.playedAtMs)
+      ? Math.max(0, Math.floor(options.playedAtMs))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_db_mark_track_played', {
+    trackId: normalizedTrackId,
+    playedAtMs,
+  }).catch(() => null);
+
+  return raw === true;
+}
+
 export async function listNativeLibrarySourceHealth(
   query?: NativeLibrarySourceHealthQuery
 ): Promise<NativeLibrarySourceHealthRecord[]> {
@@ -453,6 +498,11 @@ export async function queryNativeLibraryTracks(
     sourceId:
       typeof query?.sourceId === 'string' && query.sourceId.trim().length > 0
         ? query.sourceId.trim()
+        : undefined,
+    quickFingerprint: normalizeQuickFingerprint(query?.quickFingerprint),
+    filePath:
+      typeof query?.filePath === 'string' && query.filePath.trim().length > 0
+        ? query.filePath.trim()
         : undefined,
   };
 

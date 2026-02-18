@@ -2,6 +2,7 @@ export {
   cleanupNativeLibrarySourceTracks,
   clearNativeLibraryTracks,
   deleteNativeLibraryTracks,
+  markNativeLibraryTrackPlayed,
   getNativeLibraryStats,
   listNativeLibrarySourceHealth,
   listNativeLibraryAlbums,
