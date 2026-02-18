@@ -6,6 +6,8 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
 import {
+  clearNativeLibraryTracks,
+  deleteNativeLibraryTracks,
   getNativeLibraryStats,
   listNativeLibraryAlbums,
   listNativeLibraryArtists,
@@ -3601,6 +3603,14 @@ export class MusicLibraryService {
   }
 
   async clearLibrary(): Promise<void> {
+    if (isTauriRuntime()) {
+      try {
+        await clearNativeLibraryTracks();
+      } catch (error) {
+        console.warn('[MusicLibraryService] failed to clear native tracks, fallback to IndexedDB:', error);
+      }
+    }
+
     const db = await this.ensureDB();
     const transaction = db.transaction(['tracks'], 'readwrite');
     const store = transaction.objectStore('tracks');
@@ -3612,10 +3622,25 @@ export class MusicLibraryService {
 
   // 删除轨道
   async deleteTrack(id: string): Promise<void> {
+    const normalizedId = String(id || '').trim();
+    if (!normalizedId) return;
+
+    if (isTauriRuntime()) {
+      try {
+        await deleteNativeLibraryTracks([normalizedId]);
+      } catch (error) {
+        console.warn(
+          '[MusicLibraryService] failed to delete native track, fallback to IndexedDB:',
+          normalizedId,
+          error
+        );
+      }
+    }
+
     const db = await this.ensureDB();
     const transaction = db.transaction(['tracks'], 'readwrite');
     const store = transaction.objectStore('tracks');
-    await store.delete(id);
+    await store.delete(normalizedId);
 
     // 清除缓存
     this.clearCache();
@@ -3623,11 +3648,27 @@ export class MusicLibraryService {
 
   // 批量删除轨道（性能优化）
   async deleteMultipleTracks(ids: string[]): Promise<void> {
+    const normalizedIds = ids
+      .map((id) => String(id || '').trim())
+      .filter((id) => id.length > 0);
+    if (normalizedIds.length === 0) return;
+
+    if (isTauriRuntime()) {
+      try {
+        await deleteNativeLibraryTracks(normalizedIds);
+      } catch (error) {
+        console.warn(
+          '[MusicLibraryService] failed to delete native tracks, fallback to IndexedDB:',
+          error
+        );
+      }
+    }
+
     const db = await this.ensureDB();
     const transaction = db.transaction(['tracks'], 'readwrite');
     const store = transaction.objectStore('tracks');
 
-    for (const id of ids) {
+    for (const id of normalizedIds) {
       store.delete(id);
     }
 

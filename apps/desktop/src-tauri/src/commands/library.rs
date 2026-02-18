@@ -83,6 +83,23 @@ pub async fn music_library_db_sync_tracks(
     .map_err(|e| format!("Music library track sync task failed: {e}"))?
 }
 
+#[tauri::command]
+pub async fn music_library_db_clear_tracks(app: tauri::AppHandle) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::clear_tracks(&app))
+        .await
+        .map_err(|e| format!("Music library track clear task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_delete_tracks(
+    app: tauri::AppHandle,
+    track_ids: Vec<String>,
+) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::delete_tracks(&app, track_ids))
+        .await
+        .map_err(|e| format!("Music library track delete task failed: {e}"))?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_query_tracks(
     app: tauri::AppHandle,

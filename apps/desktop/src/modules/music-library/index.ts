@@ -1,4 +1,6 @@
 export {
+  clearNativeLibraryTracks,
+  deleteNativeLibraryTracks,
   getNativeLibraryStats,
   listNativeLibraryAlbums,
   listNativeLibraryArtists,

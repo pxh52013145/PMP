@@ -288,6 +288,32 @@ export async function syncNativeLibraryTracks(
   return ensureTrackSyncResult(raw);
 }
 
+export async function clearNativeLibraryTracks(): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+  const raw = await invoke<unknown>('music_library_db_clear_tracks').catch(() => null);
+  const parsed = asNumber(raw);
+  if (parsed === undefined) return 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
+export async function deleteNativeLibraryTracks(trackIds: string[]): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+
+  const normalizedIds = trackIds
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter((id) => id.length > 0);
+
+  if (normalizedIds.length === 0) return 0;
+
+  const raw = await invoke<unknown>('music_library_db_delete_tracks', {
+    trackIds: normalizedIds,
+  }).catch(() => null);
+
+  const parsed = asNumber(raw);
+  if (parsed === undefined) return 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
 export async function queryNativeLibraryTracks(
   query?: NativeLibraryTrackQuery
 ): Promise<NativeLibraryTrackRecord[]> {

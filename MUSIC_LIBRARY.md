@@ -350,6 +350,35 @@ Boundary in this phase:
 - Behavior is functionally backward-compatible for existing IndexedDB-first records.
 - New path mainly improves consistency when source records originate from native-first flow.
 
+### 4.19 Native write-path parity (`clear/delete tracks`)
+
+This round completes native sqlite write parity for track deletion operations while preserving
+IndexedDB fallback compatibility:
+
+- Rust sqlite module (`music_library_db.rs`) adds:
+  - `clear_tracks(app)` -> delete all rows from `local_tracks`
+  - `delete_tracks(app, track_ids)` -> normalized-id transactional delete
+- Tauri command layer and registry now expose:
+  - `music_library_db_clear_tracks`
+  - `music_library_db_delete_tracks`
+- Frontend bridge (`nativeLibraryDb.ts`) now supports typed native write calls:
+  - `clearNativeLibraryTracks(): Promise<number>`
+  - `deleteNativeLibraryTracks(trackIds: string[]): Promise<number>`
+- `MusicLibraryService` write flow is now native-first in Tauri runtime for:
+  - `clearLibrary()`
+  - `deleteTrack(id)`
+  - `deleteMultipleTracks(ids)`
+  while keeping IndexedDB writes as fallback/compatibility path.
+
+Validation baseline:
+
+- Added bridge tests for clear/delete command payload normalization and affected-count parsing.
+- Verified with:
+  - desktop `type-check`
+  - desktop `lint`
+  - targeted vitest (`nativeLibraryDb.spec.ts`, `MusicLibraryService.spec.ts`)
+  - `cargo test` in `src-tauri`
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

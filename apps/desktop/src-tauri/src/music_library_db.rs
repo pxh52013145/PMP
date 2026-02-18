@@ -610,6 +610,48 @@ pub fn sync_source_tracks(
     })
 }
 
+pub fn clear_tracks(app: &AppHandle) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let affected = conn
+            .execute("DELETE FROM local_tracks", [])
+            .map_err(|error| format!("Failed to clear tracks: {error}"))?;
+        Ok(affected as u64)
+    })
+}
+
+pub fn delete_tracks(app: &AppHandle, track_ids: Vec<String>) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_ids: Vec<String> = track_ids
+            .into_iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect();
+
+        if normalized_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("Failed to start delete tracks transaction: {error}"))?;
+
+        let mut deleted = 0_u64;
+        for track_id in normalized_ids {
+            let affected = tx
+                .execute("DELETE FROM local_tracks WHERE id = ?1", params![track_id])
+                .map_err(|error| format!("Failed to delete track: {error}"))?;
+            deleted += affected as u64;
+        }
+
+        tx.commit()
+            .map_err(|error| format!("Failed to commit delete tracks transaction: {error}"))?;
+
+        Ok(deleted)
+    })
+}
+
 pub fn query_tracks(
     app: &AppHandle,
     query: Option<LibraryTrackQueryInput>,

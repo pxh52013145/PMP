@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  clearNativeLibraryTracks,
+  deleteNativeLibraryTracks,
   listNativeLibrarySources,
   queryNativeLibraryTracks,
 } from '../nativeLibraryDb';
@@ -74,5 +76,31 @@ describe('nativeLibraryDb', () => {
     expect(sources).toHaveLength(2);
     expect(sources[0].trackCount).toBe(128);
     expect(sources[1].trackCount).toBe(0);
+  });
+
+  it('clears native tracks and parses affected count', async () => {
+    tauriMocks.invoke.mockResolvedValue(12);
+
+    const affected = await clearNativeLibraryTracks();
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_clear_tracks');
+    expect(affected).toBe(12);
+  });
+
+  it('normalizes delete track ids before invoking native command', async () => {
+    tauriMocks.invoke.mockResolvedValue(2);
+
+    const affected = await deleteNativeLibraryTracks(['  t-1  ', '   ', 't-2']);
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_delete_tracks', {
+      trackIds: ['t-1', 't-2'],
+    });
+    expect(affected).toBe(2);
+  });
+
+  it('skips native delete call when ids are empty', async () => {
+    const affected = await deleteNativeLibraryTracks(['', '   ']);
+    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+    expect(affected).toBe(0);
   });
 });
