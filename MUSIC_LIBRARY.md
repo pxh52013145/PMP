@@ -491,6 +491,31 @@ Contract notes:
 - `requiresNetworkFallback=true` is the handoff signal for future Hydra cloud/P2P resolver.
 - Fingerprint matching uses canonical `qf2:<hex>` normalization at both TS and Rust boundaries.
 
+### 4.25 Cloud blueprint bridge contract (`no network I/O yet`)
+
+This round adds an explicit cloud-entry playback bridge API without implementing network transport:
+
+- New service-level blueprint contract:
+  - `CloudLibraryPlaybackBlueprint`
+  - `CloudLibraryPlaybackPlan`
+  - `CloudLibraryNetworkFallbackRequest`
+- New method:
+  - `MusicLibraryService.resolvePlaybackPlanForCloudEntry(blueprint)`
+- Behavior:
+  1. Runs existing local resolver (`trackId -> quickFingerprint -> filePath`).
+  2. If local match found:
+     - returns local strategy (`local-trackId/local-quickFingerprint/local-filePath`)
+     - no network request payload emitted.
+  3. If local miss:
+     - returns `strategy='network-blueprint'`
+     - includes `networkFallback` payload (`entryId/ownerUid/cloudContentId/quickFingerprint/reason`) for future Hydra transport layer.
+
+Boundary:
+
+- This phase only defines deterministic planning contract and fallback envelope.
+- It does **not** perform CDN/P2P/auth/session/network playback.
+- Caller (future network module) owns actual fetch/decrypt/stream implementation.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

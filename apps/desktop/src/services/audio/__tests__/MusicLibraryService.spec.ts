@@ -194,4 +194,65 @@ describe('MusicLibraryService local resolver and playback stats', () => {
       playedAtMs: 1700000123,
     });
   });
+
+  it('builds local playback plan for cloud blueprint when local match exists', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'music_library_db_query_tracks') {
+        return Promise.resolve([
+          {
+            id: 'track-local-1',
+            sourceId: 'source-1',
+            filePath: 'C:\\Music\\local.mp3',
+            quickFingerprint: 'qf2:1234567890abcdef',
+            title: 'Local Match',
+            status: 'available',
+            playCount: 3,
+            updatedAtMs: 1700001000,
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const plan = await service.resolvePlaybackPlanForCloudEntry({
+      entryId: 'entry-1',
+      ownerUid: 'u_10086',
+      quickFingerprint: '1234567890abcdef',
+    });
+
+    expect(plan.strategy).toBe('local-quickFingerprint');
+    expect(plan.local.track?.id).toBe('track-local-1');
+    expect(plan.local.requiresNetworkFallback).toBe(false);
+    expect(plan.networkFallback).toBeUndefined();
+  });
+
+  it('returns network blueprint plan when local candidate misses', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue([]);
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const plan = await service.resolvePlaybackPlanForCloudEntry({
+      entryId: 'entry-miss-1',
+      ownerUid: 'u_42',
+      cloudContentId: 'cloud_hash_abc',
+      quickFingerprint: 'abcdef1234567890',
+    });
+
+    expect(plan.strategy).toBe('network-blueprint');
+    expect(plan.local.track).toBeNull();
+    expect(plan.local.requiresNetworkFallback).toBe(true);
+    expect(plan.networkFallback).toMatchObject({
+      entryId: 'entry-miss-1',
+      ownerUid: 'u_42',
+      cloudContentId: 'cloud_hash_abc',
+      quickFingerprint: 'qf2:abcdef1234567890',
+      reason: 'local-miss',
+    });
+  });
 });

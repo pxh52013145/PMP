@@ -71,6 +71,36 @@ export interface LocalPlaybackResolveResult {
   requiresNetworkFallback: boolean;
 }
 
+export interface CloudLibraryPlaybackBlueprint {
+  entryId: string;
+  ownerUid: string;
+  cloudContentId?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  filePath?: string;
+  sourceId?: string;
+  includeMissing?: boolean;
+  visibleOnly?: boolean;
+}
+
+export interface CloudLibraryNetworkFallbackRequest {
+  entryId: string;
+  ownerUid: string;
+  cloudContentId?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  requestedAtMs: number;
+  reason: 'local-miss';
+}
+
+export interface CloudLibraryPlaybackPlan {
+  entryId: string;
+  ownerUid: string;
+  local: LocalPlaybackResolveResult;
+  strategy: 'local-trackId' | 'local-quickFingerprint' | 'local-filePath' | 'network-blueprint';
+  networkFallback?: CloudLibraryNetworkFallbackRequest;
+}
+
 export interface AlbumSummary {
   album: string;
   artist: string;
@@ -3585,6 +3615,62 @@ export class MusicLibraryService {
       track: null,
       strategy: 'none',
       requiresNetworkFallback: true,
+    };
+  }
+
+  async resolvePlaybackPlanForCloudEntry(
+    blueprint: CloudLibraryPlaybackBlueprint
+  ): Promise<CloudLibraryPlaybackPlan> {
+    const entryId = String(blueprint.entryId || '').trim();
+    const ownerUid = String(blueprint.ownerUid || '').trim();
+    if (!entryId || !ownerUid) {
+      throw new Error('Cloud playback blueprint requires entryId and ownerUid');
+    }
+
+    const local = await this.resolveLocalPlaybackCandidate({
+      trackId: blueprint.trackId,
+      quickFingerprint: blueprint.quickFingerprint,
+      filePath: blueprint.filePath,
+      sourceId: blueprint.sourceId,
+      includeMissing: blueprint.includeMissing,
+      visibleOnly: blueprint.visibleOnly,
+    });
+
+    if (local.track) {
+      const strategy =
+        local.strategy === 'trackId'
+          ? 'local-trackId'
+          : local.strategy === 'quickFingerprint'
+            ? 'local-quickFingerprint'
+            : 'local-filePath';
+
+      return {
+        entryId,
+        ownerUid,
+        local,
+        strategy,
+      };
+    }
+
+    return {
+      entryId,
+      ownerUid,
+      local,
+      strategy: 'network-blueprint',
+      networkFallback: {
+        entryId,
+        ownerUid,
+        cloudContentId:
+          typeof blueprint.cloudContentId === 'string' && blueprint.cloudContentId.trim().length > 0
+            ? blueprint.cloudContentId.trim()
+            : undefined,
+        trackId: typeof blueprint.trackId === 'string' && blueprint.trackId.trim().length > 0
+          ? blueprint.trackId.trim()
+          : undefined,
+        quickFingerprint: this.sanitizeQuickFingerprint(blueprint.quickFingerprint),
+        requestedAtMs: Date.now(),
+        reason: 'local-miss',
+      },
     };
   }
 
