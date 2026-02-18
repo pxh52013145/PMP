@@ -17,6 +17,15 @@ export { NativeAudioService } from './NativeAudioService';
 export type { AudioEngineService, AudioEngineSnapshot, AudioEngineType } from './AudioEngineService';
 export { AUDIO_ENGINE_SERVICE_TOKEN, DefaultAudioEngineService } from './AudioEngineService';
 export {
+  CLOUD_PLAYBACK_QUEUE_AUDIT_MAX_ENTRIES,
+  CLOUD_PLAYBACK_QUEUE_SERVICE_TOKEN,
+  DefaultCloudPlaybackQueueService,
+  type CloudPlaybackQueueAuditEntry,
+  type CloudPlaybackQueueAuditSnapshot,
+  type CloudPlaybackQueueAuditStats,
+  type CloudPlaybackQueueService,
+} from './CloudPlaybackQueueService';
+export {
   clearCloudPlaybackFallbackQueue,
   getCloudPlaybackFallbackAdapter,
   getCloudPlaybackFallbackQueueSnapshot,
@@ -27,3 +36,4 @@ export {
   type CloudPlaybackFallbackRequest,
 } from './cloudPlaybackFallbackAdapter';
 export { createAudioModule } from './audioModule';
+export { createCloudPlaybackQueueModule } from './cloudPlaybackQueueModule';

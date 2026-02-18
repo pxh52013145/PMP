@@ -4,6 +4,7 @@ import type {
   AudioState,
   CloudPlaybackFallbackDispatchResult,
   CloudPlaybackFallbackRequest,
+  CloudPlaybackQueueAuditSnapshot,
 } from '../services/audio';
 import type { KeybindingsSnapshot } from '../services/keybindings/types';
 import type { MemoryGovernanceRunResult } from './memoryGovernance';
@@ -39,4 +40,5 @@ export type AppEvents = {
     request: CloudPlaybackFallbackRequest;
     dispatch: CloudPlaybackFallbackDispatchResult;
   };
+  'music-library/cloudFallbackAuditUpdated': CloudPlaybackQueueAuditSnapshot;
 };

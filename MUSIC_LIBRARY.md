@@ -560,6 +560,34 @@ Boundary:
 - Future network module can attach to `music-library/cloudFallbackQueued` and provide concrete
   transport implementation while keeping current local resolver contracts unchanged.
 
+### 4.28 Cloud fallback queue observability module (`P2.4`, blueprint-only)
+
+This round adds a dedicated queue-observability service/module on top of the `P2.3` event seam:
+
+- Added service:
+  - `CloudPlaybackQueueService` (`service.cloud-playback-queue`)
+  - in-memory ring buffer with bounded audit entries (`max=120`)
+  - snapshot contract:
+    - `totalEvents`
+    - `acceptedEvents`
+    - `dedupedEvents`
+    - `rejectedEvents`
+    - `lastQueuedAtMs`
+- Added module:
+  - `createCloudPlaybackQueueModule()`
+  - subscribes to `music-library/cloudFallbackQueued`
+  - records normalized audit entry and emits
+    `music-library/cloudFallbackAuditUpdated`
+- Added storage key for audit persistence baseline:
+  - `STORAGE_KEYS.MUSIC_LIBRARY_CLOUD_FALLBACK_AUDIT_V1`
+  - persisted as best-effort local audit snapshot for debug/inspection
+
+Boundary:
+
+- This phase provides only observability + audit plumbing.
+- It still does **not** issue HTTP/P2P/CDN requests.
+- Queue service is a stable handoff seam for future cloud transport module.
+
 ---
 
 ## 5) Why this architecture is correct for Hydra evolution

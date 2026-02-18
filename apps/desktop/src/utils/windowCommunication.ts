@@ -222,6 +222,7 @@ export const STORAGE_KEYS = {
 
   // === Music Library Performance ===
   MUSIC_LIBRARY_COVER_MAX_EDGE_PX: 'pixel-matrix-music-library-cover-max-edge-px', // 0 => original image
+  MUSIC_LIBRARY_CLOUD_FALLBACK_AUDIT_V1: 'pixel-matrix-music-library-cloud-fallback-audit-v1', // CloudPlaybackQueueAuditEntry[]
 
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean

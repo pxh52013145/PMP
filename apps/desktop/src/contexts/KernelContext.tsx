@@ -3,7 +3,7 @@ import { createKernel, ModuleLoader, type Kernel, type KernelModule } from '../k
 import type { AppEvents } from '../contracts/events';
 import { createLifecycleModule } from '../services/lifecycle';
 import { createNavigationModule } from '../services/navigation';
-import { createAudioModule } from '../services/audio';
+import { createAudioModule, createCloudPlaybackQueueModule } from '../services/audio';
 import { createCommandsModule } from '../services/commands';
 import { createMediaSessionModule } from '../services/media-session';
 import { createBuiltinMagnetRenderersModule } from '../builtin-modules/builtinMagnetRenderersModule';
@@ -176,6 +176,7 @@ function createRuntime(): KernelRuntime {
       mode: isEditorWindow ? 'noop' : 'real',
       enableTaskbarMediaControls: !isAuxWindow,
     }),
+    createCloudPlaybackQueueModule(),
     createCommandsModule(),
     createKeybindingsModule(),
     createMediaSessionModule({ enabled: !isAuxWindow }),
