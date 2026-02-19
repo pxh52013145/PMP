@@ -1280,12 +1280,6 @@ impl SpectrumTap {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct SpectrumSnapshot {
-    pub sample_rate: u32,
-    pub window: Vec<f32>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -179,7 +179,9 @@ export class NativeAudioService implements IAudioService {
   private spectrumEnablePending = false;
   private spectrumDisableTimer: number | null = null;
   private lastSpectrumTouchAtMs = 0;
+  private lastPlaybackActiveAtMs = 0;
   private readonly spectrumIdleTimeoutMs = 2500;
+  private readonly spectrumPlaybackGraceMs = 4000;
   private restoredOutputBackend = false;
   private restoredOutputDevice = false;
   private restoredInputId = false;
@@ -2529,6 +2531,19 @@ export class NativeAudioService implements IAudioService {
 
   // ===== Helpers =====
   private updateState(partial: Partial<AudioState>, options?: { emitStateChange?: boolean }) {
+    if (options?.emitStateChange === false) {
+      const target = this.state as unknown as Record<string, unknown>;
+
+      for (const [rawKey, value] of Object.entries(partial)) {
+        const key = rawKey as keyof AudioState;
+        if (typeof value === 'undefined') continue;
+        if (target[key as string] === value) continue;
+        target[key as string] = value;
+      }
+
+      return this.state;
+    }
+
     const nextState: AudioState = { ...this.state };
     let changed = false;
 
@@ -2543,9 +2558,7 @@ export class NativeAudioService implements IAudioService {
     if (!changed) return this.state;
 
     this.state = nextState;
-    if (options?.emitStateChange !== false) {
-      this.stateChangeCallbacks.forEach((cb) => cb(this.state));
-    }
+    this.stateChangeCallbacks.forEach((cb) => cb(this.state));
     return this.state;
   }
 
@@ -3104,6 +3117,17 @@ export class NativeAudioService implements IAudioService {
         if (!payload?.bins || !Array.isArray(payload.bins)) return;
         const bins = payload.bins;
 
+        const isByteEncodedBins = (() => {
+          const probeCount = Math.min(8, bins.length);
+          for (let index = 0; index < probeCount; index += 1) {
+            const value = bins[index];
+            if (typeof value === 'number' && Number.isFinite(value) && value > 1.001) {
+              return true;
+            }
+          }
+          return false;
+        })();
+
         const tap =
           payload.tapId === 'pre-dsp' || payload.tap === 'pre-dsp'
             ? 'pre-dsp'
@@ -3116,13 +3140,22 @@ export class NativeAudioService implements IAudioService {
           return new Uint8Array(bins.length);
         };
 
-        if (!tap) {
-          const target = ensureBuffer(this.spectrumData);
-          for (let i = 0; i < bins.length; i++) {
-            const value = typeof bins[i] === 'number' ? bins[i] : 0;
+        const copyBinsToTarget = (target: Uint8Array) => {
+          for (let i = 0; i < bins.length; i += 1) {
+            const value = typeof bins[i] === 'number' && Number.isFinite(bins[i]) ? bins[i] : 0;
+            if (isByteEncodedBins) {
+              target[i] = Math.max(0, Math.min(255, Math.round(value)));
+              continue;
+            }
+
             const clamped = Math.max(0, Math.min(1, value));
             target[i] = Math.round(clamped * 255);
           }
+        };
+
+        if (!tap) {
+          const target = ensureBuffer(this.spectrumData);
+          copyBinsToTarget(target);
           this.spectrumData = target;
           return;
         }
@@ -3142,11 +3175,7 @@ export class NativeAudioService implements IAudioService {
 
         const existingBins = this.spectrumFrames[tap]?.bins;
         const target = ensureBuffer(existingBins);
-        for (let i = 0; i < bins.length; i++) {
-          const value = typeof bins[i] === 'number' ? bins[i] : 0;
-          const clamped = Math.max(0, Math.min(1, value));
-          target[i] = Math.round(clamped * 255);
-        }
+        copyBinsToTarget(target);
 
         this.spectrumFrames[tap] = {
           frameId,
@@ -3390,8 +3419,17 @@ export class NativeAudioService implements IAudioService {
   }
 
   private applyPlaybackStateSideEffects(playbackState: PlaybackState) {
+    if (playbackState === 'playing' || playbackState === 'buffering') {
+      this.lastPlaybackActiveAtMs = Date.now();
+    }
+
     if (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'idle') {
       this.scheduleDynamicSrcRestoreEvaluation();
+    }
+
+    if (playbackState === 'stopped' || playbackState === 'idle' || playbackState === 'error') {
+      this.lastSpectrumTouchAtMs = 0;
+      this.maybeDisableSpectrum();
     }
   }
 
@@ -3928,7 +3966,19 @@ export class NativeAudioService implements IAudioService {
 
   private touchSpectrumUsage(): void {
     if (this.disposed) return;
-    this.lastSpectrumTouchAtMs = Date.now();
+
+    const nowMs = Date.now();
+    const playbackState = this.state.playbackState;
+    const playbackActive = playbackState === 'playing' || playbackState === 'buffering';
+    const withinPlaybackGrace = nowMs - this.lastPlaybackActiveAtMs <= this.spectrumPlaybackGraceMs;
+
+    if (!playbackActive && !withinPlaybackGrace) {
+      this.lastSpectrumTouchAtMs = 0;
+      this.maybeDisableSpectrum();
+      return;
+    }
+
+    this.lastSpectrumTouchAtMs = nowMs;
     this.ensureSpectrumEnabled();
     this.scheduleSpectrumDisable();
   }

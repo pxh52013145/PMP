@@ -22,9 +22,7 @@ use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
 use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
-use crate::audio::pipeline::{
-    boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumSnapshot, SpectrumTap,
-};
+use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumTap};
 use crate::audio::policy::{
     NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
     NativeAudioOutputQuantizationMode, NativeAudioSrcBackend, NativeAudioSrcMode,
@@ -35,7 +33,7 @@ use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 const SHARED_TIMELINE_STRESS_WINDOW: Duration = Duration::from_secs(12);
 const SHARED_TIMELINE_STRESS_EXTENSION: Duration = Duration::from_secs(16);
 const SHARED_TIMELINE_LOW_WATERMARK_TRIGGER: usize = 4;
-const STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB: usize = 64;
+const STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MIN_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MAX_MIB: usize = 4096;
 
@@ -56,6 +54,16 @@ static STOP_RELEASE_BUFFER_THRESHOLD_BYTES: Lazy<usize> = Lazy::new(|| {
         .saturating_mul(1024)
         .saturating_mul(1024)
         .max(1)
+});
+
+static FORCE_RELEASE_ON_STOP: Lazy<bool> = Lazy::new(|| {
+    std::env::var("PMP_AUDIO_FORCE_RELEASE_ON_STOP")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(true)
 });
 
 static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
@@ -1490,6 +1498,10 @@ impl NativeAudioEngine {
     }
 
     fn should_release_cached_audio_on_stop(&self) -> bool {
+        if *FORCE_RELEASE_ON_STOP {
+            return self.streaming.is_some() || self.decoded_samples.is_some();
+        }
+
         self.estimated_audio_buffer_bytes() >= *STOP_RELEASE_BUFFER_THRESHOLD_BYTES
     }
 
@@ -2206,14 +2218,6 @@ impl NativeAudioEngine {
         Ok(())
     }
 
-    pub(crate) fn snapshot_for_spectrum(&self) -> Option<SpectrumSnapshot> {
-        let (window, sample_rate) = self.spectrum_post_tap.snapshot()?;
-        Some(SpectrumSnapshot {
-            sample_rate,
-            window,
-        })
-    }
-
     pub(crate) fn snapshot_for_dual_spectrum(&mut self) -> Option<DualSpectrumSnapshot> {
         let pre = self.spectrum_pre_tap.snapshot();
         let post = self.spectrum_post_tap.snapshot();
@@ -2818,8 +2822,46 @@ impl NativeAudioEngine {
 
     pub(crate) fn build_tick_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
         let mut payload = self.build_state_payload(ended);
+        // High-frequency tick payload is intentionally compact to reduce WebView bridge allocation
+        // pressure. Full diagnostics/metrics are still available via command-triggered state
+        // payloads and periodic extended ticks in the emitter.
+        payload.sample_rate = None;
+        payload.source_sample_rate = None;
+        payload.bit_depth = None;
+        payload.device = None;
+        payload.track_path = None;
         payload.queue = None;
         payload.current_index = None;
+        payload.scheduler_profile = None;
+        payload.transport_mode = None;
+        payload.hq_src_phase_mode = None;
+        payload.src_mode = None;
+        payload.src_backend = None;
+        payload.src_target_sample_rate = None;
+        payload.output_quantization_mode = None;
+        payload.hq_src_stopband_db = None;
+        payload.hq_src_active = None;
+        payload.hq_src_ratio = None;
+        payload.transport_exact_int32_container = None;
+        payload.output_callback_metrics_valid = None;
+        payload.output_callback_p99_us = None;
+        payload.output_wait_timeout_count = None;
+        payload.output_render_underrun_events = None;
+        payload.output_render_underrun_frames = None;
+        payload.output_callback_interval_jitter_p99_us = None;
+        payload.output_callback_interval_overrun_count = None;
+        payload.output_callback_expected_interval_us = None;
+        payload.transfer_low_watermark_samples = None;
+        payload.transfer_render_low_hit_count = None;
+        payload.transfer_decode_low_hit_count = None;
+        payload.render_queue_page_locked = None;
+        payload.shared_render_ahead_enabled = None;
+        payload.shared_render_underrun_events = None;
+        payload.shared_render_underrun_frames = None;
+        payload.shared_render_low_hit_count = None;
+        payload.shared_render_low_watermark_samples = None;
+        payload.diagnostic_timeline_dropped_events = None;
+        payload.diagnostic_timeline = None;
         payload
     }
 

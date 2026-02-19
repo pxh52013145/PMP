@@ -74,12 +74,6 @@ pub struct NativeAudioStatePayload {
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeAudioSpectrumPayload<'a> {
-    pub bins: &'a [f32],
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct NativeAudioSpectrumFramePayload<'a> {
     pub frame_id: u64,
     pub timestamp_ms: u64,
@@ -87,7 +81,7 @@ pub struct NativeAudioSpectrumFramePayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tap_id: Option<&'a str>,
     pub sample_rate: u32,
-    pub bins: &'a [f32],
+    pub bins: &'a [u8],
 }
 
 #[derive(Serialize, Clone, Debug)]

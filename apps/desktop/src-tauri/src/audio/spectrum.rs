@@ -1,7 +1,6 @@
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
-use crate::audio::pipeline::SpectrumSnapshot;
 use crate::audio::{engine::SpectrumFrameSnapshot, events::NativeAudioSpectrumFramePayload};
 
 pub(crate) const SPECTRUM_WINDOW_SIZE: usize = 1024;
@@ -11,6 +10,7 @@ pub(crate) struct SpectrumComputer {
     hann: [f32; SPECTRUM_WINDOW_SIZE],
     input: [Complex<f32>; SPECTRUM_WINDOW_SIZE],
     mags: [f32; SPECTRUM_BINS],
+    bins_u8: [u8; SPECTRUM_BINS],
 }
 
 impl SpectrumComputer {
@@ -25,15 +25,8 @@ impl SpectrumComputer {
             hann,
             input: [Complex::new(0.0, 0.0); SPECTRUM_WINDOW_SIZE],
             mags: [0.0f32; SPECTRUM_BINS],
+            bins_u8: [0u8; SPECTRUM_BINS],
         }
-    }
-
-    pub fn compute_bins(
-        &mut self,
-        fft: &Arc<dyn rustfft::Fft<f32>>,
-        snapshot: &SpectrumSnapshot,
-    ) -> Option<&[f32]> {
-        self.compute_bins_from_window(fft, snapshot.sample_rate, &snapshot.window)
     }
 
     pub fn compute_bins_from_window(
@@ -41,7 +34,7 @@ impl SpectrumComputer {
         fft: &Arc<dyn rustfft::Fft<f32>>,
         sample_rate: u32,
         window: &[f32],
-    ) -> Option<&[f32]> {
+    ) -> Option<&[u8]> {
         if sample_rate == 0 {
             return None;
         }
@@ -80,11 +73,12 @@ impl SpectrumComputer {
         }
 
         let denom = if max_mag > 1e-9 { max_mag } else { 1.0 };
-        for mag in self.mags.iter_mut() {
+        for (index, mag) in self.mags.iter_mut().enumerate() {
             *mag = (*mag / denom).clamp(0.0, 1.0);
+            self.bins_u8[index] = ((*mag) * 255.0).round().clamp(0.0, 255.0) as u8;
         }
 
-        Some(&self.mags)
+        Some(&self.bins_u8)
     }
 }
 

@@ -20,6 +20,7 @@ apps/desktop/src-tauri/target-test/
 apps/desktop/src-tauri/target-test-no-run/
 apps/desktop/src-tauri/target-codex/
 apps/desktop/src-tauri/target-test-temp/
+target-codex/
 
 # Misc
 .DS_Store

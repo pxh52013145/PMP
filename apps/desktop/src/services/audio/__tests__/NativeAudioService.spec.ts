@@ -1847,4 +1847,33 @@ describe('NativeAudioService', () => {
 
     service.destroy();
   });
+
+  it('accepts byte-encoded spectrum bins without re-normalization', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    handlers.native_audio_spectrum?.({
+      payload: {
+        frameId: 101,
+        timestampMs: 2234,
+        tapId: 'post-dsp',
+        sampleRate: 48000,
+        bins: [0, 127, 255],
+      },
+    });
+
+    const post = service.getSpectrumFrame?.('post-dsp');
+    expect(post?.bins).toBeInstanceOf(Uint8Array);
+    expect(Array.from(post?.bins ?? [])).toEqual([0, 127, 255]);
+    expect(Array.from(service.getFrequencyData() ?? [])).toEqual([0, 127, 255]);
+
+    service.destroy();
+  });
 });
