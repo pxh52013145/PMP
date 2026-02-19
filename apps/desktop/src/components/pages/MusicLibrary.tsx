@@ -15,6 +15,11 @@ import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import {
+  MUSIC_LIBRARY_SOURCE_CHANGE_EVENT,
+  type MusicLibrarySourceChangeDetail,
+  type MusicLibrarySourceMode,
+} from '../../contracts/musicLibrarySource';
 import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './MusicLibrary.css';
@@ -53,6 +58,8 @@ const moduleScrollMemory: ViewScrollMemory = {};
 let moduleLastViewMode: ViewMode | null = null;
 
 type SidebarViewMode = Extract<ViewMode, 'artists' | 'genres'>;
+
+type StableLibraryEntry = Awaited<ReturnType<typeof musicLibraryService.listCloudLibraryEntries>>[number];
 
 type SidebarScrollAnchor =
   | { kind: 'artist'; key: string; offset: number }
@@ -219,6 +226,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const { navigateTo } = useNavigation();
   const t = useT();
   const locale = useLocale();
+  const [librarySourceMode, setLibrarySourceMode] = useState<MusicLibrarySourceMode>('local');
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     return moduleLastViewMode ?? (isTauriRuntime() ? 'all' : 'albums');
   });
@@ -251,6 +259,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [cleanupConfirmTarget, setCleanupConfirmTarget] =
     useState<MissingCleanupConfirmTarget | null>(null);
   const [showPathsManager, setShowPathsManager] = useState(false);
+  const [stableEntries, setStableEntries] = useState<StableLibraryEntry[]>([]);
+  const [isStableEntriesLoading, setIsStableEntriesLoading] = useState(false);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
   const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
   const [renderedTrackLimit, setRenderedTrackLimit] = useState(TRACK_RENDER_CHUNK_SIZE);
@@ -259,6 +269,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const searchTokenRef = useRef(0);
   const searchDebounceTimerRef = useRef<number | null>(null);
   const libraryLoadTokenRef = useRef(0);
+  const stableLoadTokenRef = useRef(0);
   const [mainViewport, setMainViewport] = useState<MainViewportSnapshot>({
     scrollTop: 0,
     clientHeight: 0,
@@ -461,6 +472,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   useLayoutEffect(() => {
     if (!isOpen) return;
+    if (librarySourceMode !== 'local') return;
     return () => {
       const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
       const currentScrollTop = root?.scrollTop ?? 0;
@@ -487,7 +499,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         captureMainScrollMemory(viewMode);
       }
     };
-  }, [captureMainScrollMemory, getMainScrollRoot, isOpen, viewMode]);
+  }, [captureMainScrollMemory, getMainScrollRoot, isOpen, librarySourceMode, viewMode]);
 
   // ? Artists/Genres sidebar: 閻欘剛鐝涘姘З鐠佹澘绻傞敍鍫ユ晪閻愮懓绱￠幁銏狀槻閿?
   const isRestoringSidebarScrollRef = useRef(false);
@@ -896,7 +908,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     setSelectedGenre(options?.genre || null);
   };
 
-  // 閸旂姾娴囨惔鎾存殶閹?
   const loadLibraryData = useCallback(async () => {
     const token = ++libraryLoadTokenRef.current;
     console.log('Loading library data...');
@@ -985,6 +996,37 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [beginAudioProtection, loadFacetCollections, updateCoverRuntimePolicy, viewMode]);
 
   // 閸旂姾娴囨惔鎾圭熅瀵?
+  const loadStableLibraryEntries = useCallback(async (query?: string) => {
+    const token = ++stableLoadTokenRef.current;
+
+    if (!isTauriRuntime()) {
+      if (token !== stableLoadTokenRef.current) return;
+      setStableEntries([]);
+      setIsStableEntriesLoading(false);
+      return;
+    }
+
+    setIsStableEntriesLoading(true);
+    try {
+      const rows = await musicLibraryService.listCloudLibraryEntries({
+        includeMissing: true,
+        limit: 1500,
+        searchQuery: typeof query === 'string' && query.trim().length > 0 ? query.trim() : undefined,
+      });
+
+      if (token !== stableLoadTokenRef.current) return;
+      setStableEntries(rows);
+    } catch (error) {
+      if (token !== stableLoadTokenRef.current) return;
+      console.warn('Failed to load stable library entries:', error);
+      setStableEntries([]);
+    } finally {
+      if (token === stableLoadTokenRef.current) {
+        setIsStableEntriesLoading(false);
+      }
+    }
+  }, []);
+
   const loadLibraryPathHealth = useCallback(async () => {
     if (!isTauriRuntime()) {
       setLibraryPathHealthMap({});
@@ -1036,21 +1078,96 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     await loadLibraryData();
   }, [loadLibraryData]);
 
+  const handleLibrarySourceChange = useCallback(
+    (nextMode: MusicLibrarySourceMode) => {
+      if (librarySourceMode === nextMode) return;
+
+      captureMainScrollMemory(viewMode);
+      captureSidebarScrollMemory(viewMode);
+      setLibrarySourceMode(nextMode);
+      setShowPathsManager(false);
+      setSearchQuery('');
+
+      if (searchDebounceTimerRef.current != null) {
+        window.clearTimeout(searchDebounceTimerRef.current);
+        searchDebounceTimerRef.current = null;
+      }
+
+      if (nextMode === 'local') {
+        searchTokenRef.current += 1;
+        setSelectedArtist(null);
+        setSelectedAlbum(null);
+        setSelectedGenre(null);
+        void resetLibraryDataFromStorage();
+        return;
+      }
+
+      setSelectedArtist(null);
+      setSelectedAlbum(null);
+      setSelectedGenre(null);
+      setViewMode('all');
+      setMainViewport((prev) => ({ ...prev, scrollTop: 0 }));
+      const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
+      root?.scrollTo({ top: 0 });
+      void loadStableLibraryEntries();
+    },
+    [
+      captureMainScrollMemory,
+      captureSidebarScrollMemory,
+      getMainScrollRoot,
+      librarySourceMode,
+      loadStableLibraryEntries,
+      resetLibraryDataFromStorage,
+      viewMode,
+    ]
+  );
+
+  useEffect(() => {
+    if (!embedded) return;
+
+    const onSourceChange = (event: Event) => {
+      const customEvent = event as CustomEvent<MusicLibrarySourceChangeDetail>;
+      const nextMode = customEvent.detail?.mode;
+      if (nextMode !== 'local' && nextMode !== 'stable') return;
+      handleLibrarySourceChange(nextMode);
+    };
+
+    window.addEventListener(MUSIC_LIBRARY_SOURCE_CHANGE_EVENT, onSourceChange as EventListener);
+    return () => {
+      window.removeEventListener(MUSIC_LIBRARY_SOURCE_CHANGE_EVENT, onSourceChange as EventListener);
+    };
+  }, [embedded, handleLibrarySourceChange]);
+
   useEffect(() => {
     if (!isOpen) return;
+    if (librarySourceMode === 'stable') {
+      updateCoverRuntimePolicy('hidden');
+      void loadStableLibraryEntries(searchQuery);
+      return;
+    }
     updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
     void loadLibraryData();
-  }, [isOpen, loadLibraryData, updateCoverRuntimePolicy, viewMode]);
+  }, [
+    isOpen,
+    librarySourceMode,
+    loadLibraryData,
+    loadStableLibraryEntries,
+    searchQuery,
+    updateCoverRuntimePolicy,
+    viewMode,
+  ]);
 
   useEffect(() => {
     if (!isOpen) return;
+    if (librarySourceMode !== 'local') return;
     void loadLibraryPaths();
-  }, [isOpen, loadLibraryPaths]);
+  }, [isOpen, librarySourceMode, loadLibraryPaths]);
 
   useEffect(() => {
+    if (librarySourceMode !== 'local') return;
     if (!showPathsManager) return;
     void loadLibraryPathHealth();
-  }, [loadLibraryPathHealth, showPathsManager]);
+  }, [librarySourceMode, loadLibraryPathHealth, showPathsManager]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1064,6 +1181,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   // 鐠併垽妲勯幍顐ｅ伎鏉╂稑瀹?
   useEffect(() => {
+    if (librarySourceMode !== 'local') return;
     const unsubscribe = musicLibraryService.onScanProgress((progress) => {
       console.log('Scan progress:', progress);
       setScanProgress(progress);
@@ -1082,7 +1200,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       }
     });
     return unsubscribe;
-  }, [loadLibraryData, loadLibraryPaths]);
+  }, [librarySourceMode, loadLibraryData, loadLibraryPaths]);
 
   useEffect(() => {
     const map = new Map<string, AlbumSummary>();
@@ -1094,6 +1212,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (librarySourceMode !== 'local') {
+      updateCoverRuntimePolicy('hidden');
+      return;
+    }
     if (viewMode === 'albums') {
       updateCoverRuntimePolicy('watch');
       return;
@@ -1105,14 +1227,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
 
     updateCoverRuntimePolicy(hasMoreTracks ? 'watch' : 'high');
-  }, [hasMoreTracks, isOpen, searchQuery, updateCoverRuntimePolicy, viewMode]);
+  }, [
+    hasMoreTracks,
+    isOpen,
+    librarySourceMode,
+    searchQuery,
+    updateCoverRuntimePolicy,
+    viewMode,
+  ]);
 
   useEffect(() => {
     if (!isOpen) return;
+    if (librarySourceMode !== 'local') return;
     if (searchQuery.trim()) return;
     if (viewMode !== 'albums' && viewMode !== 'artists' && viewMode !== 'genres') return;
     void loadFacetCollections(viewMode, tracks);
-  }, [isOpen, loadFacetCollections, searchQuery, tracks, viewMode]);
+  }, [isOpen, librarySourceMode, loadFacetCollections, searchQuery, tracks, viewMode]);
 
   const getAlbumCardRef = useCallback((key: string) => {
     const existing = albumCardRefCallbacksRef.current.get(key);
@@ -1374,10 +1504,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         window.clearTimeout(searchDebounceTimerRef.current);
       }
       searchDebounceTimerRef.current = window.setTimeout(() => {
+        if (librarySourceMode === 'stable') {
+          void loadStableLibraryEntries(query);
+          return;
+        }
         void handleSearch(query);
       }, SEARCH_DEBOUNCE_MS);
     },
-    [handleSearch]
+    [handleSearch, librarySourceMode, loadStableLibraryEntries]
   );
 
   useEffect(() => {
@@ -1391,10 +1525,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (librarySourceMode !== 'local') return;
     if (viewMode === 'albums') return;
     if (searchQuery.trim()) return;
     maybeLoadTrackChunkFromScroll();
-  }, [isOpen, maybeLoadTrackChunkFromScroll, searchQuery, viewMode, tracks.length]);
+  }, [isOpen, librarySourceMode, maybeLoadTrackChunkFromScroll, searchQuery, viewMode, tracks.length]);
 
   // 閹烘帒绨径鍕倞閸戣姤鏆?
   const handleSort = (field: typeof sortBy) => {
@@ -1471,6 +1606,26 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   // 閼惧嘲褰囬幒鎺戠碍閸氬海娈戞稉鎾圭帆閸掓銆?
   const sortedAlbums = useMemo(() => applySorting(albums), [albums, applySorting]);
+
+  const sortedStableEntries = useMemo(() => {
+    return [...stableEntries].sort((a, b) => {
+      const updatedDiff = (b.updatedAtMs || 0) - (a.updatedAtMs || 0);
+      if (updatedDiff !== 0) return updatedDiff;
+      return a.id.localeCompare(b.id);
+    });
+  }, [stableEntries]);
+
+  const stableLibraryStats = useMemo(() => {
+    const totalEntries = stableEntries.length;
+    const inCloud = stableEntries.filter((entry) => entry.inCloud).length;
+    const missing = stableEntries.filter((entry) => entry.isMissing).length;
+    return {
+      totalEntries,
+      inCloud,
+      missing,
+      localReady: Math.max(0, totalEntries - missing),
+    };
+  }, [stableEntries]);
 
   const filteredTracksTotal = filteredTracks.length;
 
@@ -1753,6 +1908,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     getMainScrollRoot,
     hasMoreTracks,
     isOpen,
+    librarySourceMode,
     libraryStats.totalTracks,
     renderedTrackLimit,
     scheduleTrackChunkLoad,
@@ -1825,6 +1981,55 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     console.log('閴?Adding single track:', track.title);
     onAddToQueue([track]);
   };
+
+  const handlePlayStableEntry = useCallback(
+    async (entry: StableLibraryEntry) => {
+      bumpAudioProtection('music-library-stable-play', 20_000);
+      try {
+        const playbackPlan = await musicLibraryService.resolvePlaybackPlanForCloudEntry({
+          entryId: entry.id,
+          ownerUid: entry.ownerUid,
+          trackId: entry.trackId,
+          quickFingerprint: entry.quickFingerprint,
+          cloudContentId: entry.cloudContentId,
+          includeMissing: true,
+          visibleOnly: true,
+        });
+
+        if (playbackPlan.local.track) {
+          if (onPlayNow) {
+            onPlayNow([playbackPlan.local.track], 0);
+          } else {
+            await audioService.loadTrack(playbackPlan.local.track);
+            await audioService.play();
+          }
+          return;
+        }
+
+        setErrorMessage(t('pages.music-library.stable.playbackFallbackQueued'));
+      } catch (error) {
+        setErrorMessage(
+          t('pages.music-library.stable.playbackFailed', {
+            message: error instanceof Error ? error.message : String(error),
+          })
+        );
+      }
+    },
+    [audioService, bumpAudioProtection, onPlayNow, t]
+  );
+
+  const handleRemoveStableEntry = useCallback(
+    async (entry: StableLibraryEntry) => {
+      bumpAudioProtection('music-library-stable-remove', 20_000);
+      const removed = await musicLibraryService.deleteCloudLibraryEntry(entry.id);
+      if (!removed) {
+        setErrorMessage(t('pages.music-library.stable.removeFailed'));
+        return;
+      }
+      await loadStableLibraryEntries(searchQuery);
+    },
+    [bumpAudioProtection, loadStableLibraryEntries, searchQuery, t]
+  );
 
   // 婢跺嫮鎮婂灞炬锤閸欐娊鏁懣婊冨礋
   const handleTrackContextMenu = (track: Track, index: number, e: React.MouseEvent) => {
@@ -1923,6 +2128,22 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   };
 
   // 閺嶇厧绱￠崠鏍ㄦ瀮娴犺泛銇囩亸?
+  const formatStableUpdatedAt = useCallback(
+    (timestampMs?: number) => {
+      if (!timestampMs || !Number.isFinite(timestampMs)) {
+        return t('common.state.unknown');
+      }
+      return new Date(timestampMs).toLocaleString(locale, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    },
+    [locale, t]
+  );
+
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -2070,7 +2291,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     <div className={`music-library ${embedded ? 'music-library-embedded' : ''}`}>
       {!embedded && (
         <div className="music-library-header">
-          <h2 className="music-library-title">{t('pages.music-library.title')}</h2>
+          <div className="music-library-header-left">
+            <h2 className="music-library-title">{t('pages.music-library.title')}</h2>
+            <div className="music-library-source-modes">
+              <button
+                className={`music-library-source-btn ${librarySourceMode === 'local' ? 'active' : ''}`}
+                onClick={() => handleLibrarySourceChange('local')}
+              >
+                {t('pages.music-library.source.local')}
+              </button>
+              <button
+                className={`music-library-source-btn ${librarySourceMode === 'stable' ? 'active' : ''}`}
+                onClick={() => handleLibrarySourceChange('stable')}
+              >
+                {t('pages.music-library.source.stable')}
+              </button>
+            </div>
+          </div>
           {onClose && (
             <button className="music-library-close" onClick={onClose}>
               X
@@ -2081,32 +2318,51 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       <div className="music-library-toolbar">
         <div className="music-library-actions">
-          <button
-            className="music-library-btn"
-            onClick={() => setShowPathsManager(true)}
-            title={t('pages.music-library.paths.manageTitle')}
-          >
-            <span>{t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
-          </button>
-          <button
-            className="music-library-btn"
-            onClick={() => setShowClearConfirm(true)}
-            disabled={libraryStats.totalTracks === 0}
-          >
-            {t('common.action.clear')}
-          </button>
+          {librarySourceMode === 'local' ? (
+            <>
+              <button
+                className="music-library-btn"
+                onClick={() => setShowPathsManager(true)}
+                title={t('pages.music-library.paths.manageTitle')}
+              >
+                <span>{t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
+              </button>
+              <button
+                className="music-library-btn"
+                onClick={() => setShowClearConfirm(true)}
+                disabled={libraryStats.totalTracks === 0}
+              >
+                {t('common.action.clear')}
+              </button>
+            </>
+          ) : (
+            <button
+              className="music-library-btn"
+              onClick={() => {
+                void loadStableLibraryEntries(searchQuery);
+              }}
+              disabled={isStableEntriesLoading}
+            >
+              {t('common.action.refresh')}
+            </button>
+          )}
         </div>
 
         <div className="music-library-search">
           <input
             type="text"
-            placeholder={t('pages.music-library.search.placeholder')}
+            placeholder={
+              librarySourceMode === 'local'
+                ? t('pages.music-library.search.placeholder')
+                : t('pages.music-library.stable.search.placeholder')
+            }
             value={searchQuery}
             onChange={(e) => handleSearchInputChange(e.target.value)}
           />
           <span className="music-library-search-icon">🔍</span>
         </div>
 
+        {librarySourceMode === 'local' && (
         <div className="music-library-sort">
           <label htmlFor="sort-select">{t('pages.music-library.sort.label')}</label>
           <select
@@ -2153,7 +2409,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             ▶
           </span>
         </div>
+        )}
 
+        {librarySourceMode === 'local' && (
         <div className="music-library-view-modes">
           <button
             className={`music-library-view-btn ${viewMode === 'all' ? 'active' : ''}`}
@@ -2180,27 +2438,145 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             {t('pages.music-library.viewMode.genres')}
           </button>
         </div>
+        )}
 
         <div className="music-library-stats">
-          <div className="music-library-stat">
-            <strong>{libraryStats.totalTracks}</strong> {t('pages.music-library.stats.tracksUnit')}
-          </div>
-          <div className="music-library-stat">
-            <strong>{libraryStats.totalArtists}</strong> {t('pages.music-library.stats.artistsUnit')}
-          </div>
-          <div className="music-library-stat">
-            <strong>{libraryStats.totalAlbums}</strong> {t('pages.music-library.stats.albumsUnit')}
-          </div>
-          <div className="music-library-stat">
-            <strong>{formatFileSize(libraryStats.totalSize)}</strong>
-          </div>
-          <div className="music-library-stat">
-            <strong>{formatTotalDuration(libraryStats.totalDuration)}</strong>
-          </div>
+          {librarySourceMode === 'local' ? (
+            <>
+              <div className="music-library-stat">
+                <strong>{libraryStats.totalTracks}</strong> {t('pages.music-library.stats.tracksUnit')}
+              </div>
+              <div className="music-library-stat">
+                <strong>{libraryStats.totalArtists}</strong> {t('pages.music-library.stats.artistsUnit')}
+              </div>
+              <div className="music-library-stat">
+                <strong>{libraryStats.totalAlbums}</strong> {t('pages.music-library.stats.albumsUnit')}
+              </div>
+              <div className="music-library-stat">
+                <strong>{formatFileSize(libraryStats.totalSize)}</strong>
+              </div>
+              <div className="music-library-stat">
+                <strong>{formatTotalDuration(libraryStats.totalDuration)}</strong>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="music-library-stat">
+                <strong>{stableLibraryStats.totalEntries}</strong>{' '}
+                {t('pages.music-library.stable.stats.entries')}
+              </div>
+              <div className="music-library-stat">
+                <strong>{stableLibraryStats.localReady}</strong>{' '}
+                {t('pages.music-library.stable.stats.localReady')}
+              </div>
+              <div className="music-library-stat">
+                <strong>{stableLibraryStats.inCloud}</strong>{' '}
+                {t('pages.music-library.stable.stats.inCloud')}
+              </div>
+              <div className="music-library-stat">
+                <strong>{stableLibraryStats.missing}</strong>{' '}
+                {t('pages.music-library.stable.stats.missing')}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
       <div className="music-library-content">
+        {librarySourceMode === 'stable' ? (
+          <div className="music-library-main music-library-main-stable" ref={mainScrollRef}>
+            {isStableEntriesLoading ? (
+              <div className="music-library-empty">
+                <div className="music-library-empty-icon">…</div>
+                <div className="music-library-empty-text">{t('pages.music-library.stable.loading')}</div>
+              </div>
+            ) : sortedStableEntries.length === 0 ? (
+              <div className="music-library-empty">
+                <div className="music-library-empty-icon">★</div>
+                <div className="music-library-empty-text">{t('pages.music-library.stable.empty.title')}</div>
+                <div className="music-library-empty-subtext">
+                  {t('pages.music-library.stable.empty.hint')}
+                </div>
+              </div>
+            ) : (
+              <div className="music-library-stable-list">
+                <div className="music-library-stable-header">
+                  <div>#</div>
+                  <div>{t('pages.music-library.stable.header.title')}</div>
+                  <div>{t('pages.music-library.stable.header.artist')}</div>
+                  <div>{t('pages.music-library.stable.header.owner')}</div>
+                  <div>{t('pages.music-library.stable.header.updatedAt')}</div>
+                  <div>{t('pages.music-library.stable.header.status')}</div>
+                  <div>{t('pages.music-library.tracks.header.actions')}</div>
+                </div>
+                {sortedStableEntries.map((entry, index) => {
+                  const displayTitle = entry.displayTitle || entry.trackId || entry.id;
+                  const displayArtist = entry.displayArtist || t('common.unknown.artist');
+                  const statusLabel = entry.isMissing
+                    ? t('pages.music-library.stable.status.missing')
+                    : entry.inCloud
+                      ? t('pages.music-library.stable.status.inCloud')
+                      : t('pages.music-library.stable.status.localOnly');
+                  const statusClass = entry.isMissing
+                    ? 'is-missing'
+                    : entry.inCloud
+                      ? 'is-cloud'
+                      : 'is-local';
+
+                  return (
+                    <div
+                      key={entry.id}
+                      className="music-library-stable-entry"
+                      onDoubleClick={() => {
+                        void handlePlayStableEntry(entry);
+                      }}
+                    >
+                      <div className="music-library-stable-cell">{index + 1}</div>
+                      <div className="music-library-stable-cell music-library-stable-title" title={displayTitle}>
+                        {displayTitle}
+                      </div>
+                      <div className="music-library-stable-cell" title={displayArtist}>
+                        {displayArtist}
+                      </div>
+                      <div className="music-library-stable-cell" title={entry.ownerUid}>
+                        {entry.ownerUid}
+                      </div>
+                      <div className="music-library-stable-cell">
+                        {formatStableUpdatedAt(entry.updatedAtMs)}
+                      </div>
+                      <div className="music-library-stable-cell">
+                        <span className={`music-library-stable-status ${statusClass}`}>{statusLabel}</span>
+                      </div>
+                      <div className="music-library-stable-actions">
+                        <button
+                          className="track-action-play"
+                          title={t('pages.music-library.stable.action.play')}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handlePlayStableEntry(entry);
+                          }}
+                        >
+                          ▶
+                        </button>
+                        <button
+                          className="track-action-remove"
+                          title={t('pages.music-library.stable.action.remove')}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleRemoveStableEntry(entry);
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
         {(viewMode === 'artists' || viewMode === 'genres') && (
           <div className="music-library-sidebar" ref={sidebarScrollRef} onScroll={handleSidebarScroll}>
             {viewMode === 'artists' && (
@@ -2395,9 +2771,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             </>
           )}
         </div>
+          </>
+        )}
       </div>
 
-      {scanProgress && scanProgress.isScanning && (
+      {librarySourceMode === 'local' && scanProgress && scanProgress.isScanning && (
         <div className="music-library-scan-progress">
           <div className="music-library-scan-header">
             <div className="music-library-scan-title">{t('pages.music-library.scan.title')}</div>

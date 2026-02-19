@@ -106,6 +106,13 @@
   justify-content: center;
   align-items: center;
   min-height: 48px;
+  position: relative;
+  overflow: visible;
+  z-index: 8;
+}
+
+.navigation-footer-music-library {
+  justify-content: flex-start;
 }
 
 .page-indicator {
@@ -148,6 +155,65 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.5);
   font-weight: 500;
+}
+
+.page-info-switcher {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.page-info-button {
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-info-button:hover {
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.page-info-popup {
+  position: fixed;
+  min-width: 120px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #0f1320;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 1000;
+}
+
+.page-info-popup-option {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.page-info-popup-option:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.page-info-popup-option.active {
+  background: rgba(95, 153, 255, 0.28);
+  color: rgba(255, 255, 255, 0.98);
 }
 
 @media (max-width: 600px) {

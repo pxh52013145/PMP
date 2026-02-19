@@ -62,6 +62,13 @@
   justify-content: space-between;
 }
 
+.music-library-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .music-library-title {
   font-size: 18px;
   font-weight: bold;
@@ -260,6 +267,37 @@
   color: rgba(100, 150, 255, 0.8);
   cursor: help;
   transition: opacity 0.2s;
+}
+
+.music-library-source-modes {
+  display: flex;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.music-library-source-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.music-library-source-btn.active {
+  background: rgba(95, 153, 255, 0.32);
+  color: rgba(255, 255, 255, 0.98);
+}
+
+.music-library-source-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .music-library-view-modes {
@@ -556,6 +594,118 @@
   gap: 2px;
 }
 
+.music-library-stable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.music-library-stable-header,
+.music-library-stable-entry {
+  display: grid;
+  grid-template-columns: 40px minmax(180px, 2fr) minmax(120px, 1.2fr) minmax(120px, 1fr) minmax(140px, 1fr) minmax(90px, 0.8fr) 92px;
+  gap: 10px;
+  align-items: center;
+}
+
+.music-library-stable-header {
+  padding: 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 10px;
+}
+
+.music-library-stable-entry {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.music-library-stable-entry:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.music-library-stable-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.music-library-stable-title {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.music-library-stable-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.music-library-stable-status.is-local {
+  color: #8fd3ff;
+  background: rgba(88, 176, 255, 0.16);
+  border-color: rgba(88, 176, 255, 0.35);
+}
+
+.music-library-stable-status.is-cloud {
+  color: #9be6b0;
+  background: rgba(121, 218, 142, 0.14);
+  border-color: rgba(121, 218, 142, 0.34);
+}
+
+.music-library-stable-status.is-missing {
+  color: #ffcc9a;
+  background: rgba(255, 176, 103, 0.14);
+  border-color: rgba(255, 176, 103, 0.4);
+}
+
+.music-library-stable-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.music-library-stable-actions button {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.82);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.music-library-stable-actions button:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 1);
+  transform: scale(1.05);
+}
+
+.music-library-stable-entry:hover .music-library-stable-actions {
+  opacity: 1;
+}
+
 .music-library-list-header {
   display: grid;
   grid-template-columns: 40px 1fr 1fr 1fr 80px 60px;
@@ -651,6 +801,10 @@
   transform: scale(0.95);
 }
 
+.track-action-remove {
+  color: #ffb1b1;
+}
+
 .music-library-track-load-hint {
   margin-top: 12px;
   padding: 10px 12px;
@@ -685,6 +839,13 @@
 .music-library-empty-text {
   font-size: 14px;
   margin-bottom: 20px;
+}
+
+.music-library-empty-subtext {
+  margin-top: -8px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .music-library-scan-progress {

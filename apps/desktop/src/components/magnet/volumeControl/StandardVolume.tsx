@@ -1,10 +1,5 @@
-/**
- * 标准音量控制变体
- * 包含按钮和弹出滑块
- */
-
 import React from 'react';
-import { createPortal } from 'react-dom';
+import { CollisionAwarePopup } from '../../core/CollisionAwarePopup';
 import { VolumeVariantProps } from './VolumeTypes';
 import './StandardVolume.css';
 
@@ -22,22 +17,31 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) =>
   } = logic;
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVolume = parseFloat(e.target.value);
-    setVolume(newVolume);
+    const nextVolume = parseFloat(e.target.value);
+    setVolume(nextVolume);
   };
 
-  // 渲染弹窗（使用Portal渲染到body）
-  const renderPopup = () => {
-    if (!popupState.show || !popupState.position) return null;
+  return (
+    <>
+      <div className="volume-control-container" ref={containerRef}>
+        <button
+          className="volume-btn"
+          onClick={togglePopup}
+          title={formatVolumePercent(volume)}
+        >
+          {getVolumeIcon(volume, muted)}
+        </button>
+      </div>
 
-    const popupElement = (
-      <div
+      <CollisionAwarePopup
         ref={popupRef}
+        open={popupState.show}
+        anchorRef={containerRef}
+        placement="top-center"
+        offset={6}
+        viewportPadding={8}
         className="volume-slider-popup volume-slider-popup-portal"
-        style={{
-          left: `${popupState.position.x}px`,
-          top: `${popupState.position.y}px`,
-        }}
+        role="dialog"
       >
         <span className="volume-value">{formatVolumePercent(volume)}</span>
         <div className="volume-slider-container">
@@ -52,31 +56,10 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) =>
             disabled={muted}
           />
         </div>
-        <button
-          className="volume-mute-btn"
-          onClick={toggleMute}
-          title={muted ? '取消静音' : '静音'}
-        >
+        <button className="volume-mute-btn" onClick={toggleMute}>
           {muted ? '⊗' : '♪'}
         </button>
-      </div>
-    );
-
-    return createPortal(popupElement, document.body);
-  };
-
-  return (
-    <>
-      <div className="volume-control-container" ref={containerRef}>
-        <button
-          className="volume-btn"
-          onClick={togglePopup}
-          title={`音量: ${formatVolumePercent(volume)}`}
-        >
-          {getVolumeIcon(volume, muted)}
-        </button>
-      </div>
-      {renderPopup()}
+      </CollisionAwarePopup>
     </>
   );
 };
