@@ -65,8 +65,8 @@ fn full_track_buffer_budget_samples() -> usize {
     // Default budget is intentionally conservative: full-track decoding can easily allocate
     // hundreds of MB for longer tracks (f32 interleaved PCM). Streaming is the preferred
     // decode mode for desktop playback; this budget is only for the optional full-track path.
-    const DEFAULT_BUDGET_MIB: usize = 96;
-    const MIN_BUDGET_MIB: usize = 64;
+    const DEFAULT_BUDGET_MIB: usize = 64;
+    const MIN_BUDGET_MIB: usize = 16;
     const MAX_BUDGET_MIB: usize = 4096;
 
     let budget_mib = std::env::var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB")
@@ -132,9 +132,14 @@ fn start_symphonia_stream(
     path: &Path,
     output_sample_rate: Option<u32>,
     src_policy: AudioInputSrcPolicy,
+    decode_reservoir_capacity_samples: Option<usize>,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
     let default_capacity = AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
-    let buffer = AudioRingBuffer::new(default_capacity);
+    let max_capacity = full_track_buffer_budget_samples().max(default_capacity);
+    let decode_capacity = decode_reservoir_capacity_samples
+        .unwrap_or(default_capacity)
+        .clamp(default_capacity, max_capacity);
+    let buffer = AudioRingBuffer::new(decode_capacity);
     let render_queue = AudioRingBuffer::new((buffer.capacity_samples() / 4).clamp(16_384, 262_144));
     try_lock_render_queue_hot_path(&render_queue);
 
@@ -982,6 +987,8 @@ impl AudioInput for SymphoniaInput {
         src_policy: AudioInputSrcPolicy,
     ) -> Result<AudioInputOpenResult, AudioInputError> {
         let budget_samples = full_track_buffer_budget_samples();
+        let default_streaming_capacity =
+            AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
 
         match decode_mode {
             AudioInputDecodeMode::FullTrack => {
@@ -989,7 +996,7 @@ impl AudioInput for SymphoniaInput {
                     estimate_full_track_required_samples(path, output_sample_rate, src_policy)
                 {
                     if required > budget_samples {
-                        match start_symphonia_stream(path, output_sample_rate, src_policy) {
+                        match start_symphonia_stream(path, output_sample_rate, src_policy, None) {
                             Ok((source, meta, streaming)) => {
                                 return Ok(AudioInputOpenResult {
                                     input_id: self.id(),
@@ -1019,7 +1026,7 @@ impl AudioInput for SymphoniaInput {
                 ) {
                     Ok(decoded) => Ok(decoded_to_open_result(self.id(), decoded)),
                     Err(buffer_err) => {
-                        match start_symphonia_stream(path, output_sample_rate, src_policy) {
+                        match start_symphonia_stream(path, output_sample_rate, src_policy, None) {
                             Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                                 input_id: self.id(),
                                 meta,
@@ -1037,8 +1044,35 @@ impl AudioInput for SymphoniaInput {
                     }
                 }
             }
+            AudioInputDecodeMode::StreamingFullTrack => {
+                let full_track_streaming_capacity =
+                    estimate_full_track_required_samples(path, output_sample_rate, src_policy).map(
+                        |required| required.min(budget_samples).max(default_streaming_capacity),
+                    );
+
+                match start_symphonia_stream(
+                    path,
+                    output_sample_rate,
+                    src_policy,
+                    full_track_streaming_capacity,
+                ) {
+                    Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
+                        input_id: self.id(),
+                        meta,
+                        kind: AudioInputKind::Streaming(streaming),
+                        source: Box::new(source),
+                    }),
+                    Err(stream_err) => Err(AudioInputError::new(
+                        "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
+                        format!(
+                            "Progressive full-track streaming open failed: {}",
+                            stream_err.message
+                        ),
+                    )),
+                }
+            }
             AudioInputDecodeMode::Streaming => {
-                match start_symphonia_stream(path, output_sample_rate, src_policy) {
+                match start_symphonia_stream(path, output_sample_rate, src_policy, None) {
                     Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                         input_id: self.id(),
                         meta,
@@ -1218,6 +1252,6 @@ mod tests {
             std::env::remove_var("PMP_AUDIO_FULL_TRACK_BUFFER_BUDGET_MIB");
         }
 
-        assert_eq!(budget, 96 * 1024 * 1024 / std::mem::size_of::<f32>());
+        assert_eq!(budget, 64 * 1024 * 1024 / std::mem::size_of::<f32>());
     }
 }

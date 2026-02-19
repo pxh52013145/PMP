@@ -8,7 +8,7 @@ use tauri::{
     Size, WindowBuilder, WindowUrl,
 };
 
-use super::MAIN_WINDOW_LABEL;
+use super::{focus_main_window_if_needed, MAIN_WINDOW_LABEL};
 
 pub const ORNAMENTS_OVERLAY_WINDOW_LABEL: &str = "ornaments-overlay";
 
@@ -296,9 +296,7 @@ pub fn ensure_ornaments_overlay_window(
             api.prevent_close();
             let _ = window_for_events.hide();
             set_ornaments_overlay_editing(false);
-            if let Some(main) = app_handle.get_window(MAIN_WINDOW_LABEL) {
-                let _ = main.set_focus();
-            }
+            focus_main_window_if_needed(&app_handle);
         }
         _ => {}
     });

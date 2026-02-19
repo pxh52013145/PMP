@@ -64,7 +64,6 @@
   "common.unknown.artist": "未知艺术家",
   "common.unknown.album": "未知专辑",
   "common.unknown.audioFile": "未知音频文件",
-
   "commands.app.navigate-home.title": "导航：首页",
   "commands.app.navigate-home.description": "跳转到首页",
   "commands.app.navigate-settings.title": "导航：设置",
@@ -81,26 +80,22 @@
   "commands.app.open-vst3-plugin-manager.description": "打开 VST3 插件管理窗口",
   "commands.app.go-back.title": "导航：返回",
   "commands.app.go-back.description": "返回上一页",
-
   "commands.audio.previous-track.title": "音频：上一首",
   "commands.audio.previous-track.description": "播放上一首",
   "commands.audio.next-track.title": "音频：下一首",
   "commands.audio.next-track.description": "播放下一首",
   "commands.audio.toggle-play-pause.title": "音频：播放/暂停",
   "commands.audio.toggle-play-pause.description": "在播放与暂停之间切换",
-
   "commands.commandPalette.toggle.title": "命令：切换命令面板",
   "commands.commandPalette.toggle.description": "打开或关闭命令面板（Command Palette）",
   "commands.commandPalette.close.title": "命令：关闭命令面板",
   "commands.commandPalette.close.description": "关闭命令面板（Command Palette）",
   "commands.app.open-keyboard-shortcuts-window.title": "窗口：快捷键管理",
   "commands.app.open-keyboard-shortcuts-window.description": "打开快捷键管理窗口（Keyboard Shortcuts）",
-
   "commands.palette.searchPlaceholder": "搜索命令…",
   "commands.palette.argsPlaceholder": "参数 JSON（可选）",
   "commands.palette.empty": "未注册任何命令。",
   "commands.palette.argsJsonParseFailed": "参数 JSON 解析失败：{message}",
-
   "magnet.groups.layout": "布局",
   "magnet.groups.window": "窗口",
   "magnet.groups.playback": "播放",
@@ -109,7 +104,6 @@
   "magnet.groups.utility": "工具",
   "magnet.groups.space": "空间",
   "magnet.groups.visualizer": "可视化",
-
   "magnet.variant.default": "默认",
   "magnet.variant.standard": "标准",
   "magnet.variant.minimal": "极简",
@@ -120,7 +114,6 @@
   "magnet.variant.coverGlow": "封面光晕",
   "magnet.variant.btn-play-pause.coverGlow.description": "使用封面取色的光晕效果",
   "magnet.variant.track-info.default.description": "曲目信息默认变体",
-
   "magnet.renderers.navigation-page.preview": "导航",
   "magnet.renderers.navigation-page.description": "主内容导航区域",
   "magnet.renderers.process-perf-monitor.preview": "性能",
@@ -191,13 +184,11 @@
   "magnet.dsp-vst.warmup.report.failed": "预热失败：{error}",
   "magnet.renderers.audio-visualizer.preview": "频谱",
   "magnet.renderers.audio-visualizer.description": "音频频谱可视化（FFT）",
-
   "settings.language.title": "语言",
   "settings.language.desc": "选择界面语言（覆盖范围逐步完善）。",
   "settings.language.note": "部分文本可能需要重开页面或重启应用才能完全刷新。",
   "settings.language.option.zh-CN.title": "简体中文",
   "settings.language.option.en-US.title": "English",
-
   "settings.panels.language.title": "语言",
   "settings.panels.workbench.title": "主界面",
   "settings.panels.windowClose.title": "关闭行为",
@@ -218,12 +209,10 @@
   "settings.panels.audioBuffer.desc": "管理预解码策略与预缓冲门槛（含切歌前门槛），用于平衡稳定性、内存占用与启动速度。",
   "settings.panels.plugins.title": "插件",
   "settings.panels.visualizers.title": "可视化",
-
   "settings.sections.system": "系统",
   "settings.sections.audio": "音频",
   "settings.sections.plugins": "插件",
   "settings.sections.visualizers": "可视化",
-
   "settings.windowClose.behavior.ask": "每次询问",
   "settings.windowClose.behavior.hide": "隐藏到后台",
   "settings.windowClose.behavior.exit": "直接退出",
@@ -233,7 +222,6 @@
   "settings.windowClose.system.label": "窗口关闭（任务栏/标题栏）",
   "settings.windowClose.system.desc": "点击主窗口关闭按钮或从任务栏关闭时如何处理。",
   "settings.windowClose.system.note": "默认隐藏到后台，可在系统托盘菜单中退出。",
-
   "settings.systemDemo.preview.eyebrow": "样式预览",
   "settings.systemDemo.preview.title": "面板构成",
   "settings.systemDemo.preview.subtitle": "演示标题层级与切换按钮分组样式。",
@@ -252,7 +240,6 @@
   "settings.systemDemo.preview.toneLabel.accent": "强调",
   "settings.systemDemo.preview.toneLabel.minimal": "极简",
   "settings.systemDemo.preview.note": "演示状态 → 布局：{layout} · 语气：{tone}",
-
   "settings.systemDemo.form.eyebrow": "表单控件",
   "settings.systemDemo.form.title": "统一输入",
   "settings.systemDemo.form.subtitle": "演示下拉选择与数字输入的统一样式。",
@@ -266,7 +253,6 @@
   "settings.systemDemo.form.scalePercent": "缩放 (%)",
   "settings.systemDemo.form.marginScale": "边距 (%)",
   "settings.systemDemo.form.note": "预设 {preset} · 缩放 {scale}% · 边距 {margin}%",
-
   "settings.systemDemo.actions.eyebrow": "动作分组",
   "settings.systemDemo.actions.title": "操作按钮",
   "settings.systemDemo.actions.subtitle": "主操作、次操作与重置按钮样式示例。",
@@ -274,7 +260,6 @@
   "settings.systemDemo.actions.refresh": "刷新",
   "settings.systemDemo.actions.reset": "重置",
   "settings.systemDemo.actions.warning": "仅用于界面演示，不会写入真实设置。",
-
   "settings.systemDemo.pipeline.title": "音频链路",
   "settings.systemDemo.pipeline.subtitle": "演示传输路径相关的下拉、开关与分组按钮样式。",
   "settings.systemDemo.pipeline.note": "链路状态 → 抗锯齿：{aa} · 传输：{transport} · RAW：{raw}",
@@ -304,20 +289,17 @@
   "settings.systemDemo.pipeline.transportExclusive": "独占",
   "settings.systemDemo.pipeline.transportLabel.shared": "共享",
   "settings.systemDemo.pipeline.transportLabel.exclusive": "独占",
-
   "settings.systemDemo.tuning.title": "实时调参",
   "settings.systemDemo.tuning.subtitle": "演示滑动条与输入+应用组合，覆盖实时调节控件。",
   "settings.systemDemo.tuning.note": "实时参数 → 视野：{fov} · 帧率上限：{cap}",
   "settings.systemDemo.tuning.fov": "垂直视野",
   "settings.systemDemo.tuning.frameCap": "帧率上限",
   "settings.systemDemo.tuning.apply": "应用",
-
   "windowClose.dialog.title": "关闭主窗口",
   "windowClose.dialog.message.system": "你想要退出应用，还是隐藏到后台？",
   "windowClose.dialog.message.magnet": "你点击了 Magnet 的关闭按钮。请选择隐藏到后台或退出应用。",
   "windowClose.action.hide": "隐藏到后台",
   "windowClose.action.exit": "退出应用",
-
   "settings.audio.engine.label": "音频引擎",
   "settings.audio.engine.desc": "桌面端仅支持 Native Audio，统一接入 Magnet 控件。",
   "settings.audio.engine.badge.native": "Native Audio",
@@ -326,7 +308,6 @@
   "settings.audio.openDspRack": "打开 DSP Rack",
   "settings.audio.openVstManager": "打开 VST3 插件管理器",
   "settings.audio.openVstManager.requireTauri": "需要在 Tauri 桌面环境运行（pnpm dev:tauri）",
-
   "settings.audioAdvanced.replayGain.title": "ReplayGain",
   "settings.audioAdvanced.replayGain.mode.label": "模式",
   "settings.audioAdvanced.replayGain.mode.track": "音轨",
@@ -435,7 +416,6 @@
   "settings.audioAdvanced.monitor.bufferStatus.low": "低缓冲风险",
   "settings.audioAdvanced.monitor.bufferStatus.guard": "保护中",
   "settings.audioAdvanced.monitor.bufferStatus.stable": "稳定",
-
   "settings.audioDsp.badge": "增益 {gain} dB · 低 {low} / 中 {mid} / 高 {high} dB · 限幅: {limiter}",
   "settings.audioDsp.note.requireNative": "需要在 Tauri 桌面环境运行（Native Audio）。",
   "settings.audioDsp.gain.title": "主增益",
@@ -453,7 +433,6 @@
   "settings.audioDsp.limiter.enable": "启用",
   "settings.audioDsp.limiter.disable": "关闭",
   "settings.audioDsp.limiter.thresholdDb": "阈值 (dB)",
-
   "settings.audioBuffer.title": "音频预处理",
   "settings.audioBuffer.desc": "播放前数据准备策略：预解码决定“如何产出”，预缓冲决定“何时放行”（不控制淡入淡出时长）。",
   "settings.audioBuffer.eyebrow": "AUDIO PREPROCESS",
@@ -494,7 +473,6 @@
   "settings.audioBuffer.note.defaults": "自动默认值：开始/Seek {start}s，切歌前 {crossfade}s。",
   "settings.audioBuffer.note.estimate": "内存估算（{sampleRate}Hz，{channels} 声道）：开始/Seek 约 {startMiB} MiB，切歌前约 {crossfadeMiB} MiB。",
   "settings.audioBuffer.note.underrun": "自启动以来 underrun：{events} 次，{frames} 帧。",
-
   "settings.audioComponents.title": "音频输出/输入",
   "settings.audioComponents.desc": "用于选择输出后端/设备与输入解码器（foobar-like）。",
   "settings.audioComponents.note.requireNative": "需要在 Tauri 桌面环境运行（Native Audio）。",
@@ -538,7 +516,6 @@
   "settings.audioComponents.audioInput.option.symphoniaDecoded": "Symphonia（整首解码）",
   "settings.audioComponents.audioInput.option.rodio": "Rodio（兼容模式）",
   "settings.audioComponents.audioInput.note.fullDecode": "整首解码会在播放前把整首音频载入内存；稳定性更高，但长音频会占用更多内存且打开更慢。",
-
   "settings.performance.lowPerformance.label": "低性能模式",
   "settings.performance.lowPerformance.desc": "多开 Editor 窗口时推荐开启，减少滚动卡顿。",
   "settings.performance.lowPerformance.option.standard": "标准",
@@ -569,7 +546,6 @@
   "settings.performance.memoryGovernanceAuto.label": "自动内存治理（实验）",
   "settings.performance.memoryGovernanceAuto.desc": "检测到内存压力时，尽力在后台回收可重建资源，降低长期占用。",
   "settings.performance.memoryGovernanceAuto.note": "可能清理运行时封面缓存、关闭隐藏的 Editor 窗口；不影响音频。",
-
   "settings.performance.quality.label": "画质 / UI 渲染质量",
   "settings.performance.quality.desc": "按设备性能与实时压力自动调节渲染分辨率/帧率/特效密度，降低 WebView2 的 GPU/内存占用与卡顿。",
   "settings.performance.quality.badge.auto": "自动：{level}",
@@ -605,10 +581,9 @@
   "settings.performance.runtimeProfile.option.balanced": "均衡",
   "settings.performance.runtimeProfile.option.boosted": "高体验",
   "settings.performance.runtimeProfile.option.custom": "自定义",
-"debug.center.memory.navigation.label": "导航历史",
+  "debug.center.memory.navigation.label": "导航历史",
   "debug.center.memory.navigation.desc": "用于观测 navigation history 是否出现异常膨胀。",
   "debug.center.memory.navigation.history.value": "history：{count} 条，约 {kb}KB",
-
   "settings.plugins.pmpm.label": ".pmpm 插件",
   "settings.plugins.pmpm.desc": "安装/卸载 Magnet 插件，并查看它们声明的贡献点（R5：默认启用隔离运行时）。",
   "settings.plugins.runtimeSandbox.label": "启用隔离运行时（sandbox iframe，推荐）",
@@ -637,7 +612,6 @@
   "settings.plugins.action.untrustKey.label": "取消信任",
   "settings.plugins.action.uninstall.title.magnetActive": "请先从点阵停用该 Magnet",
   "settings.plugins.action.uninstall.title": "卸载插件",
-
   "settings.plugins.install.requireTauri": "安装 .pmpm 需要 Tauri 运行时（使用 `pnpm dev:tauri`）。",
   "settings.plugins.install.filePickerFilter": ".pmpm 插件",
   "settings.plugins.install.error.invalidFilePath": "无法解析选中的 .pmpm 文件路径",
@@ -656,19 +630,15 @@
   "settings.plugins.install.confirm.permissionsNone": "(无)",
   "settings.plugins.install.confirm.entrySha256": "entrySha256: {sha256}",
   "settings.plugins.install.confirm.prompt": "确认安装？",
-
   "settings.plugins.uninstall.error.activeMagnet": "请先停用 Magnet \"{id}\"，再卸载插件。",
   "settings.plugins.uninstall.confirm.title": "确认卸载插件",
   "settings.plugins.uninstall.confirm.message": "确认卸载插件 \"{id}\"？",
-
   "settings.plugins.disable.confirm.title": "确认禁用插件",
   "settings.plugins.disable.confirm.message": "Magnet \"{id}\" 当前处于激活状态，禁用后将显示为 Disabled 占位。确认禁用？",
-
   "settings.visualizers.desc": "来自内置与插件的 Visualizer 入口。",
   "settings.visualizers.searchPlaceholder": "搜索 Visualizer…",
   "settings.visualizers.empty": "暂无可视化入口",
   "settings.visualizers.inputsLabel": "inputs",
-
   "pages.home.title": "首页",
   "pages.home.welcome.title": "欢迎使用音乐播放器",
   "pages.home.welcome.subtitle": "点击右侧按钮访问音乐库、歌单等功能",
@@ -894,21 +864,17 @@
   "pages.artist.placeholder": "艺术家页面",
   "pages.debug-center.title": "调试中心",
   "pages.debug-center.subtitle": "集中管理调试开关、环境变量与快捷入口（部分设置需重启生效）。",
-
   "debug.center.note.requireTauri": "仅在 Tauri 桌面环境可用。",
   "debug.center.actions.restart": "重启应用",
   "debug.center.actions.restartAndOpen": "重启并进入调试中心",
   "debug.center.actions.refreshEnv": "刷新环境快照",
   "debug.center.actions.copyPowershell": "复制 PowerShell 启动片段",
-
   "debug.center.mode.label": "调试模式",
   "debug.center.mode.desc": "启用后，应用会在启动时注入持久化调试环境变量（不覆盖终端显式设置）。",
   "debug.center.mode.note.restartRequired": "已保存。需要重启后生效。",
   "debug.center.mode.note.saving": "保存中...",
-
   "debug.center.vstBridge.title": "VST Bridge（Sidecar）",
   "debug.center.vstBridge.desc": "控制 VST3 sidecar 的日志、编辑器行为与崩溃转储。",
-
   "debug.center.vstBridge.stderr.label": "Sidecar stderr",
   "debug.center.vstBridge.stderr.desc": "让 sidecar 的 stderr 输出到当前终端（Windows 下会关闭“黑框”抑制）。",
   "debug.center.vstBridge.logEditor.label": "Editor 日志",
@@ -917,7 +883,6 @@
   "debug.center.vstBridge.minidump.desc": "开启 sidecar 崩溃 minidump（用于问题定位）。",
   "debug.center.vstBridge.minidumpDir.placeholder": "Minidump 输出目录（可选）",
   "debug.center.vstBridge.minidumpDir.pick": "选择目录",
-
   "debug.center.vstBridge.editorSafeMode.label": "Editor Safe Mode",
   "debug.center.vstBridge.editorSafeMode.desc": "控制编辑器窗口的兼容模式（auto 由兼容规则决定）。",
   "debug.center.vstBridge.editorSafeMode.badge.auto": "自动",
@@ -926,7 +891,6 @@
   "debug.center.vstBridge.editorSafeMode.option.auto": "自动",
   "debug.center.vstBridge.editorSafeMode.option.on": "开启",
   "debug.center.vstBridge.editorSafeMode.option.off": "关闭",
-
   "debug.center.vstBridge.sidechainMode.label": "Sidechain 模式",
   "debug.center.vstBridge.sidechainMode.desc": "覆盖侧链行为（auto 走应用设置/默认）。",
   "debug.center.vstBridge.sidechainMode.badge.auto": "自动",
@@ -937,15 +901,12 @@
   "debug.center.vstBridge.sidechainMode.option.disabled": "禁用",
   "debug.center.vstBridge.sidechainMode.option.silence": "静音",
   "debug.center.vstBridge.sidechainMode.option.self": "自回送",
-
   "debug.center.env.title": "环境变量快照",
   "debug.center.env.desc": "展示当前进程可见的关键环境变量（用于确认是否被终端显式覆盖）。",
   "debug.center.env.empty": "暂无快照（请点击“刷新环境快照”）。",
-
   "debug.center.windowComm.title": "跨窗口通信调试",
   "debug.center.windowComm.desc": "启用跨窗口通信的调试日志（控制台输出）。",
   "debug.center.windowComm.note": "该开关为前端持久化设置，实时生效，无需重启。",
-
   "debug.center.memory.title": "内存 / 缓存",
   "debug.center.memory.desc": "查看运行时缓存与 Editor 窗口快照，便于定位 WebView2 内存不回落问题。",
   "debug.center.memory.actions.destroyEditorWindows": "销毁编辑器窗口",
@@ -1006,7 +967,6 @@
   "debug.center.memory.confirm.destroyEditorWindows.message": "这会关闭所有 Editor 子窗口，强制对应的 WebView2 renderer 退出以回收内存。是否继续？",
   "debug.center.memory.confirm.clearCoverCaches.title": "确认清理封面缓存？",
   "debug.center.memory.confirm.clearCoverCaches.message": "这会 revoke 封面相关的 Blob URL（内存缓存）。图片可能会短暂重新加载。是否继续？",
-
   "debug.center.shortcuts.title": "快捷入口",
   "debug.center.shortcuts.desc": "跳转到各模块的调试页/工具窗口。",
   "debug.center.shortcuts.perfMonitor": "进程监控",
@@ -1014,11 +974,9 @@
   "debug.center.shortcuts.dspRack": "DSP Rack",
   "debug.center.shortcuts.vstManager": "VST3 插件管理器",
   "debug.center.shortcuts.themeDebug": "Theme Debug",
-
   "debug.center.restart.confirmTitle": "重启应用",
   "debug.center.restart.confirmMessage": "确定要重启应用吗？未保存的数据可能丢失。",
   "debug.center.restart.confirmMessageIntoDebug": "将启用调试模式并在重启后自动打开调试中心。确定继续吗？",
-
   "pages.native-debug.title": "原生引擎调试",
   "pages.native-debug.section.controls": "控制面板",
   "pages.native-debug.section.state": "实时状态",
@@ -1206,7 +1164,6 @@
   "pages.native-debug.log.queue.playIndex": "从队列播放索引 {index}",
   "pages.native-debug.log.queue.removeIndex": "从队列移除索引 {index}",
   "pages.native-debug.log.queue.cleared": "清空队列",
-
   "magnet.matrix-change.space.defaultName": "空间{order}",
   "magnet.matrix-change.space.cloneName": "{name} 副本",
   "magnet.matrix-change.tooltip": "空间切换：点击打开面板\n当前：{name} ({badge})",
@@ -1256,7 +1213,6 @@
   "magnet.matrix-change.dialog.clear.message": "清空空间 \"{name}\"？（仅保留必备磁贴：窗控 + switch + edit）",
   "magnet.matrix-change.dialog.reset.title": "重置空间",
   "magnet.matrix-change.dialog.reset.message": "重置空间 \"{name}\"？（将删除该空间保存的布局/配置并回到默认）",
-
   "pages.dsp-rack.title": "DSP 机架",
   "pages.dsp-rack.vst.params.toggle.show": "显示参数",
   "pages.dsp-rack.vst.params.toggle.hide": "隐藏参数",
@@ -1280,7 +1236,6 @@
   "pages.plugin-page.invalidParams": "插件页面：参数无效",
   "pages.plugin-visualizer.title": "插件可视化",
   "pages.plugin-visualizer.invalidParams": "插件可视化：参数无效",
-
   "windows.vst-manager.title": "VST3 插件管理器",
   "windows.vst-manager.requiresTauri": "VST3 插件管理器需要在 Tauri 桌面运行（`pnpm dev:tauri`）。",
   "windows.vst-manager.progress.running": "运行中",
@@ -1424,7 +1379,6 @@
   "windows.editor.custom-background.title": "自定义背景",
   "windows.editor.theme.title": "主题编辑器",
   "windows.editor.debug.title": "调试",
-
   "editor.control-panel.pin.title.pin": "窗口置顶",
   "editor.control-panel.pin.title.unpin": "取消置顶",
   "editor.control-panel.pixelHints.title.hide": "隐藏矩阵颜色提示",
@@ -1437,7 +1391,6 @@
   "editor.control-panel.toggle.background.label": "背景",
   "editor.control-panel.toggle.theme.label": "主题",
   "editor.control-panel.toggle.debug.label": "调试",
-
   "editor.theme-editor.title": "主题编辑器",
   "editor.theme-editor.subtitle": "主题配置与组件变体编辑",
   "editor.theme-editor.debug.toggle.open": "打开调试窗口",
@@ -1546,7 +1499,6 @@
   "editor.theme-editor.pmpk.recommended.bindings.noneApplicable": "没有可应用的绑定（缺失 magnet：{missing}）",
   "editor.theme-editor.pmpk.recommended.bindings.applied": "已应用绑定：{updated}（缺失 magnet：{missing}）",
   "editor.theme-editor.pmpk.recommended.bindings.applyFailed": "应用绑定失败：{message}",
-
   "editor.theme-editor.profilePack.section.title": "配置包（.pmpk）",
   "editor.theme-editor.profilePack.importFile": "导入配置包",
   "editor.theme-editor.profilePack.apply": "应用…",
@@ -1601,22 +1553,18 @@
   "editor.theme-editor.profilePack.export.themeInvalid": "主题 JSON 无效：{message}",
   "editor.theme-editor.profilePack.export.success": "配置包已导出：{name}",
   "editor.theme-editor.profilePack.export.failed": "导出失败：{message}",
-
   "editor.theme-debug.title": "主题系统调试",
   "editor.theme-debug.subtitle": "Theme & Shader 系统开发面板",
   "editor.theme-debug.alert.invalidThemeJson": "主题 JSON 解析失败，请检查格式",
   "editor.theme-debug.alert.themeFileLoaded": "已加载主题文件：{name}",
   "editor.theme-debug.alert.themeFileLoadFailed": "读取主题文件失败，请确认 JSON 格式",
-
   "editor.theme-debug.mode.title": "配置模式",
   "editor.theme-debug.mode.global": "全局主题",
   "editor.theme-debug.mode.component": "单独配置",
-
   "editor.theme-debug.global.title": "主题 JSON",
   "editor.theme-debug.global.importFile": "导入文件",
   "editor.theme-debug.global.copyJson": "复制 JSON",
   "editor.theme-debug.global.applyJson": "应用 JSON",
-
   "editor.theme-debug.component.selectTitle": "选择组件",
   "editor.theme-debug.component.configTitle": "组件配置",
   "editor.theme-debug.component.group.core": "核心组件",
@@ -1637,22 +1585,18 @@
   "editor.theme-debug.component.option.btn-back": "Back - 返回按钮",
   "editor.theme-debug.component.option.btn-window-pin": "WindowPin - 窗口置顶",
   "editor.theme-debug.component.option.btn-debug": "Debug - 调试按钮",
-
   "editor.theme-debug.actions.title": "操作",
   "editor.theme-debug.actions.filePicker.themeFiles": "主题文件",
   "editor.theme-debug.actions.importTheme": "📂 导入主题",
   "editor.theme-debug.actions.exportTheme": "📥 导出主题",
   "editor.theme-debug.actions.resetSelected": "🔄 重置",
-
   "editor.theme-debug.renderers.title": "Renderer 列表",
   "editor.theme-debug.renderers.defaultGroup": "通用",
   "editor.theme-debug.renderers.empty": "暂无注册 renderer",
-
   "editor.theme-debug.preview.title": "实时预览",
   "editor.theme-debug.preview.subtitle.theme": "主题: {name}",
   "editor.theme-debug.preview.subtitle.component": "组件: {id}",
   "editor.theme-debug.preview.currentConfig": "当前配置",
-
   "editor.theme-debug.variant.label": "变体选择",
   "editor.theme-debug.config.info.variantImplemented": "✅ 变体切换功能已实现",
   "editor.theme-debug.config.info.moreOptionsTodo": "🔧 更多配置选项开发中...",
@@ -1669,18 +1613,14 @@
   "editor.theme-debug.desc.volume.standard": "🎯 Standard: 简洁弹窗滑块",
   "editor.theme-debug.desc.volume.cyber": "🎯 Cyber: 能量条+赛博数字显示",
   "editor.theme-debug.config.placeholder": "选择 {id} 的配置选项（待实现）",
-
   "editor.theme-debug.materialMapping.title": "材质通道映射",
-
   "editor.magnet-creator.preview.title": "实时预览",
   "editor.magnet-creator.preview.hintHover": "💡 移动鼠标查看 hover 效果",
   "editor.magnet-creator.preview.hintActive": "点击查看 active 效果",
   "editor.magnet-creator.preview.scaled": "⚡ 预览已缩放至 {percent}%",
   "editor.magnet-creator.preview.empty": "填写必填字段后显示预览",
-
   "editor.magnet-creator.mode.edit": "编辑 Magnet",
   "editor.magnet-creator.mode.create": "创建 Magnet",
-
   "editor.magnet-creator.section.basic": "基础配置",
   "editor.magnet-creator.field.id": "ID",
   "editor.magnet-creator.field.name": "名称",
@@ -1696,7 +1636,6 @@
   "editor.magnet-creator.field.verticalPixels": "垂直 Pixel 数",
   "editor.magnet-creator.field.rectWidth": "矩形宽度（Pixel）",
   "editor.magnet-creator.field.rectHeight": "矩形高度（Pixel）",
-
   "editor.magnet-creator.validation.outOfBounds": "尺寸超出网格范围！",
   "editor.magnet-creator.validation.hintTitle": "提示：",
   "editor.magnet-creator.validation.anchorOutOfRangeX": "锚点 \"{id}\" 的 X 坐标超出范围 ({value})",
@@ -1704,11 +1643,9 @@
   "editor.magnet-creator.validation.conflict": "调整后会与 {magnets} 个 Magnet 冲突（{pixels} 个 pixel 重叠）",
   "editor.magnet-creator.validation.largeWidthWarning": "宽度较大，实际使用时可能需要调整位置",
   "editor.magnet-creator.validation.largeHeightWarning": "高度较大，实际使用时可能需要调整位置",
-
   "editor.magnet-creator.section.styleJson": "样式配置（JSON）",
   "editor.magnet-creator.styleJson.label": "Style JSON",
   "editor.magnet-creator.styleJson.commonStyles": "常用样式：width, height, backgroundColor, borderRadius, border, boxShadow, color, fontSize",
-
   "editor.magnet-creator.section.animationJson": "动画配置（JSON）",
   "editor.magnet-creator.animationJson.label": "Animation JSON",
   "editor.magnet-creator.animation.hint.title": "动画配置说明：",
@@ -1716,13 +1653,11 @@
   "editor.magnet-creator.animation.hint.hoverStyle": "鼠标悬停时的样式（可包含任何 CSS 属性）",
   "editor.magnet-creator.animation.hint.activeStyle": "点击/按下时的样式（可包含任何 CSS 属性）",
   "editor.magnet-creator.animation.hint.commonProps": "常用动画属性：transform (scale, translate), filter (brightness, blur), boxShadow, opacity",
-
   "editor.magnet-creator.action.restoreDefault": "还原默认",
   "editor.magnet-creator.action.history": "历史记录",
   "editor.magnet-creator.action.historyWithCount": "历史记录 ({count})",
   "editor.magnet-creator.action.importConfig": "导入配置",
   "editor.magnet-creator.action.exportConfig": "导出配置",
-
   "editor.magnet-creator.history.title": "历史记录",
   "editor.magnet-creator.history.empty": "暂无历史记录",
   "editor.magnet-creator.history.action.applyTitle": "应用此配置",
@@ -1731,7 +1666,6 @@
   "editor.magnet-creator.history.created": "创建",
   "editor.magnet-creator.history.editedSave": "编辑保存",
   "editor.magnet-creator.history.restoreDefault": "还原默认配置",
-
   "editor.magnet-creator.import.title": "导入 Magnet 配置",
   "editor.magnet-creator.import.dialogTitle": "选择 Magnet 配置文件",
   "editor.magnet-creator.import.action.chooseFile": "📁 选择文件",
@@ -1755,13 +1689,10 @@
   "editor.magnet-creator.import.hint.howToSee": "查看：",
   "editor.magnet-creator.import.hint.howToDoc": "文档：",
   "editor.magnet-creator.import.action.importAndEdit": "导入并编辑",
-
   "editor.magnet-creator.export.copySuccess": "配置已复制到剪贴板！",
   "editor.magnet-creator.export.copyFailed": "复制失败，请手动复制",
-
   "editor.background-manager.mode.maximized": "最大化背景",
   "editor.background-manager.mode.windowed": "窗口背景",
-
   "editor.background-manager.section.backgroundType": "背景类型",
   "editor.background-manager.section.opacity": "透明度",
   "editor.background-manager.section.blur": "模糊效果",
@@ -1774,20 +1705,16 @@
   "editor.background-manager.section.saveConfig": "保存配置",
   "editor.background-manager.section.history": "历史记录",
   "editor.background-manager.section.maintenance": "存储维护",
-
   "editor.background-manager.type.color": "纯色",
   "editor.background-manager.type.gradient": "渐变",
   "editor.background-manager.type.custom": "自定义",
-
   "editor.background-manager.action.openCustomEditor": "打开自定义窗口",
   "editor.background-manager.action.saveCurrent": "保存当前背景",
-
   "editor.background-manager.gradient.type.linear": "线性",
   "editor.background-manager.gradient.type.radial": "径向",
   "editor.background-manager.gradient.colorSwatch": "色块 {index}",
   "editor.background-manager.gradient.removeColorTitle": "删除颜色",
   "editor.background-manager.gradient.addColor": "+ 添加颜色",
-
   "editor.background-manager.history.restoreTitle": "点击恢复此配置",
   "editor.background-manager.history.type.color": "纯色",
   "editor.background-manager.history.type.gradientLinear": "线性渐变",
@@ -1796,10 +1723,8 @@
   "editor.background-manager.history.type.video": "视频",
   "editor.background-manager.history.type.html": "HTML",
   "editor.background-manager.history.type.unknown": "未知",
-
   "editor.background-manager.error.historyPersistFailed": "历史记录保存失败（可能是存储空间不足）。当前会话可用，但重启后可能丢失。",
   "editor.background-manager.error.openCustomEditorFailed": "打开自定义背景窗口失败：{message}",
-
   "editor.background-manager.maintenance.migrateLegacyTitle": "迁移旧版 base64 背景数据",
   "editor.background-manager.maintenance.noLegacyDataTitle": "未检测到旧版数据",
   "editor.background-manager.maintenance.migrateLegacy": "迁移旧数据",
@@ -1812,7 +1737,6 @@
   "editor.background-manager.maintenance.gcRunning": "正在清理未使用的背景文件…",
   "editor.background-manager.maintenance.gcDone": "清理完成：扫描 {scanned} 个文件，删除 {removed} 个未使用文件",
   "editor.background-manager.maintenance.gcFailed": "清理失败：请重试",
-
   "editor.background-manager.confirm.cancelButton": "[取消] CANCEL",
   "editor.background-manager.confirm.deleteHistory.title": "删除历史记录",
   "editor.background-manager.confirm.deleteHistory.message": "确定要删除这条历史记录吗？（文件会在下次启动时自动清理，或手动点“清理未使用文件”。）",
@@ -1826,23 +1750,19 @@
   "editor.background-manager.confirm.migrateLegacy.title": "迁移旧数据",
   "editor.background-manager.confirm.migrateLegacy.message": "将把旧版 data:base64 背景数据迁移为本地文件存储，并自动清理无法迁移的旧记录，确定继续吗？",
   "editor.background-manager.confirm.migrateLegacy.confirmText": "[迁移] MIGRATE",
-
   "editor.custom-background-editor.section.preview": "效果预览",
   "editor.custom-background-editor.preview.selectionHint": "框选容器内任意区域（包含背景） → 点击\"确认\"将该区域填满容器",
   "editor.custom-background-editor.preview.selectionConfirmed": "✓ 已确认（选取的容器区域已放大填满）",
   "editor.custom-background-editor.preview.selectionHint2": "选取框基于容器坐标，可框选包含背景的任意区域并放大填满",
   "editor.custom-background-editor.preview.placeholder.title": "预览区域",
   "editor.custom-background-editor.preview.placeholder.hint": "请选择或输入内容",
-
   "editor.custom-background-editor.selection.confirm": "确认",
   "editor.custom-background-editor.selection.confirmed": "✓ 已确认",
-
   "editor.custom-background-editor.section.displayMode": "显示模式",
   "editor.custom-background-editor.displayMode.containHint": "（完整显示，保持比例）",
   "editor.custom-background-editor.displayMode.coverHint": "（填满区域，可能裁边）",
   "editor.custom-background-editor.displayMode.fillHint": "（强制填满，变形拉伸）",
   "editor.custom-background-editor.displayMode.cropHint": "（手动选取显示区域）",
-
   "editor.custom-background-editor.fit.option.contain": "完整",
   "editor.custom-background-editor.fit.option.cover": "填充",
   "editor.custom-background-editor.fit.option.fill": "拉伸",
@@ -1854,37 +1774,28 @@
   "editor.custom-background-editor.fit.title.video.contain": "包含 - 完整显示视频（推荐）",
   "editor.custom-background-editor.fit.title.video.cover": "覆盖 - 填充区域，可能裁剪边缘",
   "editor.custom-background-editor.fit.title.video.crop": "选取 - 选择视频特定区域作为背景",
-
   "editor.custom-background-editor.section.type": "类型选择",
   "editor.custom-background-editor.type.image": "图片",
   "editor.custom-background-editor.type.video": "视频",
   "editor.custom-background-editor.type.html": "HTML",
-
   "editor.custom-background-editor.section.imageConfig": "图片配置",
   "editor.custom-background-editor.action.selectImageFile": "选择图片文件",
   "editor.custom-background-editor.fileSizeLimit.image": "（限制 5MB）",
   "editor.custom-background-editor.placeholder.imageUrl": "或输入图片 URL",
-
   "editor.custom-background-editor.section.videoConfig": "视频配置",
   "editor.custom-background-editor.action.selectVideoFile": "选择视频文件",
   "editor.custom-background-editor.fileSizeLimit.video": "（限制 20MB）",
   "editor.custom-background-editor.placeholder.videoUrl": "或输入视频 URL",
-
   "editor.custom-background-editor.section.htmlContent": "HTML 内容",
   "editor.custom-background-editor.placeholder.html": "输入自定义 HTML 代码...",
   "editor.custom-background-editor.htmlHint": "提示：支持完整的 HTML/CSS/JavaScript 代码",
-
   "editor.custom-background-editor.action.saveAndApply": "保存并应用",
-
   "editor.custom-background-editor.fileFilter.image": "图片文件",
   "editor.custom-background-editor.fileFilter.video": "视频文件",
-
   "editor.custom-background-editor.error.fileImportFailed": "文件导入失败\n\n[错误详情]\n{details}\n\n[建议操作]\n> 确认文件格式与大小限制（图片≤5MB，视频≤20MB）\n> 尝试复制文件到本地磁盘后重试",
   "editor.custom-background-editor.error.fileSelectFailed": "文件选择失败\n\n[错误详情]\n{details}",
-
   "editor.custom-background-editor.errorModal.title": "系统错误",
   "editor.custom-background-editor.errorModal.confirmButton": "[确认] CONFIRM",
-
   "editor.magnet-library.view.active": "✓ 已使用 ({count})",
   "editor.magnet-library.view.inactive": "○ 未使用 ({count})",
   "editor.magnet-library.filter.all": "全部 ({count})",
@@ -1894,7 +1805,6 @@
   "editor.magnet-library.search.placeholder": "搜索 id / 名称 / 描述 / tag",
   "editor.magnet-library.search.clearTitle": "清空搜索",
   "editor.magnet-library.search.countTitle": "搜索结果数量",
-
   "editor.magnet-library.import.label": "粘贴 Magnet JSON 数据：",
   "editor.magnet-library.import.placeholder": "{\n  \"id\": \"my-button\",\n  \"content\": \"按钮\",\n  \"anchorType\": \"single\",\n  \"anchors\": [{ \"id\": \"anchor\", \"gridX\": 10, \"gridY\": 10, \"role\": \"anchor\" }],\n  \"style\": {\n    \"width\": \"80px\",\n    \"height\": \"32px\",\n    \"backgroundColor\": \"rgba(0, 122, 255, 0.8)\",\n    ...\n  }\n}",
   "editor.magnet-library.import.action.importToLibrary": "导入到库",
@@ -1905,7 +1815,6 @@
   "editor.magnet-library.import.error.failed": "导入失败",
   "editor.magnet-library.import.success": "成功导入 Magnet: {id}",
   "editor.magnet-library.import.successWithWarnings": "成功导入 Magnet: {id}\n\n提示：\n{warnings}",
-
   "editor.magnet-library.plugins.title": ".pmpm 插件",
   "editor.magnet-library.plugins.fileFilter.pmpm": ".pmpm 插件",
   "editor.magnet-library.plugins.action.import": "导入 .pmpm",
@@ -1929,11 +1838,9 @@
   "editor.magnet-library.plugins.uninstall.mustDeactivate": "请先停用 Magnet \"{id}\"，再卸载插件。",
   "editor.magnet-library.plugins.uninstall.confirmTitle": "确认卸载插件",
   "editor.magnet-library.plugins.uninstall.confirmMessage": "确认卸载插件 \"{id}\"？",
-
   "editor.magnet-library.empty.active": "没有已使用的 Magnet",
   "editor.magnet-library.empty.inactive": "没有未使用的 Magnet",
   "editor.magnet-library.empty.hint": "尝试切换到“全部”查看",
-
   "editor.magnet-library.magnet.pixels": "{count} 像素",
   "editor.magnet-library.badge.required": "必备",
   "editor.magnet-library.badge.builtin": "内置",
@@ -1954,12 +1861,10 @@
   "editor.magnet-library.placement.noSpace.title": "无法放置",
   "editor.magnet-library.placement.noSpace.message": "当前空间没有足够的空位来放置 “{name}”。",
   "editor.magnet-library.action.createOrImport": "✨ 创建/导入",
-
   "editor.style-editor.section.pixelShape.title": "Pixel 形状",
   "editor.style-editor.section.pixelShape.desc": "自定义 Pixel 点阵的形状样式",
   "editor.style-editor.pixelSize.label": "Pixel 尺寸",
   "editor.style-editor.pixelOpacity.label": "Pixel 透明度",
-
   "editor.style-editor.pixelShape.circle.name": "圆形（默认）",
   "editor.style-editor.pixelShape.circle.desc": "经典的圆形像素点",
   "editor.style-editor.pixelShape.square.name": "方形",
@@ -1970,7 +1875,6 @@
   "editor.style-editor.pixelShape.diamond.desc": "旋转45度的菱形",
   "editor.style-editor.pixelShape.hexagon.name": "六边形",
   "editor.style-editor.pixelShape.hexagon.desc": "蜂窝状的六边形",
-
   "editor.style-editor.section.coverColor.title": "封面取色",
   "editor.style-editor.section.coverColor.desc": "TrackInfo / ProgressBar 跟随歌曲封面取色",
   "editor.style-editor.coverColor.enable": "启用封面取色",
@@ -1982,7 +1886,6 @@
   "editor.style-editor.coverColor.effect.dynamic.desc": "渐变/光效随时间动态变化",
   "editor.style-editor.coverColor.gradientAngle.label": "渐变角度",
   "editor.style-editor.coverColor.dynamicSpeed.label": "动态速度",
-
   "editor.style-editor.section.backgroundEffect.title": "背景效果",
   "editor.style-editor.section.backgroundEffect.desc": "为主窗口添加全屏背景效果",
   "editor.style-editor.backgroundEffect.glow-pulse.name": "光晕脉冲",
@@ -1995,7 +1898,6 @@
   "editor.style-editor.backgroundEffect.particles.desc": "密集浮动光点",
   "editor.style-editor.backgroundEffect.none.name": "无效果",
   "editor.style-editor.backgroundEffect.none.desc": "关闭背景效果",
-
   "editor.style-editor.colorTheme.cyan": "青色",
   "editor.style-editor.colorTheme.red": "红色",
   "editor.style-editor.colorTheme.blue": "蓝色",
@@ -2004,7 +1906,6 @@
   "editor.style-editor.colorTheme.rainbow": "彩虹",
   "editor.style-editor.colorTheme.custom": "自定义",
   "editor.style-editor.colorTheme.customColorTitle": "自定义颜色",
-
   "editor.style-editor.section.borderEffect.title": "边框效果",
   "editor.style-editor.section.borderEffect.desc": "为窗口边框添加动态效果",
   "editor.style-editor.borderEffect.standard.name": "标准",
@@ -2015,7 +1916,6 @@
   "editor.style-editor.borderEffect.glitch.desc": "赛博朋克闪烁",
   "editor.style-editor.borderEffect.none.name": "无效果",
   "editor.style-editor.borderEffect.none.desc": "关闭边框效果",
-
   "editor.style-editor.section.ornaments.title": "挂件",
   "editor.style-editor.section.ornaments.desc": "将图片/GIF 作为挂件附着在主界面边缘，可调整位置、尺寸与层级。",
   "editor.style-editor.ornaments.openEditor": "挂件编辑",
@@ -2062,10 +1962,8 @@
   "editor.style-bar.ornaments.title": "进入挂件拖拽编辑",
   "editor.style-editor.ornaments.error.fileSelectFailed": "文件选择失败：{details}",
   "editor.style-editor.ornaments.error.fileImportFailed": "文件导入失败：{details}",
-
   "editor.help.section.features.title": "🎯 编辑器功能",
   "editor.help.section.features.desc": "Magnet 编辑器允许你自定义界面布局，添加、移动和删除 UI 元素（Magnet）。",
-
   "editor.help.section.basic.title": "🖱️ 基本操作",
   "editor.help.basic.selectPixel.title": "选择 Pixel",
   "editor.help.basic.selectPixel.desc": "在空白区域拖动鼠标可选择 Pixel 区域",
@@ -2075,7 +1973,6 @@
   "editor.help.basic.deleteMagnet.desc": "在 Magnet 库面板中点击删除按钮（编辑器按钮除外）",
   "editor.help.basic.importMagnet.title": "导入 Magnet",
   "editor.help.basic.importMagnet.desc": "在 Magnet 库面板点击“导入”，粘贴 JSON 数据",
-
   "editor.help.section.pixelColors.title": "🎨 Pixel 颜色说明",
   "editor.help.pixelColors.green.title": "绿色",
   "editor.help.pixelColors.green.desc": "空闲 Pixel，可以放置新 Magnet",
@@ -2085,18 +1982,15 @@
   "editor.help.pixelColors.blue.desc": "已选中的 Pixel",
   "editor.help.pixelColors.hover.title": "黄色边框",
   "editor.help.pixelColors.hover.desc": "鼠标悬停的 Pixel",
-
   "editor.help.section.dragFeedback.title": "🔵 拖动反馈",
   "editor.help.dragFeedback.ok.title": "蓝色虚线边框",
   "editor.help.dragFeedback.ok.desc": "可以放置到此位置（无冲突）",
   "editor.help.dragFeedback.collision.title": "红色虚线边框",
   "editor.help.dragFeedback.collision.desc": "不能放置（与其他 Magnet 重叠）",
-
   "editor.help.section.magnetTypes.title": "⚙️ Magnet 类型",
   "editor.help.magnetTypes.single.desc": "单锚点 Magnet，固定尺寸，适合按钮等元素",
   "editor.help.magnetTypes.horizontal.desc": "水平锚点 Magnet，宽度自适应，适合进度条等元素",
   "editor.help.magnetTypes.rectangular.desc": "矩形锚点 Magnet，宽高都自适应，适合面板等元素",
-
   "editor.help.section.limits.title": "⚠️ 限制说明",
   "editor.help.limits.editorButtons.title": "编辑器按钮",
   "editor.help.limits.editorButtons.desc": "可以移动，但不能删除（保护编辑功能）",
@@ -2104,45 +1998,35 @@
   "editor.help.limits.collision.desc": "不能将 Magnet 放置到已被占用的位置",
   "editor.help.limits.bounds.title": "边界限制",
   "editor.help.limits.bounds.desc": "Magnet 会自动限制在有效的 Pixel 范围内",
-
   "editor.help.section.tips.title": "💡 使用技巧",
   "editor.help.tips.stats": "使用统计面板查看 Pixel 占用情况，合理规划布局",
   "editor.help.tips.preview": "拖动 Magnet 时会显示实时预览，帮助精确定位",
   "editor.help.tips.exportTemplate": "在 Magnet 库中可以导出现有 Magnet 作为模板",
   "editor.help.tips.occupancy": "建议保持占用率在 80% 以下，留出调整空间",
   "editor.help.tips.builtinDelete": "内置 Magnet 可以移动，但删除前请确认不影响功能",
-
   "editor.help.section.shortcuts.title": "🔗 快捷键",
   "editor.help.shortcuts.mouseDrag.key": "鼠标拖动",
   "editor.help.shortcuts.mouseDrag.desc": "移动 Magnet 或选择 Pixel",
   "editor.help.shortcuts.esc.desc": "取消当前操作",
-
   "editor.help.footer.moreDocs": "更多信息请查看项目文档 📚",
-
   "settings.workbench.workbench.label": "主界面（Workbench）",
   "settings.workbench.workbench.desc": "选择主窗口使用的工作台界面。切换会立即生效，可随时切回。",
   "settings.workbench.workbench.empty": "未注册任何 Workbench。",
-
   "settings.workbench.layout.label": "Workbench 布局（Layout）",
   "settings.workbench.layout.desc": "决定“导航”和“内容”如何排列/叠放（主要用于组合式 Workbench）。",
   "settings.workbench.layout.empty": "未注册任何布局。",
-
   "settings.workbench.navigation.label": "Workbench 导航",
   "settings.workbench.navigation.desc": "选择导航区实现（主要用于组合式 Workbench）。",
   "settings.workbench.navigation.empty": "未注册任何导航。",
-
   "settings.workbench.content.label": "Workbench 内容",
   "settings.workbench.content.desc": "选择主内容区实现（主要用于组合式 Workbench）。",
   "settings.workbench.content.empty": "未注册任何页面容器。",
-
   "workbench.host.noWorkbench.title": "未注册任何 Workbench",
   "workbench.host.noWorkbench.note": "请确认内置模块已注册 workbench contribution。",
-
   "workbench.composed.noLayout.title": "未注册任何 Workbench 布局",
   "workbench.composed.noLayout.note": "请确认内置模块已注册 workbench-layout contribution。",
   "workbench.composed.noPageContainer.title": "未注册任何 Workbench 页面容器",
   "workbench.composed.noPageContainer.note": "请确认内置模块已注册 workbench-page-container contribution。",
-
   "workbench.layouts.matrix1.title": "矩阵叠层布局（默认）",
   "workbench.layouts.matrix1.description": "内容全屏；导航悬浮覆盖在内容上（适合矩阵）。",
   "workbench.layouts.matrix2.title": "矩阵叠层布局 2（实验）",
@@ -2151,21 +2035,85 @@
   "workbench.layouts.stack.description": "内容全屏；导航悬浮覆盖在内容上。",
   "workbench.layouts.splitLeft.title": "左侧分栏布局（导航在左）",
   "workbench.layouts.splitLeft.description": "左侧固定导航栏；右侧显示内容。",
-
   "workbench.navigations.none.title": "无导航",
   "workbench.navigations.none.description": "不显示导航区。",
   "workbench.navigations.pagesList.title": "页面列表导航",
   "workbench.navigations.pagesList.description": "显示页面列表，用于快速切换页面。",
-
   "workbench.pageContainers.matrix.title": "矩阵（含编辑器）",
   "workbench.pageContainers.matrix.description": "像素矩阵主界面（包含编辑器遮罩与编辑器面板）。",
   "workbench.pageContainers.matrixMinimal.title": "矩阵（极简）",
   "workbench.pageContainers.matrixMinimal.description": "像素矩阵主界面（隐藏编辑器遮罩/面板）。",
   "workbench.pageContainers.navigationPage.title": "导航页（Navigation Page）",
   "workbench.pageContainers.navigationPage.description": "仅显示 Navigation Page（以磁贴形式呈现）。",
-
   "workbench.workbenches.default.title": "默认工作台（组合式）",
   "workbench.workbenches.default.description": "由「布局 / 导航 / 内容」三项组合生成主界面；推荐日常使用。",
   "workbench.workbenches.minimal.title": "极简工作台",
-  "workbench.workbenches.minimal.description": "直接显示矩阵（隐藏编辑器面板/遮罩）；不使用下方组合设置。"
+  "workbench.workbenches.minimal.description": "直接显示矩阵（隐藏编辑器面板/遮罩）；不使用下方组合设置。",
+  "pages.music-library.stable.action.editMetadata": "编辑元数据",
+  "pages.music-library.stable.header.playCount": "播放次数",
+  "pages.music-library.stable.header.lastPlayed": "上次播放",
+  "pages.music-library.stable.metadata.title": "稳定库条目元数据",
+  "pages.music-library.stable.metadata.rating": "评分 (0-100)",
+  "pages.music-library.stable.metadata.tags": "标签",
+  "pages.music-library.stable.metadata.tagsHint": "使用逗号或换行分隔",
+  "pages.music-library.stable.metadata.save": "保存元数据",
+  "pages.music-library.stable.metadata.saveFailed": "保存稳定库条目元数据失败",
+  "pages.music-library.stable.filters.ownerUidLabel": "所有者",
+  "pages.music-library.stable.filters.ownerUidPlaceholder": "按所有者 UID 筛选",
+  "pages.music-library.stable.filters.inCloudOnly": "仅云端关联",
+  "pages.music-library.stable.filters.includeMissing": "包含缺失",
+  "pages.music-library.stable.filters.apply": "应用筛选",
+  "pages.music-library.stable.filters.reset": "重置筛选",
+  "pages.music-library.stable.queue.button": "队列 / 审计",
+  "pages.music-library.stable.queue.title": "稳定库队列与审计",
+  "pages.music-library.stable.queue.loading": "正在加载队列数据...",
+  "pages.music-library.stable.queue.empty": "暂无记录",
+  "pages.music-library.stable.queue.loadFailed": "加载稳定库队列数据失败",
+  "pages.music-library.stable.queue.updateStatusFailed": "更新状态失败",
+  "pages.music-library.stable.queue.fallbackTasks.title": "回退任务",
+  "pages.music-library.stable.queue.hashJobs.title": "云端哈希任务",
+  "pages.music-library.stable.queue.header.entryId": "条目",
+  "pages.music-library.stable.queue.header.status": "状态",
+  "pages.music-library.stable.queue.header.attempts": "尝试次数",
+  "pages.music-library.stable.queue.header.updatedAt": "更新时间",
+  "pages.music-library.stable.queue.header.error": "错误",
+  "pages.music-library.stable.queue.audit.title": "回退分发审计",
+  "pages.music-library.stable.queue.audit.total": "总计 {count}",
+  "pages.music-library.stable.queue.audit.accepted": "接收 {count}",
+  "pages.music-library.stable.queue.audit.deduped": "去重 {count}",
+  "pages.music-library.stable.queue.audit.rejected": "拒绝 {count}",
+  "pages.music-library.stable.queue.audit.time": "时间",
+  "pages.music-library.stable.queue.audit.queueSize": "队列",
+  "pages.music-library.stable.queue.status.queued": "已排队",
+  "pages.music-library.stable.queue.status.dispatching": "分发中",
+  "pages.music-library.stable.queue.status.resolved": "已处理",
+  "pages.music-library.stable.queue.status.failed": "失败",
+  "pages.music-library.stable.queue.status.cancelled": "已取消",
+  "pages.music-library.stable.queue.status.pending": "待处理",
+  "pages.music-library.stable.queue.status.running": "运行中",
+  "pages.music-library.stable.queue.status.completed": "已完成",
+  "pages.music-library.stable.queue.status.deduped": "已去重",
+  "pages.music-library.stable.queue.status.rejected": "已拒绝",
+  "pages.music-library.columns.button": "列设置",
+  "pages.music-library.columns.modal.title": "曲目列设置",
+  "pages.music-library.columns.modal.description": "选择要显示的元数据列，并调整显示顺序。",
+  "pages.music-library.columns.modal.reset": "恢复默认",
+  "pages.music-library.columns.atLeastOneVisible": "至少保留一列可见",
+  "pages.music-library.columns.action.moveUp": "上移",
+  "pages.music-library.columns.action.moveDown": "下移",
+  "pages.music-library.columns.year": "年份",
+  "pages.music-library.columns.genre": "流派",
+  "pages.music-library.columns.trackNumber": "曲号",
+  "pages.music-library.columns.discNumber": "碟号",
+  "pages.music-library.columns.composer": "作曲",
+  "pages.music-library.columns.bitrate": "比特率",
+  "pages.music-library.columns.sampleRate": "采样率",
+  "pages.music-library.columns.format": "格式",
+  "pages.music-library.columns.playCount": "播放次数",
+  "pages.music-library.columns.lastPlayed": "上次播放",
+  "pages.music-library.columns.rating": "评分",
+  "pages.music-library.columns.fileSize": "文件大小",
+  "pages.music-library.columns.dateAdded": "添加日期",
+  "pages.music-library.columns.action.dragToReorder": "拖拽调整列顺序",
+  "pages.music-library.columns.action.dragToResize": "拖拽调整列宽"
 }

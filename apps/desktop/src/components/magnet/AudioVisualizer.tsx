@@ -21,6 +21,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>();
+  const animationGenerationRef = useRef(0);
   const isPlayingRef = useRef(isPlaying);
   const animatingRef = useRef(false);
   const tickRef = useRef<((now: number) => void) | null>(null);
@@ -42,6 +43,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const animationGeneration = animationGenerationRef.current + 1;
+    animationGenerationRef.current = animationGeneration;
 
     let cssWidth = 0;
     let cssHeight = 0;
@@ -224,6 +228,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
         : Math.min(baseFps, quality.fpsForeground > 0 ? quality.fpsForeground : baseFps);
 
     const tick = (now: number) => {
+      if (animationGenerationRef.current !== animationGeneration) {
+        return;
+      }
+
       if (renderMode === 'pause') {
         ctx.clearRect(0, 0, cssWidth, cssHeight);
         return;
@@ -271,6 +279,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
     rafRef.current = requestAnimationFrame(tick);
 
     return () => {
+      if (animationGenerationRef.current === animationGeneration) {
+        animationGenerationRef.current = animationGeneration + 1;
+      }
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       animatingRef.current = false;
       resizeObserver?.disconnect();

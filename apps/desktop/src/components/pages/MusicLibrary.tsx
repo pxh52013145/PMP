@@ -10,16 +10,20 @@ import {
   LibraryPathHealth,
   AlbumSummary,
   CoverRuntimeCachePolicy,
+  CloudFallbackTaskStatus,
+  CloudHashJobStatus,
 } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAudioService } from '../../contexts/AudioEngineContext';
+import { readJson, writeJson } from '../../modules/storage';
 import {
   MUSIC_LIBRARY_SOURCE_CHANGE_EVENT,
   type MusicLibrarySourceChangeDetail,
   type MusicLibrarySourceMode,
 } from '../../contracts/musicLibrarySource';
+import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import './MusicLibrary.css';
@@ -60,6 +64,462 @@ let moduleLastViewMode: ViewMode | null = null;
 type SidebarViewMode = Extract<ViewMode, 'artists' | 'genres'>;
 
 type StableLibraryEntry = Awaited<ReturnType<typeof musicLibraryService.listCloudLibraryEntries>>[number];
+type StableFallbackTask = Awaited<ReturnType<typeof musicLibraryService.listCloudFallbackTasks>>[number];
+type StableHashJob = Awaited<ReturnType<typeof musicLibraryService.listCloudHashJobs>>[number];
+
+type LocalTrackColumnId =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'duration'
+  | 'year'
+  | 'genre'
+  | 'trackNumber'
+  | 'discNumber'
+  | 'composer'
+  | 'bitrate'
+  | 'sampleRate'
+  | 'format'
+  | 'playCount'
+  | 'lastPlayed'
+  | 'rating'
+  | 'fileSize'
+  | 'dateAdded';
+
+type LocalTrackColumnConfig = {
+  id: LocalTrackColumnId;
+  visible: boolean;
+  widthPx?: number;
+};
+
+type LocalTrackColumnDefinition = {
+  headerKey: string;
+  defaultWidthPx: number;
+  minWidthPx: number;
+  maxWidthPx?: number;
+  className: string;
+};
+
+type LocalTrackColumnResizeSession = {
+  pointerId: number;
+  columnId: LocalTrackColumnId;
+  startClientX: number;
+  startWidthPx: number;
+};
+
+type LocalTrackColumnReorderSession = {
+  pointerId: number;
+  columnId: LocalTrackColumnId;
+  startClientX: number;
+  startClientY: number;
+  dragging: boolean;
+};
+
+type StableFallbackAuditEntry = {
+  atMs: number;
+  request: {
+    entryId: string;
+    ownerUid: string;
+    cloudContentId?: string;
+    trackId?: string;
+    quickFingerprint?: string;
+    requestedAtMs: number;
+    reason?: string;
+  };
+  dispatch: {
+    accepted: boolean;
+    deduped: boolean;
+    queueSize: number;
+  };
+};
+
+type StableFallbackAuditSnapshot = {
+  stats: {
+    totalEvents: number;
+    acceptedEvents: number;
+    dedupedEvents: number;
+    rejectedEvents: number;
+    lastQueuedAtMs?: number;
+  };
+  recent: StableFallbackAuditEntry[];
+};
+
+const LOCAL_TRACK_COLUMN_ORDER: LocalTrackColumnId[] = [
+  'title',
+  'artist',
+  'album',
+  'duration',
+  'year',
+  'genre',
+  'trackNumber',
+  'discNumber',
+  'composer',
+  'bitrate',
+  'sampleRate',
+  'format',
+  'playCount',
+  'lastPlayed',
+  'rating',
+  'fileSize',
+  'dateAdded',
+];
+
+const DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS = new Set<LocalTrackColumnId>([
+  'title',
+  'artist',
+  'album',
+  'duration',
+]);
+
+const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTrackColumnDefinition> = {
+  title: {
+    headerKey: 'pages.music-library.tracks.header.title',
+    defaultWidthPx: 280,
+    minWidthPx: 160,
+    maxWidthPx: 640,
+    className: 'music-library-track-title',
+  },
+  artist: {
+    headerKey: 'pages.music-library.tracks.header.artist',
+    defaultWidthPx: 220,
+    minWidthPx: 120,
+    maxWidthPx: 520,
+    className: 'music-library-track-artist',
+  },
+  album: {
+    headerKey: 'pages.music-library.tracks.header.album',
+    defaultWidthPx: 220,
+    minWidthPx: 120,
+    maxWidthPx: 520,
+    className: 'music-library-track-album',
+  },
+  duration: {
+    headerKey: 'pages.music-library.tracks.header.duration',
+    defaultWidthPx: 84,
+    minWidthPx: 72,
+    maxWidthPx: 140,
+    className: 'music-library-track-duration',
+  },
+  year: {
+    headerKey: 'pages.music-library.columns.year',
+    defaultWidthPx: 80,
+    minWidthPx: 60,
+    maxWidthPx: 120,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  genre: {
+    headerKey: 'pages.music-library.columns.genre',
+    defaultWidthPx: 160,
+    minWidthPx: 100,
+    maxWidthPx: 360,
+    className: 'music-library-track-meta',
+  },
+  trackNumber: {
+    headerKey: 'pages.music-library.columns.trackNumber',
+    defaultWidthPx: 84,
+    minWidthPx: 68,
+    maxWidthPx: 120,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  discNumber: {
+    headerKey: 'pages.music-library.columns.discNumber',
+    defaultWidthPx: 84,
+    minWidthPx: 68,
+    maxWidthPx: 120,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  composer: {
+    headerKey: 'pages.music-library.columns.composer',
+    defaultWidthPx: 180,
+    minWidthPx: 120,
+    maxWidthPx: 420,
+    className: 'music-library-track-meta',
+  },
+  bitrate: {
+    headerKey: 'pages.music-library.columns.bitrate',
+    defaultWidthPx: 110,
+    minWidthPx: 88,
+    maxWidthPx: 160,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  sampleRate: {
+    headerKey: 'pages.music-library.columns.sampleRate',
+    defaultWidthPx: 126,
+    minWidthPx: 96,
+    maxWidthPx: 180,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  format: {
+    headerKey: 'pages.music-library.columns.format',
+    defaultWidthPx: 100,
+    minWidthPx: 82,
+    maxWidthPx: 160,
+    className: 'music-library-track-meta music-library-track-meta-code',
+  },
+  playCount: {
+    headerKey: 'pages.music-library.columns.playCount',
+    defaultWidthPx: 100,
+    minWidthPx: 76,
+    maxWidthPx: 140,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  lastPlayed: {
+    headerKey: 'pages.music-library.columns.lastPlayed',
+    defaultWidthPx: 180,
+    minWidthPx: 130,
+    maxWidthPx: 360,
+    className: 'music-library-track-meta',
+  },
+  rating: {
+    headerKey: 'pages.music-library.columns.rating',
+    defaultWidthPx: 84,
+    minWidthPx: 64,
+    maxWidthPx: 120,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  fileSize: {
+    headerKey: 'pages.music-library.columns.fileSize',
+    defaultWidthPx: 120,
+    minWidthPx: 96,
+    maxWidthPx: 180,
+    className: 'music-library-track-meta music-library-track-meta-number',
+  },
+  dateAdded: {
+    headerKey: 'pages.music-library.columns.dateAdded',
+    defaultWidthPx: 180,
+    minWidthPx: 130,
+    maxWidthPx: 360,
+    className: 'music-library-track-meta',
+  },
+};
+
+const LOCAL_TRACK_INDEX_COLUMN_WIDTH_PX = 40;
+const LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX = 72;
+const LOCAL_TRACK_GRID_GAP_PX = 10;
+const LOCAL_TRACK_TITLE_MAX_VIEWPORT_RATIO = 0.5;
+
+const DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS: LocalTrackColumnConfig[] = LOCAL_TRACK_COLUMN_ORDER.map((id) => ({
+  id,
+  visible: DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS.has(id),
+  widthPx: LOCAL_TRACK_COLUMN_DEFINITIONS[id].defaultWidthPx,
+}));
+
+const STABLE_FALLBACK_STATUS_OPTIONS: CloudFallbackTaskStatus[] = [
+  'queued',
+  'dispatching',
+  'resolved',
+  'failed',
+  'cancelled',
+];
+
+const STABLE_HASH_STATUS_OPTIONS: CloudHashJobStatus[] = ['pending', 'running', 'completed', 'failed'];
+
+const STABLE_FALLBACK_AUDIT_MAX = 120;
+
+function isLocalTrackColumnId(value: unknown): value is LocalTrackColumnId {
+  return typeof value === 'string' && LOCAL_TRACK_COLUMN_ORDER.includes(value as LocalTrackColumnId);
+}
+
+function normalizeLocalTrackColumnWidth(columnId: LocalTrackColumnId, widthPx: unknown): number {
+  const definition = LOCAL_TRACK_COLUMN_DEFINITIONS[columnId];
+  const fallback = definition.defaultWidthPx;
+  if (typeof widthPx !== 'number' || !Number.isFinite(widthPx)) {
+    return fallback;
+  }
+
+  const rounded = Math.round(widthPx);
+  const min = definition.minWidthPx;
+  const max = definition.maxWidthPx;
+
+  if (typeof max === 'number') {
+    return Math.min(max, Math.max(min, rounded));
+  }
+  return Math.max(min, rounded);
+}
+
+function normalizeLocalTrackColumnSettings(input: unknown): LocalTrackColumnConfig[] {
+  const orderedIds: LocalTrackColumnId[] = [];
+  const visibilityMap = new Map<LocalTrackColumnId, boolean>();
+  const widthMap = new Map<LocalTrackColumnId, number>();
+  let hasExplicitVisibility = false;
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (isLocalTrackColumnId(item)) {
+        if (!orderedIds.includes(item)) orderedIds.push(item);
+        visibilityMap.set(item, true);
+        continue;
+      }
+
+      if (!item || typeof item !== 'object') continue;
+      const rawId = (item as { id?: unknown }).id;
+      if (!isLocalTrackColumnId(rawId)) continue;
+      if (!orderedIds.includes(rawId)) orderedIds.push(rawId);
+      const rawVisible = (item as { visible?: unknown }).visible;
+      const visible = typeof rawVisible === 'boolean' ? rawVisible : true;
+      const rawWidthPx = (item as { widthPx?: unknown }).widthPx;
+      visibilityMap.set(rawId, visible);
+      widthMap.set(rawId, normalizeLocalTrackColumnWidth(rawId, rawWidthPx));
+      hasExplicitVisibility = true;
+    }
+  }
+
+  if (orderedIds.length === 0) {
+    return DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item }));
+  }
+
+  for (const id of LOCAL_TRACK_COLUMN_ORDER) {
+    if (!orderedIds.includes(id)) {
+      orderedIds.push(id);
+    }
+  }
+
+  const useImplicitVisibleOnly = !hasExplicitVisibility;
+  const normalized = orderedIds.map((id) => {
+    const persistedVisible = visibilityMap.get(id);
+    const visible =
+      persistedVisible ??
+      (useImplicitVisibleOnly ? false : DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS.has(id));
+    return {
+      id,
+      visible,
+      widthPx: widthMap.get(id) ?? LOCAL_TRACK_COLUMN_DEFINITIONS[id].defaultWidthPx,
+    };
+  });
+
+  if (normalized.some((item) => item.visible)) {
+    return normalized;
+  }
+
+  return normalized.map((item) =>
+    item.id === 'title'
+      ? {
+          ...item,
+          visible: true,
+        }
+      : item
+  );
+}
+
+function asTrimmedString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  const normalized = asTrimmedString(value);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeStableFallbackAuditEntry(value: unknown): StableFallbackAuditEntry | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as {
+    atMs?: unknown;
+    request?: Record<string, unknown>;
+    dispatch?: Record<string, unknown>;
+  };
+  if (!entry.request || typeof entry.request !== 'object') return null;
+  if (!entry.dispatch || typeof entry.dispatch !== 'object') return null;
+
+  const ownerUid = asTrimmedString(entry.request.ownerUid);
+  const entryId = asTrimmedString(entry.request.entryId);
+  if (!ownerUid || !entryId) return null;
+
+  const atMs =
+    typeof entry.atMs === 'number' && Number.isFinite(entry.atMs)
+      ? Math.max(0, Math.floor(entry.atMs))
+      : Date.now();
+  const requestedAtMs =
+    typeof entry.request.requestedAtMs === 'number' && Number.isFinite(entry.request.requestedAtMs)
+      ? Math.max(0, Math.floor(entry.request.requestedAtMs))
+      : atMs;
+  const queueSize =
+    typeof entry.dispatch.queueSize === 'number' && Number.isFinite(entry.dispatch.queueSize)
+      ? Math.max(0, Math.floor(entry.dispatch.queueSize))
+      : 0;
+
+  return {
+    atMs,
+    request: {
+      entryId,
+      ownerUid,
+      cloudContentId: asOptionalString(entry.request.cloudContentId),
+      trackId: asOptionalString(entry.request.trackId),
+      quickFingerprint: asOptionalString(entry.request.quickFingerprint),
+      requestedAtMs,
+      reason: asOptionalString(entry.request.reason),
+    },
+    dispatch: {
+      accepted: Boolean(entry.dispatch.accepted),
+      deduped: Boolean(entry.dispatch.deduped),
+      queueSize,
+    },
+  };
+}
+
+function buildStableFallbackAuditSnapshot(entries: StableFallbackAuditEntry[]): StableFallbackAuditSnapshot {
+  const recent = [...entries]
+    .sort((a, b) => b.atMs - a.atMs)
+    .slice(0, STABLE_FALLBACK_AUDIT_MAX)
+    .map((item) => ({
+      atMs: item.atMs,
+      request: { ...item.request },
+      dispatch: { ...item.dispatch },
+    }));
+
+  let acceptedEvents = 0;
+  let dedupedEvents = 0;
+  let rejectedEvents = 0;
+  let lastQueuedAtMs: number | undefined;
+
+  for (const item of recent) {
+    if (item.dispatch.accepted) {
+      acceptedEvents += 1;
+      if (lastQueuedAtMs === undefined || item.atMs > lastQueuedAtMs) {
+        lastQueuedAtMs = item.atMs;
+      }
+    } else {
+      rejectedEvents += 1;
+    }
+    if (item.dispatch.deduped) {
+      dedupedEvents += 1;
+    }
+  }
+
+  return {
+    stats: {
+      totalEvents: recent.length,
+      acceptedEvents,
+      dedupedEvents,
+      rejectedEvents,
+      lastQueuedAtMs,
+    },
+    recent,
+  };
+}
+
+function parseTagsJsonAsText(tagsJson?: string): string {
+  const normalized = asTrimmedString(tagsJson);
+  if (!normalized) return '';
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (!Array.isArray(parsed)) return normalized;
+    const tags = parsed
+      .map((item) => asTrimmedString(item))
+      .filter((item) => item.length > 0);
+    return tags.join(', ');
+  } catch {
+    return normalized;
+  }
+}
+
+function buildTagsJsonFromText(raw: string): string | undefined {
+  const tags = raw
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (tags.length === 0) return undefined;
+  return JSON.stringify(Array.from(new Set(tags)));
+}
 
 type SidebarScrollAnchor =
   | { kind: 'artist'; key: string; offset: number }
@@ -261,6 +721,42 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [showPathsManager, setShowPathsManager] = useState(false);
   const [stableEntries, setStableEntries] = useState<StableLibraryEntry[]>([]);
   const [isStableEntriesLoading, setIsStableEntriesLoading] = useState(false);
+  const [stableOwnerFilter, setStableOwnerFilter] = useState('');
+  const [stableInCloudOnly, setStableInCloudOnly] = useState(false);
+  const [stableIncludeMissing, setStableIncludeMissing] = useState(true);
+  const [showStableQueuePanel, setShowStableQueuePanel] = useState(false);
+  const [isStableQueueLoading, setIsStableQueueLoading] = useState(false);
+  const [stableFallbackTasks, setStableFallbackTasks] = useState<StableFallbackTask[]>([]);
+  const [stableHashJobs, setStableHashJobs] = useState<StableHashJob[]>([]);
+  const [stableFallbackAudit, setStableFallbackAudit] = useState<StableFallbackAuditSnapshot>({
+    stats: {
+      totalEvents: 0,
+      acceptedEvents: 0,
+      dedupedEvents: 0,
+      rejectedEvents: 0,
+    },
+    recent: [],
+  });
+  const [fallbackTaskStatusPendingId, setFallbackTaskStatusPendingId] = useState<string | null>(null);
+  const [hashJobStatusPendingId, setHashJobStatusPendingId] = useState<string | null>(null);
+  const [editingStableEntry, setEditingStableEntry] = useState<StableLibraryEntry | null>(null);
+  const [stableEntryRatingInput, setStableEntryRatingInput] = useState('');
+  const [stableEntryTagsInput, setStableEntryTagsInput] = useState('');
+  const [isStableMetadataSaving, setIsStableMetadataSaving] = useState(false);
+  const [showColumnSettings, setShowColumnSettings] = useState(false);
+  const [localTrackColumnsLoaded, setLocalTrackColumnsLoaded] = useState(false);
+  const [localTrackColumnSettings, setLocalTrackColumnSettings] = useState<LocalTrackColumnConfig[]>(() =>
+    DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item }))
+  );
+  const [localTrackLayoutWidth, setLocalTrackLayoutWidth] = useState(0);
+  const [pendingPlayTrackIdentity, setPendingPlayTrackIdentity] = useState<string | null>(null);
+  const [draggingLocalTrackColumnId, setDraggingLocalTrackColumnId] =
+    useState<LocalTrackColumnId | null>(null);
+  const [dragOverLocalTrackColumnId, setDragOverLocalTrackColumnId] =
+    useState<LocalTrackColumnId | null>(null);
+  const [isLocalTrackColumnReordering, setIsLocalTrackColumnReordering] = useState(false);
+  const [resizingLocalTrackColumnId, setResizingLocalTrackColumnId] =
+    useState<LocalTrackColumnId | null>(null);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
   const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
   const [renderedTrackLimit, setRenderedTrackLimit] = useState(TRACK_RENDER_CHUNK_SIZE);
@@ -295,6 +791,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const albumInfoByKeyRef = useRef<Map<string, AlbumSummary>>(new Map());
   const albumCoverGenerationRef = useRef<number>(0);
   const albumOffscreenReclaimTimerRef = useRef<number | null>(null);
+  const localTrackColumnResizeSessionRef = useRef<LocalTrackColumnResizeSession | null>(null);
+  const localTrackColumnResizeRafRef = useRef<number | null>(null);
+  const localTrackColumnResizePendingRef = useRef<
+    { columnId: LocalTrackColumnId; widthPx: number } | null
+  >(null);
+  const localTrackColumnReorderSessionRef = useRef<LocalTrackColumnReorderSession | null>(null);
+  const localTrackColumnHeaderElementsRef = useRef<Map<LocalTrackColumnId, HTMLDivElement>>(new Map());
+  const localTrackListHeaderScrollRef = useRef<HTMLDivElement | null>(null);
+  const localTrackListBodyScrollRef = useRef<HTMLDivElement | null>(null);
+  const localTrackListLayoutRef = useRef<HTMLDivElement | null>(null);
+  const localTrackHorizontalScrollSyncingRef = useRef(false);
+  const dragOverLocalTrackColumnIdRef = useRef<LocalTrackColumnId | null>(null);
+  const pendingPlayTrackIdentityRef = useRef<string | null>(null);
+  const pendingPlayResetTimerRef = useRef<number | null>(null);
 
   const beginAudioProtection = useCallback(
     (reason: string, durationMs: number = 20_000): (() => void) => {
@@ -310,6 +820,71 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     },
     [beginAudioProtection]
   );
+
+  const resolveTrackIdentity = useCallback((track: Track | null | undefined): string | null => {
+    if (!track) return null;
+    const id = String(track.id || '').trim();
+    if (id.length > 0) return `id:${id}`;
+    const filePath = String(track.filePath || track.path || track.originalPath || '').trim();
+    if (filePath.length > 0) return `path:${filePath}`;
+    return null;
+  }, []);
+
+  const clearPendingPlayTrack = useCallback(() => {
+    if (pendingPlayResetTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearTimeout(pendingPlayResetTimerRef.current);
+      pendingPlayResetTimerRef.current = null;
+    }
+    pendingPlayTrackIdentityRef.current = null;
+    setPendingPlayTrackIdentity(null);
+  }, []);
+
+  const markPendingPlayTrack = useCallback(
+    (track: Track) => {
+      const identity = resolveTrackIdentity(track);
+      if (!identity) return;
+
+      pendingPlayTrackIdentityRef.current = identity;
+      setPendingPlayTrackIdentity(identity);
+
+      if (pendingPlayResetTimerRef.current !== null && typeof window !== 'undefined') {
+        window.clearTimeout(pendingPlayResetTimerRef.current);
+      }
+
+      if (typeof window !== 'undefined') {
+        pendingPlayResetTimerRef.current = window.setTimeout(() => {
+          pendingPlayResetTimerRef.current = null;
+          if (pendingPlayTrackIdentityRef.current === identity) {
+            pendingPlayTrackIdentityRef.current = null;
+            setPendingPlayTrackIdentity(null);
+          }
+        }, 3_500);
+      }
+    },
+    [resolveTrackIdentity]
+  );
+
+  useEffect(() => {
+    const unsubscribeState = audioService.onStateChange((state) => {
+      const pending = pendingPlayTrackIdentityRef.current;
+      if (!pending) return;
+
+      const currentIdentity = resolveTrackIdentity(state.currentTrack);
+      if (currentIdentity && currentIdentity === pending) {
+        clearPendingPlayTrack();
+      }
+    });
+
+    const unsubscribeError = audioService.onError(() => {
+      clearPendingPlayTrack();
+    });
+
+    return () => {
+      unsubscribeState();
+      unsubscribeError();
+      clearPendingPlayTrack();
+    };
+  }, [audioService, clearPendingPlayTrack, resolveTrackIdentity]);
 
   // ? 鐠佹澘绻傚姘З娴ｅ秶鐤嗛敍姘瘻 viewMode 缂佸瓨濮㈡稉缁樼泊閸斻劍娼?scrollTop + 闁挎氨鍋ｉ敍宀勪缉閸忓秷娉曟い鐢告桨/閸掑洦宕?tab 娑撱垹銇戞担宥囩枂
   const isRestoringMainScrollRef = useRef(false);
@@ -376,6 +951,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       }
       return next;
     });
+  }, []);
+
+  const refreshLocalTrackLayoutWidth = useCallback(() => {
+    const listLayout = localTrackListLayoutRef.current;
+    const main = mainScrollRef.current;
+    const navigationContent = main?.closest<HTMLElement>('.navigation-content') ?? null;
+
+    const nextWidth =
+      listLayout?.clientWidth ?? main?.clientWidth ?? navigationContent?.clientWidth ?? 0;
+
+    setLocalTrackLayoutWidth((prev) => (prev === nextWidth ? prev : nextWidth));
   }, []);
 
   const computeMainScrollAnchor = useCallback(
@@ -893,6 +1479,49 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [albums.length, getMainScrollRoot, isOpen, syncMainViewport, tracks.length, viewMode]);
 
+  useLayoutEffect(() => {
+    if (!isOpen || librarySourceMode !== 'local' || viewMode === 'albums') {
+      setLocalTrackLayoutWidth((prev) => (prev === 0 ? prev : 0));
+      return;
+    }
+
+    refreshLocalTrackLayoutWidth();
+
+    const observedElements: HTMLElement[] = [];
+    const pushObservedElement = (element: HTMLElement | null | undefined) => {
+      if (!element) return;
+      if (observedElements.includes(element)) return;
+      observedElements.push(element);
+    };
+
+    const main = mainScrollRef.current;
+    pushObservedElement(localTrackListLayoutRef.current);
+    pushObservedElement(main);
+    pushObservedElement(main?.closest<HTMLElement>('.navigation-content'));
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            refreshLocalTrackLayoutWidth();
+          })
+        : null;
+
+    if (resizeObserver) {
+      for (const element of observedElements) {
+        resizeObserver.observe(element);
+      }
+    }
+
+    window.addEventListener('resize', refreshLocalTrackLayoutWidth);
+
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      window.removeEventListener('resize', refreshLocalTrackLayoutWidth);
+    };
+  }, [isOpen, librarySourceMode, refreshLocalTrackLayoutWidth, viewMode]);
+
   // 鍒囨崲瑙嗗浘妯″紡鏃舵竻闄ょ瓫閫夌姸鎬?
   const handleViewModeChange = (
     newMode: ViewMode,
@@ -996,7 +1625,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [beginAudioProtection, loadFacetCollections, updateCoverRuntimePolicy, viewMode]);
 
   // 閸旂姾娴囨惔鎾圭熅瀵?
-  const loadStableLibraryEntries = useCallback(async (query?: string) => {
+  const loadStableLibraryEntries = useCallback(
+    async (
+      query?: string,
+      overrides?: {
+        ownerUid?: string;
+        inCloudOnly?: boolean;
+        includeMissing?: boolean;
+      }
+    ) => {
     const token = ++stableLoadTokenRef.current;
 
     if (!isTauriRuntime()) {
@@ -1005,11 +1642,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       setIsStableEntriesLoading(false);
       return;
     }
-
+    
     setIsStableEntriesLoading(true);
     try {
+      const normalizedOwnerUid = (overrides?.ownerUid ?? stableOwnerFilter).trim();
+      const inCloudOnly = overrides?.inCloudOnly ?? stableInCloudOnly;
+      const includeMissing = overrides?.includeMissing ?? stableIncludeMissing;
       const rows = await musicLibraryService.listCloudLibraryEntries({
-        includeMissing: true,
+        ownerUid: normalizedOwnerUid || undefined,
+        inCloudOnly,
+        includeMissing,
         limit: 1500,
         searchQuery: typeof query === 'string' && query.trim().length > 0 ? query.trim() : undefined,
       });
@@ -1025,7 +1667,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         setIsStableEntriesLoading(false);
       }
     }
-  }, []);
+    },
+    [stableInCloudOnly, stableIncludeMissing, stableOwnerFilter]
+  );
 
   const loadLibraryPathHealth = useCallback(async () => {
     if (!isTauriRuntime()) {
@@ -1156,6 +1800,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     updateCoverRuntimePolicy,
     viewMode,
   ]);
+
+  useEffect(() => {
+    if (librarySourceMode === 'stable') return;
+    setShowStableQueuePanel(false);
+    setEditingStableEntry(null);
+  }, [librarySourceMode]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1524,6 +2174,393 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, []);
 
   useEffect(() => {
+    const stored = readJson<unknown>(
+      STORAGE_KEYS.MUSIC_LIBRARY_TRACK_COLUMNS_V1,
+      DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS
+    );
+    setLocalTrackColumnSettings(normalizeLocalTrackColumnSettings(stored));
+    setLocalTrackColumnsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!localTrackColumnsLoaded) return;
+    writeJson(STORAGE_KEYS.MUSIC_LIBRARY_TRACK_COLUMNS_V1, localTrackColumnSettings, {
+      mode: 'idle',
+      debounceMs: 150,
+    });
+  }, [localTrackColumnSettings, localTrackColumnsLoaded]);
+
+  const toggleLocalTrackColumn = useCallback(
+    (columnId: LocalTrackColumnId) => {
+      setLocalTrackColumnSettings((previous) => {
+        const current = previous.find((item) => item.id === columnId);
+        if (!current) return previous;
+        if (current.visible) {
+          const visibleCount = previous.filter((item) => item.visible).length;
+          if (visibleCount <= 1) {
+            setErrorMessage(t('pages.music-library.columns.atLeastOneVisible'));
+            return previous;
+          }
+        }
+
+        return previous.map((item) =>
+          item.id === columnId
+            ? {
+                ...item,
+                visible: !item.visible,
+              }
+            : item
+        );
+      });
+    },
+    [t]
+  );
+
+  const moveLocalTrackColumn = useCallback((columnId: LocalTrackColumnId, offset: -1 | 1) => {
+    setLocalTrackColumnSettings((previous) => {
+      const index = previous.findIndex((item) => item.id === columnId);
+      if (index < 0) return previous;
+      const targetIndex = index + offset;
+      if (targetIndex < 0 || targetIndex >= previous.length) return previous;
+      const next = [...previous];
+      const [item] = next.splice(index, 1);
+      next.splice(targetIndex, 0, item);
+      return next;
+    });
+  }, []);
+
+  const moveLocalTrackColumnTo = useCallback(
+    (columnId: LocalTrackColumnId, targetColumnId: LocalTrackColumnId) => {
+      if (columnId === targetColumnId) return;
+      setLocalTrackColumnSettings((previous) => {
+        const fromIndex = previous.findIndex((item) => item.id === columnId);
+        const toIndex = previous.findIndex((item) => item.id === targetColumnId);
+        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return previous;
+        const next = [...previous];
+        const [moved] = next.splice(fromIndex, 1);
+        next.splice(toIndex, 0, moved);
+        return next;
+      });
+    },
+    []
+  );
+
+  const setLocalTrackColumnWidth = useCallback((columnId: LocalTrackColumnId, widthPx: number) => {
+    setLocalTrackColumnSettings((previous) => {
+      let changed = false;
+      const next = previous.map((item) => {
+        if (item.id !== columnId) return item;
+        const normalizedWidthPx = normalizeLocalTrackColumnWidth(columnId, widthPx);
+        if (item.widthPx === normalizedWidthPx) return item;
+        changed = true;
+        return {
+          ...item,
+          widthPx: normalizedWidthPx,
+        };
+      });
+      return changed ? next : previous;
+    });
+  }, []);
+
+  const flushLocalTrackColumnResize = useCallback(() => {
+    localTrackColumnResizeRafRef.current = null;
+    const pending = localTrackColumnResizePendingRef.current;
+    if (!pending) return;
+    localTrackColumnResizePendingRef.current = null;
+    setLocalTrackColumnWidth(pending.columnId, pending.widthPx);
+  }, [setLocalTrackColumnWidth]);
+
+  const cancelLocalTrackColumnResizeFrame = useCallback(() => {
+    if (localTrackColumnResizeRafRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(localTrackColumnResizeRafRef.current);
+    }
+    localTrackColumnResizeRafRef.current = null;
+    localTrackColumnResizePendingRef.current = null;
+  }, []);
+
+  const scheduleLocalTrackColumnResize = useCallback(
+    (columnId: LocalTrackColumnId, widthPx: number) => {
+      localTrackColumnResizePendingRef.current = {
+        columnId,
+        widthPx,
+      };
+
+      if (typeof window === 'undefined') {
+        flushLocalTrackColumnResize();
+        return;
+      }
+
+      if (localTrackColumnResizeRafRef.current !== null) {
+        return;
+      }
+
+      localTrackColumnResizeRafRef.current = window.requestAnimationFrame(() => {
+        flushLocalTrackColumnResize();
+      });
+    },
+    [flushLocalTrackColumnResize]
+  );
+
+  useEffect(() => {
+    dragOverLocalTrackColumnIdRef.current = dragOverLocalTrackColumnId;
+  }, [dragOverLocalTrackColumnId]);
+
+  const setLocalTrackColumnHeaderElement = useCallback(
+    (columnId: LocalTrackColumnId, element: HTMLDivElement | null) => {
+      const map = localTrackColumnHeaderElementsRef.current;
+      if (element) {
+        map.set(columnId, element);
+      } else {
+        map.delete(columnId);
+      }
+    },
+    []
+  );
+
+  const getNearestLocalTrackColumnId = useCallback(
+    (clientX: number): LocalTrackColumnId | null => {
+      let targetId: LocalTrackColumnId | null = null;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+
+      for (const column of localTrackColumnSettings) {
+        if (!column.visible) continue;
+        const element = localTrackColumnHeaderElementsRef.current.get(column.id);
+        if (!element) continue;
+        const rect = element.getBoundingClientRect();
+        const center = rect.left + rect.width / 2;
+        const distance = Math.abs(clientX - center);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          targetId = column.id;
+        }
+      }
+
+      return targetId;
+    },
+    [localTrackColumnSettings]
+  );
+
+  const handleLocalTrackColumnPointerDown = useCallback(
+    (columnId: LocalTrackColumnId, event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return;
+      if (resizingLocalTrackColumnId) return;
+
+      localTrackColumnReorderSessionRef.current = {
+        pointerId: event.pointerId,
+        columnId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        dragging: false,
+      };
+      setDragOverLocalTrackColumnId(null);
+      setIsLocalTrackColumnReordering(true);
+    },
+    [resizingLocalTrackColumnId]
+  );
+
+  useEffect(() => {
+    if (!isLocalTrackColumnReordering) return;
+    const session = localTrackColumnReorderSessionRef.current;
+    if (!session) return;
+
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+
+    const stopSession = () => {
+      localTrackColumnReorderSessionRef.current = null;
+      setDraggingLocalTrackColumnId(null);
+      setDragOverLocalTrackColumnId(null);
+      dragOverLocalTrackColumnIdRef.current = null;
+      setIsLocalTrackColumnReordering(false);
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const current = localTrackColumnReorderSessionRef.current;
+      if (!current || event.pointerId !== current.pointerId) return;
+
+      const deltaX = event.clientX - current.startClientX;
+      const deltaY = event.clientY - current.startClientY;
+      const travel = Math.hypot(deltaX, deltaY);
+
+      if (!current.dragging && travel < 6) {
+        return;
+      }
+
+      if (!current.dragging) {
+        current.dragging = true;
+        setDraggingLocalTrackColumnId(current.columnId);
+        document.body.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+      }
+
+      const targetId = getNearestLocalTrackColumnId(event.clientX);
+      if (targetId) {
+        dragOverLocalTrackColumnIdRef.current = targetId;
+        setDragOverLocalTrackColumnId((previous) => (previous === targetId ? previous : targetId));
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const current = localTrackColumnReorderSessionRef.current;
+      if (!current || event.pointerId !== current.pointerId) return;
+
+      if (current.dragging) {
+        const targetId =
+          getNearestLocalTrackColumnId(event.clientX) ?? dragOverLocalTrackColumnIdRef.current;
+        if (targetId && targetId !== current.columnId) {
+          moveLocalTrackColumnTo(current.columnId, targetId);
+        }
+      }
+
+      stopSession();
+    };
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      const current = localTrackColumnReorderSessionRef.current;
+      if (!current || event.pointerId !== current.pointerId) return;
+      stopSession();
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    };
+  }, [getNearestLocalTrackColumnId, isLocalTrackColumnReordering, moveLocalTrackColumnTo]);
+
+  const syncLocalTrackHorizontalScroll = useCallback((source: 'header' | 'body') => {
+    if (localTrackHorizontalScrollSyncingRef.current) return;
+    const header = localTrackListHeaderScrollRef.current;
+    const body = localTrackListBodyScrollRef.current;
+    if (!header || !body) return;
+
+    localTrackHorizontalScrollSyncingRef.current = true;
+    if (source === 'body') {
+      header.scrollLeft = body.scrollLeft;
+    } else {
+      body.scrollLeft = header.scrollLeft;
+    }
+    localTrackHorizontalScrollSyncingRef.current = false;
+  }, []);
+
+  const handleLocalTrackHeaderScroll = useCallback(() => {
+    syncLocalTrackHorizontalScroll('header');
+  }, [syncLocalTrackHorizontalScroll]);
+
+  const handleLocalTrackBodyScroll = useCallback(() => {
+    syncLocalTrackHorizontalScroll('body');
+  }, [syncLocalTrackHorizontalScroll]);
+
+  const handleLocalTrackColumnResizePointerDown = useCallback(
+    (columnId: LocalTrackColumnId, event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const currentSetting = localTrackColumnSettings.find((item) => item.id === columnId);
+      if (!currentSetting) return;
+
+      localTrackColumnResizeSessionRef.current = {
+        pointerId: event.pointerId,
+        columnId,
+        startClientX: event.clientX,
+        startWidthPx: normalizeLocalTrackColumnWidth(columnId, currentSetting.widthPx),
+      };
+      setResizingLocalTrackColumnId(columnId);
+    },
+    [localTrackColumnSettings]
+  );
+
+  const resetLocalTrackColumns = useCallback(() => {
+    setLocalTrackColumnSettings(DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item })));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      cancelLocalTrackColumnResizeFrame();
+    };
+  }, [cancelLocalTrackColumnResizeFrame]);
+
+  useEffect(() => {
+    if (!resizingLocalTrackColumnId) return;
+
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const stopResize = () => {
+      cancelLocalTrackColumnResizeFrame();
+      localTrackColumnResizeSessionRef.current = null;
+      setResizingLocalTrackColumnId(null);
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    };
+
+    const resolveResizeWidth = (
+      event: PointerEvent
+    ): { columnId: LocalTrackColumnId; widthPx: number } | null => {
+      const session = localTrackColumnResizeSessionRef.current;
+      if (!session || event.pointerId !== session.pointerId) return null;
+      const delta = event.clientX - session.startClientX;
+      return {
+        columnId: session.columnId,
+        widthPx: session.startWidthPx + delta,
+      };
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const nextWidth = resolveResizeWidth(event);
+      if (!nextWidth) return;
+      scheduleLocalTrackColumnResize(nextWidth.columnId, nextWidth.widthPx);
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const nextWidth = resolveResizeWidth(event);
+      if (!nextWidth) return;
+      cancelLocalTrackColumnResizeFrame();
+      setLocalTrackColumnWidth(nextWidth.columnId, nextWidth.widthPx);
+      stopResize();
+    };
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      const session = localTrackColumnResizeSessionRef.current;
+      if (!session || event.pointerId !== session.pointerId) return;
+      flushLocalTrackColumnResize();
+      stopResize();
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+      cancelLocalTrackColumnResizeFrame();
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+      if (localTrackColumnResizeSessionRef.current?.columnId === resizingLocalTrackColumnId) {
+        localTrackColumnResizeSessionRef.current = null;
+      }
+    };
+  }, [
+    cancelLocalTrackColumnResizeFrame,
+    flushLocalTrackColumnResize,
+    resizingLocalTrackColumnId,
+    scheduleLocalTrackColumnResize,
+    setLocalTrackColumnWidth,
+  ]);
+
+  useEffect(() => {
     if (!isOpen) return;
     if (librarySourceMode !== 'local') return;
     if (viewMode === 'albums') return;
@@ -1626,6 +2663,121 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       localReady: Math.max(0, totalEntries - missing),
     };
   }, [stableEntries]);
+
+  const visibleLocalTrackColumns = useMemo(
+    () => localTrackColumnSettings.filter((item) => item.visible),
+    [localTrackColumnSettings]
+  );
+
+  const localTrackResponsiveWidth =
+    localTrackLayoutWidth > 0
+      ? localTrackLayoutWidth
+      : mainViewport.clientWidth > 0
+        ? mainViewport.clientWidth
+        : 960;
+
+  const renderedLocalTrackColumns = useMemo(() => {
+    return visibleLocalTrackColumns;
+  }, [visibleLocalTrackColumns]);
+
+  const resolvedLocalTrackColumnWidths = useMemo(() => {
+    const widthById = new Map<LocalTrackColumnId, number>();
+
+    for (const column of renderedLocalTrackColumns) {
+      widthById.set(column.id, normalizeLocalTrackColumnWidth(column.id, column.widthPx));
+    }
+
+    if (renderedLocalTrackColumns.length === 0) {
+      return widthById;
+    }
+
+    const viewportWidth = localTrackResponsiveWidth;
+    const totalColumnCount = renderedLocalTrackColumns.length + 2;
+    const gapTotal = Math.max(0, totalColumnCount - 1) * LOCAL_TRACK_GRID_GAP_PX;
+    const reservedWidth =
+      LOCAL_TRACK_INDEX_COLUMN_WIDTH_PX + LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX + gapTotal;
+    const contentWidthBudget = Math.max(0, viewportWidth - reservedWidth);
+    const totalMinWidth = renderedLocalTrackColumns.reduce((sum, column) => {
+      return sum + LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].minWidthPx;
+    }, 0);
+
+    const titleColumn = renderedLocalTrackColumns.find((column) => column.id === 'title');
+    if (titleColumn) {
+      const titleDefinition = LOCAL_TRACK_COLUMN_DEFINITIONS.title;
+      const nonTitleMinimumWidth = totalMinWidth - titleDefinition.minWidthPx;
+      const titleSoftMax = Math.floor(contentWidthBudget * LOCAL_TRACK_TITLE_MAX_VIEWPORT_RATIO);
+      const titleHardMax = contentWidthBudget - nonTitleMinimumWidth;
+      const definitionMax = titleDefinition.maxWidthPx ?? Number.POSITIVE_INFINITY;
+      const cappedTitleMax = Math.max(
+        titleDefinition.minWidthPx,
+        Math.min(definitionMax, Math.min(titleSoftMax, titleHardMax))
+      );
+
+      const currentTitleWidth = widthById.get('title') ?? titleDefinition.defaultWidthPx;
+      widthById.set('title', Math.min(currentTitleWidth, cappedTitleMax));
+    }
+
+    const totalAdjustedWidth = renderedLocalTrackColumns.reduce((sum, column) => {
+      return sum + (widthById.get(column.id) ?? LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].defaultWidthPx);
+    }, 0);
+
+    if (totalAdjustedWidth <= contentWidthBudget) {
+      return widthById;
+    }
+
+    if (totalMinWidth >= contentWidthBudget) {
+      for (const column of renderedLocalTrackColumns) {
+        widthById.set(column.id, LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].minWidthPx);
+      }
+      return widthById;
+    }
+
+    const shrinkableWidth = renderedLocalTrackColumns.reduce((sum, column) => {
+      const minWidth = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].minWidthPx;
+      const currentWidth =
+        widthById.get(column.id) ?? LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].defaultWidthPx;
+      return sum + Math.max(0, currentWidth - minWidth);
+    }, 0);
+
+    if (shrinkableWidth <= 0) {
+      return widthById;
+    }
+
+    const reduceWidth = totalAdjustedWidth - contentWidthBudget;
+    for (const column of renderedLocalTrackColumns) {
+      const definition = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id];
+      const currentWidth = widthById.get(column.id) ?? definition.defaultWidthPx;
+      const capacity = Math.max(0, currentWidth - definition.minWidthPx);
+      if (capacity <= 0) continue;
+      const ratio = capacity / shrinkableWidth;
+      const nextWidth = currentWidth - reduceWidth * ratio;
+      widthById.set(column.id, Math.max(definition.minWidthPx, Math.round(nextWidth)));
+    }
+
+    return widthById;
+  }, [localTrackResponsiveWidth, renderedLocalTrackColumns]);
+
+  const localTrackGridTemplate = useMemo(() => {
+    const columnWidths = renderedLocalTrackColumns
+      .map((item) => {
+        const definition = LOCAL_TRACK_COLUMN_DEFINITIONS[item.id];
+        const widthPx =
+          resolvedLocalTrackColumnWidths.get(item.id) ??
+          normalizeLocalTrackColumnWidth(item.id, item.widthPx);
+        return `minmax(${definition.minWidthPx}px, ${widthPx}px)`;
+      })
+      .join(' ');
+    return `${LOCAL_TRACK_INDEX_COLUMN_WIDTH_PX}px ${columnWidths} ${LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX}px`;
+  }, [renderedLocalTrackColumns, resolvedLocalTrackColumnWidths]);
+
+  useEffect(() => {
+    const header = localTrackListHeaderScrollRef.current;
+    const body = localTrackListBodyScrollRef.current;
+    if (!header || !body) return;
+    header.scrollLeft = body.scrollLeft;
+  }, [localTrackGridTemplate, renderedLocalTrackColumns.length]);
+
+  const visibleLocalTrackColumnCount = visibleLocalTrackColumns.length;
 
   const filteredTracksTotal = filteredTracks.length;
 
@@ -1954,6 +3106,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       console.log('Play track:', track.title, '(embedded mode - no playback)');
       return;
     }
+
+    markPendingPlayTrack(track);
     const originalIndex = filteredTracks.findIndex((candidate) => candidate.id === track.id);
     const startIndex = originalIndex >= 0 ? originalIndex : index;
     console.log(`[MusicLibrary] Playing from track ${startIndex + 1}/${filteredTracks.length}`);
@@ -1967,6 +3121,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       console.log('Play single track:', track.title, '(embedded mode - no playback)');
       return;
     }
+    markPendingPlayTrack(track);
     console.log('[MusicLibrary] Playing single track:', track.title);
     onPlayNow([track]);
   };
@@ -2030,6 +3185,185 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     },
     [bumpAudioProtection, loadStableLibraryEntries, searchQuery, t]
   );
+
+  const loadStableQueueData = useCallback(
+    async (ownerUidOverride?: string) => {
+      if (!isTauriRuntime()) {
+        setStableFallbackTasks([]);
+        setStableHashJobs([]);
+        setStableFallbackAudit(
+          buildStableFallbackAuditSnapshot([])
+        );
+        return;
+      }
+
+      const ownerUidRaw =
+        typeof ownerUidOverride === 'string' ? ownerUidOverride : stableOwnerFilter;
+      const normalizedOwnerUid = ownerUidRaw.trim();
+
+      setIsStableQueueLoading(true);
+      try {
+        const [tasks, jobs] = await Promise.all([
+          musicLibraryService.listCloudFallbackTasks({
+            ownerUid: normalizedOwnerUid || undefined,
+            limit: 300,
+          }),
+          musicLibraryService.listCloudHashJobs({
+            ownerUid: normalizedOwnerUid || undefined,
+            limit: 300,
+          }),
+        ]);
+
+        const nextTasks = [...tasks].sort((a, b) => (b.updatedAtMs || 0) - (a.updatedAtMs || 0));
+        const nextJobs = [...jobs].sort((a, b) => (b.updatedAtMs || 0) - (a.updatedAtMs || 0));
+        setStableFallbackTasks(nextTasks);
+        setStableHashJobs(nextJobs);
+
+        const rawAudit = readJson<unknown[]>(STORAGE_KEYS.MUSIC_LIBRARY_CLOUD_FALLBACK_AUDIT_V1, []);
+        const normalizedAudit = Array.isArray(rawAudit)
+          ? rawAudit
+              .map((item) => normalizeStableFallbackAuditEntry(item))
+              .filter((item): item is StableFallbackAuditEntry => item !== null)
+          : [];
+        const filteredAudit = normalizedOwnerUid
+          ? normalizedAudit.filter((item) => item.request.ownerUid === normalizedOwnerUid)
+          : normalizedAudit;
+        setStableFallbackAudit(buildStableFallbackAuditSnapshot(filteredAudit));
+      } catch (error) {
+        console.warn('Failed to load stable queue data:', error);
+        setErrorMessage(t('pages.music-library.stable.queue.loadFailed'));
+      } finally {
+        setIsStableQueueLoading(false);
+      }
+    },
+    [stableOwnerFilter, t]
+  );
+
+  useEffect(() => {
+    if (!showStableQueuePanel) return;
+    if (librarySourceMode !== 'stable') return;
+    void loadStableQueueData();
+  }, [librarySourceMode, loadStableQueueData, showStableQueuePanel]);
+
+  const handleUpdateFallbackTaskStatus = useCallback(
+    async (taskId: string, status: CloudFallbackTaskStatus) => {
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId) return;
+      setFallbackTaskStatusPendingId(normalizedTaskId);
+      try {
+        const updated = await musicLibraryService.updateCloudFallbackTaskStatus(normalizedTaskId, status);
+        if (!updated) {
+          setErrorMessage(t('pages.music-library.stable.queue.updateStatusFailed'));
+          return;
+        }
+        await loadStableQueueData();
+      } finally {
+        setFallbackTaskStatusPendingId(null);
+      }
+    },
+    [loadStableQueueData, t]
+  );
+
+  const handleUpdateHashJobStatus = useCallback(
+    async (jobId: string, status: CloudHashJobStatus) => {
+      const normalizedJobId = jobId.trim();
+      if (!normalizedJobId) return;
+      setHashJobStatusPendingId(normalizedJobId);
+      try {
+        const updated = await musicLibraryService.updateCloudHashJobStatus(normalizedJobId, status);
+        if (!updated) {
+          setErrorMessage(t('pages.music-library.stable.queue.updateStatusFailed'));
+          return;
+        }
+        await loadStableQueueData();
+      } finally {
+        setHashJobStatusPendingId(null);
+      }
+    },
+    [loadStableQueueData, t]
+  );
+
+  const handleOpenStableMetadataEditor = useCallback((entry: StableLibraryEntry) => {
+    setEditingStableEntry(entry);
+    setStableEntryRatingInput(
+      typeof entry.rating === 'number' && Number.isFinite(entry.rating) ? String(entry.rating) : ''
+    );
+    setStableEntryTagsInput(parseTagsJsonAsText(entry.tagsJson));
+  }, []);
+
+  const handleCloseStableMetadataEditor = useCallback(() => {
+    setEditingStableEntry(null);
+    setStableEntryRatingInput('');
+    setStableEntryTagsInput('');
+    setIsStableMetadataSaving(false);
+  }, []);
+
+  const handleSaveStableMetadata = useCallback(async () => {
+    if (!editingStableEntry) return;
+
+    const parsedRating = Number.parseInt(stableEntryRatingInput.trim(), 10);
+    const normalizedRating =
+      Number.isFinite(parsedRating) && parsedRating >= 0
+        ? Math.max(0, Math.min(100, Math.floor(parsedRating)))
+        : undefined;
+
+    setIsStableMetadataSaving(true);
+    try {
+      const updated = await musicLibraryService.upsertCloudLibraryEntry({
+        entryId: editingStableEntry.id,
+        ownerUid: editingStableEntry.ownerUid,
+        trackId: editingStableEntry.trackId,
+        quickFingerprint: editingStableEntry.quickFingerprint,
+        cloudContentId: editingStableEntry.cloudContentId,
+        displayTitle: editingStableEntry.displayTitle,
+        displayArtist: editingStableEntry.displayArtist,
+        inCloud: editingStableEntry.inCloud,
+        isMissing: editingStableEntry.isMissing,
+        createdAtMs: editingStableEntry.createdAtMs,
+        updatedAtMs: Date.now(),
+        rating: normalizedRating,
+        tagsJson: buildTagsJsonFromText(stableEntryTagsInput),
+      });
+      if (!updated) {
+        setErrorMessage(t('pages.music-library.stable.metadata.saveFailed'));
+        return;
+      }
+
+      handleCloseStableMetadataEditor();
+      await loadStableLibraryEntries(searchQuery);
+    } finally {
+      setIsStableMetadataSaving(false);
+    }
+  }, [
+    editingStableEntry,
+    handleCloseStableMetadataEditor,
+    loadStableLibraryEntries,
+    searchQuery,
+    stableEntryRatingInput,
+    stableEntryTagsInput,
+    t,
+  ]);
+
+  const handleApplyStableFilters = useCallback(() => {
+    void loadStableLibraryEntries(searchQuery);
+    if (showStableQueuePanel) {
+      void loadStableQueueData();
+    }
+  }, [loadStableLibraryEntries, loadStableQueueData, searchQuery, showStableQueuePanel]);
+
+  const handleResetStableFilters = useCallback(() => {
+    setStableOwnerFilter('');
+    setStableInCloudOnly(false);
+    setStableIncludeMissing(true);
+    void loadStableLibraryEntries(searchQuery, {
+      ownerUid: '',
+      inCloudOnly: false,
+      includeMissing: true,
+    });
+    if (showStableQueuePanel) {
+      void loadStableQueueData('');
+    }
+  }, [loadStableLibraryEntries, loadStableQueueData, searchQuery, showStableQueuePanel]);
 
   // 婢跺嫮鎮婂灞炬锤閸欐娊鏁懣婊冨礋
   const handleTrackContextMenu = (track: Track, index: number, e: React.MouseEvent) => {
@@ -2144,12 +3478,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [locale, t]
   );
 
-  const formatFileSize = (bytes: number): string => {
+  const formatFileSize = useCallback((bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-  };
+  }, []);
 
   // 閺嶇厧绱￠崠鏍ㄦ闂€?
   const formatTotalDuration = (seconds: number): string => {
@@ -2162,11 +3496,123 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   };
 
   // 閺嶇厧绱￠崠鏍缓闁挻妞傞梹?
-  const formatDuration = (seconds: number): string => {
+  const formatDuration = useCallback((seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  }, []);
+
+  const formatOptionalTimestamp = useCallback(
+    (value?: number) => {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+        return '-';
+      }
+      const ms = value > 10_000_000_000 ? value : value * 1000;
+      return formatStableUpdatedAt(ms);
+    },
+    [formatStableUpdatedAt]
+  );
+
+  const renderLocalTrackColumnValue = useCallback(
+    (track: Track, columnId: LocalTrackColumnId): string => {
+      const resolveEstimatedBitrate = (): number | null => {
+        if (typeof track.bitrate === 'number' && Number.isFinite(track.bitrate) && track.bitrate > 0) {
+          return track.bitrate;
+        }
+
+        if (
+          typeof track.fileSize === 'number' &&
+          Number.isFinite(track.fileSize) &&
+          track.fileSize > 0 &&
+          typeof track.duration === 'number' &&
+          Number.isFinite(track.duration) &&
+          track.duration > 0
+        ) {
+          const estimated = (track.fileSize * 8) / track.duration;
+          if (Number.isFinite(estimated) && estimated > 0) {
+            return estimated;
+          }
+        }
+
+        return null;
+      };
+
+      const resolveFormat = (): string | null => {
+        const explicit = (track.format || track.codecName || '').trim();
+        if (explicit.length > 0) {
+          return explicit.toUpperCase();
+        }
+
+        const path = (track.path || track.originalPath || '').trim();
+        const extension = path.includes('.') ? path.split('.').pop()?.trim() ?? '' : '';
+        if (extension.length > 0) {
+          return extension.toUpperCase();
+        }
+
+        return null;
+      };
+
+      switch (columnId) {
+        case 'title':
+          return track.title || '-';
+        case 'artist':
+          return track.artist || '-';
+        case 'album':
+          return track.album || '-';
+        case 'duration':
+          return typeof track.duration === 'number' && Number.isFinite(track.duration)
+            ? formatDuration(track.duration)
+            : '-';
+        case 'year':
+          return typeof track.year === 'number' && Number.isFinite(track.year) ? String(track.year) : '-';
+        case 'genre':
+          return track.genre || '-';
+        case 'trackNumber':
+          return typeof track.trackNumber === 'number' && Number.isFinite(track.trackNumber)
+            ? String(track.trackNumber)
+            : '-';
+        case 'discNumber':
+          return typeof track.discNumber === 'number' && Number.isFinite(track.discNumber)
+            ? String(track.discNumber)
+            : '-';
+        case 'composer':
+          return track.composer || '-';
+        case 'bitrate': {
+          const bitrate = resolveEstimatedBitrate();
+          return typeof bitrate === 'number' && Number.isFinite(bitrate)
+            ? `${Math.max(0, Math.round(bitrate / 1000))} kbps`
+            : '-';
+        }
+        case 'sampleRate':
+          return typeof track.sampleRate === 'number' && Number.isFinite(track.sampleRate)
+            ? `${Math.max(0, Math.round(track.sampleRate))} Hz`
+            : '-';
+        case 'format': {
+          const format = resolveFormat();
+          return format ?? '-';
+        }
+        case 'playCount':
+          return typeof track.playCount === 'number' && Number.isFinite(track.playCount)
+            ? String(Math.max(0, Math.floor(track.playCount)))
+            : '-';
+        case 'lastPlayed':
+          return formatOptionalTimestamp(track.lastPlayed);
+        case 'rating':
+          return typeof track.rating === 'number' && Number.isFinite(track.rating)
+            ? String(Math.max(0, Math.floor(track.rating)))
+            : '-';
+        case 'fileSize':
+          return typeof track.fileSize === 'number' && Number.isFinite(track.fileSize)
+            ? formatFileSize(Math.max(0, track.fileSize))
+            : '-';
+        case 'dateAdded':
+          return formatOptionalTimestamp(track.dateAdded);
+        default:
+          return '-';
+      }
+    },
+    [formatDuration, formatFileSize, formatOptionalTimestamp]
+  );
 
   const totalMissingTracks = useMemo(() => {
     return libraryPaths.reduce((sum, path) => {
@@ -2327,6 +3773,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               >
                 <span>{t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
               </button>
+              <button className="music-library-btn" onClick={() => setShowColumnSettings(true)}>
+                {t('pages.music-library.columns.button')}
+              </button>
               <button
                 className="music-library-btn"
                 onClick={() => setShowClearConfirm(true)}
@@ -2336,15 +3785,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               </button>
             </>
           ) : (
-            <button
-              className="music-library-btn"
-              onClick={() => {
-                void loadStableLibraryEntries(searchQuery);
-              }}
-              disabled={isStableEntriesLoading}
-            >
-              {t('common.action.refresh')}
-            </button>
+            <>
+              <button
+                className="music-library-btn"
+                onClick={() => {
+                  void loadStableLibraryEntries(searchQuery);
+                }}
+                disabled={isStableEntriesLoading}
+              >
+                {t('common.action.refresh')}
+              </button>
+              <button className="music-library-btn" onClick={() => setShowStableQueuePanel(true)}>
+                {t('pages.music-library.stable.queue.button')}
+              </button>
+            </>
           )}
         </div>
 
@@ -2482,6 +3936,42 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
       </div>
 
+      {librarySourceMode === 'stable' && (
+        <div className="music-library-stable-filters">
+          <label className="music-library-stable-filter-field">
+            <span>{t('pages.music-library.stable.filters.ownerUidLabel')}</span>
+            <input
+              type="text"
+              value={stableOwnerFilter}
+              placeholder={t('pages.music-library.stable.filters.ownerUidPlaceholder')}
+              onChange={(event) => setStableOwnerFilter(event.target.value)}
+            />
+          </label>
+          <label className="music-library-stable-filter-toggle">
+            <input
+              type="checkbox"
+              checked={stableInCloudOnly}
+              onChange={(event) => setStableInCloudOnly(event.target.checked)}
+            />
+            <span>{t('pages.music-library.stable.filters.inCloudOnly')}</span>
+          </label>
+          <label className="music-library-stable-filter-toggle">
+            <input
+              type="checkbox"
+              checked={stableIncludeMissing}
+              onChange={(event) => setStableIncludeMissing(event.target.checked)}
+            />
+            <span>{t('pages.music-library.stable.filters.includeMissing')}</span>
+          </label>
+          <button className="music-library-btn" onClick={handleApplyStableFilters}>
+            {t('pages.music-library.stable.filters.apply')}
+          </button>
+          <button className="music-library-btn" onClick={handleResetStableFilters}>
+            {t('pages.music-library.stable.filters.reset')}
+          </button>
+        </div>
+      )}
+
       <div className="music-library-content">
         {librarySourceMode === 'stable' ? (
           <div className="music-library-main music-library-main-stable" ref={mainScrollRef}>
@@ -2505,6 +3995,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                   <div>{t('pages.music-library.stable.header.title')}</div>
                   <div>{t('pages.music-library.stable.header.artist')}</div>
                   <div>{t('pages.music-library.stable.header.owner')}</div>
+                  <div>{t('pages.music-library.stable.header.playCount')}</div>
+                  <div>{t('pages.music-library.stable.header.lastPlayed')}</div>
                   <div>{t('pages.music-library.stable.header.updatedAt')}</div>
                   <div>{t('pages.music-library.stable.header.status')}</div>
                   <div>{t('pages.music-library.tracks.header.actions')}</div>
@@ -2512,6 +4004,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                 {sortedStableEntries.map((entry, index) => {
                   const displayTitle = entry.displayTitle || entry.trackId || entry.id;
                   const displayArtist = entry.displayArtist || t('common.unknown.artist');
+                  const playCount =
+                    typeof entry.playCount === 'number' && Number.isFinite(entry.playCount)
+                      ? Math.max(0, Math.floor(entry.playCount))
+                      : 0;
                   const statusLabel = entry.isMissing
                     ? t('pages.music-library.stable.status.missing')
                     : entry.inCloud
@@ -2541,6 +4037,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       <div className="music-library-stable-cell" title={entry.ownerUid}>
                         {entry.ownerUid}
                       </div>
+                      <div className="music-library-stable-cell">{playCount}</div>
+                      <div className="music-library-stable-cell">
+                        {formatOptionalTimestamp(entry.lastPlayedAtMs)}
+                      </div>
                       <div className="music-library-stable-cell">
                         {formatStableUpdatedAt(entry.updatedAtMs)}
                       </div>
@@ -2548,6 +4048,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         <span className={`music-library-stable-status ${statusClass}`}>{statusLabel}</span>
                       </div>
                       <div className="music-library-stable-actions">
+                        <button
+                          className="track-action-meta"
+                          title={t('pages.music-library.stable.action.editMetadata')}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleOpenStableMetadataEditor(entry);
+                          }}
+                        >
+                          M
+                        </button>
                         <button
                           className="track-action-play"
                           title={t('pages.music-library.stable.action.play')}
@@ -2690,15 +4200,66 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               )}
 
               {(viewMode === 'all' || viewMode === 'artists' || viewMode === 'genres') && (
-                <div className="music-library-list">
-                  <div className="music-library-list-header">
-                    <div>#</div>
-                    <div>{t('pages.music-library.tracks.header.title')}</div>
-                    <div>{t('pages.music-library.tracks.header.artist')}</div>
-                    <div>{t('pages.music-library.tracks.header.album')}</div>
-                    <div>{t('pages.music-library.tracks.header.duration')}</div>
-                    <div>{t('pages.music-library.tracks.header.actions')}</div>
+                <div
+                  className={`music-library-list${resizingLocalTrackColumnId ? ' is-resizing-columns' : ''}`}
+                  ref={localTrackListLayoutRef}
+                >
+                  <div className="music-library-list-header-shell">
+                    <div
+                      className="music-library-list-header-track"
+                      ref={localTrackListHeaderScrollRef}
+                      onScroll={handleLocalTrackHeaderScroll}
+                    >
+                      <div
+                        className="music-library-list-header"
+                        style={{ gridTemplateColumns: localTrackGridTemplate }}
+                      >
+                        <div className="music-library-list-header-cell music-library-list-header-leading">
+                          #
+                        </div>
+                        {renderedLocalTrackColumns.map((column) => {
+                          const isDragging = draggingLocalTrackColumnId === column.id;
+                          const isDropTarget =
+                            dragOverLocalTrackColumnId === column.id &&
+                            draggingLocalTrackColumnId != null &&
+                            draggingLocalTrackColumnId !== column.id;
+
+                          return (
+                            <div
+                              key={column.id}
+                              className={`music-library-list-header-cell music-library-list-header-column${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}${resizingLocalTrackColumnId === column.id ? ' is-resizing' : ''}`}
+                              ref={(element) => setLocalTrackColumnHeaderElement(column.id, element)}
+                              data-local-track-column-id={column.id}
+                              onPointerDown={(event) => handleLocalTrackColumnPointerDown(column.id, event)}
+                              title={t('pages.music-library.columns.action.dragToReorder')}
+                            >
+                              <span className="music-library-list-header-label">
+                                {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
+                              </span>
+                              <button
+                                type="button"
+                                className="music-library-column-resize-handle"
+                                onPointerDown={(event) =>
+                                  handleLocalTrackColumnResizePointerDown(column.id, event)
+                                }
+                                aria-label={t('pages.music-library.columns.action.dragToResize')}
+                                title={t('pages.music-library.columns.action.dragToResize')}
+                              />
+                            </div>
+                          );
+                        })}
+                        <div className="music-library-list-header-cell music-library-list-header-actions">
+                          {t('pages.music-library.tracks.header.actions')}
+                        </div>
+                      </div>
+                    </div>
                   </div>
+                  <div
+                    className="music-library-list-scroll"
+                    ref={localTrackListBodyScrollRef}
+                    onScroll={handleLocalTrackBodyScroll}
+                  >
+                    <div className="music-library-list-content">
                   {trackVirtualWindow.topSpacerPx > 0 && (
                     <div
                       className="music-library-virtual-spacer"
@@ -2708,22 +4269,29 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                   )}
                   {virtualizedTracks.map((track, index) => {
                     const absoluteIndex = trackVirtualWindow.start + index;
+                    const isPlayPending =
+                      pendingPlayTrackIdentity !== null &&
+                      resolveTrackIdentity(track) === pendingPlayTrackIdentity;
                     return (
                     <div
                       key={track.id}
                       data-track-id={track.id}
-                      className="music-library-track"
+                      className={`music-library-track${isPlayPending ? ' is-play-pending' : ''}`}
+                      style={{ gridTemplateColumns: localTrackGridTemplate }}
                       onDoubleClick={() => handleTrackDoubleClick(track, absoluteIndex)}
                       onContextMenu={(e) => handleTrackContextMenu(track, absoluteIndex, e)}
                       title={t('pages.music-library.tracks.rowTooltip')}
                     >
                       <div className="music-library-track-number">{absoluteIndex + 1}</div>
-                      <div className="music-library-track-title">{track.title}</div>
-                      <div className="music-library-track-artist">{track.artist || '-'}</div>
-                      <div className="music-library-track-album">{track.album || '-'}</div>
-                      <div className="music-library-track-duration">
-                        {track.duration ? formatDuration(track.duration) : '-'}
-                      </div>
+                      {renderedLocalTrackColumns.map((column) => {
+                        const value = renderLocalTrackColumnValue(track, column.id);
+                        const className = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].className;
+                        return (
+                          <div key={`${track.id}-${column.id}`} className={className} title={value}>
+                            {value}
+                          </div>
+                        );
+                      })}
                       <div className="music-library-track-actions">
                         {onPlayNow && (
                           <button
@@ -2754,6 +4322,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       aria-hidden="true"
                     />
                   )}
+                    </div>
+                  </div>
                   {(isTrackChunkLoading || hasMoreTracks || renderedTracks.length < filteredTracksTotal) && (
                     <div className="music-library-track-load-hint" role="status" aria-live="polite">
                       {isTrackChunkLoading
@@ -2774,6 +4344,300 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           </>
         )}
       </div>
+
+      {showColumnSettings && (
+        <div className="music-library-modal-overlay" onClick={() => setShowColumnSettings(false)}>
+          <div
+            className="music-library-modal music-library-columns-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="music-library-modal-header">
+              <h3>{t('pages.music-library.columns.modal.title')}</h3>
+              <div className="music-library-modal-header-actions">
+                <button className="music-library-btn" onClick={resetLocalTrackColumns}>
+                  {t('pages.music-library.columns.modal.reset')}
+                </button>
+                <button className="music-library-modal-close" onClick={() => setShowColumnSettings(false)}>
+                  X
+                </button>
+              </div>
+            </div>
+            <div className="music-library-modal-body">
+              <div className="music-library-modal-description">
+                {t('pages.music-library.columns.modal.description')}
+              </div>
+              <div className="music-library-column-list">
+                {localTrackColumnSettings.map((column, index) => (
+                  <div className="music-library-column-item" key={column.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={column.visible}
+                        disabled={column.visible && visibleLocalTrackColumnCount <= 1}
+                        onChange={() => toggleLocalTrackColumn(column.id)}
+                      />
+                      <span>{t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}</span>
+                    </label>
+                    <div className="music-library-column-actions">
+                      <button
+                        className="music-library-column-move"
+                        disabled={index === 0}
+                        title={t('pages.music-library.columns.action.moveUp')}
+                        onClick={() => moveLocalTrackColumn(column.id, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="music-library-column-move"
+                        disabled={index === localTrackColumnSettings.length - 1}
+                        title={t('pages.music-library.columns.action.moveDown')}
+                        onClick={() => moveLocalTrackColumn(column.id, 1)}
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStableQueuePanel && (
+        <div className="music-library-modal-overlay" onClick={() => setShowStableQueuePanel(false)}>
+          <div
+            className="music-library-modal music-library-stable-queue-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="music-library-modal-header">
+              <h3>{t('pages.music-library.stable.queue.title')}</h3>
+              <div className="music-library-modal-header-actions">
+                <button
+                  className="music-library-btn"
+                  onClick={() => {
+                    void loadStableQueueData();
+                  }}
+                  disabled={isStableQueueLoading}
+                >
+                  {t('common.action.refresh')}
+                </button>
+                <button className="music-library-modal-close" onClick={() => setShowStableQueuePanel(false)}>
+                  X
+                </button>
+              </div>
+            </div>
+            <div className="music-library-modal-body">
+              {isStableQueueLoading ? (
+                <div className="music-library-modal-loading">{t('pages.music-library.stable.queue.loading')}</div>
+              ) : (
+                <>
+                  <div className="music-library-queue-section">
+                    <div className="music-library-queue-title">
+                      {t('pages.music-library.stable.queue.fallbackTasks.title')}
+                    </div>
+                    {stableFallbackTasks.length === 0 ? (
+                      <div className="music-library-modal-empty">{t('pages.music-library.stable.queue.empty')}</div>
+                    ) : (
+                      <div className="music-library-queue-table">
+                        <div className="music-library-queue-row music-library-queue-row-header">
+                          <div>{t('pages.music-library.stable.queue.header.entryId')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.status')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.attempts')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.updatedAt')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.error')}</div>
+                        </div>
+                        {stableFallbackTasks.map((task) => (
+                          <div className="music-library-queue-row" key={task.id}>
+                            <div title={task.entryId}>{task.entryId}</div>
+                            <div>
+                              <select
+                                value={task.status}
+                                disabled={fallbackTaskStatusPendingId === task.id}
+                                onChange={(event) => {
+                                  void handleUpdateFallbackTaskStatus(
+                                    task.id,
+                                    event.target.value as CloudFallbackTaskStatus
+                                  );
+                                }}
+                              >
+                                {STABLE_FALLBACK_STATUS_OPTIONS.map((status) => (
+                                  <option key={status} value={status}>
+                                    {t(`pages.music-library.stable.queue.status.${status}`)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>{task.enqueueCount}</div>
+                            <div>{formatOptionalTimestamp(task.updatedAtMs)}</div>
+                            <div title={task.lastError || '-'}>{task.lastError || '-'}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="music-library-queue-section">
+                    <div className="music-library-queue-title">
+                      {t('pages.music-library.stable.queue.hashJobs.title')}
+                    </div>
+                    {stableHashJobs.length === 0 ? (
+                      <div className="music-library-modal-empty">{t('pages.music-library.stable.queue.empty')}</div>
+                    ) : (
+                      <div className="music-library-queue-table">
+                        <div className="music-library-queue-row music-library-queue-row-header">
+                          <div>{t('pages.music-library.stable.queue.header.entryId')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.status')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.attempts')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.updatedAt')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.error')}</div>
+                        </div>
+                        {stableHashJobs.map((job) => (
+                          <div className="music-library-queue-row" key={job.id}>
+                            <div title={job.entryId}>{job.entryId}</div>
+                            <div>
+                              <select
+                                value={job.status}
+                                disabled={hashJobStatusPendingId === job.id}
+                                onChange={(event) => {
+                                  void handleUpdateHashJobStatus(
+                                    job.id,
+                                    event.target.value as CloudHashJobStatus
+                                  );
+                                }}
+                              >
+                                {STABLE_HASH_STATUS_OPTIONS.map((status) => (
+                                  <option key={status} value={status}>
+                                    {t(`pages.music-library.stable.queue.status.${status}`)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>{job.attemptCount}</div>
+                            <div>{formatOptionalTimestamp(job.updatedAtMs)}</div>
+                            <div title={job.lastError || '-'}>{job.lastError || '-'}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="music-library-queue-section">
+                    <div className="music-library-queue-title">
+                      {t('pages.music-library.stable.queue.audit.title')}
+                    </div>
+                    <div className="music-library-queue-audit-stats">
+                      <span>
+                        {t('pages.music-library.stable.queue.audit.total', {
+                          count: stableFallbackAudit.stats.totalEvents,
+                        })}
+                      </span>
+                      <span>
+                        {t('pages.music-library.stable.queue.audit.accepted', {
+                          count: stableFallbackAudit.stats.acceptedEvents,
+                        })}
+                      </span>
+                      <span>
+                        {t('pages.music-library.stable.queue.audit.deduped', {
+                          count: stableFallbackAudit.stats.dedupedEvents,
+                        })}
+                      </span>
+                      <span>
+                        {t('pages.music-library.stable.queue.audit.rejected', {
+                          count: stableFallbackAudit.stats.rejectedEvents,
+                        })}
+                      </span>
+                    </div>
+                    {stableFallbackAudit.recent.length === 0 ? (
+                      <div className="music-library-modal-empty">{t('pages.music-library.stable.queue.empty')}</div>
+                    ) : (
+                      <div className="music-library-queue-table">
+                        <div className="music-library-queue-row music-library-queue-row-header">
+                          <div>{t('pages.music-library.stable.queue.audit.time')}</div>
+                          <div>{t('pages.music-library.stable.header.owner')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.entryId')}</div>
+                          <div>{t('pages.music-library.stable.queue.audit.queueSize')}</div>
+                          <div>{t('pages.music-library.stable.queue.header.status')}</div>
+                        </div>
+                        {stableFallbackAudit.recent.slice(0, 20).map((item) => (
+                          <div
+                            className="music-library-queue-row"
+                            key={`${item.request.entryId}-${item.request.ownerUid}-${item.atMs}`}
+                          >
+                            <div>{formatOptionalTimestamp(item.atMs)}</div>
+                            <div title={item.request.ownerUid}>{item.request.ownerUid}</div>
+                            <div title={item.request.entryId}>{item.request.entryId}</div>
+                            <div>{item.dispatch.queueSize}</div>
+                            <div>
+                              {item.dispatch.accepted
+                                ? item.dispatch.deduped
+                                  ? t('pages.music-library.stable.queue.status.deduped')
+                                  : t('pages.music-library.stable.queue.status.queued')
+                                : t('pages.music-library.stable.queue.status.rejected')}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingStableEntry && (
+        <div className="music-library-modal-overlay" onClick={handleCloseStableMetadataEditor}>
+          <div
+            className="music-library-modal music-library-stable-metadata-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="music-library-modal-header">
+              <h3>{t('pages.music-library.stable.metadata.title')}</h3>
+              <button className="music-library-modal-close" onClick={handleCloseStableMetadataEditor}>
+                X
+              </button>
+            </div>
+            <div className="music-library-modal-body">
+              <label className="music-library-stable-metadata-field">
+                <span>{t('pages.music-library.stable.metadata.rating')}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={stableEntryRatingInput}
+                  onChange={(event) => setStableEntryRatingInput(event.target.value)}
+                />
+              </label>
+              <label className="music-library-stable-metadata-field">
+                <span>{t('pages.music-library.stable.metadata.tags')}</span>
+                <textarea
+                  value={stableEntryTagsInput}
+                  onChange={(event) => setStableEntryTagsInput(event.target.value)}
+                  placeholder={t('pages.music-library.stable.metadata.tagsHint')}
+                />
+              </label>
+              <div className="music-library-modal-footer">
+                <button className="music-library-btn" onClick={handleCloseStableMetadataEditor}>
+                  {t('common.action.cancel')}
+                </button>
+                <button
+                  className="music-library-btn"
+                  onClick={() => {
+                    void handleSaveStableMetadata();
+                  }}
+                  disabled={isStableMetadataSaving}
+                >
+                  {isStableMetadataSaving
+                    ? t('common.action.save')
+                    : t('pages.music-library.stable.metadata.save')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {librarySourceMode === 'local' && scanProgress && scanProgress.isScanning && (
         <div className="music-library-scan-progress">

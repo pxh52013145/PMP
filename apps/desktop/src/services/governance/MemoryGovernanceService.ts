@@ -35,6 +35,60 @@ export const MEMORY_GOVERNANCE_SERVICE_TOKEN = createServiceToken<MemoryGovernan
   'service.memoryGovernance'
 );
 
+const HIDDEN_PHASE_REASONS: ReadonlySet<MemoryGovernanceReason> = new Set([
+  'visibility-hidden',
+  'pagehide',
+  'beforeunload',
+  'tauri-window-hidden',
+]);
+
+const HIDDEN_PHASE_BASE_ACTION: MemoryGovernanceAction = 'tighten-cover-runtime-caches-hidden';
+
+const HIDDEN_PHASE_TAURI_ACTIONS: readonly MemoryGovernanceAction[] = [
+  'destroy-hidden-editor-windows',
+  'destroy-hidden-plugin-windows',
+  'destroy-hidden-vst-manager-windows',
+];
+
+const ACTION_TO_COVER_RUNTIME_POLICY: Partial<Record<MemoryGovernanceAction, CoverRuntimeCachePolicy>> = {
+  'tighten-cover-runtime-caches-watch': 'watch',
+  'tighten-cover-runtime-caches-high': 'high',
+  'tighten-cover-runtime-caches-critical': 'critical',
+  'tighten-cover-runtime-caches-hidden': 'hidden',
+};
+
+function appendUniqueActions(
+  target: MemoryGovernanceAction[],
+  actions: readonly MemoryGovernanceAction[]
+): void {
+  for (const action of actions) {
+    if (!target.includes(action)) {
+      target.push(action);
+    }
+  }
+}
+
+function buildPlannedActions(
+  baseActions: readonly MemoryGovernanceAction[],
+  reason: MemoryGovernanceReason,
+  isTauri: boolean
+): MemoryGovernanceAction[] {
+  const plannedActions: MemoryGovernanceAction[] = [...baseActions];
+  if (!HIDDEN_PHASE_REASONS.has(reason)) {
+    return plannedActions;
+  }
+
+  if (!plannedActions.includes(HIDDEN_PHASE_BASE_ACTION)) {
+    plannedActions.unshift(HIDDEN_PHASE_BASE_ACTION);
+  }
+
+  if (isTauri) {
+    appendUniqueActions(plannedActions, HIDDEN_PHASE_TAURI_ACTIONS);
+  }
+
+  return plannedActions;
+}
+
 export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   private lastResult: MemoryGovernanceRunResult | null = null;
 
@@ -50,10 +104,11 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
   async runOnce(reason: MemoryGovernanceReason): Promise<MemoryGovernanceRunResult> {
     const snapshot = await this.collectSnapshot();
     const plan = decideMemoryGovernancePlan(snapshot);
+    const plannedActions = buildPlannedActions(plan.actions, reason, snapshot.isTauri);
 
     const executed: MemoryGovernanceAction[] = [];
 
-    for (const action of plan.actions) {
+    for (const action of plannedActions) {
       if (action === 'clear-cover-runtime-caches') {
         try {
           MusicLibraryService.getInstance().clearCoverRuntimeCaches();
@@ -64,21 +119,8 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
         continue;
       }
 
-      if (
-        action === 'tighten-cover-runtime-caches-watch' ||
-        action === 'tighten-cover-runtime-caches-high' ||
-        action === 'tighten-cover-runtime-caches-critical' ||
-        action === 'tighten-cover-runtime-caches-hidden'
-      ) {
-        const policy: CoverRuntimeCachePolicy =
-          action === 'tighten-cover-runtime-caches-watch'
-            ? 'watch'
-            : action === 'tighten-cover-runtime-caches-high'
-              ? 'high'
-              : action === 'tighten-cover-runtime-caches-critical'
-                ? 'critical'
-                : 'hidden';
-
+      const policy = ACTION_TO_COVER_RUNTIME_POLICY[action];
+      if (policy) {
         try {
           MusicLibraryService.getInstance().applyCoverRuntimeCachePolicy(policy);
           executed.push(action);
@@ -89,40 +131,40 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       }
 
       if (action === 'destroy-hidden-editor-windows') {
-        if (!snapshot.isTauri) continue;
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('governance_destroy_hidden_editor_windows');
+        if (
+          await this.invokeTauriGovernanceCommand(
+            snapshot.isTauri,
+            'governance_destroy_hidden_editor_windows',
+            '[memory-governance] failed to destroy hidden editor windows'
+          )
+        ) {
           executed.push(action);
-        } catch (error) {
-          console.warn('[memory-governance] failed to destroy hidden editor windows', error);
         }
         continue;
       }
 
       if (action === 'destroy-hidden-plugin-windows') {
-        if (!snapshot.isTauri) continue;
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('governance_destroy_hidden_plugin_windows');
+        if (
+          await this.invokeTauriGovernanceCommand(
+            snapshot.isTauri,
+            'governance_destroy_hidden_plugin_windows',
+            '[memory-governance] failed to destroy hidden plugin windows'
+          )
+        ) {
           executed.push(action);
-        } catch (error) {
-          console.warn('[memory-governance] failed to destroy hidden plugin windows', error);
         }
         continue;
       }
 
       if (action === 'destroy-hidden-vst-manager-windows') {
-        if (!snapshot.isTauri) continue;
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('governance_destroy_hidden_vst_manager_windows');
+        if (
+          await this.invokeTauriGovernanceCommand(
+            snapshot.isTauri,
+            'governance_destroy_hidden_vst_manager_windows',
+            '[memory-governance] failed to destroy hidden vst-manager windows'
+          )
+        ) {
           executed.push(action);
-        } catch (error) {
-          console.warn(
-            '[memory-governance] failed to destroy hidden vst-manager windows',
-            error
-          );
         }
         continue;
       }
@@ -211,6 +253,23 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       writeJson(STORAGE_KEYS.MEMORY_GOVERNANCE_AUDIT_V1, next, { mode: 'idle', debounceMs: 300 });
     } catch (error) {
       console.warn('[memory-governance] failed to append audit entry', error);
+    }
+  }
+
+  private async invokeTauriGovernanceCommand(
+    isTauri: boolean,
+    command: string,
+    warningPrefix: string
+  ): Promise<boolean> {
+    if (!isTauri) return false;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      await invoke(command);
+      return true;
+    } catch (error) {
+      console.warn(warningPrefix, error);
+      return false;
     }
   }
 }

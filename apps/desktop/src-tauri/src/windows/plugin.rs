@@ -9,7 +9,9 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
 };
 
-use super::{EVENT_PLUGIN_WINDOW_HIDDEN, EVENT_PLUGIN_WINDOW_SHOWN, MAIN_WINDOW_LABEL};
+use super::{
+    focus_main_window_if_needed, EVENT_PLUGIN_WINDOW_HIDDEN, EVENT_PLUGIN_WINDOW_SHOWN,
+};
 
 pub struct PluginWindowGeometry {
     pub x: f64,
@@ -126,7 +128,9 @@ pub fn open_plugin_window(
         apply_geometry(&existing_window, &geometry);
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
-        existing_window.set_focus().map_err(|e| e.to_string())?;
+        if !existing_window.is_focused().ok().unwrap_or(false) {
+            existing_window.set_focus().map_err(|e| e.to_string())?;
+        }
         let _ = app.emit_all(
             EVENT_PLUGIN_WINDOW_SHOWN,
             payload(plugin_id.as_str(), window_id.as_str()),
@@ -183,10 +187,9 @@ pub fn open_plugin_window(
             };
             let _ = win.hide();
 
-            // Keep main window focused if it exists.
-            if let Some(main) = app_handle.get_window(MAIN_WINDOW_LABEL) {
-                let _ = main.set_focus();
-            }
+            // Avoid unnecessary focus steals: forcing focus can cause visible flicker on some
+            // Windows setups when closing WebView-owned child windows.
+            focus_main_window_if_needed(&app_handle);
         }
         tauri::WindowEvent::Destroyed => {
             unregister_open_label(label_for_events.as_str());

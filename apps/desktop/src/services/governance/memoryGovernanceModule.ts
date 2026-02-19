@@ -122,6 +122,7 @@ export function createMemoryGovernanceModule(): KernelModule<AppEvents> {
       if (enabled) {
         start();
         startPlaybackWatch();
+        void service.runOnce('interval');
       }
 
       const unregisterFlush = lifecycle.registerFlushHandler((reason) => {

@@ -35,9 +35,28 @@ use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 const SHARED_TIMELINE_STRESS_WINDOW: Duration = Duration::from_secs(12);
 const SHARED_TIMELINE_STRESS_EXTENSION: Duration = Duration::from_secs(16);
 const SHARED_TIMELINE_LOW_WATERMARK_TRIGGER: usize = 4;
+const STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB: usize = 64;
+const STOP_RELEASE_BUFFER_THRESHOLD_MIN_MIB: usize = 16;
+const STOP_RELEASE_BUFFER_THRESHOLD_MAX_MIB: usize = 4096;
 
 pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> =
     Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
+
+static STOP_RELEASE_BUFFER_THRESHOLD_BYTES: Lazy<usize> = Lazy::new(|| {
+    let threshold_mib = std::env::var("PMP_AUDIO_STOP_RELEASE_THRESHOLD_MIB")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB)
+        .clamp(
+            STOP_RELEASE_BUFFER_THRESHOLD_MIN_MIB,
+            STOP_RELEASE_BUFFER_THRESHOLD_MAX_MIB,
+        );
+
+    threshold_mib
+        .saturating_mul(1024)
+        .saturating_mul(1024)
+        .max(1)
+});
 
 static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
     std::env::var("PMP_AUDIO_INFO_LOG")
@@ -94,7 +113,7 @@ pub(crate) fn resolve_requested_output_sample_rate_for_backend(
 fn decode_mode_id(mode: AudioInputDecodeMode) -> &'static str {
     match mode {
         AudioInputDecodeMode::Streaming => "streaming",
-        AudioInputDecodeMode::FullTrack => "full-track",
+        AudioInputDecodeMode::FullTrack | AudioInputDecodeMode::StreamingFullTrack => "full-track",
     }
 }
 
@@ -770,7 +789,8 @@ impl NativeAudioEngine {
         if let Some(mode) = decode_mode.and_then(parse_decode_mode) {
             self.streaming_decode_mode = mode;
         }
-        if let Some(profile) = interactive_profile.and_then(parse_interactive_prebuffer_profile_id) {
+        if let Some(profile) = interactive_profile.and_then(parse_interactive_prebuffer_profile_id)
+        {
             self.streaming_interactive_profile = profile;
         }
     }
@@ -1445,6 +1465,48 @@ impl NativeAudioEngine {
         }
     }
 
+    fn estimated_audio_buffer_bytes(&self) -> usize {
+        let sample_bytes = std::mem::size_of::<f32>();
+
+        let decoded_bytes = self
+            .decoded_samples
+            .as_ref()
+            .map(|samples| samples.len().saturating_mul(sample_bytes))
+            .unwrap_or(0);
+
+        let streaming_bytes = self
+            .streaming
+            .as_ref()
+            .map(|streaming| {
+                streaming
+                    .buffer
+                    .capacity_samples()
+                    .saturating_add(streaming.render_queue.capacity_samples())
+                    .saturating_mul(sample_bytes)
+            })
+            .unwrap_or(0);
+
+        decoded_bytes.saturating_add(streaming_bytes)
+    }
+
+    fn should_release_cached_audio_on_stop(&self) -> bool {
+        self.estimated_audio_buffer_bytes() >= *STOP_RELEASE_BUFFER_THRESHOLD_BYTES
+    }
+
+    fn release_cached_audio_pipeline(&mut self) {
+        if let Some(sink) = self.sink.take() {
+            sink.stop();
+        }
+        self.mixer = None;
+        self.shutdown_streaming();
+        self.decoded_samples = None;
+        self.decoded_channels = 0;
+        self.source_sample_rate = 0;
+        self.decoded_sample_rate = 0;
+        self.decoded_bit_depth = None;
+        self.active_input_id = None;
+    }
+
     fn reload_track_for_seek_recovery(&mut self, track_path: PathBuf) -> Result<(), String> {
         let previous_prebuffer = self.streaming_prebuffer_start_or_seek_seconds;
         self.streaming_prebuffer_start_or_seek_seconds = Some(0.0);
@@ -1704,6 +1766,12 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn play(&mut self) -> Result<(), String> {
+        if self.sink.is_none() {
+            if let Some(track_path) = self.current_track.clone() {
+                self.reload_track_for_seek_recovery(track_path)?;
+            }
+        }
+
         let sink = self
             .sink
             .as_ref()
@@ -1819,8 +1887,11 @@ impl NativeAudioEngine {
         self.buffering_started_at = None;
         self.buffering_last_progress_at = None;
         self.buffering_last_samples = 0;
+        let should_release_cached_audio = self.should_release_cached_audio_on_stop();
 
-        if let Some(streaming) = &self.streaming {
+        if should_release_cached_audio {
+            self.release_cached_audio_pipeline();
+        } else if let Some(streaming) = &self.streaming {
             streaming.buffer.clear();
             streaming.render_queue.clear();
             let _ = streaming.command_tx.send(DecoderCommand::Seek(0.0));
@@ -2372,6 +2443,9 @@ impl NativeAudioEngine {
                         self.base_position = self.current_position;
                         self.playback_started_at = None;
                         self.set_state(PlaybackState::Stopped);
+                        if self.should_release_cached_audio_on_stop() {
+                            self.release_cached_audio_pipeline();
+                        }
                         return true;
                     }
 
@@ -2461,6 +2535,9 @@ impl NativeAudioEngine {
             self.base_position = self.current_position;
             self.playback_started_at = None;
             self.set_state(PlaybackState::Stopped);
+            if self.should_release_cached_audio_on_stop() {
+                self.release_cached_audio_pipeline();
+            }
         }
         true
     }
@@ -3160,6 +3237,79 @@ mod tests {
     }
 
     #[test]
+    fn release_cached_audio_pipeline_drops_heavy_runtime_handles() {
+        let backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.current_track = Some(PathBuf::from("D:/memory-test.wav"));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.decoded_samples = Some(Arc::new(vec![0.0f32; 64 * 1024]));
+        engine.sink = Some(Arc::new(CallSink::default()));
+        engine.streaming = Some(make_finished_streaming_playback(1_000_000, 2));
+
+        engine.release_cached_audio_pipeline();
+
+        assert!(
+            engine.streaming.is_none(),
+            "release should drop streaming pipeline"
+        );
+        assert!(
+            engine.decoded_samples.is_none(),
+            "release should drop decoded samples cache"
+        );
+        assert!(engine.sink.is_none(), "release should drop sink handle");
+        assert_eq!(engine.decoded_channels, 0);
+        assert_eq!(engine.decoded_sample_rate, 0);
+        assert!(engine.active_input_id.is_none());
+    }
+
+    #[test]
+    fn play_recovers_by_reloading_when_sink_was_released() {
+        let backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let temp_name = format!(
+            "pmpm-play-recover-{}.wav",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(temp_name);
+        write_wav_i16_stereo(&path, 48_000, 4_800);
+
+        engine.current_track = Some(path.clone());
+        engine.active_input_id = None;
+        engine.sink = None;
+        engine.mixer = None;
+        engine.streaming = None;
+        engine.decoded_samples = None;
+
+        let play_result = engine.play();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            play_result.is_ok(),
+            "play should reload track when sink was released"
+        );
+        assert!(
+            engine.sink.is_some(),
+            "play should restore sink via lazy reload"
+        );
+        assert!(
+            matches!(
+                engine.playback_state,
+                PlaybackState::Playing | PlaybackState::Buffering
+            ),
+            "playback should transition into active state after reload"
+        );
+        assert!(!matches!(engine.playback_state, PlaybackState::Error));
+    }
+
+    #[test]
     fn rebuild_sink_does_not_stop_old_sink_when_new_sink_fails() {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(FailBackend);
         let mut engine = NativeAudioEngine::new_with_backend(backend);
@@ -3549,7 +3699,9 @@ mod tests {
         engine.set_streaming_buffer_settings(None, None, None, Some("stable"));
 
         assert_eq!(
-            engine.streaming_buffer_settings_payload().interactive_profile,
+            engine
+                .streaming_buffer_settings_payload()
+                .interactive_profile,
             "stable"
         );
 
@@ -3559,7 +3711,9 @@ mod tests {
 
         engine.set_streaming_buffer_settings(None, None, None, Some("invalid"));
         assert_eq!(
-            engine.streaming_buffer_settings_payload().interactive_profile,
+            engine
+                .streaming_buffer_settings_payload()
+                .interactive_profile,
             "stable"
         );
     }

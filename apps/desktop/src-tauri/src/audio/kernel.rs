@@ -9,11 +9,18 @@ use super::{
         PreparedCrossfade, PreparedLoad, StreamingPrebufferKind, ENGINE,
     },
     events::NativeAudioStatePayload,
-    input::{AudioInputKind, StreamingPlayback},
+    input::{AudioInputDecodeMode, AudioInputKind, StreamingPlayback},
     mixer::{coerce_source_format, PlaybackMixerSource},
     pipeline::boxed_with_dsp,
     policy::{NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload},
 };
+
+fn transport_start_decode_mode(mode: AudioInputDecodeMode) -> AudioInputDecodeMode {
+    match mode {
+        AudioInputDecodeMode::FullTrack => AudioInputDecodeMode::StreamingFullTrack,
+        other => other,
+    }
+}
 
 pub(crate) struct TransportExecution {
     pub(crate) result: Result<(), String>,
@@ -188,7 +195,8 @@ fn prepare_crossfade_for_operation(
 }
 
 pub(crate) fn execute_load(track_path: PathBuf) -> Result<TransportExecution, String> {
-    let op = with_engine_mut(|engine| engine.begin_load_operation())?;
+    let mut op = with_engine_mut(|engine| engine.begin_load_operation())?;
+    op.decode_mode = transport_start_decode_mode(op.decode_mode);
     let prepared = prepare_load_for_operation(&op, &track_path);
 
     let execution = match prepared {
@@ -223,7 +231,8 @@ pub(crate) fn execute_load_and_play(
     track_path: PathBuf,
     replay_gain_db: Option<f32>,
 ) -> Result<TransportExecution, String> {
-    let op = with_engine_mut(|engine| engine.begin_load_operation())?;
+    let mut op = with_engine_mut(|engine| engine.begin_load_operation())?;
+    op.decode_mode = transport_start_decode_mode(op.decode_mode);
     let prepared = prepare_load_for_operation(&op, &track_path);
 
     let execution = match prepared {
@@ -352,9 +361,11 @@ pub(crate) fn execute_crossfade(
         (was_playing, op)
     })?;
 
-    let Some(op) = op else {
+    let Some(mut op) = op else {
         return Ok(CrossfadeExecution::FallbackLoad { was_playing });
     };
+
+    op.decode_mode = transport_start_decode_mode(op.decode_mode);
 
     let prepared = prepare_crossfade_for_operation(&op, &track_path, duration_ms);
     let execution = match prepared {
@@ -393,11 +404,11 @@ pub(crate) fn execute_crossfade_or_load(
     match execute_crossfade(track_path.clone(), duration_ms)? {
         CrossfadeExecution::Applied(execution) => Ok(vec![execution]),
         CrossfadeExecution::FallbackLoad { was_playing } => {
-            let mut executions = vec![execute_load(track_path)?];
             if was_playing {
-                executions.push(execute_play()?);
+                Ok(vec![execute_load_and_play(track_path, None)?])
+            } else {
+                Ok(vec![execute_load(track_path)?])
             }
-            Ok(executions)
         }
     }
 }

@@ -25,6 +25,9 @@ pub(crate) const SACD_INPUT_ID: &str = "sacd";
 pub(crate) enum AudioInputDecodeMode {
     Streaming,
     FullTrack,
+    // Transport fast-start path: begin playback via streaming immediately,
+    // while allowing decoder-side buffering to grow toward full-track budget.
+    StreamingFullTrack,
 }
 
 impl Default for AudioInputDecodeMode {

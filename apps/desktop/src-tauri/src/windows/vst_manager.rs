@@ -9,7 +9,9 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
 };
 
-use super::{EVENT_VST_MANAGER_WINDOW_HIDDEN, EVENT_VST_MANAGER_WINDOW_SHOWN, MAIN_WINDOW_LABEL};
+use super::{
+    focus_main_window_if_needed, EVENT_VST_MANAGER_WINDOW_HIDDEN, EVENT_VST_MANAGER_WINDOW_SHOWN,
+};
 
 pub const VST_MANAGER_WINDOW_LABEL: &str = "vst-manager";
 
@@ -103,7 +105,9 @@ pub fn open_vst_manager_window(
         apply_geometry(&existing_window, &geometry);
         let _ = existing_window.show();
         let _ = existing_window.unminimize();
-        existing_window.set_focus().map_err(|e| e.to_string())?;
+        if !existing_window.is_focused().ok().unwrap_or(false) {
+            existing_window.set_focus().map_err(|e| e.to_string())?;
+        }
         let _ = app.emit_all(EVENT_VST_MANAGER_WINDOW_SHOWN, ());
         return Ok(());
     }
@@ -142,9 +146,7 @@ pub fn open_vst_manager_window(
             };
             let _ = win.hide();
 
-            if let Some(main) = app_handle.get_window(MAIN_WINDOW_LABEL) {
-                let _ = main.set_focus();
-            }
+            focus_main_window_if_needed(&app_handle);
         }
         tauri::WindowEvent::Destroyed => {
             unregister_open_label(label_for_events.as_str());

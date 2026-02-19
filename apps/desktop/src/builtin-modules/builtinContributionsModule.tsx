@@ -533,11 +533,37 @@ function BuiltinMusicLibraryPage() {
 
   const Library = MusicLibraryLazy;
 
+  const resolveTrackIdentity = (track: Track): string => {
+    const id = String(track.id || '').trim();
+    if (id.length > 0) return `id:${id}`;
+
+    const filePath = String(track.filePath || track.path || track.originalPath || '').trim();
+    if (filePath.length > 0) return `path:${filePath}`;
+
+    return `title:${String(track.title || '').trim()}`;
+  };
+
+  const isSameQueueOrder = (left: Track[], right: Track[]): boolean => {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (resolveTrackIdentity(left[index]) !== resolveTrackIdentity(right[index])) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   const handlePlayNow = async (tracks: Track[], startIndex: number = 0) => {
     if (tracks.length === 0) return;
-    audioService.clearQueue();
-    audioService.addMultipleToQueue(tracks);
-    await audioService.playTrackAtIndex(Math.max(0, startIndex));
+
+    const safeStartIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
+    const currentQueue = audioService.getQueue();
+    if (!isSameQueueOrder(currentQueue, tracks)) {
+      audioService.clearQueue();
+      audioService.addMultipleToQueue(tracks);
+    }
+
+    await audioService.playTrackAtIndex(safeStartIndex);
   };
 
   const handleAddToQueue = (tracks: Track[]) => {

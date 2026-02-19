@@ -93,31 +93,32 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
   let tier: MemoryGovernanceTier = 0;
 
   if (
-    heap >= 1_200_000_000 ||
-    navBytes >= 2_000_000 ||
+    heap >= 950_000_000 ||
+    navBytes >= 1_600_000 ||
     coverBlobRatio >= 0.98 ||
-    webview2Private >= 1_200_000_000 ||
-    webview2WorkingSet >= 1_600_000_000 ||
-    treePrivate >= 2_200_000_000
+    webview2Private >= 700_000_000 ||
+    webview2WorkingSet >= 950_000_000 ||
+    treePrivate >= 1_200_000_000
   ) {
     tier = 3;
   } else if (
-    heap >= 900_000_000 ||
-    navBytes >= 1_000_000 ||
+    heap >= 650_000_000 ||
+    navBytes >= 800_000 ||
     coverBlobRatio >= 0.92 ||
-    webview2Private >= 850_000_000 ||
-    webview2WorkingSet >= 1_100_000_000 ||
-    treePrivate >= 1_700_000_000 ||
-    webview2Cpu >= 55
+    webview2Private >= 500_000_000 ||
+    webview2WorkingSet >= 700_000_000 ||
+    treePrivate >= 900_000_000 ||
+    webview2Cpu >= 50
   ) {
     tier = 2;
   } else if (
-    heap >= 700_000_000 ||
-    navBytes >= 512_000 ||
+    heap >= 450_000_000 ||
+    navBytes >= 400_000 ||
     coverBlobRatio >= 0.85 ||
-    webview2Private >= 650_000_000 ||
-    webview2WorkingSet >= 800_000_000 ||
-    webview2Cpu >= 35
+    webview2Private >= 350_000_000 ||
+    webview2WorkingSet >= 500_000_000 ||
+    treePrivate >= 650_000_000 ||
+    webview2Cpu >= 30
   ) {
     tier = 1;
   }
