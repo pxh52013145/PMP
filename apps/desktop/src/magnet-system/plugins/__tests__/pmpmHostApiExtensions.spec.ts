@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { APP_VERSION, HOST_API_VERSION } from '../../../constants/versions';
-import { createPluginMountApi, type HostAudioService, type HostNavigation } from '../pluginHostApi';
+import {
+  createPluginMountApi,
+  registerPluginHostCapability,
+  type HostAudioService,
+  type HostNavigation,
+} from '../pluginHostApi';
 
 type NavigationListener = Parameters<NonNullable<HostNavigation['subscribe']>>[0];
 
@@ -178,6 +183,88 @@ describe('pmpm Host API - extensions', () => {
     unsubscribe();
     emitChange(2);
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('host.listCapabilities filters by capability permission', async () => {
+    const deniedAi = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    const deniedList = await deniedAi.host.listCapabilities();
+    expect(deniedList.some((item) => item.id === 'foundation.ai-adapter')).toBe(false);
+
+    const allowedAi = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host', 'api:ai-runtime']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    const allowedList = await allowedAi.host.listCapabilities();
+    expect(allowedList.some((item) => item.id === 'foundation.ai-adapter')).toBe(true);
+  });
+
+  it('host.invokeCapability enforces permissions and forwards invoke context', async () => {
+    const unregister = registerPluginHostCapability({
+      id: 'test.echo-bridge',
+      version: '1.0.0',
+      permission: 'api:ai-runtime',
+      handler: ({ method, payload, context }) => ({
+        method,
+        payload,
+        pluginId: context.pluginId,
+      }),
+    });
+
+    try {
+      const denied = createPluginMountApi({
+        pluginId: 'demo',
+        hostLabel: 'TestHost',
+        permissions: new Set<string>(['api:host', 'api:ai-runtime']),
+        audioService: createTestAudioService(),
+        navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+      });
+
+      await expect(
+        denied.host.invokeCapability('test.echo-bridge', 'run', { value: 1 })
+      ).rejects.toThrow(/permission denied/i);
+
+      const allowed = createPluginMountApi({
+        pluginId: 'demo',
+        hostLabel: 'TestHost',
+        permissions: new Set<string>(['api:host', 'api:host-capability', 'api:ai-runtime']),
+        audioService: createTestAudioService(),
+        navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+      });
+
+      await expect(
+        allowed.host.invokeCapability('test.echo-bridge', 'run', { value: 1 })
+      ).resolves.toEqual({
+        method: 'run',
+        payload: { value: 1 },
+        pluginId: 'demo',
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it('host.hasPermission supports wildcard capability grants', () => {
+    const api = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host', 'api:*']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    expect(api.host.hasPermission('api:voice-training')).toBe(true);
+    expect(api.host.hasPermission('api:desktop-pet')).toBe(true);
   });
 
   it('visualizer.getSpectrumFrame and onSpectrumFrame are gated and poll host frames', async () => {

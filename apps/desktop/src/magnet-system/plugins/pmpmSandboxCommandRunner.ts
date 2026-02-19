@@ -47,6 +47,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 async function runRpc(api: PluginMountApi, request: RpcRequest): Promise<unknown> {
   const args = Array.isArray(request.args) ? request.args : [];
   switch (request.method) {
+    case 'host.listCapabilities':
+      return await api.host.listCapabilities();
+    case 'host.invokeCapability':
+      return await api.host.invokeCapability(
+        String(args[0] ?? ''),
+        String(args[1] ?? ''),
+        args[2]
+      );
     case 'audio.play':
       return await api.audio.play();
     case 'audio.pause':
@@ -126,6 +134,12 @@ const warnDenied = (capability, action) => {
 const hasPermission = (capability) => {
   if (permissions.has(capability)) return true;
   if (capability.startsWith('net:') && (permissions.has('net:*') || permissions.has('net:all'))) return true;
+  for (const granted of permissions) {
+    if (typeof granted === 'string' && granted.endsWith('*')) {
+      const prefix = granted.slice(0, -1);
+      if (prefix && capability.startsWith(prefix)) return true;
+    }
+  }
   return false;
 };
 
@@ -220,6 +234,20 @@ const api = {
         return false;
       }
       return hasPermission(String(capability || ''));
+    },
+    listCapabilities: () => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.listCapabilities()');
+        return Promise.resolve([]);
+      }
+      return rpcCall('host.listCapabilities');
+    },
+    invokeCapability: (capabilityId, method, payload) => {
+      if (!permissions.has('api:host')) {
+        warnDenied('api:host', 'host.invokeCapability(capabilityId, method, payload)');
+        return Promise.resolve(null);
+      }
+      return rpcCall('host.invokeCapability', [capabilityId, method, payload]);
     },
   },
   audio: {

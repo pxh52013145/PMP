@@ -15,6 +15,11 @@ import {
   type PmpmPluginConfig,
 } from '../pluginConfig';
 import { recordPmpmPermissionDenied } from '../pmpmGovernance';
+import {
+  getPluginHostCapability,
+  invokePluginHostCapability,
+  listPluginHostCapabilities,
+} from './capabilities';
 import { hasPermission, PLUGIN_PERMISSIONS } from './permissions';
 import type {
   HostAudioService,
@@ -196,6 +201,62 @@ export function createPluginMountApi({
           return false;
         }
         return hasPermission(permissions, String(capability ?? ''));
+      },
+      listCapabilities: async () => {
+        if (!allowHost) {
+          warnDenied('api:host', 'host.listCapabilities()');
+          return [];
+        }
+
+        return listPluginHostCapabilities().filter(
+          (capability) =>
+            !capability.permission || hasPermission(permissions, capability.permission)
+        );
+      },
+      invokeCapability: async (capabilityId, method, payload) => {
+        if (!allowHost) {
+          warnDenied('api:host', `host.invokeCapability(${String(capabilityId)}, ${String(method)})`);
+          return null;
+        }
+
+        const normalizedCapabilityId =
+          typeof capabilityId === 'string' ? capabilityId.trim() : '';
+        const normalizedMethod = typeof method === 'string' ? method.trim() : '';
+
+        if (!normalizedCapabilityId || !normalizedMethod) {
+          throw new Error('host.invokeCapability requires capabilityId and method');
+        }
+
+        const capability = getPluginHostCapability(normalizedCapabilityId);
+        if (!capability) {
+          throw new Error(`Unknown host capability: ${normalizedCapabilityId}`);
+        }
+
+        if (capability.permission && !hasPermission(permissions, capability.permission)) {
+          warnDenied(
+            capability.permission,
+            `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
+          );
+          throw new Error(`Permission denied: ${capability.permission}`);
+        }
+
+        if (!hasPermission(permissions, PLUGIN_PERMISSIONS.hostCapabilityInvoke)) {
+          warnDenied(
+            PLUGIN_PERMISSIONS.hostCapabilityInvoke,
+            `host.invokeCapability(${normalizedCapabilityId}, ${normalizedMethod})`
+          );
+          throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
+        }
+
+        return await invokePluginHostCapability(normalizedCapabilityId, {
+          method: normalizedMethod,
+          payload,
+          context: {
+            pluginId,
+            hostLabel,
+            permissions,
+          },
+        });
       },
     },
     audio: {

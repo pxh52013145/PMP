@@ -16,10 +16,40 @@ export type PluginHostInfo = {
   runtime: 'tauri' | 'web';
 };
 
+export type PluginHostCapabilityInfo = {
+  id: string;
+  version: string;
+  permission?: string;
+  description?: string;
+  experimental?: boolean;
+};
+
+export type PluginHostCapabilityInvokeContext = {
+  pluginId: string;
+  hostLabel: string;
+  permissions: ReadonlySet<string>;
+};
+
+export type PluginHostCapabilityInvokeRequest = {
+  method: string;
+  payload: unknown;
+  context: PluginHostCapabilityInvokeContext;
+};
+
+export type PluginHostCapabilityHandler = (
+  request: PluginHostCapabilityInvokeRequest
+) => Promise<unknown> | unknown;
+
+export type PluginHostCapabilityRegistration = PluginHostCapabilityInfo & {
+  handler?: PluginHostCapabilityHandler;
+};
+
 export type PluginHostApi = {
   getInfo: () => PluginHostInfo | null;
   listPermissions: () => string[];
   hasPermission: (capability: string) => boolean;
+  listCapabilities: () => Promise<PluginHostCapabilityInfo[]>;
+  invokeCapability: (capabilityId: string, method: string, payload?: unknown) => Promise<unknown>;
 };
 
 export type PluginAudioApi = {

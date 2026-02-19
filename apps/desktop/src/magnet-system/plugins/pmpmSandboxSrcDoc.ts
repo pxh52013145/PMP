@@ -62,6 +62,12 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
       const hasPermission = (capability) => {
         if (permissions.has(capability)) return true;
         if (capability.startsWith('net:') && (permissions.has('net:*') || permissions.has('net:all'))) return true;
+        for (const granted of permissions) {
+          if (typeof granted === 'string' && granted.endsWith('*')) {
+            const prefix = granted.slice(0, -1);
+            if (prefix && capability.startsWith(prefix)) return true;
+          }
+        }
         return false;
       };
 
@@ -195,6 +201,20 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
               return false;
             }
             return hasPermission(String(capability || ''));
+          },
+          listCapabilities: () => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.listCapabilities()');
+              return Promise.resolve([]);
+            }
+            return rpcCall('host.listCapabilities');
+          },
+          invokeCapability: (capabilityId, method, payload) => {
+            if (!permissions.has('api:host')) {
+              warnDenied('api:host', 'host.invokeCapability(capabilityId, method, payload)');
+              return Promise.resolve(null);
+            }
+            return rpcCall('host.invokeCapability', [capabilityId, method, payload]);
           },
         },
         audio: {
