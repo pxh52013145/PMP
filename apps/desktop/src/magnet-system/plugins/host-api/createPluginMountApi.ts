@@ -44,6 +44,37 @@ const PAGES_REQUIRING_PARAMS = new Set<NavigationPageType>([
 ]);
 
 const PLAY_MODES = new Set<string>(['sequence', 'loop', 'single-loop', 'shuffle']);
+const HOST_CAPABILITY_INVOKE_TIMEOUT_MS = 6000;
+const HOST_CAPABILITY_PAYLOAD_MAX_BYTES = 256 * 1024;
+
+function asJsonSerializedSize(value: unknown): number {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error('Capability payload must be JSON-serializable');
+  }
+  if (typeof serialized !== 'string') return 0;
+  return new TextEncoder().encode(serialized).byteLength;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutHandle: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutHandle = globalThis.setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle !== null) {
+      globalThis.clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 export function createPluginMountApi({
   pluginId,
@@ -227,6 +258,17 @@ export function createPluginMountApi({
           throw new Error('host.invokeCapability requires capabilityId and method');
         }
 
+        if (!/^[a-z][a-z0-9_.-]{0,63}$/i.test(normalizedMethod)) {
+          throw new Error(`Invalid host capability method: ${normalizedMethod}`);
+        }
+
+        const payloadSize = asJsonSerializedSize(payload);
+        if (payloadSize > HOST_CAPABILITY_PAYLOAD_MAX_BYTES) {
+          throw new Error(
+            `Capability payload too large (${payloadSize} bytes > ${HOST_CAPABILITY_PAYLOAD_MAX_BYTES})`
+          );
+        }
+
         const capability = getPluginHostCapability(normalizedCapabilityId);
         if (!capability) {
           throw new Error(`Unknown host capability: ${normalizedCapabilityId}`);
@@ -248,15 +290,19 @@ export function createPluginMountApi({
           throw new Error(`Permission denied: ${PLUGIN_PERMISSIONS.hostCapabilityInvoke}`);
         }
 
-        return await invokePluginHostCapability(normalizedCapabilityId, {
-          method: normalizedMethod,
-          payload,
-          context: {
-            pluginId,
-            hostLabel,
-            permissions,
-          },
-        });
+        return await withTimeout(
+          invokePluginHostCapability(normalizedCapabilityId, {
+            method: normalizedMethod,
+            payload,
+            context: {
+              pluginId,
+              hostLabel,
+              permissions,
+            },
+          }),
+          HOST_CAPABILITY_INVOKE_TIMEOUT_MS,
+          `Host capability invocation timed out: ${normalizedCapabilityId}.${normalizedMethod}`
+        );
       },
     },
     audio: {

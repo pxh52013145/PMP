@@ -20,9 +20,14 @@
   1. `host.listCapabilities()`
   2. check capability `id + version`
   3. call `host.invokeCapability(...)` only when permission and capability are available
+- Capability responses should use a stable envelope (`ok/data` or `ok:false/error`) to keep forward compatibility.
+
+## Current Baseline
+- Host API: `1.3.0`
+- Capability baseline: foundation capability registry + reserved AI/DesktopPet/Voice runtime capability IDs.
+- Invocation guardrails: JSON-serializable payload, 256 KiB payload ceiling, 6s timeout.
 
 ## Security / Governance
 - New capabilities must be deny-by-default.
 - Every capability should declare a permission namespace and audit-friendly action path.
 - Wildcard permissions (`namespace:*`) must be minimized and reviewed.
-

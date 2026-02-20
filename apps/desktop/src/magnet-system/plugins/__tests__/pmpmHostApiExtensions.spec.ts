@@ -254,6 +254,102 @@ describe('pmpm Host API - extensions', () => {
     }
   });
 
+  it('host.invokeCapability supports builtin capability-registry list', async () => {
+    const api = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host', 'api:host-capability']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    const result = await api.host.invokeCapability('foundation.capability-registry', 'list', {});
+    expect(result).toMatchObject({ ok: true });
+    const data = (result as { ok: true; data: Array<{ id: string }> }).data;
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.some((item) => item.id === 'foundation.capability-registry')).toBe(true);
+  });
+
+  it('host.invokeCapability supports builtin reserved describe method', async () => {
+    const api = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host', 'api:host-capability', 'api:ai-runtime']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    const result = await api.host.invokeCapability('foundation.ai-adapter', 'describe', null);
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        capabilityId: 'foundation.ai-adapter',
+        ready: false,
+      },
+    });
+  });
+
+  it('host.invokeCapability rejects invalid method names', async () => {
+    const api = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host', 'api:host-capability', 'api:ai-runtime']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    await expect(
+      api.host.invokeCapability('foundation.ai-adapter', 'bad method', {})
+    ).rejects.toThrow(/invalid host capability method/i);
+  });
+
+  it('host.invokeCapability rejects oversized payloads', async () => {
+    const api = createPluginMountApi({
+      pluginId: 'demo',
+      hostLabel: 'TestHost',
+      permissions: new Set<string>(['api:host', 'api:host-capability', 'api:ai-runtime']),
+      audioService: createTestAudioService(),
+      navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+    });
+
+    const oversizedPayload = { text: 'x'.repeat(300 * 1024) };
+    await expect(
+      api.host.invokeCapability('foundation.ai-adapter', 'describe', oversizedPayload)
+    ).rejects.toThrow(/payload too large/i);
+  });
+
+  it('host.invokeCapability times out for stalled runtime handlers', async () => {
+    vi.useFakeTimers();
+
+    const unregister = registerPluginHostCapability({
+      id: 'test.slow-runtime',
+      version: '1.0.0',
+      permission: 'api:ai-runtime',
+      handler: async () => {
+        await new Promise(() => {});
+        return null;
+      },
+    });
+
+    try {
+      const api = createPluginMountApi({
+        pluginId: 'demo',
+        hostLabel: 'TestHost',
+        permissions: new Set<string>(['api:host', 'api:host-capability', 'api:ai-runtime']),
+        audioService: createTestAudioService(),
+        navigation: { navigateTo: () => {}, goBack: () => {} } satisfies HostNavigation,
+      });
+
+      const pending = api.host.invokeCapability('test.slow-runtime', 'run', null);
+      const assertion = expect(pending).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(6_100);
+      await assertion;
+    } finally {
+      unregister();
+      vi.useRealTimers();
+    }
+  });
+
   it('host.hasPermission supports wildcard capability grants', () => {
     const api = createPluginMountApi({
       pluginId: 'demo',

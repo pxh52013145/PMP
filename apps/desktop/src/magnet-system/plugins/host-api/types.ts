@@ -36,6 +36,23 @@ export type PluginHostCapabilityInvokeRequest = {
   context: PluginHostCapabilityInvokeContext;
 };
 
+export type PluginHostCapabilityError = {
+  code: string;
+  message: string;
+  retryable?: boolean;
+  details?: unknown;
+};
+
+export type PluginHostCapabilityResult<T = unknown> =
+  | {
+      ok: true;
+      data: T;
+    }
+  | {
+      ok: false;
+      error: PluginHostCapabilityError;
+    };
+
 export type PluginHostCapabilityHandler = (
   request: PluginHostCapabilityInvokeRequest
 ) => Promise<unknown> | unknown;

@@ -26,7 +26,7 @@ function wildcardMatch(grantedCapability: string, requestedCapability: string): 
   return prefix.length > 0 && requestedCapability.startsWith(prefix);
 }
 
-export function hasPermission(permissions: Set<string>, capability: string): boolean {
+export function hasPermission(permissions: ReadonlySet<string>, capability: string): boolean {
   if (permissions.has(capability)) return true;
   if (
     capability.startsWith('net:') &&
