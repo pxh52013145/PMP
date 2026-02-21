@@ -61,6 +61,21 @@ function formatAuditEvent(event: PmpmAuditEvent): string {
   if (event.type === 'permissions-updated') {
     return `[permissions] denied=${event.deniedPermissions.join(',') || '(none)'}`;
   }
+  if (event.type === 'audio-input-adapter-selected') {
+    return `[audio-input:selected:${event.adapterKind}] ${event.adapterId} -> ${event.selectedInputId}`;
+  }
+  if (event.type === 'audio-input-adapter-fallback') {
+    return `[audio-input:fallback] ${event.fromProviderId} -> ${event.toAdapterId} (${event.reason})`;
+  }
+  if (event.type === 'audio-input-adapter-session-closed') {
+    return `[audio-input:closed:${event.adapterKind}] ${event.adapterId} ${event.reason ?? ''}`.trim();
+  }
+  if (event.type === 'audio-input-adapter-provider-quarantined') {
+    return `[audio-input:quarantined] ${event.providerId} failures=${event.consecutiveFailures}`;
+  }
+  if (event.type === 'audio-input-adapter-provider-quarantine-cleared') {
+    return `[audio-input:quarantine-cleared] ${event.providerId ?? 'all'} ${event.reason ?? ''}`.trim();
+  }
   return '[event]';
 }
 

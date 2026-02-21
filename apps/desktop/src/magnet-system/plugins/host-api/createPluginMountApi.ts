@@ -25,6 +25,7 @@ import type {
   HostAudioService,
   HostNavigation,
   PluginCoverSnapshot,
+  PluginHostAudioInputAdapterBridge,
   PluginMountApi,
   PluginNavigationSnapshot,
 } from './types';
@@ -76,6 +77,18 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
+function safeQueueLength(audioService: HostAudioService): number {
+  const getQueue = audioService.getQueue;
+  if (typeof getQueue !== 'function') return 0;
+
+  try {
+    const queue = getQueue.call(audioService);
+    return Array.isArray(queue) ? queue.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function createPluginMountApi({
   pluginId,
   hostLabel,
@@ -106,6 +119,84 @@ export function createPluginMountApi({
       // ignore
     }
   };
+
+  const aiControlBridge = {
+    searchTracks: async (query: string, limit: number): Promise<Track[]> => {
+      const normalizedQuery = typeof query === 'string' ? query.trim() : '';
+      if (!normalizedQuery) return [];
+
+      const safeLimit =
+        typeof limit === 'number' && Number.isFinite(limit)
+          ? Math.max(1, Math.min(200, Math.floor(limit)))
+          : 25;
+
+      return await musicLibraryService.searchTracks(normalizedQuery, safeLimit);
+    },
+    enqueueTracks: (
+      tracks: Track[],
+      options?: { replaceQueue?: boolean }
+    ): { previousQueueSize: number; nextQueueSize: number } => {
+      const normalizedTracks = Array.isArray(tracks) ? tracks.filter((track) => Boolean(track)) : [];
+      const previousQueueSize = safeQueueLength(audioService);
+
+      if (options?.replaceQueue) {
+        audioService.clearQueue?.();
+      }
+
+      if (normalizedTracks.length > 0) {
+        if (typeof audioService.addMultipleToQueue === 'function') {
+          audioService.addMultipleToQueue(normalizedTracks);
+        } else if (typeof audioService.addToQueue === 'function') {
+          for (const track of normalizedTracks) {
+            audioService.addToQueue(track);
+          }
+        } else {
+          throw new Error('Host audio service does not support queue mutation');
+        }
+      }
+
+      const fallbackNext = (options?.replaceQueue ? 0 : previousQueueSize) + normalizedTracks.length;
+      const nextQueueSize = Math.max(fallbackNext, safeQueueLength(audioService));
+
+      return {
+        previousQueueSize,
+        nextQueueSize,
+      };
+    },
+    playQueueIndex: async (index: number): Promise<void> => {
+      if (typeof audioService.playTrackAtIndex !== 'function') {
+        throw new Error('Host audio service does not support queue playback by index');
+      }
+
+      const safeIndex =
+        typeof index === 'number' && Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0;
+
+      await audioService.playTrackAtIndex(safeIndex);
+    },
+  };
+
+  const audioInputAdapterBridge: PluginHostAudioInputAdapterBridge | undefined =
+    typeof audioService.listAudioInputs === 'function'
+      ? {
+          listInputs: async () => {
+            try {
+              const ids = await Promise.resolve(audioService.listAudioInputs?.());
+              if (!Array.isArray(ids)) return [];
+              return ids
+                .map((id) => (typeof id === 'string' ? id.trim() : ''))
+                .filter((id) => id.length > 0);
+            } catch {
+              return [];
+            }
+          },
+          selectInput:
+            typeof audioService.selectAudioInput === 'function'
+              ? async (inputId: string | null) => {
+                  return await Promise.resolve(audioService.selectAudioInput?.(inputId));
+                }
+              : undefined,
+        }
+      : undefined;
 
   let coverCache: { key: string; value: PluginCoverSnapshot | null } | null = null;
   let coverInflight: { key: string; promise: Promise<PluginCoverSnapshot | null> } | null = null;
@@ -298,6 +389,8 @@ export function createPluginMountApi({
               pluginId,
               hostLabel,
               permissions,
+              aiControl: aiControlBridge,
+              audioInputAdapter: audioInputAdapterBridge,
             },
           }),
           HOST_CAPABILITY_INVOKE_TIMEOUT_MS,

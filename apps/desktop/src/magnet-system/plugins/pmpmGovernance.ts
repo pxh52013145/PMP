@@ -53,6 +53,65 @@ export type PmpmPermissionsUpdatedAuditEvent = {
   deniedPermissions: string[];
 };
 
+export type PmpmAudioInputAdapterSelectedAuditEvent = {
+  type: 'audio-input-adapter-selected';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  sessionId: string;
+  sourcePath: string;
+  adapterKind: 'builtin' | 'provider';
+  adapterId: string;
+  selectedInputId: string;
+  providerSessionId?: string;
+  fallbackFromProviderId?: string;
+};
+
+export type PmpmAudioInputAdapterFallbackAuditEvent = {
+  type: 'audio-input-adapter-fallback';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  sourcePath: string;
+  fromProviderId: string;
+  toAdapterKind: 'builtin' | 'provider';
+  toAdapterId: string;
+  selectedInputId?: string;
+  reason: string;
+};
+
+export type PmpmAudioInputAdapterSessionClosedAuditEvent = {
+  type: 'audio-input-adapter-session-closed';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  sessionId: string;
+  adapterKind: 'builtin' | 'provider';
+  adapterId: string;
+  providerSessionId?: string;
+  reason?: string;
+};
+
+export type PmpmAudioInputAdapterProviderQuarantinedAuditEvent = {
+  type: 'audio-input-adapter-provider-quarantined';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  providerId: string;
+  reason: string;
+  consecutiveFailures: number;
+  quarantineUntilMs: number;
+};
+
+export type PmpmAudioInputAdapterProviderQuarantineClearedAuditEvent = {
+  type: 'audio-input-adapter-provider-quarantine-cleared';
+  at: number;
+  pluginId: string;
+  hostLabel: string;
+  providerId?: string;
+  reason?: string;
+};
+
 export type PmpmAuditEvent =
   | PmpmPermissionDeniedAuditEvent
   | PmpmCrashAuditEvent
@@ -60,7 +119,12 @@ export type PmpmAuditEvent =
   | PmpmDisabledAuditEvent
   | PmpmRuntimeUnresponsiveAuditEvent
   | PmpmRuntimeRestartAuditEvent
-  | PmpmPermissionsUpdatedAuditEvent;
+  | PmpmPermissionsUpdatedAuditEvent
+  | PmpmAudioInputAdapterSelectedAuditEvent
+  | PmpmAudioInputAdapterFallbackAuditEvent
+  | PmpmAudioInputAdapterSessionClosedAuditEvent
+  | PmpmAudioInputAdapterProviderQuarantinedAuditEvent
+  | PmpmAudioInputAdapterProviderQuarantineClearedAuditEvent;
 
 export type PmpmAuditEventInput =
   | Omit<PmpmPermissionDeniedAuditEvent, 'at'>
@@ -69,7 +133,12 @@ export type PmpmAuditEventInput =
   | Omit<PmpmDisabledAuditEvent, 'at'>
   | Omit<PmpmRuntimeUnresponsiveAuditEvent, 'at'>
   | Omit<PmpmRuntimeRestartAuditEvent, 'at'>
-  | Omit<PmpmPermissionsUpdatedAuditEvent, 'at'>;
+  | Omit<PmpmPermissionsUpdatedAuditEvent, 'at'>
+  | Omit<PmpmAudioInputAdapterSelectedAuditEvent, 'at'>
+  | Omit<PmpmAudioInputAdapterFallbackAuditEvent, 'at'>
+  | Omit<PmpmAudioInputAdapterSessionClosedAuditEvent, 'at'>
+  | Omit<PmpmAudioInputAdapterProviderQuarantinedAuditEvent, 'at'>
+  | Omit<PmpmAudioInputAdapterProviderQuarantineClearedAuditEvent, 'at'>;
 
 export type PmpmAuditListener = () => void;
 

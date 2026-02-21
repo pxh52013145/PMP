@@ -1,4 +1,4 @@
-use crate::native_audio;
+use crate::{audio::decoder_sidecar, native_audio};
 
 #[tauri::command]
 pub async fn native_audio_load(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
@@ -141,6 +141,93 @@ pub async fn native_audio_select_audio_input(
     tauri::async_runtime::spawn_blocking(move || native_audio::select_audio_input(&app, input_id))
         .await
         .map_err(|e| format!("Native audio select audio input task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_decoder_sidecar_describe_provider(
+    provider_id: String,
+    protocol_version: Option<String>,
+) -> Result<decoder_sidecar::DecoderSidecarDescribeProviderResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder_sidecar::describe_provider(decoder_sidecar::DecoderSidecarDescribeProviderRequest {
+            provider_id,
+            protocol_version,
+        })
+    })
+    .await
+    .map_err(|e| format!("Decoder sidecar describe provider task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_decoder_sidecar_probe(
+    provider_id: String,
+    protocol_version: Option<String>,
+    source_path: String,
+    preferred_input_id: Option<String>,
+) -> Result<decoder_sidecar::DecoderSidecarProbeResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder_sidecar::probe(decoder_sidecar::DecoderSidecarProbeRequest {
+            provider_id,
+            protocol_version,
+            source_path,
+            preferred_input_id,
+        })
+    })
+    .await
+    .map_err(|e| format!("Decoder sidecar probe task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_decoder_sidecar_open_session(
+    provider_id: String,
+    protocol_version: Option<String>,
+    source_path: String,
+    preferred_input_id: Option<String>,
+) -> Result<decoder_sidecar::DecoderSidecarOpenSessionResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder_sidecar::open_session(decoder_sidecar::DecoderSidecarOpenSessionRequest {
+            provider_id,
+            protocol_version,
+            source_path,
+            preferred_input_id,
+        })
+    })
+    .await
+    .map_err(|e| format!("Decoder sidecar open session task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_decoder_sidecar_close_session(
+    provider_id: String,
+    protocol_version: Option<String>,
+    session_id: Option<String>,
+    provider_session_id: Option<String>,
+) -> Result<decoder_sidecar::DecoderSidecarCloseSessionResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder_sidecar::close_session(decoder_sidecar::DecoderSidecarCloseSessionRequest {
+            provider_id,
+            protocol_version,
+            session_id,
+            provider_session_id,
+        })
+    })
+    .await
+    .map_err(|e| format!("Decoder sidecar close session task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_decoder_sidecar_health(
+    provider_id: String,
+    protocol_version: Option<String>,
+) -> Result<decoder_sidecar::DecoderSidecarHealthResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder_sidecar::health(decoder_sidecar::DecoderSidecarHealthRequest {
+            provider_id,
+            protocol_version,
+        })
+    })
+    .await
+    .map_err(|e| format!("Decoder sidecar health task failed: {e}"))?
 }
 
 #[tauri::command]

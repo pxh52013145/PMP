@@ -8,6 +8,7 @@ export const PLUGIN_PERMISSIONS = {
   audioCover: 'api:audio-cover',
 
   aiRuntime: 'api:ai-runtime',
+  audioInputAdapter: 'api:audio-input-adapter',
   desktopPet: 'api:desktop-pet',
   voiceTraining: 'api:voice-training',
 

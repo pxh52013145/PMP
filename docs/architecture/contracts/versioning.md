@@ -4,6 +4,7 @@
 - Plugin manifest contract (`manifest.json` / `.pmpm`)
 - Host API contract (`host/audio/visualizer/navigation/config/window`)
 - Host capability contract (`host.listCapabilities` + `host.invokeCapability`)
+- Decoder adapter contract (draft): `foundation.audio-input-adapter`
 
 ## Semver Rules
 - `MAJOR`: breaking change, requires plugin migration path and fallback/disable strategy.
@@ -23,9 +24,15 @@
 - Capability responses should use a stable envelope (`ok/data` or `ok:false/error`) to keep forward compatibility.
 
 ## Current Baseline
-- Host API: `1.3.0`
-- Capability baseline: foundation capability registry + reserved AI/DesktopPet/Voice runtime capability IDs.
+- Host API: `1.8.0`
+- Capability baseline:
+  - `foundation.capability-registry` (discovery + visibility checks)
+  - `foundation.ai-adapter@0.4.0` (provider registry + invoke bridge + AI music controls)
+  - `foundation.audio-input-adapter@0.4.0` (Phase D foundation runtime: `describe/health/listInputs/listProviders/stats/clearProviderQuarantine/probe/openSession/closeSession`)
+  - `foundation.desktop-pet-runtime@0.3.0` (provider runtime bridge)
+  - `foundation.voice-training-runtime@0.3.0` (provider runtime bridge)
 - Invocation guardrails: JSON-serializable payload, 256 KiB payload ceiling, 6s timeout.
+- Draft reference: `foundation.audio-input-adapter` lifecycle/IPC/RT contract in `audio-decoder-plugin-contract-draft.md` (Phase C adds governed provider skeleton + C.1 sidecar handshake helper + C.2 Tauri control-plane command skeleton + C.3 governance audit hooks + Phase D foundation governance/observability; full sidecar data plane is still pending).
 
 ## Security / Governance
 - New capabilities must be deny-by-default.

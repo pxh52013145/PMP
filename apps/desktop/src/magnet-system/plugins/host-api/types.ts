@@ -1,5 +1,5 @@
 import type { NavigationPageData, NavigationPageType } from '../../../contracts/navigation';
-import type { PlayMode } from '../../../services/audio';
+import type { PlayMode, Track } from '../../../services/audio';
 import type { AudioSpectrumFrame, AudioSpectrumTap } from '../../../services/audio/types';
 import type { DynamicColors } from '../../../utils/dynamicColors';
 
@@ -28,7 +28,138 @@ export type PluginHostCapabilityInvokeContext = {
   pluginId: string;
   hostLabel: string;
   permissions: ReadonlySet<string>;
+  aiControl?: PluginHostAiControlBridge;
+  audioInputAdapter?: PluginHostAudioInputAdapterBridge;
 };
+
+export type PluginHostAiControlBridge = {
+  searchTracks: (query: string, limit: number) => Promise<Track[]>;
+  enqueueTracks: (
+    tracks: Track[],
+    options?: { replaceQueue?: boolean }
+  ) => { previousQueueSize: number; nextQueueSize: number };
+  playQueueIndex: (index: number) => Promise<void>;
+};
+
+export type PluginHostAudioInputAdapterBridge = {
+  listInputs: () => Promise<string[]> | string[];
+  selectInput?: (inputId: string | null) => Promise<unknown> | unknown;
+};
+
+export type PluginHostAudioInputAdapterProviderHealthStatus =
+  | 'ready'
+  | 'degraded'
+  | 'offline';
+
+export type PluginHostAudioInputAdapterProviderInfo = {
+  id: string;
+  name: string;
+  version: string;
+  protocolVersion: string;
+  vendor?: string;
+  description?: string;
+  experimental?: boolean;
+};
+
+export type PluginHostAudioInputAdapterProviderProbeRequest = {
+  sourcePath: string;
+  preferredInputId?: string | null;
+  context: PluginHostCapabilityInvokeContext;
+};
+
+export type PluginHostAudioInputAdapterProviderProbeResult = {
+  supported: boolean;
+  score?: number;
+  inputId?: string;
+  reason?: string;
+  details?: unknown;
+};
+
+export type PluginHostAudioInputAdapterProviderOpenSessionRequest = {
+  sourcePath: string;
+  preferredInputId?: string | null;
+  context: PluginHostCapabilityInvokeContext;
+};
+
+export type PluginHostAudioInputAdapterProviderOpenSessionResult = {
+  providerSessionId?: string;
+  selectedInputId?: string;
+  metadata?: unknown;
+};
+
+export type PluginHostAudioInputAdapterProviderCloseSessionRequest = {
+  sessionId: string;
+  providerSessionId?: string;
+  context: PluginHostCapabilityInvokeContext;
+};
+
+export type PluginHostAudioInputAdapterProviderHealth = {
+  status: PluginHostAudioInputAdapterProviderHealthStatus;
+  message?: string;
+};
+
+export type PluginHostAudioInputAdapterProviderRegistration = {
+  info: PluginHostAudioInputAdapterProviderInfo;
+  probe?: (
+    request: PluginHostAudioInputAdapterProviderProbeRequest
+  ) => Promise<PluginHostAudioInputAdapterProviderProbeResult> | PluginHostAudioInputAdapterProviderProbeResult;
+  openSession: (
+    request: PluginHostAudioInputAdapterProviderOpenSessionRequest
+  ) => Promise<PluginHostAudioInputAdapterProviderOpenSessionResult> | PluginHostAudioInputAdapterProviderOpenSessionResult;
+  closeSession?: (
+    request: PluginHostAudioInputAdapterProviderCloseSessionRequest
+  ) => Promise<void> | void;
+  health?: () => Promise<PluginHostAudioInputAdapterProviderHealth> | PluginHostAudioInputAdapterProviderHealth;
+};
+
+export type PluginHostAudioInputAdapterGovernanceOptions = {
+  thirdPartyEnabled?: boolean;
+  allowedProviderIds?: string[] | null;
+  timeoutMs?: number;
+  maxOpenSessionsPerPlugin?: number;
+  quarantineThreshold?: number;
+  quarantineMs?: number;
+};
+
+export type PluginHostRuntimeProviderHealthStatus = 'ready' | 'degraded' | 'offline';
+
+export type PluginHostRuntimeProviderInfo = {
+  id: string;
+  name: string;
+  version: string;
+  vendor?: string;
+  description?: string;
+  capabilities: string[];
+  experimental?: boolean;
+};
+
+export type PluginHostRuntimeProviderInvokeRequest = {
+  task: string;
+  input: unknown;
+  options: Record<string, unknown>;
+  context: PluginHostCapabilityInvokeContext;
+};
+
+export type PluginHostRuntimeProviderHealth = {
+  status: PluginHostRuntimeProviderHealthStatus;
+  message?: string;
+};
+
+export type PluginHostRuntimeProviderRegistration = {
+  info: PluginHostRuntimeProviderInfo;
+  invoke: (request: PluginHostRuntimeProviderInvokeRequest) => Promise<unknown> | unknown;
+  health?: () => Promise<PluginHostRuntimeProviderHealth> | PluginHostRuntimeProviderHealth;
+};
+
+export type PluginHostDesktopPetProviderInfo = PluginHostRuntimeProviderInfo;
+export type PluginHostDesktopPetProviderInvokeRequest = PluginHostRuntimeProviderInvokeRequest;
+export type PluginHostDesktopPetProviderHealth = PluginHostRuntimeProviderHealth;
+export type PluginHostDesktopPetProviderRegistration = PluginHostRuntimeProviderRegistration;
+
+export type PluginHostVoiceTrainingProviderInfo = PluginHostRuntimeProviderInfo;
+export type PluginHostVoiceTrainingProviderInvokeRequest = PluginHostRuntimeProviderInvokeRequest;
+export type PluginHostVoiceTrainingProviderHealth = PluginHostRuntimeProviderHealth;
+export type PluginHostVoiceTrainingProviderRegistration = PluginHostRuntimeProviderRegistration;
 
 export type PluginHostCapabilityInvokeRequest = {
   method: string;
@@ -41,6 +172,56 @@ export type PluginHostCapabilityError = {
   message: string;
   retryable?: boolean;
   details?: unknown;
+};
+
+export type PluginHostAiAdapterProviderHealthStatus = 'ready' | 'degraded' | 'offline';
+
+export type PluginHostAiAdapterProviderCapability =
+  | 'chat'
+  | 'completion'
+  | 'embedding'
+  | 'image-generation'
+  | 'audio-transcription'
+  | 'audio-synthesis'
+  | 'tool-calling'
+  | 'streaming';
+
+export type PluginHostAiAdapterProviderInfo = {
+  id: string;
+  name: string;
+  version: string;
+  vendor?: string;
+  description?: string;
+  defaultModel?: string;
+  capabilities: PluginHostAiAdapterProviderCapability[];
+  experimental?: boolean;
+};
+
+export type PluginHostAiAdapterInvokePayload = {
+  providerId?: string;
+  task: string;
+  input?: unknown;
+  options?: Record<string, unknown>;
+};
+
+export type PluginHostAiAdapterProviderInvokeRequest = {
+  task: string;
+  input: unknown;
+  options: Record<string, unknown>;
+  context: PluginHostCapabilityInvokeContext;
+};
+
+export type PluginHostAiAdapterProviderHealth = {
+  status: PluginHostAiAdapterProviderHealthStatus;
+  message?: string;
+};
+
+export type PluginHostAiAdapterProviderRegistration = {
+  info: PluginHostAiAdapterProviderInfo;
+  invoke: (
+    request: PluginHostAiAdapterProviderInvokeRequest
+  ) => Promise<unknown> | unknown;
+  health?: () => Promise<PluginHostAiAdapterProviderHealth> | PluginHostAiAdapterProviderHealth;
 };
 
 export type PluginHostCapabilityResult<T = unknown> =
@@ -164,10 +345,16 @@ export type HostAudioService = {
   playNext?: () => Promise<void>;
   playPrevious?: () => Promise<void>;
   playTrackAtIndex?: (index: number) => Promise<void>;
+  addToQueue?: (track: Track) => void;
+  addMultipleToQueue?: (tracks: Track[]) => void;
+  clearQueue?: () => void;
+  getQueue?: () => Track[];
   getPlayMode?: () => PlayMode;
   setPlayMode?: (mode: PlayMode) => void;
   getFrequencyData?: () => Uint8Array | null;
   getSpectrumFrame?: (tap?: AudioSpectrumTap) => AudioSpectrumFrame | null;
+  listAudioInputs?: () => Promise<string[]> | string[];
+  selectAudioInput?: (inputId: string | null) => Promise<unknown> | unknown;
 };
 
 export type HostNavigation = {

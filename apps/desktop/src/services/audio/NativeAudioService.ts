@@ -22,6 +22,7 @@ import {
   STORAGE_KEYS,
   TAURI_EVENTS,
 } from '../../utils/windowCommunication';
+import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readString } from '../../modules/storage';
 
 type StateListener = (state: AudioState) => void;
@@ -3710,6 +3711,43 @@ export class NativeAudioService implements IAudioService {
 
   getQueue(): Track[] {
     return this.state.queue;
+  }
+
+  async listAudioInputs(): Promise<string[]> {
+    if (!isTauriRuntime()) return [];
+
+    try {
+      const payload = await invoke<unknown>('native_audio_list_audio_inputs');
+      return this.normalizeOutputBackends(payload);
+    } catch (error) {
+      console.warn('[NativeAudio] Failed to list audio inputs:', error);
+      return [];
+    }
+  }
+
+  async selectAudioInput(inputId: string | null): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+
+    const normalizedInputId = this.sanitizeBackendId(inputId);
+
+    try {
+      const payload = await invoke<unknown>('native_audio_select_audio_input', {
+        inputId: normalizedInputId,
+      });
+      const parsed = this.parseComponentsStatePayload(payload);
+      const persistedInputId = this.sanitizeBackendId(parsed.preferredInputId) ?? normalizedInputId;
+
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_INPUT_ID,
+        persistedInputId,
+        TAURI_EVENTS.NATIVE_AUDIO_INPUT_ID_UPDATED
+      );
+
+      return true;
+    } catch (error) {
+      console.warn('[NativeAudio] Failed to select audio input:', error);
+      return false;
+    }
   }
 
   async playTrackAtIndex(index: number): Promise<void> {
