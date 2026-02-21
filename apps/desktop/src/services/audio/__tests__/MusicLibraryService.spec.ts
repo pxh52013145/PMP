@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@tauri-apps/api/tauri', () => ({
   invoke: vi.fn(),
+  convertFileSrc: vi.fn((path: string) => `http://asset.localhost/${String(path).replace(/\\/g, '/')}`),
 }));
 
 vi.mock('@tauri-apps/api/dialog', () => ({
@@ -63,7 +64,8 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\\\Music\\\\song.mp3' })
     );
-    expect(url).toBe('pmp://cover/cover-abc-thumb-256px');
+    expect(url).toContain('cover-abc-thumb-256px.jpg');
+    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
   });
 
   it('keeps embedded base64 coverUrl for non-absolute paths in Tauri', async () => {
@@ -115,7 +117,87 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
       'music_library_get_cover',
       expect.objectContaining({ path: 'C:\\Music\\sized.mp3', maxEdgePx: 160 })
     );
-    expect(url).toBe('pmp://cover/cover-small-thumb-160px?size=small');
+    expect(url).toContain('cover-small-thumb-160px.jpg');
+    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+  });
+
+  it('replaces stale pmp coverUrl in http dev runtime with asset url fallback', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({
+      key: 'cover-dev-thumb-256px',
+      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-dev-thumb-256px.jpg',
+      size: 2048,
+      mediaType: 'image/jpeg',
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    (service as unknown as { upsertCoverCacheEntry: unknown }).upsertCoverCacheEntry = vi
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as unknown as { maybeUpdateTrackCoverInDB: unknown }).maybeUpdateTrackCoverInDB = vi
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as unknown as { pruneCoverCacheIfNeeded: unknown }).pruneCoverCacheIfNeeded = vi
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const url = await service.getCoverUrlForTrack({
+      id: 't-dev-1',
+      title: 'Dev URL',
+      filePath: 'C:\\Music\\dev.mp3',
+      coverUrl: 'pmp://cover/cover-dev-thumb-256px?size=medium',
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_get_cover',
+      expect.objectContaining({ path: 'C:\\Music\\dev.mp3' })
+    );
+    expect(url).toContain('cover-dev-thumb-256px.jpg');
+    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+  });
+
+  it('allows bypassing hidden runtime cache policy for active track cover resolution', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({
+      key: 'cover-hidden-thumb-256px',
+      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-hidden-thumb-256px.jpg',
+      size: 4096,
+      mediaType: 'image/jpeg',
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    (service as unknown as { upsertCoverCacheEntry: unknown }).upsertCoverCacheEntry = vi
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as unknown as { maybeUpdateTrackCoverInDB: unknown }).maybeUpdateTrackCoverInDB = vi
+      .fn()
+      .mockResolvedValue(undefined);
+    (service as unknown as { pruneCoverCacheIfNeeded: unknown }).pruneCoverCacheIfNeeded = vi
+      .fn()
+      .mockResolvedValue(undefined);
+
+    service.applyCoverRuntimeCachePolicy('hidden');
+
+    const track = {
+      id: 't-hidden',
+      title: 'Hidden Policy Track',
+      filePath: 'C:\\Music\\hidden.mp3',
+    };
+
+    const blocked = await service.getCoverUrlForTrack(track);
+    expect(blocked).toBeUndefined();
+
+    const url = await service.getCoverUrlForTrack(track, { bypassRuntimePolicy: true });
+    expect(url).toContain('cover-hidden-thumb-256px.jpg');
+    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_get_cover',
+      expect.objectContaining({ path: 'C:\\Music\\hidden.mp3' })
+    );
   });
 });
 

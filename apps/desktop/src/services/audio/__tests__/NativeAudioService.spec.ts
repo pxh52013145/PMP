@@ -49,6 +49,43 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('falls back to track.path when filePath is empty', async () => {
+    const service = new NativeAudioService();
+
+    await service.loadTrack({
+      id: 't-path-fallback',
+      title: 'Path Fallback',
+      filePath: '',
+      path: 'C:\\\\Music\\\\path-fallback.mp3',
+    });
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load', {
+      path: 'C:\\\\Music\\\\path-fallback.mp3',
+    });
+
+    service.destroy();
+  });
+
+  it('does not duplicate queue entries when equivalent path format is loaded', async () => {
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+    ]);
+
+    await service.loadTrack({
+      id: 't1-variant',
+      title: 'A Variant',
+      filePath: 'C:/Music/a.mp3',
+      path: 'C:/Music/a.mp3',
+    });
+
+    const state = service.getState();
+    expect(state.queue).toHaveLength(1);
+    expect(state.currentIndex).toBe(0);
+
+    service.destroy();
+  });
+
   it('emits error when receiving native_audio_error event', async () => {
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
     listenMock.mockImplementation(
@@ -200,7 +237,7 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
-  it('clears currentTrack when backend reports trackPath as null', async () => {
+  it('clears currentTrack when backend reports ended with null trackPath', async () => {
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
     const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
     listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
@@ -212,10 +249,32 @@ describe('NativeAudioService', () => {
     await service.loadTrack({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
     expect(service.getState().currentTrack).not.toBeNull();
 
-    handlers.native_audio_state?.({ payload: { trackPath: null } });
+    handlers.native_audio_state?.({
+      payload: { trackPath: null, playbackState: 'stopped', ended: true },
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(service.getState().currentTrack).toBeNull();
+    service.destroy();
+  });
+
+  it('keeps currentTrack when backend tick payload omits trackPath while playing', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await service.loadTrack({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
+    const beforeTrack = service.getState().currentTrack;
+    expect(beforeTrack).not.toBeNull();
+
+    handlers.native_audio_state?.({ payload: { trackPath: null, playbackState: 'playing' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(service.getState().currentTrack).toBe(beforeTrack);
     service.destroy();
   });
 
@@ -1844,6 +1903,83 @@ describe('NativeAudioService', () => {
     expect(post?.frameId).toBe(100);
     expect(post?.tap).toBe('post-dsp');
     expect(post?.bins?.length).toBe(3);
+
+    service.destroy();
+  });
+
+  it('normalizes queue and track path separators from native payloads', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      { id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' },
+      { id: 't2', title: 'B', filePath: 'C:\\\\Music\\\\b.mp3' },
+    ]);
+
+    await service.playTrackAtIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const before = service.getState();
+    const beforeQueueRef = before.queue;
+    const beforeTrackRef = before.currentTrack;
+
+    handlers.native_audio_state?.({
+      payload: {
+        queue: ['C:/Music/a.mp3', 'C:/Music/b.mp3'],
+        currentIndex: 0,
+        trackPath: 'C:/Music/a.mp3',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const after = service.getState();
+    expect(after.queue).toBe(beforeQueueRef);
+    expect(after.currentTrack).toBe(beforeTrackRef);
+
+    service.destroy();
+  });
+
+  it('matches native trackPath variants like file URI and extended Windows prefix', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([{ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a b.mp3' }]);
+    await service.playTrackAtIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const expectedTrack = service.getState().currentTrack;
+    expect(expectedTrack?.id).toBe('t1');
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        trackPath: 'file:///C:/Music/a%20b.mp3',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(service.getState().currentTrack).toBe(expectedTrack);
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        trackPath: '\\\\?\\C:\\\\Music\\\\a b.mp3',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(service.getState().currentTrack).toBe(expectedTrack);
 
     service.destroy();
   });

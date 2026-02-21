@@ -66,7 +66,10 @@ async function extractColorsFromImageUrl(imageUrl: string, cacheKey?: string): P
 
     return await new Promise<DynamicColors>((resolve) => {
       const img = new Image();
-      img.crossOrigin = 'anonymous';
+      const lowerPortableUrl = portableUrl.toLowerCase();
+      if (lowerPortableUrl.startsWith('http:') || lowerPortableUrl.startsWith('https:')) {
+        img.crossOrigin = 'anonymous';
+      }
 
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');

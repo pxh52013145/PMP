@@ -1200,6 +1200,44 @@ export class MusicLibraryService {
     return `pmp://cover/${encodeURIComponent(normalizedKey)}`;
   }
 
+  private shouldUsePmpCoverProtocol(): boolean {
+    if (typeof window === 'undefined') return true;
+    const protocol = String(window.location?.protocol || '').toLowerCase();
+    // In Vite dev (`http://localhost:*`) custom schemes like `pmp://` are often blocked as
+    // unknown/non-fetch protocols by the browser layer. Prefer convertFileSrc() there.
+    if (protocol === 'http:' || protocol === 'https:') return false;
+    return true;
+  }
+
+  private isPmpCoverUrl(url: string): boolean {
+    const value = String(url || '').trim().toLowerCase();
+    return value.startsWith('pmp://cover/');
+  }
+
+  private async buildResolvedCoverUrlForRuntime(
+    coverPath: string,
+    coverKey: string,
+    coverSizeHint?: CoverSizeHint
+  ): Promise<string | undefined> {
+    if (this.shouldUsePmpCoverProtocol()) {
+      const pmpUrl = this.buildPmpCoverUrlForHint(coverKey, coverSizeHint);
+      if (pmpUrl) return pmpUrl;
+    }
+
+    try {
+      const tauriApi = await import('@tauri-apps/api/tauri');
+      const candidate =
+        typeof tauriApi.convertFileSrc === 'function' ? tauriApi.convertFileSrc(coverPath) : '';
+      const normalized = typeof candidate === 'string' ? candidate.trim() : '';
+      if (normalized) return normalized;
+    } catch {
+      // fallback below
+    }
+
+    const fallback = this.buildPmpCoverUrlForHint(coverKey, coverSizeHint);
+    return fallback || undefined;
+  }
+
   private resolveCoverEdgePx(coverSizeHint?: CoverSizeHint): number {
     switch (coverSizeHint) {
       case 'small':
@@ -1635,10 +1673,15 @@ export class MusicLibraryService {
 
   async getCoverUrlForTrack(
     track: Track,
-    options?: { allowAlbumFallback?: boolean; coverSizeHint?: CoverSizeHint }
+    options?: {
+      allowAlbumFallback?: boolean;
+      coverSizeHint?: CoverSizeHint;
+      bypassRuntimePolicy?: boolean;
+    }
   ): Promise<string | undefined> {
     const allowAlbumFallback = options?.allowAlbumFallback !== false;
     const coverSizeHint = options?.coverSizeHint;
+    const bypassRuntimePolicy = options?.bypassRuntimePolicy === true;
     const requestedEdgePx = this.resolveCoverEdgePx(coverSizeHint);
     const existingUrl = track.coverUrl;
     const inTauri = isTauriRuntime();
@@ -1670,8 +1713,9 @@ export class MusicLibraryService {
     const effectiveCacheKey = cacheKey ?? `${this.normalizePathForCompare(audioPath)}|edge=${requestedEdgePx}`;
     const normalizedExistingUrl =
       typeof existingUrl === 'string' && existingUrl.trim().length > 0 ? existingUrl.trim() : '';
+    const allowPmpCoverUrl = this.shouldUsePmpCoverProtocol();
 
-    if (normalizedExistingUrl.toLowerCase().startsWith('pmp://cover/')) {
+    if (this.isPmpCoverUrl(normalizedExistingUrl) && allowPmpCoverUrl) {
       const coverKeyFromUrl = this.parseCoverKeyFromPmpUrl(normalizedExistingUrl);
       const preferredExistingUrl = coverKeyFromUrl
         ? this.buildPmpCoverUrlForHint(coverKeyFromUrl, coverSizeHint) || normalizedExistingUrl
@@ -1685,19 +1729,28 @@ export class MusicLibraryService {
       return preferredExistingUrl;
     }
 
+    if (this.isPmpCoverUrl(normalizedExistingUrl) && !allowPmpCoverUrl) {
+      // Ignore stale `pmp://` URLs in runtimes where custom scheme loading is blocked.
+      this.coverUrlCache.delete(effectiveCacheKey);
+    }
+
     const cached = this.coverUrlCache.get(effectiveCacheKey);
     if (cached) {
-      if (track.coverKey) {
-        void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+      if (this.isPmpCoverUrl(cached) && !allowPmpCoverUrl) {
+        this.coverUrlCache.delete(effectiveCacheKey);
+      } else {
+        if (track.coverKey) {
+          void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
+        }
+        this.touchCoverBlobCache(effectiveCacheKey);
+        return cached;
       }
-      this.touchCoverBlobCache(effectiveCacheKey);
-      return cached;
     }
 
     const inflight = this.coverUrlInflight.get(effectiveCacheKey);
     if (inflight) return inflight;
 
-    if (this.currentCoverRuntimeCachePolicy === 'hidden') {
+    if (this.currentCoverRuntimeCachePolicy === 'hidden' && !bypassRuntimePolicy) {
       return undefined;
     }
 
@@ -1723,10 +1776,14 @@ export class MusicLibraryService {
       const coverPath = String(result.path || '').trim();
       if (!coverPath) return undefined;
 
-      const protocolUrl = this.buildPmpCoverUrlForHint(String(result.key || ''), coverSizeHint);
-      if (!protocolUrl) return undefined;
+      const resolvedUrl = await this.buildResolvedCoverUrlForRuntime(
+        coverPath,
+        String(result.key || ''),
+        coverSizeHint
+      );
+      if (!resolvedUrl) return undefined;
 
-      const url = protocolUrl;
+      const url = resolvedUrl;
       this.coverUrlCache.set(effectiveCacheKey, url);
       this.addCoverBlobUrlToCache(effectiveCacheKey, url, result.size);
       this.pruneUrlCaches();
@@ -1790,6 +1847,7 @@ export class MusicLibraryService {
         const url = await this.getCoverUrlForTrack(candidate, {
           allowAlbumFallback: false,
           coverSizeHint,
+          bypassRuntimePolicy,
         });
         if (url) {
           this.albumCoverUrlCache.set(albumCacheKey, url);

@@ -2598,7 +2598,94 @@ export class NativeAudioService implements IAudioService {
   }
 
   private getTrackPath(track: Track): string | null {
-    return track.filePath ?? track.path ?? track.originalPath ?? null;
+    const candidates = [track.filePath, track.path, track.originalPath];
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+    return null;
+  }
+
+  private normalizeTrackPathForCompare(path: string | null | undefined): string {
+    if (!path) return '';
+
+    let normalized = path.trim();
+    if (!normalized) return '';
+
+    if (/^file:\/\//i.test(normalized)) {
+      normalized = normalized.replace(/^file:\/\/(localhost)?/i, '');
+      try {
+        normalized = decodeURIComponent(normalized);
+      } catch {
+        // keep raw value when URI decode fails
+      }
+    }
+
+    normalized = normalized.replace(/^[\\/]{2}[?.][\\/]/, '');
+
+    if (/^\/[a-zA-Z]:[\\/]/.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+
+    normalized = normalized.replace(/\\/g, '/');
+    normalized = normalized.replace(/\/+/g, '/');
+    normalized = normalized.replace(/\/$/, '');
+
+    return normalized.toLowerCase();
+  }
+
+  private findQueueIndexByPath(queue: Track[], trackPath: string): number {
+    const normalizedTrackPath = this.normalizeTrackPathForCompare(trackPath);
+    if (!normalizedTrackPath) return -1;
+
+    return queue.findIndex((track) => {
+      const candidatePath = this.getTrackPath(track);
+      return this.normalizeTrackPathForCompare(candidatePath) === normalizedTrackPath;
+    });
+  }
+
+  private resolveAbsoluteTrackPathOrEmitError(track: Track): string | null {
+    const trackPath = this.getTrackPath(track);
+    if (trackPath && this.isProbablyAbsolutePath(trackPath)) {
+      return trackPath;
+    }
+
+    const error = new Error(
+      'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
+    ) as Error & { code?: string };
+    error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
+    this.emitError(error);
+    return null;
+  }
+
+  private ensureTrackInQueue(track: Track, trackPath: string): { queue: Track[]; index: number } {
+    let queue = this.state.queue;
+    let index = this.findQueueIndexByPath(queue, trackPath);
+
+    if (index === -1) {
+      queue = [...queue, track];
+      index = queue.length - 1;
+    }
+
+    return { queue, index };
+  }
+
+  private applyTrackLoadingState(track: Track, queue: Track[], index: number): void {
+    const nextState = this.updateState({
+      currentTrack: track,
+      queue,
+      currentIndex: index,
+      playbackState: 'loading',
+      duration: track.duration ?? 0,
+      currentTime: 0,
+      bufferedTime: 0,
+      bufferedAhead: 0,
+      decodeBufferedAhead: 0,
+      outputBufferedAhead: 0,
+    });
+    this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+    this.syncQueueToNative(queue, index);
   }
 
   private buildQueuePaths(queue: Track[]): string[] {
@@ -2654,13 +2741,15 @@ export class NativeAudioService implements IAudioService {
     for (const track of this.state.queue) {
       const path = this.getTrackPath(track);
       if (!path) continue;
-      if (!pathToTrack.has(path)) {
-        pathToTrack.set(path, track);
+      const normalizedPath = this.normalizeTrackPathForCompare(path);
+      if (!normalizedPath) continue;
+      if (!pathToTrack.has(normalizedPath)) {
+        pathToTrack.set(normalizedPath, track);
       }
     }
 
     return queuePaths.map((trackPath) => {
-      const existing = pathToTrack.get(trackPath);
+      const existing = pathToTrack.get(this.normalizeTrackPathForCompare(trackPath));
       if (existing) return existing;
 
       return {
@@ -2678,7 +2767,10 @@ export class NativeAudioService implements IAudioService {
     if (queuePaths.length !== queue.length) return false;
 
     for (let index = 0; index < queuePaths.length; index += 1) {
-      if (this.getTrackPath(queue[index]) !== queuePaths[index]) {
+      if (
+        this.normalizeTrackPathForCompare(this.getTrackPath(queue[index])) !==
+        this.normalizeTrackPathForCompare(queuePaths[index])
+      ) {
         return false;
       }
     }
@@ -3050,23 +3142,33 @@ export class NativeAudioService implements IAudioService {
           const currentTrackPath = this.state.currentTrack
             ? this.getTrackPath(this.state.currentTrack)
             : null;
+          const normalizedCurrentTrackPath =
+            this.normalizeTrackPathForCompare(currentTrackPath);
 
-          if (next.trackPath && next.trackPath !== currentTrackPath) {
-            const resolved = this.resolveTrackFromPath(next.trackPath);
-            if (resolved) {
-              update.currentTrack = resolved.track;
-              update.currentIndex = resolved.index;
-            } else {
-              update.currentTrack = {
-                id: `native-${next.trackPath}`,
-                title: this.deriveTitleFromPath(next.trackPath),
-                filePath: next.trackPath,
-                path: next.trackPath,
-                originalPath: next.trackPath,
-              };
+          if (typeof next.trackPath === 'string') {
+            const nextTrackPath = next.trackPath.trim();
+            if (nextTrackPath.length > 0) {
+              const normalizedNextTrackPath = this.normalizeTrackPathForCompare(nextTrackPath);
+              if (normalizedNextTrackPath !== normalizedCurrentTrackPath) {
+                const resolved = this.resolveTrackFromPath(nextTrackPath);
+                if (resolved) {
+                  update.currentTrack = resolved.track;
+                  update.currentIndex = resolved.index;
+                } else {
+                  update.currentTrack = {
+                    id: `native-${nextTrackPath}`,
+                    title: this.deriveTitleFromPath(nextTrackPath),
+                    filePath: nextTrackPath,
+                    path: nextTrackPath,
+                    originalPath: nextTrackPath,
+                  };
+                }
+              }
             }
-          } else if (!next.trackPath && currentTrackPath) {
-            update.currentTrack = null;
+          } else if (next.trackPath === null && currentTrackPath) {
+            if (next.ended === true) {
+              update.currentTrack = null;
+            }
           }
         }
 
@@ -3372,10 +3474,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private resolveTrackFromPath(trackPath: string): { track: Track; index: number } | null {
-    const index = this.state.queue.findIndex((track) => {
-      const candidates = [track.filePath, track.path, track.originalPath].filter(Boolean) as string[];
-      return candidates.includes(trackPath);
-    });
+    const index = this.findQueueIndexByPath(this.state.queue, trackPath);
     if (index === -1) return null;
     return { track: this.state.queue[index], index };
   }
@@ -3449,38 +3548,11 @@ export class NativeAudioService implements IAudioService {
     this.clearPendingSeek();
     if (!track) return false;
 
-    const trackPath = this.getTrackPath(track);
-    if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
-      const error = new Error(
-        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-      ) as Error & { code?: string };
-      error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-      this.emitError(error);
-      return false;
-    }
+    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(track);
+    if (!trackPath) return false;
 
-    let queue = this.state.queue;
-    let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
-    if (index === -1) {
-      queue = [...queue, track];
-      index = queue.length - 1;
-    }
-
-    const nextState = this.updateState({
-      currentTrack: track,
-      queue,
-      currentIndex: index,
-      playbackState: 'loading',
-      duration: track.duration ?? 0,
-      currentTime: 0,
-      bufferedTime: 0,
-      bufferedAhead: 0,
-      decodeBufferedAhead: 0,
-      outputBufferedAhead: 0,
-    });
-    this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
-
-    this.syncQueueToNative(queue, index);
+    const { queue, index } = this.ensureTrackInQueue(track, trackPath);
+    this.applyTrackLoadingState(track, queue, index);
 
     try {
       await this.applyReplayGainForTrack(track);
@@ -3501,38 +3573,11 @@ export class NativeAudioService implements IAudioService {
     this.clearPendingSeek();
     if (!track) return false;
 
-    const trackPath = this.getTrackPath(track);
-    if (!trackPath || !this.isProbablyAbsolutePath(trackPath)) {
-      const error = new Error(
-        'Native audio requires an absolute file path. This track has no filePath (likely added via File System Access API).'
-      ) as Error & { code?: string };
-      error.code = !trackPath ? 'NATIVE_TRACK_PATH_MISSING' : 'NATIVE_TRACK_PATH_NOT_ABSOLUTE';
-      this.emitError(error);
-      return false;
-    }
+    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(track);
+    if (!trackPath) return false;
 
-    let queue = this.state.queue;
-    let index = queue.findIndex((entry) => this.getTrackPath(entry) === trackPath);
-    if (index === -1) {
-      queue = [...queue, track];
-      index = queue.length - 1;
-    }
-
-    const nextState = this.updateState({
-      currentTrack: track,
-      queue,
-      currentIndex: index,
-      playbackState: 'loading',
-      duration: track.duration ?? 0,
-      currentTime: 0,
-      bufferedTime: 0,
-      bufferedAhead: 0,
-      decodeBufferedAhead: 0,
-      outputBufferedAhead: 0,
-    });
-    this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
-
-    this.syncQueueToNative(queue, index);
+    const { queue, index } = this.ensureTrackInQueue(track, trackPath);
+    this.applyTrackLoadingState(track, queue, index);
 
     const replayGainDb = this.computeReplayGainDbForTrack(track);
 

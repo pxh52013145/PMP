@@ -8,7 +8,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    http::{Request as HttpRequest, Response as HttpResponse, ResponseBuilder as HttpResponseBuilder},
+    http::{
+        Request as HttpRequest, Response as HttpResponse, ResponseBuilder as HttpResponseBuilder,
+    },
     AppHandle, Manager, Runtime,
 };
 
@@ -801,14 +803,12 @@ fn extract_quick_metadata(
     };
 
     // Many formats expose tags via the probe metadata rather than format.metadata().
-    if let Some(metadata) = probed_metadata.get() {
-        if let Some(rev) = metadata.current() {
-            apply_tags(rev);
-        }
+    if let Some(mut metadata) = probed_metadata.get() {
+        for_each_metadata_revision(&mut metadata, |rev| apply_tags(rev));
     }
-    if let Some(rev) = format.metadata().current() {
-        apply_tags(rev);
-    }
+
+    let mut format_metadata = format.metadata();
+    for_each_metadata_revision(&mut format_metadata, |rev| apply_tags(rev));
 
     Ok((
         duration,
@@ -820,6 +820,61 @@ fn extract_quick_metadata(
         replay_gain_track_db,
         replay_gain_album_db,
     ))
+}
+
+fn for_each_metadata_revision<F>(
+    metadata: &mut symphonia::core::meta::Metadata<'_>,
+    mut callback: F,
+) where
+    F: FnMut(&symphonia::core::meta::MetadataRevision),
+{
+    loop {
+        let Some(rev) = metadata.current() else {
+            break;
+        };
+
+        callback(rev);
+
+        if metadata.pop().is_none() {
+            break;
+        }
+    }
+}
+
+fn select_cover_from_metadata(
+    metadata: &mut symphonia::core::meta::Metadata<'_>,
+) -> Option<(Vec<u8>, String)> {
+    let mut fallback: Option<(Vec<u8>, String)> = None;
+
+    loop {
+        let Some(rev) = metadata.current() else {
+            break;
+        };
+
+        if let Some(front_cover) = rev
+            .visuals()
+            .iter()
+            .find(|visual| visual.usage == Some(StandardVisualKey::FrontCover))
+        {
+            return Some((
+                front_cover.data.as_ref().to_vec(),
+                front_cover.media_type.clone(),
+            ));
+        }
+
+        if let Some(first_visual) = rev.visuals().first() {
+            fallback = Some((
+                first_visual.data.as_ref().to_vec(),
+                first_visual.media_type.clone(),
+            ));
+        }
+
+        if metadata.pop().is_none() {
+            break;
+        }
+    }
+
+    fallback
 }
 
 fn stable_hash_for_path(path: &str) -> u32 {
@@ -893,7 +948,10 @@ fn media_type_from_cover_path(path: &Path) -> Option<String> {
 
 fn parse_cover_key_from_protocol_uri(uri: &str) -> Option<String> {
     let uri_without_fragment = uri.split('#').next().unwrap_or(uri);
-    let uri_without_query = uri_without_fragment.split('?').next().unwrap_or(uri_without_fragment);
+    let uri_without_query = uri_without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(uri_without_fragment);
 
     let candidate = if let Some(rest) = uri_without_query.strip_prefix("pmp://cover/") {
         rest
@@ -964,7 +1022,10 @@ fn strip_cover_thumb_suffix(key: &str) -> &str {
     &key[..prefix_end]
 }
 
-fn candidate_cover_keys_for_protocol_request(request_key: &str, preferred_edge_px: Option<u32>) -> Vec<String> {
+fn candidate_cover_keys_for_protocol_request(
+    request_key: &str,
+    preferred_edge_px: Option<u32>,
+) -> Vec<String> {
     if let Some(edge_px) = preferred_edge_px {
         let base_key = strip_cover_thumb_suffix(request_key);
         let preferred_variant = cover_variant_key(base_key, edge_px);
@@ -988,7 +1049,9 @@ fn build_protocol_response(
     }
     response = response.header("Access-Control-Allow-Origin", "*");
     response = response.header("Cache-Control", "public, max-age=604800, immutable");
-    response.header("Content-Length", body.len().to_string()).body(body)
+    response
+        .header("Content-Length", body.len().to_string())
+        .body(body)
 }
 
 pub fn handle_pmp_protocol_request<R: Runtime>(
@@ -1312,37 +1375,16 @@ pub fn get_or_create_cover(
         ..
     } = probed;
 
-    fn choose_from_revision<'a>(
-        rev: &'a symphonia::core::meta::MetadataRevision,
-    ) -> Option<&'a symphonia::core::meta::Visual> {
-        if rev.visuals().is_empty() {
-            return None;
-        }
-        for visual in rev.visuals() {
-            if visual.usage == Some(StandardVisualKey::FrontCover) {
-                return Some(visual);
-            }
-        }
-        Some(&rev.visuals()[0])
-    }
-
     let mut chosen: Option<(Vec<u8>, String)> = None;
 
     // Prefer probe metadata; some formats provide embedded visuals there (e.g. ID3).
-    if let Some(metadata) = probed_metadata.get() {
-        if let Some(rev) = metadata.current() {
-            if let Some(visual) = choose_from_revision(rev) {
-                chosen = Some((visual.data.as_ref().to_vec(), visual.media_type.clone()));
-            }
-        }
+    if let Some(mut metadata) = probed_metadata.get() {
+        chosen = select_cover_from_metadata(&mut metadata);
     }
+
     if chosen.is_none() {
-        let format_metadata = format.metadata();
-        if let Some(rev) = format_metadata.current() {
-            if let Some(visual) = choose_from_revision(rev) {
-                chosen = Some((visual.data.as_ref().to_vec(), visual.media_type.clone()));
-            }
-        }
+        let mut format_metadata = format.metadata();
+        chosen = select_cover_from_metadata(&mut format_metadata);
     }
 
     let (chosen_data, chosen_media_type) = match chosen {
@@ -1562,14 +1604,16 @@ pub fn scan_library_paths(
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_cover_keys_for_protocol_request, compute_quick_fingerprint, extract_quick_metadata,
-        parse_cover_key_from_protocol_uri, parse_cover_size_edge_from_protocol_uri,
-        parse_replaygain_db, strip_cover_thumb_suffix,
+        candidate_cover_keys_for_protocol_request, compute_quick_fingerprint,
+        extract_quick_metadata, parse_cover_key_from_protocol_uri,
+        parse_cover_size_edge_from_protocol_uri, parse_replaygain_db, select_cover_from_metadata,
+        strip_cover_thumb_suffix,
     };
     use std::fs::File;
     use std::io::Write;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use symphonia::core::meta::{MetadataBuilder, MetadataLog, StandardVisualKey, Visual};
 
     #[test]
     fn parse_replaygain_db_parses_db_suffix() {
@@ -1764,7 +1808,10 @@ mod tests {
 
     #[test]
     fn strip_cover_thumb_suffix_extracts_base_key() {
-        assert_eq!(strip_cover_thumb_suffix("cover-abc-thumb-256px"), "cover-abc");
+        assert_eq!(
+            strip_cover_thumb_suffix("cover-abc-thumb-256px"),
+            "cover-abc"
+        );
         assert_eq!(strip_cover_thumb_suffix("cover-abc"), "cover-abc");
     }
 
@@ -1774,7 +1821,82 @@ mod tests {
             candidate_cover_keys_for_protocol_request("cover-abc-thumb-256px", Some(160));
         assert_eq!(
             candidates,
-            vec!["cover-abc-thumb-160px".to_string(), "cover-abc-thumb-256px".to_string()]
+            vec![
+                "cover-abc-thumb-160px".to_string(),
+                "cover-abc-thumb-256px".to_string()
+            ]
         );
+    }
+
+    #[test]
+    fn select_cover_from_metadata_scans_all_revisions_for_front_cover() {
+        let mut log = MetadataLog::default();
+
+        let mut first_builder = MetadataBuilder::new();
+        first_builder.add_visual(Visual {
+            media_type: "image/png".to_string(),
+            dimensions: None,
+            bits_per_pixel: None,
+            color_mode: None,
+            usage: Some(StandardVisualKey::Media),
+            tags: Vec::new(),
+            data: vec![1u8, 2u8, 3u8].into_boxed_slice(),
+        });
+        log.push(first_builder.metadata());
+
+        let mut second_builder = MetadataBuilder::new();
+        second_builder.add_visual(Visual {
+            media_type: "image/jpeg".to_string(),
+            dimensions: None,
+            bits_per_pixel: None,
+            color_mode: None,
+            usage: Some(StandardVisualKey::FrontCover),
+            tags: Vec::new(),
+            data: vec![9u8, 8u8, 7u8].into_boxed_slice(),
+        });
+        log.push(second_builder.metadata());
+
+        let mut metadata = log.metadata();
+        let selected =
+            select_cover_from_metadata(&mut metadata).expect("front cover from revisions");
+
+        assert_eq!(selected.1, "image/jpeg");
+        assert_eq!(selected.0, vec![9u8, 8u8, 7u8]);
+    }
+
+    #[test]
+    fn select_cover_from_metadata_falls_back_to_latest_non_front_visual() {
+        let mut log = MetadataLog::default();
+
+        let mut first_builder = MetadataBuilder::new();
+        first_builder.add_visual(Visual {
+            media_type: "image/png".to_string(),
+            dimensions: None,
+            bits_per_pixel: None,
+            color_mode: None,
+            usage: Some(StandardVisualKey::Illustration),
+            tags: Vec::new(),
+            data: vec![10u8].into_boxed_slice(),
+        });
+        log.push(first_builder.metadata());
+
+        let mut second_builder = MetadataBuilder::new();
+        second_builder.add_visual(Visual {
+            media_type: "image/webp".to_string(),
+            dimensions: None,
+            bits_per_pixel: None,
+            color_mode: None,
+            usage: Some(StandardVisualKey::BandArtistLogo),
+            tags: Vec::new(),
+            data: vec![20u8].into_boxed_slice(),
+        });
+        log.push(second_builder.metadata());
+
+        let mut metadata = log.metadata();
+        let selected =
+            select_cover_from_metadata(&mut metadata).expect("fallback visual from revisions");
+
+        assert_eq!(selected.1, "image/webp");
+        assert_eq!(selected.0, vec![20u8]);
     }
 }

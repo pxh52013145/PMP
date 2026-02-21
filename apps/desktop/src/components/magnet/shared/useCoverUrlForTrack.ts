@@ -112,7 +112,9 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     let cancelled = false;
     const currentKey = key;
 
-    void musicLibraryService.getCoverUrlForTrack(lookupTrack, { coverSizeHint }).then((url) => {
+    void musicLibraryService
+      .getCoverUrlForTrack(lookupTrack, { coverSizeHint, bypassRuntimePolicy: true })
+      .then((url) => {
       if (cancelled) return;
       if (!isNonEmptyString(url)) return;
       setResolved({ key: currentKey, url });
