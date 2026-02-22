@@ -37,6 +37,7 @@ const SHARED_TIMELINE_LOW_WATERMARK_TRIGGER: usize = 4;
 const STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MIN_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MAX_MIB: usize = 4096;
+const BUFFERING_DEGRADED_RECOVERY_WINDOW: Duration = Duration::from_secs(20);
 
 pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> =
     Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
@@ -77,6 +78,8 @@ static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 
+static BUFFERING_DEGRADED_RESUME_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+
 fn info_log(message: impl AsRef<str>) {
     if *NATIVE_AUDIO_INFO_LOG_ENABLED {
         eprintln!("{}", message.as_ref());
@@ -92,6 +95,14 @@ fn should_wrap_source_for_shared_backend(backend_id: &str) -> bool {
     // Wrapping sources again with a generic render-ahead layer increases latency and can make
     // play/pause/seek feel sluggish.
     backend_id == "wasapi" || backend_id == "rodio-cpal"
+}
+
+fn soft_start_sample_threshold(sample_rate: u32, channels: usize) -> usize {
+    let sample_rate = sample_rate.max(1) as f64;
+    let channels = channels.max(1) as f64;
+    ((sample_rate * channels * 0.04).ceil() as usize)
+        .max((channels as usize) * 32)
+        .max(1)
 }
 
 pub(crate) fn effective_src_policy_for_backend_open(
@@ -1816,6 +1827,8 @@ impl NativeAudioEngine {
                 let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil()
                     as usize)
                     .clamp(1, target_samples);
+                let soft_start_samples =
+                    soft_start_sample_threshold(self.decoded_sample_rate.max(1), channels);
 
                 let available = render_queue.len_samples();
                 let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
@@ -1841,7 +1854,23 @@ impl NativeAudioEngine {
 
                     let available = render_queue.len_samples();
                     let finished = decode_reservoir.is_finished() && render_queue.is_finished();
-                    if available >= min_start_samples || (finished && available > 0) {
+                    let degraded_start =
+                        available >= soft_start_samples && available < min_start_samples;
+                    if available >= min_start_samples
+                        || (finished && available > 0)
+                        || degraded_start
+                    {
+                        if degraded_start {
+                            crate::audio::diagnostics::record_event_throttled(
+                                "audio.buffering.degraded_start",
+                                available as u64,
+                                min_start_samples as u64,
+                                &BUFFERING_DEGRADED_RESUME_TIMELINE_GATE_MS,
+                                180,
+                            );
+                            self.underrun_recovery_until =
+                                Some(Instant::now() + BUFFERING_DEGRADED_RECOVERY_WINDOW);
+                        }
                         sink.play();
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
@@ -2456,6 +2485,8 @@ impl NativeAudioEngine {
                     }
 
                     let ready_min = available >= min_start_samples;
+                    let soft_start_samples =
+                        soft_start_sample_threshold(self.decoded_sample_rate.max(1), channels);
 
                     let stall_timeout = Duration::from_secs(15);
                     let no_progress_for = self
@@ -2463,6 +2494,26 @@ impl NativeAudioEngine {
                         .map(|instant| now.saturating_duration_since(instant))
                         .unwrap_or(Duration::from_secs(0));
                     if !ready_min && no_progress_for >= stall_timeout && !finished {
+                        if available >= soft_start_samples {
+                            crate::audio::diagnostics::record_event_throttled(
+                                "audio.buffering.degraded_resume",
+                                available as u64,
+                                min_start_samples as u64,
+                                &BUFFERING_DEGRADED_RESUME_TIMELINE_GATE_MS,
+                                180,
+                            );
+                            sink.play();
+                            self.buffering_started_at = None;
+                            self.buffering_last_progress_at = None;
+                            self.buffering_last_samples = 0;
+                            self.set_state(PlaybackState::Playing);
+                            self.base_position = self.current_position;
+                            self.playback_started_at = Some(now);
+                            self.underrun_recovery_until =
+                                Some(now + BUFFERING_DEGRADED_RECOVERY_WINDOW);
+                            return true;
+                        }
+
                         sink.pause();
                         self.sync_clock();
                         self.buffering_started_at = None;

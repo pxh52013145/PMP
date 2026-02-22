@@ -140,14 +140,14 @@ pub(crate) fn streaming_min_start_bounds(
 
     if is_exclusive {
         if underrun_recovery_active {
-            (1.50, 0.35)
+            (0.75, 0.25)
         } else {
-            (0.65, 0.15)
+            (0.30, 0.10)
         }
     } else if underrun_recovery_active {
-        (4.00, 0.60)
+        (1.05, 0.35)
     } else {
-        (1.20, 0.25)
+        (0.35, 0.12)
     }
 }
 
