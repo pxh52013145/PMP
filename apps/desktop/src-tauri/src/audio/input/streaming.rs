@@ -40,6 +40,24 @@ pub(crate) struct StreamingPlayback {
     pub error: Arc<Mutex<Option<String>>>,
 }
 
+fn transfer_target_samples(
+    render_len: usize,
+    low_watermark: usize,
+    high_watermark: usize,
+    chunk_limit: usize,
+    channels: usize,
+    profile: RealtimePressureProfile,
+) -> usize {
+    let desired =
+        if render_len <= low_watermark || !matches!(profile, RealtimePressureProfile::Normal) {
+            high_watermark.saturating_sub(render_len)
+        } else {
+            low_watermark.saturating_sub(render_len)
+        };
+
+    desired.max(channels).min(chunk_limit)
+}
+
 pub(crate) fn streaming_transfer_stats() -> (u64, u64, u64, bool) {
     (
         TRANSFER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed),
@@ -244,13 +262,14 @@ pub(crate) fn spawn_render_transfer_worker(
                     );
                 }
 
-                let target_samples = if render_len <= low_watermark {
-                    high_watermark.saturating_sub(render_len)
-                } else {
-                    low_watermark.saturating_sub(render_len)
-                }
-                .max(channels)
-                .min(chunk_limit);
+                let target_samples = transfer_target_samples(
+                    render_len,
+                    low_watermark,
+                    high_watermark,
+                    chunk_limit,
+                    channels,
+                    profile,
+                );
 
                 let transfer = decode_reservoir.pop_chunk_into(
                     &mut transfer_block,
@@ -282,8 +301,11 @@ pub(crate) fn spawn_render_transfer_worker(
                 }
 
                 if transfer.finished && decode_reservoir.is_finished_and_empty() {
+                    // Keep transfer worker alive across EOS so subsequent seek/restart commands can
+                    // refill the render queue without requiring a full pipeline rebuild.
                     render_queue.mark_finished();
-                    break;
+                    thread::sleep(decode_idle_backoff);
+                    continue;
                 }
 
                 if transfer.popped == 0 {
@@ -681,5 +703,90 @@ mod tests {
         let high_rate =
             adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
         assert!(high_rate > low_rate);
+    }
+
+    #[test]
+    fn transfer_target_samples_normal_profile_prefers_low_watermark() {
+        let target = transfer_target_samples(
+            97_920,
+            46_080,
+            103_680,
+            12_288,
+            2,
+            RealtimePressureProfile::Normal,
+        );
+
+        assert_eq!(target, 2);
+    }
+
+    #[test]
+    fn transfer_target_samples_guarded_profile_prefers_high_watermark() {
+        let target = transfer_target_samples(
+            97_920,
+            46_080,
+            103_680,
+            12_288,
+            2,
+            RealtimePressureProfile::Guarded,
+        );
+
+        assert_eq!(target, 5_760);
+    }
+
+    #[test]
+    fn transfer_target_samples_is_bounded_by_chunk_limit() {
+        let target = transfer_target_samples(
+            10_000,
+            46_080,
+            103_680,
+            1_024,
+            2,
+            RealtimePressureProfile::Critical,
+        );
+
+        assert_eq!(target, 1_024);
+    }
+
+    #[test]
+    fn transfer_worker_stays_alive_across_finished_boundary_for_seek_recovery() {
+        let decode_reservoir = AudioRingBuffer::new(8_192);
+        let render_queue = AudioRingBuffer::new(8_192);
+        let (command_tx, command_rx) = mpsc::channel::<TransferCommand>();
+
+        spawn_render_transfer_worker(
+            decode_reservoir.clone(),
+            render_queue.clone(),
+            2,
+            48_000,
+            command_rx,
+            "streaming-transfer-test-seek-recovery",
+        )
+        .expect("spawn transfer worker");
+
+        let first = vec![0.25f32; 1_024];
+        let pushed_first = decode_reservoir.push_interleaved(&first, 2);
+        assert!(pushed_first > 0);
+        decode_reservoir.mark_finished();
+
+        render_queue.wait_for_samples(512, Duration::from_millis(400));
+        assert!(render_queue.len_samples() > 0);
+
+        let mut drained = Vec::new();
+        let _ = render_queue.pop_chunk_into(&mut drained, 8_192, Duration::from_millis(0));
+
+        // Simulate interactive seek: clear finished flags and push fresh decoded samples.
+        decode_reservoir.clear();
+        render_queue.clear();
+        let second = vec![0.75f32; 1_024];
+        let pushed_second = decode_reservoir.push_interleaved(&second, 2);
+        assert!(pushed_second > 0);
+
+        render_queue.wait_for_samples(512, Duration::from_millis(500));
+        assert!(
+            render_queue.len_samples() > 0,
+            "transfer worker should keep running after EOS and forward post-seek samples"
+        );
+
+        let _ = command_tx.send(TransferCommand::Shutdown);
     }
 }

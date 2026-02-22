@@ -99,7 +99,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 let ended = was_playing && is_stopped;
                 Some((
                     if include_extended_tick || ended {
-                        engine.build_state_payload(ended)
+                        engine.build_extended_tick_state_payload(ended)
                     } else {
                         engine.build_tick_state_payload(ended)
                     },

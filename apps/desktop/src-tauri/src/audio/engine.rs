@@ -1409,6 +1409,12 @@ impl NativeAudioEngine {
             }
         }
 
+        // Backend/device topology changed: stale recovery pressure from the previous pipeline can
+        // over-constrain min-start gating for the new sink path and cause impossible buffering
+        // targets during immediate post-switch ticks. Reset recovery tracking and apply a short
+        // diagnostics grace window.
+        self.reset_recovery_tracking();
+
         let resolved_sample_rate = self
             .output_sample_rate
             .or_else(|| self.output_backend.current_info().output_sample_rate);
@@ -2699,7 +2705,13 @@ impl NativeAudioEngine {
         Ok(())
     }
 
-    pub(crate) fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
+    fn build_state_payload_with_options(
+        &self,
+        ended: bool,
+        include_track_path: bool,
+        include_queue: bool,
+        include_diagnostics: bool,
+    ) -> NativeAudioStatePayload {
         let (underrun_events, underrun_frames) = crate::audio::input::streaming_underrun_stats();
         let (
             transfer_low_watermark_samples,
@@ -2717,7 +2729,11 @@ impl NativeAudioEngine {
             || self.output_backend.id() == "wasapi-shared-raw";
         let shared_render_backend = is_shared_output_backend(self.output_backend.id());
         let shared_render_metrics = crate::audio::output::shared_render_ahead_metrics();
-        let diagnostics_timeline = crate::audio::diagnostics::snapshot_recent_default();
+        let diagnostics_timeline = if include_diagnostics {
+            Some(crate::audio::diagnostics::snapshot_recent_default())
+        } else {
+            None
+        };
         let transfer_metrics_valid = matches!(
             self.active_input_id.as_deref(),
             Some(SYMPHONIA_INPUT_ID) | Some(SACD_INPUT_ID)
@@ -2756,10 +2772,13 @@ impl NativeAudioEngine {
             gain_db: self.gain_db,
             replay_gain_db: self.replay_gain_db,
             muted: self.muted,
-            track_path: self
-                .current_track
-                .as_ref()
-                .and_then(|path| path.to_str().map(|s| s.to_string())),
+            track_path: if include_track_path {
+                self.current_track
+                    .as_ref()
+                    .and_then(|path| path.to_str().map(|s| s.to_string()))
+            } else {
+                None
+            },
             current_time: self.current_position,
             duration: self.duration,
             buffered_time,
@@ -2778,7 +2797,7 @@ impl NativeAudioEngine {
             },
             bit_depth: self.decoded_bit_depth,
             device: self.device_name.clone(),
-            queue: if self.queue_initialized {
+            queue: if include_queue && self.queue_initialized {
                 Some(
                     self.queue
                         .iter()
@@ -2898,8 +2917,10 @@ impl NativeAudioEngine {
             } else {
                 None
             },
-            diagnostic_timeline_dropped_events: Some(diagnostics_timeline.dropped_events),
-            diagnostic_timeline: Some(diagnostics_timeline.events),
+            diagnostic_timeline_dropped_events: diagnostics_timeline
+                .as_ref()
+                .map(|timeline| timeline.dropped_events),
+            diagnostic_timeline: diagnostics_timeline.map(|timeline| timeline.events),
             error_seq: self
                 .last_error_code
                 .as_ref()
@@ -2910,8 +2931,20 @@ impl NativeAudioEngine {
         }
     }
 
+    pub(crate) fn build_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
+        self.build_state_payload_with_options(ended, true, true, true)
+    }
+
+    pub(crate) fn build_extended_tick_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
+        self.build_state_payload_with_options(ended, true, false, true)
+    }
+
+    pub(crate) fn build_transport_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
+        self.build_state_payload_with_options(ended, true, false, false)
+    }
+
     pub(crate) fn build_tick_state_payload(&self, ended: bool) -> NativeAudioStatePayload {
-        let mut payload = self.build_state_payload(ended);
+        let mut payload = self.build_state_payload_with_options(ended, false, false, false);
         // High-frequency tick payload is intentionally compact to reduce WebView bridge allocation
         // pressure. Full diagnostics/metrics are still available via command-triggered state
         // payloads and periodic extended ticks in the emitter.
@@ -4323,20 +4356,94 @@ mod tests {
     }
 
     #[test]
+    fn switch_output_backend_resets_recovery_tracking_after_success() {
+        let old_backend = Arc::new(TransportModeBackend::new("old"));
+        let mut engine = NativeAudioEngine::new_with_backend(old_backend.clone());
+
+        engine.underrun_recovery_until = Some(Instant::now() + Duration::from_secs(10));
+        engine.shared_timeline_stress_until = Some(Instant::now() + Duration::from_secs(10));
+        engine.buffering_started_at = Some(Instant::now() - Duration::from_secs(2));
+        engine.buffering_last_progress_at = Some(Instant::now() - Duration::from_secs(2));
+        engine.buffering_last_samples = 12_345;
+        engine.shared_timeline_stress_ignore_before_ms = 0;
+
+        let switched_backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("new"));
+        engine
+            .switch_output_backend(switched_backend)
+            .expect("backend switch should succeed");
+
+        assert_eq!(engine.output_backend.id(), "new");
+        assert!(engine.underrun_recovery_until.is_none());
+        assert!(engine.shared_timeline_stress_until.is_none());
+        assert!(engine.buffering_started_at.is_none());
+        assert!(engine.buffering_last_progress_at.is_none());
+        assert_eq!(engine.buffering_last_samples, 0);
+        assert!(
+            engine.shared_timeline_stress_ignore_before_ms
+                > crate::audio::diagnostics::current_timestamp_ms()
+        );
+    }
+
+    #[test]
     fn shared_timeline_stress_window_gets_extended_by_diagnostics() {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("wasapi"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
 
-        for index in 0..32 {
-            let kind = match index % 3 {
-                0 => "shared.transfer.render_low_watermark",
-                1 => "shared.transfer.decode_low_watermark",
-                _ => "shared.render_ahead.low_watermark",
-            };
-            crate::audio::diagnostics::record_event(kind, 128, 512);
+        // Diagnostics recording is best-effort (`try_lock`); under parallel test load some events
+        // can be dropped. Retry recording/updating a few rounds to make the assertion stable.
+        for _ in 0..8 {
+            for index in 0..32 {
+                let kind = match index % 3 {
+                    0 => "shared.transfer.render_low_watermark",
+                    1 => "shared.transfer.decode_low_watermark",
+                    _ => "shared.render_ahead.low_watermark",
+                };
+                crate::audio::diagnostics::record_event(kind, 128, 512);
+            }
+            engine.update_shared_timeline_stress_window();
+            if engine.shared_timeline_stress_until.is_some() {
+                break;
+            }
+            std::thread::yield_now();
         }
 
-        engine.update_shared_timeline_stress_window();
         assert!(engine.shared_timeline_stress_until.is_some());
+    }
+
+    #[test]
+    fn extended_tick_payload_keeps_diagnostics_but_omits_queue() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("wasapi"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+        engine.current_track = Some(PathBuf::from("queue-track-a.wav"));
+        engine.queue_initialized = true;
+        engine.queue = vec![
+            PathBuf::from("queue-track-a.wav"),
+            PathBuf::from("queue-track-b.wav"),
+        ];
+        engine.current_index = 0;
+
+        crate::audio::diagnostics::record_event("shared.transfer.render_low_watermark", 64, 128);
+        let payload = engine.build_extended_tick_state_payload(false);
+
+        assert_eq!(payload.track_path.as_deref(), Some("queue-track-a.wav"));
+        assert!(payload.queue.is_none());
+        assert!(payload.diagnostic_timeline.is_some());
+    }
+
+    #[test]
+    fn transport_payload_omits_queue_and_diagnostics() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(StaticBackend("wasapi"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+        engine.current_track = Some(PathBuf::from("queue-track-a.wav"));
+        engine.queue_initialized = true;
+        engine.queue = vec![PathBuf::from("queue-track-a.wav")];
+        engine.current_index = 0;
+
+        let payload = engine.build_transport_state_payload(false);
+        assert_eq!(payload.track_path.as_deref(), Some("queue-track-a.wav"));
+        assert!(payload.queue.is_none());
+        assert!(payload.diagnostic_timeline.is_none());
+        assert!(payload.diagnostic_timeline_dropped_events.is_none());
     }
 }

@@ -213,7 +213,7 @@ pub(crate) fn execute_load(track_path: PathBuf) -> Result<TransportExecution, St
                 });
             TransportExecution {
                 result,
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             }
         })?,
         Err(err) => with_engine_mut(|engine| {
@@ -221,7 +221,7 @@ pub(crate) fn execute_load(track_path: PathBuf) -> Result<TransportExecution, St
             engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
             TransportExecution {
                 result: Err(err),
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             }
         })?,
     };
@@ -261,7 +261,7 @@ pub(crate) fn execute_load_and_play(
 
             TransportExecution {
                 result,
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             }
         })?,
         Err(err) => with_engine_mut(|engine| {
@@ -269,7 +269,7 @@ pub(crate) fn execute_load_and_play(
             engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
             TransportExecution {
                 result: Err(err),
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             }
         })?,
     };
@@ -285,7 +285,7 @@ pub(crate) fn execute_play() -> Result<TransportExecution, String> {
         });
         TransportExecution {
             result,
-            state_payload: engine.build_state_payload(false),
+            state_payload: engine.build_transport_state_payload(false),
         }
     })?;
 
@@ -300,7 +300,7 @@ pub(crate) fn execute_pause() -> Result<TransportExecution, String> {
         });
         TransportExecution {
             result,
-            state_payload: engine.build_state_payload(false),
+            state_payload: engine.build_transport_state_payload(false),
         }
     })?;
 
@@ -312,7 +312,7 @@ pub(crate) fn execute_stop() -> Result<TransportExecution, String> {
         engine.stop();
         TransportExecution {
             result: Ok(()),
-            state_payload: engine.build_state_payload(false),
+            state_payload: engine.build_transport_state_payload(false),
         }
     })?;
 
@@ -328,14 +328,14 @@ pub(crate) fn execute_seek_command(
         if exec_seq == 0 || !exec_time.is_finite() {
             return TransportExecution {
                 result: Ok(()),
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             };
         }
 
         if !engine.should_accept_seek_command(Some(exec_seq), latest_requested_seek_seq) {
             return TransportExecution {
                 result: Ok(()),
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             };
         }
 
@@ -346,7 +346,7 @@ pub(crate) fn execute_seek_command(
 
         TransportExecution {
             result,
-            state_payload: engine.build_state_payload(false),
+            state_payload: engine.build_transport_state_payload(false),
         }
     })?;
 
@@ -383,7 +383,7 @@ pub(crate) fn execute_crossfade(
 
             TransportExecution {
                 result,
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             }
         })?,
         Err(err) => with_engine_mut(|engine| {
@@ -391,7 +391,7 @@ pub(crate) fn execute_crossfade(
             engine.set_error("NATIVE_AUDIO_CROSSFADE_FAILED", err.clone());
             TransportExecution {
                 result: Err(err),
-                state_payload: engine.build_state_payload(false),
+                state_payload: engine.build_transport_state_payload(false),
             }
         })?,
     };
