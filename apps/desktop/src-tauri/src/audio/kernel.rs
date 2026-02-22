@@ -157,14 +157,16 @@ fn prepare_crossfade_for_operation(
             &op.output_backend_id,
             op.target_sample_rate,
             channels,
-            streaming.buffer.capacity_samples(),
+            streaming.render_queue.capacity_samples(),
             meta.duration,
             StreamingPrebufferKind::Crossfade,
             op.streaming_prebuffer_crossfade_seconds,
             op.interactive_wait_policy,
         );
-        if streaming.buffer.len_samples() < target_samples {
-            streaming.buffer.wait_for_samples(target_samples, timeout);
+        if streaming.render_queue.len_samples() < target_samples {
+            streaming
+                .render_queue
+                .wait_for_samples(target_samples, timeout);
         }
     }
 

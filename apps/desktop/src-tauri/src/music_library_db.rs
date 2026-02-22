@@ -677,7 +677,9 @@ fn normalize_cloud_hash_job_status(value: Option<&str>) -> String {
 }
 
 fn normalize_limit(value: Option<u32>) -> i64 {
-    value.map(|item| item.clamp(1, 2000) as i64).unwrap_or(i64::MAX)
+    value
+        .map(|item| item.clamp(1, 2000) as i64)
+        .unwrap_or(i64::MAX)
 }
 
 fn normalize_offset(value: Option<u32>) -> i64 {
@@ -702,10 +704,18 @@ fn build_fallback_task_id(
 }
 
 fn build_cloud_hash_job_id(owner_uid: &str, entry_id: &str, track_id: Option<&str>) -> String {
-    format!("{}::{}::{}", owner_uid, entry_id, track_id.unwrap_or_default())
+    format!(
+        "{}::{}::{}",
+        owner_uid,
+        entry_id,
+        track_id.unwrap_or_default()
+    )
 }
 
-fn user_entry_record_by_id(conn: &Connection, entry_id: &str) -> Result<LibraryUserEntryRecord, String> {
+fn user_entry_record_by_id(
+    conn: &Connection,
+    entry_id: &str,
+) -> Result<LibraryUserEntryRecord, String> {
     conn.query_row(
         r#"
         SELECT
@@ -1305,7 +1315,11 @@ pub fn list_user_entries(
             .as_ref()
             .and_then(|item| item.owner_uid.as_ref())
             .and_then(|value| normalize_owner_uid(Some(value.as_str())));
-        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() { 1_i64 } else { 0_i64 };
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
         let in_cloud_only_flag = if query
             .as_ref()
@@ -1566,13 +1580,21 @@ pub fn list_fallback_tasks(
             .as_ref()
             .and_then(|item| item.owner_uid.as_ref())
             .and_then(|value| normalize_owner_uid(Some(value.as_str())));
-        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() { 1_i64 } else { 0_i64 };
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
         let normalized_status = query
             .as_ref()
             .and_then(|item| item.status.as_ref())
             .map(|value| normalize_fallback_status(Some(value.as_str())));
-        let status_enabled_flag = if normalized_status.is_some() { 1_i64 } else { 0_i64 };
+        let status_enabled_flag = if normalized_status.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let status_exact_value = normalized_status.unwrap_or_default();
 
         let mut stmt = conn
@@ -1770,13 +1792,21 @@ pub fn list_cloud_hash_jobs(
             .as_ref()
             .and_then(|item| item.owner_uid.as_ref())
             .and_then(|value| normalize_owner_uid(Some(value.as_str())));
-        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() { 1_i64 } else { 0_i64 };
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
         let normalized_status = query
             .as_ref()
             .and_then(|item| item.status.as_ref())
             .map(|value| normalize_cloud_hash_job_status(Some(value.as_str())));
-        let status_enabled_flag = if normalized_status.is_some() { 1_i64 } else { 0_i64 };
+        let status_enabled_flag = if normalized_status.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let status_exact_value = normalized_status.unwrap_or_default();
 
         let mut stmt = conn
@@ -1802,7 +1832,9 @@ pub fn list_cloud_hash_jobs(
                 OFFSET ?6
                 "#,
             )
-            .map_err(|error| format!("Failed to prepare cloud hash job query statement: {error}"))?;
+            .map_err(|error| {
+                format!("Failed to prepare cloud hash job query statement: {error}")
+            })?;
 
         let rows = stmt
             .query_map(
@@ -1834,7 +1866,8 @@ pub fn list_cloud_hash_jobs(
 
         let mut items = Vec::new();
         for row in rows {
-            items.push(row.map_err(|error| format!("Failed to parse cloud hash job row: {error}"))?);
+            items
+                .push(row.map_err(|error| format!("Failed to parse cloud hash job row: {error}"))?);
         }
         Ok(items)
     })

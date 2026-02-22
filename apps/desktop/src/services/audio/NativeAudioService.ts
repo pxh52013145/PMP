@@ -297,6 +297,7 @@ export class NativeAudioService implements IAudioService {
     aux: number;
   }> = [];
   private diagnosticTimelineLastSeq = 0;
+  private diagnosticTimelineIgnoreBeforeMs = 0;
   private sharedStressUntilMs = 0;
   private sharedStressReason: string | null = null;
   private sharedStressEscalationCount = 0;
@@ -315,8 +316,9 @@ export class NativeAudioService implements IAudioService {
   private static readonly PROTECTION_WINDOW_MAX_MS = 120_000;
   private static readonly ROBUSTNESS_BUFFER_WINDOW_SIZE = 48;
   private static readonly SHARED_TIMELINE_STRESS_WINDOW_MS = 12_000;
-  private static readonly SHARED_TIMELINE_LOW_WATERMARK_TRIGGER = 4;
+  private static readonly SHARED_TIMELINE_LOW_WATERMARK_TRIGGER = 20;
   private static readonly SHARED_TIMELINE_UNDERRUN_TRIGGER = 1;
+  private static readonly SHARED_TIMELINE_STRESS_RESET_GRACE_MS = 1_500;
   private static readonly DYNAMIC_SRC_RESTORE_DEBOUNCE_MS = 4_000;
   private static readonly DYNAMIC_SRC_MIN_SWITCH_INTERVAL_MS = 600;
   private static readonly DYNAMIC_SRC_SEEK_HOLD_MS = 2_000;
@@ -2152,11 +2154,26 @@ export class NativeAudioService implements IAudioService {
     this.diagnosticTimelineLastSeq = latestSeq;
 
     const nowMs = Date.now();
+    if (
+      this.diagnosticTimelineIgnoreBeforeMs > 0 &&
+      nowMs >= this.diagnosticTimelineIgnoreBeforeMs
+    ) {
+      this.diagnosticTimelineIgnoreBeforeMs = 0;
+    }
+
+    if (this.diagnosticTimelineIgnoreBeforeMs > nowMs) {
+      return;
+    }
+
+    const timelineFloorMs = Math.max(
+      nowMs - NativeAudioService.SHARED_TIMELINE_STRESS_WINDOW_MS,
+      this.diagnosticTimelineIgnoreBeforeMs
+    );
     const recent = newEvents.filter(
       (event) =>
         Number.isFinite(event.timestampMs) &&
         event.timestampMs > 0 &&
-        nowMs - event.timestampMs <= NativeAudioService.SHARED_TIMELINE_STRESS_WINDOW_MS
+        event.timestampMs >= timelineFloorMs
     );
 
     if (recent.length === 0) {
@@ -2312,18 +2329,24 @@ export class NativeAudioService implements IAudioService {
     this.maybeAutoSwitchOutputBackend('underrun-spike');
   }
 
+  private resetSharedTimelineStressTracking(nowMs: number = Date.now()): void {
+    this.sharedStressUntilMs = 0;
+    this.sharedStressReason = null;
+    this.sharedStressEscalationCount = 0;
+    this.diagnosticTimelineIgnoreBeforeMs =
+      nowMs + NativeAudioService.SHARED_TIMELINE_STRESS_RESET_GRACE_MS;
+    this.applyStreamingBufferPolicy(true);
+    this.scheduleDynamicSrcRestoreEvaluation();
+  }
+
   private resetUnderrunTracking(): void {
     this.lastUnderrunEvents = 0;
     this.lastUnderrunFrames = 0;
     this.underrunSpikeTimestampsMs = [];
     this.underrunRecoveryUntilMs = 0;
-    this.sharedStressUntilMs = 0;
-    this.sharedStressReason = null;
-    this.sharedStressEscalationCount = 0;
     this.dynamicSrcHoldUntilMs = 0;
     this.clearDynamicSrcRestoreTimer();
-    this.applyStreamingBufferPolicy(true);
-    this.scheduleDynamicSrcRestoreEvaluation();
+    this.resetSharedTimelineStressTracking();
   }
 
   private maybeReleaseUnderrunRecovery(playbackState: PlaybackState): void {
@@ -2672,6 +2695,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private applyTrackLoadingState(track: Track, queue: Track[], index: number): void {
+    this.resetSharedTimelineStressTracking();
     const nextState = this.updateState({
       currentTrack: track,
       queue,
@@ -2685,7 +2709,6 @@ export class NativeAudioService implements IAudioService {
       outputBufferedAhead: 0,
     });
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
-    this.syncQueueToNative(queue, index);
   }
 
   private buildQueuePaths(queue: Track[]): string[] {
@@ -2693,8 +2716,11 @@ export class NativeAudioService implements IAudioService {
   }
 
   private disposed = false;
-  private pendingQueueSync: { queue: Track[]; currentIndex: number } | null = null;
+  private pendingQueueSync: { queue: Track[]; currentIndex: number; indexOnly: boolean } | null =
+    null;
   private queueSyncScheduled = false;
+  private lastSyncedQueueRef: Track[] | null = null;
+  private lastSyncedQueueIndex = -1;
 
   private scheduleQueueSyncFlush(): void {
     if (this.disposed) {
@@ -2714,12 +2740,43 @@ export class NativeAudioService implements IAudioService {
       this.pendingQueueSync = null;
       if (!pending) return;
 
+      const canUseIndexOnlySync =
+        pending.indexOnly &&
+        this.lastSyncedQueueRef === pending.queue &&
+        pending.currentIndex !== this.lastSyncedQueueIndex;
+
+      if (
+        pending.indexOnly &&
+        this.lastSyncedQueueRef === pending.queue &&
+        pending.currentIndex === this.lastSyncedQueueIndex
+      ) {
+        return;
+      }
+
+      if (canUseIndexOnlySync) {
+        void invoke('native_audio_sync_queue_index', {
+          currentIndex: pending.currentIndex,
+        })
+          .then(() => {
+            this.lastSyncedQueueIndex = pending.currentIndex;
+          })
+          .catch((error) => {
+            console.warn('[NativeAudio] Failed to sync queue index state:', error);
+          });
+        return;
+      }
+
       void invoke('native_audio_sync_queue', {
         queue: this.buildQueuePaths(pending.queue),
         currentIndex: pending.currentIndex,
-      }).catch((error) => {
-        console.warn('[NativeAudio] Failed to sync queue state:', error);
-      });
+      })
+        .then(() => {
+          this.lastSyncedQueueRef = pending.queue;
+          this.lastSyncedQueueIndex = pending.currentIndex;
+        })
+        .catch((error) => {
+          console.warn('[NativeAudio] Failed to sync queue state:', error);
+        });
     };
 
     if (typeof queueMicrotask === 'function') {
@@ -2730,9 +2787,16 @@ export class NativeAudioService implements IAudioService {
     void Promise.resolve().then(flush);
   }
 
-  private syncQueueToNative(queue: Track[] = this.state.queue, currentIndex = this.state.currentIndex): void {
+  private syncQueueToNative(
+    queue: Track[] = this.state.queue,
+    currentIndex = this.state.currentIndex,
+    options?: { indexOnly?: boolean }
+  ): void {
     if (this.disposed) return;
-    this.pendingQueueSync = { queue, currentIndex };
+    const requestIndexOnly = options?.indexOnly === true;
+    const previousPending = this.pendingQueueSync;
+    const mergedIndexOnly = requestIndexOnly && !(previousPending && !previousPending.indexOnly);
+    this.pendingQueueSync = { queue, currentIndex, indexOnly: mergedIndexOnly };
     this.scheduleQueueSyncFlush();
   }
 
@@ -3562,6 +3626,8 @@ export class NativeAudioService implements IAudioService {
       return false;
     }
 
+    this.syncQueueToNative(queue, index, { indexOnly: queue === this.state.queue });
+
     this.updateState({
       playbackState: 'paused',
       currentTime: 0,
@@ -3587,6 +3653,8 @@ export class NativeAudioService implements IAudioService {
       // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.
       return false;
     }
+
+    this.syncQueueToNative(queue, index, { indexOnly: queue === this.state.queue });
 
     this.markTrackPlayedBestEffort(track);
 
@@ -3821,8 +3889,9 @@ export class NativeAudioService implements IAudioService {
       const wasPlaying = this.state.playbackState === 'playing';
       const previousIndex = this.state.currentIndex;
       const track = this.state.queue[index];
+      this.resetSharedTimelineStressTracking();
       this.updateState({ currentIndex: index });
-      this.syncQueueToNative(this.state.queue, index);
+      this.syncQueueToNative(this.state.queue, index, { indexOnly: true });
 
       const crossfade = this.readCrossfadeSettings();
       const shouldCrossfade =
@@ -4125,6 +4194,9 @@ export class NativeAudioService implements IAudioService {
     this.disposed = true;
     this.pendingQueueSync = null;
     this.queueSyncScheduled = false;
+    this.lastSyncedQueueRef = null;
+    this.lastSyncedQueueIndex = -1;
+    this.diagnosticTimelineIgnoreBeforeMs = 0;
 
     this.stop();
     this.stopFallbackTicker();

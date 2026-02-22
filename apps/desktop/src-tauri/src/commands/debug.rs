@@ -160,7 +160,8 @@ mod tests {
 
     #[test]
     fn parse_recent_git_commits_output_extracts_records() {
-        let input = "a1b2\u{001f}a1b2\u{001f}feat: hello\u{001f}2026-02-17T10:00:00+00:00\u{001e}\n\
+        let input =
+            "a1b2\u{001f}a1b2\u{001f}feat: hello\u{001f}2026-02-17T10:00:00+00:00\u{001e}\n\
                      c3d4\u{001f}c3d4\u{001f}fix: world\u{001f}2026-02-17T11:00:00+00:00\u{001e}";
         let commits = parse_recent_git_commits_output(input);
         assert_eq!(commits.len(), 2);

@@ -490,7 +490,11 @@ impl StreamingResampler {
         }
     }
 
-    pub fn process_interleaved_into(&mut self, input_interleaved: &[f32], out_interleaved: &mut Vec<f32>) {
+    pub fn process_interleaved_into(
+        &mut self,
+        input_interleaved: &[f32],
+        out_interleaved: &mut Vec<f32>,
+    ) {
         out_interleaved.clear();
         let frames = input_interleaved.len() / self.channels;
         if frames == 0 {

@@ -1310,38 +1310,23 @@ describe('NativeAudioService', () => {
     invokeMock.mockClear();
 
     const now = Date.now();
+    const lowWatermarkKinds = [
+      'shared.transfer.render_low_watermark',
+      'shared.transfer.decode_low_watermark',
+      'shared.render_ahead.low_watermark',
+    ] as const;
+
+    const diagnosticTimeline = Array.from({ length: 20 }, (_, index) => ({
+      seq: 201 + index,
+      timestampMs: now - (120 - index),
+      kind: lowWatermarkKinds[index % lowWatermarkKinds.length],
+      value: 1024 - index * 12,
+      aux: 4096,
+    }));
+
     handlers.native_audio_state?.({
       payload: {
-        diagnosticTimeline: [
-          {
-            seq: 201,
-            timestampMs: now - 100,
-            kind: 'shared.transfer.render_low_watermark',
-            value: 1024,
-            aux: 4096,
-          },
-          {
-            seq: 202,
-            timestampMs: now - 90,
-            kind: 'shared.transfer.decode_low_watermark',
-            value: 900,
-            aux: 4096,
-          },
-          {
-            seq: 203,
-            timestampMs: now - 80,
-            kind: 'shared.render_ahead.low_watermark',
-            value: 800,
-            aux: 4096,
-          },
-          {
-            seq: 204,
-            timestampMs: now - 70,
-            kind: 'shared.transfer.render_low_watermark',
-            value: 700,
-            aux: 4096,
-          },
-        ],
+        diagnosticTimeline,
       },
     });
 

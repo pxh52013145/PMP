@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::audio::buffer_policy::streaming_min_start_bounds;
+use crate::audio::buffer_policy::{streaming_min_start_bounds, streaming_transfer_watermarks};
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
     open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputDecodeMode,
@@ -33,11 +33,11 @@ use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
 const SHARED_TIMELINE_STRESS_WINDOW: Duration = Duration::from_secs(12);
 const SHARED_TIMELINE_STRESS_EXTENSION: Duration = Duration::from_secs(16);
-const SHARED_TIMELINE_LOW_WATERMARK_TRIGGER: usize = 4;
+const SHARED_TIMELINE_LOW_WATERMARK_TRIGGER: usize = 20;
+const SHARED_TIMELINE_STRESS_RESET_GRACE_MS: u64 = 1_500;
 const STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MIN_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MAX_MIB: usize = 4096;
-const BUFFERING_DEGRADED_RECOVERY_WINDOW: Duration = Duration::from_secs(20);
 
 pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> =
     Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
@@ -78,8 +78,6 @@ static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 
-static BUFFERING_DEGRADED_RESUME_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
-
 fn info_log(message: impl AsRef<str>) {
     if *NATIVE_AUDIO_INFO_LOG_ENABLED {
         eprintln!("{}", message.as_ref());
@@ -97,12 +95,25 @@ fn should_wrap_source_for_shared_backend(backend_id: &str) -> bool {
     backend_id == "wasapi" || backend_id == "rodio-cpal"
 }
 
-fn soft_start_sample_threshold(sample_rate: u32, channels: usize) -> usize {
-    let sample_rate = sample_rate.max(1) as f64;
-    let channels = channels.max(1) as f64;
-    ((sample_rate * channels * 0.04).ceil() as usize)
-        .max((channels as usize) * 32)
+fn clamp_min_start_samples_to_reachable(
+    min_start_samples: usize,
+    target_samples: usize,
+    capacity_samples: usize,
+    channels: usize,
+    profile: RealtimePressureProfile,
+) -> usize {
+    let channels = channels.max(1);
+    let floor_samples = channels.saturating_mul(32).max(1);
+    let (_, high_watermark) =
+        streaming_transfer_watermarks(capacity_samples.max(1), channels, profile);
+    let reachable_ceiling = high_watermark
+        .max(floor_samples)
+        .min(capacity_samples.max(1));
+
+    min_start_samples
         .max(1)
+        .min(target_samples.max(1))
+        .min(reachable_ceiling)
 }
 
 pub(crate) fn effective_src_policy_for_backend_open(
@@ -440,6 +451,7 @@ pub(crate) struct NativeAudioEngine {
     buffering_last_samples: usize,
     underrun_recovery_until: Option<Instant>,
     shared_timeline_stress_until: Option<Instant>,
+    shared_timeline_stress_ignore_before_ms: u64,
     last_observed_underrun_events: u64,
     decoded_samples: Option<Arc<Vec<f32>>>,
     decoded_channels: u16,
@@ -639,6 +651,7 @@ impl NativeAudioEngine {
             buffering_last_samples: 0,
             underrun_recovery_until: None,
             shared_timeline_stress_until: None,
+            shared_timeline_stress_ignore_before_ms: 0,
             last_observed_underrun_events: 0,
             decoded_samples: None,
             decoded_channels: 0,
@@ -874,12 +887,19 @@ impl NativeAudioEngine {
                 .as_millis()
                 .min(u64::MAX as u128) as u64,
         );
+        if self.shared_timeline_stress_ignore_before_ms > 0
+            && now_ms >= self.shared_timeline_stress_ignore_before_ms
+        {
+            self.shared_timeline_stress_ignore_before_ms = 0;
+        }
+        let timeline_floor_ms =
+            recent_threshold_ms.max(self.shared_timeline_stress_ignore_before_ms);
 
         let mut low_watermark_hits = 0usize;
         let mut has_underrun = false;
 
         for event in timeline.events.iter().rev() {
-            if event.timestamp_ms < recent_threshold_ms {
+            if event.timestamp_ms < timeline_floor_ms {
                 continue;
             }
 
@@ -912,6 +932,18 @@ impl NativeAudioEngine {
         {
             self.shared_timeline_stress_until = None;
         }
+    }
+
+    fn reset_recovery_tracking(&mut self) {
+        self.buffering_started_at = None;
+        self.buffering_last_progress_at = None;
+        self.buffering_last_samples = 0;
+        self.underrun_recovery_until = None;
+        self.shared_timeline_stress_until = None;
+        self.last_observed_underrun_events = crate::audio::input::streaming_underrun_stats().0;
+        self.shared_timeline_stress_ignore_before_ms =
+            crate::audio::diagnostics::current_timestamp_ms()
+                .saturating_add(SHARED_TIMELINE_STRESS_RESET_GRACE_MS);
     }
 
     pub(crate) fn engine_policy_payload(&self) -> NativeAudioEnginePolicyPayload {
@@ -1044,6 +1076,7 @@ impl NativeAudioEngine {
         self.spectrum_pre_tap.clear();
         self.spectrum_post_tap.clear();
         self.dsp_runtime.request_reset();
+        self.reset_recovery_tracking();
 
         if let Some(old_sink) = self.sink.take() {
             old_sink.stop();
@@ -1148,6 +1181,7 @@ impl NativeAudioEngine {
         self.clear_error();
         self.spectrum_pre_tap.clear();
         self.spectrum_post_tap.clear();
+        self.reset_recovery_tracking();
 
         let token = self.begin_operation();
         Some(CrossfadeOperation {
@@ -1522,9 +1556,7 @@ impl NativeAudioEngine {
         self.spectrum_pre_tap.clear();
         self.spectrum_post_tap.clear();
         self.dsp_runtime.request_reset();
-        self.buffering_started_at = None;
-        self.buffering_last_progress_at = None;
-        self.buffering_last_samples = 0;
+        self.reset_recovery_tracking();
         if let Some(old_sink) = self.sink.take() {
             old_sink.stop();
         }
@@ -1656,6 +1688,7 @@ impl NativeAudioEngine {
         self.clear_error();
         self.spectrum_pre_tap.clear();
         self.spectrum_post_tap.clear();
+        self.reset_recovery_tracking();
 
         let target_channels = self.decoded_channels.max(1);
         let target_sample_rate = self.decoded_sample_rate.max(1);
@@ -1824,11 +1857,9 @@ impl NativeAudioEngine {
                     .min(min_seconds_cap)
                     .max(min_seconds_floor)
                     .min(target_seconds);
-                let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil()
-                    as usize)
-                    .clamp(1, target_samples);
-                let soft_start_samples =
-                    soft_start_sample_threshold(self.decoded_sample_rate.max(1), channels);
+                let mut min_start_samples =
+                    ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                        .clamp(1, target_samples);
 
                 let available = render_queue.len_samples();
                 let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
@@ -1836,7 +1867,14 @@ impl NativeAudioEngine {
                 } else {
                     0.0
                 };
-                let _ = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
+                let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
+                min_start_samples = clamp_min_start_samples_to_reachable(
+                    min_start_samples,
+                    target_samples,
+                    render_queue.capacity_samples(),
+                    channels,
+                    profile,
+                );
                 self.desired_playback_state = PlaybackState::Playing;
                 let finished = decode_reservoir.is_finished() && render_queue.is_finished();
                 if available < min_start_samples && !finished {
@@ -1854,23 +1892,7 @@ impl NativeAudioEngine {
 
                     let available = render_queue.len_samples();
                     let finished = decode_reservoir.is_finished() && render_queue.is_finished();
-                    let degraded_start =
-                        available >= soft_start_samples && available < min_start_samples;
-                    if available >= min_start_samples
-                        || (finished && available > 0)
-                        || degraded_start
-                    {
-                        if degraded_start {
-                            crate::audio::diagnostics::record_event_throttled(
-                                "audio.buffering.degraded_start",
-                                available as u64,
-                                min_start_samples as u64,
-                                &BUFFERING_DEGRADED_RESUME_TIMELINE_GATE_MS,
-                                180,
-                            );
-                            self.underrun_recovery_until =
-                                Some(Instant::now() + BUFFERING_DEGRADED_RECOVERY_WINDOW);
-                        }
+                    if available >= min_start_samples || (finished && available > 0) {
                         sink.play();
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
@@ -1987,6 +2009,39 @@ impl NativeAudioEngine {
     pub(crate) fn sync_queue_state(&mut self, queue: Vec<PathBuf>, current_index: i32) {
         self.queue_initialized = true;
         self.queue = queue;
+        let max_index = (self.queue.len() as i32).saturating_sub(1);
+        self.current_index = current_index.clamp(-1, max_index);
+
+        if self.queue.is_empty() || self.current_index < 0 {
+            self.cancel_crossfade();
+            self.sync_clock();
+            self.spectrum_pre_tap.clear();
+            self.spectrum_post_tap.clear();
+            self.dsp_runtime.request_reset();
+            if let Some(sink) = self.sink.take() {
+                sink.stop();
+            }
+            self.shutdown_streaming();
+            self.current_track = None;
+            self.active_input_id = None;
+            self.current_position = 0.0;
+            self.base_position = 0.0;
+            self.playback_started_at = None;
+            self.duration = 0.0;
+            self.decoded_samples = None;
+            self.decoded_channels = 0;
+            self.source_sample_rate = 0;
+            self.decoded_sample_rate = 0;
+            self.decoded_bit_depth = None;
+            self.set_state(PlaybackState::Stopped);
+        }
+    }
+
+    pub(crate) fn sync_queue_index_state(&mut self, current_index: i32) {
+        if !self.queue_initialized {
+            return;
+        }
+
         let max_index = (self.queue.len() as i32).saturating_sub(1);
         self.current_index = current_index.clamp(-1, max_index);
 
@@ -2294,7 +2349,9 @@ impl NativeAudioEngine {
         let (underrun_events, _) = crate::audio::input::streaming_underrun_stats();
         if underrun_events > self.last_observed_underrun_events {
             self.last_observed_underrun_events = underrun_events;
-            self.underrun_recovery_until = Some(Instant::now() + Duration::from_secs(20));
+            if self.streaming.is_some() && self.is_playing_or_rebuffering() {
+                self.underrun_recovery_until = Some(Instant::now() + Duration::from_secs(20));
+            }
         }
         let now_for_recovery = Instant::now();
         let underrun_recovery_active = self
@@ -2376,15 +2433,22 @@ impl NativeAudioEngine {
                     .min(min_seconds_cap)
                     .max(min_seconds_floor)
                     .min(target_seconds);
-                let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil()
-                    as usize)
-                    .clamp(1, target_samples);
+                let mut min_start_samples =
+                    ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                        .clamp(1, target_samples);
                 let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
                     (streaming.render_queue.len_samples() as f64) / (sample_rate * channels_f64)
                 } else {
                     0.0
                 };
-                let _ = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
+                let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
+                min_start_samples = clamp_min_start_samples_to_reachable(
+                    min_start_samples,
+                    target_samples,
+                    streaming.render_queue.capacity_samples(),
+                    channels,
+                    profile,
+                );
 
                 if matches!(self.desired_playback_state, PlaybackState::Playing)
                     && matches!(self.playback_state, PlaybackState::Playing)
@@ -2435,6 +2499,7 @@ impl NativeAudioEngine {
                         && available < min_start_samples
                         && no_progress_for >= stall_timeout
                     {
+                        let decode_available = streaming.buffer.len_samples();
                         sink.pause();
                         self.sync_clock();
                         self.buffering_started_at = None;
@@ -2442,7 +2507,9 @@ impl NativeAudioEngine {
                         self.buffering_last_samples = 0;
                         self.set_error(
                             "NATIVE_AUDIO_SEEK_STALLED",
-                            "Audio seek stalled (no decoder progress)".to_string(),
+                            format!(
+                                "Audio seek stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available}"
+                            ),
                         );
                         return true;
                     }
@@ -2485,8 +2552,6 @@ impl NativeAudioEngine {
                     }
 
                     let ready_min = available >= min_start_samples;
-                    let soft_start_samples =
-                        soft_start_sample_threshold(self.decoded_sample_rate.max(1), channels);
 
                     let stall_timeout = Duration::from_secs(15);
                     let no_progress_for = self
@@ -2494,26 +2559,7 @@ impl NativeAudioEngine {
                         .map(|instant| now.saturating_duration_since(instant))
                         .unwrap_or(Duration::from_secs(0));
                     if !ready_min && no_progress_for >= stall_timeout && !finished {
-                        if available >= soft_start_samples {
-                            crate::audio::diagnostics::record_event_throttled(
-                                "audio.buffering.degraded_resume",
-                                available as u64,
-                                min_start_samples as u64,
-                                &BUFFERING_DEGRADED_RESUME_TIMELINE_GATE_MS,
-                                180,
-                            );
-                            sink.play();
-                            self.buffering_started_at = None;
-                            self.buffering_last_progress_at = None;
-                            self.buffering_last_samples = 0;
-                            self.set_state(PlaybackState::Playing);
-                            self.base_position = self.current_position;
-                            self.playback_started_at = Some(now);
-                            self.underrun_recovery_until =
-                                Some(now + BUFFERING_DEGRADED_RECOVERY_WINDOW);
-                            return true;
-                        }
-
+                        let decode_available = streaming.buffer.len_samples();
                         sink.pause();
                         self.sync_clock();
                         self.buffering_started_at = None;
@@ -2521,7 +2567,9 @@ impl NativeAudioEngine {
                         self.buffering_last_samples = 0;
                         self.set_error(
                             "NATIVE_AUDIO_BUFFERING_TIMEOUT",
-                            "Audio buffering stalled (no decoder progress)".to_string(),
+                            format!(
+                                "Audio buffering stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available} profile={profile:?}"
+                            ),
                         );
                         return true;
                     }
@@ -3184,6 +3232,31 @@ mod tests {
     }
 
     #[test]
+    fn min_start_samples_is_clamped_to_reachable_ceiling() {
+        let channels = 2usize;
+        let capacity_samples = 16_384usize;
+        let target_samples = capacity_samples;
+        let raw_min_start_samples = capacity_samples;
+
+        let clamped = clamp_min_start_samples_to_reachable(
+            raw_min_start_samples,
+            target_samples,
+            capacity_samples,
+            channels,
+            RealtimePressureProfile::Critical,
+        );
+
+        let expected = streaming_transfer_watermarks(
+            capacity_samples,
+            channels,
+            RealtimePressureProfile::Critical,
+        )
+        .1;
+        assert_eq!(clamped, expected);
+        assert!(clamped < capacity_samples);
+    }
+
+    #[test]
     fn play_buffers_until_render_queue_has_min_start_samples() {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(TransportModeBackend::new("wasapi"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
@@ -3278,8 +3351,14 @@ mod tests {
             .min(min_seconds_cap)
             .max(min_seconds_floor)
             .min(target_seconds);
-        let min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
-            .clamp(1, target_samples);
+        let min_start_samples = clamp_min_start_samples_to_reachable(
+            ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
+                .clamp(1, target_samples),
+            target_samples,
+            render_queue.capacity_samples(),
+            channels,
+            RealtimePressureProfile::Normal,
+        );
 
         let frames_to_push = (min_start_samples + channels - 1) / channels;
         let samples_to_push = frames_to_push * channels;

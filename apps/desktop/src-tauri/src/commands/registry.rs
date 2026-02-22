@@ -96,6 +96,7 @@ pub const AUDIO_COMMAND_NAMES: &[&str] = &[
     "native_audio_select_device",
     "native_audio_open_asio_control_panel",
     "native_audio_sync_queue",
+    "native_audio_sync_queue_index",
 ];
 
 pub const DSP_COMMAND_NAMES: &[&str] =
@@ -347,6 +348,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::audio::native_audio_select_device,
             crate::commands::audio::native_audio_open_asio_control_panel,
             crate::commands::audio::native_audio_sync_queue,
+            crate::commands::audio::native_audio_sync_queue_index,
             crate::magnet_layout_store::magnet_layout_store_get_state,
             crate::magnet_layout_store::magnet_layout_store_bootstrap,
             crate::magnet_layout_store::magnet_layout_store_apply_patch

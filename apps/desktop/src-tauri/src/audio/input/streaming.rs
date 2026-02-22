@@ -153,9 +153,12 @@ pub(crate) fn spawn_render_transfer_worker(
     let channels = channels.max(1) as usize;
     let sample_rate = sample_rate.max(1) as f64;
     let capacity = render_queue.capacity_samples().max(channels);
-    let low_watermark = ((capacity * 3) / 10).max(channels * 128).min(capacity);
-    let high_watermark = ((capacity * 8) / 10).max(low_watermark).min(capacity);
-    TRANSFER_LOW_WATERMARK_SAMPLES.store(low_watermark as u64, Ordering::Relaxed);
+    let (initial_low_watermark, _) = buffer_policy::streaming_transfer_watermarks(
+        capacity,
+        channels,
+        RealtimePressureProfile::Normal,
+    );
+    TRANSFER_LOW_WATERMARK_SAMPLES.store(initial_low_watermark as u64, Ordering::Relaxed);
 
     thread::Builder::new()
         .name(thread_name.to_string())
@@ -177,9 +180,23 @@ pub(crate) fn spawn_render_transfer_worker(
                 let decode_len = decode_reservoir.len_samples();
                 let buffered_ahead_seconds =
                     (render_len as f64) / (sample_rate * (channels as f64).max(1.0));
+
+                let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                let (mut low_watermark, mut high_watermark) =
+                    buffer_policy::streaming_transfer_watermarks(
+                        capacity,
+                        channels,
+                        current_profile,
+                    );
                 let recovery_hint = render_len <= low_watermark || decode_len <= low_watermark;
                 let profile = crate::audio::realtime_scheduler::SCHEDULER
                     .update(buffered_ahead_seconds, recovery_hint);
+                if profile != current_profile {
+                    (low_watermark, high_watermark) =
+                        buffer_policy::streaming_transfer_watermarks(capacity, channels, profile);
+                }
+
+                TRANSFER_LOW_WATERMARK_SAMPLES.store(low_watermark as u64, Ordering::Relaxed);
                 crate::audio::threading::apply_audio_transfer_pressure_profile(profile);
                 let chunk_limit = buffer_policy::output_producer_chunk_samples(profile);
                 let wait_timeout = buffer_policy::source_pop_wait_timeout(profile);

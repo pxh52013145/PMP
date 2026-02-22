@@ -358,3 +358,15 @@ pub async fn native_audio_sync_queue(
     .await
     .map_err(|e| format!("Native audio sync queue task failed: {e}"))?
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_sync_queue_index(
+    app: tauri::AppHandle,
+    current_index: i32,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::sync_queue_index(&app, current_index)
+    })
+    .await
+    .map_err(|e| format!("Native audio sync queue index task failed: {e}"))?
+}

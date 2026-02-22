@@ -207,9 +207,11 @@ pub async fn music_library_db_list_cloud_hash_jobs(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibraryCloudHashJobQueryInput>,
 ) -> Result<Vec<music_library_db::LibraryCloudHashJobRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || music_library_db::list_cloud_hash_jobs(&app, query))
-        .await
-        .map_err(|e| format!("Music library list cloud hash jobs task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::list_cloud_hash_jobs(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library list cloud hash jobs task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

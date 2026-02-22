@@ -9,9 +9,7 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Position, Size, WindowBuilder, WindowUrl,
 };
 
-use super::{
-    focus_main_window_if_needed, EVENT_PLUGIN_WINDOW_HIDDEN, EVENT_PLUGIN_WINDOW_SHOWN,
-};
+use super::{focus_main_window_if_needed, EVENT_PLUGIN_WINDOW_HIDDEN, EVENT_PLUGIN_WINDOW_SHOWN};
 
 pub struct PluginWindowGeometry {
     pub x: f64,

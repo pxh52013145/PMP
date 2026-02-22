@@ -90,6 +90,31 @@ pub(crate) fn output_producer_backoff(profile: RealtimePressureProfile) -> Durat
     }
 }
 
+pub(crate) fn streaming_transfer_watermarks(
+    capacity_samples: usize,
+    channels: usize,
+    profile: RealtimePressureProfile,
+) -> (usize, usize) {
+    let capacity = capacity_samples.max(channels.max(1));
+    let (low_percent, high_percent) = match profile {
+        RealtimePressureProfile::Normal => (30usize, 85usize),
+        RealtimePressureProfile::Guarded => (40usize, 90usize),
+        RealtimePressureProfile::Critical => (50usize, 95usize),
+    };
+
+    let low = ((capacity * low_percent) / 100)
+        .max(channels * 128)
+        .min(capacity);
+    let mut high = ((capacity * high_percent) / 100)
+        .max(channels * 256)
+        .min(capacity);
+    if high < low {
+        high = low;
+    }
+
+    (low, high)
+}
+
 pub(crate) fn wasapi_start_prefill_samples(
     sample_rate: u32,
     channels: u16,
@@ -177,5 +202,22 @@ mod tests {
         let shared = wasapi_start_prefill_samples(48_000, 2, 512, true);
         assert!(exclusive >= 512 * 2 * 2);
         assert!(shared >= exclusive);
+    }
+
+    #[test]
+    fn streaming_transfer_watermarks_increase_with_pressure() {
+        let capacity = 96_000usize;
+        let channels = 2usize;
+
+        let (normal_low, normal_high) =
+            streaming_transfer_watermarks(capacity, channels, RealtimePressureProfile::Normal);
+        let (guarded_low, guarded_high) =
+            streaming_transfer_watermarks(capacity, channels, RealtimePressureProfile::Guarded);
+        let (critical_low, critical_high) =
+            streaming_transfer_watermarks(capacity, channels, RealtimePressureProfile::Critical);
+
+        assert!(normal_low <= guarded_low && guarded_low <= critical_low);
+        assert!(normal_high <= guarded_high && guarded_high <= critical_high);
+        assert!(critical_high <= capacity);
     }
 }

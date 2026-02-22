@@ -1278,10 +1278,11 @@ fn emit_transport_execution(
     app_handle: &AppHandle,
     execution: TransportExecution,
 ) -> Result<(), String> {
+    let mut state_payload = execution.state_payload;
     let maybe_error = match (
-        execution.state_payload.error_seq,
-        execution.state_payload.error_code.clone(),
-        execution.state_payload.error_message.clone(),
+        state_payload.error_seq,
+        state_payload.error_code.clone(),
+        state_payload.error_message.clone(),
     ) {
         (Some(seq), Some(code), Some(message)) => {
             Some(NativeAudioErrorPayload { seq, code, message })
@@ -1289,7 +1290,14 @@ fn emit_transport_execution(
         _ => None,
     };
 
-    emitter::emit_state(app_handle, execution.state_payload)?;
+    // Queue path arrays and diagnostics timeline can become large and are not required for
+    // command response semantics. Keep command-triggered payloads compact to reduce WebView bridge
+    // allocation pressure during frequent track switches.
+    state_payload.queue = None;
+    state_payload.diagnostic_timeline_dropped_events = None;
+    state_payload.diagnostic_timeline = None;
+
+    emitter::emit_state(app_handle, state_payload)?;
     if let Err(err) = execution.result {
         if let Some(error_payload) = maybe_error {
             emitter::emit_error(app_handle, error_payload)?;
@@ -1359,15 +1367,22 @@ pub fn sync_queue(
     current_index: i32,
 ) -> Result<(), String> {
     emitter::ensure_started(app_handle);
-    let payload = {
+    let paths = queue.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    let mut engine = ENGINE
+        .lock()
+        .map_err(|_| "Audio engine is locked".to_string())?;
+    engine.sync_queue_state(paths, current_index);
+    Ok(())
+}
+
+pub fn sync_queue_index(app_handle: &AppHandle, current_index: i32) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    {
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        let paths = queue.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-        engine.sync_queue_state(paths, current_index);
-        engine.build_state_payload(false)
-    };
-    emitter::emit_state(app_handle, payload)?;
+        engine.sync_queue_index_state(current_index);
+    }
     Ok(())
 }
 
