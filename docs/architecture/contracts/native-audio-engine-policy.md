@@ -1,6 +1,6 @@
 # Native Audio Engine Policy Contract
 
-Updated: 2026-02-16
+Updated: 2026-02-22
 Scope: `apps/desktop/src-tauri/src/audio/*`, `apps/desktop/src/services/audio/*`
 
 ## 1. Purpose
@@ -158,3 +158,46 @@ Exclusive/shared-raw declick guarantees:
 - Uses adaptive equal-power fade-in/fade-out (instead of fixed linear 96-frame masking).
 - Fade duration is sample-rate / pressure-profile / underrun-streak aware and clamped by safe bounds.
 - Tail zeroing keeps underrun recovery transitions smooth and reduces audible crackle under jitter.
+
+## 9. ReplayGain and Dynamic Gain Fallback Contract
+
+To keep loudness handling deterministic while allowing missing-tag tracks to remain playable, ReplayGain commands now define explicit `number | null` semantics.
+
+Command payload semantics:
+
+- `native_audio_set_replay_gain({ db: number })`:
+  - Applies static replay gain (clamped by host-side policy).
+  - Disables dynamic gain fallback.
+- `native_audio_set_replay_gain({ db: null })`:
+  - Means ReplayGain tag is unavailable for current track.
+  - Backend sets static replay gain to `0dB` and enables dynamic gain fallback.
+
+Host settings split:
+
+- ReplayGain settings (`NATIVE_AUDIO_REPLAYGAIN_SETTINGS`):
+  - `enabled: boolean`
+  - `mode: "track" | "album"`
+  - `preampDb: number`
+- Runtime control settings (`NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS`):
+  - `dynamicFallbackEnabled: boolean` (default `false`)
+    - `true`: missing ReplayGain tag maps to `db: null` and enables dynamic gain fallback.
+    - `false`: missing ReplayGain tag maps to `db: 0` and keeps dynamic fallback disabled.
+  - `volumeDebounceEnabled: boolean` (default `true`)
+    - `true`: UI volume slider commands are coalesced/debounced before dispatch.
+    - `false`: volume commands dispatch immediately for every change.
+
+Track-load path semantics:
+
+- `native_audio_load_and_play({ replayGainDb: number })` behaves as static ReplayGain.
+- `native_audio_load_and_play({ replayGainDb: null })` enables dynamic gain fallback for the loaded track.
+- UI/host that explicitly disables ReplayGain must send `0` (not `null`) to disable fallback by contract.
+
+State event additions (`native_audio_state`):
+
+- `dynamicGainEnabled: boolean`
+- `dynamicGainDb: number`
+
+Compatibility notes:
+
+- Additive state fields are backward compatible; legacy consumers can ignore them.
+- Existing clients that always send numeric ReplayGain keep previous behavior unchanged.

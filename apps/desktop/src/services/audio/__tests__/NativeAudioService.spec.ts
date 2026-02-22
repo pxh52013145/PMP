@@ -146,6 +146,92 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('passes replayGainDb=0 when replaygain is disabled (disables dynamic fallback)', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS,
+      JSON.stringify({ enabled: false, mode: 'track', preampDb: 6 })
+    );
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([{ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' }]);
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    await service.playTrackAtIndex(0);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
+      path: 'C:\\\\Music\\\\a.mp3',
+      replayGainDb: 0,
+    });
+
+    service.destroy();
+  });
+
+  it('passes replayGainDb=null when replaygain is enabled and dynamic fallback is enabled', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS,
+      JSON.stringify({ dynamicFallbackEnabled: true, volumeDebounceEnabled: true })
+    );
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([{ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' }]);
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    await service.playTrackAtIndex(0);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
+      path: 'C:\\\\Music\\\\a.mp3',
+      replayGainDb: null,
+    });
+
+    service.destroy();
+  });
+
+  it('coalesces rapid setVolume calls into the latest backend command', async () => {
+    vi.useFakeTimers();
+
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    service.setVolume(0.2);
+    service.setVolume(0.45);
+    service.setVolume(0.7);
+
+    expect(invoke).not.toHaveBeenCalledWith('native_audio_set_volume', expect.anything());
+
+    await vi.advanceTimersByTimeAsync(30);
+
+    const volumeCalls = invokeMock.mock.calls.filter((call) => call?.[0] === 'native_audio_set_volume');
+    expect(volumeCalls).toHaveLength(1);
+    expect(volumeCalls[0]).toEqual(['native_audio_set_volume', { volume: 0.7 }]);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('dispatches volume immediately when volume debounce is disabled', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS,
+      JSON.stringify({ dynamicFallbackEnabled: false, volumeDebounceEnabled: false })
+    );
+
+    const service = new NativeAudioService();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    service.setVolume(0.66);
+
+    const volumeCalls = invokeMock.mock.calls.filter((call) => call?.[0] === 'native_audio_set_volume');
+    expect(volumeCalls).toHaveLength(1);
+    expect(volumeCalls[0]).toEqual(['native_audio_set_volume', { volume: 0.66 }]);
+
+    service.destroy();
+  });
+
   it('loads the current queue track when play() is called without a loaded track', async () => {
     const service = new NativeAudioService();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -162,7 +248,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
       path: 'C:\\\\Music\\\\a.mp3',
-      replayGainDb: null,
+      replayGainDb: 0,
     });
     expect(invoke).toHaveBeenCalledWith(
       'music_library_db_mark_track_played',
@@ -190,7 +276,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
       path: 'C:\\\\Music\\\\a.mp3',
-      replayGainDb: null,
+      replayGainDb: 0,
     });
     service.destroy();
   });
@@ -322,7 +408,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
       path: 'C:\\\\Music\\\\a.mp3',
-      replayGainDb: null,
+      replayGainDb: 0,
     });
     service.destroy();
   });
@@ -369,7 +455,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
       path: 'C:\\\\Music\\\\a.mp3',
-      replayGainDb: null,
+      replayGainDb: 0,
     });
     service.destroy();
   });

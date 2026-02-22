@@ -12,6 +12,11 @@ type ReplayGainSettings = {
   preampDb: number;
 };
 
+type RuntimeControlSettings = {
+  dynamicFallbackEnabled: boolean;
+  volumeDebounceEnabled: boolean;
+};
+
 type CrossfadeSettings = {
   enabled: boolean;
   durationMs: number;
@@ -40,12 +45,14 @@ type NativeDebugPlaybackDspPanelProps = {
   dspGainDb: number;
   crossfadeSettings: CrossfadeSettings;
   replayGainSettings: ReplayGainSettings;
+  runtimeControlSettings: RuntimeControlSettings;
   nativeMeta: NativeAudioMeta;
   eqBands: NativeDspEqBand[];
   limiterEnabled: boolean;
   limiterThresholdDb: number;
   setCrossfadeSettings: Dispatch<SetStateAction<CrossfadeSettings>>;
   setReplayGainSettings: Dispatch<SetStateAction<ReplayGainSettings>>;
+  setRuntimeControlSettings: Dispatch<SetStateAction<RuntimeControlSettings>>;
   handleSelectTrack: () => void | Promise<void>;
   handlePrev: () => void | Promise<void>;
   handleTogglePlayPause: () => void | Promise<void>;
@@ -56,6 +63,7 @@ type NativeDebugPlaybackDspPanelProps = {
   handleGainChange: (db: number) => void | Promise<void>;
   handleApplyCrossfadeSettings: () => void | Promise<void>;
   handleApplyReplayGainSettings: () => void | Promise<void>;
+  handleApplyRuntimeControlSettings: () => void | Promise<void>;
   eqBandKindLabel: (kind: NativeDspEqBandKind) => string;
   handleEqReset: () => void | Promise<void>;
   handleEqBandGainChange: (index: number, gainDb: number) => void | Promise<void>;
@@ -71,12 +79,14 @@ export function NativeDebugPlaybackDspPanel({
   dspGainDb,
   crossfadeSettings,
   replayGainSettings,
+  runtimeControlSettings,
   nativeMeta,
   eqBands,
   limiterEnabled,
   limiterThresholdDb,
   setCrossfadeSettings,
   setReplayGainSettings,
+  setRuntimeControlSettings,
   handleSelectTrack,
   handlePrev,
   handleTogglePlayPause,
@@ -87,6 +97,7 @@ export function NativeDebugPlaybackDspPanel({
   handleGainChange,
   handleApplyCrossfadeSettings,
   handleApplyReplayGainSettings,
+  handleApplyRuntimeControlSettings,
   eqBandKindLabel,
   handleEqReset,
   handleEqBandGainChange,
@@ -257,6 +268,44 @@ export function NativeDebugPlaybackDspPanel({
           <span>dB</span>
         </label>
         <button type="button" onClick={() => void handleApplyReplayGainSettings()}>
+          {t('common.action.apply')}
+        </button>
+      </div>
+    </div>
+
+    <div className="device-row">
+      <div className="device-meta">
+        <p className="device-label">{t('settings.audioAdvanced.runtimeControl.title')}</p>
+        <p className="device-hint">{t('settings.audioAdvanced.runtimeControl.subtitle')}</p>
+      </div>
+      <div className="device-controls" style={{ gap: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={runtimeControlSettings.dynamicFallbackEnabled}
+            onChange={(e) =>
+              setRuntimeControlSettings((prev) => ({
+                ...prev,
+                dynamicFallbackEnabled: e.target.checked,
+              }))
+            }
+          />
+          {t('settings.audioAdvanced.runtimeControl.dynamicFallback.label')}
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={runtimeControlSettings.volumeDebounceEnabled}
+            onChange={(e) =>
+              setRuntimeControlSettings((prev) => ({
+                ...prev,
+                volumeDebounceEnabled: e.target.checked,
+              }))
+            }
+          />
+          {t('settings.audioAdvanced.runtimeControl.volumeDebounce.label')}
+        </label>
+        <button type="button" onClick={() => void handleApplyRuntimeControlSettings()}>
           {t('common.action.apply')}
         </button>
       </div>

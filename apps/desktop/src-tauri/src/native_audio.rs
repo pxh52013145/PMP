@@ -1615,7 +1615,7 @@ pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> R
         let mut engine = ENGINE
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
-        engine.set_replay_gain(replay_gain_db.unwrap_or(0.0));
+        engine.set_replay_gain(replay_gain_db);
         engine.build_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;

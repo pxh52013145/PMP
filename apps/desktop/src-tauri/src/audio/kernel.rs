@@ -250,7 +250,7 @@ pub(crate) fn execute_load_and_play(
                         })?;
 
                 if committed {
-                    engine.set_replay_gain(replay_gain_db.unwrap_or(0.0));
+                    engine.set_replay_gain(replay_gain_db);
                     if let Err(err) = engine.play() {
                         engine.set_error("NATIVE_AUDIO_PLAY_FAILED", err);
                     }

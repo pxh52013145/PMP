@@ -170,6 +170,8 @@ export const STORAGE_KEYS = {
   DSP_RACK_LOCATE_NODE: 'pixel-matrix-dsp-rack-locate-node-v1', // DSP Rack 定位/高亮节点（object）
   NAVIGATION_REQUEST: 'pixel-matrix-navigation-request-v1', // 跨窗口导航请求（object）
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS: 'pixel-matrix-native-audio-replaygain-settings', // ReplayGain settings（object）
+  NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS:
+    'pixel-matrix-native-audio-runtime-control-settings', // Runtime control settings（dynamic fallback / volume debounce）
   NATIVE_AUDIO_CROSSFADE_SETTINGS: 'pixel-matrix-native-audio-crossfade-settings', // Crossfade settings（object）
   NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS: 'pixel-matrix-native-audio-streaming-buffer-settings', // Streaming buffer settings（object）
   NATIVE_AUDIO_ENGINE_POLICY: 'pixel-matrix-native-audio-engine-policy', // Engine policy settings（object）
@@ -300,6 +302,7 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_DSP_GRAPH_UPDATED: 'native-audio-dsp-graph-updated',
   NATIVE_AUDIO_VST_ENABLED_UPDATED: 'native-audio-vst-enabled-updated',
   NATIVE_AUDIO_REPLAYGAIN_SETTINGS_UPDATED: 'native-audio-replaygain-settings-updated',
+  NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS_UPDATED: 'native-audio-runtime-control-settings-updated',
   NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED: 'native-audio-crossfade-settings-updated',
   NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS_UPDATED: 'native-audio-streaming-buffer-settings-updated',
   NATIVE_AUDIO_ENGINE_POLICY_UPDATED: 'native-audio-engine-policy-updated',

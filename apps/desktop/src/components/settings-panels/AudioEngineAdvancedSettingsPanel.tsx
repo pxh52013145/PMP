@@ -18,6 +18,11 @@ type ReplayGainSettings = {
   preampDb: number;
 };
 
+type RuntimeControlSettings = {
+  dynamicFallbackEnabled: boolean;
+  volumeDebounceEnabled: boolean;
+};
+
 type CrossfadeSettings = {
   enabled: boolean;
   durationMs: number;
@@ -47,6 +52,11 @@ const DEFAULT_REPLAYGAIN: ReplayGainSettings = {
   enabled: true,
   mode: 'track',
   preampDb: 0,
+};
+
+const DEFAULT_RUNTIME_CONTROL: RuntimeControlSettings = {
+  dynamicFallbackEnabled: false,
+  volumeDebounceEnabled: true,
 };
 
 const DEFAULT_CROSSFADE: CrossfadeSettings = {
@@ -168,6 +178,23 @@ function parseReplayGainSettings(raw: unknown): ReplayGainSettings {
     enabled,
     mode,
     preampDb: clampNumber(preampDbRaw, -18, 18),
+  };
+}
+
+function parseRuntimeControlSettings(raw: unknown): RuntimeControlSettings {
+  const record = toRecord(raw);
+  const dynamicFallbackEnabled =
+    typeof record?.dynamicFallbackEnabled === 'boolean'
+      ? record.dynamicFallbackEnabled
+      : DEFAULT_RUNTIME_CONTROL.dynamicFallbackEnabled;
+  const volumeDebounceEnabled =
+    typeof record?.volumeDebounceEnabled === 'boolean'
+      ? record.volumeDebounceEnabled
+      : DEFAULT_RUNTIME_CONTROL.volumeDebounceEnabled;
+
+  return {
+    dynamicFallbackEnabled,
+    volumeDebounceEnabled,
   };
 }
 
@@ -407,6 +434,12 @@ function estimateReplayGainCost(replayGain: ReplayGainSettings): number {
   return clampPercent(4 + modeCost + preampCost);
 }
 
+function estimateRuntimeControlCost(runtimeControl: RuntimeControlSettings): number {
+  const fallbackCost = runtimeControl.dynamicFallbackEnabled ? 6 : 0;
+  const debounceCost = runtimeControl.volumeDebounceEnabled ? 2 : 0;
+  return clampPercent(fallbackCost + debounceCost);
+}
+
 type SettingHelpLabelProps = {
   title: string;
   help: string;
@@ -468,6 +501,9 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [replayGain, setReplayGain] = useState<ReplayGainSettings>(() =>
     parseReplayGainSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS))
   );
+  const [runtimeControl, setRuntimeControl] = useState<RuntimeControlSettings>(() =>
+    parseRuntimeControlSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS))
+  );
   const [crossfade, setCrossfade] = useState<CrossfadeSettings>(() =>
     parseCrossfadeSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS))
   );
@@ -480,6 +516,7 @@ export function AudioEngineAdvancedSettingsPanel() {
 
   const sourceRateChoices = useMemo(() => [44100, 48000, 88200, 96000, 176400, 192000], []);
   const replayGainCost = useMemo(() => estimateReplayGainCost(replayGain), [replayGain]);
+  const runtimeControlCost = useMemo(() => estimateRuntimeControlCost(runtimeControl), [runtimeControl]);
   const crossfadeCost = useMemo(() => estimateCrossfadeCost(crossfade), [crossfade]);
   const srcPolicyCost = useMemo(() => estimateEnginePolicyCost(enginePolicy), [enginePolicy]);
   const dynamicSrcCost = useMemo(() => estimateDynamicSrcCost(dynamicSrc), [dynamicSrc]);
@@ -522,6 +559,9 @@ export function AudioEngineAdvancedSettingsPanel() {
       }
 
       setReplayGain(parseReplayGainSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)));
+      setRuntimeControl(
+        parseRuntimeControlSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS))
+      );
       setCrossfade(parseCrossfadeSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -573,7 +613,13 @@ export function AudioEngineAdvancedSettingsPanel() {
       const track = audioService.getState().currentTrack;
       const base = replayGain.mode === 'album' ? track?.replayGainAlbumGainDb : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && Number.isFinite(base);
-      const effectiveDb = replayGain.enabled && hasBase ? base + replayGain.preampDb : null;
+      const effectiveDb = replayGain.enabled
+        ? hasBase
+          ? base + replayGain.preampDb
+          : runtimeControl.dynamicFallbackEnabled
+            ? null
+            : 0
+        : 0;
       await invoke('native_audio_set_replay_gain', {
         db: typeof effectiveDb === 'number' ? clampNumber(effectiveDb, -30, 30) : null,
       });
@@ -582,7 +628,39 @@ export function AudioEngineAdvancedSettingsPanel() {
     } finally {
       setBusy(false);
     }
-  }, [audioService, canUse, replayGain]);
+  }, [audioService, canUse, replayGain, runtimeControl.dynamicFallbackEnabled]);
+
+  const applyRuntimeControl = useCallback(async () => {
+    if (!canUse) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await broadcastDataUpdate(
+        STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS,
+        runtimeControl,
+        TAURI_EVENTS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS_UPDATED
+      );
+
+      const track = audioService.getState().currentTrack;
+      const base = replayGain.mode === 'album' ? track?.replayGainAlbumGainDb : track?.replayGainTrackGainDb;
+      const hasBase = typeof base === 'number' && Number.isFinite(base);
+      const effectiveDb = replayGain.enabled
+        ? hasBase
+          ? base + replayGain.preampDb
+          : runtimeControl.dynamicFallbackEnabled
+            ? null
+            : 0
+        : 0;
+      await invoke('native_audio_set_replay_gain', {
+        db: typeof effectiveDb === 'number' ? clampNumber(effectiveDb, -30, 30) : null,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [audioService, canUse, replayGain, runtimeControl]);
 
   const applyCrossfade = useCallback(async () => {
     if (!canUse) return;
@@ -773,6 +851,111 @@ export function AudioEngineAdvancedSettingsPanel() {
 
             <div className="settings-section-controls">
               <button type="button" className="settings-action-btn" onClick={() => void applyReplayGain()} disabled={busy}>
+                {t('common.action.apply')}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
+        )}
+      </div>
+
+      <div className="settings-audio-block" style={buildInlineMeterStyle(runtimeControlCost)}>
+        <div className="settings-param-divider settings-param-divider--compact" />
+        <AdvancedParamHead
+          eyebrow="RUNTIME CONTROL"
+          title={t('settings.audioAdvanced.runtimeControl.title')}
+          subtitle={t('settings.audioAdvanced.runtimeControl.subtitle')}
+          costPercent={runtimeControlCost}
+        />
+
+        {canUse ? (
+          <>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.runtimeControl.dynamicFallback.label')}
+                  help={t('settings.audioAdvanced.runtimeControl.dynamicFallback.help')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={runtimeControl.dynamicFallbackEnabled}
+                  onClick={() =>
+                    setRuntimeControl((prev) => ({
+                      ...prev,
+                      dynamicFallbackEnabled: true,
+                    }))
+                  }
+                  disabled={busy}
+                >
+                  {t('common.state.on')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={!runtimeControl.dynamicFallbackEnabled}
+                  onClick={() =>
+                    setRuntimeControl((prev) => ({
+                      ...prev,
+                      dynamicFallbackEnabled: false,
+                    }))
+                  }
+                  disabled={busy}
+                >
+                  {t('common.state.off')}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.runtimeControl.volumeDebounce.label')}
+                  help={t('settings.audioAdvanced.runtimeControl.volumeDebounce.help')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={runtimeControl.volumeDebounceEnabled}
+                  onClick={() =>
+                    setRuntimeControl((prev) => ({
+                      ...prev,
+                      volumeDebounceEnabled: true,
+                    }))
+                  }
+                  disabled={busy}
+                >
+                  {t('common.state.on')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={!runtimeControl.volumeDebounceEnabled}
+                  onClick={() =>
+                    setRuntimeControl((prev) => ({
+                      ...prev,
+                      volumeDebounceEnabled: false,
+                    }))
+                  }
+                  disabled={busy}
+                >
+                  {t('common.state.off')}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-section-controls">
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applyRuntimeControl()}
+                disabled={busy}
+              >
                 {t('common.action.apply')}
               </button>
             </div>

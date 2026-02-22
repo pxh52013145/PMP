@@ -132,6 +132,30 @@ type ReplayGainSettings = {
   preampDb: number;
 };
 
+type RuntimeControlSettings = {
+  dynamicFallbackEnabled: boolean;
+  volumeDebounceEnabled: boolean;
+};
+
+function parseLegacyRuntimeControlFromReplayGain(raw: string | null): RuntimeControlSettings | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const record = parsed as Record<string, unknown>;
+    const hasDynamic = typeof record.dynamicFallbackEnabled === 'boolean';
+    const hasDebounce = typeof record.volumeDebounceEnabled === 'boolean';
+    if (!hasDynamic && !hasDebounce) return null;
+
+    return {
+      dynamicFallbackEnabled: hasDynamic ? (record.dynamicFallbackEnabled as boolean) : false,
+      volumeDebounceEnabled: hasDebounce ? (record.volumeDebounceEnabled as boolean) : true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 type CrossfadeSettings = {
   enabled: boolean;
   durationMs: number;
@@ -207,6 +231,9 @@ export class NativeAudioService implements IAudioService {
   private pendingSeekTime: number | null = null;
   private pendingSeekSeq: number | null = null;
   private pendingSeekTimer: number | null = null;
+  private pendingVolume: number | null = null;
+  private pendingVolumeTimer: number | null = null;
+  private lastVolumeDispatchAtMs = 0;
   private pendingSeekTarget: number | null = null;
   private pendingSeekDirection: 'forward' | 'backward' | null = null;
   private pendingSeekSettleUntilMs = 0;
@@ -307,6 +334,8 @@ export class NativeAudioService implements IAudioService {
   private static readonly SEEK_MAX_PARALLEL_INVOCATIONS = 3;
   private static readonly SEEK_STALE_GUARD_WINDOW_MS = 8_000;
   private static readonly SEEK_STALE_GUARD_TOLERANCE_SECONDS = 0.45;
+  private static readonly VOLUME_COALESCE_MS = 24;
+  private static readonly VOLUME_DISPATCH_MIN_INTERVAL_MS = 16;
   private static readonly UNDERRUN_RECOVERY_WINDOW_MS = 20_000;
   private static readonly AUTO_BACKEND_UNDERRUN_WINDOW_MS = 15_000;
   private static readonly AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT = 3;
@@ -531,6 +560,54 @@ export class NativeAudioService implements IAudioService {
     this.pendingSeekTimer = window.setTimeout(() => {
       this.pendingSeekTimer = null;
       this.flushPendingSeekCommand();
+    }, safeDelayMs);
+  }
+
+  private clearPendingVolume(): void {
+    this.pendingVolume = null;
+    if (this.pendingVolumeTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.pendingVolumeTimer);
+    }
+    this.pendingVolumeTimer = null;
+  }
+
+  private flushPendingVolumeCommand(): void {
+    const volume = this.pendingVolume;
+    if (typeof volume !== 'number' || !Number.isFinite(volume)) {
+      return;
+    }
+
+    const nowMs = Date.now();
+    const elapsedSinceLastDispatch = nowMs - this.lastVolumeDispatchAtMs;
+    const remainingThrottleMs =
+      NativeAudioService.VOLUME_DISPATCH_MIN_INTERVAL_MS - elapsedSinceLastDispatch;
+    if (remainingThrottleMs > 0) {
+      this.scheduleVolumeFlush(remainingThrottleMs);
+      return;
+    }
+
+    this.pendingVolume = null;
+    this.lastVolumeDispatchAtMs = nowMs;
+    this.fireAndForgetCommand('native_audio_set_volume', { volume });
+  }
+
+  private scheduleVolumeFlush(delayMs: number = NativeAudioService.VOLUME_COALESCE_MS): void {
+    if (typeof window === 'undefined') {
+      this.flushPendingVolumeCommand();
+      return;
+    }
+
+    if (this.pendingVolumeTimer !== null) {
+      window.clearTimeout(this.pendingVolumeTimer);
+    }
+
+    const safeDelayMs = Number.isFinite(delayMs)
+      ? Math.max(0, Math.floor(delayMs))
+      : NativeAudioService.VOLUME_COALESCE_MS;
+
+    this.pendingVolumeTimer = window.setTimeout(() => {
+      this.pendingVolumeTimer = null;
+      this.flushPendingVolumeCommand();
     }, safeDelayMs);
   }
 
@@ -889,21 +966,65 @@ export class NativeAudioService implements IAudioService {
       const modeRaw = typeof record.mode === 'string' ? record.mode : 'track';
       const mode: ReplayGainMode = modeRaw === 'album' ? 'album' : 'track';
       const preampDb = typeof record.preampDb === 'number' ? record.preampDb : 0;
-
       return { enabled, mode, preampDb };
     } catch {
       return { enabled: true, mode: 'track', preampDb: 0 };
     }
   }
 
+  private readRuntimeControlSettings(): RuntimeControlSettings {
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS);
+      if (!raw) {
+        return (
+          parseLegacyRuntimeControlFromReplayGain(
+            readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)
+          ) ?? {
+            dynamicFallbackEnabled: false,
+            volumeDebounceEnabled: true,
+          }
+        );
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') {
+        return (
+          parseLegacyRuntimeControlFromReplayGain(
+            readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)
+          ) ?? {
+            dynamicFallbackEnabled: false,
+            volumeDebounceEnabled: true,
+          }
+        );
+      }
+
+      const record = parsed as Record<string, unknown>;
+      const dynamicFallbackEnabled =
+        typeof record.dynamicFallbackEnabled === 'boolean' ? record.dynamicFallbackEnabled : false;
+      const volumeDebounceEnabled =
+        typeof record.volumeDebounceEnabled === 'boolean' ? record.volumeDebounceEnabled : true;
+
+      return { dynamicFallbackEnabled, volumeDebounceEnabled };
+    } catch {
+      return (
+        parseLegacyRuntimeControlFromReplayGain(readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)) ?? {
+          dynamicFallbackEnabled: false,
+          volumeDebounceEnabled: true,
+        }
+      );
+    }
+  }
+
   private computeReplayGainDbForTrack(track: Track): number | null {
     const settings = this.readReplayGainSettings();
-    if (!settings.enabled) return null;
+    const runtimeControl = this.readRuntimeControlSettings();
+    if (!settings.enabled) return 0;
 
     const base =
       settings.mode === 'album' ? track.replayGainAlbumGainDb : track.replayGainTrackGainDb;
     if (typeof base !== 'number' || !isFinite(base)) {
-      return null;
+      // `null` means: no ReplayGain tag available, backend may switch to dynamic fallback gain.
+      // If dynamic fallback is disabled, keep static gain at 0 dB.
+      return runtimeControl.dynamicFallbackEnabled ? null : 0;
     }
 
     const effective = base + (typeof settings.preampDb === 'number' ? settings.preampDb : 0);
@@ -3730,7 +3851,15 @@ export class NativeAudioService implements IAudioService {
   // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸劍閺呮繈鏌曟径娑橆洭缂佺姵鍎抽埞鎴︽偐閸欏鎮欓梻鍌氬亞閸ㄨ京鎹㈠☉姗嗗晠妞ゆ棁宕甸惄搴ｇ磽娴ｅ搫孝缁剧虎鍙冮獮澶岀矙濞嗘儳鎮戞繝銏ｆ硾閿曘儱危?=====
   setVolume(volume: number): void {
     const clamped = Math.max(0, Math.min(1, volume));
-    this.fireAndForgetCommand('native_audio_set_volume', { volume: clamped });
+    const runtimeControlSettings = this.readRuntimeControlSettings();
+    if (runtimeControlSettings.volumeDebounceEnabled) {
+      this.pendingVolume = clamped;
+      this.scheduleVolumeFlush();
+    } else {
+      this.clearPendingVolume();
+      this.lastVolumeDispatchAtMs = Date.now();
+      this.fireAndForgetCommand('native_audio_set_volume', { volume: clamped });
+    }
     this.updateState({ volume: clamped, muted: clamped === 0 ? true : this.state.muted });
   }
 
@@ -4199,6 +4328,7 @@ export class NativeAudioService implements IAudioService {
     this.diagnosticTimelineIgnoreBeforeMs = 0;
 
     this.stop();
+    this.clearPendingVolume();
     this.stopFallbackTicker();
     this.clearProtectionWindowTimer();
     this.clearDynamicSrcRestoreTimer();

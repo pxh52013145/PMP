@@ -2667,8 +2667,12 @@ impl NativeAudioEngine {
         self.gain_db = self.dsp_runtime.apply_chain(&self.dsp_chain);
     }
 
-    pub(crate) fn set_replay_gain(&mut self, replay_gain_db: f32) {
+    pub(crate) fn set_replay_gain(&mut self, replay_gain_db: Option<f32>) {
+        let fallback_dynamic_gain_enabled = replay_gain_db.is_none();
+        let replay_gain_db = replay_gain_db.unwrap_or(0.0);
         self.replay_gain_db = self.dsp_runtime.set_replay_gain_db(replay_gain_db);
+        self.dsp_runtime
+            .set_dynamic_gain_enabled(fallback_dynamic_gain_enabled);
     }
 
     pub(crate) fn set_dsp_chain(&mut self, chain: Vec<DspNodeConfig>) {
@@ -2771,6 +2775,8 @@ impl NativeAudioEngine {
             volume: self.volume,
             gain_db: self.gain_db,
             replay_gain_db: self.replay_gain_db,
+            dynamic_gain_enabled: self.dsp_runtime.dynamic_gain_enabled(),
+            dynamic_gain_db: self.dsp_runtime.dynamic_gain_db(),
             muted: self.muted,
             track_path: if include_track_path {
                 self.current_track

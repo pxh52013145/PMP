@@ -53,6 +53,13 @@ fn gain_db_to_linear(db: f32) -> f32 {
     10.0f32.powf(db / 20.0)
 }
 
+const DYNAMIC_GAIN_TARGET_DBFS: f32 = -18.0;
+const DYNAMIC_GAIN_GATE_DBFS: f32 = -52.0;
+const DYNAMIC_GAIN_MAX_BOOST_DB: f32 = 9.0;
+const DYNAMIC_GAIN_MAX_CUT_DB: f32 = 12.0;
+const DYNAMIC_GAIN_ATTACK_MS: f32 = 25.0;
+const DYNAMIC_GAIN_RELEASE_MS: f32 = 300.0;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct DspSlowConfig {
     eq_bands: Vec<EqBandConfig>,
@@ -87,6 +94,8 @@ pub(crate) struct DspRuntime {
     gain_db_bits: AtomicU32,
     replay_gain_db_bits: AtomicU32,
     gain_linear_bits: AtomicU32,
+    dynamic_gain_enabled: AtomicBool,
+    dynamic_gain_db_bits: AtomicU32,
     reset_serial: AtomicU64,
 }
 
@@ -100,6 +109,8 @@ impl DspRuntime {
             gain_db_bits: AtomicU32::new(0.0f32.to_bits()),
             replay_gain_db_bits: AtomicU32::new(0.0f32.to_bits()),
             gain_linear_bits: AtomicU32::new(1.0f32.to_bits()),
+            dynamic_gain_enabled: AtomicBool::new(false),
+            dynamic_gain_db_bits: AtomicU32::new(0.0f32.to_bits()),
             reset_serial: AtomicU64::new(1),
         }
     }
@@ -160,6 +171,39 @@ impl DspRuntime {
 
     fn gain_linear(&self) -> f32 {
         load_atomic_f32(&self.gain_linear_bits)
+    }
+
+    pub(crate) fn dynamic_gain_enabled(&self) -> bool {
+        self.dynamic_gain_enabled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_dynamic_gain_enabled(&self, enabled: bool) -> bool {
+        let previous = self.dynamic_gain_enabled.swap(enabled, Ordering::AcqRel);
+        if previous != enabled {
+            self.request_reset();
+            if !enabled {
+                store_atomic_f32(&self.dynamic_gain_db_bits, 0.0);
+            }
+        }
+        enabled
+    }
+
+    pub(crate) fn dynamic_gain_db(&self) -> f32 {
+        let value = load_atomic_f32(&self.dynamic_gain_db_bits);
+        if value.is_finite() {
+            value
+        } else {
+            0.0
+        }
+    }
+
+    fn update_dynamic_gain_db(&self, dynamic_gain_db: f32) {
+        let normalized = if dynamic_gain_db.is_finite() {
+            dynamic_gain_db.clamp(-30.0, 18.0)
+        } else {
+            0.0
+        };
+        store_atomic_f32(&self.dynamic_gain_db_bits, normalized);
     }
 
     fn slow_config(&self) -> Arc<DspSlowConfig> {
@@ -563,6 +607,121 @@ impl LimiterProcessor {
     }
 }
 
+#[derive(Clone, Debug)]
+struct DynamicGainProcessor {
+    enabled: bool,
+    target_rms: f32,
+    gate_rms: f32,
+    min_gain: f32,
+    max_gain: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    current_gain: f32,
+}
+
+impl DynamicGainProcessor {
+    fn new(sample_rate: u32) -> Self {
+        let sample_rate = sample_rate.max(1) as f32;
+        let attack_coeff = smoothing_coeff_from_ms(DYNAMIC_GAIN_ATTACK_MS, sample_rate);
+        let release_coeff = smoothing_coeff_from_ms(DYNAMIC_GAIN_RELEASE_MS, sample_rate);
+        let target_rms = gain_db_to_linear(DYNAMIC_GAIN_TARGET_DBFS).max(1.0e-6);
+        let gate_rms = gain_db_to_linear(DYNAMIC_GAIN_GATE_DBFS).max(1.0e-7);
+        let max_gain = gain_db_to_linear(DYNAMIC_GAIN_MAX_BOOST_DB).max(1.0);
+        let min_gain = gain_db_to_linear(-DYNAMIC_GAIN_MAX_CUT_DB).clamp(0.01, 1.0);
+
+        Self {
+            enabled: false,
+            target_rms,
+            gate_rms,
+            min_gain,
+            max_gain,
+            attack_coeff,
+            release_coeff,
+            current_gain: 1.0,
+        }
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
+        self.enabled = enabled;
+        if !enabled {
+            self.current_gain = 1.0;
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn current_gain_db(&self) -> f32 {
+        linear_to_gain_db(self.current_gain)
+    }
+
+    fn reset(&mut self) {
+        self.current_gain = 1.0;
+    }
+
+    fn process_frame_in_place(&mut self, frame: &mut [f32]) {
+        if !self.enabled || frame.is_empty() {
+            return;
+        }
+
+        let rms = rms_abs(frame);
+        let desired_gain = if !rms.is_finite() || rms <= self.gate_rms {
+            1.0
+        } else {
+            (self.target_rms / rms).clamp(self.min_gain, self.max_gain)
+        };
+
+        let coeff = if desired_gain < self.current_gain {
+            self.attack_coeff
+        } else {
+            self.release_coeff
+        };
+        self.current_gain = (coeff * self.current_gain + (1.0 - coeff) * desired_gain)
+            .clamp(self.min_gain, self.max_gain);
+
+        if (self.current_gain - 1.0).abs() < 1.0e-6 {
+            return;
+        }
+
+        scalar_mul_in_place(frame, self.current_gain);
+    }
+}
+
+#[inline]
+fn smoothing_coeff_from_ms(time_ms: f32, sample_rate: f32) -> f32 {
+    if !time_ms.is_finite() || time_ms <= 0.0 {
+        return 0.0;
+    }
+    let tau = (time_ms / 1000.0).max(0.001);
+    (-1.0 / (tau * sample_rate.max(1.0))).exp().clamp(0.0, 0.999_999)
+}
+
+#[inline]
+fn linear_to_gain_db(gain: f32) -> f32 {
+    if !gain.is_finite() || gain <= 0.0 {
+        return -120.0;
+    }
+    20.0 * gain.log10()
+}
+
+#[inline]
+fn rms_abs(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+
+    let mut sum_sq = 0.0f32;
+    for sample in samples {
+        sum_sq += sample * sample;
+    }
+
+    (sum_sq / samples.len() as f32).sqrt()
+}
+
 #[inline]
 fn peak_abs(samples: &[f32]) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -703,6 +862,7 @@ unsafe fn simd_mul_in_place_avx2(samples: &mut [f32], gain: f32) {
 struct DspChainProcessor {
     gain_linear: f32,
     eq: EqProcessor,
+    dynamic_gain: DynamicGainProcessor,
     limiter: Option<LimiterProcessor>,
     channels: usize,
     scratch_frame: Vec<f32>,
@@ -713,6 +873,7 @@ impl Default for DspChainProcessor {
         Self {
             gain_linear: 1.0,
             eq: EqProcessor::default(),
+            dynamic_gain: DynamicGainProcessor::new(48_000),
             limiter: None,
             channels: 0,
             scratch_frame: Vec::new(),
@@ -729,6 +890,7 @@ impl DspChainProcessor {
         Self {
             gain_linear: config.gain_linear,
             eq,
+            dynamic_gain: DynamicGainProcessor::new(sample_rate),
             limiter,
             channels,
             scratch_frame: vec![0.0; channels.max(1)],
@@ -737,23 +899,25 @@ impl DspChainProcessor {
 
     fn reset(&mut self) {
         self.eq.reset();
+        self.dynamic_gain.reset();
         if let Some(limiter) = &mut self.limiter {
             limiter.reset();
         }
     }
 
-    fn process_interleaved_in_place(&mut self, samples: &mut [f32]) {
+    fn process_interleaved_in_place(&mut self, samples: &mut [f32]) -> f32 {
         let channels = self.channels.max(1);
         let gain = self.gain_linear;
         let has_eq = !self.eq.is_empty();
+        let has_dynamic_gain = self.dynamic_gain.is_enabled();
         let has_limiter = self.limiter.is_some();
-        if (gain - 1.0).abs() < 1e-6 && !has_eq && !has_limiter {
-            return;
+        if (gain - 1.0).abs() < 1e-6 && !has_eq && !has_dynamic_gain && !has_limiter {
+            return self.dynamic_gain.current_gain_db();
         }
 
-        if !has_eq && !has_limiter {
+        if !has_eq && !has_dynamic_gain && !has_limiter {
             if (gain - 1.0).abs() < 1e-6 {
-                return;
+                return self.dynamic_gain.current_gain_db();
             }
 
             #[cfg(target_arch = "x86_64")]
@@ -762,18 +926,18 @@ impl DspChainProcessor {
                     unsafe {
                         simd_mul_in_place_avx2(samples, gain);
                     }
-                    return;
+                    return self.dynamic_gain.current_gain_db();
                 }
                 if std::arch::is_x86_feature_detected!("sse2") {
                     unsafe {
                         simd_mul_in_place_sse2(samples, gain);
                     }
-                    return;
+                    return self.dynamic_gain.current_gain_db();
                 }
             }
 
             scalar_mul_in_place(samples, gain);
-            return;
+            return self.dynamic_gain.current_gain_db();
         }
 
         let frames = samples.len() / channels;
@@ -793,6 +957,11 @@ impl DspChainProcessor {
                 self.scratch_frame[ch] = x;
             }
 
+            if has_dynamic_gain {
+                self.dynamic_gain
+                    .process_frame_in_place(&mut self.scratch_frame[..channels]);
+            }
+
             if let Some(limiter) = &mut self.limiter {
                 limiter.process_frame_in_place(&mut self.scratch_frame[..channels]);
             }
@@ -809,6 +978,11 @@ impl DspChainProcessor {
             if has_eq {
                 x = self.eq.process_sample(x, ch);
             }
+            if has_dynamic_gain {
+                let mut frame = [x];
+                self.dynamic_gain.process_frame_in_place(&mut frame);
+                x = frame[0];
+            }
             if let Some(limiter) = &mut self.limiter {
                 let mut frame = [x];
                 limiter.process_frame_in_place(&mut frame);
@@ -816,6 +990,8 @@ impl DspChainProcessor {
             }
             samples[idx] = x;
         }
+
+        self.dynamic_gain.current_gain_db()
     }
 }
 
@@ -1034,6 +1210,9 @@ where
         }
 
         self.processor.gain_linear = gain_linear;
+        self.processor
+            .dynamic_gain
+            .set_enabled(self.dsp.dynamic_gain_enabled());
     }
 
     fn take_pending_update(&mut self) -> Option<PreparedDspUpdate> {
@@ -1067,6 +1246,9 @@ where
         if let Some(vst_nodes) = update.vst_nodes {
             self.processor = update.processor;
             self.processor.gain_linear = gain_linear;
+            self.processor
+                .dynamic_gain
+                .set_enabled(self.dsp.dynamic_gain_enabled());
             self.vst_keys = update.vst_keys;
             self.vst_nodes = vst_nodes;
             self.processor_version = update.version;
@@ -1082,6 +1264,9 @@ where
         if frames == 0 {
             self.processor = update.processor;
             self.processor.gain_linear = gain_linear;
+            self.processor
+                .dynamic_gain
+                .set_enabled(self.dsp.dynamic_gain_enabled());
             self.processor_version = update.version;
             return false;
         }
@@ -1095,11 +1280,19 @@ where
 
         let mut next_processor = update.processor;
         next_processor.gain_linear = gain_linear;
-        next_processor.process_interleaved_in_place(&mut self.local);
+        next_processor
+            .dynamic_gain
+            .set_enabled(self.dsp.dynamic_gain_enabled());
+        let dynamic_gain_db = next_processor.process_interleaved_in_place(&mut self.local);
+        self.dsp.update_dynamic_gain_db(dynamic_gain_db);
 
         if crossfade_samples > 0 {
             self.processor.gain_linear = gain_linear;
             self.processor
+                .dynamic_gain
+                .set_enabled(self.dsp.dynamic_gain_enabled());
+            let _ = self
+                .processor
                 .process_interleaved_in_place(&mut self.update_scratch[..crossfade_samples]);
 
             let denom = crossfade_frames.max(1) as f32;
@@ -1140,7 +1333,8 @@ where
         let processor_already_applied = self.maybe_apply_update_on_refill();
         self.ensure_processor_uptodate();
         if !processor_already_applied {
-            self.processor.process_interleaved_in_place(&mut self.local);
+            let dynamic_gain_db = self.processor.process_interleaved_in_place(&mut self.local);
+            self.dsp.update_dynamic_gain_db(dynamic_gain_db);
         }
         self.pre_tap
             .push_interleaved(&self.local, self.channels.max(1) as usize);
@@ -1314,6 +1508,24 @@ mod tests {
         assert!((runtime.gain_db() - 3.0).abs() < 1e-6);
         assert!((runtime.replay_gain_db() + 6.0).abs() < 1e-6);
         assert!((snapshot.gain_linear - gain_db_to_linear(-3.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dsp_runtime_dynamic_gain_toggle_updates_state_and_reset_serial() {
+        let runtime = DspRuntime::new();
+        let before_reset = runtime.reset_serial();
+        assert!(!runtime.dynamic_gain_enabled());
+
+        runtime.set_dynamic_gain_enabled(true);
+        assert!(runtime.dynamic_gain_enabled());
+        assert!(runtime.reset_serial() > before_reset);
+
+        runtime.update_dynamic_gain_db(3.5);
+        assert!((runtime.dynamic_gain_db() - 3.5).abs() < 1e-6);
+
+        runtime.set_dynamic_gain_enabled(false);
+        assert!(!runtime.dynamic_gain_enabled());
+        assert!(runtime.dynamic_gain_db().abs() < 1e-6);
     }
 
     #[test]
@@ -1579,6 +1791,25 @@ mod tests {
         let threshold = gain_db_to_linear(threshold_db);
         assert!((samples[0].abs() - threshold).abs() < 1e-6);
         assert!((samples[1].abs() - threshold).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dsp_chain_dynamic_gain_boosts_low_level_frames_when_enabled() {
+        let config = DspRuntimeConfig {
+            gain_linear: 1.0,
+            eq_bands: Vec::new(),
+            limiter_threshold_db: None,
+            vst_nodes: Vec::new(),
+        };
+
+        let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);
+        processor.dynamic_gain.set_enabled(true);
+
+        let mut samples = vec![0.01f32; 48_000];
+        let dynamic_gain_db = processor.process_interleaved_in_place(&mut samples);
+
+        assert!(dynamic_gain_db > 0.5);
+        assert!(samples.iter().all(|sample| *sample >= 0.01));
     }
 
     #[test]
