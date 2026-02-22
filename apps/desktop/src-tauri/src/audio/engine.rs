@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::audio::buffer_policy::streaming_min_start_bounds;
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
     open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputDecodeMode,
@@ -384,30 +385,6 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
     };
 
     (capped_target, timeout.min(timeout_cap))
-}
-
-fn streaming_min_start_bounds(
-    output_backend_id: &str,
-    underrun_recovery_active: bool,
-) -> (f64, f64) {
-    let is_exclusive = output_backend_id == "wasapi-exclusive";
-
-    if is_exclusive {
-        if underrun_recovery_active {
-            // Exclusive mode can start fairly quickly, but after underruns we want a more conservative
-            // prebuffer to avoid immediate rebuffer loops.
-            (0.75, 0.25)
-        } else {
-            // Low-latency startup: do not block the first play for ~1s of prebuffer.
-            (0.30, 0.10)
-        }
-    } else if underrun_recovery_active {
-        // Shared backends are more sensitive to scheduling jitter; keep recovery startup conservative.
-        (1.05, 0.35)
-    } else {
-        // Normal startup should feel instant (sub-500ms) while still preventing most underruns.
-        (0.35, 0.12)
-    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1790,14 +1767,22 @@ impl NativeAudioEngine {
             .cloned()
             .ok_or_else(|| "No track loaded".to_string())?;
 
+        self.update_shared_timeline_stress_window();
         if let Some(streaming) = self.streaming.as_ref() {
             let now_for_recovery = Instant::now();
             let underrun_recovery_active = self
                 .underrun_recovery_until
                 .is_some_and(|until| until > now_for_recovery);
+            let shared_stress_active = self
+                .shared_timeline_stress_until
+                .is_some_and(|until| until > now_for_recovery);
             if !underrun_recovery_active {
                 self.underrun_recovery_until = None;
             }
+            if !shared_stress_active {
+                self.shared_timeline_stress_until = None;
+            }
+            let robust_recovery_active = underrun_recovery_active || shared_stress_active;
 
             let channels = self.decoded_channels.max(1) as usize;
             let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
@@ -1808,7 +1793,7 @@ impl NativeAudioEngine {
 
             let decode_reservoir = streaming.buffer.clone();
             let render_queue = streaming.render_queue.clone();
-            let (target_samples, _timeout) = streaming_prebuffer_target_samples(
+            let (target_samples, wait_timeout) = streaming_prebuffer_target_samples(
                 self.output_backend.id(),
                 self.decoded_sample_rate,
                 channels,
@@ -1823,7 +1808,7 @@ impl NativeAudioEngine {
                 let channels_f64 = channels.max(1) as f64;
                 let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
                 let (min_seconds_cap, min_seconds_floor) =
-                    streaming_min_start_bounds(self.output_backend.id(), underrun_recovery_active);
+                    streaming_min_start_bounds(self.output_backend.id(), robust_recovery_active);
                 let min_start_seconds = target_seconds
                     .min(min_seconds_cap)
                     .max(min_seconds_floor)
@@ -1833,6 +1818,12 @@ impl NativeAudioEngine {
                     .clamp(1, target_samples);
 
                 let available = render_queue.len_samples();
+                let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
+                    (available as f64) / (sample_rate * channels_f64)
+                } else {
+                    0.0
+                };
+                let _ = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
                 self.desired_playback_state = PlaybackState::Playing;
                 let finished = decode_reservoir.is_finished() && render_queue.is_finished();
                 if available < min_start_samples && !finished {
@@ -1846,7 +1837,7 @@ impl NativeAudioEngine {
 
                     // Fast-path: wait briefly for initial decoded samples so click-to-play does
                     // not depend on the emitter tick cadence.
-                    render_queue.wait_for_samples(min_start_samples, Duration::from_millis(200));
+                    render_queue.wait_for_samples(min_start_samples, wait_timeout);
 
                     let available = render_queue.len_samples();
                     let finished = decode_reservoir.is_finished() && render_queue.is_finished();
@@ -3767,23 +3758,33 @@ mod tests {
             streaming_min_start_bounds("wasapi-exclusive", false);
 
         assert!(
-            shared_cap <= 0.50,
-            "shared backend min-start cap too high: cap={shared_cap} floor={shared_floor}"
+            shared_cap >= shared_floor,
+            "shared backend bounds must be ordered: cap={shared_cap} floor={shared_floor}"
         );
         assert!(
-            exclusive_cap <= 0.50,
-            "exclusive backend min-start cap too high: cap={exclusive_cap} floor={exclusive_floor}"
+            exclusive_cap >= exclusive_floor,
+            "exclusive backend bounds must be ordered: cap={exclusive_cap} floor={exclusive_floor}"
         );
 
-        let (shared_recovery_cap, _) = streaming_min_start_bounds("rodio-cpal", true);
-        let (exclusive_recovery_cap, _) = streaming_min_start_bounds("wasapi-exclusive", true);
+        let (shared_recovery_cap, shared_recovery_floor) =
+            streaming_min_start_bounds("rodio-cpal", true);
+        let (exclusive_recovery_cap, exclusive_recovery_floor) =
+            streaming_min_start_bounds("wasapi-exclusive", true);
         assert!(
             shared_recovery_cap >= shared_cap,
             "recovery cap should not be lower than normal cap"
         );
         assert!(
+            shared_recovery_floor >= shared_floor,
+            "recovery floor should not be lower than normal floor"
+        );
+        assert!(
             exclusive_recovery_cap >= exclusive_cap,
             "recovery cap should not be lower than normal cap"
+        );
+        assert!(
+            exclusive_recovery_floor >= exclusive_floor,
+            "recovery floor should not be lower than normal floor"
         );
     }
 

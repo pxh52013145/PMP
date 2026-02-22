@@ -9,6 +9,7 @@ use once_cell::sync::Lazy;
 use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
+use crate::audio::buffer_policy;
 use crate::audio::diagnostics;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
@@ -123,33 +124,7 @@ static UNDERRUN_MASK_POLICY: Lazy<UnderrunMaskPolicy> = Lazy::new(UnderrunMaskPo
 
 fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
     let rate = sample_rate.max(8_000) as f64;
-    ((rate * milliseconds as f64) / 1000.0)
-        .round()
-        .max(1.0) as usize
-}
-
-fn transfer_wait(profile: RealtimePressureProfile) -> Duration {
-    match profile {
-        RealtimePressureProfile::Normal => Duration::from_millis(2),
-        RealtimePressureProfile::Guarded => Duration::from_millis(1),
-        RealtimePressureProfile::Critical => Duration::from_millis(0),
-    }
-}
-
-fn transfer_chunk_samples(profile: RealtimePressureProfile) -> usize {
-    match profile {
-        RealtimePressureProfile::Normal => 8_192,
-        RealtimePressureProfile::Guarded => 12_288,
-        RealtimePressureProfile::Critical => 16_384,
-    }
-}
-
-fn transfer_backoff(profile: RealtimePressureProfile) -> Duration {
-    match profile {
-        RealtimePressureProfile::Normal => Duration::from_millis(1),
-        RealtimePressureProfile::Guarded => Duration::from_millis(0),
-        RealtimePressureProfile::Critical => Duration::from_millis(0),
-    }
+    ((rate * milliseconds as f64) / 1000.0).round().max(1.0) as usize
 }
 
 pub(crate) fn try_lock_render_queue_hot_path(render_queue: &AudioRingBuffer) {
@@ -171,10 +146,12 @@ pub(crate) fn spawn_render_transfer_worker(
     decode_reservoir: AudioRingBuffer,
     render_queue: AudioRingBuffer,
     channels: u16,
+    sample_rate: u32,
     command_rx: mpsc::Receiver<TransferCommand>,
     thread_name: &str,
 ) -> Result<(), String> {
     let channels = channels.max(1) as usize;
+    let sample_rate = sample_rate.max(1) as f64;
     let capacity = render_queue.capacity_samples().max(channels);
     let low_watermark = ((capacity * 3) / 10).max(channels * 128).min(capacity);
     let high_watermark = ((capacity * 8) / 10).max(low_watermark).min(capacity);
@@ -196,26 +173,29 @@ pub(crate) fn spawn_render_transfer_worker(
                     Err(mpsc::TryRecvError::Empty) => {}
                 }
 
-                let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                let render_len = render_queue.len_samples();
+                let decode_len = decode_reservoir.len_samples();
+                let buffered_ahead_seconds =
+                    (render_len as f64) / (sample_rate * (channels as f64).max(1.0));
+                let recovery_hint = render_len <= low_watermark || decode_len <= low_watermark;
+                let profile = crate::audio::realtime_scheduler::SCHEDULER
+                    .update(buffered_ahead_seconds, recovery_hint);
                 crate::audio::threading::apply_audio_transfer_pressure_profile(profile);
-                let chunk_limit = transfer_chunk_samples(profile);
-                let wait_timeout = transfer_wait(profile);
-                let backoff = transfer_backoff(profile);
+                let chunk_limit = buffer_policy::output_producer_chunk_samples(profile);
+                let wait_timeout = buffer_policy::source_pop_wait_timeout(profile);
+                let backoff = buffer_policy::output_producer_backoff(profile);
+                let decode_idle_backoff =
+                    buffer_policy::decode_push_backoff(profile).max(Duration::from_millis(5));
 
                 if decode_reservoir.is_finished_and_empty() {
                     // Keep the transfer worker alive even after end-of-stream so a subsequent
                     // interactive seek can clear the reservoir and resume playback without
                     // forcing a full pipeline rebuild.
                     render_queue.mark_finished();
-                    if backoff.is_zero() {
-                        thread::sleep(Duration::from_millis(10));
-                    } else {
-                        thread::sleep(backoff.max(Duration::from_millis(5)));
-                    }
+                    thread::sleep(decode_idle_backoff);
                     continue;
                 }
 
-                let render_len = render_queue.len_samples();
                 if render_len >= high_watermark {
                     if backoff.is_zero() {
                         thread::yield_now();
@@ -236,11 +216,11 @@ pub(crate) fn spawn_render_transfer_worker(
                     );
                 }
 
-                if decode_reservoir.len_samples() <= low_watermark {
+                if decode_len <= low_watermark {
                     TRANSFER_DECODE_LOW_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
                     diagnostics::record_event_throttled(
                         "shared.transfer.decode_low_watermark",
-                        decode_reservoir.len_samples() as u64,
+                        decode_len as u64,
                         low_watermark as u64,
                         &TRANSFER_DECODE_LOW_TIMELINE_GATE_MS,
                         180,
@@ -290,7 +270,11 @@ pub(crate) fn spawn_render_transfer_worker(
                 }
 
                 if transfer.popped == 0 {
-                    thread::yield_now();
+                    if backoff.is_zero() {
+                        thread::yield_now();
+                    } else {
+                        thread::sleep(backoff);
+                    }
                 }
             }
         })
@@ -422,10 +406,11 @@ impl Iterator for StreamingSamplesSource {
     fn next(&mut self) -> Option<Self::Item> {
         if self.local_index >= self.local.len() {
             let channels = self.channels.max(1) as usize;
+            let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
             let result = self.render_queue.pop_chunk_into(
                 &mut self.local,
                 Self::CHUNK_SAMPLES,
-                Duration::from_millis(0),
+                buffer_policy::source_pop_wait_timeout(profile),
             );
             self.local_index = 0;
 
@@ -591,6 +576,7 @@ mod tests {
             buffer.clone(),
             render_queue.clone(),
             2,
+            48_000,
             transfer_rx,
             "test-transfer-worker",
         )
@@ -660,19 +646,23 @@ mod tests {
     fn adaptive_underrun_silence_frames_scales_with_pressure_and_streak() {
         let normal = adaptive_underrun_silence_frames(RealtimePressureProfile::Normal, 1, 48_000);
         let guarded = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 48_000);
-        let critical = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 1, 48_000);
+        let critical =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 1, 48_000);
 
         assert!(normal < guarded);
         assert!(guarded < critical);
 
-        let streaked = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 8, 48_000);
+        let streaked =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 8, 48_000);
         assert!(streaked >= critical);
     }
 
     #[test]
     fn adaptive_underrun_silence_frames_scale_with_sample_rate() {
-        let low_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 44_100);
-        let high_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
+        let low_rate =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 44_100);
+        let high_rate =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
         assert!(high_rate > low_rate);
     }
 }

@@ -1,5 +1,6 @@
 pub(crate) mod atomic_f32;
 pub(crate) mod buffer;
+pub(crate) mod buffer_policy;
 pub(crate) mod decoder_sidecar;
 pub(crate) mod diagnostics;
 pub(crate) mod dsd2pcm;

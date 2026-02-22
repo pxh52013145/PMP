@@ -22,6 +22,7 @@ use super::{
 };
 
 use crate::audio::buffer::AudioRingBuffer;
+use crate::audio::buffer_policy;
 
 use super::streaming::{
     drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
@@ -140,7 +141,10 @@ fn start_symphonia_stream(
         .unwrap_or(default_capacity)
         .clamp(default_capacity, max_capacity);
     let buffer = AudioRingBuffer::new(decode_capacity);
-    let render_queue = AudioRingBuffer::new((buffer.capacity_samples() / 4).clamp(16_384, 262_144));
+    let render_queue_capacity =
+        buffer_policy::recommended_render_queue_capacity_samples(output_sample_rate, 2)
+            .min(buffer.capacity_samples().max(16_384));
+    let render_queue = AudioRingBuffer::new(render_queue_capacity);
     try_lock_render_queue_hot_path(&render_queue);
 
     let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
@@ -227,9 +231,12 @@ fn start_symphonia_stream(
         let mut meta_delivered = false;
 
         'decode_loop: loop {
+            let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
             crate::audio::threading::apply_audio_decode_pressure_profile(
-                crate::audio::realtime_scheduler::SCHEDULER.profile(),
+                profile,
             );
+            let decode_backoff = buffer_policy::decode_push_backoff(profile);
+            let eof_wait_backoff = decode_backoff.max(Duration::from_millis(10));
             let drained = drain_decoder_commands(&command_rx);
             if drained.shutdown {
                 buffer_clone.mark_finished();
@@ -297,7 +304,7 @@ fn start_symphonia_stream(
                     // disconnect the command channel and force slow pipeline rebuilds.
                     buffer_clone.mark_finished();
                     loop {
-                        std::thread::sleep(Duration::from_millis(10));
+                        std::thread::sleep(eof_wait_backoff);
                         let drained = drain_decoder_commands(&command_rx);
                         if drained.shutdown {
                             return;
@@ -516,6 +523,11 @@ fn start_symphonia_stream(
                                     let frames_pushed =
                                         buffer_clone.push_interleaved(remaining, channels);
                                     if frames_pushed == 0 {
+                                        if decode_backoff.is_zero() {
+                                            std::thread::yield_now();
+                                        } else {
+                                            std::thread::sleep(decode_backoff);
+                                        }
                                         continue;
                                     }
                                     offset_samples += frames_pushed * channels;
@@ -587,6 +599,11 @@ fn start_symphonia_stream(
                                     let frames_pushed =
                                         buffer_clone.push_interleaved(remaining, channels);
                                     if frames_pushed == 0 {
+                                        if decode_backoff.is_zero() {
+                                            std::thread::yield_now();
+                                        } else {
+                                            std::thread::sleep(decode_backoff);
+                                        }
                                         continue;
                                     }
                                     offset_samples += frames_pushed * channels;
@@ -611,7 +628,7 @@ fn start_symphonia_stream(
 
                     buffer_clone.mark_finished();
                     loop {
-                        std::thread::sleep(Duration::from_millis(10));
+                        std::thread::sleep(eof_wait_backoff);
                         let drained = drain_decoder_commands(&command_rx);
                         if drained.shutdown {
                             return;
@@ -704,6 +721,7 @@ fn start_symphonia_stream(
         buffer.clone(),
         render_queue.clone(),
         meta.channels,
+        meta.sample_rate,
         transfer_rx,
         "pmpm-symphonia-transfer",
     ) {

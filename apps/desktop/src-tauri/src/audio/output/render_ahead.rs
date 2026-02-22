@@ -9,6 +9,7 @@ use once_cell::sync::Lazy;
 use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
+use crate::audio::buffer_policy;
 use crate::audio::diagnostics;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
@@ -73,6 +74,12 @@ fn parse_env_u64(key: &str, default_value: u64, min: u64, max: u64) -> u64 {
         .clamp(min, max)
 }
 
+fn has_render_pop_wait_override() -> bool {
+    std::env::var("PMP_AUDIO_RENDER_POP_WAIT_NORMAL_MS").is_ok()
+        || std::env::var("PMP_AUDIO_RENDER_POP_WAIT_GUARDED_MS").is_ok()
+        || std::env::var("PMP_AUDIO_RENDER_POP_WAIT_CRITICAL_MS").is_ok()
+}
+
 fn parse_env_u32(key: &str, default_value: u32, min: u32, max: u32) -> u32 {
     std::env::var(key)
         .ok()
@@ -123,40 +130,59 @@ impl UnderrunMaskPolicy {
     }
 }
 
-static RENDER_POP_WAIT_POLICY: Lazy<RenderPopWaitPolicy> = Lazy::new(RenderPopWaitPolicy::from_env);
+static RENDER_POP_WAIT_POLICY: Lazy<Option<RenderPopWaitPolicy>> =
+    Lazy::new(|| has_render_pop_wait_override().then(RenderPopWaitPolicy::from_env));
 static UNDERRUN_MASK_POLICY: Lazy<UnderrunMaskPolicy> = Lazy::new(UnderrunMaskPolicy::from_env);
 
 fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
     let rate = sample_rate.max(8_000) as f64;
-    ((rate * milliseconds as f64) / 1000.0)
-        .round()
-        .max(1.0) as usize
+    ((rate * milliseconds as f64) / 1000.0).round().max(1.0) as usize
 }
 
 fn producer_chunk_samples(profile: RealtimePressureProfile) -> usize {
-    match profile {
-        RealtimePressureProfile::Normal => 8192,
-        RealtimePressureProfile::Guarded => 12288,
-        RealtimePressureProfile::Critical => 16384,
-    }
+    buffer_policy::output_producer_chunk_samples(profile)
 }
 
 fn producer_backoff_duration(profile: RealtimePressureProfile) -> Duration {
-    match profile {
-        RealtimePressureProfile::Normal => Duration::from_millis(1),
-        RealtimePressureProfile::Guarded => Duration::from_millis(0),
-        RealtimePressureProfile::Critical => Duration::from_millis(0),
-    }
+    buffer_policy::output_producer_backoff(profile)
 }
 
 fn render_pop_wait_timeout(profile: RealtimePressureProfile) -> Duration {
-    let policy = *RENDER_POP_WAIT_POLICY;
-    let wait_ms = match profile {
-        RealtimePressureProfile::Normal => policy.normal_ms,
-        RealtimePressureProfile::Guarded => policy.guarded_ms,
-        RealtimePressureProfile::Critical => policy.critical_ms,
+    if let Some(policy) = *RENDER_POP_WAIT_POLICY {
+        let wait_ms = match profile {
+            RealtimePressureProfile::Normal => policy.normal_ms,
+            RealtimePressureProfile::Guarded => policy.guarded_ms,
+            RealtimePressureProfile::Critical => policy.critical_ms,
+        };
+        Duration::from_millis(wait_ms)
+    } else {
+        buffer_policy::source_pop_wait_timeout(profile)
+    }
+}
+
+fn render_watermark_samples(
+    capacity_samples: usize,
+    channels: usize,
+    profile: RealtimePressureProfile,
+) -> (usize, usize) {
+    let capacity = capacity_samples.max(channels.max(1));
+    let (low_percent, high_percent) = match profile {
+        RealtimePressureProfile::Normal => (30usize, 80usize),
+        RealtimePressureProfile::Guarded => (40usize, 88usize),
+        RealtimePressureProfile::Critical => (50usize, 92usize),
     };
-    Duration::from_millis(wait_ms)
+
+    let low = ((capacity * low_percent) / 100)
+        .max(channels * 128)
+        .min(capacity);
+    let mut high = ((capacity * high_percent) / 100)
+        .max(channels * 256)
+        .min(capacity);
+    if high < low {
+        high = low;
+    }
+
+    (low, high)
 }
 
 fn adaptive_underrun_silence_frames(
@@ -212,15 +238,19 @@ pub(crate) fn wrap_source_for_shared_backend(
         parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 0.6, 0.3, 6.0);
     let prebuffer_samples =
         ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
-    let capacity_samples = prebuffer_samples.clamp(16_384, 2_000_000);
+    let policy_capacity =
+        buffer_policy::recommended_render_queue_capacity_samples(Some(sample_rate), channels);
+    let capacity_samples = prebuffer_samples
+        .max((policy_capacity * 2) / 3)
+        .clamp(16_384, 2_000_000);
 
     let queue = AudioRingBuffer::new(capacity_samples.max(channels as usize * 256));
     queue.try_lock_memory_pages();
 
-    SHARED_RENDER_LOW_WATERMARK_SAMPLES.store(
-        ((queue.capacity_samples() * 3) / 10).max(channels as usize * 128) as u64,
-        Ordering::Relaxed,
-    );
+    let initial_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+    let (initial_low_watermark, _) =
+        render_watermark_samples(queue.capacity_samples(), channels as usize, initial_profile);
+    SHARED_RENDER_LOW_WATERMARK_SAMPLES.store(initial_low_watermark as u64, Ordering::Relaxed);
 
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let producer = spawn_producer_thread(source, queue.clone(), stop_rx, seek_epoch.clone());
@@ -247,7 +277,7 @@ pub(crate) fn wrap_source_for_shared_backend(
         duration,
         seek_epoch,
         observed_seek_epoch,
-        local: Vec::with_capacity(8192),
+        local: Vec::with_capacity(producer_chunk_samples(RealtimePressureProfile::Normal)),
         local_index: 0,
         last_samples: vec![0.0; channels as usize],
         needs_fade_in: false,
@@ -273,11 +303,11 @@ fn spawn_producer_thread(
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_decode();
             let channels = source.channels().max(1) as usize;
-            let high_watermark = ((queue.capacity_samples() * 8) / 10)
-                .max(channels * 256)
-                .min(queue.capacity_samples());
+            let sample_rate = source.sample_rate().max(1) as f64;
+            let queue_capacity = queue.capacity_samples().max(channels);
 
-            let mut block = Vec::<f32>::with_capacity(4096);
+            let mut block =
+                Vec::<f32>::with_capacity(producer_chunk_samples(RealtimePressureProfile::Normal));
             let mut observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
 
             loop {
@@ -292,11 +322,23 @@ fn spawn_producer_thread(
                     block.clear();
                 }
 
-                let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                let render_len = queue.len_samples();
+                let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                let (mut low_watermark, mut high_watermark) =
+                    render_watermark_samples(queue_capacity, channels, current_profile);
+                let buffered_ahead_seconds = (render_len as f64) / (sample_rate * channels as f64);
+                let profile = crate::audio::realtime_scheduler::SCHEDULER
+                    .update(buffered_ahead_seconds, render_len <= low_watermark);
+                if profile != current_profile {
+                    (low_watermark, high_watermark) =
+                        render_watermark_samples(queue_capacity, channels, profile);
+                }
+
+                SHARED_RENDER_LOW_WATERMARK_SAMPLES.store(low_watermark as u64, Ordering::Relaxed);
                 crate::audio::threading::apply_audio_decode_pressure_profile(profile);
                 let backoff = producer_backoff_duration(profile);
 
-                if queue.len_samples() >= high_watermark {
+                if render_len >= high_watermark {
                     if backoff.is_zero() {
                         thread::yield_now();
                     } else {
@@ -306,6 +348,9 @@ fn spawn_producer_thread(
                 }
 
                 let chunk_samples = producer_chunk_samples(profile);
+                if block.capacity() < chunk_samples {
+                    block.reserve(chunk_samples - block.capacity());
+                }
                 block.clear();
                 let mut seek_flushed = false;
                 for _ in 0..chunk_samples {
@@ -403,21 +448,23 @@ impl RenderAheadSource {
         self.local_index = 0;
 
         let low_watermark = SHARED_RENDER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed) as usize;
-        if low_watermark > 0 && self.queue.len_samples() <= low_watermark {
+        let render_len = self.queue.len_samples();
+        if low_watermark > 0 && render_len <= low_watermark {
             SHARED_RENDER_LOW_HIT_COUNT.fetch_add(1, Ordering::Relaxed);
             diagnostics::record_event_throttled(
                 "shared.render_ahead.low_watermark",
-                self.queue.len_samples() as u64,
+                render_len as u64,
                 low_watermark as u64,
                 &SHARED_RENDER_LOW_TIMELINE_GATE_MS,
                 160,
             );
         }
 
+        let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
         let pop = self.queue.pop_chunk_into(
             &mut self.local,
             Self::POP_CHUNK_SAMPLES,
-            render_pop_wait_timeout(crate::audio::realtime_scheduler::SCHEDULER.profile()),
+            render_pop_wait_timeout(profile),
         );
 
         if pop.popped > 0 {
@@ -447,11 +494,8 @@ impl RenderAheadSource {
 
         let channels = self.channels.max(1) as usize;
         self.underrun_streak = self.underrun_streak.saturating_add(1);
-        let silence_frames = adaptive_underrun_silence_frames(
-            crate::audio::realtime_scheduler::SCHEDULER.profile(),
-            self.underrun_streak,
-            self.sample_rate,
-        );
+        let silence_frames =
+            adaptive_underrun_silence_frames(profile, self.underrun_streak, self.sample_rate);
         self.needs_fade_in = true;
         self.pending_fade_in_frames = silence_frames;
         let silence_samples = channels * silence_frames;
@@ -595,19 +639,23 @@ mod tests {
     fn adaptive_underrun_silence_frames_scales_with_pressure_and_streak() {
         let normal = adaptive_underrun_silence_frames(RealtimePressureProfile::Normal, 1, 48_000);
         let guarded = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 48_000);
-        let critical = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 1, 48_000);
+        let critical =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 1, 48_000);
 
         assert!(normal < guarded);
         assert!(guarded < critical);
 
-        let streaked = adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 8, 48_000);
+        let streaked =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Critical, 8, 48_000);
         assert!(streaked >= critical);
     }
 
     #[test]
     fn adaptive_underrun_silence_frames_scale_with_sample_rate() {
-        let low_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 44_100);
-        let high_rate = adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
+        let low_rate =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 44_100);
+        let high_rate =
+            adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
         assert!(high_rate > low_rate);
     }
 
@@ -618,5 +666,20 @@ mod tests {
         let critical = render_pop_wait_timeout(RealtimePressureProfile::Critical);
         assert!(normal <= guarded);
         assert!(guarded <= critical);
+    }
+
+    #[test]
+    fn render_watermarks_scale_with_pressure() {
+        let (normal_low, normal_high) =
+            render_watermark_samples(100_000, 2, RealtimePressureProfile::Normal);
+        let (guarded_low, guarded_high) =
+            render_watermark_samples(100_000, 2, RealtimePressureProfile::Guarded);
+        let (critical_low, critical_high) =
+            render_watermark_samples(100_000, 2, RealtimePressureProfile::Critical);
+
+        assert!(normal_low < guarded_low);
+        assert!(guarded_low < critical_low);
+        assert!(normal_high < guarded_high);
+        assert!(guarded_high < critical_high);
     }
 }

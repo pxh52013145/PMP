@@ -14,6 +14,7 @@ use super::{
     OutputDeviceInfo, OutputStreamInfo,
 };
 use crate::audio::buffer::AudioRingBuffer;
+use crate::audio::buffer_policy;
 use crate::audio::diagnostics;
 use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTransportMode};
 use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
@@ -1927,7 +1928,9 @@ impl WasapiExclusiveSink {
         let handle = thread::spawn(move || {
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_decode();
-            let mut local: Vec<f32> = Vec::with_capacity(8192);
+            let mut local: Vec<f32> = Vec::with_capacity(
+                buffer_policy::output_producer_chunk_samples(RealtimePressureProfile::Normal),
+            );
 
             let mut source = {
                 let Ok(mut guard) = inner_clone.producer_source.lock() else {
@@ -1949,19 +1952,27 @@ impl WasapiExclusiveSink {
                     break;
                 }
 
-                crate::audio::threading::apply_audio_decode_pressure_profile(
-                    crate::audio::realtime_scheduler::SCHEDULER.profile(),
-                );
+                let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                crate::audio::threading::apply_audio_decode_pressure_profile(profile);
+                let chunk_samples = buffer_policy::output_producer_chunk_samples(profile);
+                let backoff = buffer_policy::output_producer_backoff(profile);
 
                 if inner_clone.render_queue.len_samples()
                     >= inner_clone.render_queue.capacity_samples() * 3 / 4
                 {
-                    thread::sleep(Duration::from_millis(1));
+                    if backoff.is_zero() {
+                        thread::yield_now();
+                    } else {
+                        thread::sleep(backoff);
+                    }
                     continue;
                 }
 
                 local.clear();
-                for _ in 0..8192 {
+                if local.capacity() < chunk_samples {
+                    local.reserve(chunk_samples - local.capacity());
+                }
+                for _ in 0..chunk_samples {
                     match source.next() {
                         Some(sample) => local.push(sample),
                         None => break,
@@ -1979,7 +1990,11 @@ impl WasapiExclusiveSink {
                         .render_queue
                         .push_interleaved(&local[start..], channels);
                     if pushed_frames == 0 {
-                        thread::sleep(Duration::from_millis(1));
+                        if backoff.is_zero() {
+                            thread::yield_now();
+                        } else {
+                            thread::sleep(backoff);
+                        }
                         if stop_rx.try_recv().is_ok() {
                             return;
                         }
@@ -2523,7 +2538,9 @@ impl WasapiSharedRawSink {
         let handle = thread::spawn(move || {
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_decode();
-            let mut local: Vec<f32> = Vec::with_capacity(8192);
+            let mut local: Vec<f32> = Vec::with_capacity(
+                buffer_policy::output_producer_chunk_samples(RealtimePressureProfile::Normal),
+            );
 
             let mut source = {
                 let Ok(mut guard) = inner_clone.producer_source.lock() else {
@@ -2545,19 +2562,27 @@ impl WasapiSharedRawSink {
                     break;
                 }
 
-                crate::audio::threading::apply_audio_decode_pressure_profile(
-                    crate::audio::realtime_scheduler::SCHEDULER.profile(),
-                );
+                let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+                crate::audio::threading::apply_audio_decode_pressure_profile(profile);
+                let chunk_samples = buffer_policy::output_producer_chunk_samples(profile);
+                let backoff = buffer_policy::output_producer_backoff(profile);
 
                 if inner_clone.render_queue.len_samples()
                     >= inner_clone.render_queue.capacity_samples() * 3 / 4
                 {
-                    thread::sleep(Duration::from_millis(1));
+                    if backoff.is_zero() {
+                        thread::yield_now();
+                    } else {
+                        thread::sleep(backoff);
+                    }
                     continue;
                 }
 
                 local.clear();
-                for _ in 0..8192 {
+                if local.capacity() < chunk_samples {
+                    local.reserve(chunk_samples - local.capacity());
+                }
+                for _ in 0..chunk_samples {
                     match source.next() {
                         Some(sample) => local.push(sample),
                         None => break,
@@ -2575,7 +2600,11 @@ impl WasapiSharedRawSink {
                         .render_queue
                         .push_interleaved(&local[start..], channels);
                     if pushed_frames == 0 {
-                        thread::sleep(Duration::from_millis(1));
+                        if backoff.is_zero() {
+                            thread::yield_now();
+                        } else {
+                            thread::sleep(backoff);
+                        }
                         if stop_rx.try_recv().is_ok() {
                             return;
                         }
@@ -2658,13 +2687,20 @@ fn start_stream_with_prefill(
     stream: &mut WasapiStream,
     inner: &SinkInner,
     channels: u16,
-    _sample_rate: u32,
+    sample_rate: u32,
     scratch: &mut Vec<f32>,
     declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
+    let prefill_samples = buffer_policy::wasapi_start_prefill_samples(
+        sample_rate,
+        channels,
+        stream.buffer_frame_count,
+        false,
+    );
+    let prefill_timeout = buffer_policy::wasapi_start_prefill_timeout(false);
     inner
         .render_queue
-        .wait_for_samples((channels.max(1) as usize) * 64, Duration::from_millis(60));
+        .wait_for_samples(prefill_samples, prefill_timeout);
 
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
     let output_quantization_mode = inner
@@ -2698,13 +2734,20 @@ fn start_stream_with_prefill_shared_raw(
     stream: &mut WasapiStream,
     inner: &SharedRawSinkInner,
     channels: u16,
-    _sample_rate: u32,
+    sample_rate: u32,
     scratch: &mut Vec<f32>,
     declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
+    let prefill_samples = buffer_policy::wasapi_start_prefill_samples(
+        sample_rate,
+        channels,
+        stream.buffer_frame_count,
+        true,
+    );
+    let prefill_timeout = buffer_policy::wasapi_start_prefill_timeout(true);
     inner
         .render_queue
-        .wait_for_samples((channels.max(1) as usize) * 64, Duration::from_millis(80));
+        .wait_for_samples(prefill_samples, prefill_timeout);
 
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
     let output_quantization_mode = inner
