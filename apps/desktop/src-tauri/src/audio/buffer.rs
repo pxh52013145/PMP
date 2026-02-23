@@ -74,7 +74,7 @@ impl AudioRingBuffer {
 
     pub fn recommended_capacity_samples(sample_rate: Option<u32>, channels: u16) -> usize {
         const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-        const TARGET_SECONDS: u64 = 10;
+        const TARGET_SECONDS: u64 = 6;
         const MIN_SAMPLES: u64 = 32_768;
         const MAX_SAMPLES: u64 = 8_000_000;
 

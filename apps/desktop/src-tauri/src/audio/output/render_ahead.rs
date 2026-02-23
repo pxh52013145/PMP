@@ -456,12 +456,12 @@ pub(crate) fn wrap_source_for_shared_backend(
     let duration = source.total_duration();
 
     let prebuffer_seconds =
-        parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 1.0, 0.3, 8.0);
+        parse_env_seconds("PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS", 0.65, 0.2, 8.0);
     let prebuffer_samples =
         ((sample_rate as f64) * (channels as f64) * prebuffer_seconds).ceil() as usize;
     let policy_capacity_scale = parse_env_seconds(
         "PMP_AUDIO_SHARED_RENDER_AHEAD_POLICY_CAPACITY_SCALE",
-        1.35,
+        1.20,
         1.0,
         4.0,
     );
@@ -470,7 +470,7 @@ pub(crate) fn wrap_source_for_shared_backend(
     let scaled_policy_capacity = ((policy_capacity as f64) * policy_capacity_scale).ceil() as usize;
     let capacity_samples = prebuffer_samples
         .max(scaled_policy_capacity)
-        .clamp(16_384, 3_000_000);
+        .clamp(16_384, 1_500_000);
 
     let queue = AudioRingBuffer::new(capacity_samples.max(channels as usize * 256));
     queue.try_lock_memory_pages();

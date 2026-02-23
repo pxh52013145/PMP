@@ -14,6 +14,9 @@ type MatrixRainAnimator = {
   resetTime: () => void;
 };
 
+const MATRIX_RAIN_RESOLUTION_MULTIPLIER = 0.5;
+const MATRIX_RAIN_RESOLUTION_FLOOR = 0.2;
+
 export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRainEffectProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { renderMode } = useWindowActivity();
@@ -68,7 +71,8 @@ export default function MatrixRainEffect({ color, isRainbow = false }: MatrixRai
     const applyCanvasSize = () => {
       const q = qualityRef.current;
       const dpr = window.devicePixelRatio || 1;
-      const resolutionScale = dpr * Math.max(0.25, Math.min(1.0, q.renderScale));
+      const resolutionScale =
+        dpr * Math.max(MATRIX_RAIN_RESOLUTION_FLOOR, Math.min(1.0, q.renderScale * MATRIX_RAIN_RESOLUTION_MULTIPLIER));
 
       cssWidth = window.innerWidth;
       cssHeight = window.innerHeight;

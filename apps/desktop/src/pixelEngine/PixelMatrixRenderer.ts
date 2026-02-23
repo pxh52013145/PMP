@@ -12,6 +12,9 @@ type PixelShape = 'circle' | 'square' | 'rounded-square' | 'diamond' | 'hexagon'
  * 使用 PixiJS 实现高性能像素矩阵渲染
  */
 export class PixelMatrixRenderer {
+  private static readonly HIGH_DPR_THRESHOLD = 2;
+  private static readonly HIGH_DPR_RENDER_SCALE_CAP = 0.75;
+
   private app: PIXI.Application;
   private pixelContainer: PIXI.ParticleContainer;
   private pixels: PIXI.Sprite[] = [];
@@ -63,7 +66,7 @@ export class PixelMatrixRenderer {
       height,
       backgroundAlpha: 0, // 完全透明背景
       antialias: useAntialias,
-      resolution: (window.devicePixelRatio || 1) * this.renderScale,
+      resolution: this.computeRendererResolution(),
       autoDensity: true,
     });
 
@@ -91,6 +94,15 @@ export class PixelMatrixRenderer {
 
     // 初始化像素网格
     this.initPixels();
+  }
+
+  private computeRendererResolution(): number {
+    const dpr = window.devicePixelRatio || 1;
+    const highDprScaleCap =
+      dpr >= PixelMatrixRenderer.HIGH_DPR_THRESHOLD
+        ? PixelMatrixRenderer.HIGH_DPR_RENDER_SCALE_CAP
+        : 1.0;
+    return dpr * Math.min(this.renderScale, highDprScaleCap);
   }
 
   /**
@@ -373,7 +385,7 @@ export class PixelMatrixRenderer {
     if (!changed) return;
 
     try {
-      this.app.renderer.resolution = (window.devicePixelRatio || 1) * this.renderScale;
+      this.app.renderer.resolution = this.computeRendererResolution();
       this.app.renderer.resize(this.width, this.height);
       if (renderScaleChanged) {
         this.refreshPixelTexture(this.pixelShape, true);

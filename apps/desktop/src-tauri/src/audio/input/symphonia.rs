@@ -96,7 +96,7 @@ fn streaming_full_track_initial_capacity_samples(
 
     let initial_seconds = parse_env_f64(
         "PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS",
-        24.0,
+        12.0,
         6.0,
         300.0,
     );
@@ -115,21 +115,28 @@ fn streaming_default_capacity_samples(
     default_capacity: usize,
     budget_samples: usize,
 ) -> usize {
-    let base_seconds = parse_env_f64("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS", 18.0, 8.0, 180.0);
+    let base_seconds = parse_env_f64("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS", 8.0, 4.0, 120.0);
     let sample_rate = output_sample_rate.unwrap_or(44_100).max(1) as f64;
-    let rate_boost = if sample_rate >= 176_400.0 {
-        1.80
-    } else if sample_rate >= 96_000.0 {
-        1.45
-    } else if sample_rate >= 48_000.0 {
-        1.20
-    } else {
-        1.0
-    };
+    let rate_scale = streaming_reservoir_rate_scale(sample_rate);
     let channels = 2.0f64;
 
-    ((sample_rate * channels * base_seconds * rate_boost).ceil() as usize)
+    ((sample_rate * channels * base_seconds * rate_scale).ceil() as usize)
         .clamp(default_capacity, budget_samples.max(default_capacity))
+}
+
+fn streaming_reservoir_rate_scale(sample_rate: f64) -> f64 {
+    // Memory-first policy for local-file desktop playback:
+    // higher sample-rate content carries significantly larger per-second data volume,
+    // so we shorten effective reservoir seconds to avoid disproportionate RSS growth.
+    if sample_rate >= 352_800.0 {
+        0.50
+    } else if sample_rate >= 192_000.0 {
+        0.62
+    } else if sample_rate >= 96_000.0 {
+        0.82
+    } else {
+        1.0
+    }
 }
 
 fn track_is_audio_like(track: &Track) -> bool {
@@ -1500,8 +1507,36 @@ mod tests {
             std::env::remove_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS");
         }
 
-        assert!(low > low_default);
-        assert!(high > high_default);
+        assert!(low >= low_default);
+        assert!(high >= high_default);
         assert!(high > low);
+    }
+
+    #[test]
+    fn streaming_default_capacity_applies_high_rate_scale() {
+        let prev = std::env::var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS").ok();
+        std::env::remove_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS");
+
+        let budget_samples = usize::MAX / 2;
+        let default_floor = 32_768usize;
+        let sample_rate = 192_000f64;
+        let channels = 2.0f64;
+        let base_seconds = 8.0f64;
+        let unscaled = (sample_rate * channels * base_seconds).ceil() as usize;
+
+        let scaled = streaming_default_capacity_samples(
+            Some(sample_rate as u32),
+            default_floor,
+            budget_samples,
+        );
+
+        if let Some(prev) = prev {
+            std::env::set_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS", prev);
+        } else {
+            std::env::remove_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS");
+        }
+
+        assert!(scaled < unscaled);
+        assert!(scaled >= default_floor);
     }
 }

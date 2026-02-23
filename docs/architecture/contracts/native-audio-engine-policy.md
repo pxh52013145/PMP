@@ -114,7 +114,7 @@ To keep track-switch latency bounded, streaming open no longer relies solely on 
 `StreamingFullTrack` mode now defaults to low-latency initial reservoir sizing instead of preallocating full budget upfront.
 
 - Default initial sizing uses:
-  - `PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS` (default `24.0s`, clamped `6..300`)
+  - `PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS` (default `12.0s`, clamped `6..300`)
 - Optional legacy behavior (full preallocation):
   - `PMP_AUDIO_STREAMING_FULLTRACK_PREALLOCATE_FULL=1`
 
@@ -125,16 +125,26 @@ Rationale:
 
 ### 6.3 Streaming Decode Reservoir Baseline
 
-Streaming mode applies a larger decode-reservoir baseline to improve jitter tolerance on
-high-rate shared backends.
+Streaming mode applies a memory-first decode-reservoir baseline while keeping bounded
+jitter tolerance on high-rate content.
 
-- `PMP_AUDIO_STREAMING_RESERVOIR_SECONDS` (default `18.0`, clamped `8..180`)
+- `PMP_AUDIO_STREAMING_RESERVOIR_SECONDS` (default `8.0`, clamped `4..120`)
 
 Policy behavior:
 
-- High output sample rates receive additional reservoir scaling (96k/192k paths allocate larger
-  decode reservoirs by default).
+- High output sample rates apply additional scale-down (96k/192k/352.8k+), avoiding
+  disproportionate decode-reservoir growth.
 - Capacity is still bounded by full-track budget guardrails.
+
+Shared queue defaults used by streaming transfer path:
+
+- Render queue default target:
+  - `PMP_AUDIO_RENDER_QUEUE_SECONDS` default `1.5` (range `0.2..4.0`)
+  - hard sample cap `786_432`
+- Shared render-ahead defaults:
+  - `PMP_AUDIO_SHARED_RENDER_AHEAD_SECONDS` default `0.65` (range `0.2..8.0`)
+  - `PMP_AUDIO_SHARED_RENDER_AHEAD_POLICY_CAPACITY_SCALE` default `1.20`
+  - render-ahead hard sample cap `1_500_000`
 
 ### 6.4 Shared Resume Barrier Contract
 

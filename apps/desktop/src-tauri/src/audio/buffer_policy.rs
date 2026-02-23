@@ -4,11 +4,11 @@ use std::time::Duration;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
-const DEFAULT_RENDER_QUEUE_SECONDS: f64 = 1.8;
+const DEFAULT_RENDER_QUEUE_SECONDS: f64 = 1.5;
 const MIN_RENDER_QUEUE_SECONDS: f64 = 0.2;
 const MAX_RENDER_QUEUE_SECONDS: f64 = 4.0;
 const MIN_RENDER_QUEUE_SAMPLES: usize = 16_384;
-const MAX_RENDER_QUEUE_SAMPLES: usize = 1_048_576;
+const MAX_RENDER_QUEUE_SAMPLES: usize = 786_432;
 
 #[derive(Clone, Copy, Debug)]
 struct SourcePopWaitPolicy {

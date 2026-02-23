@@ -8,7 +8,7 @@ import { trackKey } from './trackKey';
 
 type CoverUrlState = { key: string; url?: string };
 
-const COVER_RELEASE_DELAY_MS = 12000;
+const COVER_RELEASE_DELAY_MS = 3000;
 const COVER_KEEP_HOT_COUNT = 2;
 
 type UseCoverUrlOptions = {

@@ -58,9 +58,16 @@ This plan targets a hard real-time baseline for PMP audio playback:
 
 6. Added low-latency initial sizing for `StreamingFullTrack` decode reservoir.
    - `apps/desktop/src-tauri/src/audio/input/symphonia.rs`
-   - Default `PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS=24.0` (full preallocate remains opt-in via `PMP_AUDIO_STREAMING_FULLTRACK_PREALLOCATE_FULL=1`).
+   - Default `PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS=12.0` (full preallocate remains opt-in via `PMP_AUDIO_STREAMING_FULLTRACK_PREALLOCATE_FULL=1`).
 
-7. Added transport/open timing diagnostics for load/crossfade path attribution.
+7. Rebalanced memory-related defaults for playback and rendering layers.
+   - `apps/desktop/src-tauri/src/audio/input/symphonia.rs`
+   - `apps/desktop/src-tauri/src/audio/buffer_policy.rs`
+   - `apps/desktop/src-tauri/src/audio/output/render_ahead.rs`
+   - `apps/desktop/src/contracts/memoryGovernance.ts`
+   - `apps/desktop/src/pixelEngine/PixelMatrixRenderer.ts`
+
+8. Added transport/open timing diagnostics for load/crossfade path attribution.
    - `apps/desktop/src-tauri/src/audio/kernel.rs`
    - `apps/desktop/src-tauri/src/audio/input/symphonia.rs`
 

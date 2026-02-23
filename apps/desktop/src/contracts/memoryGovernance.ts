@@ -55,7 +55,7 @@ export type MemoryGovernanceRunResult = {
   executed: MemoryGovernanceAction[];
 };
 
-export const DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED = false;
+export const DEFAULT_MEMORY_GOVERNANCE_AUTO_ENABLED = true;
 
 export const MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES = 50;
 
