@@ -3,6 +3,7 @@ use std::sync::mpsc;
 use rodio::source::UniformSourceIterator;
 use rodio::Source;
 
+use crate::audio::bulk_source::BulkSource;
 use crate::audio::input::StreamingShutdownTx;
 use crate::audio::output::BoxedSource;
 
@@ -246,6 +247,26 @@ impl Iterator for PlaybackMixerSource {
     }
 }
 
+impl BulkSource for PlaybackMixerSource {
+    fn fill_buffer(&mut self, buf: &mut [f32]) -> usize {
+        let mut written = 0usize;
+        while written < buf.len() {
+            if self.local_index >= self.local.len() && !self.refill_local() {
+                break;
+            }
+
+            let available = self.local.len().saturating_sub(self.local_index);
+            let to_copy = available.min(buf.len().saturating_sub(written));
+            let start = self.local_index;
+            let end = start + to_copy;
+            buf[written..written + to_copy].copy_from_slice(&self.local[start..end]);
+            self.local_index = end;
+            written += to_copy;
+        }
+        written
+    }
+}
+
 impl Source for PlaybackMixerSource {
     fn current_frame_len(&self) -> Option<usize> {
         None
@@ -261,5 +282,28 @@ impl Source for PlaybackMixerSource {
 
     fn total_duration(&self) -> Option<std::time::Duration> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_mixer_bulk_fill_matches_input_without_crossfade() {
+        let samples = vec![0.25f32, -0.25, 0.5, -0.5, 0.75, -0.75];
+        let source: BoxedSource = Box::new(rodio::buffer::SamplesBuffer::new(
+            2,
+            48_000,
+            samples.clone(),
+        ));
+        let (_controller, mut mixer) = PlaybackMixerSource::new(source, 2, 48_000);
+
+        let mut out = vec![0.0f32; samples.len()];
+        let filled = mixer.fill_buffer(&mut out);
+
+        assert_eq!(filled, samples.len());
+        assert_eq!(out, samples);
+        assert_eq!(mixer.fill_buffer(&mut out), 0);
     }
 }

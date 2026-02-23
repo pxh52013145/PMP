@@ -9,6 +9,7 @@ use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
+use crate::audio::bulk_source::BulkSource;
 use crate::audio::control_plane::{CommandRx, CommandTryRecvError, CommandTx};
 use crate::audio::diagnostics;
 use crate::audio::memory_pool;
@@ -640,6 +641,22 @@ impl StreamingSamplesSource {
             underrun_streak: 0,
         }
     }
+
+    fn track_sample_history(&mut self, sample: f32) {
+        let channels = self.channels.max(1) as usize;
+        let channel = self.channel_cursor;
+        self.channel_cursor += 1;
+        if self.channel_cursor >= channels {
+            self.channel_cursor = 0;
+        }
+        if let (Some(previous), Some(last)) = (
+            self.previous_samples.get_mut(channel),
+            self.last_samples.get_mut(channel),
+        ) {
+            *previous = *last;
+            *last = sample;
+        }
+    }
 }
 
 impl Iterator for StreamingSamplesSource {
@@ -736,21 +753,38 @@ impl Iterator for StreamingSamplesSource {
         let sample_index = self.local_index;
         let sample = self.local[sample_index];
         self.local_index += 1;
-
-        let channels = self.channels.max(1) as usize;
-        let channel = self.channel_cursor;
-        self.channel_cursor += 1;
-        if self.channel_cursor >= channels {
-            self.channel_cursor = 0;
-        }
-        if let (Some(previous), Some(last)) = (
-            self.previous_samples.get_mut(channel),
-            self.last_samples.get_mut(channel),
-        ) {
-            *previous = *last;
-            *last = sample;
-        }
+        self.track_sample_history(sample);
         Some(sample)
+    }
+}
+
+impl BulkSource for StreamingSamplesSource {
+    fn fill_buffer(&mut self, buf: &mut [f32]) -> usize {
+        let mut written = 0usize;
+        while written < buf.len() {
+            if self.local_index >= self.local.len() {
+                let Some(sample) = self.next() else {
+                    break;
+                };
+                buf[written] = sample;
+                written += 1;
+                continue;
+            }
+
+            let available = self.local.len().saturating_sub(self.local_index);
+            let to_copy = available.min(buf.len().saturating_sub(written));
+            let start = self.local_index;
+            let end = start + to_copy;
+            buf[written..written + to_copy].copy_from_slice(&self.local[start..end]);
+            self.local_index = end;
+
+            for &sample in &buf[written..written + to_copy] {
+                self.track_sample_history(sample);
+            }
+
+            written += to_copy;
+        }
+        written
     }
 }
 
@@ -836,9 +870,53 @@ impl Source for SharedSamplesSource {
     }
 }
 
+impl BulkSource for SharedSamplesSource {
+    fn fill_buffer(&mut self, buf: &mut [f32]) -> usize {
+        if self.position >= self.samples.len() {
+            return 0;
+        }
+
+        let available = self.samples.len().saturating_sub(self.position);
+        let to_copy = available.min(buf.len());
+        let end = self.position + to_copy;
+        buf[..to_copy].copy_from_slice(&self.samples[self.position..end]);
+        self.position = end;
+        to_copy
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_samples_source_bulk_fill_matches_samples() {
+        let samples = Arc::new(vec![0.1f32, -0.2, 0.3, -0.4, 0.5]);
+        let mut source = SharedSamplesSource::new(samples.clone(), 1, 48_000, 0);
+        let mut out = vec![0.0f32; samples.len()];
+
+        let filled = source.fill_buffer(&mut out);
+
+        assert_eq!(filled, samples.len());
+        assert_eq!(out, *samples);
+        assert_eq!(source.fill_buffer(&mut out), 0);
+    }
+
+    #[test]
+    fn streaming_samples_source_bulk_fill_reads_render_queue() {
+        let render_queue = AudioRingBuffer::new(512);
+        let samples = vec![0.1f32, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4];
+        let pushed = render_queue.push_interleaved(&samples, 2);
+        assert_eq!(pushed * 2, samples.len());
+        render_queue.mark_finished();
+
+        let mut source = StreamingSamplesSource::new(render_queue, 2, 48_000, 0.0);
+        let mut out = vec![0.0f32; samples.len()];
+        let filled = source.fill_buffer(&mut out);
+
+        assert_eq!(filled, samples.len());
+        assert_eq!(out, samples);
+    }
 
     #[test]
     fn streaming_samples_source_emits_silence_until_samples_arrive_then_finishes() {
