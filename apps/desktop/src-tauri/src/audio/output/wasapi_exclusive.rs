@@ -44,13 +44,62 @@ fn parse_env_u32(key: &str, default_value: u32, min: u32, max: u32) -> u32 {
 fn parse_env_bool_wasapi(key: &str, default_value: bool) -> bool {
     std::env::var(key)
         .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes"
-            )
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default_value,
         })
         .unwrap_or(default_value)
+}
+
+fn shared_raw_low_latency_prefill_floor_samples(
+    sample_rate: u32,
+    channels: u16,
+    low_latency_period_frames: Option<u32>,
+) -> usize {
+    let Some(period_frames) = low_latency_period_frames else {
+        return 0;
+    };
+
+    let sample_rate = sample_rate.max(1) as usize;
+    let channels = channels.max(1) as usize;
+    let period_frames = period_frames.max(1) as usize;
+
+    let floor_from_time = sample_rate.saturating_mul(120).saturating_add(999) / 1000;
+    let floor_from_period = period_frames.saturating_mul(64);
+    let floor_frames = floor_from_time
+        .max(floor_from_period)
+        .min(sample_rate.saturating_mul(320).saturating_add(999) / 1000)
+        .max(period_frames.saturating_mul(8));
+
+    floor_frames.saturating_mul(channels)
+}
+
+fn shared_raw_render_pop_wait_timeout(
+    sample_rate: u32,
+    low_latency_period_frames: Option<u32>,
+) -> Duration {
+    let Some(period_frames) = low_latency_period_frames else {
+        return Duration::ZERO;
+    };
+
+    let sample_rate = sample_rate.max(1) as u64;
+    let period_us = (period_frames.max(1) as u64)
+        .saturating_mul(1_000_000)
+        .saturating_div(sample_rate)
+        .max(250);
+    Duration::from_micros(period_us.min(1_500))
+}
+
+fn exclusive_render_pop_wait_timeout(sample_rate: u32, buffer_frame_count: u32) -> Duration {
+    let sample_rate = sample_rate.max(1) as u64;
+    let period_frames = buffer_frame_count.max(1) as u64;
+    let period_us = period_frames
+        .saturating_mul(1_000_000)
+        .saturating_div(sample_rate)
+        .max(400);
+    let wait_us = period_us / 4;
+    Duration::from_micros(wait_us.clamp(200, 2_000))
 }
 
 impl UnderrunDeclickPolicy {
@@ -1615,15 +1664,18 @@ fn pack_pcm24_packed_bytes(sample: i32) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_transient_shared_raw_error, pack_pcm24_in32, pack_pcm24_packed_bytes,
-        parse_env_bool_wasapi, quantize_pcm16_round, quantize_pcm16_round_buffer,
-        quantize_pcm16_with_mode, quantize_pcm24, quantize_pcm24_round_in32_buffer,
-        quantize_pcm24_transport_exact, quantize_pcm24_with_mode, quantize_pcm32_with_mode,
-        select_low_latency_period, write_scaled_f32_buffer, AudioOutputError,
-        NativeAudioOutputQuantizationMode, AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED,
-        AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED, AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+        exclusive_render_pop_wait_timeout, is_transient_shared_raw_error, pack_pcm24_in32,
+        pack_pcm24_packed_bytes, parse_env_bool_wasapi, quantize_pcm16_round,
+        quantize_pcm16_round_buffer, quantize_pcm16_with_mode, quantize_pcm24,
+        quantize_pcm24_round_in32_buffer, quantize_pcm24_transport_exact, quantize_pcm24_with_mode,
+        quantize_pcm32_with_mode, select_low_latency_period,
+        shared_raw_low_latency_prefill_floor_samples, shared_raw_render_pop_wait_timeout,
+        write_scaled_f32_buffer, AudioOutputError, NativeAudioOutputQuantizationMode,
+        AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED, AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED,
+        AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
         AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT,
     };
+    use std::time::Duration;
 
     #[test]
     fn pcm24_quantize_clamps_and_rounds() {
@@ -1827,6 +1879,54 @@ mod tests {
             "PMP_TEST_NONEXISTENT_KEY_12345",
             false
         ));
+    }
+
+    #[test]
+    fn parse_env_bool_wasapi_invalid_value_falls_back_to_default() {
+        std::env::set_var("PMP_TEST_PARSE_ENV_BOOL_WASAPI", "maybe");
+        assert!(parse_env_bool_wasapi(
+            "PMP_TEST_PARSE_ENV_BOOL_WASAPI",
+            true
+        ));
+        assert!(!parse_env_bool_wasapi(
+            "PMP_TEST_PARSE_ENV_BOOL_WASAPI",
+            false
+        ));
+        std::env::remove_var("PMP_TEST_PARSE_ENV_BOOL_WASAPI");
+    }
+
+    #[test]
+    fn shared_raw_low_latency_prefill_floor_has_reasonable_bounds() {
+        let floor = shared_raw_low_latency_prefill_floor_samples(48_000, 2, Some(48));
+        assert!(floor >= 9_600, "should keep at least ~100ms startup floor");
+        assert!(floor <= 30_720, "should cap startup floor to ~320ms");
+        assert_eq!(
+            shared_raw_low_latency_prefill_floor_samples(48_000, 2, None),
+            0
+        );
+    }
+
+    #[test]
+    fn shared_raw_render_pop_wait_timeout_is_only_enabled_for_low_latency() {
+        assert_eq!(
+            shared_raw_render_pop_wait_timeout(48_000, None),
+            Duration::ZERO
+        );
+
+        let wait = shared_raw_render_pop_wait_timeout(48_000, Some(48));
+        assert!(wait > Duration::ZERO);
+        assert!(wait <= Duration::from_micros(1_500));
+    }
+
+    #[test]
+    fn exclusive_render_pop_wait_timeout_stays_within_callback_budget() {
+        let wait = exclusive_render_pop_wait_timeout(48_000, 480);
+        assert!(wait >= Duration::from_micros(200));
+        assert!(wait <= Duration::from_micros(2_000));
+
+        let tiny = exclusive_render_pop_wait_timeout(48_000, 48);
+        assert!(tiny >= Duration::from_micros(200));
+        assert!(tiny <= Duration::from_micros(2_000));
     }
 
     #[test]
@@ -3032,12 +3132,22 @@ fn start_stream_with_prefill_shared_raw(
     scratch: &mut Vec<f32>,
     declicker: &mut UnderrunDeclicker,
 ) -> Result<(), AudioOutputError> {
-    let prefill_samples = buffer_policy::wasapi_start_prefill_samples(
+    let mut prefill_samples = buffer_policy::wasapi_start_prefill_samples(
         sample_rate,
         channels,
         stream.buffer_frame_count,
         true,
     );
+    let low_latency_prefill_floor = shared_raw_low_latency_prefill_floor_samples(
+        sample_rate,
+        channels,
+        stream.low_latency_period_frames,
+    );
+    if low_latency_prefill_floor > 0 {
+        prefill_samples = prefill_samples.max(low_latency_prefill_floor);
+    }
+    prefill_samples = prefill_samples.min(inner.render_queue.capacity_samples());
+
     let prefill_timeout = buffer_policy::wasapi_start_prefill_timeout(true);
     inner
         .render_queue
@@ -3267,10 +3377,11 @@ fn render_frames(
     let mut available_samples = 0usize;
     let mut underrun = false;
     if consume {
-        let popped =
-            inner
-                .render_queue
-                .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        let pop_wait =
+            exclusive_render_pop_wait_timeout(stream.sample_rate, stream.buffer_frame_count);
+        let popped = inner
+            .render_queue
+            .pop_chunk_into(scratch, total_samples, pop_wait);
         available_samples = popped.popped;
         if popped.popped == 0 && popped.finished {
             return Ok(());
@@ -3446,10 +3557,13 @@ fn render_frames_shared_raw(
     let mut available_samples = 0usize;
     let mut underrun = false;
     if consume {
-        let popped =
-            inner
-                .render_queue
-                .pop_chunk_into(scratch, total_samples, Duration::from_millis(0));
+        let pop_wait = shared_raw_render_pop_wait_timeout(
+            stream.sample_rate,
+            stream.low_latency_period_frames,
+        );
+        let popped = inner
+            .render_queue
+            .pop_chunk_into(scratch, total_samples, pop_wait);
         available_samples = popped.popped;
         if popped.popped == 0 && popped.finished {
             return Ok(());

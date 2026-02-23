@@ -108,16 +108,16 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_resume_floor_frames: 96,
         },
         "wasapi-shared-raw" => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.35,
-            crossfade_prebuffer_seconds: 0.88,
-            min_start_cap_seconds: 0.40,
-            min_start_floor_seconds: 0.14,
-            recovery_cap_seconds: 0.95,
-            recovery_floor_seconds: 0.35,
-            rebuffer_enter_divisor: 4,
-            rebuffer_resume_divisor: 3,
-            rebuffer_enter_floor_frames: 64,
-            rebuffer_resume_floor_frames: 128,
+            start_seek_prebuffer_seconds: 0.40,
+            crossfade_prebuffer_seconds: 0.92,
+            min_start_cap_seconds: 0.48,
+            min_start_floor_seconds: 0.17,
+            recovery_cap_seconds: 1.10,
+            recovery_floor_seconds: 0.42,
+            rebuffer_enter_divisor: 3,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 80,
+            rebuffer_resume_floor_frames: 160,
         },
         "rodio-cpal" => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.55,
@@ -365,18 +365,28 @@ pub(crate) fn wasapi_start_prefill_samples(
     shared_raw: bool,
 ) -> usize {
     let target_ms = if shared_raw {
-        parse_env_u64("PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS", 200, 20, 2000)
+        parse_env_u64("PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS", 240, 20, 2000)
     } else {
-        parse_env_u64("PMP_AUDIO_WASAPI_EXCLUSIVE_PREFILL_MS", 120, 20, 2000)
+        parse_env_u64("PMP_AUDIO_WASAPI_EXCLUSIVE_PREFILL_MS", 150, 20, 2000)
     };
 
     let rate = sample_rate.max(1) as u128;
     let channels = channels.max(1) as usize;
+    let max_prefill_frames = if shared_raw {
+        (buffer_frame_count as usize).saturating_mul(256).max(1)
+    } else {
+        ((sample_rate.max(1) as usize)
+            .saturating_mul(400)
+            .saturating_add(999)
+            / 1000)
+            .max((buffer_frame_count as usize).saturating_mul(16))
+            .max(1)
+    };
     let frames_from_time = rate.saturating_mul(target_ms as u128).saturating_add(999) / 1000;
     let target_frames = (frames_from_time as usize)
         .max((buffer_frame_count as usize).saturating_mul(2))
         .max(64)
-        .min((buffer_frame_count as usize).saturating_mul(16).max(1));
+        .min(max_prefill_frames);
 
     target_frames.saturating_mul(channels)
 }
@@ -385,14 +395,14 @@ pub(crate) fn wasapi_start_prefill_timeout(shared_raw: bool) -> Duration {
     let timeout_ms = if shared_raw {
         parse_env_u64(
             "PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_TIMEOUT_MS",
-            220,
+            320,
             40,
             3000,
         )
     } else {
         parse_env_u64(
             "PMP_AUDIO_WASAPI_EXCLUSIVE_PREFILL_TIMEOUT_MS",
-            120,
+            180,
             30,
             3000,
         )
@@ -554,6 +564,24 @@ mod tests {
         assert!(
             shared_raw > exclusive,
             "shared-raw prefill should exceed exclusive prefill"
+        );
+    }
+
+    #[test]
+    fn wasapi_shared_raw_prefill_scales_for_low_latency_buffers() {
+        let low_latency = wasapi_start_prefill_samples(48_000, 2, 48, true);
+        assert!(
+            low_latency >= 48 * 2 * 128,
+            "shared-raw low-latency prefill should keep meaningful startup headroom"
+        );
+    }
+
+    #[test]
+    fn wasapi_exclusive_prefill_avoids_tiny_buffer_clamp() {
+        let low_latency = wasapi_start_prefill_samples(48_000, 2, 48, false);
+        assert!(
+            low_latency >= 48_000 * 2 * 120 / 1000,
+            "exclusive prefill should keep at least ~120ms even with tiny period"
         );
     }
 
