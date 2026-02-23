@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
-const DEFAULT_RENDER_QUEUE_SECONDS: f64 = 1.2;
+const DEFAULT_RENDER_QUEUE_SECONDS: f64 = 1.8;
 const MIN_RENDER_QUEUE_SECONDS: f64 = 0.2;
 const MAX_RENDER_QUEUE_SECONDS: f64 = 4.0;
 const MIN_RENDER_QUEUE_SAMPLES: usize = 16_384;
@@ -35,9 +35,9 @@ fn parse_env_u64(key: &str, default_value: u64, min: u64, max: u64) -> u64 {
 }
 
 static SOURCE_POP_WAIT_POLICY: Lazy<SourcePopWaitPolicy> = Lazy::new(|| SourcePopWaitPolicy {
-    normal_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_NORMAL_MS", 1, 0, 12),
-    guarded_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_GUARDED_MS", 2, 0, 12),
-    critical_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_CRITICAL_MS", 3, 0, 12),
+    normal_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_NORMAL_MS", 2, 0, 16),
+    guarded_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_GUARDED_MS", 4, 0, 16),
+    critical_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_CRITICAL_MS", 6, 0, 16),
 });
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,7 +97,7 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
     match output_backend_id {
         "wasapi-exclusive" => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.28,
-            crossfade_prebuffer_seconds: 0.85,
+            crossfade_prebuffer_seconds: 1.10,
             min_start_cap_seconds: 0.30,
             min_start_floor_seconds: 0.10,
             recovery_cap_seconds: 0.72,
@@ -108,40 +108,40 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_resume_floor_frames: 96,
         },
         "wasapi-shared-raw" => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.32,
-            crossfade_prebuffer_seconds: 0.70,
-            min_start_cap_seconds: 0.34,
-            min_start_floor_seconds: 0.11,
-            recovery_cap_seconds: 0.85,
-            recovery_floor_seconds: 0.28,
-            rebuffer_enter_divisor: 4,
-            rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 64,
-            rebuffer_resume_floor_frames: 128,
-        },
-        "rodio-cpal" => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.38,
-            crossfade_prebuffer_seconds: 0.60,
-            min_start_cap_seconds: 0.45,
-            min_start_floor_seconds: 0.14,
-            recovery_cap_seconds: 1.20,
-            recovery_floor_seconds: 0.40,
+            start_seek_prebuffer_seconds: 0.45,
+            crossfade_prebuffer_seconds: 0.82,
+            min_start_cap_seconds: 0.52,
+            min_start_floor_seconds: 0.18,
+            recovery_cap_seconds: 1.25,
+            recovery_floor_seconds: 0.45,
             rebuffer_enter_divisor: 3,
             rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 80,
-            rebuffer_resume_floor_frames: 160,
+            rebuffer_enter_floor_frames: 96,
+            rebuffer_resume_floor_frames: 192,
+        },
+        "rodio-cpal" => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.55,
+            crossfade_prebuffer_seconds: 0.95,
+            min_start_cap_seconds: 0.75,
+            min_start_floor_seconds: 0.25,
+            recovery_cap_seconds: 1.80,
+            recovery_floor_seconds: 0.65,
+            rebuffer_enter_divisor: 2,
+            rebuffer_resume_divisor: 1,
+            rebuffer_enter_floor_frames: 128,
+            rebuffer_resume_floor_frames: 256,
         },
         "wasapi" => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.35,
-            crossfade_prebuffer_seconds: 0.55,
-            min_start_cap_seconds: 0.35,
-            min_start_floor_seconds: 0.12,
-            recovery_cap_seconds: 1.05,
-            recovery_floor_seconds: 0.35,
-            rebuffer_enter_divisor: 4,
+            start_seek_prebuffer_seconds: 0.50,
+            crossfade_prebuffer_seconds: 0.90,
+            min_start_cap_seconds: 0.62,
+            min_start_floor_seconds: 0.22,
+            recovery_cap_seconds: 1.50,
+            recovery_floor_seconds: 0.55,
+            rebuffer_enter_divisor: 3,
             rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 64,
-            rebuffer_resume_floor_frames: 128,
+            rebuffer_enter_floor_frames: 96,
+            rebuffer_resume_floor_frames: 192,
         },
         _ => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.35,
@@ -158,10 +158,7 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
     }
 }
 
-pub(crate) fn streaming_prebuffer_default_seconds(
-    output_backend_id: &str,
-    crossfade: bool,
-) -> f64 {
+pub(crate) fn streaming_prebuffer_default_seconds(output_backend_id: &str, crossfade: bool) -> f64 {
     let pack = backend_buffer_policy_pack(output_backend_id);
     if crossfade {
         pack.crossfade_prebuffer_seconds
@@ -220,9 +217,9 @@ pub(crate) fn adaptive_transfer_strategy(
     }
     state.last_band = band;
 
-    let starvation_level = if state.starvation_streak >= 8 {
+    let starvation_level = if state.starvation_streak >= 6 {
         2
-    } else if state.starvation_streak >= 3 {
+    } else if state.starvation_streak >= 2 {
         1
     } else {
         0
@@ -233,15 +230,15 @@ pub(crate) fn adaptive_transfer_strategy(
     if target_level > state.adaptation_level {
         state.adaptation_level = target_level;
         state.stable_streak = 0;
-    } else if target_level < state.adaptation_level && state.stable_streak >= 12 {
+    } else if target_level < state.adaptation_level && state.stable_streak >= 20 {
         state.adaptation_level = state.adaptation_level.saturating_sub(1);
         state.stable_streak = 0;
     }
 
     let (low_boost_percent, high_boost_percent, chunk_boost_frames) = match state.adaptation_level {
         0 => (0usize, 0usize, 0usize),
-        1 => (8usize, 4usize, 512usize),
-        _ => (15usize, 8usize, 1024usize),
+        1 => (12usize, 8usize, 1024usize),
+        _ => (24usize, 14usize, 2048usize),
     };
 
     let low_watermark = ((base_low as u128)
@@ -314,17 +311,17 @@ pub(crate) fn source_pop_wait_timeout(profile: RealtimePressureProfile) -> Durat
 
 pub(crate) fn decode_push_backoff(profile: RealtimePressureProfile) -> Duration {
     match profile {
-        RealtimePressureProfile::Normal => Duration::from_millis(2),
-        RealtimePressureProfile::Guarded => Duration::from_millis(1),
+        RealtimePressureProfile::Normal => Duration::from_millis(1),
+        RealtimePressureProfile::Guarded => Duration::from_millis(0),
         RealtimePressureProfile::Critical => Duration::from_millis(0),
     }
 }
 
 pub(crate) fn output_producer_chunk_samples(profile: RealtimePressureProfile) -> usize {
     match profile {
-        RealtimePressureProfile::Normal => 8_192,
-        RealtimePressureProfile::Guarded => 12_288,
-        RealtimePressureProfile::Critical => 16_384,
+        RealtimePressureProfile::Normal => 12_288,
+        RealtimePressureProfile::Guarded => 18_432,
+        RealtimePressureProfile::Critical => 24_576,
     }
 }
 
@@ -343,9 +340,9 @@ pub(crate) fn streaming_transfer_watermarks(
 ) -> (usize, usize) {
     let capacity = capacity_samples.max(channels.max(1));
     let (low_percent, high_percent) = match profile {
-        RealtimePressureProfile::Normal => (30usize, 85usize),
-        RealtimePressureProfile::Guarded => (40usize, 90usize),
-        RealtimePressureProfile::Critical => (50usize, 95usize),
+        RealtimePressureProfile::Normal => (36usize, 88usize),
+        RealtimePressureProfile::Guarded => (52usize, 94usize),
+        RealtimePressureProfile::Critical => (64usize, 97usize),
     };
 
     let low = ((capacity * low_percent) / 100)
@@ -542,7 +539,9 @@ mod tests {
         assert!(strategy.adaptation_level >= 1);
         assert!(strategy.low_watermark >= base_low);
         assert!(strategy.high_watermark >= base_high);
-        assert!(strategy.chunk_limit >= output_producer_chunk_samples(RealtimePressureProfile::Guarded));
+        assert!(
+            strategy.chunk_limit >= output_producer_chunk_samples(RealtimePressureProfile::Guarded)
+        );
     }
 
     #[test]

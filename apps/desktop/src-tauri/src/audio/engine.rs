@@ -25,7 +25,10 @@ use crate::audio::mixer::{coerce_source_format, PlaybackMixerController, Playbac
 use crate::audio::output::ASIO_BACKEND_ID;
 #[cfg(target_os = "windows")]
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
-use crate::audio::output::{default_backend, AudioOutputBackend, AudioSink, OutputStreamInfo};
+use crate::audio::output::{
+    default_backend, shared_render_ahead_ready_snapshot, wait_for_shared_render_ahead_ready,
+    AudioOutputBackend, AudioSink, OutputStreamInfo,
+};
 use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumTap};
 use crate::audio::policy::{
     NativeAudioEnginePolicyPatch, NativeAudioEnginePolicyPayload, NativeAudioHqSrcPhaseMode,
@@ -378,9 +381,31 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
     let channels = channels.max(1);
     let sample_rate = sample_rate.max(1) as f64;
     let channels_f64 = channels as f64;
+    let shared_cap_scale = if is_shared_output_backend(output_backend_id) {
+        parse_env_f64(
+            "PMP_AUDIO_STREAM_INTERACTIVE_SHARED_CAP_SCALE",
+            1.8,
+            1.0,
+            6.0,
+        )
+    } else {
+        1.0
+    };
+    let shared_timeout_scale = if is_shared_output_backend(output_backend_id) {
+        parse_env_f64(
+            "PMP_AUDIO_STREAM_INTERACTIVE_SHARED_TIMEOUT_SCALE",
+            1.6,
+            1.0,
+            6.0,
+        )
+    } else {
+        1.0
+    };
     let cap_seconds = match kind {
-        StreamingPrebufferKind::StartOrSeek => wait_policy.start_seek_cap_seconds,
-        StreamingPrebufferKind::Crossfade => wait_policy.crossfade_cap_seconds,
+        StreamingPrebufferKind::StartOrSeek => {
+            wait_policy.start_seek_cap_seconds * shared_cap_scale
+        }
+        StreamingPrebufferKind::Crossfade => wait_policy.crossfade_cap_seconds * shared_cap_scale,
     };
     let mut cap_samples = ((sample_rate * channels_f64 * cap_seconds).ceil() as usize)
         .clamp(channels * 32, capacity_samples.max(1));
@@ -393,12 +418,16 @@ pub(crate) fn streaming_prebuffer_interactive_wait_with_policy(
 
     let capped_target = target_samples.min(cap_samples.max(1));
     let timeout_cap = match kind {
-        StreamingPrebufferKind::StartOrSeek => {
-            Duration::from_millis(wait_policy.start_seek_timeout_ms)
-        }
-        StreamingPrebufferKind::Crossfade => {
-            Duration::from_millis(wait_policy.crossfade_timeout_ms)
-        }
+        StreamingPrebufferKind::StartOrSeek => Duration::from_millis(
+            ((wait_policy.start_seek_timeout_ms as f64) * shared_timeout_scale)
+                .round()
+                .clamp(80.0, 4_000.0) as u64,
+        ),
+        StreamingPrebufferKind::Crossfade => Duration::from_millis(
+            ((wait_policy.crossfade_timeout_ms as f64) * shared_timeout_scale)
+                .round()
+                .clamp(120.0, 6_000.0) as u64,
+        ),
     };
 
     (capped_target, timeout.min(timeout_cap))
@@ -577,7 +606,10 @@ impl PreparedCrossfade {
     pub(crate) fn abort(self) {
         if let Some(streaming) = self.streaming {
             streaming.shutdown_tx.shutdown();
-            crate::audio::retire_plane::retire_drop("engine.prepared_crossfade.streaming", streaming);
+            crate::audio::retire_plane::retire_drop(
+                "engine.prepared_crossfade.streaming",
+                streaming,
+            );
         }
     }
 }
@@ -1477,6 +1509,52 @@ impl NativeAudioEngine {
         }
     }
 
+    fn play_sink_with_shared_guard(&self, sink: &Arc<dyn AudioSink>) {
+        if self.streaming.is_some()
+            && should_wrap_source_for_shared_backend(self.output_backend.id())
+        {
+            let guard_timeout_seconds =
+                parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_SECONDS", 0.24, 0.0, 2.0);
+            let guard_min_seconds =
+                parse_env_f64("PMP_AUDIO_SHARED_RESUME_GUARD_MIN_SECONDS", 0.08, 0.0, 0.8);
+            let guard_timeout = Duration::from_secs_f64(guard_timeout_seconds);
+            let guard_state = shared_render_ahead_ready_snapshot();
+
+            if guard_state.active_wrapper_id > 0 && guard_timeout > Duration::ZERO {
+                if let Some(streaming) = &self.streaming {
+                    let sample_rate = self
+                        .output_sample_rate
+                        .or(if self.decoded_sample_rate > 0 {
+                            Some(self.decoded_sample_rate)
+                        } else {
+                            None
+                        })
+                        .unwrap_or(48_000)
+                        .max(1) as f64;
+                    let channels = self.decoded_channels.max(1) as usize;
+
+                    let inner_resume_target =
+                        ((sample_rate * channels as f64 * guard_min_seconds * 0.75).ceil()
+                            as usize)
+                            .max(channels.saturating_mul(32))
+                            .min(streaming.render_queue.capacity_samples().max(channels));
+                    streaming
+                        .render_queue
+                        .wait_for_samples(inner_resume_target, guard_timeout);
+
+                    let outer_resume_target = ((sample_rate * channels as f64 * guard_min_seconds)
+                        .ceil() as usize)
+                        .max(channels.saturating_mul(48));
+                    let seek_epoch = self.seek_epoch.load(Ordering::Acquire);
+                    let wait_target = outer_resume_target.max(guard_state.low_watermark_samples);
+                    let _ =
+                        wait_for_shared_render_ahead_ready(wait_target, seek_epoch, guard_timeout);
+                }
+            }
+        }
+        sink.play();
+    }
+
     fn stop_and_retire_sink(&self, sink: Arc<dyn AudioSink>) {
         sink.stop();
         crate::audio::retire_plane::retire_drop("engine.sink", sink);
@@ -1911,7 +1989,7 @@ impl NativeAudioEngine {
                     let available = render_queue.len_samples();
                     let finished = decode_reservoir.is_finished() && render_queue.is_finished();
                     if available >= min_start_samples || (finished && available > 0) {
-                        sink.play();
+                        self.play_sink_with_shared_guard(&sink);
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
@@ -1925,7 +2003,7 @@ impl NativeAudioEngine {
             }
         }
 
-        sink.play();
+        self.play_sink_with_shared_guard(&sink);
         self.buffering_started_at = None;
         self.buffering_last_progress_at = None;
         self.buffering_last_samples = 0;
@@ -2147,7 +2225,7 @@ impl NativeAudioEngine {
                     apply_streaming_seek_state(self, target, resume_playing, available_samples);
                     if resume_playing {
                         if let Some(sink) = &self.sink {
-                            sink.play();
+                            self.play_sink_with_shared_guard(&sink);
                         }
                     }
                     return Ok(());
@@ -2181,7 +2259,7 @@ impl NativeAudioEngine {
                         apply_streaming_seek_state(self, target, resume_playing, available_samples);
                         if resume_playing {
                             if let Some(sink) = &self.sink {
-                                sink.play();
+                                self.play_sink_with_shared_guard(&sink);
                             }
                         }
                         return Ok(());
@@ -2239,7 +2317,7 @@ impl NativeAudioEngine {
             sink.flush();
             sink.set_volume(self.effective_volume());
             if resume_playing {
-                sink.play();
+                self.play_sink_with_shared_guard(&sink);
                 self.base_position = actual_target;
                 self.playback_started_at = Some(Instant::now());
                 self.set_state(PlaybackState::Playing);
@@ -2296,7 +2374,7 @@ impl NativeAudioEngine {
         sink.set_volume(self.effective_volume());
 
         if resume_playing {
-            sink.play();
+            self.play_sink_with_shared_guard(&sink);
             self.base_position = target;
             self.playback_started_at = Some(Instant::now());
         } else {
@@ -2570,7 +2648,7 @@ impl NativeAudioEngine {
                     }
 
                     if finished && available > 0 {
-                        sink.play();
+                        self.play_sink_with_shared_guard(&sink);
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
@@ -2610,7 +2688,7 @@ impl NativeAudioEngine {
                     }
 
                     if ready_min {
-                        sink.play();
+                        self.play_sink_with_shared_guard(&sink);
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
@@ -2628,7 +2706,7 @@ impl NativeAudioEngine {
             if matches!(self.desired_playback_state, PlaybackState::Playing)
                 && matches!(self.playback_state, PlaybackState::Buffering)
             {
-                sink.play();
+                self.play_sink_with_shared_guard(&sink);
                 self.buffering_started_at = None;
                 self.buffering_last_progress_at = None;
                 self.buffering_last_samples = 0;
@@ -3210,7 +3288,7 @@ impl NativeAudioEngine {
                 }
             }
 
-            sink.play();
+            self.play_sink_with_shared_guard(&sink);
             self.base_position = target;
             self.playback_started_at = Some(Instant::now());
             self.set_state(PlaybackState::Playing);
@@ -3376,8 +3454,7 @@ mod tests {
         assert!(resume >= enter);
         assert!(resume <= min_start_samples);
 
-        let (small_enter, small_resume) =
-            runtime_rebuffer_threshold_samples("rodio-cpal", 512, 2);
+        let (small_enter, small_resume) = runtime_rebuffer_threshold_samples("rodio-cpal", 512, 2);
         assert!(small_enter >= 128);
         assert!(small_resume >= small_enter);
     }
@@ -3728,7 +3805,8 @@ mod tests {
 
     #[test]
     fn release_cached_audio_pipeline_does_not_block_on_sink_drop() {
-        let backend: Arc<dyn AudioOutputBackend> = Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("rodio-cpal"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
 
         let stop_calls = Arc::new(AtomicUsize::new(0));
@@ -3993,10 +4071,10 @@ mod tests {
         );
 
         let samples_per_second = sample_rate as usize * channels;
-        let expected_shared_start = ((samples_per_second as f64) * 0.38f64).ceil() as usize;
-        let expected_shared_cross = ((samples_per_second as f64) * 0.60f64).ceil() as usize;
+        let expected_shared_start = ((samples_per_second as f64) * 0.55f64).ceil() as usize;
+        let expected_shared_cross = ((samples_per_second as f64) * 0.95f64).ceil() as usize;
         let expected_exclusive_start = ((samples_per_second as f64) * 0.28f64).ceil() as usize;
-        let expected_exclusive_cross = ((samples_per_second as f64) * 0.85f64).ceil() as usize;
+        let expected_exclusive_cross = ((samples_per_second as f64) * 1.10f64).ceil() as usize;
         assert_eq!(shared_start_samples, expected_shared_start);
         assert_eq!(shared_cross_samples, expected_shared_cross);
         assert_eq!(exclusive_start_samples, expected_exclusive_start);
@@ -4020,8 +4098,8 @@ mod tests {
         );
 
         assert!(target_samples > 0);
-        assert!(target_samples <= (sample_rate as usize * channels * 3) / 10);
-        assert!(timeout <= Duration::from_millis(220));
+        assert!(target_samples <= (sample_rate as usize * channels * 11) / 20);
+        assert!(timeout <= Duration::from_millis(352));
     }
 
     #[test]
@@ -4041,8 +4119,8 @@ mod tests {
         );
 
         assert!(target_samples > 0);
-        assert!(target_samples <= (sample_rate as usize * channels * 9) / 20);
-        assert!(timeout <= Duration::from_millis(320));
+        assert!(target_samples <= (sample_rate as usize * channels * 17) / 20);
+        assert!(timeout <= Duration::from_millis(512));
     }
 
     #[test]

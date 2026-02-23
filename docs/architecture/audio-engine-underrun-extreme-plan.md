@@ -248,9 +248,27 @@ Suggested baseline (`48k`, stereo):
   - run dual-path telemetry comparison,
   - add deterministic queue/property tests for supersession/coalescing.
 
+## 10. User Backend Ownership Guardrail (new)
+
+Hard rule:
+
+- Underrun recovery must not silently escalate user output semantics (e.g. auto-switch to exclusive).
+- Backend changes stay explicit user actions or explicit policy restores.
+
+Windows startup default policy:
+
+- Startup probing remains baseline-compatible (`wasapi-exclusive` -> `wasapi-shared-raw` -> `wasapi` -> `rodio-cpal`).
+- Persisted user backend selection remains the primary behavior after host restore.
+
+Scheduling policy:
+
+- Pressure priority escalation is configurable via `PMP_AUDIO_PRIORITY_PROFILE_CAP` (`normal`/`guarded`/`critical`).
+- Priority cap tunes scheduler aggressiveness without changing backend mode.
+
+
 ---
 
-## 10. Documentation Sync
+## 11. Documentation Sync
 
 If contract or policy behavior changes, update:
 
@@ -293,3 +311,43 @@ P4 progress snapshot (2026-02-23):
 - Added backend policy packs for `wasapi-exclusive`, `wasapi-shared-raw`, `wasapi`, and `rodio-cpal` in `audio/buffer_policy.rs`.
 - Routed start/seek prebuffer defaults, min-start/recovery bounds, and runtime rebuffer enter/resume thresholds through backend-specific policy selection.
 - Added B3 automated regression case for transport-exact sample-mode roundtrip consistency.
+
+Post-P4 stabilization snapshot (2026-02-23, underrun crackle mitigation):
+
+- Added shared render-ahead bounded micro-retry pop strategy (`render_pop_retry_attempts`) before underrun declaration.
+- Replaced shared render-ahead tail-to-zero masking with predictive continuity concealment + equal-power fade for clustered underrun transitions.
+- Reduced producer hot-loop atomic polling overhead by switching seek-epoch checks from per-sample to stride-based polling in shared render-ahead producer.
+- Elevated transfer/decode scheduling policy in critical pressure profile (`audio/threading.rs`) to reduce decode-reservoir starvation under CPU contention.
+- Smoke benchmark trend (`rodio-cpal`, `120s`, `seek=8`, `stress-cpu-threads=8`):
+  - before: `underrunEvents=2498`, `underrunFrames=2331312`
+  - after: `underrunEvents=2185`, `underrunFrames=2030736`
+  - delta: events `-12.5%`, frames `-12.9%`
+
+Post-P4 stabilization snapshot (2026-02-23, iteration 2):
+
+- Added streaming-source bounded micro-retry pop strategy before underrun declaration.
+- Upgraded streaming-source underrun masking to predictive continuity + equal-power fade.
+- Increased streaming decode-reservoir default baseline via `PMP_AUDIO_STREAMING_RESERVOIR_SECONDS` with high-rate scaling.
+- Smoke benchmark trend (`rodio-cpal`, `120s`, `seek=8`, `stress-cpu-threads=8`):
+  - previous iteration: `underrunEvents=2185`, `underrunFrames=2030736`
+  - iteration 2: `underrunEvents=2151`, `underrunFrames=2060880`
+  - interpretation: event count slightly improved, but frame-level improvement is saturated; dominant bottleneck remains sustained decode-side starvation under extreme CPU contention.
+
+Post-P4 stabilization snapshot (2026-02-23, iteration 3 hardening):
+
+- Increased shared-path queue pressure margins (render queue baseline, transfer watermarks, adaptive boost levels).
+- Increased burst-fill aggressiveness (earlier entry, longer hold, larger chunk boost) to recover from decode starvation faster.
+- Increased shared render-ahead startup preroll and linked initial preroll to low-watermark floor.
+- Raised streaming decode-reservoir baseline default (`PMP_AUDIO_STREAMING_RESERVOIR_SECONDS=18.0`).
+- Added shared interactive-prebuffer scaling for seek/crossfade path to reduce immediate post-seek starvation windows.
+
+Post-P4 stabilization snapshot (2026-02-23, iteration 4 deterministic resume barrier):
+
+- Replaced shared resume fixed sleep with state-driven barrier in `play_sink_with_shared_guard(...)`.
+- Added shared render-ahead readiness snapshot + wait API (`shared_render_ahead_ready_snapshot`, `wait_for_shared_render_ahead_ready`).
+- Introduced active-wrapper/seek-epoch readiness handoff to avoid resume on stale/underfilled outer queue after seek/switch.
+- Added focused unit tests for shared render-ahead ready-wait semantics.
+- Stress smoke (`20s`, `seek=8`, `stress-cpu-threads=8`, 3 runs):
+  - `wasapi`: shared render underrun events `6/7/8` (median `7`, p95 `8`).
+  - `wasapi-exclusive`: shared render underrun events `0/0/0`.
+  - `rodio-cpal`: shared render underrun events `7/12/9` (median `9`, p95 `12`).

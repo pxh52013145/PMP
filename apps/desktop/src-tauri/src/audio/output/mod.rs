@@ -19,7 +19,10 @@ mod wasapi_exclusive;
 pub(crate) use asio::open_control_panel as open_asio_control_panel;
 #[cfg(all(target_os = "windows", feature = "asio-sdk"))]
 pub use asio::{asio_backend, ASIO_BACKEND_ID};
-pub(crate) use render_ahead::{shared_render_ahead_metrics, wrap_source_for_shared_backend};
+pub(crate) use render_ahead::{
+    shared_render_ahead_metrics, shared_render_ahead_ready_snapshot,
+    wait_for_shared_render_ahead_ready, wrap_source_for_shared_backend,
+};
 pub use rodio_cpal::RODIO_CPAL_BACKEND_ID;
 #[cfg(target_os = "windows")]
 pub use wasapi::{wasapi_backend, WASAPI_BACKEND_ID};
@@ -52,27 +55,57 @@ pub(crate) fn output_callback_metrics() -> OutputCallbackMetricsSnapshot {
 
 static BACKEND_FALLBACK_LOCK: Lazy<std::sync::Mutex<()>> = Lazy::new(|| std::sync::Mutex::new(()));
 
+#[cfg(target_os = "windows")]
+fn normalize_default_backend_env(value: &str) -> Option<&'static str> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "auto" | "default" => None,
+        "rodio" | "cpal" | "rodio-cpal" => Some(RODIO_CPAL_BACKEND_ID),
+        "wasapi" | "wasapi-shared" | "shared" => Some(WASAPI_BACKEND_ID),
+        "wasapi-shared-raw" | "shared-raw" | "raw" => Some(WASAPI_SHARED_RAW_BACKEND_ID),
+        "wasapi-exclusive" | "exclusive" => Some(WASAPI_EXCLUSIVE_BACKEND_ID),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn backend_by_id(backend_id: &str) -> Arc<dyn AudioOutputBackend> {
+    match backend_id {
+        WASAPI_SHARED_RAW_BACKEND_ID => wasapi_shared_raw_backend(),
+        WASAPI_BACKEND_ID => wasapi_backend(),
+        RODIO_CPAL_BACKEND_ID => rodio_cpal_backend(),
+        WASAPI_EXCLUSIVE_BACKEND_ID => wasapi_exclusive_backend(),
+        _ => rodio_cpal_backend(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_env_default_backend() -> Option<Arc<dyn AudioOutputBackend>> {
+    let requested = std::env::var("PMP_AUDIO_DEFAULT_BACKEND")
+        .ok()
+        .and_then(|value| normalize_default_backend_env(&value))?;
+
+    let backend = backend_by_id(requested);
+    backend.create_sink().ok().map(|_| backend)
+}
+
 pub fn rodio_cpal_backend() -> Arc<dyn AudioOutputBackend> {
     rodio_cpal::default_backend()
 }
 
 #[cfg(target_os = "windows")]
 pub fn default_backend() -> Arc<dyn AudioOutputBackend> {
-    if std::env::var("PMP_AUDIO_DEFAULT_BACKEND")
-        .ok()
-        .map(|value| value.trim().eq_ignore_ascii_case("rodio-cpal"))
-        .unwrap_or(false)
-    {
-        return rodio_cpal_backend();
-    }
-
     let _guard = BACKEND_FALLBACK_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let backend = wasapi_exclusive_backend();
-    if backend.create_sink().is_ok() {
-        return backend;
+    if let Some(env_backend) = resolve_env_default_backend() {
+        return env_backend;
+    }
+
+    let exclusive = wasapi_exclusive_backend();
+    if exclusive.create_sink().is_ok() {
+        return exclusive;
     }
 
     let shared_raw = wasapi_shared_raw_backend();
@@ -80,12 +113,17 @@ pub fn default_backend() -> Arc<dyn AudioOutputBackend> {
         return shared_raw;
     }
 
-    let fallback = wasapi_backend();
-    if fallback.create_sink().is_ok() {
-        return fallback;
+    let shared = wasapi_backend();
+    if shared.create_sink().is_ok() {
+        return shared;
     }
 
-    rodio_cpal_backend()
+    let rodio = rodio_cpal_backend();
+    if rodio.create_sink().is_ok() {
+        return rodio;
+    }
+
+    rodio
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -179,6 +217,43 @@ pub trait AudioOutputBackend: Send + Sync {
     fn set_transport_mode(&self, _mode: NativeAudioTransportMode) {}
 
     fn set_output_quantization_mode(&self, _mode: NativeAudioOutputQuantizationMode) {}
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "windows")]
+    use super::{normalize_default_backend_env, RODIO_CPAL_BACKEND_ID, WASAPI_BACKEND_ID};
+    #[cfg(target_os = "windows")]
+    use super::{WASAPI_EXCLUSIVE_BACKEND_ID, WASAPI_SHARED_RAW_BACKEND_ID};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn normalize_default_backend_env_supports_explicit_aliases() {
+        assert_eq!(
+            normalize_default_backend_env("rodio"),
+            Some(RODIO_CPAL_BACKEND_ID)
+        );
+        assert_eq!(
+            normalize_default_backend_env("wasapi"),
+            Some(WASAPI_BACKEND_ID)
+        );
+        assert_eq!(
+            normalize_default_backend_env("shared-raw"),
+            Some(WASAPI_SHARED_RAW_BACKEND_ID)
+        );
+        assert_eq!(
+            normalize_default_backend_env("exclusive"),
+            Some(WASAPI_EXCLUSIVE_BACKEND_ID)
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn normalize_default_backend_env_treats_auto_as_unspecified() {
+        assert_eq!(normalize_default_backend_env("auto"), None);
+        assert_eq!(normalize_default_backend_env(""), None);
+        assert_eq!(normalize_default_backend_env("unknown"), None);
+    }
 }
 
 #[derive(Clone, Debug)]

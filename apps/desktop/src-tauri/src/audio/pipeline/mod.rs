@@ -649,9 +649,8 @@ impl DynamicGainProcessor {
         let min_gain = gain_db_to_linear(-DYNAMIC_GAIN_MAX_CUT_DB).clamp(0.01, 1.0);
         let headroom_peak = gain_db_to_linear(DYNAMIC_GAIN_HEADROOM_DBFS).clamp(0.25, 1.0);
         let unity_deadband_ratio = gain_db_to_linear(DYNAMIC_GAIN_UNITY_DEADBAND_DB).max(1.0);
-        let transient_hold_samples = ((sample_rate * (DYNAMIC_GAIN_TRANSIENT_HOLD_MS / 1000.0)).round()
-            as usize)
-            .max(1);
+        let transient_hold_samples =
+            ((sample_rate * (DYNAMIC_GAIN_TRANSIENT_HOLD_MS / 1000.0)).round() as usize).max(1);
 
         Self {
             enabled: false,
@@ -744,7 +743,8 @@ impl DynamicGainProcessor {
             (self.headroom_peak / self.peak_env.max(1.0e-6)).clamp(self.min_gain, self.max_gain);
         desired_gain = desired_gain.min(peak_limited_gain);
 
-        if desired_gain > 1.0 / self.unity_deadband_ratio && desired_gain < self.unity_deadband_ratio
+        if desired_gain > 1.0 / self.unity_deadband_ratio
+            && desired_gain < self.unity_deadband_ratio
         {
             desired_gain = 1.0;
         }
@@ -775,7 +775,9 @@ fn smoothing_coeff_from_ms(time_ms: f32, sample_rate: f32) -> f32 {
         return 0.0;
     }
     let tau = (time_ms / 1000.0).max(0.001);
-    (-1.0 / (tau * sample_rate.max(1.0))).exp().clamp(0.0, 0.999_999)
+    (-1.0 / (tau * sample_rate.max(1.0)))
+        .exp()
+        .clamp(0.0, 0.999_999)
 }
 
 #[inline]

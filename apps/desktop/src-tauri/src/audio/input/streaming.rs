@@ -73,7 +73,7 @@ fn transfer_target_samples(
     let min_quantum = match profile {
         RealtimePressureProfile::Normal => channels.saturating_mul(256),
         RealtimePressureProfile::Guarded => channels.saturating_mul(512),
-        RealtimePressureProfile::Critical => channels.saturating_mul(1024),
+        RealtimePressureProfile::Critical => channels.saturating_mul(2048),
     };
 
     desired.max(min_quantum).max(channels).min(chunk_limit)
@@ -137,6 +137,30 @@ fn env_u32(name: &str, default_value: u32, min: u32, max: u32) -> u32 {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct BurstFillPolicy {
+    enabled: bool,
+    enter_hits: u32,
+    hold_loops: u32,
+    chunk_boost_percent: u32,
+}
+
+impl BurstFillPolicy {
+    fn from_env() -> Self {
+        Self {
+            enabled: env_bool("PMP_AUDIO_TRANSFER_BURST_FILL_ENABLED", true),
+            enter_hits: env_u32("PMP_AUDIO_TRANSFER_BURST_ENTER_HITS", 2, 1, 64),
+            hold_loops: env_u32("PMP_AUDIO_TRANSFER_BURST_HOLD_LOOPS", 36, 1, 320),
+            chunk_boost_percent: env_u32(
+                "PMP_AUDIO_TRANSFER_BURST_CHUNK_BOOST_PERCENT",
+                250,
+                0,
+                800,
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct UnderrunMaskPolicy {
     normal_ms: u32,
     guarded_ms: u32,
@@ -161,7 +185,36 @@ impl UnderrunMaskPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StreamingPopRetryPolicy {
+    normal_attempts: u32,
+    guarded_attempts: u32,
+    critical_attempts: u32,
+    streak_step: u32,
+    max_attempts: u32,
+    normal_spins: u32,
+    guarded_spins: u32,
+    critical_spins: u32,
+}
+
+impl StreamingPopRetryPolicy {
+    fn from_env() -> Self {
+        Self {
+            normal_attempts: env_u32("PMP_AUDIO_STREAM_POP_RETRY_NORMAL", 2, 1, 8),
+            guarded_attempts: env_u32("PMP_AUDIO_STREAM_POP_RETRY_GUARDED", 3, 1, 8),
+            critical_attempts: env_u32("PMP_AUDIO_STREAM_POP_RETRY_CRITICAL", 4, 1, 8),
+            streak_step: env_u32("PMP_AUDIO_STREAM_POP_RETRY_STREAK_STEP", 2, 1, 8),
+            max_attempts: env_u32("PMP_AUDIO_STREAM_POP_RETRY_MAX", 7, 1, 12),
+            normal_spins: env_u32("PMP_AUDIO_STREAM_POP_RETRY_SPIN_NORMAL", 24, 0, 600),
+            guarded_spins: env_u32("PMP_AUDIO_STREAM_POP_RETRY_SPIN_GUARDED", 48, 0, 1200),
+            critical_spins: env_u32("PMP_AUDIO_STREAM_POP_RETRY_SPIN_CRITICAL", 96, 0, 1600),
+        }
+    }
+}
+
 static UNDERRUN_MASK_POLICY: Lazy<UnderrunMaskPolicy> = Lazy::new(UnderrunMaskPolicy::from_env);
+static STREAMING_POP_RETRY_POLICY: Lazy<StreamingPopRetryPolicy> =
+    Lazy::new(StreamingPopRetryPolicy::from_env);
 
 fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
     let rate = sample_rate.max(8_000) as f64;
@@ -224,6 +277,9 @@ pub(crate) fn spawn_render_transfer_worker(
                 "streaming.transfer.block_prewarm_growth",
             );
             adaptive_state = buffer_policy::TransferAdaptiveState::default();
+            let burst_policy = BurstFillPolicy::from_env();
+            let mut burst_loops_remaining = 0u32;
+            let mut starvation_hits = 0u32;
 
             loop {
                 if transfer_should_shutdown(&command_rx) {
@@ -239,8 +295,11 @@ pub(crate) fn spawn_render_transfer_worker(
                     (render_len as f64) / (sample_rate * (channels as f64).max(1.0));
 
                 let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
-                let (hint_low_watermark, _) =
-                    buffer_policy::streaming_transfer_watermarks(capacity, channels, current_profile);
+                let (hint_low_watermark, _) = buffer_policy::streaming_transfer_watermarks(
+                    capacity,
+                    channels,
+                    current_profile,
+                );
                 let recovery_hint =
                     render_len <= hint_low_watermark || decode_len <= hint_low_watermark;
                 let profile = crate::audio::realtime_scheduler::SCHEDULER
@@ -258,15 +317,52 @@ pub(crate) fn spawn_render_transfer_worker(
                 let low_watermark = strategy.low_watermark;
                 let high_watermark = strategy.high_watermark;
 
+                let starving = render_len <= low_watermark || decode_len <= low_watermark;
+                if burst_policy.enabled {
+                    if starving {
+                        starvation_hits = starvation_hits.saturating_add(1);
+                    } else {
+                        starvation_hits = starvation_hits.saturating_sub(1);
+                    }
+
+                    if starvation_hits >= burst_policy.enter_hits {
+                        burst_loops_remaining = burst_policy.hold_loops.max(1);
+                        starvation_hits = 0;
+                    }
+                } else {
+                    starvation_hits = 0;
+                    burst_loops_remaining = 0;
+                }
+
+                let burst_active = burst_loops_remaining > 0;
+                if burst_loops_remaining > 0 {
+                    burst_loops_remaining = burst_loops_remaining.saturating_sub(1);
+                }
+
                 TRANSFER_LOW_WATERMARK_SAMPLES.store(low_watermark as u64, Ordering::Relaxed);
                 TRANSFER_ADAPTATION_LEVEL
                     .store(strategy.adaptation_level as u64, Ordering::Relaxed);
                 TRANSFER_OSCILLATION_STREAK
                     .store(strategy.oscillation_streak as u64, Ordering::Relaxed);
                 crate::audio::threading::apply_audio_transfer_pressure_profile(profile);
-                let chunk_limit = strategy.chunk_limit;
-                let wait_timeout = buffer_policy::source_pop_wait_timeout(profile);
-                let backoff = strategy.producer_backoff;
+                let chunk_limit = if burst_active {
+                    let boosted = (strategy.chunk_limit as u128).saturating_mul(
+                        (100u128).saturating_add(burst_policy.chunk_boost_percent as u128),
+                    ) / 100u128;
+                    (boosted as usize).clamp(channels, capacity)
+                } else {
+                    strategy.chunk_limit
+                };
+                let wait_timeout = if burst_active {
+                    Duration::ZERO
+                } else {
+                    buffer_policy::source_pop_wait_timeout(profile)
+                };
+                let backoff = if burst_active {
+                    Duration::ZERO
+                } else {
+                    strategy.producer_backoff
+                };
                 let decode_idle_backoff = strategy.decode_idle_backoff;
 
                 if decode_reservoir.is_finished_and_empty() {
@@ -309,7 +405,7 @@ pub(crate) fn spawn_render_transfer_worker(
                     );
                 }
 
-                let target_samples = transfer_target_samples(
+                let mut target_samples = transfer_target_samples(
                     render_len,
                     low_watermark,
                     high_watermark,
@@ -317,6 +413,10 @@ pub(crate) fn spawn_render_transfer_worker(
                     channels,
                     profile,
                 );
+                if burst_active {
+                    let burst_headroom = capacity.saturating_sub(render_len).max(channels);
+                    target_samples = target_samples.max(burst_headroom.min(chunk_limit));
+                }
 
                 let transfer = decode_reservoir.pop_chunk_into(
                     &mut transfer_block,
@@ -444,6 +544,45 @@ fn adaptive_underrun_silence_frames(
     ms_to_frames(sample_rate, mask_ms)
 }
 
+fn streaming_pop_retry_attempts(profile: RealtimePressureProfile, underrun_streak: u32) -> u32 {
+    let policy = *STREAMING_POP_RETRY_POLICY;
+    let base_attempts = match profile {
+        RealtimePressureProfile::Normal => policy.normal_attempts,
+        RealtimePressureProfile::Guarded => policy.guarded_attempts,
+        RealtimePressureProfile::Critical => policy.critical_attempts,
+    };
+    let streak_boost = underrun_streak.saturating_sub(1) / policy.streak_step.max(1);
+    base_attempts
+        .saturating_add(streak_boost)
+        .clamp(1, policy.max_attempts)
+}
+
+fn streaming_pop_retry_spins(profile: RealtimePressureProfile) -> u32 {
+    let policy = *STREAMING_POP_RETRY_POLICY;
+    match profile {
+        RealtimePressureProfile::Normal => policy.normal_spins,
+        RealtimePressureProfile::Guarded => policy.guarded_spins,
+        RealtimePressureProfile::Critical => policy.critical_spins,
+    }
+}
+
+fn predictive_concealment_sample(
+    last: f32,
+    previous: f32,
+    frame: usize,
+    total_frames: usize,
+) -> f32 {
+    if total_frames <= 1 {
+        return last.clamp(-1.0, 1.0);
+    }
+
+    let normalized = frame as f32 / (total_frames.saturating_sub(1)) as f32;
+    let slope = (last - previous).clamp(-0.18, 0.18);
+    let slope_decay = (1.0 - normalized).clamp(0.0, 1.0);
+    let continuation = last + slope * ((frame + 1) as f32) * slope_decay * slope_decay;
+    continuation.clamp(-1.0, 1.0)
+}
+
 fn equal_power_fade_out_gain(frame: usize, frames: usize) -> f32 {
     if frames <= 1 {
         return 0.0;
@@ -468,6 +607,8 @@ pub(crate) struct StreamingSamplesSource {
     duration: f64,
     local: Vec<f32>,
     local_index: usize,
+    channel_cursor: usize,
+    previous_samples: Vec<f32>,
     last_samples: Vec<f32>,
     needs_fade_in: bool,
     pending_fade_in_frames: usize,
@@ -491,6 +632,8 @@ impl StreamingSamplesSource {
             duration,
             local: Vec::with_capacity(Self::CHUNK_SAMPLES),
             local_index: 0,
+            channel_cursor: 0,
+            previous_samples: vec![0.0; channels as usize],
             last_samples: vec![0.0; channels as usize],
             needs_fade_in: false,
             pending_fade_in_frames: 0,
@@ -506,11 +649,28 @@ impl Iterator for StreamingSamplesSource {
         if self.local_index >= self.local.len() {
             let channels = self.channels.max(1) as usize;
             let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
-            let result = self.render_queue.pop_chunk_into(
+            let mut result = self.render_queue.pop_chunk_into(
                 &mut self.local,
                 Self::CHUNK_SAMPLES,
                 buffer_policy::source_pop_wait_timeout(profile),
             );
+            let retry_attempts =
+                streaming_pop_retry_attempts(profile, self.underrun_streak.saturating_add(1))
+                    .max(1);
+            let retry_spins = streaming_pop_retry_spins(profile);
+            for _ in 1..retry_attempts {
+                if result.popped > 0 || result.finished {
+                    break;
+                }
+                for _ in 0..retry_spins {
+                    std::hint::spin_loop();
+                }
+                result = self.render_queue.pop_chunk_into(
+                    &mut self.local,
+                    Self::CHUNK_SAMPLES,
+                    Duration::ZERO,
+                );
+            }
             self.local_index = 0;
 
             if result.popped == 0 {
@@ -544,7 +704,13 @@ impl Iterator for StreamingSamplesSource {
                     let gain = equal_power_fade_out_gain(frame, silence_frames);
                     let base = frame * channels;
                     for channel in 0..channels {
-                        self.local[base + channel] = self.last_samples[channel] * gain;
+                        let predicted = predictive_concealment_sample(
+                            self.last_samples[channel],
+                            self.previous_samples[channel],
+                            frame,
+                            silence_frames,
+                        );
+                        self.local[base + channel] = predicted * gain;
                     }
                 }
             } else if self.needs_fade_in {
@@ -572,8 +738,16 @@ impl Iterator for StreamingSamplesSource {
         self.local_index += 1;
 
         let channels = self.channels.max(1) as usize;
-        let channel = sample_index % channels;
-        if let Some(last) = self.last_samples.get_mut(channel) {
+        let channel = self.channel_cursor;
+        self.channel_cursor += 1;
+        if self.channel_cursor >= channels {
+            self.channel_cursor = 0;
+        }
+        if let (Some(previous), Some(last)) = (
+            self.previous_samples.get_mut(channel),
+            self.last_samples.get_mut(channel),
+        ) {
+            *previous = *last;
             *last = sample;
         }
         Some(sample)
@@ -670,7 +844,8 @@ mod tests {
     fn streaming_samples_source_emits_silence_until_samples_arrive_then_finishes() {
         let buffer = AudioRingBuffer::new(512);
         let render_queue = AudioRingBuffer::new(512);
-        let (_transfer_tx, transfer_rx) = crate::audio::control_plane::command_channel::<TransferCommand>();
+        let (_transfer_tx, transfer_rx) =
+            crate::audio::control_plane::command_channel::<TransferCommand>();
         spawn_render_transfer_worker(
             buffer.clone(),
             render_queue.clone(),
@@ -763,6 +938,29 @@ mod tests {
         let high_rate =
             adaptive_underrun_silence_frames(RealtimePressureProfile::Guarded, 1, 96_000);
         assert!(high_rate > low_rate);
+    }
+
+    #[test]
+    fn streaming_pop_retry_attempts_scale_with_pressure_and_streak() {
+        let normal = streaming_pop_retry_attempts(RealtimePressureProfile::Normal, 1);
+        let guarded = streaming_pop_retry_attempts(RealtimePressureProfile::Guarded, 1);
+        let critical = streaming_pop_retry_attempts(RealtimePressureProfile::Critical, 1);
+
+        assert!(normal <= guarded);
+        assert!(guarded <= critical);
+
+        let streaked = streaming_pop_retry_attempts(RealtimePressureProfile::Critical, 9);
+        assert!(streaked >= critical);
+    }
+
+    #[test]
+    fn streaming_predictive_concealment_stays_finite_and_bounded() {
+        for frame in 0..64 {
+            let sample = predictive_concealment_sample(0.92, -0.35, frame, 64);
+            assert!(sample.is_finite());
+            assert!(sample <= 1.0);
+            assert!(sample >= -1.0);
+        }
     }
 
     #[test]

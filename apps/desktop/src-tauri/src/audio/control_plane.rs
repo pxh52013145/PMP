@@ -147,9 +147,9 @@ impl<T> CommandTx<T> {
                     }
                 }
             }
-            CommandTxInner::Legacy(sender) => {
-                sender.send(value).map_err(|err| CommandSendError::Disconnected(err.0))
-            }
+            CommandTxInner::Legacy(sender) => sender
+                .send(value)
+                .map_err(|err| CommandSendError::Disconnected(err.0)),
         }
     }
 }
@@ -268,7 +268,10 @@ mod tests {
         assert!(matches!(rx.try_recv(), Err(CommandTryRecvError::Empty)));
 
         drop(tx2);
-        assert!(matches!(rx.try_recv(), Err(CommandTryRecvError::Disconnected)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(CommandTryRecvError::Disconnected)
+        ));
     }
 
     #[test]

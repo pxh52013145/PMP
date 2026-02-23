@@ -1,4 +1,38 @@
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
+use once_cell::sync::Lazy;
+
+#[derive(Clone, Copy, Debug)]
+enum PriorityProfileCap {
+    Normal,
+    Guarded,
+    Critical,
+}
+
+impl PriorityProfileCap {
+    fn from_env() -> Self {
+        let raw = std::env::var("PMP_AUDIO_PRIORITY_PROFILE_CAP")
+            .ok()
+            .unwrap_or_else(|| "critical".to_string());
+
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "normal" => Self::Normal,
+            "guarded" => Self::Guarded,
+            _ => Self::Critical,
+        }
+    }
+}
+
+static PRESSURE_PRIORITY_CAP: Lazy<PriorityProfileCap> = Lazy::new(PriorityProfileCap::from_env);
+
+fn clamp_pressure_profile(profile: RealtimePressureProfile) -> RealtimePressureProfile {
+    match (*PRESSURE_PRIORITY_CAP, profile) {
+        (PriorityProfileCap::Normal, _) => RealtimePressureProfile::Normal,
+        (PriorityProfileCap::Guarded, RealtimePressureProfile::Critical) => {
+            RealtimePressureProfile::Guarded
+        }
+        _ => profile,
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct ThreadPriorityGuard {
@@ -71,11 +105,11 @@ pub(crate) fn promote_current_thread_for_audio_transfer() -> ThreadPriorityGuard
         use windows::core::w;
         use windows::Win32::System::Threading::{
             AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority, GetCurrentThread,
-            SetThreadPriority, AVRT_PRIORITY_LOW, THREAD_PRIORITY_NORMAL,
+            SetThreadPriority, AVRT_PRIORITY_NORMAL, THREAD_PRIORITY_ABOVE_NORMAL,
         };
 
         unsafe {
-            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
         }
 
         let mut task_index = 0u32;
@@ -87,7 +121,7 @@ pub(crate) fn promote_current_thread_for_audio_transfer() -> ThreadPriorityGuard
 
         if let Some(handle) = handle {
             unsafe {
-                let _ = AvSetMmThreadPriority(handle, AVRT_PRIORITY_LOW);
+                let _ = AvSetMmThreadPriority(handle, AVRT_PRIORITY_NORMAL);
             }
         }
 
@@ -142,6 +176,8 @@ pub(crate) fn promote_current_thread_for_audio_output() -> ThreadPriorityGuard {
 }
 
 pub(crate) fn apply_audio_output_pressure_profile(profile: RealtimePressureProfile) {
+    let profile = clamp_pressure_profile(profile);
+
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::System::Threading::{
@@ -162,17 +198,19 @@ pub(crate) fn apply_audio_output_pressure_profile(profile: RealtimePressureProfi
 }
 
 pub(crate) fn apply_audio_decode_pressure_profile(profile: RealtimePressureProfile) {
+    let profile = clamp_pressure_profile(profile);
+
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::System::Threading::{
             GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
-            THREAD_PRIORITY_HIGHEST,
+            THREAD_PRIORITY_HIGHEST, THREAD_PRIORITY_TIME_CRITICAL,
         };
 
         let priority = match profile {
             RealtimePressureProfile::Normal => THREAD_PRIORITY_ABOVE_NORMAL,
             RealtimePressureProfile::Guarded => THREAD_PRIORITY_HIGHEST,
-            RealtimePressureProfile::Critical => THREAD_PRIORITY_HIGHEST,
+            RealtimePressureProfile::Critical => THREAD_PRIORITY_TIME_CRITICAL,
         };
 
         unsafe {
@@ -182,21 +220,61 @@ pub(crate) fn apply_audio_decode_pressure_profile(profile: RealtimePressureProfi
 }
 
 pub(crate) fn apply_audio_transfer_pressure_profile(profile: RealtimePressureProfile) {
+    let profile = clamp_pressure_profile(profile);
+
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::System::Threading::{
             GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
-            THREAD_PRIORITY_NORMAL,
+            THREAD_PRIORITY_HIGHEST, THREAD_PRIORITY_NORMAL,
         };
 
         let priority = match profile {
             RealtimePressureProfile::Normal => THREAD_PRIORITY_NORMAL,
-            RealtimePressureProfile::Guarded => THREAD_PRIORITY_NORMAL,
-            RealtimePressureProfile::Critical => THREAD_PRIORITY_ABOVE_NORMAL,
+            RealtimePressureProfile::Guarded => THREAD_PRIORITY_ABOVE_NORMAL,
+            RealtimePressureProfile::Critical => THREAD_PRIORITY_HIGHEST,
         };
 
         unsafe {
             let _ = SetThreadPriority(GetCurrentThread(), priority);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_pressure_profile_respects_cap() {
+        assert_eq!(
+            clamp_pressure_profile(RealtimePressureProfile::Normal),
+            RealtimePressureProfile::Normal
+        );
+
+        match *PRESSURE_PRIORITY_CAP {
+            PriorityProfileCap::Normal => {
+                assert_eq!(
+                    clamp_pressure_profile(RealtimePressureProfile::Guarded),
+                    RealtimePressureProfile::Normal
+                );
+                assert_eq!(
+                    clamp_pressure_profile(RealtimePressureProfile::Critical),
+                    RealtimePressureProfile::Normal
+                );
+            }
+            PriorityProfileCap::Guarded => {
+                assert_eq!(
+                    clamp_pressure_profile(RealtimePressureProfile::Critical),
+                    RealtimePressureProfile::Guarded
+                );
+            }
+            PriorityProfileCap::Critical => {
+                assert_eq!(
+                    clamp_pressure_profile(RealtimePressureProfile::Critical),
+                    RealtimePressureProfile::Critical
+                );
+            }
         }
     }
 }

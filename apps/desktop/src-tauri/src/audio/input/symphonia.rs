@@ -110,6 +110,28 @@ fn streaming_full_track_initial_capacity_samples(
         .max(default_capacity)
 }
 
+fn streaming_default_capacity_samples(
+    output_sample_rate: Option<u32>,
+    default_capacity: usize,
+    budget_samples: usize,
+) -> usize {
+    let base_seconds = parse_env_f64("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS", 18.0, 8.0, 180.0);
+    let sample_rate = output_sample_rate.unwrap_or(44_100).max(1) as f64;
+    let rate_boost = if sample_rate >= 176_400.0 {
+        1.80
+    } else if sample_rate >= 96_000.0 {
+        1.45
+    } else if sample_rate >= 48_000.0 {
+        1.20
+    } else {
+        1.0
+    };
+    let channels = 2.0f64;
+
+    ((sample_rate * channels * base_seconds * rate_boost).ceil() as usize)
+        .clamp(default_capacity, budget_samples.max(default_capacity))
+}
+
 fn track_is_audio_like(track: &Track) -> bool {
     track.codec_params.sample_rate.is_some()
         || track.codec_params.channels.is_some()
@@ -1164,6 +1186,11 @@ impl AudioInput for SymphoniaInput {
         let budget_samples = full_track_buffer_budget_samples();
         let default_streaming_capacity =
             AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
+        let streaming_default_capacity = Some(streaming_default_capacity_samples(
+            output_sample_rate,
+            default_streaming_capacity,
+            budget_samples,
+        ));
 
         match decode_mode {
             AudioInputDecodeMode::FullTrack => {
@@ -1171,7 +1198,12 @@ impl AudioInput for SymphoniaInput {
                     estimate_full_track_required_samples(path, output_sample_rate, src_policy)
                 {
                     if required > budget_samples {
-                        match start_symphonia_stream(path, output_sample_rate, src_policy, None) {
+                        match start_symphonia_stream(
+                            path,
+                            output_sample_rate,
+                            src_policy,
+                            streaming_default_capacity,
+                        ) {
                             Ok((source, meta, streaming)) => {
                                 return Ok(AudioInputOpenResult {
                                     input_id: self.id(),
@@ -1201,7 +1233,12 @@ impl AudioInput for SymphoniaInput {
                 ) {
                     Ok(decoded) => Ok(decoded_to_open_result(self.id(), decoded)),
                     Err(buffer_err) => {
-                        match start_symphonia_stream(path, output_sample_rate, src_policy, None) {
+                        match start_symphonia_stream(
+                            path,
+                            output_sample_rate,
+                            src_policy,
+                            streaming_default_capacity,
+                        ) {
                             Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                                 input_id: self.id(),
                                 meta,
@@ -1257,7 +1294,12 @@ impl AudioInput for SymphoniaInput {
                 }
             }
             AudioInputDecodeMode::Streaming => {
-                match start_symphonia_stream(path, output_sample_rate, src_policy, None) {
+                match start_symphonia_stream(
+                    path,
+                    output_sample_rate,
+                    src_policy,
+                    streaming_default_capacity,
+                ) {
                     Ok((source, meta, streaming)) => Ok(AudioInputOpenResult {
                         input_id: self.id(),
                         meta,
@@ -1438,5 +1480,28 @@ mod tests {
         }
 
         assert_eq!(budget, 64 * 1024 * 1024 / std::mem::size_of::<f32>());
+    }
+
+    #[test]
+    fn streaming_default_capacity_scales_with_sample_rate() {
+        let prev = std::env::var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS").ok();
+        std::env::remove_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS");
+
+        let budget = full_track_buffer_budget_samples();
+        let low_default = AudioRingBuffer::recommended_capacity_samples(Some(44_100), 2);
+        let high_default = AudioRingBuffer::recommended_capacity_samples(Some(192_000), 2);
+
+        let low = streaming_default_capacity_samples(Some(44_100), low_default, budget);
+        let high = streaming_default_capacity_samples(Some(192_000), high_default, budget);
+
+        if let Some(prev) = prev {
+            std::env::set_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS", prev);
+        } else {
+            std::env::remove_var("PMP_AUDIO_STREAMING_RESERVOIR_SECONDS");
+        }
+
+        assert!(low > low_default);
+        assert!(high > high_default);
+        assert!(high > low);
     }
 }

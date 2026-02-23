@@ -16,8 +16,8 @@ pub mod output;
 pub(crate) mod pipeline;
 pub(crate) mod policy;
 pub(crate) mod realtime_scheduler;
-pub(crate) mod retire_plane;
 pub(crate) mod resample;
+pub(crate) mod retire_plane;
 pub(crate) mod spectrum;
 pub(crate) mod threading;
 

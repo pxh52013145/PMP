@@ -660,10 +660,13 @@ export class NativeAudioService implements IAudioService {
     };
 
     this.setupNativeListeners();
-    void this.refreshOutputBackendInventory().finally(() => {
-      this.emitRobustnessSnapshot(true);
-    });
-    void this.restoreFromStorage().catch(() => {});
+    void this.restoreFromStorage()
+      .catch(() => {})
+      .finally(() => {
+        void this.refreshOutputBackendInventory().finally(() => {
+          this.emitRobustnessSnapshot(true);
+        });
+      });
   }
 
   private async restoreFromStorage(): Promise<void> {
