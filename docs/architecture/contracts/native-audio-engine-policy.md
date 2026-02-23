@@ -1,6 +1,6 @@
 # Native Audio Engine Policy Contract
 
-Updated: 2026-02-22
+Updated: 2026-02-23
 Scope: `apps/desktop/src-tauri/src/audio/*`, `apps/desktop/src/services/audio/*`
 
 ## 1. Purpose
@@ -95,6 +95,28 @@ Implementation reference:
 
 This guardrail remains intentionally independent from steady-state robustness policy so interactive transport latency stays deterministic while allowing profile/env tuning per machine.
 
+### 6.1 Stream Open Initialization Latency Contract
+
+To keep track-switch latency bounded, streaming open no longer relies solely on first decoded packet before exposing metadata.
+
+- Decoder now emits metadata from codec params when available (channels/sample-rate/duration estimate), enabling early transfer startup.
+- Stream init timeout is bounded and configurable via:
+  - `PMP_AUDIO_STREAM_INIT_TIMEOUT_MS` (default `2200`, clamped `300..8000`)
+
+### 6.2 StreamingFullTrack Initial Reservoir Contract
+
+`StreamingFullTrack` mode now defaults to low-latency initial reservoir sizing instead of preallocating full budget upfront.
+
+- Default initial sizing uses:
+  - `PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS` (default `24.0s`, clamped `6..300`)
+- Optional legacy behavior (full preallocation):
+  - `PMP_AUDIO_STREAMING_FULLTRACK_PREALLOCATE_FULL=1`
+
+Rationale:
+
+- Prevent large ring-buffer preallocation stalls on rapid track switches.
+- Keep predictable click-to-play latency while preserving a configurable full-preallocate path for benchmark scenarios.
+
 ## 7. Streaming Buffer Observability Contract (State Event)
 
 `native_audio_state` now exposes split buffer-headroom signals to separate decode-side pressure from output-side pressure:
@@ -159,18 +181,17 @@ Exclusive/shared-raw declick guarantees:
 - Fade duration is sample-rate / pressure-profile / underrun-streak aware and clamped by safe bounds.
 - Tail zeroing keeps underrun recovery transitions smooth and reduces audible crackle under jitter.
 
-## 9. ReplayGain and Dynamic Gain Fallback Contract
+## 9. ReplayGain and Runtime Dynamic Gain Contract
 
-To keep loudness handling deterministic while allowing missing-tag tracks to remain playable, ReplayGain commands now define explicit `number | null` semantics.
+ReplayGain (tag gain) and dynamic gain (runtime loudness processing) are decoupled.
 
 Command payload semantics:
 
-- `native_audio_set_replay_gain({ db: number })`:
-  - Applies static replay gain (clamped by host-side policy).
-  - Disables dynamic gain fallback.
-- `native_audio_set_replay_gain({ db: null })`:
-  - Means ReplayGain tag is unavailable for current track.
-  - Backend sets static replay gain to `0dB` and enables dynamic gain fallback.
+- `native_audio_set_replay_gain({ db: number | null })`:
+  - Applies static replay gain (host clamped).
+  - `null` is normalized to `0dB` for compatibility; dynamic gain state is unchanged.
+- `native_audio_set_dynamic_gain_enabled({ enabled: boolean })`:
+  - Enables/disables dynamic gain independently of ReplayGain tags.
 
 Host settings split:
 
@@ -179,23 +200,76 @@ Host settings split:
   - `mode: "track" | "album"`
   - `preampDb: number`
 - Runtime control settings (`NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS`):
-  - `dynamicFallbackEnabled: boolean` (default `false`)
-    - `true`: missing ReplayGain tag maps to `db: null` and enables dynamic gain fallback.
-    - `false`: missing ReplayGain tag maps to `db: 0` and keeps dynamic fallback disabled.
+  - `dynamicGainEnabled: boolean` (default `false`)
+    - Controls dynamic gain globally (not tied to ReplayGain tag presence).
+    - Backward compatibility: `dynamicFallbackEnabled` is still accepted as a legacy alias.
   - `volumeDebounceEnabled: boolean` (default `true`)
     - `true`: UI volume slider commands are coalesced/debounced before dispatch.
     - `false`: volume commands dispatch immediately for every change.
 
 Track-load path semantics:
 
-- `native_audio_load_and_play({ replayGainDb: number })` behaves as static ReplayGain.
-- `native_audio_load_and_play({ replayGainDb: null })` enables dynamic gain fallback for the loaded track.
-- UI/host that explicitly disables ReplayGain must send `0` (not `null`) to disable fallback by contract.
+- `native_audio_load_and_play({ replayGainDb: number | null })` applies static ReplayGain only.
+- Dynamic gain state comes from `native_audio_set_dynamic_gain_enabled`, not from `replayGainDb`.
 
 State event additions (`native_audio_state`):
 
 - `dynamicGainEnabled: boolean`
 - `dynamicGainDb: number`
+- `memoryPoolF32GrowthEvents?: number`
+- `memoryPoolF32GrowthBytes?: number`
+- `memoryPoolF32PrewarmHits?: number`
+
+Memory-pool metric semantics:
+
+- Emitted on full/extended state payloads for allocation observability.
+- Intentionally omitted in high-frequency compact tick payloads to keep WebView bridge pressure low.
+
+## 10. Control Plane Queue Policy
+
+Decoder/transfer control signaling now defaults to lock-free command queue transport.
+
+- Default mode: lock-free queue (`PMP_AUDIO_CONTROL_QUEUE_MODE` unset).
+- Legacy fallback: set `PMP_AUDIO_CONTROL_QUEUE_MODE=mpsc` (or `legacy`) to force `std::sync::mpsc`.
+- Queue capacity: `PMP_AUDIO_CONTROL_QUEUE_CAPACITY` (default `256`, clamped `8..8192`).
+- Overflow policy: when lock-free queue is full, oldest command is evicted and newest is kept.
+
+State event additions (`native_audio_state`) for control-plane observability:
+
+- `controlQueueLockFree?: boolean`
+- `controlQueueCapacity?: number`
+- `controlQueueOverwriteEvents?: number`
+
+Adaptive transfer-buffer policy (P3):
+
+- Transfer worker applies adaptive watermarks/chunking based on starvation and low/high oscillation streaks.
+- Adaptation is bounded and decays after stable mid-band window to avoid sticky high-latency behavior.
+
+State event additions (`native_audio_state`) for adaptive transfer observability:
+
+- `transferAdaptationLevel?: number`
+- `transferOscillationStreak?: number`
+
+Backend policy pack (P4):
+
+- Prebuffer defaults, min-start bounds, recovery bounds, and runtime rebuffer thresholds are selected by output backend id.
+- Current tuned packs: `wasapi-exclusive`, `wasapi-shared-raw`, `wasapi`, `rodio-cpal`, and fallback default.
+- Goal: keep exclusive path responsive while giving shared paths larger guard bands to reduce recurrent buffering oscillation.
+
+Retire-plane lifecycle policy:
+
+- Lifecycle-heavy cleanup (old sink/streaming objects) may be retired asynchronously by retire plane.
+- Control-path still sends immediate stop/shutdown signals before retirement.
+
+State event additions (`native_audio_state`) for retire-plane observability:
+
+- `retirePendingTasks?: number`
+- `retireEnqueuedTotal?: number`
+- `retireExecutedTotal?: number`
+- `retireInlineFallbackTotal?: number`
+- `retirePanicTotal?: number`
+
+This toggle is compatibility-only and intended for diagnostics/rollback during staged migration.
 
 Compatibility notes:
 

@@ -11,6 +11,7 @@ use rodio::Source;
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
 use crate::audio::diagnostics;
+use crate::audio::memory_pool;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 use super::BoxedSource;
@@ -277,7 +278,7 @@ pub(crate) fn wrap_source_for_shared_backend(
         duration,
         seek_epoch,
         observed_seek_epoch,
-        local: Vec::with_capacity(producer_chunk_samples(RealtimePressureProfile::Normal)),
+        local: Vec::with_capacity(producer_chunk_samples(RealtimePressureProfile::Critical)),
         local_index: 0,
         last_samples: vec![0.0; channels as usize],
         needs_fade_in: false,
@@ -307,7 +308,7 @@ fn spawn_producer_thread(
             let queue_capacity = queue.capacity_samples().max(channels);
 
             let mut block =
-                Vec::<f32>::with_capacity(producer_chunk_samples(RealtimePressureProfile::Normal));
+                Vec::<f32>::with_capacity(producer_chunk_samples(RealtimePressureProfile::Critical));
             let mut observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
 
             loop {
@@ -348,9 +349,11 @@ fn spawn_producer_thread(
                 }
 
                 let chunk_samples = producer_chunk_samples(profile);
-                if block.capacity() < chunk_samples {
-                    block.reserve(chunk_samples - block.capacity());
-                }
+                memory_pool::reserve_f32_capacity(
+                    &mut block,
+                    chunk_samples,
+                    "shared.render_ahead.block_growth",
+                );
                 block.clear();
                 let mut seek_flushed = false;
                 for _ in 0..chunk_samples {

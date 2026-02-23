@@ -100,7 +100,7 @@ type ReplayGainSettings = {
 };
 
 type RuntimeControlSettings = {
-  dynamicFallbackEnabled: boolean;
+  dynamicGainEnabled: boolean;
   volumeDebounceEnabled: boolean;
 };
 
@@ -195,7 +195,7 @@ export const NativeDebugPage: React.FC = () => {
     preampDb: 0,
   });
   const [runtimeControlSettings, setRuntimeControlSettings] = useState<RuntimeControlSettings>({
-    dynamicFallbackEnabled: false,
+    dynamicGainEnabled: false,
     volumeDebounceEnabled: true,
   });
   const [crossfadeSettings, setCrossfadeSettings] = useState<CrossfadeSettings>({
@@ -311,12 +311,16 @@ export const NativeDebugPage: React.FC = () => {
     const record = asRecord(persisted);
     if (!record) return;
 
-    const dynamicFallbackEnabled =
-      typeof record.dynamicFallbackEnabled === 'boolean' ? record.dynamicFallbackEnabled : false;
+    const dynamicGainEnabled =
+      typeof record.dynamicGainEnabled === 'boolean'
+        ? record.dynamicGainEnabled
+        : typeof record.dynamicFallbackEnabled === 'boolean'
+          ? record.dynamicFallbackEnabled
+          : false;
     const volumeDebounceEnabled =
       typeof record.volumeDebounceEnabled === 'boolean' ? record.volumeDebounceEnabled : true;
 
-    setRuntimeControlSettings({ dynamicFallbackEnabled, volumeDebounceEnabled });
+    setRuntimeControlSettings({ dynamicGainEnabled, volumeDebounceEnabled });
   }, [isNativeEngine]);
 
   useEffect(() => {
@@ -936,16 +940,10 @@ export const NativeDebugPage: React.FC = () => {
           ? track?.replayGainAlbumGainDb
           : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && isFinite(base);
-      const effective = replayGainSettings.enabled
-        ? hasBase
-          ? base + replayGainSettings.preampDb
-          : runtimeControlSettings.dynamicFallbackEnabled
-            ? null
-            : 0
-        : 0;
+      const effective = replayGainSettings.enabled && hasBase ? base + replayGainSettings.preampDb : 0;
 
       await invoke('native_audio_set_replay_gain', {
-        db: typeof effective === 'number' ? effective : null,
+        db: effective,
       });
 
       appendLog(
@@ -959,7 +957,7 @@ export const NativeDebugPage: React.FC = () => {
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.replayGainUpdateFailed', { message }));
     }
-  }, [appendLog, audioService, replayGainSettings, runtimeControlSettings.dynamicFallbackEnabled, t]);
+  }, [appendLog, audioService, replayGainSettings, t]);
 
   const handleApplyRuntimeControlSettings = useCallback(async () => {
     try {
@@ -969,22 +967,20 @@ export const NativeDebugPage: React.FC = () => {
         TAURI_EVENTS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS_UPDATED
       );
 
+      await invoke('native_audio_set_dynamic_gain_enabled', {
+        enabled: runtimeControlSettings.dynamicGainEnabled,
+      });
+
       const track = audioService.getState().currentTrack;
       const base =
         replayGainSettings.mode === 'album'
           ? track?.replayGainAlbumGainDb
           : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && isFinite(base);
-      const effective = replayGainSettings.enabled
-        ? hasBase
-          ? base + replayGainSettings.preampDb
-          : runtimeControlSettings.dynamicFallbackEnabled
-            ? null
-            : 0
-        : 0;
+      const effective = replayGainSettings.enabled && hasBase ? base + replayGainSettings.preampDb : 0;
 
       await invoke('native_audio_set_replay_gain', {
-        db: typeof effective === 'number' ? effective : null,
+        db: effective,
       });
 
       appendLog(t('settings.audioAdvanced.runtimeControl.applySuccess'));

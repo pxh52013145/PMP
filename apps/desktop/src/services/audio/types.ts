@@ -190,6 +190,8 @@ export interface AudioRobustnessSnapshot {
   transferLowWatermarkSamples?: number;
   transferRenderLowHitCount?: number;
   transferDecodeLowHitCount?: number;
+  transferAdaptationLevel?: number;
+  transferOscillationStreak?: number;
   renderQueuePageLocked?: boolean;
   transferMetricsValid?: boolean;
   sharedRenderAheadEnabled?: boolean;

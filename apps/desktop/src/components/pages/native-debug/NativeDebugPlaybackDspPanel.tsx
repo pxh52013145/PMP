@@ -13,7 +13,7 @@ type ReplayGainSettings = {
 };
 
 type RuntimeControlSettings = {
-  dynamicFallbackEnabled: boolean;
+  dynamicGainEnabled: boolean;
   volumeDebounceEnabled: boolean;
 };
 
@@ -280,17 +280,17 @@ export function NativeDebugPlaybackDspPanel({
       </div>
       <div className="device-controls" style={{ gap: 10 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={runtimeControlSettings.dynamicFallbackEnabled}
-            onChange={(e) =>
-              setRuntimeControlSettings((prev) => ({
-                ...prev,
-                dynamicFallbackEnabled: e.target.checked,
-              }))
-            }
-          />
-          {t('settings.audioAdvanced.runtimeControl.dynamicFallback.label')}
+            <input
+              type="checkbox"
+              checked={runtimeControlSettings.dynamicGainEnabled}
+              onChange={(e) =>
+                setRuntimeControlSettings((prev) => ({
+                  ...prev,
+                  dynamicGainEnabled: e.target.checked,
+                }))
+              }
+            />
+          {t('settings.audioAdvanced.runtimeControl.dynamicGain.label')}
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input

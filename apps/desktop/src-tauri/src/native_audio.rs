@@ -1622,6 +1622,19 @@ pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> R
     Ok(())
 }
 
+pub fn set_dynamic_gain_enabled(app_handle: &AppHandle, enabled: bool) -> Result<(), String> {
+    emitter::ensure_started(app_handle);
+    let payload = {
+        let mut engine = ENGINE
+            .lock()
+            .map_err(|_| "Audio engine is locked".to_string())?;
+        engine.set_dynamic_gain_enabled(enabled);
+        engine.build_state_payload(false)
+    };
+    emitter::emit_state(app_handle, payload)?;
+    Ok(())
+}
+
 pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Result<(), String> {
     emitter::ensure_started(app_handle);
 

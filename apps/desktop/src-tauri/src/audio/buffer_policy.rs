@@ -40,6 +40,252 @@ static SOURCE_POP_WAIT_POLICY: Lazy<SourcePopWaitPolicy> = Lazy::new(|| SourcePo
     critical_ms: parse_env_u64("PMP_AUDIO_SOURCE_POP_WAIT_CRITICAL_MS", 3, 0, 12),
 });
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferPressureBand {
+    Low,
+    Mid,
+    High,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TransferAdaptiveState {
+    starvation_streak: u32,
+    oscillation_streak: u32,
+    stable_streak: u32,
+    adaptation_level: u8,
+    last_band: TransferPressureBand,
+}
+
+impl Default for TransferAdaptiveState {
+    fn default() -> Self {
+        Self {
+            starvation_streak: 0,
+            oscillation_streak: 0,
+            stable_streak: 0,
+            adaptation_level: 0,
+            last_band: TransferPressureBand::Mid,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AdaptiveTransferStrategy {
+    pub low_watermark: usize,
+    pub high_watermark: usize,
+    pub chunk_limit: usize,
+    pub producer_backoff: Duration,
+    pub decode_idle_backoff: Duration,
+    pub adaptation_level: u8,
+    pub oscillation_streak: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BackendBufferPolicyPack {
+    start_seek_prebuffer_seconds: f64,
+    crossfade_prebuffer_seconds: f64,
+    min_start_cap_seconds: f64,
+    min_start_floor_seconds: f64,
+    recovery_cap_seconds: f64,
+    recovery_floor_seconds: f64,
+    rebuffer_enter_divisor: usize,
+    rebuffer_resume_divisor: usize,
+    rebuffer_enter_floor_frames: usize,
+    rebuffer_resume_floor_frames: usize,
+}
+
+fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPack {
+    match output_backend_id {
+        "wasapi-exclusive" => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.28,
+            crossfade_prebuffer_seconds: 0.85,
+            min_start_cap_seconds: 0.30,
+            min_start_floor_seconds: 0.10,
+            recovery_cap_seconds: 0.72,
+            recovery_floor_seconds: 0.24,
+            rebuffer_enter_divisor: 5,
+            rebuffer_resume_divisor: 3,
+            rebuffer_enter_floor_frames: 48,
+            rebuffer_resume_floor_frames: 96,
+        },
+        "wasapi-shared-raw" => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.32,
+            crossfade_prebuffer_seconds: 0.70,
+            min_start_cap_seconds: 0.34,
+            min_start_floor_seconds: 0.11,
+            recovery_cap_seconds: 0.85,
+            recovery_floor_seconds: 0.28,
+            rebuffer_enter_divisor: 4,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 64,
+            rebuffer_resume_floor_frames: 128,
+        },
+        "rodio-cpal" => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.38,
+            crossfade_prebuffer_seconds: 0.60,
+            min_start_cap_seconds: 0.45,
+            min_start_floor_seconds: 0.14,
+            recovery_cap_seconds: 1.20,
+            recovery_floor_seconds: 0.40,
+            rebuffer_enter_divisor: 3,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 80,
+            rebuffer_resume_floor_frames: 160,
+        },
+        "wasapi" => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.35,
+            crossfade_prebuffer_seconds: 0.55,
+            min_start_cap_seconds: 0.35,
+            min_start_floor_seconds: 0.12,
+            recovery_cap_seconds: 1.05,
+            recovery_floor_seconds: 0.35,
+            rebuffer_enter_divisor: 4,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 64,
+            rebuffer_resume_floor_frames: 128,
+        },
+        _ => BackendBufferPolicyPack {
+            start_seek_prebuffer_seconds: 0.35,
+            crossfade_prebuffer_seconds: 0.50,
+            min_start_cap_seconds: 0.35,
+            min_start_floor_seconds: 0.12,
+            recovery_cap_seconds: 1.05,
+            recovery_floor_seconds: 0.35,
+            rebuffer_enter_divisor: 4,
+            rebuffer_resume_divisor: 2,
+            rebuffer_enter_floor_frames: 64,
+            rebuffer_resume_floor_frames: 128,
+        },
+    }
+}
+
+pub(crate) fn streaming_prebuffer_default_seconds(
+    output_backend_id: &str,
+    crossfade: bool,
+) -> f64 {
+    let pack = backend_buffer_policy_pack(output_backend_id);
+    if crossfade {
+        pack.crossfade_prebuffer_seconds
+    } else {
+        pack.start_seek_prebuffer_seconds
+    }
+}
+
+fn classify_transfer_pressure_band(
+    render_len: usize,
+    low_watermark: usize,
+    high_watermark: usize,
+) -> TransferPressureBand {
+    if render_len <= low_watermark {
+        TransferPressureBand::Low
+    } else if render_len >= high_watermark {
+        TransferPressureBand::High
+    } else {
+        TransferPressureBand::Mid
+    }
+}
+
+pub(crate) fn adaptive_transfer_strategy(
+    capacity_samples: usize,
+    channels: usize,
+    profile: RealtimePressureProfile,
+    render_len: usize,
+    decode_len: usize,
+    state: &mut TransferAdaptiveState,
+) -> AdaptiveTransferStrategy {
+    let channels = channels.max(1);
+    let capacity = capacity_samples.max(channels);
+    let (base_low, base_high) = streaming_transfer_watermarks(capacity, channels, profile);
+
+    let band = classify_transfer_pressure_band(render_len, base_low, base_high);
+    let starving = render_len <= base_low || decode_len <= base_low;
+
+    if starving {
+        state.starvation_streak = state.starvation_streak.saturating_add(1);
+        state.stable_streak = 0;
+    } else if matches!(band, TransferPressureBand::Mid) {
+        state.stable_streak = state.stable_streak.saturating_add(1);
+        state.starvation_streak = state.starvation_streak.saturating_sub(1);
+    } else {
+        state.stable_streak = 0;
+        state.starvation_streak = state.starvation_streak.saturating_sub(1);
+    }
+
+    if !matches!(state.last_band, TransferPressureBand::Mid)
+        && !matches!(band, TransferPressureBand::Mid)
+        && state.last_band != band
+    {
+        state.oscillation_streak = state.oscillation_streak.saturating_add(1);
+    } else {
+        state.oscillation_streak = state.oscillation_streak.saturating_sub(1);
+    }
+    state.last_band = band;
+
+    let starvation_level = if state.starvation_streak >= 8 {
+        2
+    } else if state.starvation_streak >= 3 {
+        1
+    } else {
+        0
+    };
+    let oscillation_level = if state.oscillation_streak >= 6 { 1 } else { 0 };
+    let target_level = starvation_level.max(oscillation_level) as u8;
+
+    if target_level > state.adaptation_level {
+        state.adaptation_level = target_level;
+        state.stable_streak = 0;
+    } else if target_level < state.adaptation_level && state.stable_streak >= 12 {
+        state.adaptation_level = state.adaptation_level.saturating_sub(1);
+        state.stable_streak = 0;
+    }
+
+    let (low_boost_percent, high_boost_percent, chunk_boost_frames) = match state.adaptation_level {
+        0 => (0usize, 0usize, 0usize),
+        1 => (8usize, 4usize, 512usize),
+        _ => (15usize, 8usize, 1024usize),
+    };
+
+    let low_watermark = ((base_low as u128)
+        .saturating_add((capacity as u128).saturating_mul(low_boost_percent as u128) / 100)
+        as usize)
+        .min(capacity)
+        .max(channels.saturating_mul(128));
+    let mut high_watermark = ((base_high as u128)
+        .saturating_add((capacity as u128).saturating_mul(high_boost_percent as u128) / 100)
+        as usize)
+        .min(capacity)
+        .max(low_watermark);
+    if high_watermark < low_watermark {
+        high_watermark = low_watermark;
+    }
+
+    let chunk_limit = output_producer_chunk_samples(profile)
+        .saturating_add(channels.saturating_mul(chunk_boost_frames))
+        .min(capacity)
+        .max(channels);
+
+    let producer_backoff = if state.adaptation_level > 0 {
+        Duration::from_millis(0)
+    } else {
+        output_producer_backoff(profile)
+    };
+
+    let decode_idle_backoff = if state.adaptation_level >= 2 {
+        Duration::from_millis(1)
+    } else {
+        decode_push_backoff(profile).max(Duration::from_millis(2))
+    };
+
+    AdaptiveTransferStrategy {
+        low_watermark,
+        high_watermark,
+        chunk_limit,
+        producer_backoff,
+        decode_idle_backoff,
+        adaptation_level: state.adaptation_level,
+        oscillation_streak: state.oscillation_streak,
+    }
+}
+
 pub(crate) fn recommended_render_queue_capacity_samples(
     sample_rate: Option<u32>,
     channels: u16,
@@ -161,19 +407,39 @@ pub(crate) fn streaming_min_start_bounds(
     output_backend_id: &str,
     underrun_recovery_active: bool,
 ) -> (f64, f64) {
-    let is_exclusive = output_backend_id == "wasapi-exclusive";
-
-    if is_exclusive {
-        if underrun_recovery_active {
-            (0.75, 0.25)
-        } else {
-            (0.30, 0.10)
-        }
-    } else if underrun_recovery_active {
-        (1.05, 0.35)
+    let pack = backend_buffer_policy_pack(output_backend_id);
+    if underrun_recovery_active {
+        (pack.recovery_cap_seconds, pack.recovery_floor_seconds)
     } else {
-        (0.35, 0.12)
+        (pack.min_start_cap_seconds, pack.min_start_floor_seconds)
     }
+}
+
+pub(crate) fn runtime_rebuffer_threshold_samples(
+    output_backend_id: &str,
+    min_start_samples: usize,
+    channels: usize,
+) -> (usize, usize) {
+    let pack = backend_buffer_policy_pack(output_backend_id);
+    let channels = channels.max(1);
+    let min_start_samples = min_start_samples.max(1);
+    let hard_floor_enter = channels
+        .saturating_mul(pack.rebuffer_enter_floor_frames.max(1))
+        .max(1);
+    let hard_floor_resume = channels
+        .saturating_mul(pack.rebuffer_resume_floor_frames.max(1))
+        .max(hard_floor_enter);
+
+    let enter = (min_start_samples / pack.rebuffer_enter_divisor.max(1))
+        .max(hard_floor_enter)
+        .min(min_start_samples);
+    let resume = (min_start_samples / pack.rebuffer_resume_divisor.max(1))
+        .max(hard_floor_resume)
+        .max(enter.saturating_add(channels.saturating_mul(32)))
+        .min(min_start_samples)
+        .max(enter);
+
+    (enter, resume)
 }
 
 #[cfg(test)]
@@ -219,5 +485,130 @@ mod tests {
         assert!(normal_low <= guarded_low && guarded_low <= critical_low);
         assert!(normal_high <= guarded_high && guarded_high <= critical_high);
         assert!(critical_high <= capacity);
+    }
+
+    #[test]
+    fn prebuffer_defaults_are_backend_specific() {
+        let exclusive_start = streaming_prebuffer_default_seconds("wasapi-exclusive", false);
+        let shared_start = streaming_prebuffer_default_seconds("rodio-cpal", false);
+        let exclusive_crossfade = streaming_prebuffer_default_seconds("wasapi-exclusive", true);
+        let shared_crossfade = streaming_prebuffer_default_seconds("rodio-cpal", true);
+
+        assert!(exclusive_start < shared_start);
+        assert!(exclusive_crossfade > shared_crossfade);
+    }
+
+    #[test]
+    fn runtime_rebuffer_thresholds_track_backend_policy() {
+        let min_start_samples = 33_600usize;
+
+        let (exclusive_enter, exclusive_resume) =
+            runtime_rebuffer_threshold_samples("wasapi-exclusive", min_start_samples, 2);
+        let (shared_enter, shared_resume) =
+            runtime_rebuffer_threshold_samples("rodio-cpal", min_start_samples, 2);
+
+        assert!(exclusive_enter < shared_enter);
+        assert!(exclusive_resume <= shared_resume);
+    }
+
+    #[test]
+    fn adaptive_transfer_strategy_boosts_watermarks_when_starving() {
+        let capacity = 96_000usize;
+        let channels = 2usize;
+        let mut state = TransferAdaptiveState::default();
+
+        let (base_low, base_high) =
+            streaming_transfer_watermarks(capacity, channels, RealtimePressureProfile::Guarded);
+
+        let mut strategy = adaptive_transfer_strategy(
+            capacity,
+            channels,
+            RealtimePressureProfile::Guarded,
+            base_low / 2,
+            base_low / 2,
+            &mut state,
+        );
+        for _ in 0..8 {
+            strategy = adaptive_transfer_strategy(
+                capacity,
+                channels,
+                RealtimePressureProfile::Guarded,
+                base_low / 2,
+                base_low / 2,
+                &mut state,
+            );
+        }
+
+        assert!(strategy.adaptation_level >= 1);
+        assert!(strategy.low_watermark >= base_low);
+        assert!(strategy.high_watermark >= base_high);
+        assert!(strategy.chunk_limit >= output_producer_chunk_samples(RealtimePressureProfile::Guarded));
+    }
+
+    #[test]
+    fn adaptive_transfer_strategy_decays_after_stable_mid_band() {
+        let capacity = 96_000usize;
+        let channels = 2usize;
+        let mut state = TransferAdaptiveState::default();
+
+        let (base_low, base_high) =
+            streaming_transfer_watermarks(capacity, channels, RealtimePressureProfile::Normal);
+        let mid = (base_low + base_high) / 2;
+
+        for _ in 0..8 {
+            let _ = adaptive_transfer_strategy(
+                capacity,
+                channels,
+                RealtimePressureProfile::Normal,
+                base_low / 2,
+                base_low / 2,
+                &mut state,
+            );
+        }
+        assert!(state.adaptation_level >= 1);
+
+        for _ in 0..40 {
+            let _ = adaptive_transfer_strategy(
+                capacity,
+                channels,
+                RealtimePressureProfile::Normal,
+                mid,
+                mid,
+                &mut state,
+            );
+        }
+
+        assert_eq!(state.adaptation_level, 0);
+    }
+
+    #[test]
+    fn adaptive_transfer_strategy_detects_low_high_oscillation() {
+        let capacity = 96_000usize;
+        let channels = 2usize;
+        let mut state = TransferAdaptiveState::default();
+        let (base_low, base_high) =
+            streaming_transfer_watermarks(capacity, channels, RealtimePressureProfile::Normal);
+
+        for _ in 0..8 {
+            let _ = adaptive_transfer_strategy(
+                capacity,
+                channels,
+                RealtimePressureProfile::Normal,
+                base_low.saturating_sub(channels),
+                base_high,
+                &mut state,
+            );
+            let _ = adaptive_transfer_strategy(
+                capacity,
+                channels,
+                RealtimePressureProfile::Normal,
+                base_high.saturating_add(channels),
+                base_high,
+                &mut state,
+            );
+        }
+
+        assert!(state.oscillation_streak >= 1);
+        assert!(state.adaptation_level >= 1);
     }
 }

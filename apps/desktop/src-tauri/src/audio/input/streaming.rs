@@ -1,6 +1,5 @@
 use std::f32::consts::FRAC_PI_2;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -10,7 +9,9 @@ use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
+use crate::audio::control_plane::{CommandRx, CommandTryRecvError, CommandTx};
 use crate::audio::diagnostics;
+use crate::audio::memory_pool;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
 
 static STREAMING_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -21,6 +22,8 @@ static TRANSFER_RENDER_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_DECODE_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static RENDER_QUEUE_PAGE_LOCK_SUCCESS: AtomicU64 = AtomicU64::new(0);
 static RENDER_QUEUE_PAGE_LOCK_FAILURE: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_ADAPTATION_LEVEL: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_OSCILLATION_STREAK: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_RENDER_LOW_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static TRANSFER_DECODE_LOW_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static STREAMING_UNDERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
@@ -35,7 +38,7 @@ pub(crate) fn streaming_underrun_stats() -> (u64, u64) {
 pub(crate) struct StreamingPlayback {
     pub buffer: AudioRingBuffer,
     pub render_queue: AudioRingBuffer,
-    pub command_tx: mpsc::Sender<DecoderCommand>,
+    pub command_tx: CommandTx<DecoderCommand>,
     pub shutdown_tx: StreamingShutdownTx,
     pub error: Arc<Mutex<Option<String>>>,
 }
@@ -48,36 +51,56 @@ fn transfer_target_samples(
     channels: usize,
     profile: RealtimePressureProfile,
 ) -> usize {
-    let desired =
-        if render_len <= low_watermark || !matches!(profile, RealtimePressureProfile::Normal) {
-            high_watermark.saturating_sub(render_len)
-        } else {
-            low_watermark.saturating_sub(render_len)
-        };
+    let channels = channels.max(1);
+    let low = low_watermark.max(channels);
+    let high = high_watermark.max(low);
+    let chunk_limit = chunk_limit.max(channels);
 
-    desired.max(channels).min(chunk_limit)
+    let refill_anchor = match profile {
+        RealtimePressureProfile::Normal => {
+            let span = high.saturating_sub(low);
+            low.saturating_add((span.saturating_mul(2)) / 3)
+        }
+        RealtimePressureProfile::Guarded | RealtimePressureProfile::Critical => high,
+    };
+
+    let desired = if render_len <= low {
+        high.saturating_sub(render_len)
+    } else {
+        refill_anchor.saturating_sub(render_len)
+    };
+
+    let min_quantum = match profile {
+        RealtimePressureProfile::Normal => channels.saturating_mul(256),
+        RealtimePressureProfile::Guarded => channels.saturating_mul(512),
+        RealtimePressureProfile::Critical => channels.saturating_mul(1024),
+    };
+
+    desired.max(min_quantum).max(channels).min(chunk_limit)
 }
 
-pub(crate) fn streaming_transfer_stats() -> (u64, u64, u64, bool) {
+pub(crate) fn streaming_transfer_stats() -> (u64, u64, u64, bool, u64, u64) {
     (
         TRANSFER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed),
         TRANSFER_RENDER_LOW_HIT_COUNT.load(Ordering::Relaxed),
         TRANSFER_DECODE_LOW_HIT_COUNT.load(Ordering::Relaxed),
         RENDER_QUEUE_PAGE_LOCK_SUCCESS.load(Ordering::Relaxed)
             > RENDER_QUEUE_PAGE_LOCK_FAILURE.load(Ordering::Relaxed),
+        TRANSFER_ADAPTATION_LEVEL.load(Ordering::Relaxed),
+        TRANSFER_OSCILLATION_STREAK.load(Ordering::Relaxed),
     )
 }
 
 #[derive(Clone)]
 pub(crate) struct StreamingShutdownTx {
-    decoder_tx: mpsc::Sender<DecoderCommand>,
-    transfer_tx: mpsc::Sender<TransferCommand>,
+    decoder_tx: CommandTx<DecoderCommand>,
+    transfer_tx: CommandTx<TransferCommand>,
 }
 
 impl StreamingShutdownTx {
     pub fn new(
-        decoder_tx: mpsc::Sender<DecoderCommand>,
-        transfer_tx: mpsc::Sender<TransferCommand>,
+        decoder_tx: CommandTx<DecoderCommand>,
+        transfer_tx: CommandTx<TransferCommand>,
     ) -> Self {
         Self {
             decoder_tx,
@@ -165,7 +188,7 @@ pub(crate) fn spawn_render_transfer_worker(
     render_queue: AudioRingBuffer,
     channels: u16,
     sample_rate: u32,
-    command_rx: mpsc::Receiver<TransferCommand>,
+    command_rx: CommandRx<TransferCommand>,
     thread_name: &str,
 ) -> Result<(), String> {
     let channels = channels.max(1) as usize;
@@ -177,6 +200,8 @@ pub(crate) fn spawn_render_transfer_worker(
         RealtimePressureProfile::Normal,
     );
     TRANSFER_LOW_WATERMARK_SAMPLES.store(initial_low_watermark as u64, Ordering::Relaxed);
+    TRANSFER_ADAPTATION_LEVEL.store(0, Ordering::Relaxed);
+    TRANSFER_OSCILLATION_STREAK.store(0, Ordering::Relaxed);
 
     thread::Builder::new()
         .name(thread_name.to_string())
@@ -184,14 +209,28 @@ pub(crate) fn spawn_render_transfer_worker(
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_transfer();
             let mut transfer_block: Vec<f32> = Vec::with_capacity(8_192);
+            let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
+            let warmup_strategy = buffer_policy::adaptive_transfer_strategy(
+                capacity,
+                channels,
+                RealtimePressureProfile::Critical,
+                0,
+                0,
+                &mut adaptive_state,
+            );
+            memory_pool::reserve_f32_capacity(
+                &mut transfer_block,
+                warmup_strategy.chunk_limit.max(8_192),
+                "streaming.transfer.block_prewarm_growth",
+            );
+            adaptive_state = buffer_policy::TransferAdaptiveState::default();
 
             loop {
-                match command_rx.try_recv() {
-                    Ok(TransferCommand::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
-                        render_queue.mark_finished();
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
+                if transfer_should_shutdown(&command_rx) {
+                    render_queue.mark_finished();
+                    TRANSFER_ADAPTATION_LEVEL.store(0, Ordering::Relaxed);
+                    TRANSFER_OSCILLATION_STREAK.store(0, Ordering::Relaxed);
+                    break;
                 }
 
                 let render_len = render_queue.len_samples();
@@ -200,27 +239,35 @@ pub(crate) fn spawn_render_transfer_worker(
                     (render_len as f64) / (sample_rate * (channels as f64).max(1.0));
 
                 let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
-                let (mut low_watermark, mut high_watermark) =
-                    buffer_policy::streaming_transfer_watermarks(
-                        capacity,
-                        channels,
-                        current_profile,
-                    );
-                let recovery_hint = render_len <= low_watermark || decode_len <= low_watermark;
+                let (hint_low_watermark, _) =
+                    buffer_policy::streaming_transfer_watermarks(capacity, channels, current_profile);
+                let recovery_hint =
+                    render_len <= hint_low_watermark || decode_len <= hint_low_watermark;
                 let profile = crate::audio::realtime_scheduler::SCHEDULER
                     .update(buffered_ahead_seconds, recovery_hint);
-                if profile != current_profile {
-                    (low_watermark, high_watermark) =
-                        buffer_policy::streaming_transfer_watermarks(capacity, channels, profile);
-                }
+
+                let strategy = buffer_policy::adaptive_transfer_strategy(
+                    capacity,
+                    channels,
+                    profile,
+                    render_len,
+                    decode_len,
+                    &mut adaptive_state,
+                );
+
+                let low_watermark = strategy.low_watermark;
+                let high_watermark = strategy.high_watermark;
 
                 TRANSFER_LOW_WATERMARK_SAMPLES.store(low_watermark as u64, Ordering::Relaxed);
+                TRANSFER_ADAPTATION_LEVEL
+                    .store(strategy.adaptation_level as u64, Ordering::Relaxed);
+                TRANSFER_OSCILLATION_STREAK
+                    .store(strategy.oscillation_streak as u64, Ordering::Relaxed);
                 crate::audio::threading::apply_audio_transfer_pressure_profile(profile);
-                let chunk_limit = buffer_policy::output_producer_chunk_samples(profile);
+                let chunk_limit = strategy.chunk_limit;
                 let wait_timeout = buffer_policy::source_pop_wait_timeout(profile);
-                let backoff = buffer_policy::output_producer_backoff(profile);
-                let decode_idle_backoff =
-                    buffer_policy::decode_push_backoff(profile).max(Duration::from_millis(5));
+                let backoff = strategy.producer_backoff;
+                let decode_idle_backoff = strategy.decode_idle_backoff;
 
                 if decode_reservoir.is_finished_and_empty() {
                     // Keep the transfer worker alive even after end-of-stream so a subsequent
@@ -283,6 +330,11 @@ pub(crate) fn spawn_render_transfer_worker(
                         let samples_to_push = frames * channels;
                         let mut start = 0usize;
                         while start < samples_to_push {
+                            if transfer_should_shutdown(&command_rx) {
+                                render_queue.mark_finished();
+                                return;
+                            }
+
                             let pushed_frames = render_queue.push_interleaved(
                                 &transfer_block[start..samples_to_push],
                                 channels,
@@ -330,6 +382,14 @@ pub(crate) enum TransferCommand {
     Shutdown,
 }
 
+#[inline]
+fn transfer_should_shutdown(command_rx: &CommandRx<TransferCommand>) -> bool {
+    match command_rx.try_recv() {
+        Ok(TransferCommand::Shutdown) | Err(CommandTryRecvError::Disconnected) => true,
+        Err(CommandTryRecvError::Empty) => false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DrainedDecoderCommands {
     pub shutdown: bool,
@@ -337,7 +397,7 @@ pub(crate) struct DrainedDecoderCommands {
 }
 
 pub(crate) fn drain_decoder_commands(
-    command_rx: &mpsc::Receiver<DecoderCommand>,
+    command_rx: &CommandRx<DecoderCommand>,
 ) -> DrainedDecoderCommands {
     let mut result = DrainedDecoderCommands::default();
 
@@ -351,8 +411,8 @@ pub(crate) fn drain_decoder_commands(
             Ok(DecoderCommand::Seek(target)) => {
                 result.seek_target = Some(target);
             }
-            Err(mpsc::TryRecvError::Empty) => break,
-            Err(mpsc::TryRecvError::Disconnected) => {
+            Err(CommandTryRecvError::Empty) => break,
+            Err(CommandTryRecvError::Disconnected) => {
                 result.shutdown = true;
                 result.seek_target = None;
                 return result;
@@ -610,7 +670,7 @@ mod tests {
     fn streaming_samples_source_emits_silence_until_samples_arrive_then_finishes() {
         let buffer = AudioRingBuffer::new(512);
         let render_queue = AudioRingBuffer::new(512);
-        let (_transfer_tx, transfer_rx) = mpsc::channel::<TransferCommand>();
+        let (_transfer_tx, transfer_rx) = crate::audio::control_plane::command_channel::<TransferCommand>();
         spawn_render_transfer_worker(
             buffer.clone(),
             render_queue.clone(),
@@ -663,7 +723,7 @@ mod tests {
 
     #[test]
     fn drain_decoder_commands_keeps_last_seek_and_stops_on_shutdown() {
-        let (tx, rx) = mpsc::channel::<DecoderCommand>();
+        let (tx, rx) = crate::audio::control_plane::command_channel::<DecoderCommand>();
         tx.send(DecoderCommand::Seek(1.0)).unwrap();
         tx.send(DecoderCommand::Seek(2.0)).unwrap();
         tx.send(DecoderCommand::Seek(3.5)).unwrap();
@@ -716,7 +776,7 @@ mod tests {
             RealtimePressureProfile::Normal,
         );
 
-        assert_eq!(target, 2);
+        assert_eq!(target, 512);
     }
 
     #[test]
@@ -751,7 +811,8 @@ mod tests {
     fn transfer_worker_stays_alive_across_finished_boundary_for_seek_recovery() {
         let decode_reservoir = AudioRingBuffer::new(8_192);
         let render_queue = AudioRingBuffer::new(8_192);
-        let (command_tx, command_rx) = mpsc::channel::<TransferCommand>();
+        let (command_tx, command_rx) =
+            crate::audio::control_plane::command_channel::<TransferCommand>();
 
         spawn_render_transfer_worker(
             decode_reservoir.clone(),
@@ -788,5 +849,59 @@ mod tests {
         );
 
         let _ = command_tx.send(TransferCommand::Shutdown);
+    }
+
+    #[test]
+    fn transfer_worker_shutdown_does_not_stall_when_render_queue_is_pressure_full() {
+        let channels = 2usize;
+        let decode_reservoir = AudioRingBuffer::new(8_192);
+        let render_queue = AudioRingBuffer::new(2_048);
+        let (command_tx, command_rx) =
+            crate::audio::control_plane::command_channel::<TransferCommand>();
+
+        // Prefill render queue near the guarded high band so min transfer quantum can exceed free
+        // headroom and force partial writes in the transfer loop.
+        let prefill = vec![0.0f32; 1_600];
+        let prefilled = render_queue.push_interleaved(&prefill, channels);
+        assert_eq!(prefilled * channels, 1_600);
+
+        let pending = vec![0.25f32; 4_096];
+        let pushed = decode_reservoir.push_interleaved(&pending, channels);
+        assert!(pushed > 0);
+
+        spawn_render_transfer_worker(
+            decode_reservoir.clone(),
+            render_queue.clone(),
+            channels as u16,
+            48_000,
+            command_rx,
+            "streaming-transfer-test-shutdown-liveness",
+        )
+        .expect("spawn transfer worker");
+
+        std::thread::sleep(Duration::from_millis(30));
+        let _ = command_tx.send(TransferCommand::Shutdown);
+
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        let mut finished_in_time = false;
+        while std::time::Instant::now() < deadline {
+            if render_queue.is_finished() {
+                finished_in_time = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // Best-effort cleanup in case of regressions to avoid leaking a running thread in tests.
+        if !finished_in_time {
+            render_queue.clear();
+            let _ = command_tx.send(TransferCommand::Shutdown);
+            std::thread::sleep(Duration::from_millis(80));
+        }
+
+        assert!(
+            finished_in_time,
+            "transfer worker should honor shutdown even under render-queue backpressure"
+        );
     }
 }

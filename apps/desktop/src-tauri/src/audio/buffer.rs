@@ -208,7 +208,11 @@ impl AudioRingBuffer {
 
         let count = available.min(max_samples).min(self.inner.capacity);
         if out.capacity() < count {
-            out.reserve(count.saturating_sub(out.len()));
+            crate::audio::memory_pool::reserve_f32_capacity(
+                out,
+                count,
+                "memory_pool.buffer.pop_chunk_growth",
+            );
         }
 
         unsafe {
@@ -252,57 +256,40 @@ impl AudioRingBuffer {
             return 0;
         }
 
-        let mut waited = false;
-
-        loop {
-            let read = self.inner.read_pos.load(Ordering::Acquire);
-            let write = self.inner.write_pos.load(Ordering::Acquire);
-            let used = write.saturating_sub(read) as usize;
-            let free_samples = self.inner.capacity.saturating_sub(used);
-            let free_frames = free_samples / channels;
-            if free_frames == 0 {
-                if waited {
-                    return 0;
-                }
-                waited = true;
-                let guard = self
-                    .inner
-                    .wait_lock
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let _ = self
-                    .inner
-                    .space
-                    .wait_timeout(guard, Duration::from_millis(10));
-                continue;
-            }
-
-            let frames_to_push = free_frames.min(total_frames);
-            let samples_to_push = frames_to_push * channels;
-            if samples_to_push == 0 {
-                return 0;
-            }
-
-            unsafe {
-                let start = (write as usize) % self.inner.capacity;
-                let first = (self.inner.capacity - start).min(samples_to_push);
-                ptr::copy_nonoverlapping(samples.as_ptr(), self.inner.data_ptr.add(start), first);
-                if first < samples_to_push {
-                    ptr::copy_nonoverlapping(
-                        samples.as_ptr().add(first),
-                        self.inner.data_ptr,
-                        samples_to_push - first,
-                    );
-                }
-            }
-
-            self.inner.write_pos.store(
-                write.saturating_add(samples_to_push as u64),
-                Ordering::Release,
-            );
-            self.inner.available.notify_all();
-            return frames_to_push;
+        let read = self.inner.read_pos.load(Ordering::Acquire);
+        let write = self.inner.write_pos.load(Ordering::Acquire);
+        let used = write.saturating_sub(read) as usize;
+        let free_samples = self.inner.capacity.saturating_sub(used);
+        let free_frames = free_samples / channels;
+        if free_frames == 0 {
+            return 0;
         }
+
+        let frames_to_push = free_frames.min(total_frames);
+        let samples_to_push = frames_to_push * channels;
+        if samples_to_push == 0 {
+            return 0;
+        }
+
+        unsafe {
+            let start = (write as usize) % self.inner.capacity;
+            let first = (self.inner.capacity - start).min(samples_to_push);
+            ptr::copy_nonoverlapping(samples.as_ptr(), self.inner.data_ptr.add(start), first);
+            if first < samples_to_push {
+                ptr::copy_nonoverlapping(
+                    samples.as_ptr().add(first),
+                    self.inner.data_ptr,
+                    samples_to_push - first,
+                );
+            }
+        }
+
+        self.inner.write_pos.store(
+            write.saturating_add(samples_to_push as u64),
+            Ordering::Release,
+        );
+        self.inner.available.notify_all();
+        frames_to_push
     }
 }
 

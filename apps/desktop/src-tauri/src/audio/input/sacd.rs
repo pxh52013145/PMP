@@ -11,6 +11,7 @@ use crate::audio::dsd2pcm::Dsd2PcmContext;
 
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
+use crate::audio::control_plane::command_channel;
 
 use super::streaming::{
     drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
@@ -211,8 +212,8 @@ fn start_dsf_stream(
     let render_queue = AudioRingBuffer::new(render_queue_capacity);
     try_lock_render_queue_hot_path(&render_queue);
 
-    let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
-    let (transfer_tx, transfer_rx) = mpsc::channel::<TransferCommand>();
+    let (command_tx, command_rx) = command_channel::<DecoderCommand>();
+    let (transfer_tx, transfer_rx) = command_channel::<TransferCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
     let path = path.to_path_buf();

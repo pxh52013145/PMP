@@ -502,10 +502,10 @@ impl StreamingResampler {
         }
 
         if out_interleaved.capacity() < input_interleaved.len() {
-            out_interleaved.reserve(
-                input_interleaved
-                    .len()
-                    .saturating_sub(out_interleaved.capacity()),
+            crate::audio::memory_pool::reserve_f32_capacity(
+                out_interleaved,
+                input_interleaved.len(),
+                "memory_pool.resample.output_growth",
             );
         }
         for frame in 0..frames {

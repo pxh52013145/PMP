@@ -16,6 +16,7 @@ use super::{
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
 use crate::audio::diagnostics;
+use crate::audio::memory_pool;
 use crate::audio::policy::{NativeAudioOutputQuantizationMode, NativeAudioTransportMode};
 use crate::audio::realtime_scheduler::{RealtimePressureProfile, SCHEDULER};
 
@@ -1632,6 +1633,43 @@ mod tests {
     }
 
     #[test]
+    fn transport_exact_pcm24_preserves_sample_mode_for_grid_values() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut vectors = vec![
+            -8_388_607i32,
+            -8_000_000,
+            -4_194_304,
+            -1_048_576,
+            -16_384,
+            -1,
+            0,
+            1,
+            16_384,
+            1_048_576,
+            4_194_304,
+            8_000_000,
+            8_388_607,
+        ];
+
+        for _ in 0..4096 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let raw = ((seed >> 16) & 0x00ff_ffff) as i32;
+            let centered = raw - 8_388_607;
+            vectors.push(centered.clamp(-8_388_607, 8_388_607));
+        }
+
+        for sample_i24 in vectors {
+            let normalized = (sample_i24 as f32) / 8_388_608.0;
+            let expected = quantize_pcm24(normalized, 1.0);
+            let quantized = quantize_pcm24_transport_exact(normalized, 1.0);
+            assert_eq!(quantized, expected);
+
+            let packed_in32 = pack_pcm24_in32(expected);
+            assert_eq!(packed_in32 & 0xff, 0);
+        }
+    }
+
+    #[test]
     fn pcm24_tpdf_quantization_is_deterministic_with_same_seed() {
         let mut seed_a = 0x1234_5678_9abc_def0u64;
         let mut seed_b = 0x1234_5678_9abc_def0u64;
@@ -1929,7 +1967,7 @@ impl WasapiExclusiveSink {
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_decode();
             let mut local: Vec<f32> = Vec::with_capacity(
-                buffer_policy::output_producer_chunk_samples(RealtimePressureProfile::Normal),
+                buffer_policy::output_producer_chunk_samples(RealtimePressureProfile::Critical),
             );
 
             let mut source = {
@@ -1969,9 +2007,11 @@ impl WasapiExclusiveSink {
                 }
 
                 local.clear();
-                if local.capacity() < chunk_samples {
-                    local.reserve(chunk_samples - local.capacity());
-                }
+                memory_pool::reserve_f32_capacity(
+                    &mut local,
+                    chunk_samples,
+                    "exclusive.output.producer.local_growth",
+                );
                 for _ in 0..chunk_samples {
                     match source.next() {
                         Some(sample) => local.push(sample),
@@ -2161,6 +2201,12 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                         WasapiStreamMode::Exclusive,
                     ) {
                         Ok(new_stream) => {
+                            memory_pool::reserve_f32_capacity(
+                                &mut render_scratch,
+                                new_stream.buffer_frame_count as usize
+                                    * new_stream.channels.max(1) as usize,
+                                "exclusive.output.render_scratch_growth",
+                            );
                             if let Ok(mut state) = inner.backend_state.lock() {
                                 state.output_sample_rate = Some(new_stream.sample_rate);
                                 state.stream_open = true;
@@ -2354,6 +2400,12 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                         WasapiStreamMode::SharedRaw,
                     ) {
                         Ok(new_stream) => {
+                            memory_pool::reserve_f32_capacity(
+                                &mut render_scratch,
+                                new_stream.buffer_frame_count as usize
+                                    * new_stream.channels.max(1) as usize,
+                                "shared_raw.output.render_scratch_growth",
+                            );
                             if let Ok(mut state) = inner.backend_state.lock() {
                                 state.output_sample_rate = Some(new_stream.sample_rate);
                                 state.stream_open = true;
@@ -2539,7 +2591,7 @@ impl WasapiSharedRawSink {
             let _priority_guard =
                 crate::audio::threading::promote_current_thread_for_audio_decode();
             let mut local: Vec<f32> = Vec::with_capacity(
-                buffer_policy::output_producer_chunk_samples(RealtimePressureProfile::Normal),
+                buffer_policy::output_producer_chunk_samples(RealtimePressureProfile::Critical),
             );
 
             let mut source = {
@@ -2579,9 +2631,11 @@ impl WasapiSharedRawSink {
                 }
 
                 local.clear();
-                if local.capacity() < chunk_samples {
-                    local.reserve(chunk_samples - local.capacity());
-                }
+                memory_pool::reserve_f32_capacity(
+                    &mut local,
+                    chunk_samples,
+                    "shared_raw.output.producer.local_growth",
+                );
                 for _ in 0..chunk_samples {
                     match source.next() {
                         Some(sample) => local.push(sample),
@@ -2964,9 +3018,11 @@ fn render_frames(
     let channels = stream.channels.max(1) as usize;
     let total_samples = frames as usize * channels;
     scratch.clear();
-    if scratch.capacity() < total_samples {
-        scratch.reserve(total_samples.saturating_sub(scratch.capacity()));
-    }
+    memory_pool::reserve_f32_capacity(
+        scratch,
+        total_samples,
+        "exclusive.output.render_scratch_growth",
+    );
 
     let mut available_samples = 0usize;
     let mut underrun = false;
@@ -3141,9 +3197,11 @@ fn render_frames_shared_raw(
     let channels = stream.channels.max(1) as usize;
     let total_samples = frames as usize * channels;
     scratch.clear();
-    if scratch.capacity() < total_samples {
-        scratch.reserve(total_samples.saturating_sub(scratch.capacity()));
-    }
+    memory_pool::reserve_f32_capacity(
+        scratch,
+        total_samples,
+        "shared_raw.output.render_scratch_growth",
+    );
 
     let mut available_samples = 0usize;
     let mut underrun = false;

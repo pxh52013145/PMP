@@ -102,6 +102,18 @@ pub async fn native_audio_set_replay_gain(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn native_audio_set_dynamic_gain_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        native_audio::set_dynamic_gain_enabled(&app, enabled)
+    })
+    .await
+    .map_err(|e| format!("Native audio set dynamic gain task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn native_audio_set_dsp_chain(
     app: tauri::AppHandle,
     chain: Vec<native_audio::DspNodeConfig>,

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::Instant;
 
 use symphonia::core::{
     audio::SampleBuffer,
@@ -23,6 +24,8 @@ use super::{
 
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
+use crate::audio::control_plane::command_channel;
+use crate::audio::diagnostics;
 
 use super::streaming::{
     drain_decoder_commands, spawn_render_transfer_worker, try_lock_render_queue_hot_path,
@@ -38,6 +41,73 @@ fn is_full_decode_fallback_enabled() -> bool {
         }
         Err(_) => false,
     }
+}
+
+fn parse_env_bool(key: &str, default_value: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "1" | "true" | "yes" | "on" => Some(true),
+                "0" | "false" | "no" | "off" => Some(false),
+                _ => None,
+            }
+        })
+        .unwrap_or(default_value)
+}
+
+fn parse_env_f64(key: &str, default_value: f64, min: f64, max: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default_value)
+        .clamp(min, max)
+}
+
+fn stream_init_timeout() -> Duration {
+    const DEFAULT_TIMEOUT_MS: u64 = 2_200;
+    const MIN_TIMEOUT_MS: u64 = 300;
+    const MAX_TIMEOUT_MS: u64 = 8_000;
+
+    let timeout_ms = std::env::var("PMP_AUDIO_STREAM_INIT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+    Duration::from_millis(timeout_ms)
+}
+
+fn streaming_full_track_initial_capacity_samples(
+    output_sample_rate: Option<u32>,
+    default_capacity: usize,
+    budget_samples: usize,
+    estimated_required_samples: Option<usize>,
+) -> usize {
+    let requested_capacity = estimated_required_samples
+        .map(|required| required.min(budget_samples).max(default_capacity))
+        .unwrap_or(default_capacity)
+        .clamp(default_capacity, budget_samples.max(default_capacity));
+
+    if parse_env_bool("PMP_AUDIO_STREAMING_FULLTRACK_PREALLOCATE_FULL", false) {
+        return requested_capacity;
+    }
+
+    let initial_seconds = parse_env_f64(
+        "PMP_AUDIO_STREAMING_FULLTRACK_INITIAL_SECONDS",
+        24.0,
+        6.0,
+        300.0,
+    );
+    let sample_rate = output_sample_rate.unwrap_or(44_100).max(1) as f64;
+    let assumed_channels = 2.0f64;
+    let initial_capacity = ((sample_rate * assumed_channels * initial_seconds).ceil() as usize)
+        .clamp(default_capacity, budget_samples.max(default_capacity));
+
+    requested_capacity
+        .min(initial_capacity)
+        .max(default_capacity)
 }
 
 fn track_is_audio_like(track: &Track) -> bool {
@@ -135,6 +205,7 @@ fn start_symphonia_stream(
     src_policy: AudioInputSrcPolicy,
     decode_reservoir_capacity_samples: Option<usize>,
 ) -> Result<(StreamingSamplesSource, AudioInputMeta, StreamingPlayback), AudioInputError> {
+    let open_started_at = Instant::now();
     let default_capacity = AudioRingBuffer::recommended_capacity_samples(output_sample_rate, 2);
     let max_capacity = full_track_buffer_budget_samples().max(default_capacity);
     let decode_capacity = decode_reservoir_capacity_samples
@@ -145,10 +216,15 @@ fn start_symphonia_stream(
         buffer_policy::recommended_render_queue_capacity_samples(output_sample_rate, 2)
             .min(buffer.capacity_samples().max(16_384));
     let render_queue = AudioRingBuffer::new(render_queue_capacity);
+    diagnostics::record_event(
+        "stream.open.begin",
+        decode_capacity as u64,
+        render_queue_capacity as u64,
+    );
     try_lock_render_queue_hot_path(&render_queue);
 
-    let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
-    let (transfer_tx, transfer_rx) = mpsc::channel::<TransferCommand>();
+    let (command_tx, command_rx) = command_channel::<DecoderCommand>();
+    let (transfer_tx, transfer_rx) = command_channel::<TransferCommand>();
     let (meta_tx, meta_rx) = mpsc::channel::<Result<AudioInputMeta, String>>();
 
     let path = path.to_path_buf();
@@ -229,6 +305,61 @@ fn start_symphonia_stream(
         let mut channels_usize: usize = 0;
         let mut effective_sample_rate: u32 = 0;
         let mut meta_delivered = false;
+
+        if let (Some(pre_channels), Some(input_sample_rate)) = (
+            track
+                .codec_params
+                .channels
+                .map(|value| value.count())
+                .filter(|value| *value > 0),
+            track.codec_params.sample_rate.filter(|value| *value > 0),
+        ) {
+            channels_usize = pre_channels;
+            effective_sample_rate = input_sample_rate;
+
+            let requested_sample_rate = output_sample_rate.unwrap_or(input_sample_rate);
+            if requested_sample_rate != input_sample_rate {
+                match crate::audio::resample::StreamingResampler::new_with_policy(
+                    input_sample_rate,
+                    requested_sample_rate,
+                    channels_usize,
+                    resample_chunk_frames,
+                    src_policy.hq_src_enabled,
+                    src_policy.hq_src_phase_mode,
+                    src_policy.src_backend,
+                ) {
+                    Ok(instance) => {
+                        let resampler_delay = instance.output_delay();
+                        resampler = Some(instance);
+                        if resampler_delay > 0 {
+                            pending_trim_frames_out =
+                                pending_trim_frames_out.saturating_add(resampler_delay);
+                        }
+                        effective_sample_rate = requested_sample_rate;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[NativeAudio] Failed to init resampler from codec params, falling back: [{}] {}",
+                            err.code, err.message
+                        );
+                    }
+                }
+            }
+
+            let duration = track
+                .codec_params
+                .n_frames
+                .map(|frames| frames as f64 / input_sample_rate as f64)
+                .unwrap_or(0.0);
+            let _ = meta_tx.send(Ok(AudioInputMeta {
+                channels: channels_usize as u16,
+                sample_rate: effective_sample_rate,
+                source_sample_rate: input_sample_rate,
+                bit_depth,
+                duration,
+            }));
+            meta_delivered = true;
+        }
 
         'decode_loop: loop {
             let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
@@ -477,6 +608,7 @@ fn start_symphonia_stream(
                                     }
                                     if let Some(target) = drained.seek_target {
                                         buffer_clone.clear();
+                                        render_queue_clone.clear();
                                         pending_trim_frames_out = 0;
 
                                         let seek_to = SeekTo::Time {
@@ -551,6 +683,7 @@ fn start_symphonia_stream(
                                     }
                                     if let Some(target) = drained.seek_target {
                                         buffer_clone.clear();
+                                        render_queue_clone.clear();
                                         pending_trim_frames_out = 0;
 
                                         let seek_to = SeekTo::Time {
@@ -704,18 +837,32 @@ fn start_symphonia_stream(
             )
         })?;
 
-    let meta = match meta_rx.recv_timeout(Duration::from_secs(8)) {
+    let init_timeout = stream_init_timeout();
+    let meta = match meta_rx.recv_timeout(init_timeout) {
         Ok(value) => value.map_err(|message| {
             AudioInputError::new("AUDIO_INPUT_SYMPHONIA_OPEN_FAILED", message)
         })?,
         Err(err) => {
             let _ = command_tx.send(DecoderCommand::Shutdown);
+            diagnostics::record_event(
+                "stream.open.timeout",
+                open_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                init_timeout.as_millis().min(u64::MAX as u128) as u64,
+            );
             return Err(AudioInputError::new(
                 "AUDIO_INPUT_SYMPHONIA_OPEN_TIMEOUT",
-                format!("Timed out initializing decoder: {err}"),
+                format!(
+                    "Timed out initializing decoder after {} ms: {err}",
+                    init_timeout.as_millis()
+                ),
             ));
         }
     };
+    diagnostics::record_event(
+        "stream.open.ready",
+        open_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        (meta.sample_rate as u64).max(1),
+    );
 
     if let Err(err) = spawn_render_transfer_worker(
         buffer.clone(),
@@ -727,11 +874,21 @@ fn start_symphonia_stream(
     ) {
         let _ = transfer_tx.send(TransferCommand::Shutdown);
         let _ = command_tx.send(DecoderCommand::Shutdown);
+        diagnostics::record_event(
+            "stream.open.transfer_spawn_failed",
+            open_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            0,
+        );
         return Err(AudioInputError::new(
             "AUDIO_INPUT_SYMPHONIA_OPEN_FAILED",
             err,
         ));
     }
+    diagnostics::record_event(
+        "stream.open.transfer_ready",
+        open_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        render_queue.capacity_samples() as u64,
+    );
 
     Ok((
         StreamingSamplesSource::new(
@@ -1063,10 +1220,20 @@ impl AudioInput for SymphoniaInput {
                 }
             }
             AudioInputDecodeMode::StreamingFullTrack => {
-                let full_track_streaming_capacity =
-                    estimate_full_track_required_samples(path, output_sample_rate, src_policy).map(
-                        |required| required.min(budget_samples).max(default_streaming_capacity),
-                    );
+                let estimated_required =
+                    estimate_full_track_required_samples(path, output_sample_rate, src_policy);
+                let selected_capacity = streaming_full_track_initial_capacity_samples(
+                    output_sample_rate,
+                    default_streaming_capacity,
+                    budget_samples,
+                    estimated_required,
+                );
+                diagnostics::record_event(
+                    "stream.open.fulltrack_capacity",
+                    selected_capacity as u64,
+                    estimated_required.unwrap_or(0) as u64,
+                );
+                let full_track_streaming_capacity = Some(selected_capacity);
 
                 match start_symphonia_stream(
                     path,

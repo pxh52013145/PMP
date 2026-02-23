@@ -53,12 +53,19 @@ fn gain_db_to_linear(db: f32) -> f32 {
     10.0f32.powf(db / 20.0)
 }
 
-const DYNAMIC_GAIN_TARGET_DBFS: f32 = -18.0;
-const DYNAMIC_GAIN_GATE_DBFS: f32 = -52.0;
-const DYNAMIC_GAIN_MAX_BOOST_DB: f32 = 9.0;
-const DYNAMIC_GAIN_MAX_CUT_DB: f32 = 12.0;
-const DYNAMIC_GAIN_ATTACK_MS: f32 = 25.0;
-const DYNAMIC_GAIN_RELEASE_MS: f32 = 300.0;
+const DYNAMIC_GAIN_TARGET_DBFS: f32 = -20.0;
+const DYNAMIC_GAIN_GATE_DBFS: f32 = -56.0;
+const DYNAMIC_GAIN_MAX_BOOST_DB: f32 = 6.0;
+const DYNAMIC_GAIN_MAX_CUT_DB: f32 = 9.0;
+const DYNAMIC_GAIN_ATTACK_MS: f32 = 12.0;
+const DYNAMIC_GAIN_RELEASE_MS: f32 = 380.0;
+const DYNAMIC_GAIN_RMS_WINDOW_MS: f32 = 120.0;
+const DYNAMIC_GAIN_PEAK_RELEASE_MS: f32 = 80.0;
+const DYNAMIC_GAIN_TRANSIENT_HOLD_MS: f32 = 12.0;
+const DYNAMIC_GAIN_TRANSIENT_CREST_THRESHOLD: f32 = 3.8;
+const DYNAMIC_GAIN_TRANSIENT_BOOST_DAMP: f32 = 0.35;
+const DYNAMIC_GAIN_UNITY_DEADBAND_DB: f32 = 0.7;
+const DYNAMIC_GAIN_HEADROOM_DBFS: f32 = -1.0;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 struct DspSlowConfig {
@@ -614,8 +621,18 @@ struct DynamicGainProcessor {
     gate_rms: f32,
     min_gain: f32,
     max_gain: f32,
+    headroom_peak: f32,
     attack_coeff: f32,
     release_coeff: f32,
+    rms_coeff: f32,
+    peak_release_coeff: f32,
+    unity_deadband_ratio: f32,
+    transient_crest_threshold: f32,
+    transient_boost_damp: f32,
+    transient_hold_samples: usize,
+    transient_hold_remaining: usize,
+    rms_env_sq: f32,
+    peak_env: f32,
     current_gain: f32,
 }
 
@@ -624,10 +641,17 @@ impl DynamicGainProcessor {
         let sample_rate = sample_rate.max(1) as f32;
         let attack_coeff = smoothing_coeff_from_ms(DYNAMIC_GAIN_ATTACK_MS, sample_rate);
         let release_coeff = smoothing_coeff_from_ms(DYNAMIC_GAIN_RELEASE_MS, sample_rate);
+        let rms_coeff = smoothing_coeff_from_ms(DYNAMIC_GAIN_RMS_WINDOW_MS, sample_rate);
+        let peak_release_coeff = smoothing_coeff_from_ms(DYNAMIC_GAIN_PEAK_RELEASE_MS, sample_rate);
         let target_rms = gain_db_to_linear(DYNAMIC_GAIN_TARGET_DBFS).max(1.0e-6);
         let gate_rms = gain_db_to_linear(DYNAMIC_GAIN_GATE_DBFS).max(1.0e-7);
         let max_gain = gain_db_to_linear(DYNAMIC_GAIN_MAX_BOOST_DB).max(1.0);
         let min_gain = gain_db_to_linear(-DYNAMIC_GAIN_MAX_CUT_DB).clamp(0.01, 1.0);
+        let headroom_peak = gain_db_to_linear(DYNAMIC_GAIN_HEADROOM_DBFS).clamp(0.25, 1.0);
+        let unity_deadband_ratio = gain_db_to_linear(DYNAMIC_GAIN_UNITY_DEADBAND_DB).max(1.0);
+        let transient_hold_samples = ((sample_rate * (DYNAMIC_GAIN_TRANSIENT_HOLD_MS / 1000.0)).round()
+            as usize)
+            .max(1);
 
         Self {
             enabled: false,
@@ -635,8 +659,18 @@ impl DynamicGainProcessor {
             gate_rms,
             min_gain,
             max_gain,
+            headroom_peak,
             attack_coeff,
             release_coeff,
+            rms_coeff,
+            peak_release_coeff,
+            unity_deadband_ratio,
+            transient_crest_threshold: DYNAMIC_GAIN_TRANSIENT_CREST_THRESHOLD,
+            transient_boost_damp: DYNAMIC_GAIN_TRANSIENT_BOOST_DAMP.clamp(0.0, 1.0),
+            transient_hold_samples,
+            transient_hold_remaining: 0,
+            rms_env_sq: target_rms * target_rms,
+            peak_env: target_rms,
             current_gain: 1.0,
         }
     }
@@ -647,7 +681,7 @@ impl DynamicGainProcessor {
         }
         self.enabled = enabled;
         if !enabled {
-            self.current_gain = 1.0;
+            self.reset();
         }
     }
 
@@ -661,6 +695,9 @@ impl DynamicGainProcessor {
 
     fn reset(&mut self) {
         self.current_gain = 1.0;
+        self.transient_hold_remaining = 0;
+        self.rms_env_sq = self.target_rms * self.target_rms;
+        self.peak_env = self.target_rms;
     }
 
     fn process_frame_in_place(&mut self, frame: &mut [f32]) {
@@ -668,12 +705,49 @@ impl DynamicGainProcessor {
             return;
         }
 
-        let rms = rms_abs(frame);
-        let desired_gain = if !rms.is_finite() || rms <= self.gate_rms {
+        let frame_rms = rms_abs(frame);
+        let frame_peak = peak_abs(frame).max(frame_rms);
+
+        let energy = frame_rms * frame_rms;
+        self.rms_env_sq =
+            (self.rms_coeff * self.rms_env_sq + (1.0 - self.rms_coeff) * energy).max(1.0e-12);
+        self.peak_env = frame_peak.max(self.peak_env * self.peak_release_coeff);
+
+        let envelope_rms = self.rms_env_sq.sqrt().max(1.0e-6);
+
+        if frame_peak > envelope_rms * self.transient_crest_threshold {
+            self.transient_hold_remaining = self.transient_hold_samples;
+        } else if self.transient_hold_remaining > 0 {
+            self.transient_hold_remaining = self.transient_hold_remaining.saturating_sub(1);
+        }
+
+        let mut desired_gain = if !envelope_rms.is_finite() || envelope_rms <= self.gate_rms {
             1.0
         } else {
-            (self.target_rms / rms).clamp(self.min_gain, self.max_gain)
+            (self.target_rms / envelope_rms).clamp(self.min_gain, self.max_gain)
         };
+
+        if desired_gain > 1.0 {
+            let crest = self.peak_env / envelope_rms;
+            if crest.is_finite() && crest > self.transient_crest_threshold {
+                let excess = (crest - self.transient_crest_threshold).clamp(0.0, 6.0);
+                let attenuation = 1.0 / (1.0 + 0.45 * excess);
+                desired_gain = 1.0 + (desired_gain - 1.0) * attenuation;
+            }
+
+            if self.transient_hold_remaining > 0 {
+                desired_gain = 1.0 + (desired_gain - 1.0) * self.transient_boost_damp;
+            }
+        }
+
+        let peak_limited_gain =
+            (self.headroom_peak / self.peak_env.max(1.0e-6)).clamp(self.min_gain, self.max_gain);
+        desired_gain = desired_gain.min(peak_limited_gain);
+
+        if desired_gain > 1.0 / self.unity_deadband_ratio && desired_gain < self.unity_deadband_ratio
+        {
+            desired_gain = 1.0;
+        }
 
         let coeff = if desired_gain < self.current_gain {
             self.attack_coeff
@@ -683,7 +757,11 @@ impl DynamicGainProcessor {
         self.current_gain = (coeff * self.current_gain + (1.0 - coeff) * desired_gain)
             .clamp(self.min_gain, self.max_gain);
 
-        if (self.current_gain - 1.0).abs() < 1.0e-6 {
+        let instant_peak_limited_gain =
+            (self.headroom_peak / frame_peak.max(1.0e-6)).clamp(self.min_gain, self.max_gain);
+        self.current_gain = self.current_gain.min(instant_peak_limited_gain);
+
+        if (self.current_gain - 1.0).abs() < 1.0e-5 {
             return;
         }
 
@@ -1810,6 +1888,34 @@ mod tests {
 
         assert!(dynamic_gain_db > 0.5);
         assert!(samples.iter().all(|sample| *sample >= 0.01));
+    }
+
+    #[test]
+    fn dynamic_gain_preserves_peak_headroom_on_transients() {
+        let config = DspRuntimeConfig {
+            gain_linear: 1.0,
+            eq_bands: Vec::new(),
+            limiter_threshold_db: None,
+            vst_nodes: Vec::new(),
+        };
+
+        let mut processor = DspChainProcessor::from_runtime_config(&config, 48_000, 2);
+        processor.dynamic_gain.set_enabled(true);
+
+        let mut samples = vec![0.01f32; 4_096];
+        // Inject one high-energy transient frame.
+        samples[2_048] = 0.92;
+        samples[2_049] = -0.92;
+
+        processor.process_interleaved_in_place(&mut samples);
+
+        let max_abs = samples
+            .iter()
+            .fold(0.0f32, |acc, sample| acc.max(sample.abs()));
+        let headroom_peak = gain_db_to_linear(DYNAMIC_GAIN_HEADROOM_DBFS);
+
+        assert!(max_abs <= headroom_peak + 0.02);
+        assert!(max_abs.is_finite());
     }
 
     #[test]

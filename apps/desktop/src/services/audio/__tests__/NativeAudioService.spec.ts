@@ -146,7 +146,7 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
-  it('passes replayGainDb=0 when replaygain is disabled (disables dynamic fallback)', async () => {
+  it('passes replayGainDb=0 when replaygain is disabled', async () => {
     localStorage.setItem(
       STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS,
       JSON.stringify({ enabled: false, mode: 'track', preampDb: 6 })
@@ -168,10 +168,10 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
-  it('passes replayGainDb=null when replaygain is enabled and dynamic fallback is enabled', async () => {
+  it('keeps replayGainDb static while dynamic gain is enabled independently', async () => {
     localStorage.setItem(
       STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS,
-      JSON.stringify({ dynamicFallbackEnabled: true, volumeDebounceEnabled: true })
+      JSON.stringify({ dynamicGainEnabled: true, volumeDebounceEnabled: true })
     );
 
     const service = new NativeAudioService();
@@ -182,9 +182,12 @@ describe('NativeAudioService', () => {
 
     await service.playTrackAtIndex(0);
 
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_dynamic_gain_enabled', {
+      enabled: true,
+    });
     expect(invoke).toHaveBeenCalledWith('native_audio_load_and_play', {
       path: 'C:\\\\Music\\\\a.mp3',
-      replayGainDb: null,
+      replayGainDb: 0,
     });
 
     service.destroy();
@@ -216,7 +219,7 @@ describe('NativeAudioService', () => {
   it('dispatches volume immediately when volume debounce is disabled', async () => {
     localStorage.setItem(
       STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS,
-      JSON.stringify({ dynamicFallbackEnabled: false, volumeDebounceEnabled: false })
+      JSON.stringify({ dynamicGainEnabled: false, volumeDebounceEnabled: false })
     );
 
     const service = new NativeAudioService();
@@ -228,6 +231,27 @@ describe('NativeAudioService', () => {
     const volumeCalls = invokeMock.mock.calls.filter((call) => call?.[0] === 'native_audio_set_volume');
     expect(volumeCalls).toHaveLength(1);
     expect(volumeCalls[0]).toEqual(['native_audio_set_volume', { volume: 0.66 }]);
+
+    service.destroy();
+  });
+
+  it('accepts legacy dynamicFallbackEnabled as runtime dynamic gain alias', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS,
+      JSON.stringify({ dynamicFallbackEnabled: true, volumeDebounceEnabled: true })
+    );
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([{ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' }]);
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+
+    await service.playTrackAtIndex(0);
+
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_dynamic_gain_enabled', {
+      enabled: true,
+    });
 
     service.destroy();
   });

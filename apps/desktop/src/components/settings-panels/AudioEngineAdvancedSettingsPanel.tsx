@@ -19,7 +19,7 @@ type ReplayGainSettings = {
 };
 
 type RuntimeControlSettings = {
-  dynamicFallbackEnabled: boolean;
+  dynamicGainEnabled: boolean;
   volumeDebounceEnabled: boolean;
 };
 
@@ -55,7 +55,7 @@ const DEFAULT_REPLAYGAIN: ReplayGainSettings = {
 };
 
 const DEFAULT_RUNTIME_CONTROL: RuntimeControlSettings = {
-  dynamicFallbackEnabled: false,
+  dynamicGainEnabled: false,
   volumeDebounceEnabled: true,
 };
 
@@ -183,17 +183,19 @@ function parseReplayGainSettings(raw: unknown): ReplayGainSettings {
 
 function parseRuntimeControlSettings(raw: unknown): RuntimeControlSettings {
   const record = toRecord(raw);
-  const dynamicFallbackEnabled =
-    typeof record?.dynamicFallbackEnabled === 'boolean'
-      ? record.dynamicFallbackEnabled
-      : DEFAULT_RUNTIME_CONTROL.dynamicFallbackEnabled;
+  const dynamicGainEnabled =
+    typeof record?.dynamicGainEnabled === 'boolean'
+      ? record.dynamicGainEnabled
+      : typeof record?.dynamicFallbackEnabled === 'boolean'
+        ? record.dynamicFallbackEnabled
+        : DEFAULT_RUNTIME_CONTROL.dynamicGainEnabled;
   const volumeDebounceEnabled =
     typeof record?.volumeDebounceEnabled === 'boolean'
       ? record.volumeDebounceEnabled
       : DEFAULT_RUNTIME_CONTROL.volumeDebounceEnabled;
 
   return {
-    dynamicFallbackEnabled,
+    dynamicGainEnabled,
     volumeDebounceEnabled,
   };
 }
@@ -435,9 +437,9 @@ function estimateReplayGainCost(replayGain: ReplayGainSettings): number {
 }
 
 function estimateRuntimeControlCost(runtimeControl: RuntimeControlSettings): number {
-  const fallbackCost = runtimeControl.dynamicFallbackEnabled ? 6 : 0;
+  const dynamicGainCost = runtimeControl.dynamicGainEnabled ? 6 : 0;
   const debounceCost = runtimeControl.volumeDebounceEnabled ? 2 : 0;
-  return clampPercent(fallbackCost + debounceCost);
+  return clampPercent(dynamicGainCost + debounceCost);
 }
 
 type SettingHelpLabelProps = {
@@ -613,22 +615,16 @@ export function AudioEngineAdvancedSettingsPanel() {
       const track = audioService.getState().currentTrack;
       const base = replayGain.mode === 'album' ? track?.replayGainAlbumGainDb : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && Number.isFinite(base);
-      const effectiveDb = replayGain.enabled
-        ? hasBase
-          ? base + replayGain.preampDb
-          : runtimeControl.dynamicFallbackEnabled
-            ? null
-            : 0
-        : 0;
+      const effectiveDb = replayGain.enabled && hasBase ? base + replayGain.preampDb : 0;
       await invoke('native_audio_set_replay_gain', {
-        db: typeof effectiveDb === 'number' ? clampNumber(effectiveDb, -30, 30) : null,
+        db: clampNumber(effectiveDb, -30, 30),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [audioService, canUse, replayGain, runtimeControl.dynamicFallbackEnabled]);
+  }, [audioService, canUse, replayGain]);
 
   const applyRuntimeControl = useCallback(async () => {
     if (!canUse) return;
@@ -642,18 +638,16 @@ export function AudioEngineAdvancedSettingsPanel() {
         TAURI_EVENTS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS_UPDATED
       );
 
+      await invoke('native_audio_set_dynamic_gain_enabled', {
+        enabled: runtimeControl.dynamicGainEnabled,
+      });
+
       const track = audioService.getState().currentTrack;
       const base = replayGain.mode === 'album' ? track?.replayGainAlbumGainDb : track?.replayGainTrackGainDb;
       const hasBase = typeof base === 'number' && Number.isFinite(base);
-      const effectiveDb = replayGain.enabled
-        ? hasBase
-          ? base + replayGain.preampDb
-          : runtimeControl.dynamicFallbackEnabled
-            ? null
-            : 0
-        : 0;
+      const effectiveDb = replayGain.enabled && hasBase ? base + replayGain.preampDb : 0;
       await invoke('native_audio_set_replay_gain', {
-        db: typeof effectiveDb === 'number' ? clampNumber(effectiveDb, -30, 30) : null,
+        db: clampNumber(effectiveDb, -30, 30),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -873,20 +867,20 @@ export function AudioEngineAdvancedSettingsPanel() {
           <>
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
-                <SettingHelpLabel
-                  title={t('settings.audioAdvanced.runtimeControl.dynamicFallback.label')}
-                  help={t('settings.audioAdvanced.runtimeControl.dynamicFallback.help')}
+                  <SettingHelpLabel
+                  title={t('settings.audioAdvanced.runtimeControl.dynamicGain.label')}
+                  help={t('settings.audioAdvanced.runtimeControl.dynamicGain.help')}
                 />
               </div>
               <div className="settings-inline-row-controls">
                 <button
                   type="button"
                   className="settings-choice-btn"
-                  data-active={runtimeControl.dynamicFallbackEnabled}
+                  data-active={runtimeControl.dynamicGainEnabled}
                   onClick={() =>
                     setRuntimeControl((prev) => ({
                       ...prev,
-                      dynamicFallbackEnabled: true,
+                      dynamicGainEnabled: true,
                     }))
                   }
                   disabled={busy}
@@ -896,11 +890,11 @@ export function AudioEngineAdvancedSettingsPanel() {
                 <button
                   type="button"
                   className="settings-choice-btn"
-                  data-active={!runtimeControl.dynamicFallbackEnabled}
+                  data-active={!runtimeControl.dynamicGainEnabled}
                   onClick={() =>
                     setRuntimeControl((prev) => ({
                       ...prev,
-                      dynamicFallbackEnabled: false,
+                      dynamicGainEnabled: false,
                     }))
                   }
                   disabled={busy}

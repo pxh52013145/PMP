@@ -9,7 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::audio::buffer_policy::{streaming_min_start_bounds, streaming_transfer_watermarks};
+use crate::audio::buffer_policy::{
+    runtime_rebuffer_threshold_samples, streaming_min_start_bounds,
+    streaming_prebuffer_default_seconds, streaming_transfer_watermarks,
+};
 use crate::audio::events::NativeAudioStatePayload;
 use crate::audio::input::{
     open_rodio_source_at, resolve_audio_input_target_sample_rate, AudioInputDecodeMode,
@@ -287,19 +290,11 @@ pub(crate) fn streaming_prebuffer_target_samples(
     let (env_key, default_seconds) = match kind {
         StreamingPrebufferKind::StartOrSeek => (
             "PMP_AUDIO_STREAM_PREBUFFER_SECONDS",
-            if output_backend_id == "wasapi-exclusive" {
-                0.30
-            } else {
-                0.35
-            },
+            streaming_prebuffer_default_seconds(output_backend_id, false),
         ),
         StreamingPrebufferKind::Crossfade => (
             "PMP_AUDIO_STREAM_CROSSFADE_PREBUFFER_SECONDS",
-            if output_backend_id == "wasapi-exclusive" {
-                1.0
-            } else {
-                0.5
-            },
+            streaming_prebuffer_default_seconds(output_backend_id, true),
         ),
     };
 
@@ -449,6 +444,7 @@ pub(crate) struct NativeAudioEngine {
     buffering_started_at: Option<Instant>,
     buffering_last_progress_at: Option<Instant>,
     buffering_last_samples: usize,
+    buffering_resume_samples: usize,
     underrun_recovery_until: Option<Instant>,
     shared_timeline_stress_until: Option<Instant>,
     shared_timeline_stress_ignore_before_ms: u64,
@@ -542,8 +538,10 @@ pub(crate) struct PreparedLoad {
 impl PreparedLoad {
     pub(crate) fn abort(self) {
         self.sink.stop();
+        crate::audio::retire_plane::retire_drop("engine.prepared_load.sink", self.sink);
         if let Some(streaming) = self.streaming {
             streaming.shutdown_tx.shutdown();
+            crate::audio::retire_plane::retire_drop("engine.prepared_load.streaming", streaming);
         }
     }
 }
@@ -579,6 +577,7 @@ impl PreparedCrossfade {
     pub(crate) fn abort(self) {
         if let Some(streaming) = self.streaming {
             streaming.shutdown_tx.shutdown();
+            crate::audio::retire_plane::retire_drop("engine.prepared_crossfade.streaming", streaming);
         }
     }
 }
@@ -649,6 +648,7 @@ impl NativeAudioEngine {
             buffering_started_at: None,
             buffering_last_progress_at: None,
             buffering_last_samples: 0,
+            buffering_resume_samples: 0,
             underrun_recovery_until: None,
             shared_timeline_stress_until: None,
             shared_timeline_stress_ignore_before_ms: 0,
@@ -938,6 +938,7 @@ impl NativeAudioEngine {
         self.buffering_started_at = None;
         self.buffering_last_progress_at = None;
         self.buffering_last_samples = 0;
+        self.buffering_resume_samples = 0;
         self.underrun_recovery_until = None;
         self.shared_timeline_stress_until = None;
         self.last_observed_underrun_events = crate::audio::input::streaming_underrun_stats().0;
@@ -1079,7 +1080,7 @@ impl NativeAudioEngine {
         self.reset_recovery_tracking();
 
         if let Some(old_sink) = self.sink.take() {
-            old_sink.stop();
+            self.stop_and_retire_sink(old_sink);
         }
         self.shutdown_streaming();
         self.mixer = None;
@@ -1342,7 +1343,7 @@ impl NativeAudioEngine {
             self.cancel_crossfade();
             self.sync_clock();
             if let Some(old_sink) = self.sink.take() {
-                old_sink.stop();
+                self.stop_and_retire_sink(old_sink);
             }
 
             if switching_to_exclusive || switching_to_asio {
@@ -1476,6 +1477,16 @@ impl NativeAudioEngine {
         }
     }
 
+    fn stop_and_retire_sink(&self, sink: Arc<dyn AudioSink>) {
+        sink.stop();
+        crate::audio::retire_plane::retire_drop("engine.sink", sink);
+    }
+
+    fn shutdown_and_retire_streaming(&self, streaming: StreamingPlayback) {
+        streaming.shutdown_tx.shutdown();
+        crate::audio::retire_plane::retire_drop("engine.streaming", streaming);
+    }
+
     pub(crate) fn cancel_crossfade(&mut self) {
         if let Some(mixer) = &self.mixer {
             mixer.cancel_crossfade();
@@ -1497,7 +1508,7 @@ impl NativeAudioEngine {
 
     fn shutdown_streaming(&mut self) {
         if let Some(streaming) = self.streaming.take() {
-            streaming.shutdown_tx.shutdown();
+            self.shutdown_and_retire_streaming(streaming);
         }
     }
 
@@ -1535,7 +1546,7 @@ impl NativeAudioEngine {
 
     fn release_cached_audio_pipeline(&mut self) {
         if let Some(sink) = self.sink.take() {
-            sink.stop();
+            self.stop_and_retire_sink(sink);
         }
         self.mixer = None;
         self.shutdown_streaming();
@@ -1564,7 +1575,7 @@ impl NativeAudioEngine {
         self.dsp_runtime.request_reset();
         self.reset_recovery_tracking();
         if let Some(old_sink) = self.sink.take() {
-            old_sink.stop();
+            self.stop_and_retire_sink(old_sink);
         }
         self.shutdown_streaming();
 
@@ -1891,6 +1902,7 @@ impl NativeAudioEngine {
                     self.buffering_started_at = Some(now);
                     self.buffering_last_progress_at = Some(now);
                     self.buffering_last_samples = available;
+                    self.buffering_resume_samples = min_start_samples;
 
                     // Fast-path: wait briefly for initial decoded samples so click-to-play does
                     // not depend on the emitter tick cadence.
@@ -1903,6 +1915,7 @@ impl NativeAudioEngine {
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
+                        self.buffering_resume_samples = 0;
                         self.set_state(PlaybackState::Playing);
                         self.base_position = self.current_position;
                         self.playback_started_at = Some(Instant::now());
@@ -1981,7 +1994,7 @@ impl NativeAudioEngine {
                         sink.pause();
                         sink.set_volume(self.effective_volume());
                         if let Some(old) = self.sink.replace(sink) {
-                            old.stop();
+                            self.stop_and_retire_sink(old);
                         }
                         self.current_position = 0.0;
                         self.base_position = 0.0;
@@ -1999,7 +2012,7 @@ impl NativeAudioEngine {
                 sink.pause();
                 sink.set_volume(self.effective_volume());
                 if let Some(old) = self.sink.replace(sink) {
-                    old.stop();
+                    self.stop_and_retire_sink(old);
                 }
             }
         } else if let Some(sink) = &self.sink {
@@ -2025,7 +2038,7 @@ impl NativeAudioEngine {
             self.spectrum_post_tap.clear();
             self.dsp_runtime.request_reset();
             if let Some(sink) = self.sink.take() {
-                sink.stop();
+                self.stop_and_retire_sink(sink);
             }
             self.shutdown_streaming();
             self.current_track = None;
@@ -2058,7 +2071,7 @@ impl NativeAudioEngine {
             self.spectrum_post_tap.clear();
             self.dsp_runtime.request_reset();
             if let Some(sink) = self.sink.take() {
-                sink.stop();
+                self.stop_and_retire_sink(sink);
             }
             self.shutdown_streaming();
             self.current_track = None;
@@ -2292,7 +2305,7 @@ impl NativeAudioEngine {
         }
 
         if let Some(old_sink) = self.sink.replace(sink) {
-            old_sink.stop();
+            self.stop_and_retire_sink(old_sink);
         }
 
         self.current_position = target;
@@ -2408,6 +2421,7 @@ impl NativeAudioEngine {
             self.buffering_started_at = None;
             self.buffering_last_progress_at = None;
             self.buffering_last_samples = 0;
+            self.buffering_resume_samples = 0;
             self.set_error("NATIVE_AUDIO_STREAM_ERROR", message);
             return true;
         }
@@ -2460,11 +2474,17 @@ impl NativeAudioEngine {
                     && matches!(self.playback_state, PlaybackState::Playing)
                 {
                     let available = streaming.render_queue.len_samples();
+                    let (rebuffer_enter_samples, rebuffer_resume_samples) =
+                        runtime_rebuffer_threshold_samples(
+                            self.output_backend.id(),
+                            min_start_samples,
+                            channels,
+                        );
                     // During interactive seek we keep the sink running (the streaming source emits
                     // silence) and avoid entering the buffering state, otherwise shared backends
                     // can "pause then resume" with large perceived latency.
                     if self.playback_started_at.is_some()
-                        && available < min_start_samples
+                        && available < rebuffer_enter_samples
                         && !self.streaming_is_finished(streaming)
                     {
                         sink.pause();
@@ -2474,6 +2494,7 @@ impl NativeAudioEngine {
                         self.buffering_started_at = Some(now);
                         self.buffering_last_progress_at = Some(now);
                         self.buffering_last_samples = available;
+                        self.buffering_resume_samples = rebuffer_resume_samples;
                         return true;
                     }
                 }
@@ -2511,6 +2532,7 @@ impl NativeAudioEngine {
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
+                        self.buffering_resume_samples = 0;
                         self.set_error(
                             "NATIVE_AUDIO_SEEK_STALLED",
                             format!(
@@ -2536,6 +2558,7 @@ impl NativeAudioEngine {
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
+                        self.buffering_resume_samples = 0;
                         self.current_position = self.duration;
                         self.base_position = self.current_position;
                         self.playback_started_at = None;
@@ -2551,13 +2574,18 @@ impl NativeAudioEngine {
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
+                        self.buffering_resume_samples = 0;
                         self.set_state(PlaybackState::Playing);
                         self.base_position = self.current_position;
                         self.playback_started_at = Some(now);
                         return true;
                     }
 
-                    let ready_min = available >= min_start_samples;
+                    let resume_samples = self
+                        .buffering_resume_samples
+                        .max((channels.max(1)).saturating_mul(32))
+                        .min(min_start_samples.max(1));
+                    let ready_min = available >= resume_samples;
 
                     let stall_timeout = Duration::from_secs(15);
                     let no_progress_for = self
@@ -2577,6 +2605,7 @@ impl NativeAudioEngine {
                                 "Audio buffering stalled (no decoder progress): available={available} minStart={min_start_samples} target={target_samples} decodeAvailable={decode_available} profile={profile:?}"
                             ),
                         );
+                        self.buffering_resume_samples = 0;
                         return true;
                     }
 
@@ -2585,6 +2614,7 @@ impl NativeAudioEngine {
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
                         self.buffering_last_samples = 0;
+                        self.buffering_resume_samples = 0;
                         self.set_state(PlaybackState::Playing);
                         self.base_position = self.current_position;
                         self.playback_started_at = Some(Instant::now());
@@ -2602,6 +2632,7 @@ impl NativeAudioEngine {
                 self.buffering_started_at = None;
                 self.buffering_last_progress_at = None;
                 self.buffering_last_samples = 0;
+                self.buffering_resume_samples = 0;
                 self.set_state(PlaybackState::Playing);
                 self.base_position = self.current_position;
                 self.playback_started_at = Some(Instant::now());
@@ -2668,11 +2699,12 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn set_replay_gain(&mut self, replay_gain_db: Option<f32>) {
-        let fallback_dynamic_gain_enabled = replay_gain_db.is_none();
         let replay_gain_db = replay_gain_db.unwrap_or(0.0);
         self.replay_gain_db = self.dsp_runtime.set_replay_gain_db(replay_gain_db);
-        self.dsp_runtime
-            .set_dynamic_gain_enabled(fallback_dynamic_gain_enabled);
+    }
+
+    pub(crate) fn set_dynamic_gain_enabled(&mut self, enabled: bool) {
+        self.dsp_runtime.set_dynamic_gain_enabled(enabled);
     }
 
     pub(crate) fn set_dsp_chain(&mut self, chain: Vec<DspNodeConfig>) {
@@ -2722,6 +2754,8 @@ impl NativeAudioEngine {
             transfer_render_low_hit_count,
             transfer_decode_low_hit_count,
             render_queue_page_locked,
+            transfer_adaptation_level,
+            transfer_oscillation_streak,
         ) = crate::audio::input::streaming_transfer_stats();
 
         #[cfg(target_os = "windows")]
@@ -2733,6 +2767,9 @@ impl NativeAudioEngine {
             || self.output_backend.id() == "wasapi-shared-raw";
         let shared_render_backend = is_shared_output_backend(self.output_backend.id());
         let shared_render_metrics = crate::audio::output::shared_render_ahead_metrics();
+        let memory_pool_stats = crate::audio::memory_pool::stats_snapshot();
+        let control_plane_stats = crate::audio::control_plane::control_plane_stats_snapshot();
+        let retire_plane_stats = crate::audio::retire_plane::stats_snapshot();
         let diagnostics_timeline = if include_diagnostics {
             Some(crate::audio::diagnostics::snapshot_recent_default())
         } else {
@@ -2897,6 +2934,16 @@ impl NativeAudioEngine {
             } else {
                 None
             },
+            transfer_adaptation_level: if transfer_metrics_valid {
+                Some(transfer_adaptation_level)
+            } else {
+                None
+            },
+            transfer_oscillation_streak: if transfer_metrics_valid {
+                Some(transfer_oscillation_streak)
+            } else {
+                None
+            },
             render_queue_page_locked: if transfer_metrics_valid {
                 Some(render_queue_page_locked)
             } else {
@@ -2923,6 +2970,17 @@ impl NativeAudioEngine {
             } else {
                 None
             },
+            memory_pool_f32_growth_events: Some(memory_pool_stats.f32_growth_events),
+            memory_pool_f32_growth_bytes: Some(memory_pool_stats.f32_growth_bytes),
+            memory_pool_f32_prewarm_hits: Some(memory_pool_stats.f32_prewarm_hits),
+            control_queue_lock_free: Some(control_plane_stats.mode_lock_free),
+            control_queue_capacity: Some(control_plane_stats.queue_capacity),
+            control_queue_overwrite_events: Some(control_plane_stats.overwrite_events),
+            retire_pending_tasks: Some(retire_plane_stats.pending_tasks),
+            retire_enqueued_total: Some(retire_plane_stats.enqueued_total),
+            retire_executed_total: Some(retire_plane_stats.executed_total),
+            retire_inline_fallback_total: Some(retire_plane_stats.inline_fallback_total),
+            retire_panic_total: Some(retire_plane_stats.panic_total),
             diagnostic_timeline_dropped_events: diagnostics_timeline
                 .as_ref()
                 .map(|timeline| timeline.dropped_events),
@@ -2983,12 +3041,25 @@ impl NativeAudioEngine {
         payload.transfer_low_watermark_samples = None;
         payload.transfer_render_low_hit_count = None;
         payload.transfer_decode_low_hit_count = None;
+        payload.transfer_adaptation_level = None;
+        payload.transfer_oscillation_streak = None;
         payload.render_queue_page_locked = None;
         payload.shared_render_ahead_enabled = None;
         payload.shared_render_underrun_events = None;
         payload.shared_render_underrun_frames = None;
         payload.shared_render_low_hit_count = None;
         payload.shared_render_low_watermark_samples = None;
+        payload.memory_pool_f32_growth_events = None;
+        payload.memory_pool_f32_growth_bytes = None;
+        payload.memory_pool_f32_prewarm_hits = None;
+        payload.control_queue_lock_free = None;
+        payload.control_queue_capacity = None;
+        payload.control_queue_overwrite_events = None;
+        payload.retire_pending_tasks = None;
+        payload.retire_enqueued_total = None;
+        payload.retire_executed_total = None;
+        payload.retire_inline_fallback_total = None;
+        payload.retire_panic_total = None;
         payload.diagnostic_timeline_dropped_events = None;
         payload.diagnostic_timeline = None;
         payload
@@ -3037,7 +3108,7 @@ impl NativeAudioEngine {
         // Commit point: stop current playback before mutating shared state (DSP runtime / streaming buffer).
         self.sync_clock();
         if let Some(old_sink) = self.sink.take() {
-            old_sink.stop();
+            self.stop_and_retire_sink(old_sink);
         }
 
         self.output_sample_rate = output_info.output_sample_rate;
@@ -3168,7 +3239,6 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct FailBackend;
@@ -3296,6 +3366,23 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rebuffer_thresholds_are_less_aggressive_than_start_gate() {
+        let min_start_samples = 33_600usize;
+        let (enter, resume) =
+            runtime_rebuffer_threshold_samples("rodio-cpal", min_start_samples, 2);
+
+        assert!(enter > 0);
+        assert!(enter < min_start_samples);
+        assert!(resume >= enter);
+        assert!(resume <= min_start_samples);
+
+        let (small_enter, small_resume) =
+            runtime_rebuffer_threshold_samples("rodio-cpal", 512, 2);
+        assert!(small_enter >= 128);
+        assert!(small_resume >= small_enter);
+    }
+
+    #[test]
     fn play_buffers_until_render_queue_has_min_start_samples() {
         let backend: Arc<dyn AudioOutputBackend> = Arc::new(TransportModeBackend::new("wasapi"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
@@ -3323,8 +3410,9 @@ mod tests {
         let pushed = buffer.push_interleaved(&seed, 2);
         assert!(pushed > 0, "expected seed frames to be pushed");
 
-        let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
-        let (transfer_tx, _transfer_rx) = mpsc::channel();
+        let (command_tx, _command_rx) =
+            crate::audio::control_plane::command_channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = crate::audio::control_plane::command_channel();
         let streaming = StreamingPlayback {
             buffer,
             render_queue,
@@ -3411,8 +3499,9 @@ mod tests {
         let pushed = render_queue.push_interleaved(&seed, channels);
         assert_eq!(pushed, frames_to_push);
 
-        let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
-        let (transfer_tx, _transfer_rx) = mpsc::channel();
+        let (command_tx, _command_rx) =
+            crate::audio::control_plane::command_channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = crate::audio::control_plane::command_channel();
         engine.streaming = Some(StreamingPlayback {
             buffer,
             render_queue,
@@ -3607,6 +3696,75 @@ mod tests {
         fn set_volume(&self, _value: f32) {}
     }
 
+    struct SlowDropSink {
+        stop_calls: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for SlowDropSink {
+        fn drop(&mut self) {
+            std::thread::sleep(Duration::from_millis(180));
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    impl AudioSink for SlowDropSink {
+        fn append(&self, _source: crate::audio::output::BoxedSource) {}
+
+        fn play(&self) {}
+
+        fn pause(&self) {}
+
+        fn stop(&self) {
+            self.stop_calls.fetch_add(1, Ordering::Release);
+        }
+
+        fn empty(&self) -> bool {
+            true
+        }
+
+        fn set_volume(&self, _value: f32) {}
+    }
+
+    #[test]
+    fn release_cached_audio_pipeline_does_not_block_on_sink_drop() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        engine.sink = Some(Arc::new(SlowDropSink {
+            stop_calls: stop_calls.clone(),
+            dropped: dropped.clone(),
+        }));
+
+        let started = Instant::now();
+        engine.release_cached_audio_pipeline();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(120),
+            "release_cached_audio_pipeline should stay non-blocking, elapsed={elapsed:?}"
+        );
+        assert_eq!(
+            stop_calls.load(Ordering::Acquire),
+            1,
+            "sink stop should still be invoked before retirement"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if dropped.load(Ordering::Acquire) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "retire plane should eventually drop retired sink"
+        );
+    }
+
     struct StaticBackend(&'static str);
 
     impl AudioOutputBackend for StaticBackend {
@@ -3704,8 +3862,9 @@ mod tests {
         buffer.mark_finished();
         render_queue.mark_finished();
 
-        let (command_tx, _command_rx) = mpsc::channel::<DecoderCommand>();
-        let (transfer_tx, _transfer_rx) = std::sync::mpsc::channel();
+        let (command_tx, _command_rx) =
+            crate::audio::control_plane::command_channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = crate::audio::control_plane::command_channel();
         StreamingPlayback {
             buffer,
             render_queue,
@@ -3834,10 +3993,14 @@ mod tests {
         );
 
         let samples_per_second = sample_rate as usize * channels;
-        assert_eq!(shared_start_samples, samples_per_second * 35 / 100);
-        assert_eq!(shared_cross_samples, samples_per_second / 2);
-        assert_eq!(exclusive_start_samples, samples_per_second * 30 / 100);
-        assert_eq!(exclusive_cross_samples, samples_per_second);
+        let expected_shared_start = ((samples_per_second as f64) * 0.38f64).ceil() as usize;
+        let expected_shared_cross = ((samples_per_second as f64) * 0.60f64).ceil() as usize;
+        let expected_exclusive_start = ((samples_per_second as f64) * 0.28f64).ceil() as usize;
+        let expected_exclusive_cross = ((samples_per_second as f64) * 0.85f64).ceil() as usize;
+        assert_eq!(shared_start_samples, expected_shared_start);
+        assert_eq!(shared_cross_samples, expected_shared_cross);
+        assert_eq!(exclusive_start_samples, expected_exclusive_start);
+        assert_eq!(exclusive_cross_samples, expected_exclusive_cross);
     }
 
     #[test]
@@ -3893,6 +4056,22 @@ mod tests {
             engine.current_decode_mode(),
             AudioInputDecodeMode::Streaming
         );
+    }
+
+    #[test]
+    fn replay_gain_update_does_not_implicitly_toggle_dynamic_gain() {
+        let mut engine = NativeAudioEngine::new();
+
+        engine.set_dynamic_gain_enabled(false);
+        engine.set_replay_gain(Some(-6.0));
+        assert!(!engine.dsp_runtime.dynamic_gain_enabled());
+
+        engine.set_replay_gain(None);
+        assert!(!engine.dsp_runtime.dynamic_gain_enabled());
+
+        engine.set_dynamic_gain_enabled(true);
+        engine.set_replay_gain(Some(0.0));
+        assert!(engine.dsp_runtime.dynamic_gain_enabled());
     }
 
     #[test]
@@ -4173,9 +4352,10 @@ mod tests {
         buffer.mark_finished();
         render_queue.mark_finished();
 
-        let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+        let (command_tx, command_rx) =
+            crate::audio::control_plane::command_channel::<DecoderCommand>();
         drop(command_rx);
-        let (transfer_tx, _transfer_rx) = mpsc::channel();
+        let (transfer_tx, _transfer_rx) = crate::audio::control_plane::command_channel();
 
         engine.current_track = Some(path.clone());
         engine.streaming = Some(StreamingPlayback {
@@ -4241,9 +4421,11 @@ mod tests {
                         "expected streaming pipeline for decode_mode={decode_mode}"
                     );
 
-                    let (command_tx, command_rx) = mpsc::channel::<DecoderCommand>();
+                    let (command_tx, command_rx) =
+                        crate::audio::control_plane::command_channel::<DecoderCommand>();
                     drop(command_rx);
-                    let (transfer_tx, _transfer_rx) = mpsc::channel();
+                    let (transfer_tx, _transfer_rx) =
+                        crate::audio::control_plane::command_channel();
                     {
                         let streaming = engine.streaming.as_mut().expect("streaming pipeline");
                         streaming.command_tx = command_tx.clone();

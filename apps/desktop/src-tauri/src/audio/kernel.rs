@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use super::{
@@ -197,9 +198,15 @@ fn prepare_crossfade_for_operation(
 }
 
 pub(crate) fn execute_load(track_path: PathBuf) -> Result<TransportExecution, String> {
+    let started_at = Instant::now();
     let mut op = with_engine_mut(|engine| engine.begin_load_operation())?;
     op.decode_mode = transport_start_decode_mode(op.decode_mode);
     let prepared = prepare_load_for_operation(&op, &track_path);
+    crate::audio::diagnostics::record_event(
+        "transport.load.prepare",
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        prepared.is_ok() as u64,
+    );
 
     let execution = match prepared {
         Ok(prepared) => with_engine_mut(|engine| {
@@ -226,6 +233,12 @@ pub(crate) fn execute_load(track_path: PathBuf) -> Result<TransportExecution, St
         })?,
     };
 
+    crate::audio::diagnostics::record_event(
+        "transport.load.total",
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        execution.result.is_ok() as u64,
+    );
+
     Ok(execution)
 }
 
@@ -233,9 +246,15 @@ pub(crate) fn execute_load_and_play(
     track_path: PathBuf,
     replay_gain_db: Option<f32>,
 ) -> Result<TransportExecution, String> {
+    let started_at = Instant::now();
     let mut op = with_engine_mut(|engine| engine.begin_load_operation())?;
     op.decode_mode = transport_start_decode_mode(op.decode_mode);
     let prepared = prepare_load_for_operation(&op, &track_path);
+    crate::audio::diagnostics::record_event(
+        "transport.load_and_play.prepare",
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        prepared.is_ok() as u64,
+    );
 
     let execution = match prepared {
         Ok(prepared) => with_engine_mut(|engine| {
@@ -273,6 +292,12 @@ pub(crate) fn execute_load_and_play(
             }
         })?,
     };
+
+    crate::audio::diagnostics::record_event(
+        "transport.load_and_play.total",
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        execution.result.is_ok() as u64,
+    );
 
     Ok(execution)
 }
@@ -357,6 +382,7 @@ pub(crate) fn execute_crossfade(
     track_path: PathBuf,
     duration_ms: u64,
 ) -> Result<CrossfadeExecution, String> {
+    let started_at = Instant::now();
     let (was_playing, op) = with_engine_mut(|engine| {
         let was_playing = matches!(engine.playback_state(), PlaybackState::Playing);
         let op = engine.begin_crossfade_operation(duration_ms);
@@ -364,12 +390,22 @@ pub(crate) fn execute_crossfade(
     })?;
 
     let Some(mut op) = op else {
+        crate::audio::diagnostics::record_event(
+            "transport.crossfade.fallback",
+            started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            0,
+        );
         return Ok(CrossfadeExecution::FallbackLoad { was_playing });
     };
 
     op.decode_mode = transport_start_decode_mode(op.decode_mode);
 
     let prepared = prepare_crossfade_for_operation(&op, &track_path, duration_ms);
+    crate::audio::diagnostics::record_event(
+        "transport.crossfade.prepare",
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        prepared.is_ok() as u64,
+    );
     let execution = match prepared {
         Ok(prepared) => with_engine_mut(|engine| {
             let result = engine
@@ -395,6 +431,12 @@ pub(crate) fn execute_crossfade(
             }
         })?,
     };
+
+    crate::audio::diagnostics::record_event(
+        "transport.crossfade.total",
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        execution.result.is_ok() as u64,
+    );
 
     Ok(CrossfadeExecution::Applied(execution))
 }

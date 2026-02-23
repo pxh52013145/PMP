@@ -64,12 +64,22 @@ type NativeAudioStatePayload = {
   transferLowWatermarkSamples?: number;
   transferRenderLowHitCount?: number;
   transferDecodeLowHitCount?: number;
+  transferAdaptationLevel?: number;
+  transferOscillationStreak?: number;
   renderQueuePageLocked?: boolean;
   sharedRenderAheadEnabled?: boolean;
   sharedRenderUnderrunEvents?: number;
   sharedRenderUnderrunFrames?: number;
   sharedRenderLowHitCount?: number;
   sharedRenderLowWatermarkSamples?: number;
+  controlQueueLockFree?: boolean;
+  controlQueueCapacity?: number;
+  controlQueueOverwriteEvents?: number;
+  retirePendingTasks?: number;
+  retireEnqueuedTotal?: number;
+  retireExecutedTotal?: number;
+  retireInlineFallbackTotal?: number;
+  retirePanicTotal?: number;
   diagnosticTimelineDroppedEvents?: number;
   diagnosticTimeline?: Array<{
     seq?: number;
@@ -133,7 +143,7 @@ type ReplayGainSettings = {
 };
 
 type RuntimeControlSettings = {
-  dynamicFallbackEnabled: boolean;
+  dynamicGainEnabled: boolean;
   volumeDebounceEnabled: boolean;
 };
 
@@ -143,12 +153,21 @@ function parseLegacyRuntimeControlFromReplayGain(raw: string | null): RuntimeCon
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object') return null;
     const record = parsed as Record<string, unknown>;
-    const hasDynamic = typeof record.dynamicFallbackEnabled === 'boolean';
+    const hasDynamicGain =
+      typeof record.dynamicGainEnabled === 'boolean' ||
+      typeof record.dynamicFallbackEnabled === 'boolean';
     const hasDebounce = typeof record.volumeDebounceEnabled === 'boolean';
-    if (!hasDynamic && !hasDebounce) return null;
+    if (!hasDynamicGain && !hasDebounce) return null;
+
+    const dynamicGainEnabled =
+      typeof record.dynamicGainEnabled === 'boolean'
+        ? record.dynamicGainEnabled
+        : typeof record.dynamicFallbackEnabled === 'boolean'
+          ? record.dynamicFallbackEnabled
+          : false;
 
     return {
-      dynamicFallbackEnabled: hasDynamic ? (record.dynamicFallbackEnabled as boolean) : false,
+      dynamicGainEnabled,
       volumeDebounceEnabled: hasDebounce ? (record.volumeDebounceEnabled as boolean) : true,
     };
   } catch {
@@ -308,6 +327,8 @@ export class NativeAudioService implements IAudioService {
   private transferLowWatermarkSamples = 0;
   private transferRenderLowHitCount = 0;
   private transferDecodeLowHitCount = 0;
+  private transferAdaptationLevel = 0;
+  private transferOscillationStreak = 0;
   private renderQueuePageLocked = false;
   private transferMetricsValid = false;
   private sharedRenderAheadEnabled = false;
@@ -980,7 +1001,7 @@ export class NativeAudioService implements IAudioService {
           parseLegacyRuntimeControlFromReplayGain(
             readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)
           ) ?? {
-            dynamicFallbackEnabled: false,
+            dynamicGainEnabled: false,
             volumeDebounceEnabled: true,
           }
         );
@@ -991,40 +1012,41 @@ export class NativeAudioService implements IAudioService {
           parseLegacyRuntimeControlFromReplayGain(
             readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)
           ) ?? {
-            dynamicFallbackEnabled: false,
+            dynamicGainEnabled: false,
             volumeDebounceEnabled: true,
           }
         );
       }
 
       const record = parsed as Record<string, unknown>;
-      const dynamicFallbackEnabled =
-        typeof record.dynamicFallbackEnabled === 'boolean' ? record.dynamicFallbackEnabled : false;
+      const dynamicGainEnabled =
+        typeof record.dynamicGainEnabled === 'boolean'
+          ? record.dynamicGainEnabled
+          : typeof record.dynamicFallbackEnabled === 'boolean'
+            ? record.dynamicFallbackEnabled
+            : false;
       const volumeDebounceEnabled =
         typeof record.volumeDebounceEnabled === 'boolean' ? record.volumeDebounceEnabled : true;
 
-      return { dynamicFallbackEnabled, volumeDebounceEnabled };
+      return { dynamicGainEnabled, volumeDebounceEnabled };
     } catch {
       return (
         parseLegacyRuntimeControlFromReplayGain(readString(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)) ?? {
-          dynamicFallbackEnabled: false,
+          dynamicGainEnabled: false,
           volumeDebounceEnabled: true,
         }
       );
     }
   }
 
-  private computeReplayGainDbForTrack(track: Track): number | null {
+  private computeReplayGainDbForTrack(track: Track): number {
     const settings = this.readReplayGainSettings();
-    const runtimeControl = this.readRuntimeControlSettings();
     if (!settings.enabled) return 0;
 
     const base =
       settings.mode === 'album' ? track.replayGainAlbumGainDb : track.replayGainTrackGainDb;
     if (typeof base !== 'number' || !isFinite(base)) {
-      // `null` means: no ReplayGain tag available, backend may switch to dynamic fallback gain.
-      // If dynamic fallback is disabled, keep static gain at 0 dB.
-      return runtimeControl.dynamicFallbackEnabled ? null : 0;
+      return 0;
     }
 
     const effective = base + (typeof settings.preampDb === 'number' ? settings.preampDb : 0);
@@ -1034,6 +1056,13 @@ export class NativeAudioService implements IAudioService {
   private async applyReplayGainForTrack(track: Track): Promise<void> {
     const db = this.computeReplayGainDbForTrack(track);
     await this.invokeCommand('native_audio_set_replay_gain', { db });
+  }
+
+  private async applyRuntimeControlSettingsToBackend(): Promise<void> {
+    const runtimeControl = this.readRuntimeControlSettings();
+    await this.invokeCommand('native_audio_set_dynamic_gain_enabled', {
+      enabled: runtimeControl.dynamicGainEnabled,
+    });
   }
 
   private sanitizeBackendId(value: unknown): string | null {
@@ -2617,6 +2646,8 @@ export class NativeAudioService implements IAudioService {
       transferLowWatermarkSamples: this.transferLowWatermarkSamples,
       transferRenderLowHitCount: this.transferRenderLowHitCount,
       transferDecodeLowHitCount: this.transferDecodeLowHitCount,
+      transferAdaptationLevel: this.transferAdaptationLevel,
+      transferOscillationStreak: this.transferOscillationStreak,
       renderQueuePageLocked: this.renderQueuePageLocked,
       transferMetricsValid: this.transferMetricsValid,
       sharedRenderAheadEnabled: this.sharedRenderAheadEnabled,
@@ -3187,6 +3218,8 @@ export class NativeAudioService implements IAudioService {
           this.transferLowWatermarkSamples = 0;
           this.transferRenderLowHitCount = 0;
           this.transferDecodeLowHitCount = 0;
+          this.transferAdaptationLevel = 0;
+          this.transferOscillationStreak = 0;
           this.renderQueuePageLocked = false;
         }
 
@@ -3202,6 +3235,20 @@ export class NativeAudioService implements IAudioService {
           Number.isFinite(next.transferDecodeLowHitCount)
         ) {
           this.transferDecodeLowHitCount = Math.max(0, Math.floor(next.transferDecodeLowHitCount));
+        }
+
+        if (
+          typeof next.transferAdaptationLevel === 'number' &&
+          Number.isFinite(next.transferAdaptationLevel)
+        ) {
+          this.transferAdaptationLevel = Math.max(0, Math.floor(next.transferAdaptationLevel));
+        }
+
+        if (
+          typeof next.transferOscillationStreak === 'number' &&
+          Number.isFinite(next.transferOscillationStreak)
+        ) {
+          this.transferOscillationStreak = Math.max(0, Math.floor(next.transferOscillationStreak));
         }
 
         if (typeof next.renderQueuePageLocked === 'boolean') {
@@ -3740,6 +3787,7 @@ export class NativeAudioService implements IAudioService {
     this.applyTrackLoadingState(track, queue, index);
 
     try {
+      await this.applyRuntimeControlSettingsToBackend();
       await this.applyReplayGainForTrack(track);
       await this.invokeCommand('native_audio_load', { path: trackPath });
     } catch {
@@ -3769,6 +3817,7 @@ export class NativeAudioService implements IAudioService {
     const replayGainDb = this.computeReplayGainDbForTrack(track);
 
     try {
+      await this.applyRuntimeControlSettingsToBackend();
       await this.invokeCommand('native_audio_load_and_play', { path: trackPath, replayGainDb });
     } catch {
       // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.

@@ -24,8 +24,10 @@ pub(crate) struct RealtimeScheduler {
 }
 
 impl RealtimeScheduler {
-    const GUARDED_BUFFER_AHEAD_SECONDS: f64 = 0.35;
-    const CRITICAL_BUFFER_AHEAD_SECONDS: f64 = 0.16;
+    const GUARDED_ENTER_SECONDS: f64 = 0.35;
+    const GUARDED_EXIT_SECONDS: f64 = 0.50;
+    const CRITICAL_ENTER_SECONDS: f64 = 0.16;
+    const CRITICAL_EXIT_SECONDS: f64 = 0.24;
 
     pub(crate) fn new() -> Self {
         Self {
@@ -48,14 +50,44 @@ impl RealtimeScheduler {
             0.0
         };
 
-        let next = if buffered_ahead_seconds <= Self::CRITICAL_BUFFER_AHEAD_SECONDS {
-            RealtimePressureProfile::Critical
-        } else if underrun_recovery_active
-            || buffered_ahead_seconds <= Self::GUARDED_BUFFER_AHEAD_SECONDS
-        {
-            RealtimePressureProfile::Guarded
-        } else {
-            RealtimePressureProfile::Normal
+        let current = self.profile();
+
+        let next = match current {
+            RealtimePressureProfile::Normal => {
+                if buffered_ahead_seconds <= Self::CRITICAL_ENTER_SECONDS {
+                    RealtimePressureProfile::Critical
+                } else if underrun_recovery_active
+                    || buffered_ahead_seconds <= Self::GUARDED_ENTER_SECONDS
+                {
+                    RealtimePressureProfile::Guarded
+                } else {
+                    RealtimePressureProfile::Normal
+                }
+            }
+            RealtimePressureProfile::Guarded => {
+                if buffered_ahead_seconds <= Self::CRITICAL_ENTER_SECONDS {
+                    RealtimePressureProfile::Critical
+                } else if !underrun_recovery_active
+                    && buffered_ahead_seconds >= Self::GUARDED_EXIT_SECONDS
+                {
+                    RealtimePressureProfile::Normal
+                } else {
+                    RealtimePressureProfile::Guarded
+                }
+            }
+            RealtimePressureProfile::Critical => {
+                if buffered_ahead_seconds >= Self::CRITICAL_EXIT_SECONDS {
+                    if !underrun_recovery_active
+                        && buffered_ahead_seconds >= Self::GUARDED_EXIT_SECONDS
+                    {
+                        RealtimePressureProfile::Normal
+                    } else {
+                        RealtimePressureProfile::Guarded
+                    }
+                } else {
+                    RealtimePressureProfile::Critical
+                }
+            }
         };
 
         self.profile.store(next as u8, Ordering::Release);
@@ -64,3 +96,52 @@ impl RealtimeScheduler {
 }
 
 pub(crate) static SCHEDULER: Lazy<RealtimeScheduler> = Lazy::new(RealtimeScheduler::new);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_uses_hysteresis_for_profile_recovery() {
+        let scheduler = RealtimeScheduler::new();
+
+        assert_eq!(
+            scheduler.update(0.10, false),
+            RealtimePressureProfile::Critical
+        );
+        assert_eq!(
+            scheduler.update(0.20, false),
+            RealtimePressureProfile::Critical
+        );
+        assert_eq!(
+            scheduler.update(0.26, false),
+            RealtimePressureProfile::Guarded
+        );
+        assert_eq!(
+            scheduler.update(0.40, false),
+            RealtimePressureProfile::Guarded
+        );
+        assert_eq!(
+            scheduler.update(0.55, false),
+            RealtimePressureProfile::Normal
+        );
+    }
+
+    #[test]
+    fn scheduler_keeps_guarded_during_recovery_hint() {
+        let scheduler = RealtimeScheduler::new();
+
+        assert_eq!(
+            scheduler.update(0.60, true),
+            RealtimePressureProfile::Guarded
+        );
+        assert_eq!(
+            scheduler.update(0.70, true),
+            RealtimePressureProfile::Guarded
+        );
+        assert_eq!(
+            scheduler.update(0.70, false),
+            RealtimePressureProfile::Normal
+        );
+    }
+}

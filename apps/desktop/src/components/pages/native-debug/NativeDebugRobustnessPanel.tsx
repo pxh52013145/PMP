@@ -571,6 +571,22 @@ export function NativeDebugRobustnessPanel({
           </p>
         </div>
         <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.transfer.adaptationLevel')}</p>
+          <p className="device-value">
+            {typeof robustness.transferAdaptationLevel === 'number'
+              ? robustness.transferAdaptationLevel
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.transfer.oscillationStreak')}</p>
+          <p className="device-value">
+            {typeof robustness.transferOscillationStreak === 'number'
+              ? robustness.transferOscillationStreak
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
           <p className="device-label">{t('pages.native-debug.robustness.shared.enabled')}</p>
           <p className="device-value">
             {typeof robustness.sharedRenderAheadEnabled === 'boolean'
