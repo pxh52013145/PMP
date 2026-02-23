@@ -108,16 +108,16 @@ fn backend_buffer_policy_pack(output_backend_id: &str) -> BackendBufferPolicyPac
             rebuffer_resume_floor_frames: 96,
         },
         "wasapi-shared-raw" => BackendBufferPolicyPack {
-            start_seek_prebuffer_seconds: 0.45,
-            crossfade_prebuffer_seconds: 0.82,
-            min_start_cap_seconds: 0.52,
-            min_start_floor_seconds: 0.18,
-            recovery_cap_seconds: 1.25,
-            recovery_floor_seconds: 0.45,
-            rebuffer_enter_divisor: 3,
-            rebuffer_resume_divisor: 2,
-            rebuffer_enter_floor_frames: 96,
-            rebuffer_resume_floor_frames: 192,
+            start_seek_prebuffer_seconds: 0.35,
+            crossfade_prebuffer_seconds: 0.88,
+            min_start_cap_seconds: 0.40,
+            min_start_floor_seconds: 0.14,
+            recovery_cap_seconds: 0.95,
+            recovery_floor_seconds: 0.35,
+            rebuffer_enter_divisor: 4,
+            rebuffer_resume_divisor: 3,
+            rebuffer_enter_floor_frames: 64,
+            rebuffer_resume_floor_frames: 128,
         },
         "rodio-cpal" => BackendBufferPolicyPack {
             start_seek_prebuffer_seconds: 0.55,
@@ -365,7 +365,7 @@ pub(crate) fn wasapi_start_prefill_samples(
     shared_raw: bool,
 ) -> usize {
     let target_ms = if shared_raw {
-        parse_env_u64("PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS", 160, 20, 2000)
+        parse_env_u64("PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_MS", 200, 20, 2000)
     } else {
         parse_env_u64("PMP_AUDIO_WASAPI_EXCLUSIVE_PREFILL_MS", 120, 20, 2000)
     };
@@ -385,7 +385,7 @@ pub(crate) fn wasapi_start_prefill_timeout(shared_raw: bool) -> Duration {
     let timeout_ms = if shared_raw {
         parse_env_u64(
             "PMP_AUDIO_WASAPI_SHARED_RAW_PREFILL_TIMEOUT_MS",
-            180,
+            220,
             40,
             3000,
         )
@@ -506,6 +506,55 @@ mod tests {
 
         assert!(exclusive_enter < shared_enter);
         assert!(exclusive_resume <= shared_resume);
+    }
+
+    #[test]
+    fn shared_raw_policy_is_tighter_than_rodio_cpal() {
+        let shared_raw_start = streaming_prebuffer_default_seconds("wasapi-shared-raw", false);
+        let rodio_start = streaming_prebuffer_default_seconds("rodio-cpal", false);
+        assert!(
+            shared_raw_start < rodio_start,
+            "shared-raw start prebuffer should be less than rodio-cpal"
+        );
+
+        let (shared_raw_cap, _) = streaming_min_start_bounds("wasapi-shared-raw", true);
+        let (rodio_cap, _) = streaming_min_start_bounds("rodio-cpal", true);
+        assert!(
+            shared_raw_cap < rodio_cap,
+            "shared-raw recovery cap should be less than rodio-cpal"
+        );
+    }
+
+    #[test]
+    fn shared_raw_rebuffer_thresholds_are_between_exclusive_and_rodio() {
+        let min_start_samples = 33_600usize;
+        let (exclusive_enter, exclusive_resume) =
+            runtime_rebuffer_threshold_samples("wasapi-exclusive", min_start_samples, 2);
+        let (shared_raw_enter, shared_raw_resume) =
+            runtime_rebuffer_threshold_samples("wasapi-shared-raw", min_start_samples, 2);
+        let (rodio_enter, rodio_resume) =
+            runtime_rebuffer_threshold_samples("rodio-cpal", min_start_samples, 2);
+
+        assert!(
+            exclusive_enter <= shared_raw_enter,
+            "exclusive enter should be <= shared-raw enter"
+        );
+        assert!(
+            shared_raw_enter <= rodio_enter,
+            "shared-raw enter should be <= rodio-cpal enter"
+        );
+        assert!(exclusive_resume <= shared_raw_resume);
+        assert!(shared_raw_resume <= rodio_resume);
+    }
+
+    #[test]
+    fn wasapi_shared_raw_prefill_is_larger_than_exclusive() {
+        let exclusive = wasapi_start_prefill_samples(48_000, 2, 512, false);
+        let shared_raw = wasapi_start_prefill_samples(48_000, 2, 512, true);
+        assert!(
+            shared_raw > exclusive,
+            "shared-raw prefill should exceed exclusive prefill"
+        );
     }
 
     #[test]

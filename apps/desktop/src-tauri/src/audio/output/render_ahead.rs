@@ -10,6 +10,7 @@ use rodio::Source;
 
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
+use crate::audio::bulk_source::BulkSource;
 use crate::audio::diagnostics;
 use crate::audio::memory_pool;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
@@ -20,8 +21,11 @@ static SHARED_RENDER_UNDERRUN_EVENTS: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_UNDERRUN_FRAMES: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_LOW_HIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_LOW_WATERMARK_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static SHARED_RENDER_CONSUMER_JITTER_P99_US: AtomicU64 = AtomicU64::new(0);
+static SHARED_RENDER_JITTER_ANOMALY_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_LOW_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_UNDERRUN_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static SHARED_RENDER_JITTER_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_WRAPPER_SEQ: AtomicU64 = AtomicU64::new(1);
 static SHARED_RENDER_ACTIVE_WRAPPER_ID: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_READY_WRAPPER_ID: AtomicU64 = AtomicU64::new(0);
@@ -29,11 +33,14 @@ static SHARED_RENDER_READY_SEEK_EPOCH: AtomicU64 = AtomicU64::new(0);
 static SHARED_RENDER_AVAILABLE_SAMPLES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
 pub(crate) struct SharedRenderAheadMetricsSnapshot {
     pub render_underrun_events: u64,
     pub render_underrun_frames: u64,
     pub render_low_hit_count: u64,
     pub render_low_watermark_samples: u64,
+    pub consumer_jitter_p99_us: u32,
+    pub jitter_anomaly_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -51,6 +58,10 @@ pub(crate) fn shared_render_ahead_metrics() -> SharedRenderAheadMetricsSnapshot 
         render_underrun_frames: SHARED_RENDER_UNDERRUN_FRAMES.load(Ordering::Relaxed),
         render_low_hit_count: SHARED_RENDER_LOW_HIT_COUNT.load(Ordering::Relaxed),
         render_low_watermark_samples: SHARED_RENDER_LOW_WATERMARK_SAMPLES.load(Ordering::Relaxed),
+        consumer_jitter_p99_us: SHARED_RENDER_CONSUMER_JITTER_P99_US
+            .load(Ordering::Relaxed)
+            .min(u32::MAX as u64) as u32,
+        jitter_anomaly_count: SHARED_RENDER_JITTER_ANOMALY_COUNT.load(Ordering::Relaxed),
     }
 }
 
@@ -133,6 +144,9 @@ fn reset_shared_render_ahead_metrics() {
     SHARED_RENDER_UNDERRUN_FRAMES.store(0, Ordering::Relaxed);
     SHARED_RENDER_LOW_HIT_COUNT.store(0, Ordering::Relaxed);
     SHARED_RENDER_LOW_WATERMARK_SAMPLES.store(0, Ordering::Relaxed);
+    SHARED_RENDER_CONSUMER_JITTER_P99_US.store(0, Ordering::Relaxed);
+    SHARED_RENDER_JITTER_ANOMALY_COUNT.store(0, Ordering::Relaxed);
+    SHARED_RENDER_JITTER_TIMELINE_GATE_MS.store(0, Ordering::Relaxed);
     SHARED_RENDER_ACTIVE_WRAPPER_ID.store(0, Ordering::Relaxed);
     SHARED_RENDER_READY_WRAPPER_ID.store(0, Ordering::Relaxed);
     SHARED_RENDER_READY_SEEK_EPOCH.store(0, Ordering::Relaxed);
@@ -394,6 +408,41 @@ fn equal_power_fade_in_gain(frame: usize, frames: usize) -> f32 {
     (t.clamp(0.0, 1.0) * FRAC_PI_2).sin()
 }
 
+fn record_render_consumer_jitter_sample(
+    jitter_window: &mut [u32; 16],
+    jitter_window_pos: &mut usize,
+    jitter_window_count: &mut usize,
+    expected_interval_us: u32,
+    delta_us: u32,
+) {
+    jitter_window[*jitter_window_pos % 16] = delta_us;
+    *jitter_window_pos = (*jitter_window_pos).wrapping_add(1);
+    *jitter_window_count = (*jitter_window_count).saturating_add(1).min(16);
+
+    let count = *jitter_window_count;
+    if count < 4 {
+        return;
+    }
+
+    let mut sorted = *jitter_window;
+    sorted[..count].sort_unstable();
+    let p99_idx = (count * 99 / 100).max(count.saturating_sub(1));
+    let p99 = sorted[p99_idx];
+    SHARED_RENDER_CONSUMER_JITTER_P99_US.store(p99 as u64, Ordering::Relaxed);
+
+    let threshold = expected_interval_us.saturating_mul(3);
+    if threshold > 0 && delta_us > threshold {
+        SHARED_RENDER_JITTER_ANOMALY_COUNT.fetch_add(1, Ordering::Relaxed);
+        diagnostics::record_event_throttled(
+            "shared.render_ahead.jitter_anomaly",
+            delta_us as u64,
+            expected_interval_us as u64,
+            &SHARED_RENDER_JITTER_TIMELINE_GATE_MS,
+            200,
+        );
+    }
+}
+
 pub(crate) fn wrap_source_for_shared_backend(
     source: BoxedSource,
     seek_epoch: Arc<AtomicU64>,
@@ -466,6 +515,8 @@ pub(crate) fn wrap_source_for_shared_backend(
         queue.len_samples(),
         initial_low_watermark,
     );
+    let expected_interval_us =
+        (4096u64 * 1_000_000 / (sample_rate as u64 * channels.max(1) as u64)) as u32;
 
     Box::new(RenderAheadSource {
         wrapper_id,
@@ -475,7 +526,7 @@ pub(crate) fn wrap_source_for_shared_backend(
         duration,
         seek_epoch,
         observed_seek_epoch,
-        local: Vec::with_capacity(producer_chunk_samples(RealtimePressureProfile::Critical)),
+        local: Vec::with_capacity(8192),
         local_index: 0,
         channel_cursor: 0,
         previous_samples: vec![0.0; channels as usize],
@@ -483,6 +534,11 @@ pub(crate) fn wrap_source_for_shared_backend(
         needs_fade_in: false,
         pending_fade_in_frames: 0,
         underrun_streak: 0,
+        last_refill_instant: None,
+        jitter_window: [0u32; 16],
+        jitter_window_pos: 0,
+        jitter_window_count: 0,
+        expected_interval_us,
         stop_tx: Some(stop_tx),
         producer: Some(producer),
     })
@@ -664,14 +720,54 @@ struct RenderAheadSource {
     needs_fade_in: bool,
     pending_fade_in_frames: usize,
     underrun_streak: u32,
+    last_refill_instant: Option<Instant>,
+    jitter_window: [u32; 16],
+    jitter_window_pos: usize,
+    jitter_window_count: usize,
+    expected_interval_us: u32,
     stop_tx: Option<mpsc::Sender<()>>,
     producer: Option<JoinHandle<()>>,
 }
 
 impl RenderAheadSource {
-    const POP_CHUNK_SAMPLES: usize = 4096;
+    fn pop_chunk_samples() -> usize {
+        match crate::audio::realtime_scheduler::SCHEDULER.profile() {
+            RealtimePressureProfile::Normal => 4096,
+            RealtimePressureProfile::Guarded => 6144,
+            RealtimePressureProfile::Critical => 8192,
+        }
+    }
+
+    fn track_sample_history(&mut self, sample: f32) {
+        let channels = self.channels.max(1) as usize;
+        let channel = self.channel_cursor;
+        self.channel_cursor += 1;
+        if self.channel_cursor >= channels {
+            self.channel_cursor = 0;
+        }
+        if let (Some(previous), Some(last)) = (
+            self.previous_samples.get_mut(channel),
+            self.last_samples.get_mut(channel),
+        ) {
+            *previous = *last;
+            *last = sample;
+        }
+    }
 
     fn refill_local(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(prev) = self.last_refill_instant {
+            let delta_us = prev.elapsed().as_micros().min(u32::MAX as u128) as u32;
+            record_render_consumer_jitter_sample(
+                &mut self.jitter_window,
+                &mut self.jitter_window_pos,
+                &mut self.jitter_window_count,
+                self.expected_interval_us,
+                delta_us,
+            );
+        }
+        self.last_refill_instant = Some(now);
+
         let current_epoch = self.seek_epoch.load(Ordering::Acquire);
         if current_epoch != self.observed_seek_epoch {
             self.observed_seek_epoch = current_epoch;
@@ -707,11 +803,12 @@ impl RenderAheadSource {
         }
 
         let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+        let chunk_samples = Self::pop_chunk_samples();
         let retry_attempts = render_pop_retry_attempts(profile, self.underrun_streak).max(1);
         let retry_spins = render_pop_retry_spins(profile);
         let mut pop = self.queue.pop_chunk_into(
             &mut self.local,
-            Self::POP_CHUNK_SAMPLES,
+            chunk_samples,
             render_pop_wait_timeout(profile),
         );
         for _ in 1..retry_attempts {
@@ -721,9 +818,9 @@ impl RenderAheadSource {
             for _ in 0..retry_spins {
                 std::hint::spin_loop();
             }
-            pop =
-                self.queue
-                    .pop_chunk_into(&mut self.local, Self::POP_CHUNK_SAMPLES, Duration::ZERO);
+            pop = self
+                .queue
+                .pop_chunk_into(&mut self.local, chunk_samples, Duration::ZERO);
         }
 
         if pop.popped > 0 {
@@ -796,22 +893,34 @@ impl Iterator for RenderAheadSource {
         let sample_index = self.local_index;
         let sample = self.local[sample_index];
         self.local_index += 1;
-
-        let channels = self.channels.max(1) as usize;
-        let channel = self.channel_cursor;
-        self.channel_cursor += 1;
-        if self.channel_cursor >= channels {
-            self.channel_cursor = 0;
-        }
-        if let (Some(previous), Some(last)) = (
-            self.previous_samples.get_mut(channel),
-            self.last_samples.get_mut(channel),
-        ) {
-            *previous = *last;
-            *last = sample;
-        }
+        self.track_sample_history(sample);
 
         Some(sample)
+    }
+}
+
+impl BulkSource for RenderAheadSource {
+    fn fill_buffer(&mut self, buf: &mut [f32]) -> usize {
+        let mut written = 0usize;
+        while written < buf.len() {
+            if self.local_index >= self.local.len() && !self.refill_local() {
+                break;
+            }
+
+            let available = self.local.len().saturating_sub(self.local_index);
+            let to_copy = available.min(buf.len().saturating_sub(written));
+            let start = self.local_index;
+            let end = start + to_copy;
+            buf[written..written + to_copy].copy_from_slice(&self.local[start..end]);
+            self.local_index = end;
+
+            for &sample in &buf[written..written + to_copy] {
+                self.track_sample_history(sample);
+            }
+
+            written += to_copy;
+        }
+        written
     }
 }
 
@@ -889,6 +998,47 @@ mod tests {
         fn total_duration(&self) -> Option<Duration> {
             None
         }
+    }
+
+    #[test]
+    fn render_ahead_source_bulk_fill_matches_queue_samples() {
+        let queue = AudioRingBuffer::new(4_096);
+        let samples = vec![0.2f32, -0.2, 0.4, -0.4, 0.6, -0.6, 0.8, -0.8];
+        let pushed = queue.push_interleaved(&samples, 2);
+        assert_eq!(pushed * 2, samples.len());
+        queue.mark_finished();
+
+        let mut source = RenderAheadSource {
+            wrapper_id: 0,
+            queue,
+            channels: 2,
+            sample_rate: 48_000,
+            duration: None,
+            seek_epoch: Arc::new(AtomicU64::new(1)),
+            observed_seek_epoch: 1,
+            local: Vec::with_capacity(8192),
+            local_index: 0,
+            channel_cursor: 0,
+            previous_samples: vec![0.0; 2],
+            last_samples: vec![0.0; 2],
+            needs_fade_in: false,
+            pending_fade_in_frames: 0,
+            underrun_streak: 0,
+            last_refill_instant: None,
+            jitter_window: [0; 16],
+            jitter_window_pos: 0,
+            jitter_window_count: 0,
+            expected_interval_us: 0,
+            stop_tx: None,
+            producer: None,
+        };
+
+        let mut out = vec![0.0f32; samples.len()];
+        let filled = source.fill_buffer(&mut out);
+
+        assert_eq!(filled, samples.len());
+        assert_eq!(out, samples);
+        assert_eq!(source.fill_buffer(&mut out), 0);
     }
 
     #[test]
@@ -975,6 +1125,13 @@ mod tests {
     }
 
     #[test]
+    fn pop_chunk_samples_scales_with_pressure() {
+        let chunk = RenderAheadSource::pop_chunk_samples();
+        assert!(chunk >= 4096);
+        assert!(chunk <= 8192);
+    }
+
+    #[test]
     fn predictive_concealment_stays_finite_and_bounded() {
         for frame in 0..64 {
             let sample = predictive_concealment_sample(0.92, -0.35, frame, 64);
@@ -1017,5 +1174,107 @@ mod tests {
             3,
             Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn jitter_anomaly_threshold_scales_with_interval() {
+        reset_shared_render_ahead_metrics();
+
+        let mut jitter_window = [0u32; 16];
+        let mut jitter_window_pos = 0usize;
+        let mut jitter_window_count = 0usize;
+
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            1_000,
+            800,
+        );
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            1_000,
+            1_000,
+        );
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            1_000,
+            1_200,
+        );
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            1_000,
+            3_000,
+        );
+        assert_eq!(shared_render_ahead_metrics().jitter_anomaly_count, 0);
+
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            1_000,
+            3_001,
+        );
+        assert_eq!(shared_render_ahead_metrics().jitter_anomaly_count, 1);
+
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            2_000,
+            6_000,
+        );
+        assert_eq!(shared_render_ahead_metrics().jitter_anomaly_count, 1);
+
+        record_render_consumer_jitter_sample(
+            &mut jitter_window,
+            &mut jitter_window_pos,
+            &mut jitter_window_count,
+            2_000,
+            6_001,
+        );
+        assert_eq!(shared_render_ahead_metrics().jitter_anomaly_count, 2);
+    }
+
+    #[test]
+    fn jitter_p99_window_produces_stable_values() {
+        reset_shared_render_ahead_metrics();
+
+        let mut jitter_window = [0u32; 16];
+        let mut jitter_window_pos = 0usize;
+        let mut jitter_window_count = 0usize;
+
+        let first_window = [
+            920u32, 940, 960, 980, 1_000, 1_020, 1_040, 1_060, 1_080, 1_100, 1_120, 1_140, 1_160,
+            1_180, 1_200, 2_400,
+        ];
+        for delta_us in first_window {
+            record_render_consumer_jitter_sample(
+                &mut jitter_window,
+                &mut jitter_window_pos,
+                &mut jitter_window_count,
+                2_000,
+                delta_us,
+            );
+        }
+        assert_eq!(shared_render_ahead_metrics().consumer_jitter_p99_us, 2_400);
+
+        for _ in 0..16 {
+            record_render_consumer_jitter_sample(
+                &mut jitter_window,
+                &mut jitter_window_pos,
+                &mut jitter_window_count,
+                2_000,
+                1_100,
+            );
+        }
+        let snapshot = shared_render_ahead_metrics();
+        assert_eq!(snapshot.consumer_jitter_p99_us, 1_100);
     }
 }

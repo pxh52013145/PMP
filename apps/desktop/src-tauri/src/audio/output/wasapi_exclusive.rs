@@ -41,6 +41,18 @@ fn parse_env_u32(key: &str, default_value: u32, min: u32, max: u32) -> u32 {
         .clamp(min, max)
 }
 
+fn parse_env_bool_wasapi(key: &str, default_value: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(default_value)
+}
+
 impl UnderrunDeclickPolicy {
     fn from_env() -> Self {
         let min_ms = parse_env_u32("PMP_AUDIO_EXCLUSIVE_DECLICK_MIN_MS", 4, 1, 120);
@@ -122,6 +134,17 @@ const AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT: &str =
     "AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT";
 const AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED: &str =
     "AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED";
+const SHARED_RAW_MAX_RENDER_RETRIES: u32 = 3;
+const SHARED_RAW_RETRY_BASE_DELAY_MS: u64 = 50;
+
+fn is_transient_shared_raw_error(err: &AudioOutputError) -> bool {
+    !matches!(
+        err.code,
+        AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT
+            | AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED
+            | AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WasapiStreamMode {
@@ -1592,10 +1615,14 @@ fn pack_pcm24_packed_bytes(sample: i32) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        pack_pcm24_in32, pack_pcm24_packed_bytes, quantize_pcm16_round,
-        quantize_pcm16_round_buffer, quantize_pcm16_with_mode, quantize_pcm24,
-        quantize_pcm24_round_in32_buffer, quantize_pcm24_transport_exact, quantize_pcm24_with_mode,
-        quantize_pcm32_with_mode, write_scaled_f32_buffer, NativeAudioOutputQuantizationMode,
+        is_transient_shared_raw_error, pack_pcm24_in32, pack_pcm24_packed_bytes,
+        parse_env_bool_wasapi, quantize_pcm16_round, quantize_pcm16_round_buffer,
+        quantize_pcm16_with_mode, quantize_pcm24, quantize_pcm24_round_in32_buffer,
+        quantize_pcm24_transport_exact, quantize_pcm24_with_mode, quantize_pcm32_with_mode,
+        select_low_latency_period, write_scaled_f32_buffer, AudioOutputError,
+        NativeAudioOutputQuantizationMode, AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED,
+        AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED, AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+        AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT,
     };
 
     #[test]
@@ -1773,6 +1800,54 @@ mod tests {
             assert!((out[index] - (*sample * volume)).abs() <= 1e-6);
         }
     }
+
+    #[test]
+    fn select_low_latency_period_rounds_up_to_fundamental() {
+        assert_eq!(select_low_latency_period(48, 448, 4), 48);
+        assert_eq!(select_low_latency_period(48, 480, 16), 48);
+        assert_eq!(select_low_latency_period(50, 480, 16), 64);
+        assert_eq!(select_low_latency_period(1, 480, 1), 1);
+    }
+
+    #[test]
+    fn select_low_latency_period_clamps_and_handles_bounds() {
+        assert_eq!(select_low_latency_period(500, 480, 16), 480);
+        assert_eq!(select_low_latency_period(0, 0, 0), 0);
+        assert_eq!(select_low_latency_period(0, 480, 0), 0);
+        assert_eq!(select_low_latency_period(48, 480, 0), 48);
+    }
+
+    #[test]
+    fn parse_env_bool_wasapi_uses_default_when_missing() {
+        assert!(parse_env_bool_wasapi(
+            "PMP_TEST_NONEXISTENT_KEY_12345",
+            true
+        ));
+        assert!(!parse_env_bool_wasapi(
+            "PMP_TEST_NONEXISTENT_KEY_12345",
+            false
+        ));
+    }
+
+    #[test]
+    fn transient_error_detection_classifies_correctly() {
+        assert!(!is_transient_shared_raw_error(&AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_UNSUPPORTED_FORMAT,
+            message: "test".to_string(),
+        }));
+        assert!(!is_transient_shared_raw_error(&AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_INIT_FAILED,
+            message: "test".to_string(),
+        }));
+        assert!(is_transient_shared_raw_error(&AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_SHARED_RAW_OPEN_FAILED,
+            message: "test".to_string(),
+        }));
+        assert!(is_transient_shared_raw_error(&AudioOutputError {
+            code: AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED,
+            message: "test".to_string(),
+        }));
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1787,6 +1862,7 @@ struct WasapiStream {
     transport_mode: NativeAudioTransportMode,
     mode: WasapiStreamMode,
     started: bool,
+    low_latency_period_frames: Option<u32>,
 }
 
 #[cfg(target_os = "windows")]
@@ -1984,20 +2060,42 @@ impl WasapiExclusiveSink {
             };
 
             let channels = source.channels().max(1) as usize;
+            let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
+            let mut observed_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
 
             while !inner_clone.stopped.load(Ordering::Acquire) {
                 if stop_rx.try_recv().is_ok() {
                     break;
                 }
 
+                let current_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
+                if current_flush_epoch != observed_flush_epoch {
+                    observed_flush_epoch = current_flush_epoch;
+                    local.clear();
+                    adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                }
+
+                let queue_capacity = inner_clone.render_queue.capacity_samples().max(channels);
+                let render_len = inner_clone.render_queue.len_samples();
                 let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
                 crate::audio::threading::apply_audio_decode_pressure_profile(profile);
-                let chunk_samples = buffer_policy::output_producer_chunk_samples(profile);
-                let backoff = buffer_policy::output_producer_backoff(profile);
 
-                if inner_clone.render_queue.len_samples()
-                    >= inner_clone.render_queue.capacity_samples() * 3 / 4
-                {
+                let adaptive = buffer_policy::adaptive_transfer_strategy(
+                    queue_capacity,
+                    channels,
+                    profile,
+                    render_len,
+                    render_len,
+                    &mut adaptive_state,
+                );
+
+                let high_watermark = adaptive.high_watermark;
+                let chunk_samples = adaptive
+                    .chunk_limit
+                    .max(buffer_policy::output_producer_chunk_samples(profile));
+                let backoff = adaptive.producer_backoff;
+
+                if render_len >= high_watermark {
                     if backoff.is_zero() {
                         thread::yield_now();
                     } else {
@@ -2368,8 +2466,17 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
         let mut declicker = UnderrunDeclicker::new(0);
         let mut callback_timing = CallbackTimingState::default();
         let mut observed_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
+        let mut render_retry_count = 0u32;
+        let mut retry_open_stream = false;
 
         while !inner.stopped.load(Ordering::Acquire) {
+            if retry_open_stream {
+                if let Some(stream) = stream.as_mut() {
+                    stream.stop();
+                }
+                stream = None;
+            }
+
             let queued = match inner.queue.lock() {
                 Ok(mut queue) => queue.pop_front(),
                 Err(_) => None,
@@ -2379,13 +2486,14 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 let desired_sample_rate = source.sample_rate().max(1);
                 let desired_channels = source.channels().max(1);
 
-                let need_open = match stream.as_ref() {
-                    Some(stream) => {
-                        stream.sample_rate != desired_sample_rate
-                            || stream.channels != desired_channels
-                    }
-                    None => true,
-                };
+                let need_open = retry_open_stream
+                    || match stream.as_ref() {
+                        Some(stream) => {
+                            stream.sample_rate != desired_sample_rate
+                                || stream.channels != desired_channels
+                        }
+                        None => true,
+                    };
 
                 if need_open {
                     if let Some(stream) = stream.as_mut() {
@@ -2400,6 +2508,11 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                         WasapiStreamMode::SharedRaw,
                     ) {
                         Ok(new_stream) => {
+                            if let Some(period_frames) = new_stream.low_latency_period_frames {
+                                eprintln!(
+                                    "[NativeAudio][wasapi-shared-raw] Negotiated low-latency period_frames={period_frames}"
+                                );
+                            }
                             memory_pool::reserve_f32_capacity(
                                 &mut render_scratch,
                                 new_stream.buffer_frame_count as usize
@@ -2419,8 +2532,21 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                             active_sample_rate = new_stream.sample_rate;
                             declicker.ensure_channels(active_channels as usize);
                             stream = Some(new_stream);
+                            render_retry_count = 0;
+                            retry_open_stream = false;
                         }
                         Err(err) => {
+                            if retry_open_stream
+                                && is_transient_shared_raw_error(&err)
+                                && render_retry_count < SHARED_RAW_MAX_RENDER_RETRIES
+                            {
+                                render_retry_count = render_retry_count.saturating_add(1);
+                                let delay_ms = SHARED_RAW_RETRY_BASE_DELAY_MS
+                                    .saturating_mul(1u64 << render_retry_count.min(3));
+                                thread::sleep(Duration::from_millis(delay_ms));
+                                continue;
+                            }
+
                             if let Ok(mut state) = inner.backend_state.lock() {
                                 state.stream_open = false;
                                 state.output_sample_rate = None;
@@ -2433,6 +2559,67 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 }
 
                 WasapiSharedRawSink::start_producer_for_source(&inner, source);
+            }
+
+            if retry_open_stream
+                && stream.is_none()
+                && active_channels > 0
+                && active_sample_rate > 0
+            {
+                match open_wasapi_stream(
+                    device_id,
+                    active_sample_rate,
+                    active_channels,
+                    transport_mode,
+                    WasapiStreamMode::SharedRaw,
+                ) {
+                    Ok(new_stream) => {
+                        if let Some(period_frames) = new_stream.low_latency_period_frames {
+                            eprintln!(
+                                "[NativeAudio][wasapi-shared-raw] Negotiated low-latency period_frames={period_frames}"
+                            );
+                        }
+                        memory_pool::reserve_f32_capacity(
+                            &mut render_scratch,
+                            new_stream.buffer_frame_count as usize
+                                * new_stream.channels.max(1) as usize,
+                            "shared_raw.output.render_scratch_growth",
+                        );
+                        if let Ok(mut state) = inner.backend_state.lock() {
+                            state.output_sample_rate = Some(new_stream.sample_rate);
+                            state.stream_open = true;
+                            state.error = None;
+                        }
+                        callback_timing.reset_for_stream(
+                            new_stream.buffer_frame_count,
+                            new_stream.sample_rate,
+                        );
+                        declicker.ensure_channels(new_stream.channels.max(1) as usize);
+                        active_channels = new_stream.channels;
+                        active_sample_rate = new_stream.sample_rate;
+                        stream = Some(new_stream);
+                        retry_open_stream = false;
+                    }
+                    Err(err) => {
+                        if !is_transient_shared_raw_error(&err)
+                            || render_retry_count >= SHARED_RAW_MAX_RENDER_RETRIES
+                        {
+                            if let Ok(mut state) = inner.backend_state.lock() {
+                                state.stream_open = false;
+                                state.output_sample_rate = None;
+                                state.error = Some(err);
+                            }
+                            inner.is_empty.store(true, Ordering::Release);
+                            return;
+                        }
+
+                        render_retry_count = render_retry_count.saturating_add(1);
+                        let delay_ms = SHARED_RAW_RETRY_BASE_DELAY_MS
+                            .saturating_mul(1u64 << render_retry_count.min(3));
+                        thread::sleep(Duration::from_millis(delay_ms));
+                        continue;
+                    }
+                }
             }
 
             if stream.is_none() {
@@ -2468,6 +2655,19 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                     &mut render_scratch,
                     &mut declicker,
                 ) {
+                    if is_transient_shared_raw_error(&err)
+                        && render_retry_count < SHARED_RAW_MAX_RENDER_RETRIES
+                    {
+                        render_retry_count = render_retry_count.saturating_add(1);
+                        stream.stop();
+                        callback_timing.clear_last_wake();
+                        retry_open_stream = true;
+                        let delay_ms = SHARED_RAW_RETRY_BASE_DELAY_MS
+                            .saturating_mul(1u64 << render_retry_count.min(3));
+                        thread::sleep(Duration::from_millis(delay_ms));
+                        continue;
+                    }
+
                     if let Ok(mut state) = inner.backend_state.lock() {
                         state.error = Some(err);
                     }
@@ -2493,12 +2693,27 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 &mut callback_timing,
                 &mut declicker,
             ) {
+                if is_transient_shared_raw_error(&err)
+                    && render_retry_count < SHARED_RAW_MAX_RENDER_RETRIES
+                {
+                    render_retry_count = render_retry_count.saturating_add(1);
+                    stream.stop();
+                    callback_timing.clear_last_wake();
+                    retry_open_stream = true;
+                    let delay_ms = SHARED_RAW_RETRY_BASE_DELAY_MS
+                        .saturating_mul(1u64 << render_retry_count.min(3));
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    continue;
+                }
+
                 if let Ok(mut state) = inner.backend_state.lock() {
                     state.error = Some(err);
                 }
                 inner.is_empty.store(true, Ordering::Release);
                 return;
             }
+
+            render_retry_count = 0;
 
             crate::audio::threading::apply_audio_output_pressure_profile(
                 crate::audio::realtime_scheduler::SCHEDULER.profile(),
@@ -2524,7 +2739,10 @@ impl WasapiSharedRawSink {
             .ok()
             .and_then(|state| state.device_id.clone());
         reset_output_callback_metrics();
-        let render_queue = AudioRingBuffer::new(48_000 * 2 * 4);
+        let render_queue = AudioRingBuffer::new(
+            buffer_policy::recommended_render_queue_capacity_samples(Some(48_000), 2)
+                .max(48_000 * 2 * 4),
+        );
         render_queue.try_lock_memory_pages();
         Self {
             inner: Arc::new(SharedRawSinkInner {
@@ -2608,20 +2826,42 @@ impl WasapiSharedRawSink {
             };
 
             let channels = source.channels().max(1) as usize;
+            let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
+            let mut observed_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
 
             while !inner_clone.stopped.load(Ordering::Acquire) {
                 if stop_rx.try_recv().is_ok() {
                     break;
                 }
 
+                let current_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
+                if current_flush_epoch != observed_flush_epoch {
+                    observed_flush_epoch = current_flush_epoch;
+                    local.clear();
+                    adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                }
+
+                let queue_capacity = inner_clone.render_queue.capacity_samples().max(channels);
+                let render_len = inner_clone.render_queue.len_samples();
                 let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
                 crate::audio::threading::apply_audio_decode_pressure_profile(profile);
-                let chunk_samples = buffer_policy::output_producer_chunk_samples(profile);
-                let backoff = buffer_policy::output_producer_backoff(profile);
 
-                if inner_clone.render_queue.len_samples()
-                    >= inner_clone.render_queue.capacity_samples() * 3 / 4
-                {
+                let adaptive = buffer_policy::adaptive_transfer_strategy(
+                    queue_capacity,
+                    channels,
+                    profile,
+                    render_len,
+                    render_len,
+                    &mut adaptive_state,
+                );
+
+                let high_watermark = adaptive.high_watermark;
+                let chunk_samples = adaptive
+                    .chunk_limit
+                    .max(buffer_policy::output_producer_chunk_samples(profile));
+                let backoff = adaptive.producer_backoff;
+
+                if render_len >= high_watermark {
                     if backoff.is_zero() {
                         thread::yield_now();
                     } else {
@@ -3363,6 +3603,18 @@ fn render_frames_shared_raw(
     Ok(())
 }
 
+fn select_low_latency_period(min: u32, max: u32, fundamental: u32) -> u32 {
+    if min > max {
+        return max;
+    }
+    let fundamental = fundamental.max(1);
+    let period = min
+        .saturating_add(fundamental.saturating_sub(1))
+        .saturating_div(fundamental)
+        .saturating_mul(fundamental);
+    period.clamp(min, max)
+}
+
 #[cfg(target_os = "windows")]
 fn open_wasapi_stream(
     device_id: &str,
@@ -3374,7 +3626,7 @@ fn open_wasapi_stream(
     use windows::core::{Interface, PCWSTR};
     use windows::Win32::Foundation::BOOL;
     use windows::Win32::Media::Audio::{
-        AudioCategory_Media, AudioClientProperties, IAudioClient, IAudioClient2,
+        AudioCategory_Media, AudioClientProperties, IAudioClient, IAudioClient2, IAudioClient3,
         IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
         AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_E_UNSUPPORTED_FORMAT,
         AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -3428,6 +3680,8 @@ fn open_wasapi_stream(
             AUDCLNT_SHAREMODE_EXCLUSIVE
         };
         let stream_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+        let low_latency_enabled =
+            parse_env_bool_wasapi("PMP_AUDIO_WASAPI_LOW_LATENCY_ENABLED", true);
 
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| {
@@ -3793,6 +4047,167 @@ fn open_wasapi_stream(
                 }
             }
 
+            if is_shared_raw && low_latency_enabled {
+                if let Ok(low_latency_client) = device.Activate::<IAudioClient>(CLSCTX_ALL, None) {
+                    let raw_props = AudioClientProperties {
+                        cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
+                        bIsOffload: BOOL(0),
+                        eCategory: AudioCategory_Media,
+                        Options: AUDCLNT_STREAMOPTIONS_RAW,
+                    };
+                    let low_latency_raw_ready = match low_latency_client.cast::<IAudioClient2>() {
+                        Ok(client2) => {
+                            if let Err(err) = client2.SetClientProperties(&raw_props as *const _) {
+                                eprintln!(
+                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 path failed to reapply RAW properties: {err}, falling back"
+                                );
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                        Err(_) => {
+                            eprintln!(
+                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 path could not query IAudioClient2, falling back"
+                            );
+                            false
+                        }
+                    };
+
+                    if low_latency_raw_ready {
+                        if let Ok(audio_client3) = low_latency_client.cast::<IAudioClient3>() {
+                            let mut default_period_frames: u32 = 0;
+                            let mut fundamental_period_frames: u32 = 0;
+                            let mut min_period_frames: u32 = 0;
+                            let mut max_period_frames: u32 = 0;
+
+                            if audio_client3
+                                .GetSharedModeEnginePeriod(
+                                    attempt.wave_format.as_ptr(),
+                                    &mut default_period_frames,
+                                    &mut fundamental_period_frames,
+                                    &mut min_period_frames,
+                                    &mut max_period_frames,
+                                )
+                                .is_ok()
+                            {
+                                let selected_period = select_low_latency_period(
+                                    min_period_frames,
+                                    max_period_frames,
+                                    fundamental_period_frames,
+                                );
+
+                                eprintln!(
+                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 periods: default={} fundamental={} min={} max={} selected={}",
+                                default_period_frames,
+                                fundamental_period_frames,
+                                min_period_frames,
+                                max_period_frames,
+                                selected_period
+                            );
+
+                                match CreateEventW(None, false, false, PCWSTR::null()) {
+                                    Ok(event_handle) => {
+                                        match audio_client3.InitializeSharedAudioStream(
+                                            stream_flags,
+                                            selected_period,
+                                            attempt.wave_format.as_ptr(),
+                                            None,
+                                        ) {
+                                            Ok(()) => {
+                                                if let Err(err) =
+                                                    low_latency_client.SetEventHandle(event_handle)
+                                                {
+                                                    let _ = windows::Win32::Foundation::CloseHandle(
+                                                        event_handle,
+                                                    );
+                                                    eprintln!(
+                                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 SetEventHandle failed: {err}, falling back"
+                                                );
+                                                } else {
+                                                    match low_latency_client.GetBufferSize() {
+                                                        Ok(buffer_frame_count) => {
+                                                            match low_latency_client.GetService() {
+                                                                Ok(render_client) => {
+                                                                    eprintln!(
+                                                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 low-latency stream: format={} channels={} sample_rate={} period_frames={} buffer_frames={}",
+                                                                    attempt.label,
+                                                                    channels,
+                                                                    sample_rate,
+                                                                    selected_period,
+                                                                    buffer_frame_count
+                                                                );
+                                                                    return Ok(WasapiStream {
+                                                                        audio_client:
+                                                                            low_latency_client,
+                                                                        render_client,
+                                                                        event_handle,
+                                                                        buffer_frame_count,
+                                                                        channels,
+                                                                        sample_rate,
+                                                                        sample_format: attempt
+                                                                            .sample_format,
+                                                                        transport_mode,
+                                                                        mode: stream_mode,
+                                                                        started: false,
+                                                                        low_latency_period_frames:
+                                                                            Some(selected_period),
+                                                                    });
+                                                                }
+                                                                Err(err) => {
+                                                                    let _ = windows::Win32::Foundation::CloseHandle(event_handle);
+                                                                    eprintln!(
+                                                                    "[NativeAudio][wasapi-shared-raw] IAudioClient3 GetService failed: {err}, falling back"
+                                                                );
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(err) => {
+                                                            let _ =
+                                                            windows::Win32::Foundation::CloseHandle(
+                                                                event_handle,
+                                                            );
+                                                            eprintln!(
+                                                            "[NativeAudio][wasapi-shared-raw] IAudioClient3 GetBufferSize failed: {err}, falling back"
+                                                        );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(err) => {
+                                                let _ = windows::Win32::Foundation::CloseHandle(
+                                                    event_handle,
+                                                );
+                                                eprintln!(
+                                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 InitializeSharedAudioStream failed: {err}, falling back to classic path"
+                                            );
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        eprintln!(
+                                        "[NativeAudio][wasapi-shared-raw] IAudioClient3 CreateEventW failed: {err}, falling back"
+                                    );
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 GetSharedModeEnginePeriod failed, falling back"
+                            );
+                            }
+                        } else {
+                            eprintln!(
+                                "[NativeAudio][wasapi-shared-raw] IAudioClient3 not available, falling back to classic path"
+                            );
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "[NativeAudio][wasapi-shared-raw] Failed to activate dedicated client for IAudioClient3, falling back"
+                    );
+                }
+            }
+
             let mut default_period = 0i64;
             let mut min_period = 0i64;
             if let Err(e) =
@@ -3962,6 +4377,7 @@ fn open_wasapi_stream(
                             transport_mode,
                             mode: stream_mode,
                             started: false,
+                            low_latency_period_frames: None,
                         });
                     }
 
@@ -4020,6 +4436,7 @@ fn open_wasapi_stream(
                     transport_mode,
                     mode: stream_mode,
                     started: false,
+                    low_latency_period_frames: None,
                 });
             }
         }
