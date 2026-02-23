@@ -235,6 +235,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function readRecordField(record: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in record) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
 function asTrimmedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -302,12 +311,12 @@ function ensureTrackSyncResult(value: unknown): NativeLibraryTrackSyncResult | n
 
 function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
   if (!isRecord(value)) return null;
-  const id = asTrimmedString(value.id);
-  const sourceId = asTrimmedString(value.sourceId);
-  const filePath = asTrimmedString(value.filePath);
-  const status = asTrimmedString(value.status);
-  const updatedAtMs = asNumber(value.updatedAtMs);
-  const playCount = asNumber(value.playCount);
+  const id = asTrimmedString(readRecordField(value, 'id'));
+  const sourceId = asTrimmedString(readRecordField(value, 'sourceId', 'source_id'));
+  const filePath = asTrimmedString(readRecordField(value, 'filePath', 'file_path'));
+  const status = asTrimmedString(readRecordField(value, 'status'));
+  const updatedAtMs = asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms'));
+  const playCount = asNumber(readRecordField(value, 'playCount', 'play_count'));
   if (
     !id ||
     !sourceId ||
@@ -323,20 +332,26 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     id,
     sourceId,
     filePath,
-    quickFingerprint: asOptionalString(value.quickFingerprint),
-    title: asOptionalString(value.title),
-    artist: asOptionalString(value.artist),
-    album: asOptionalString(value.album),
-    genre: asOptionalString(value.genre),
-    durationSeconds: asNumber(value.durationSeconds),
-    sampleRate: asNumber(value.sampleRate),
-    bitDepth: asNumber(value.bitDepth),
-    fileSize: asNumber(value.fileSize),
-    mtimeMs: asNumber(value.mtimeMs),
-    replayGainTrackDb: asNumber(value.replayGainTrackDb),
-    replayGainAlbumDb: asNumber(value.replayGainAlbumDb),
+    quickFingerprint: asOptionalString(
+      readRecordField(value, 'quickFingerprint', 'quick_fingerprint')
+    ),
+    title: asOptionalString(readRecordField(value, 'title')),
+    artist: asOptionalString(readRecordField(value, 'artist')),
+    album: asOptionalString(readRecordField(value, 'album')),
+    genre: asOptionalString(readRecordField(value, 'genre')),
+    durationSeconds: asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds')),
+    sampleRate: asNumber(readRecordField(value, 'sampleRate', 'sample_rate')),
+    bitDepth: asNumber(readRecordField(value, 'bitDepth', 'bit_depth')),
+    fileSize: asNumber(readRecordField(value, 'fileSize', 'file_size')),
+    mtimeMs: asNumber(readRecordField(value, 'mtimeMs', 'mtime_ms')),
+    replayGainTrackDb: asNumber(
+      readRecordField(value, 'replayGainTrackDb', 'replay_gain_track_db')
+    ),
+    replayGainAlbumDb: asNumber(
+      readRecordField(value, 'replayGainAlbumDb', 'replay_gain_album_db')
+    ),
     playCount: Math.max(0, Math.floor(playCount)),
-    lastPlayedAtMs: asNumber(value.lastPlayedAtMs),
+    lastPlayedAtMs: asNumber(readRecordField(value, 'lastPlayedAtMs', 'last_played_at_ms')),
     status,
     updatedAtMs,
   };

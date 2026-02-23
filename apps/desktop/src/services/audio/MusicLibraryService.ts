@@ -2735,6 +2735,8 @@ export class MusicLibraryService {
   ): Promise<void> {
     const silentProgress = options?.silentProgress ?? false;
     const enrichUnscannedMetadata = options?.enrichUnscannedMetadata ?? true;
+    const pickFiniteNumber = (...values: Array<number | null | undefined>): number | undefined =>
+      values.find((value): value is number => typeof value === 'number' && Number.isFinite(value));
 
     this.isScanning = true;
 
@@ -2792,10 +2794,13 @@ export class MusicLibraryService {
       const quick = await invoke<
         Array<{
           path: string;
-          fileName: string;
+          fileName?: string;
+          file_name?: string;
           size: number;
-          mtimeMs: number;
+          mtimeMs?: number;
+          mtime_ms?: number;
           quickFingerprint?: string | null;
+          quick_fingerprint?: string | null;
         }>
       >('music_library_scan', {
         paths: [folderPath],
@@ -2829,14 +2834,26 @@ export class MusicLibraryService {
       const needMetadataPaths: string[] = [];
 
       for (const item of quick) {
-        const normalizedPath = this.normalizePathForCompare(item.path);
+        const itemPath = String(item.path || '').trim();
+        if (!itemPath) {
+          continue;
+        }
+
+        const itemFileName =
+          String(item.fileName || item.file_name || '').trim() ||
+          itemPath.split(/[\\/]/).pop() ||
+          itemPath;
+        const itemMtimeMs = pickFiniteNumber(item.mtimeMs, item.mtime_ms) ?? 0;
+        const itemQuickFingerprint = this.sanitizeQuickFingerprint(
+          item.quickFingerprint ?? item.quick_fingerprint
+        );
+
+        const normalizedPath = this.normalizePathForCompare(itemPath);
         seen.add(normalizedPath);
 
-        const quickFingerprint = this.sanitizeQuickFingerprint(item.quickFingerprint);
-
         let prev = existingByPath.get(normalizedPath);
-        if (!prev && quickFingerprint) {
-          const fingerprintCandidates = existingByQuickFingerprint.get(quickFingerprint) || [];
+        if (!prev && itemQuickFingerprint) {
+          const fingerprintCandidates = existingByQuickFingerprint.get(itemQuickFingerprint) || [];
           prev =
             fingerprintCandidates.find((candidate) => {
               if (!candidate?.id || reusedTrackIds.has(candidate.id)) return false;
@@ -2856,31 +2873,57 @@ export class MusicLibraryService {
           prev &&
           typeof prev.mtimeMs === 'number' &&
           typeof prev.fileSize === 'number' &&
-          prev.mtimeMs === item.mtimeMs &&
+          prev.mtimeMs === itemMtimeMs &&
           prev.fileSize === item.size;
 
         const needsLibraryPathLink = Boolean(pathId) && prev && !prev.libraryPathId;
         const metadataScannedBefore = prev && typeof prev.metadataScannedAtMs === 'number';
-        const shouldProbeMetadata = isNew || !unchanged || (!metadataScannedBefore && enrichUnscannedMetadata);
+        const hasSampleRate =
+          !!prev &&
+          typeof prev.sampleRate === 'number' &&
+          Number.isFinite(prev.sampleRate) &&
+          prev.sampleRate > 0;
+        const hasDuration =
+          !!prev &&
+          typeof prev.duration === 'number' &&
+          Number.isFinite(prev.duration) &&
+          prev.duration > 0;
+        const hasFileSize =
+          !!prev &&
+          typeof prev.fileSize === 'number' &&
+          Number.isFinite(prev.fileSize) &&
+          prev.fileSize > 0;
+        const hasExplicitBitrate =
+          !!prev &&
+          typeof prev.bitrate === 'number' &&
+          Number.isFinite(prev.bitrate) &&
+          prev.bitrate > 0;
+        const hasBitrateDisplayData = hasExplicitBitrate || (hasDuration && hasFileSize);
+        const needsMetadataBackfill = !!prev && (!hasSampleRate || !hasBitrateDisplayData);
+        const shouldProbeMetadata =
+          isNew ||
+          !unchanged ||
+          (!metadataScannedBefore && enrichUnscannedMetadata) ||
+          (enrichUnscannedMetadata && needsMetadataBackfill);
 
-        if (shouldProbeMetadata) needMetadataPaths.push(item.path);
+        if (shouldProbeMetadata) needMetadataPaths.push(itemPath);
         if (!isNew && unchanged && !needsLibraryPathLink && !shouldProbeMetadata) continue;
 
-        const fallbackTitle = item.fileName.replace(/\.[^/.]+$/, '');
+        const fallbackTitle = itemFileName.replace(/\.[^/.]+$/, '');
         upserts.push(
           {
             ...(prev ?? {}),
-            id: prev?.id ?? this.stableIdFromPath(item.path),
+            id: prev?.id ?? this.stableIdFromPath(itemPath),
             title: prev?.title ?? fallbackTitle,
             fileSize: item.size,
-            mtimeMs: item.mtimeMs,
-            quickFingerprint: quickFingerprint ?? prev?.quickFingerprint,
-            filePath: item.path,
-            originalPath: item.path,
-            path: item.path,
+            mtimeMs: itemMtimeMs,
+            quickFingerprint: itemQuickFingerprint ?? prev?.quickFingerprint,
+            filePath: itemPath,
+            originalPath: itemPath,
+            path: itemPath,
             libraryPathId: pathId ?? prev?.libraryPathId,
             addedAt: prev?.addedAt ?? Date.now(),
-            mimeType: prev?.mimeType ?? this.guessMimeTypeFromPath(item.path),
+            mimeType: prev?.mimeType ?? this.guessMimeTypeFromPath(itemPath),
             file: undefined,
             fileContent: undefined,
           } as StoredTrackRecord
@@ -2903,17 +2946,23 @@ export class MusicLibraryService {
         const scannedMeta = await invoke<
           Array<{
             path: string;
-            fileName: string;
+            fileName?: string;
+            file_name?: string;
             size: number;
-            mtimeMs: number;
+            mtimeMs?: number;
+            mtime_ms?: number;
             quickFingerprint?: string | null;
+            quick_fingerprint?: string | null;
             duration?: number | null;
             sampleRate?: number | null;
+            sample_rate?: number | null;
             title?: string | null;
             artist?: string | null;
             album?: string | null;
             replayGainTrackDb?: number | null;
+            replay_gain_track_db?: number | null;
             replayGainAlbumDb?: number | null;
+            replay_gain_album_db?: number | null;
           }>
         >('music_library_scan', {
           paths: needMetadataPaths,
@@ -2939,16 +2988,29 @@ export class MusicLibraryService {
           if (title.length > 0) record.title = title;
           if (artist.length > 0) record.artist = artist;
           if (album.length > 0) record.album = album;
-          if (typeof meta.duration === 'number') record.duration = meta.duration;
-          if (typeof meta.sampleRate === 'number') record.sampleRate = meta.sampleRate;
-          if (typeof meta.replayGainTrackDb === 'number') {
-            record.replayGainTrackGainDb = meta.replayGainTrackDb;
+          const duration = pickFiniteNumber(meta.duration);
+          const sampleRate = pickFiniteNumber(meta.sampleRate, meta.sample_rate);
+          const replayGainTrackDb = pickFiniteNumber(
+            meta.replayGainTrackDb,
+            meta.replay_gain_track_db
+          );
+          const replayGainAlbumDb = pickFiniteNumber(
+            meta.replayGainAlbumDb,
+            meta.replay_gain_album_db
+          );
+
+          if (duration !== undefined) record.duration = duration;
+          if (sampleRate !== undefined) record.sampleRate = sampleRate;
+          if (replayGainTrackDb !== undefined) {
+            record.replayGainTrackGainDb = replayGainTrackDb;
           }
-          if (typeof meta.replayGainAlbumDb === 'number') {
-            record.replayGainAlbumGainDb = meta.replayGainAlbumDb;
+          if (replayGainAlbumDb !== undefined) {
+            record.replayGainAlbumGainDb = replayGainAlbumDb;
           }
 
-          const quickFingerprint = this.sanitizeQuickFingerprint(meta.quickFingerprint);
+          const quickFingerprint = this.sanitizeQuickFingerprint(
+            meta.quickFingerprint ?? meta.quick_fingerprint
+          );
           if (quickFingerprint) {
             record.quickFingerprint = quickFingerprint;
           }
@@ -3429,6 +3491,27 @@ export class MusicLibraryService {
     const toOptionalNumber = (value: unknown): number | undefined =>
       typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
+    const legacyTrack = storedTrack as StoredTrackRecord & {
+      sample_rate?: unknown;
+      bitrate_kbps?: unknown;
+      bitrate_bps?: unknown;
+      file_size?: unknown;
+      mtime_ms?: unknown;
+      replay_gain_track_db?: unknown;
+      replay_gain_album_db?: unknown;
+      quick_fingerprint?: unknown;
+      metadata_scanned_at_ms?: unknown;
+      library_path_id?: unknown;
+      original_path?: unknown;
+      cover_key?: unknown;
+    };
+
+    const rawBitrate = toOptionalNumber(
+      storedTrack.bitrate ?? legacyTrack.bitrate_kbps ?? legacyTrack.bitrate_bps
+    );
+    const normalizedBitrate =
+      typeof rawBitrate === 'number' ? (rawBitrate > 2000 ? rawBitrate / 1000 : rawBitrate) : undefined;
+
     const normalizedPath =
       toOptionalString(storedTrack.filePath) || toOptionalString(storedTrack.path) || undefined;
 
@@ -3447,13 +3530,17 @@ export class MusicLibraryService {
       trackNumber: toOptionalNumber(storedTrack.trackNumber),
       discNumber: toOptionalNumber(storedTrack.discNumber),
       composer: toOptionalString(storedTrack.composer),
-      bitrate: toOptionalNumber(storedTrack.bitrate),
-      sampleRate: toOptionalNumber(storedTrack.sampleRate),
-      replayGainTrackGainDb: toOptionalNumber(storedTrack.replayGainTrackGainDb),
-      replayGainAlbumGainDb: toOptionalNumber(storedTrack.replayGainAlbumGainDb),
+      bitrate: normalizedBitrate,
+      sampleRate: toOptionalNumber(storedTrack.sampleRate ?? legacyTrack.sample_rate),
+      replayGainTrackGainDb: toOptionalNumber(
+        storedTrack.replayGainTrackGainDb ?? legacyTrack.replay_gain_track_db
+      ),
+      replayGainAlbumGainDb: toOptionalNumber(
+        storedTrack.replayGainAlbumGainDb ?? legacyTrack.replay_gain_album_db
+      ),
       format: toOptionalString(storedTrack.format),
       codecName: toOptionalString(storedTrack.codecName),
-      fileSize: toOptionalNumber(storedTrack.fileSize),
+      fileSize: toOptionalNumber(storedTrack.fileSize ?? legacyTrack.file_size),
       dateAdded: toOptionalNumber(storedTrack.dateAdded),
       lastPlayed: toOptionalNumber(storedTrack.lastPlayed),
       playCount: toOptionalNumber(storedTrack.playCount),
@@ -3464,12 +3551,16 @@ export class MusicLibraryService {
         : undefined,
       comment: toOptionalString(storedTrack.comment),
       mimeType: toOptionalString(storedTrack.mimeType),
-      quickFingerprint: this.sanitizeQuickFingerprint(storedTrack.quickFingerprint),
-      mtimeMs: toOptionalNumber(storedTrack.mtimeMs),
-      metadataScannedAtMs: toOptionalNumber(storedTrack.metadataScannedAtMs),
-      libraryPathId: toOptionalString(storedTrack.libraryPathId),
-      originalPath: toOptionalString(storedTrack.originalPath),
-      coverKey: toOptionalString(storedTrack.coverKey),
+      quickFingerprint: this.sanitizeQuickFingerprint(
+        storedTrack.quickFingerprint ?? legacyTrack.quick_fingerprint
+      ),
+      mtimeMs: toOptionalNumber(storedTrack.mtimeMs ?? legacyTrack.mtime_ms),
+      metadataScannedAtMs: toOptionalNumber(
+        storedTrack.metadataScannedAtMs ?? legacyTrack.metadata_scanned_at_ms
+      ),
+      libraryPathId: toOptionalString(storedTrack.libraryPathId ?? legacyTrack.library_path_id),
+      originalPath: toOptionalString(storedTrack.originalPath ?? legacyTrack.original_path),
+      coverKey: toOptionalString(storedTrack.coverKey ?? legacyTrack.cover_key),
       path: normalizedPath,
       filePath: normalizedPath,
     };

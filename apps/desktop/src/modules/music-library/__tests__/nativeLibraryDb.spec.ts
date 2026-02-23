@@ -65,6 +65,42 @@ describe('nativeLibraryDb', () => {
     });
   });
 
+  it('parses snake_case track payload fields for compatibility', async () => {
+    tauriMocks.invoke.mockResolvedValue([
+      {
+        id: 'track-1',
+        source_id: 'source-1',
+        file_path: 'D:/Music/a.mp3',
+        quick_fingerprint: 'qf2:abcdef1234567890',
+        duration_seconds: 267.4,
+        sample_rate: 44100,
+        bit_depth: 16,
+        file_size: 1234567,
+        mtime_ms: 1700000000123,
+        replay_gain_track_db: -6.2,
+        replay_gain_album_db: -5.7,
+        play_count: 2,
+        last_played_at_ms: 1700000100000,
+        status: 'available',
+        updated_at_ms: 1700000200000,
+      },
+    ]);
+
+    const rows = await queryNativeLibraryTracks({ includeMissing: true, visibleOnly: false });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: 'track-1',
+      sourceId: 'source-1',
+      filePath: 'D:/Music/a.mp3',
+      sampleRate: 44100,
+      durationSeconds: 267.4,
+      fileSize: 1234567,
+      playCount: 2,
+      status: 'available',
+    });
+  });
+
   it('parses native source records with trackCount', async () => {
     tauriMocks.invoke.mockResolvedValue([
       {

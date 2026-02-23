@@ -298,6 +298,8 @@ const LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX = 72;
 const LOCAL_TRACK_GRID_GAP_PX = 10;
 const LOCAL_TRACK_TITLE_MAX_VIEWPORT_RATIO = 0.5;
 
+const LEFT_ALIGNED_LOCAL_TRACK_COLUMNS = new Set<LocalTrackColumnId>(['title', 'artist', 'album']);
+
 const DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS: LocalTrackColumnConfig[] = LOCAL_TRACK_COLUMN_ORDER.map((id) => ({
   id,
   visible: DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS.has(id),
@@ -601,6 +603,22 @@ function buildModuleCacheSnapshot(input: {
   };
 }
 
+function isModuleCacheTrackMetadataCompatible(snapshot: ModuleCacheSnapshot): boolean {
+  return snapshot.tracks.every((track) => {
+    const hasDuration =
+      typeof track.duration === 'number' && Number.isFinite(track.duration) && track.duration > 0;
+    if (!hasDuration) {
+      return true;
+    }
+
+    const hasBitrate =
+      typeof track.bitrate === 'number' && Number.isFinite(track.bitrate) && track.bitrate > 0;
+    const hasFileSize =
+      typeof track.fileSize === 'number' && Number.isFinite(track.fileSize) && track.fileSize > 0;
+    return hasBitrate || hasFileSize;
+  });
+}
+
 function trimTrackText(value: unknown, maxChars: number = TRACK_TEXT_MAX_CHARS): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -638,6 +656,9 @@ function compactTrackForLibrary(track: Track): Track {
   const safeCoverKey = internTrackText(trimTrackText(track.coverKey, 256));
   const safeOriginalPath = internTrackText(trimTrackText(track.originalPath, 512));
   const safeQuickFingerprint = internTrackText(trimTrackText(track.quickFingerprint, 80));
+  const safeComposer = internTrackText(trimTrackText(track.composer));
+  const safeFormat = internTrackText(trimTrackText(track.format, 32));
+  const safeCodecName = internTrackText(trimTrackText(track.codecName, 48));
 
   return {
     id: track.id,
@@ -647,6 +668,19 @@ function compactTrackForLibrary(track: Track): Track {
     genre: safeGenre,
     duration: typeof track.duration === 'number' ? track.duration : undefined,
     year: typeof track.year === 'number' ? track.year : undefined,
+    trackNumber: typeof track.trackNumber === 'number' ? track.trackNumber : undefined,
+    discNumber: typeof track.discNumber === 'number' ? track.discNumber : undefined,
+    composer: safeComposer,
+    bitrate: typeof track.bitrate === 'number' ? track.bitrate : undefined,
+    sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : undefined,
+    format: safeFormat,
+    codecName: safeCodecName,
+    fileSize: typeof track.fileSize === 'number' ? track.fileSize : undefined,
+    dateAdded: typeof track.dateAdded === 'number' ? track.dateAdded : undefined,
+    lastPlayed: typeof track.lastPlayed === 'number' ? track.lastPlayed : undefined,
+    playCount: typeof track.playCount === 'number' ? track.playCount : undefined,
+    rating: typeof track.rating === 'number' ? track.rating : undefined,
+    favorite: typeof track.favorite === 'boolean' ? track.favorite : undefined,
     filePath: typeof safePath === 'string' && safePath ? safePath : track.filePath,
     path: safePath,
     originalPath: safeOriginalPath,
@@ -1544,7 +1578,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     // 閴?缁斿宓嗛弰鍓с仛濡€虫健缂傛挸鐡ㄩ弫鐗堝祦閿涘牆顩ч弸婊勬箒閺佸牞绱?
     const now = Date.now();
-    if (moduleCache && now - moduleCache.timestamp < CACHE_DURATION) {
+    if (
+      moduleCache &&
+      now - moduleCache.timestamp < CACHE_DURATION &&
+      isModuleCacheTrackMetadataCompatible(moduleCache)
+    ) {
       console.log('Using module cache for instant display');
       setTracks(moduleCache.tracks);
       setArtists(moduleCache.artists);
@@ -3515,9 +3553,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const renderLocalTrackColumnValue = useCallback(
     (track: Track, columnId: LocalTrackColumnId): string => {
-      const resolveEstimatedBitrate = (): number | null => {
+      const resolveBitrateKbps = (): number | null => {
         if (typeof track.bitrate === 'number' && Number.isFinite(track.bitrate) && track.bitrate > 0) {
-          return track.bitrate;
+          return track.bitrate >= 2000 ? track.bitrate / 1000 : track.bitrate;
         }
 
         if (
@@ -3528,7 +3566,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           Number.isFinite(track.duration) &&
           track.duration > 0
         ) {
-          const estimated = (track.fileSize * 8) / track.duration;
+          const estimated = (track.fileSize * 8) / track.duration / 1000;
           if (Number.isFinite(estimated) && estimated > 0) {
             return estimated;
           }
@@ -3578,9 +3616,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         case 'composer':
           return track.composer || '-';
         case 'bitrate': {
-          const bitrate = resolveEstimatedBitrate();
+          const bitrate = resolveBitrateKbps();
           return typeof bitrate === 'number' && Number.isFinite(bitrate)
-            ? `${Math.max(0, Math.round(bitrate / 1000))} kbps`
+            ? `${Math.max(0, Math.round(bitrate))} kbps`
             : '-';
         }
         case 'sampleRate':
@@ -4248,9 +4286,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                             </div>
                           );
                         })}
-                        <div className="music-library-list-header-cell music-library-list-header-actions">
-                          {t('pages.music-library.tracks.header.actions')}
-                        </div>
+                        <div
+                          className="music-library-list-header-cell music-library-list-header-actions"
+                          aria-hidden="true"
+                        />
                       </div>
                     </div>
                   </div>
@@ -4286,8 +4325,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       {renderedLocalTrackColumns.map((column) => {
                         const value = renderLocalTrackColumnValue(track, column.id);
                         const className = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].className;
+                        const alignClass = LEFT_ALIGNED_LOCAL_TRACK_COLUMNS.has(column.id)
+                          ? 'music-library-track-cell-left'
+                          : 'music-library-track-cell-right';
                         return (
-                          <div key={`${track.id}-${column.id}`} className={className} title={value}>
+                          <div
+                            key={`${track.id}-${column.id}`}
+                            className={`${className} ${alignClass}`}
+                            title={value}
+                          >
                             {value}
                           </div>
                         );
