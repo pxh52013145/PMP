@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy::{
     runtime_rebuffer_threshold_samples, streaming_min_start_bounds,
     streaming_prebuffer_default_seconds, streaming_transfer_watermarks,
@@ -451,6 +452,22 @@ pub struct NativeAudioStreamingBufferSettingsPayload {
     pub crossfade_seconds: Option<f64>,
     pub decode_mode: String,
     pub interactive_profile: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct StreamingPrebufferWaitRequest {
+    pub render_queue: AudioRingBuffer,
+    pub target_samples: usize,
+    pub timeout: Duration,
+}
+
+struct PlayPrebufferPlan {
+    decode_reservoir: AudioRingBuffer,
+    render_queue: AudioRingBuffer,
+    min_start_samples: usize,
+    wait_timeout: Duration,
+    available: usize,
+    finished: bool,
 }
 
 pub(crate) struct NativeAudioEngine {
@@ -1893,7 +1910,118 @@ impl NativeAudioEngine {
         Ok(())
     }
 
+    fn refresh_recovery_window_state(&mut self) -> bool {
+        let now_for_recovery = Instant::now();
+        let underrun_recovery_active = self
+            .underrun_recovery_until
+            .is_some_and(|until| until > now_for_recovery);
+        let shared_stress_active = self
+            .shared_timeline_stress_until
+            .is_some_and(|until| until > now_for_recovery);
+
+        if !underrun_recovery_active {
+            self.underrun_recovery_until = None;
+        }
+        if !shared_stress_active {
+            self.shared_timeline_stress_until = None;
+        }
+
+        underrun_recovery_active || shared_stress_active
+    }
+
+    fn play_prebuffer_plan(&mut self) -> Option<PlayPrebufferPlan> {
+        let robust_recovery_active = self.refresh_recovery_window_state();
+        let streaming = self.streaming.as_ref()?;
+
+        let channels = self.decoded_channels.max(1) as usize;
+        let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
+            (self.duration - self.current_position).max(0.0)
+        } else {
+            self.duration
+        };
+
+        let decode_reservoir = streaming.buffer.clone();
+        let render_queue = streaming.render_queue.clone();
+        let (target_samples, wait_timeout) = streaming_prebuffer_target_samples(
+            self.output_backend.id(),
+            self.decoded_sample_rate,
+            channels,
+            render_queue.capacity_samples(),
+            remaining_duration,
+            StreamingPrebufferKind::StartOrSeek,
+            self.streaming_prebuffer_start_or_seek_seconds,
+        );
+
+        if target_samples == 0 {
+            return None;
+        }
+
+        let sample_rate = self.decoded_sample_rate.max(1) as f64;
+        let channels_f64 = channels.max(1) as f64;
+        let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
+        let (min_seconds_cap, min_seconds_floor) =
+            streaming_min_start_bounds(self.output_backend.id(), robust_recovery_active);
+        let min_start_seconds = target_seconds
+            .min(min_seconds_cap)
+            .max(min_seconds_floor)
+            .min(target_seconds);
+        let mut min_start_samples = ((sample_rate * channels_f64 * min_start_seconds).ceil()
+            as usize)
+            .clamp(1, target_samples);
+
+        let available = render_queue.len_samples();
+        let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
+            (available as f64) / (sample_rate * channels_f64)
+        } else {
+            0.0
+        };
+        let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
+        min_start_samples = clamp_min_start_samples_to_reachable(
+            min_start_samples,
+            target_samples,
+            render_queue.capacity_samples(),
+            channels,
+            profile,
+        );
+
+        let finished = decode_reservoir.is_finished() && render_queue.is_finished();
+
+        Some(PlayPrebufferPlan {
+            decode_reservoir,
+            render_queue,
+            min_start_samples,
+            wait_timeout,
+            available,
+            finished,
+        })
+    }
+
+    pub(crate) fn extract_play_prebuffer_wait_request(
+        &mut self,
+    ) -> Option<StreamingPrebufferWaitRequest> {
+        self.update_shared_timeline_stress_window();
+        let plan = self.play_prebuffer_plan()?;
+
+        if plan.available < plan.min_start_samples && !plan.finished {
+            Some(StreamingPrebufferWaitRequest {
+                render_queue: plan.render_queue,
+                target_samples: plan.min_start_samples,
+                timeout: plan.wait_timeout,
+            })
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn play(&mut self) -> Result<(), String> {
+        self.play_internal(true)
+    }
+
+    pub(crate) fn play_without_prebuffer_wait(&mut self) -> Result<(), String> {
+        self.play_internal(false)
+    }
+
+    fn play_internal(&mut self, allow_prebuffer_wait: bool) -> Result<(), String> {
         if self.sink.is_none() {
             if let Some(track_path) = self.current_track.clone() {
                 self.reload_track_for_seek_recovery(track_path)?;
@@ -1907,88 +2035,28 @@ impl NativeAudioEngine {
             .ok_or_else(|| "No track loaded".to_string())?;
 
         self.update_shared_timeline_stress_window();
-        if let Some(streaming) = self.streaming.as_ref() {
-            let now_for_recovery = Instant::now();
-            let underrun_recovery_active = self
-                .underrun_recovery_until
-                .is_some_and(|until| until > now_for_recovery);
-            let shared_stress_active = self
-                .shared_timeline_stress_until
-                .is_some_and(|until| until > now_for_recovery);
-            if !underrun_recovery_active {
-                self.underrun_recovery_until = None;
-            }
-            if !shared_stress_active {
-                self.shared_timeline_stress_until = None;
-            }
-            let robust_recovery_active = underrun_recovery_active || shared_stress_active;
+        if let Some(plan) = self.play_prebuffer_plan() {
+            self.desired_playback_state = PlaybackState::Playing;
+            if plan.available < plan.min_start_samples && !plan.finished {
+                sink.pause();
+                self.sync_clock();
+                self.playback_state = PlaybackState::Buffering;
+                let now = Instant::now();
+                self.buffering_started_at = Some(now);
+                self.buffering_last_progress_at = Some(now);
+                self.buffering_last_samples = plan.available;
+                self.buffering_resume_samples = plan.min_start_samples;
 
-            let channels = self.decoded_channels.max(1) as usize;
-            let remaining_duration = if self.duration.is_finite() && self.duration > 0.0 {
-                (self.duration - self.current_position).max(0.0)
-            } else {
-                self.duration
-            };
-
-            let decode_reservoir = streaming.buffer.clone();
-            let render_queue = streaming.render_queue.clone();
-            let (target_samples, wait_timeout) = streaming_prebuffer_target_samples(
-                self.output_backend.id(),
-                self.decoded_sample_rate,
-                channels,
-                render_queue.capacity_samples(),
-                remaining_duration,
-                StreamingPrebufferKind::StartOrSeek,
-                self.streaming_prebuffer_start_or_seek_seconds,
-            );
-
-            if target_samples > 0 {
-                let sample_rate = self.decoded_sample_rate.max(1) as f64;
-                let channels_f64 = channels.max(1) as f64;
-                let target_seconds = target_samples as f64 / (sample_rate * channels_f64);
-                let (min_seconds_cap, min_seconds_floor) =
-                    streaming_min_start_bounds(self.output_backend.id(), robust_recovery_active);
-                let min_start_seconds = target_seconds
-                    .min(min_seconds_cap)
-                    .max(min_seconds_floor)
-                    .min(target_seconds);
-                let mut min_start_samples =
-                    ((sample_rate * channels_f64 * min_start_seconds).ceil() as usize)
-                        .clamp(1, target_samples);
-
-                let available = render_queue.len_samples();
-                let buffered_ahead_seconds = if sample_rate > 0.0 && channels_f64 > 0.0 {
-                    (available as f64) / (sample_rate * channels_f64)
-                } else {
-                    0.0
-                };
-                let profile = SCHEDULER.update(buffered_ahead_seconds, robust_recovery_active);
-                min_start_samples = clamp_min_start_samples_to_reachable(
-                    min_start_samples,
-                    target_samples,
-                    render_queue.capacity_samples(),
-                    channels,
-                    profile,
-                );
-                self.desired_playback_state = PlaybackState::Playing;
-                let finished = decode_reservoir.is_finished() && render_queue.is_finished();
-                if available < min_start_samples && !finished {
-                    sink.pause();
-                    self.sync_clock();
-                    self.playback_state = PlaybackState::Buffering;
-                    let now = Instant::now();
-                    self.buffering_started_at = Some(now);
-                    self.buffering_last_progress_at = Some(now);
-                    self.buffering_last_samples = available;
-                    self.buffering_resume_samples = min_start_samples;
-
+                if allow_prebuffer_wait {
                     // Fast-path: wait briefly for initial decoded samples so click-to-play does
                     // not depend on the emitter tick cadence.
-                    render_queue.wait_for_samples(min_start_samples, wait_timeout);
+                    plan.render_queue
+                        .wait_for_samples(plan.min_start_samples, plan.wait_timeout);
 
-                    let available = render_queue.len_samples();
-                    let finished = decode_reservoir.is_finished() && render_queue.is_finished();
-                    if available >= min_start_samples || (finished && available > 0) {
+                    let available = plan.render_queue.len_samples();
+                    let finished =
+                        plan.decode_reservoir.is_finished() && plan.render_queue.is_finished();
+                    if available >= plan.min_start_samples || (finished && available > 0) {
                         self.play_sink_with_shared_guard(&sink);
                         self.buffering_started_at = None;
                         self.buffering_last_progress_at = None;
@@ -1998,8 +2066,8 @@ impl NativeAudioEngine {
                         self.base_position = self.current_position;
                         self.playback_started_at = Some(Instant::now());
                     }
-                    return Ok(());
                 }
+                return Ok(());
             }
         }
 

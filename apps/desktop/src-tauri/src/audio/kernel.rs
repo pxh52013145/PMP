@@ -40,6 +40,15 @@ fn with_engine_mut<T>(f: impl FnOnce(&mut NativeAudioEngine) -> T) -> Result<T, 
     Ok(f(&mut engine))
 }
 
+fn wait_for_streaming_prebuffer(wait: Option<engine::StreamingPrebufferWaitRequest>) {
+    if let Some(wait) = wait {
+        if wait.render_queue.len_samples() < wait.target_samples {
+            wait.render_queue
+                .wait_for_samples(wait.target_samples, wait.timeout);
+        }
+    }
+}
+
 fn prepare_load_for_operation(
     op: &LoadOperation,
     track_path: &Path,
@@ -164,11 +173,11 @@ fn prepare_crossfade_for_operation(
             op.streaming_prebuffer_crossfade_seconds,
             op.interactive_wait_policy,
         );
-        if streaming.render_queue.len_samples() < target_samples {
-            streaming
-                .render_queue
-                .wait_for_samples(target_samples, timeout);
-        }
+        wait_for_streaming_prebuffer(Some(engine::StreamingPrebufferWaitRequest {
+            render_queue: streaming.render_queue.clone(),
+            target_samples,
+            timeout,
+        }));
     }
 
     let next_source = coerce_source_format(source, op.target_channels, op.target_sample_rate);
@@ -256,42 +265,52 @@ pub(crate) fn execute_load_and_play(
         prepared.is_ok() as u64,
     );
 
-    let execution = match prepared {
-        Ok(prepared) => with_engine_mut(|engine| {
-            let result = (|| -> Result<(), String> {
-                let committed =
-                    engine
-                        .commit_load_operation(op.token, prepared)
-                        .map_err(|err| {
-                            engine.abandon_operation(op.token);
-                            engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
-                            err
-                        })?;
-
-                if committed {
-                    engine.set_replay_gain(replay_gain_db);
-                    if let Err(err) = engine.play() {
-                        engine.set_error("NATIVE_AUDIO_PLAY_FAILED", err);
+    let (result, committed, prebuffer_wait) = match prepared {
+        Ok(prepared) => {
+            with_engine_mut(
+                |engine| match engine.commit_load_operation(op.token, prepared) {
+                    Ok(committed) => {
+                        if committed {
+                            engine.set_replay_gain(replay_gain_db);
+                        }
+                        let prebuffer_wait = if committed {
+                            engine.extract_play_prebuffer_wait_request()
+                        } else {
+                            None
+                        };
+                        (Ok(()), committed, prebuffer_wait)
                     }
-                }
-
-                Ok(())
-            })();
-
-            TransportExecution {
-                result,
-                state_payload: engine.build_transport_state_payload(false),
-            }
-        })?,
+                    Err(err) => {
+                        engine.abandon_operation(op.token);
+                        engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
+                        (Err(err), false, None)
+                    }
+                },
+            )?
+        }
         Err(err) => with_engine_mut(|engine| {
             engine.abandon_operation(op.token);
             engine.set_error("NATIVE_AUDIO_LOAD_FAILED", err.clone());
-            TransportExecution {
-                result: Err(err),
-                state_payload: engine.build_transport_state_payload(false),
-            }
+            (Err(err), false, None)
         })?,
     };
+
+    if committed {
+        wait_for_streaming_prebuffer(prebuffer_wait);
+    }
+
+    let execution = with_engine_mut(move |engine| {
+        if committed {
+            if let Err(err) = engine.play_without_prebuffer_wait() {
+                engine.set_error("NATIVE_AUDIO_PLAY_FAILED", err);
+            }
+        }
+
+        TransportExecution {
+            result,
+            state_payload: engine.build_transport_state_payload(false),
+        }
+    })?;
 
     crate::audio::diagnostics::record_event(
         "transport.load_and_play.total",
@@ -303,8 +322,11 @@ pub(crate) fn execute_load_and_play(
 }
 
 pub(crate) fn execute_play() -> Result<TransportExecution, String> {
+    let prebuffer_wait = with_engine_mut(|engine| engine.extract_play_prebuffer_wait_request())?;
+    wait_for_streaming_prebuffer(prebuffer_wait);
+
     let execution = with_engine_mut(|engine| {
-        let result = engine.play().map_err(|err| {
+        let result = engine.play_without_prebuffer_wait().map_err(|err| {
             engine.set_error("NATIVE_AUDIO_PLAY_FAILED", err.clone());
             err
         });
@@ -498,7 +520,7 @@ pub(crate) fn apply_engine_policy(
 
     if let Some(context) = maybe_rebuild {
         let prepared = prepare_load_for_operation(&context.op, &context.track_path);
-        with_engine_mut(|engine| match prepared {
+        let (should_resume, prebuffer_wait) = with_engine_mut(|engine| match prepared {
             Ok(prepared) => {
                 let committed = engine
                     .commit_load_operation(context.op.token, prepared)
@@ -515,17 +537,27 @@ pub(crate) fn apply_engine_policy(
                         }
                     }
                     if context.resume_playing {
-                        if let Err(err) = engine.play() {
-                            engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
-                        }
+                        return (true, engine.extract_play_prebuffer_wait_request());
                     }
                 }
+
+                (false, None)
             }
             Err(err) => {
                 engine.abandon_operation(context.op.token);
                 engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
+                (false, None)
             }
         })?;
+
+        if should_resume {
+            wait_for_streaming_prebuffer(prebuffer_wait);
+            with_engine_mut(|engine| {
+                if let Err(err) = engine.play_without_prebuffer_wait() {
+                    engine.set_error("NATIVE_AUDIO_SRC_RECONFIGURE_FAILED", err);
+                }
+            })?;
+        }
     }
 
     Ok(policy_payload)
@@ -534,6 +566,13 @@ pub(crate) fn apply_engine_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use crate::audio::buffer::AudioRingBuffer;
 
     #[test]
     fn crossfade_returns_fallback_when_transport_is_not_playing() {
@@ -561,5 +600,47 @@ mod tests {
         let execution = execute_seek_command(0, 1.0, Some(1)).expect("seek execution");
         assert!(execution.result.is_ok(), "invalid seek should be ignored");
         assert!(execution.state_payload.error_code.is_none());
+    }
+
+    #[test]
+    fn prebuffer_wait_does_not_hold_engine_mutex() {
+        let render_queue = AudioRingBuffer::new(1024);
+        let wait = engine::StreamingPrebufferWaitRequest {
+            render_queue,
+            target_samples: 512,
+            timeout: Duration::from_millis(140),
+        };
+
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_worker = barrier.clone();
+        let wait_thread = thread::spawn(move || {
+            barrier_worker.wait();
+            let started_at = Instant::now();
+            wait_for_streaming_prebuffer(Some(wait));
+            started_at.elapsed()
+        });
+
+        barrier.wait();
+
+        let probe_deadline = Instant::now() + Duration::from_millis(120);
+        let mut acquired = false;
+        while Instant::now() < probe_deadline {
+            if let Ok(guard) = ENGINE.try_lock() {
+                drop(guard);
+                acquired = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let waited = wait_thread.join().expect("wait thread should complete");
+        assert!(
+            acquired,
+            "engine mutex should remain lockable while prebuffer wait is in-flight"
+        );
+        assert!(
+            waited >= Duration::from_millis(120),
+            "expected prebuffer wait to block long enough for lock probing, waited={waited:?}"
+        );
     }
 }
