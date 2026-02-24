@@ -114,5 +114,11 @@ docs/examples/**/dist/
 docs/perf-snapshots/*.csv
 docs/examples/**/*.pmpm
 
+# Root docs and local architecture notes
+/MUSIC_LIBRARY.md
+/AGENTS.md
+/PMP_STORAGE_LOCATIONS.md
+/docs/
+
 # Manuals (work-in-progress)
 Mannuals/

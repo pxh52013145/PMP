@@ -1,7 +1,0 @@
-phase_id,phase_name,duration,target,deliverables,exit_criteria,risk,rollback
-P0,基线与观测加固,1w,统一指标与门禁,"统一underrun/buffer/rebuffer/true-peak指标;音频冒烟模板命令",可稳定复现干扰并输出一致指标,指标口径不一致,保留旧日志路径与对比脚本
-P1,实时调度控制器,2w,动态线程调度,"RealtimeScheduler状态机;输出线程高优先级;解码动态boost;扫描后台降权;调度升降级策略表",CPU干扰下underrun下降>=70%,过度升权影响系统流畅度,PMP_AUDIO_RT_SCHEDULER=off
-P2,缓冲与队列重构,2w,降低欠载与抖动,"双层缓冲(Decode Reservoir+Render Queue);块级推拉队列;块完整性元数据;输出块渲染路径;自适应预缓冲",30分钟干扰播放无持续增长欠载且无busy-loop,seek/crossfade边界回归,保留旧buffer adapter
-P3,TransportExact通路,2w,建立可验证传输位完美,"TransportExact模式;Int32容器默认量化;能力检测;冲突功能自动屏蔽;样本位模式一致性校验",支持设备进入成功率>95%;冲突功能拦截100%;数字一致性通过,设备兼容差异,自动回退Robust并提示
-P4,高保真升频与量化,2w,提升SRC和量化质量,"HQ SRC(>=140dB阻带);True Peak/Headroom;TPDF dither;noise shaping;默认Linear Phase;CPU SIMD优先",低电平线性优于round-only路径且镜像混叠/ISP事件显著下降,参数不当导致音色偏移,提供旧SRC/量化开关
-P5,稳定性收敛与发布门禁,1w,形成发布标准,"回归脚本组合;报告模板;门禁阈值固化",满足门禁阈值后发布,测试覆盖不足,延后发布并补齐回归
