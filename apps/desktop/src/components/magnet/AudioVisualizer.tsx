@@ -4,9 +4,51 @@ import { useQuality } from '../../contexts/QualityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
 import './AudioVisualizer.css';
 
+type RgbColor = { r: number; g: number; b: number };
+
+const DEFAULT_VISUALIZER_COLOR: RgbColor = { r: 23, g: 247, b: 0 };
+
+function clampByte(value: number): number {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function parseCssColorToRgb(color: string | undefined): RgbColor | null {
+  if (!color) return null;
+  const value = color.trim();
+  if (!value) return null;
+
+  const rgbMatch = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+\s*)?\)$/i.exec(value);
+  if (rgbMatch) {
+    const red = Number(rgbMatch[1]);
+    const green = Number(rgbMatch[2]);
+    const blue = Number(rgbMatch[3]);
+    if ([red, green, blue].every((channel) => Number.isFinite(channel))) {
+      return { r: clampByte(red), g: clampByte(green), b: clampByte(blue) };
+    }
+  }
+
+  const hexMatch = /^#([\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i.exec(value);
+  if (!hexMatch) return null;
+
+  const hex = hexMatch[1] ?? '';
+  if (hex.length === 3) {
+    const red = parseInt(hex[0] + hex[0], 16);
+    const green = parseInt(hex[1] + hex[1], 16);
+    const blue = parseInt(hex[2] + hex[2], 16);
+    return { r: red, g: green, b: blue };
+  }
+
+  const normalized = hex.length === 8 ? hex.slice(0, 6) : hex;
+  const red = parseInt(normalized.slice(0, 2), 16);
+  const green = parseInt(normalized.slice(2, 4), 16);
+  const blue = parseInt(normalized.slice(4, 6), 16);
+  return { r: red, g: green, b: blue };
+}
+
 interface AudioVisualizerProps {
   getFrequencyData: () => Uint8Array | null;
   isPlaying: boolean;
+  accentColor?: string;
 }
 
 /**
@@ -17,7 +59,11 @@ interface AudioVisualizerProps {
  * - Uses log-frequency mapping + perceptual tilt to avoid low-end dominance
  * - Smooths levels for a fluid pulse
  */
-export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyData, isPlaying }) => {
+export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
+  getFrequencyData,
+  isPlaying,
+  accentColor,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>();
@@ -43,6 +89,8 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const visualizerColor = parseCssColorToRgb(accentColor) ?? DEFAULT_VISUALIZER_COLOR;
 
     const animationGeneration = animationGenerationRef.current + 1;
     animationGenerationRef.current = animationGeneration;
@@ -179,9 +227,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
       bassEnergy /= bassBins;
       const pulse = Math.min(1, bassEnergy * 1.8);
 
-      const r = 23;
-      const g = 247;
-      const b = 0;
+      const { r, g, b } = visualizerColor;
 
       const minSide = Math.min(width, height);
       const centerX = width / 2;
@@ -287,6 +333,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ getFrequencyDa
       resizeObserver?.disconnect();
     };
   }, [
+    accentColor,
     getFrequencyData,
     quality.fpsBackground,
     quality.fpsEffects,

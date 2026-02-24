@@ -53,13 +53,19 @@ export interface StyleEditorModel {
   openColorPicker: (type: 'background' | 'border', event: React.MouseEvent<HTMLButtonElement>) => Promise<void>;
 }
 
+const COVER_COLOR_COMPONENT_IDS = ['track-info', 'progress-bar', 'audio-visualizer', 'btn-play-pause'] as const;
+
 export function useStyleEditorModel(): StyleEditorModel {
   const { theme, applyTheme, getComponentTheme } = useTheme();
 
   const currentCoverColorConfig: DynamicColorConfig = useMemo(() => {
-    const trackInfoConfig = getComponentTheme('track-info').dynamicColor;
-    const progressBarConfig = getComponentTheme('progress-bar').dynamicColor;
-    return (trackInfoConfig ?? progressBarConfig ?? {}) as DynamicColorConfig;
+    for (const componentId of COVER_COLOR_COMPONENT_IDS) {
+      const config = getComponentTheme(componentId).dynamicColor;
+      if (config) {
+        return config as DynamicColorConfig;
+      }
+    }
+    return {} as DynamicColorConfig;
   }, [getComponentTheme]);
 
   const coverColorEnabled = currentCoverColorConfig.extractFromCover !== false;
@@ -69,28 +75,24 @@ export function useStyleEditorModel(): StyleEditorModel {
 
   const applyCoverColorConfig = useCallback(
     async (partial: Partial<DynamicColorConfig>) => {
-      const currentTrackInfoTheme = getComponentTheme('track-info');
-      const currentProgressBarTheme = getComponentTheme('progress-bar');
+      const nextComponentThemes = {
+        ...(theme.componentThemes ?? {}),
+      };
+
+      for (const componentId of COVER_COLOR_COMPONENT_IDS) {
+        const currentComponentTheme = getComponentTheme(componentId);
+        nextComponentThemes[componentId] = {
+          ...currentComponentTheme,
+          dynamicColor: {
+            ...(currentComponentTheme.dynamicColor ?? {}),
+            ...partial,
+          },
+        };
+      }
 
       const nextTheme = {
         ...theme,
-        componentThemes: {
-          ...(theme.componentThemes ?? {}),
-          'track-info': {
-            ...currentTrackInfoTheme,
-            dynamicColor: {
-              ...(currentTrackInfoTheme.dynamicColor ?? {}),
-              ...partial,
-            },
-          },
-          'progress-bar': {
-            ...currentProgressBarTheme,
-            dynamicColor: {
-              ...(currentProgressBarTheme.dynamicColor ?? {}),
-              ...partial,
-            },
-          },
-        },
+        componentThemes: nextComponentThemes,
       };
 
       await applyTheme(nextTheme);
