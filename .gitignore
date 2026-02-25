@@ -120,5 +120,8 @@ docs/examples/**/*.pmpm
 /PMP_STORAGE_LOCATIONS.md
 /docs/
 
+# Local blueprint drafts (do not commit)
+/documents/local/
+
 # Manuals (work-in-progress)
 Mannuals/
