@@ -12,6 +12,10 @@ import { BACK_BUTTON_MAGNET } from '../../data/builtin/backButtonMagnet';
 import { AUDIO_VISUALIZER_MAGNET } from '../../data/builtin/audioVisualizerMagnet';
 import { PROCESS_PERF_MONITOR_MAGNET } from '../../data/builtin/processPerfMonitorMagnet';
 import {
+  PLATFORM_LOGIN_MAGNET,
+  PLATFORM_MAGNET,
+} from '../../data/builtin/platformMagnets';
+import {
   PLAY_QUEUE_MAGNET,
   PLAYLISTS_MAGNET,
   MUSIC_LIBRARY_MAGNET,
@@ -38,6 +42,8 @@ export function createDefaultMagnetLibrary(): Magnet[] {
     PLAYLISTS_MAGNET,
     MUSIC_LIBRARY_MAGNET,
     NAVIGATION_PAGE_MAGNET,
+    PLATFORM_MAGNET,
+    PLATFORM_LOGIN_MAGNET,
     BACK_BUTTON_MAGNET,
   ];
 }

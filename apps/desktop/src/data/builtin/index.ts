@@ -14,6 +14,7 @@ export { DEBUG_BUTTON_MAGNET } from './debugButtonMagnet';
 export { AUDIO_VISUALIZER_MAGNET } from './audioVisualizerMagnet';
 export { MATRIX_CHANGE_MAGNET } from './matrixChangeMagnet';
 export { PROCESS_PERF_MONITOR_MAGNET } from './processPerfMonitorMagnet';
+export { PLATFORM_MAGNET, PLATFORM_LOGIN_MAGNET } from './platformMagnets';
 
 import { WINDOW_CONTROL_MAGNETS } from './windowControlMagnets';
 import { DRAG_HANDLE_MAGNET } from './dragHandleMagnet';
@@ -27,6 +28,7 @@ import { DEBUG_BUTTON_MAGNET } from './debugButtonMagnet';
 import { AUDIO_VISUALIZER_MAGNET } from './audioVisualizerMagnet';
 import { MATRIX_CHANGE_MAGNET } from './matrixChangeMagnet';
 import { PROCESS_PERF_MONITOR_MAGNET } from './processPerfMonitorMagnet';
+import { PLATFORM_MAGNET, PLATFORM_LOGIN_MAGNET } from './platformMagnets';
 import { Magnet } from '../../types/pixel';
 
 /**
@@ -46,6 +48,8 @@ export const ALL_BUILTIN_MAGNETS: Magnet[] = [
   PLAYLISTS_MAGNET,
   MUSIC_LIBRARY_MAGNET,
   NAVIGATION_PAGE_MAGNET,
+  PLATFORM_MAGNET,
+  PLATFORM_LOGIN_MAGNET,
   BACK_BUTTON_MAGNET,
 ];
 

@@ -41,6 +41,7 @@ import {
   ensureMagnetSpaceLayout,
 } from './layoutStorage';
 import { resolveMagnetLayoutStorageKey, type MagnetSpaceLayout } from './layout';
+import { getSystemAnchorsForActiveMagnets } from './systemLayouts';
 import {
   magnetLayoutStoreApplyPatch,
   magnetLayoutStoreBootstrapFromLegacy,
@@ -79,6 +80,8 @@ export interface MagnetConfigContextValue {
 
 const MagnetConfigContext = createContext<MagnetConfigContextValue | null>(null);
 
+const SPACE2_REQUIRED_PLATFORM_MAGNET_IDS = ['platform-magnet', 'btn-platform-login'] as const;
+
 function resolveRuntimeDefaultActiveMagnetIds(
   fallback: ReadonlySet<string>
 ): ReadonlySet<string> {
@@ -87,6 +90,53 @@ function resolveRuntimeDefaultActiveMagnetIds(
     'minimal'
   );
   return runtimeProfile === 'minimal' ? MINIMAL_ACTIVE_MAGNET_IDS : fallback;
+}
+
+function normalizeSpaceLayoutWithSystemAnchors(
+  spaceId: string,
+  layout: MagnetSpaceLayout
+): { layout: MagnetSpaceLayout; changed: boolean } {
+  const active = new Set(layout.activeMagnetIds);
+  let changed = false;
+
+  for (const id of REQUIRED_MAGNET_IDS) {
+    if (active.has(id)) continue;
+    active.add(id);
+    changed = true;
+  }
+
+  if (spaceId === 'space2') {
+    for (const id of SPACE2_REQUIRED_PLATFORM_MAGNET_IDS) {
+      if (active.has(id)) continue;
+      active.add(id);
+      changed = true;
+    }
+  }
+
+  const nextAnchorsByMagnetId: MagnetSpaceLayout['anchorsByMagnetId'] = {
+    ...layout.anchorsByMagnetId,
+  };
+
+  const systemAnchors = getSystemAnchorsForActiveMagnets(spaceId, active);
+  for (const [magnetId, anchors] of Object.entries(systemAnchors)) {
+    const existing = nextAnchorsByMagnetId[magnetId];
+    if (Array.isArray(existing) && existing.length > 0) continue;
+    nextAnchorsByMagnetId[magnetId] = anchors;
+    changed = true;
+  }
+
+  if (!changed) {
+    return { layout, changed: false };
+  }
+
+  return {
+    layout: {
+      ...layout,
+      activeMagnetIds: [...active],
+      anchorsByMagnetId: nextAnchorsByMagnetId,
+    },
+    changed: true,
+  };
 }
 
 export function MagnetLibraryProvider({
@@ -286,7 +336,9 @@ export function MagnetLibraryProvider({
     }) => {
       const catalogMagnets = ensureMagnetCatalogState(args.spaceIds).state.magnets;
 
-      const activeFromLayout = new Set(args.layout.activeMagnetIds);
+      const normalizedLayout = normalizeSpaceLayoutWithSystemAnchors(args.activeSpaceId, args.layout).layout;
+
+      const activeFromLayout = new Set(normalizedLayout.activeMagnetIds);
       for (const id of REQUIRED_MAGNET_IDS) activeFromLayout.add(id);
 
       const configKey = resolveMagnetConfigStorageKey(args.activeSpaceId);
@@ -306,7 +358,8 @@ export function MagnetLibraryProvider({
         const existing = patchedMagnets[magnet.id];
         patchedMagnets[magnet.id] = {
           ...(existing ?? { anchors: magnet.anchors, isActive: false }),
-          anchors: args.layout.anchorsByMagnetId[magnet.id] ?? existing?.anchors ?? magnet.anchors,
+          anchors:
+            normalizedLayout.anchorsByMagnetId[magnet.id] ?? existing?.anchors ?? magnet.anchors,
           isActive: activeFromLayout.has(magnet.id),
         };
       }
@@ -355,10 +408,19 @@ export function MagnetLibraryProvider({
       const layout =
         store.layoutsBySpaceId[storeActiveSpaceId] ?? createDefaultMagnetSpaceLayout(storeActiveSpaceId, resolvedActive);
 
-      applySnapshot({ activeSpaceId: storeActiveSpaceId, spaceIds, layout });
+      const normalized = normalizeSpaceLayoutWithSystemAnchors(storeActiveSpaceId, layout);
+      if (normalized.changed) {
+        void applyLayoutStorePatch(
+          [{ kind: 'setSpaceLayout', spaceId: storeActiveSpaceId, layout: normalized.layout }],
+          'migrate:space-layout-system-anchors'
+        );
+      }
+
+      applySnapshot({ activeSpaceId: storeActiveSpaceId, spaceIds, layout: normalized.layout });
     })();
   }, [
     activeSpaceId,
+    applyLayoutStorePatch,
     defaultMagnetLibrary,
     gridSize,
     magnetSpaces.spaces,

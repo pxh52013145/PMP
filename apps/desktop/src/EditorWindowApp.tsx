@@ -23,25 +23,10 @@ import { ThemeDebugPage } from './components/debug/ThemeDebugPage';
 import { Magnet } from './types/pixel';
 import { BackgroundSettings, BackgroundConfig } from './types/background';
 import { DEFAULT_BACKGROUND_SETTINGS } from './constants/defaultBackground';
-import { WINDOW_CONTROL_MAGNETS } from './data/builtin/windowControlMagnets';
-import { DRAG_HANDLE_MAGNET } from './data/builtin/dragHandleMagnet';
-import { WINDOW_PIN_MAGNET } from './data/builtin/windowPinMagnet';
-import { MUSIC_PLAYER_MAGNETS } from './data/builtin/musicPlayerMagnets';
-import { EDITOR_BUTTON_MAGNET } from './data/builtin/editorMagnet';
-import { DEBUG_BUTTON_MAGNET } from './data/builtin/debugButtonMagnet';
-import { NAVIGATION_PAGE_MAGNET } from './data/builtin/navigationPageMagnet';
-import { BACK_BUTTON_MAGNET } from './data/builtin/backButtonMagnet';
-import { AUDIO_VISUALIZER_MAGNET } from './data/builtin/audioVisualizerMagnet';
-import { MATRIX_CHANGE_MAGNET } from './data/builtin/matrixChangeMagnet';
-import { DSP_VST_MAGNET } from './data/builtin/dspVstMagnet';
-import {
-  PLAY_QUEUE_MAGNET,
-  PLAYLISTS_MAGNET,
-  MUSIC_LIBRARY_MAGNET,
-} from './data/builtin/musicMagnets';
 import { DEFAULT_ACTIVE_MAGNET_IDS, REQUIRED_MAGNET_IDS } from './constants/magnets';
 import { saveConfig, loadConfig, applyConfig, type MagnetConfig, type MagnetStateConfig } from './utils/configManager';
 import {
+  createDefaultMagnetLibrary,
   createDefaultMagnetSpaceLayout,
   createDefaultMagnetSpacesState,
   ensureMagnetCatalogState,
@@ -762,25 +747,7 @@ export function EditorWindowApp() {
   }, [windowType]);
 
   // 默认内置 Magnet 库
-  const defaultMagnetLibrary = useMemo(
-    () => [
-      DRAG_HANDLE_MAGNET,
-      ...WINDOW_CONTROL_MAGNETS,
-      WINDOW_PIN_MAGNET,
-      ...MUSIC_PLAYER_MAGNETS,
-      AUDIO_VISUALIZER_MAGNET,
-      EDITOR_BUTTON_MAGNET,
-      DEBUG_BUTTON_MAGNET,
-      MATRIX_CHANGE_MAGNET,
-      DSP_VST_MAGNET,
-      PLAY_QUEUE_MAGNET,
-      PLAYLISTS_MAGNET,
-      MUSIC_LIBRARY_MAGNET,
-      NAVIGATION_PAGE_MAGNET,
-      BACK_BUTTON_MAGNET,
-    ],
-    []
-  );
+  const defaultMagnetLibrary = useMemo(() => createDefaultMagnetLibrary(), []);
 
   const [magnetLibrary, setMagnetLibrary] = useState<Magnet[]>(() => {
     return readJson<Magnet[]>(STORAGE_KEYS.MAGNET_LIBRARY, []);

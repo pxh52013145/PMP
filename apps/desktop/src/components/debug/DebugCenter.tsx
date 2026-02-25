@@ -18,8 +18,26 @@ import {
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { calculateWindowPosition, openEditorWindow } from '../../utils/editorWindows';
 import { openVstManagerWindow } from '../../utils/vstManagerWindows';
-import { MusicLibraryService } from '../../services/audio/MusicLibraryService';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import {
+  type BilibiliAuthStatus,
+  type BilibiliQrCodeSession,
+  type BilibiliQrPollResult,
+  MusicLibraryService,
+  type UnifiedMusicSource,
+  type UnifiedTrackCandidate,
+} from '../../services/audio/MusicLibraryService';
+import {
+  type NativeLibrarySyncFailureOverview,
+  type NativeLibrarySyncFailureSourceSummary,
+  type NativeLibrarySyncSchedulerStatus,
+  type NativeLibrarySyncStatus,
+  type NativeLibrarySyncTickResult,
+} from '../../modules/music-library';
+import {
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+  setupTauriListenerWithPayload,
+} from '../../utils/windowCommunication';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 
 const WINDOW_COMM_DEBUG_KEY = 'pixel-matrix-debug-window-comm';
@@ -32,6 +50,14 @@ type EditorWindowsDebugState = {
 };
 
 type CoverCacheStats = ReturnType<MusicLibraryService['getCoverRuntimeCacheStats']>;
+
+type MusicLibrarySyncStatusEventPayload = {
+  source?: string;
+  emittedAtMs?: number;
+  syncStatus?: NativeLibrarySyncStatus;
+  schedulerStatus?: NativeLibrarySyncSchedulerStatus;
+  tickResult?: NativeLibrarySyncTickResult;
+};
 
 type MemoryBaselineSample = {
   id: string;
@@ -349,6 +375,23 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   const [confirmDestroyEditorWindows, setConfirmDestroyEditorWindows] = useState(false);
   const [confirmClearCoverCaches, setConfirmClearCoverCaches] = useState(false);
   const [minidumpDirDraft, setMinidumpDirDraft] = useState('');
+  const [syncStatus, setSyncStatus] = useState<NativeLibrarySyncStatus | null>(null);
+  const [syncSchedulerStatus, setSyncSchedulerStatus] =
+    useState<NativeLibrarySyncSchedulerStatus | null>(null);
+  const [syncFailureOverview, setSyncFailureOverview] =
+    useState<NativeLibrarySyncFailureOverview | null>(null);
+  const [selectedSyncFailureSourceIds, setSelectedSyncFailureSourceIds] = useState<string[]>([]);
+  const [lastSyncTickResult, setLastSyncTickResult] = useState<NativeLibrarySyncTickResult | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncSchedulerIntervalMs, setSyncSchedulerIntervalMs] = useState(60_000);
+  const [unifiedSources, setUnifiedSources] = useState<UnifiedMusicSource[]>([]);
+  const [unifiedSearchQuery, setUnifiedSearchQuery] = useState('');
+  const [unifiedSearchResults, setUnifiedSearchResults] = useState<UnifiedTrackCandidate[]>([]);
+  const [unifiedBusy, setUnifiedBusy] = useState(false);
+  const [bilibiliAuthStatus, setBilibiliAuthStatus] = useState<BilibiliAuthStatus | null>(null);
+  const [bilibiliQrSession, setBilibiliQrSession] = useState<BilibiliQrCodeSession | null>(null);
+  const [bilibiliQrPollResult, setBilibiliQrPollResult] = useState<BilibiliQrPollResult | null>(null);
+  const [bilibiliBusy, setBilibiliBusy] = useState(false);
   const [memoryBaselines, setMemoryBaselines] = useState<MemoryBaselineSample[]>(() =>
     readJson<MemoryBaselineSample[]>(STORAGE_KEYS.MEMORY_BASELINE_SAMPLES_V1, [])
   );
@@ -395,6 +438,315 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       setEditorWindowsState(null);
     }
   }, [isTauri]);
+
+  const refreshSyncOrchestrator = useCallback(async () => {
+    if (!isTauri) {
+      setSyncStatus(null);
+      setSyncSchedulerStatus(null);
+      setSyncFailureOverview(null);
+      return;
+    }
+
+    const service = MusicLibraryService.getInstance();
+    const [status, schedulerStatus, failureOverview] = await Promise.all([
+      service.getSyncOrchestratorStatus(),
+      service.getSyncSchedulerStatus(),
+      service.getSyncFailureOverview(200),
+    ]);
+
+    setSyncStatus(status);
+    setSyncSchedulerStatus(schedulerStatus);
+    setSyncFailureOverview(failureOverview);
+    if (typeof schedulerStatus?.intervalMs === 'number' && Number.isFinite(schedulerStatus.intervalMs)) {
+      setSyncSchedulerIntervalMs(Math.max(5_000, Math.floor(schedulerStatus.intervalMs)));
+    }
+  }, [isTauri]);
+
+  const runSyncTick = useCallback(async () => {
+    if (!isTauri || syncBusy) return;
+    setSyncBusy(true);
+    setError(null);
+
+    try {
+      const service = MusicLibraryService.getInstance();
+      const result = await service.runSyncOrchestratorTick('debug-manual');
+      if (!result) {
+        setError(t('debug.center.sync.status.actionFailed'));
+        return;
+      }
+
+      setLastSyncTickResult(result);
+      setStatusMessage(
+        t('debug.center.sync.status.tickDone', {
+          scanned: result.scannedSources,
+          changed: result.changedSources,
+          queued: result.enqueuedMetadataJobs,
+        })
+      );
+      await refreshSyncOrchestrator();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [isTauri, refreshSyncOrchestrator, syncBusy, t]);
+
+  const startSyncScheduler = useCallback(async () => {
+    if (!isTauri || syncBusy) return;
+    setSyncBusy(true);
+    setError(null);
+
+    try {
+      const intervalMs = Math.max(5_000, Math.min(60 * 60 * 1_000, Math.floor(syncSchedulerIntervalMs)));
+      const service = MusicLibraryService.getInstance();
+      const status = await service.startSyncScheduler(intervalMs);
+      if (!status) {
+        setError(t('debug.center.sync.status.actionFailed'));
+        return;
+      }
+
+      setSyncSchedulerStatus(status);
+      setStatusMessage(t('debug.center.sync.status.schedulerStarted', { intervalMs: status.intervalMs }));
+      await refreshSyncOrchestrator();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [isTauri, refreshSyncOrchestrator, syncBusy, syncSchedulerIntervalMs, t]);
+
+  const stopSyncScheduler = useCallback(async () => {
+    if (!isTauri || syncBusy) return;
+    setSyncBusy(true);
+    setError(null);
+
+    try {
+      const service = MusicLibraryService.getInstance();
+      const status = await service.stopSyncScheduler();
+      if (!status) {
+        setError(t('debug.center.sync.status.actionFailed'));
+        return;
+      }
+
+      setSyncSchedulerStatus(status);
+      setStatusMessage(t('debug.center.sync.status.schedulerStopped'));
+      await refreshSyncOrchestrator();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [isTauri, refreshSyncOrchestrator, syncBusy, t]);
+
+  const retrySyncFailedSources = useCallback(async () => {
+    if (!isTauri || syncBusy) return;
+    setSyncBusy(true);
+    setError(null);
+
+    try {
+      const sourceIds =
+        selectedSyncFailureSourceIds.length > 0 ? selectedSyncFailureSourceIds : undefined;
+      const service = MusicLibraryService.getInstance();
+      const result = await service.retrySyncFailedSources({
+        sourceIds,
+        reason: 'debug-retry-failed-sources',
+      });
+      if (!result) {
+        setError(t('debug.center.sync.status.actionFailed'));
+        return;
+      }
+
+      setLastSyncTickResult(result.tickResult);
+      setStatusMessage(
+        t('debug.center.sync.status.retryDone', {
+          cleared: result.clearedSources,
+          selected: sourceIds?.length ?? 0,
+          scanned: result.tickResult.scannedSources,
+          changed: result.tickResult.changedSources,
+        })
+      );
+      await refreshSyncOrchestrator();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [isTauri, refreshSyncOrchestrator, selectedSyncFailureSourceIds, syncBusy, t]);
+
+  const clearSyncFailedSources = useCallback(async () => {
+    if (!isTauri || syncBusy) return;
+    setSyncBusy(true);
+    setError(null);
+
+    try {
+      const sourceIds =
+        selectedSyncFailureSourceIds.length > 0 ? selectedSyncFailureSourceIds : undefined;
+      const service = MusicLibraryService.getInstance();
+      const result = await service.clearSyncFailedSources({
+        sourceIds,
+      });
+      if (!result) {
+        setError(t('debug.center.sync.status.actionFailed'));
+        return;
+      }
+
+      setStatusMessage(
+        t('debug.center.sync.status.clearDone', {
+          cleared: result.clearedSources,
+          selected: sourceIds?.length ?? 0,
+        })
+      );
+      await refreshSyncOrchestrator();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sync.status.actionFailed'));
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [isTauri, refreshSyncOrchestrator, selectedSyncFailureSourceIds, syncBusy, t]);
+
+  const refreshUnifiedSources = useCallback(async () => {
+    if (!isTauri) {
+      setUnifiedSources([]);
+      return;
+    }
+
+    try {
+      const service = MusicLibraryService.getInstance();
+      const items = await service.listUnifiedMusicSources();
+      setUnifiedSources(items);
+    } catch {
+      setUnifiedSources([]);
+    }
+  }, [isTauri]);
+
+  const runUnifiedSearch = useCallback(async () => {
+    if (!isTauri || unifiedBusy) return;
+    const query = unifiedSearchQuery.trim();
+    if (!query) {
+      setUnifiedSearchResults([]);
+      return;
+    }
+
+    setUnifiedBusy(true);
+    try {
+      const service = MusicLibraryService.getInstance();
+      const items = await service.searchUnifiedTracks({ query, limit: 30 });
+      setUnifiedSearchResults(items);
+    } catch {
+      setUnifiedSearchResults([]);
+    } finally {
+      setUnifiedBusy(false);
+    }
+  }, [isTauri, unifiedBusy, unifiedSearchQuery]);
+
+  const refreshBilibiliAuthStatus = useCallback(async () => {
+    if (!isTauri) {
+      setBilibiliAuthStatus(null);
+      return;
+    }
+
+    try {
+      const service = MusicLibraryService.getInstance();
+      const status = await service.getBilibiliAuthStatus();
+      setBilibiliAuthStatus(status);
+    } catch {
+      setBilibiliAuthStatus(null);
+    }
+  }, [isTauri]);
+
+  const pollBilibiliQrSession = useCallback(
+    async (sessionId?: string) => {
+      if (!isTauri || bilibiliBusy) return;
+
+      const targetSessionId = (sessionId ?? bilibiliQrSession?.sessionId ?? '').trim();
+      if (!targetSessionId) return;
+
+      setBilibiliBusy(true);
+      try {
+        const service = MusicLibraryService.getInstance();
+        const result = await service.pollBilibiliQrCodeSession(targetSessionId);
+        setBilibiliQrPollResult(result);
+
+        if (!result) {
+          setError(t('debug.center.sourceFacade.bilibili.pollFailed'));
+          return;
+        }
+
+        if (result.state === 'authorized') {
+          setStatusMessage(
+            t('debug.center.sourceFacade.bilibili.authorized', {
+              accountUid: result.accountUid ?? '-',
+            })
+          );
+          setBilibiliQrSession(null);
+          await refreshUnifiedSources();
+        }
+
+        if (
+          result.state === 'authorized' ||
+          result.state === 'expired' ||
+          result.state === 'failed'
+        ) {
+          setBilibiliQrSession(null);
+        }
+
+        await refreshBilibiliAuthStatus();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t('debug.center.sourceFacade.bilibili.pollFailed'));
+      } finally {
+        setBilibiliBusy(false);
+      }
+    },
+    [
+      bilibiliBusy,
+      bilibiliQrSession?.sessionId,
+      isTauri,
+      refreshBilibiliAuthStatus,
+      refreshUnifiedSources,
+      t,
+    ]
+  );
+
+  const generateBilibiliQrSession = useCallback(async () => {
+    if (!isTauri || bilibiliBusy) return;
+
+    setBilibiliBusy(true);
+    try {
+      const service = MusicLibraryService.getInstance();
+      const session = await service.generateBilibiliQrCodeSession();
+      if (!session) {
+        setError(t('debug.center.sourceFacade.bilibili.generateFailed'));
+        return;
+      }
+
+      setBilibiliQrSession(session);
+      setBilibiliQrPollResult(null);
+      setStatusMessage(t('debug.center.sourceFacade.bilibili.generated'));
+      await refreshBilibiliAuthStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sourceFacade.bilibili.generateFailed'));
+    } finally {
+      setBilibiliBusy(false);
+    }
+  }, [bilibiliBusy, isTauri, refreshBilibiliAuthStatus, t]);
+
+  const logoutBilibiliAuth = useCallback(async () => {
+    if (!isTauri || bilibiliBusy) return;
+
+    setBilibiliBusy(true);
+    try {
+      const service = MusicLibraryService.getInstance();
+      const status = await service.logoutBilibili();
+      setBilibiliAuthStatus(status);
+      setBilibiliQrSession(null);
+      setBilibiliQrPollResult(null);
+      setStatusMessage(t('debug.center.sourceFacade.bilibili.loggedOut'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('debug.center.sourceFacade.bilibili.logoutFailed'));
+    } finally {
+      setBilibiliBusy(false);
+    }
+  }, [bilibiliBusy, isTauri, t]);
 
   const clearThreeStageCaptureTimers = useCallback(() => {
     if (threeStageCaptureTimersRef.current.length === 0) return;
@@ -522,6 +874,117 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
   }, [refreshMemory]);
 
   useEffect(() => {
+    void refreshSyncOrchestrator();
+    if (!isTauri) return;
+
+    const timer = window.setInterval(() => {
+      void refreshSyncOrchestrator();
+    }, 5_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isTauri, refreshSyncOrchestrator]);
+
+  useEffect(() => {
+    void refreshUnifiedSources();
+    if (!isTauri) return;
+
+    const timer = window.setInterval(() => {
+      void refreshUnifiedSources();
+    }, 15_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isTauri, refreshUnifiedSources]);
+
+  useEffect(() => {
+    void refreshBilibiliAuthStatus();
+    if (!isTauri) return;
+
+    const timer = window.setInterval(() => {
+      void refreshBilibiliAuthStatus();
+    }, 20_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isTauri, refreshBilibiliAuthStatus]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    const sessionId = bilibiliQrSession?.sessionId;
+    if (!sessionId) return;
+
+    const timer = window.setInterval(() => {
+      void pollBilibiliQrSession(sessionId);
+    }, 1_800);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [bilibiliQrSession?.sessionId, isTauri, pollBilibiliQrSession]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    void setupTauriListenerWithPayload<MusicLibrarySyncStatusEventPayload>(
+      TAURI_EVENTS.MUSIC_LIBRARY_SYNC_STATUS_UPDATED,
+      (payload) => {
+        if (!active || !payload) return;
+
+        if (payload.syncStatus) {
+          setSyncStatus(payload.syncStatus);
+        }
+
+        if (payload.schedulerStatus) {
+          setSyncSchedulerStatus(payload.schedulerStatus);
+          if (
+            typeof payload.schedulerStatus.intervalMs === 'number' &&
+            Number.isFinite(payload.schedulerStatus.intervalMs)
+          ) {
+            setSyncSchedulerIntervalMs(
+              Math.max(5_000, Math.floor(payload.schedulerStatus.intervalMs))
+            );
+          }
+        }
+
+        if (payload.tickResult) {
+          setLastSyncTickResult(payload.tickResult);
+
+          void MusicLibraryService.getInstance()
+            .getSyncFailureOverview(200)
+            .then((overview) => {
+              if (!active) return;
+              setSyncFailureOverview(overview);
+            })
+            .catch(() => {
+              if (!active) return;
+              setSyncFailureOverview(null);
+            });
+        }
+      }
+    ).then((off) => {
+      if (!active) {
+        off();
+        return;
+      }
+      unlisten = off;
+    });
+
+    return () => {
+      active = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isTauri]);
+
+  useEffect(() => {
     return () => {
       clearThreeStageCaptureTimers();
     };
@@ -553,6 +1016,65 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       coverDecodedDeltaMb: formatBytesToMb(comparison.deltaCoverDecodedEstimateTotalBytes),
     };
   }, [latestThreeStageComparison]);
+
+  const latestSyncTickResult = useMemo(
+    () => lastSyncTickResult ?? syncSchedulerStatus?.lastTickResult ?? null,
+    [lastSyncTickResult, syncSchedulerStatus?.lastTickResult]
+  );
+
+  const syncFailedSourceItems = useMemo<NativeLibrarySyncFailureSourceSummary[]>(
+    () => syncFailureOverview?.items ?? [],
+    [syncFailureOverview]
+  );
+
+  const selectedSyncFailureSourceIdSet = useMemo(
+    () => new Set(selectedSyncFailureSourceIds),
+    [selectedSyncFailureSourceIds]
+  );
+
+  const hasSelectedSyncFailureSources = selectedSyncFailureSourceIds.length > 0;
+
+  useEffect(() => {
+    if (syncFailedSourceItems.length === 0) {
+      if (selectedSyncFailureSourceIds.length > 0) {
+        setSelectedSyncFailureSourceIds([]);
+      }
+      return;
+    }
+
+    const availableSourceIds = new Set(syncFailedSourceItems.map((item) => item.sourceId));
+    const nextSelected = selectedSyncFailureSourceIds.filter((sourceId) =>
+      availableSourceIds.has(sourceId)
+    );
+
+    if (nextSelected.length !== selectedSyncFailureSourceIds.length) {
+      setSelectedSyncFailureSourceIds(nextSelected);
+    }
+  }, [selectedSyncFailureSourceIds, syncFailedSourceItems]);
+
+  const toggleSyncFailureSourceSelection = useCallback((sourceId: string) => {
+    const normalizedSourceId = sourceId.trim();
+    if (!normalizedSourceId) return;
+
+    setSelectedSyncFailureSourceIds((prev) => {
+      if (prev.includes(normalizedSourceId)) {
+        return prev.filter((item) => item !== normalizedSourceId);
+      }
+      return [...prev, normalizedSourceId];
+    });
+  }, []);
+
+  const selectAllSyncFailureSources = useCallback(() => {
+    if (syncFailedSourceItems.length === 0) {
+      setSelectedSyncFailureSourceIds([]);
+      return;
+    }
+    setSelectedSyncFailureSourceIds(syncFailedSourceItems.map((item) => item.sourceId));
+  }, [syncFailedSourceItems]);
+
+  const clearSelectedSyncFailureSources = useCallback(() => {
+    setSelectedSyncFailureSourceIds([]);
+  }, []);
 
   const handleCopyLatestScenarioSummary = useCallback(async () => {
     const comparison = latestThreeStageComparison;
@@ -954,6 +1476,401 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             </p>
           ) : null}
           {error ? <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>{error}</p> : null}
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.sourceFacade.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.sourceFacade.desc')}</p>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void refreshUnifiedSources();
+                }}
+                disabled={unifiedBusy}
+              >
+                {t('common.action.refresh')}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gap: 8 }}>
+            <p className="settings-card-note">
+              {t('debug.center.sourceFacade.summary', { total: unifiedSources.length })}
+            </p>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                type="text"
+                value={unifiedSearchQuery}
+                onChange={(event) => {
+                  setUnifiedSearchQuery(event.target.value);
+                }}
+                placeholder={t('debug.center.sourceFacade.searchPlaceholder')}
+                style={{
+                  minWidth: 260,
+                  padding: '6px 8px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.14)',
+                  background: 'rgba(0,0,0,0.18)',
+                  color: 'rgba(255,255,255,0.9)',
+                }}
+              />
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => {
+                  void runUnifiedSearch();
+                }}
+                disabled={unifiedBusy}
+              >
+                {t('debug.center.sourceFacade.searchAction')}
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: 8,
+                padding: '10px 12px',
+                borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'rgba(0,0,0,0.18)',
+              }}
+            >
+              <p className="settings-card-note">{t('debug.center.sourceFacade.bilibili.title')}</p>
+              <p className="settings-card-note">
+                {t('debug.center.sourceFacade.bilibili.authStatus', {
+                  authState: bilibiliAuthStatus?.authState ?? 'unauthorized',
+                  accountUid: bilibiliAuthStatus?.accountUid ?? '-',
+                })}
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="settings-action-btn"
+                  onClick={() => {
+                    void generateBilibiliQrSession();
+                  }}
+                  disabled={bilibiliBusy}
+                >
+                  {t('debug.center.sourceFacade.bilibili.generateAction')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-action-btn"
+                  onClick={() => {
+                    void pollBilibiliQrSession();
+                  }}
+                  disabled={bilibiliBusy || !bilibiliQrSession}
+                >
+                  {t('debug.center.sourceFacade.bilibili.pollAction')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-action-btn"
+                  onClick={() => {
+                    void logoutBilibiliAuth();
+                  }}
+                  disabled={bilibiliBusy}
+                >
+                  {t('debug.center.sourceFacade.bilibili.logoutAction')}
+                </button>
+              </div>
+              {bilibiliQrSession ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <img
+                    src={bilibiliQrSession.qrImageDataUrl}
+                    alt={t('debug.center.sourceFacade.bilibili.qrAlt')}
+                    style={{ width: 180, height: 180, borderRadius: 8, background: '#fff' }}
+                  />
+                  <p className="settings-card-note">
+                    {t('debug.center.sourceFacade.bilibili.qrExpires', {
+                      expiresAt: new Date(bilibiliQrSession.expiresAtMs).toLocaleString(),
+                    })}
+                  </p>
+                  <p className="settings-card-note">
+                    {t('debug.center.sourceFacade.bilibili.qrHint')}
+                  </p>
+                </div>
+              ) : (
+                <p className="settings-card-note">{t('debug.center.sourceFacade.bilibili.noQr')}</p>
+              )}
+              {bilibiliQrPollResult ? (
+                <p className="settings-card-note">
+                  {t('debug.center.sourceFacade.bilibili.pollState', {
+                    state: bilibiliQrPollResult.state,
+                    message: bilibiliQrPollResult.stateMessage,
+                  })}
+                </p>
+              ) : null}
+            </div>
+
+            {unifiedSources.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {unifiedSources.slice(0, 8).map((item) => (
+                  <p className="settings-card-note" key={`${item.sourceId}:${item.connectorId}`}>
+                    {t('debug.center.sourceFacade.sourceItem', {
+                      sourceId: item.sourceId,
+                      kind: item.kind,
+                      driver: item.driver,
+                      status: item.status,
+                      name: item.displayName,
+                    })}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="settings-card-note">{t('debug.center.sourceFacade.empty')}</p>
+            )}
+
+            {unifiedSearchResults.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <p className="settings-card-note">
+                  {t('debug.center.sourceFacade.searchResultSummary', {
+                    count: unifiedSearchResults.length,
+                  })}
+                </p>
+                {unifiedSearchResults.slice(0, 8).map((item) => (
+                  <p className="settings-card-note" key={`${item.trackId}:${item.sourceId}`}>
+                    {t('debug.center.sourceFacade.searchResultItem', {
+                      title: item.title ?? '-',
+                      artist: item.artist ?? '-',
+                      sourceId: item.sourceId,
+                      availability: item.availability,
+                    })}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <div>
+              <p className="settings-card-label">{t('debug.center.sync.title')}</p>
+              <p className="settings-card-desc">{t('debug.center.sync.desc')}</p>
+            </div>
+            <span className="settings-card-badge">
+              {syncSchedulerStatus?.running ? t('common.state.on') : t('common.state.off')}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => {
+                void refreshSyncOrchestrator();
+              }}
+              disabled={syncBusy}
+            >
+              {t('common.action.refresh')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => {
+                void runSyncTick();
+              }}
+              disabled={syncBusy}
+            >
+              {t('debug.center.sync.actions.tick')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => {
+                void retrySyncFailedSources();
+              }}
+              disabled={syncBusy}
+            >
+              {t('debug.center.sync.actions.retryFailedSources')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => {
+                void clearSyncFailedSources();
+              }}
+              disabled={syncBusy}
+            >
+              {t('debug.center.sync.actions.clearFailedSources')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => {
+                void startSyncScheduler();
+              }}
+              disabled={syncBusy}
+            >
+              {t('debug.center.sync.actions.startScheduler')}
+            </button>
+            <button
+              type="button"
+              className="settings-action-btn"
+              onClick={() => {
+                void stopSyncScheduler();
+              }}
+              disabled={syncBusy}
+            >
+              {t('debug.center.sync.actions.stopScheduler')}
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+            <div>
+              <p className="settings-card-label">{t('debug.center.sync.scheduler.intervalLabel')}</p>
+              <p className="settings-card-desc">{t('debug.center.sync.scheduler.intervalDesc')}</p>
+              <input
+                type="number"
+                min={5000}
+                max={3600000}
+                step={1000}
+                value={syncSchedulerIntervalMs}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next)) return;
+                  setSyncSchedulerIntervalMs(Math.max(5_000, Math.min(60 * 60 * 1_000, Math.floor(next))));
+                }}
+                style={{
+                  marginTop: 6,
+                  width: 180,
+                  padding: '6px 8px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.14)',
+                  background: 'rgba(0,0,0,0.18)',
+                  color: 'rgba(255,255,255,0.9)',
+                }}
+              />
+            </div>
+
+            <p className="settings-card-note">
+              {t('debug.center.sync.scheduler.status', {
+                running: syncSchedulerStatus?.running === true ? t('common.state.on') : t('common.state.off'),
+                intervalMs:
+                  typeof syncSchedulerStatus?.intervalMs === 'number'
+                    ? syncSchedulerStatus.intervalMs
+                    : syncSchedulerIntervalMs,
+                nextRunAt:
+                  typeof syncSchedulerStatus?.nextRunAtMs === 'number'
+                    ? new Date(syncSchedulerStatus.nextRunAtMs).toLocaleString()
+                    : '-',
+              })}
+            </p>
+
+            <p className="settings-card-note">
+              {t('debug.center.sync.orchestrator.status', {
+                running: syncStatus?.running === true ? t('common.state.on') : t('common.state.off'),
+                totalTicks: syncStatus?.totalTicks ?? 0,
+                lastReason: syncStatus?.lastTickReason ?? '-',
+                lastError: syncStatus?.lastError ?? '-',
+              })}
+            </p>
+
+            {latestSyncTickResult ? (
+              <p className="settings-card-note">
+                {t('debug.center.sync.lastTick.result', {
+                  startedAt: new Date(latestSyncTickResult.startedAtMs).toLocaleString(),
+                  scanned: latestSyncTickResult.scannedSources,
+                  changed: latestSyncTickResult.changedSources,
+                  failed: latestSyncTickResult.failedSources,
+                  queued: latestSyncTickResult.enqueuedMetadataJobs,
+                })}
+              </p>
+            ) : null}
+
+            <div>
+              <p className="settings-card-label">{t('debug.center.sync.failedSources.title')}</p>
+              <p className="settings-card-note">
+                {t('debug.center.sync.failedSources.summary', {
+                  total: syncFailureOverview?.totalFailedSources ?? 0,
+                  backoff: syncFailureOverview?.backoffActiveSources ?? 0,
+                })}
+              </p>
+              {syncFailedSourceItems.length > 0 ? (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, marginBottom: 6 }}>
+                  <button
+                    type="button"
+                    className="settings-action-btn"
+                    onClick={selectAllSyncFailureSources}
+                    disabled={syncBusy}
+                  >
+                    {t('debug.center.sync.failedSources.selectAll')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-action-btn"
+                    onClick={clearSelectedSyncFailureSources}
+                    disabled={syncBusy || !hasSelectedSyncFailureSources}
+                  >
+                    {t('debug.center.sync.failedSources.clearSelection')}
+                  </button>
+                  <p className="settings-card-note" style={{ margin: 0, alignSelf: 'center' }}>
+                    {t('debug.center.sync.failedSources.selectedSummary', {
+                      selected: selectedSyncFailureSourceIds.length,
+                    })}
+                  </p>
+                </div>
+              ) : null}
+              {syncFailedSourceItems.length === 0 ? (
+                <p className="settings-card-note">{t('debug.center.sync.failedSources.empty')}</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {syncFailedSourceItems.slice(0, 8).map((item) => {
+                    const backoffSeconds =
+                      typeof item.backoffRemainingMs === 'number'
+                        ? Math.max(0, Math.ceil(item.backoffRemainingMs / 1000))
+                        : 0;
+
+                    return (
+                      <label
+                        className="settings-card-note"
+                        key={`${item.sourceId}:${item.updatedAtMs}:${item.lastError ?? '-'}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 8,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedSyncFailureSourceIdSet.has(item.sourceId)}
+                          onChange={() => {
+                            toggleSyncFailureSourceSelection(item.sourceId);
+                          }}
+                          disabled={syncBusy}
+                          style={{ marginTop: 2 }}
+                        />
+                        <span>
+                          {t('debug.center.sync.failedSources.itemSummary', {
+                            sourceId: item.sourceId,
+                            sourceDisplayName: item.sourceDisplayName ?? '-',
+                            connectorId: item.connectorId,
+                            path: item.sourcePath,
+                            error: item.lastError ?? '-',
+                            lastScanAt:
+                              typeof item.incrementalScanAtMs === 'number'
+                                ? new Date(item.incrementalScanAtMs).toLocaleString()
+                                : '-',
+                            updatedAt: new Date(item.updatedAtMs).toLocaleString(),
+                            backoffSeconds,
+                          })}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="settings-card">

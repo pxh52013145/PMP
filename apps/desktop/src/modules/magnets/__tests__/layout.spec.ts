@@ -56,7 +56,9 @@ describe('ensureMagnetSpaceLayout', () => {
     const result = ensureMagnetSpaceLayout('space2');
     expect(result.didCreate).toBe(true);
     expect(result.storageKey).toBe(`${STORAGE_KEYS.MAGNET_SPACE_LAYOUT}:space2`);
-    expect(result.layout.activeMagnetIds).toEqual([...REQUIRED_MAGNET_IDS]);
+    expect(result.layout.activeMagnetIds).toEqual(
+      expect.arrayContaining([...REQUIRED_MAGNET_IDS, 'platform-magnet', 'btn-platform-login'])
+    );
   });
 
   it('bootstraps space1 using the system defaults', () => {
@@ -75,7 +77,7 @@ describe('ensureMagnetSpaceLayout', () => {
     ]);
   });
 
-  it('migrates active + anchors from legacy config (space2 keeps strict blank)', () => {
+  it('migrates active + anchors from legacy config (space2 keeps explicit actives)', () => {
     const legacyConfig = {
       version: '1.1.0',
       gridSize: { columns: 10, rows: 10 },

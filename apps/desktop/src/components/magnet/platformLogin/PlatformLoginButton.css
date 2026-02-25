@@ -1,0 +1,189 @@
+.platform-login-magnet {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.platform-login-trigger {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.platform-login-trigger-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fb7299;
+}
+
+.platform-login-trigger-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.platform-login-selector-popup {
+  width: min(420px, calc(100vw - 24px));
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 10, 12, 0.96);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.52);
+  padding: 12px;
+  color: rgba(255, 255, 255, 0.92);
+  display: grid;
+  gap: 10px;
+  z-index: 9999;
+}
+
+.platform-login-selector-title,
+.platform-login-auth-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  opacity: 0.9;
+}
+
+.platform-login-platform-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.platform-login-platform-item {
+  min-width: 92px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.platform-login-platform-item:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.platform-login-platform-item--active {
+  border-color: rgba(251, 114, 153, 0.8);
+  background: rgba(251, 114, 153, 0.16);
+}
+
+.platform-login-platform-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fb7299;
+  flex-shrink: 0;
+}
+
+.platform-login-platform-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.platform-login-platform-label {
+  white-space: nowrap;
+}
+
+.platform-login-placeholder-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.platform-login-auth-popup {
+  width: min(340px, calc(100vw - 24px));
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 10, 12, 0.98);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
+  padding: 12px;
+  color: rgba(255, 255, 255, 0.92);
+  display: grid;
+  gap: 8px;
+  z-index: 10000;
+}
+
+.platform-login-auth-line,
+.platform-login-qr-hint,
+.platform-login-qr-expire,
+.platform-login-empty,
+.platform-login-poll-result,
+.platform-login-status,
+.platform-login-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.platform-login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.platform-login-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.platform-login-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.platform-login-qr-card {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.platform-login-qr-image {
+  width: 168px;
+  height: 168px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.platform-login-status {
+  color: rgba(135, 255, 174, 0.95);
+}
+
+.platform-login-error {
+  color: rgba(255, 126, 126, 0.96);
+}
+

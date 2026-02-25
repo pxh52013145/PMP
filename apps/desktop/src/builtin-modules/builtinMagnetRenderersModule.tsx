@@ -12,6 +12,12 @@ import { subscribeLocale, t } from '../i18n/core';
 const NavigationPageLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/NavigationPage')).NavigationPage,
 }));
+const PlatformMagnetLazy = React.lazy(async () => ({
+  default: (await import('../components/magnet/PlatformMagnet')).PlatformMagnet,
+}));
+const PlatformLoginButtonLazy = React.lazy(async () => ({
+  default: (await import('../components/magnet/PlatformLoginButton')).PlatformLoginButton,
+}));
 const WindowPinButtonLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/WindowPinButton')).WindowPinButton,
 }));
@@ -80,6 +86,24 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
       preview: () => createTextPreview(t('magnet.renderers.navigation-page.preview')),
       description: t('magnet.renderers.navigation-page.description'),
       group: 'layout',
+      source: 'builtin',
+    },
+    {
+      id: 'platform-magnet',
+      render: () => renderWithLazyBoundary(<PlatformMagnetLazy />),
+      preview: () => createTextPreview(t('magnet.renderers.platform-magnet.preview')),
+      description: t('magnet.renderers.platform-magnet.description'),
+      group: 'layout',
+      tags: ['platform', 'source', 'adapter', 'sangreal'],
+      source: 'builtin',
+    },
+    {
+      id: 'btn-platform-login',
+      render: () => renderWithLazyBoundary(<PlatformLoginButtonLazy />),
+      preview: () => createTextPreview(t('magnet.renderers.btn-platform-login.preview')),
+      description: t('magnet.renderers.btn-platform-login.description'),
+      group: 'navigation',
+      tags: ['platform', 'auth', 'login'],
       source: 'builtin',
     },
     {

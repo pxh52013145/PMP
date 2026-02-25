@@ -9,6 +9,12 @@ import {
 } from './layout';
 import { getSystemAnchorsForActiveMagnets } from './systemLayouts';
 
+const SPACE2_DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
+  ...REQUIRED_MAGNET_IDS,
+  'platform-magnet',
+  'btn-platform-login',
+]);
+
 export function loadMagnetSpaceLayout(storageKey: string): MagnetSpaceLayout | null {
   const raw = readJson<unknown | null>(storageKey, null);
   if (raw === null) return null;
@@ -107,7 +113,12 @@ export function createDefaultMagnetSpaceLayout(
   defaultActiveMagnetIds: ReadonlySet<string> = DEFAULT_ACTIVE_MAGNET_IDS
 ): MagnetSpaceLayout {
   const normalized = spaceId.trim();
-  const seed = normalized === 'space1' ? defaultActiveMagnetIds : REQUIRED_MAGNET_IDS;
+  const seed =
+    normalized === 'space1'
+      ? defaultActiveMagnetIds
+      : normalized === 'space2'
+        ? SPACE2_DEFAULT_ACTIVE_MAGNET_IDS
+        : REQUIRED_MAGNET_IDS;
   const active = new Set<string>();
   for (const id of seed) active.add(id);
   for (const id of REQUIRED_MAGNET_IDS) active.add(id);
@@ -198,6 +209,16 @@ export function ensureMagnetSpaceLayout(
     if (normalized === 'space1' && !active.has('process-perf-monitor')) {
       active.add('process-perf-monitor');
       changed = true;
+    }
+    if (normalized === 'space2') {
+      if (!active.has('platform-magnet')) {
+        active.add('platform-magnet');
+        changed = true;
+      }
+      if (!active.has('btn-platform-login')) {
+        active.add('btn-platform-login');
+        changed = true;
+      }
     }
 
     const systemAnchors = getSystemAnchorsForActiveMagnets(normalized, active);

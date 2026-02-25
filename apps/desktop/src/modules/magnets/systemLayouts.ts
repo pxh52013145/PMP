@@ -71,9 +71,21 @@ export const SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnc
   'btn-music-library': [{ id: 'anchor', gridX: 26, gridY: 19, role: 'anchor' }],
 };
 
+export const SYSTEM_SPACE2_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnchor[]> = {
+  ...SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID,
+  'btn-platform-login': [{ id: 'anchor', gridX: 1, gridY: 0, role: 'anchor' }],
+  'platform-magnet': [
+    { id: 'top-left', gridX: 0, gridY: 1, role: 'anchor' },
+    { id: 'top-right', gridX: 26, gridY: 1, role: 'boundary' },
+    { id: 'bottom-left', gridX: 0, gridY: 17, role: 'boundary' },
+    { id: 'bottom-right', gridX: 26, gridY: 17, role: 'boundary' },
+  ],
+};
+
 export function getSystemAnchorsByMagnetId(spaceId: string): Record<string, PixelAnchor[]> {
   const normalized = spaceId.trim();
   if (normalized === 'space1') return SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID;
+  if (normalized === 'space2') return SYSTEM_SPACE2_DEFAULT_ANCHORS_BY_MAGNET_ID;
   return SYSTEM_REQUIRED_ANCHORS_BY_MAGNET_ID;
 }
 
