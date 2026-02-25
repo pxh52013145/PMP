@@ -1,0 +1,721 @@
+.platform-magnet-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(249, 245, 255, 0.96), rgba(255, 255, 255, 0.98));
+  color: #2f2340;
+  overflow: hidden;
+}
+
+.platform-magnet-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.platform-magnet-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-magnet-header-main {
+  flex: 1;
+  min-width: 0;
+  display: block;
+}
+
+.platform-magnet-mode-switcher {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid rgba(173, 131, 214, 0.4);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.platform-magnet-mode-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-magnet-bv-top-search {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+}
+
+.platform-magnet-bv-top-search input {
+  border: 1px solid rgba(173, 131, 214, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #3d2558;
+  font-size: 12px;
+  padding: 6px 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.platform-magnet-bv-top-search .platform-magnet-mini-btn {
+  white-space: nowrap;
+}
+
+.platform-magnet-mode-btn {
+  border: none;
+  background: transparent;
+  color: #553a72;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  min-width: 88px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.platform-magnet-mode-btn.active {
+  background: rgba(171, 95, 255, 0.18);
+  color: #3d2558;
+}
+
+.platform-magnet-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.platform-magnet-summary-row p {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(57, 33, 76, 0.74);
+}
+
+.platform-magnet-panel {
+  border: 1px solid rgba(173, 131, 214, 0.32);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.platform-magnet-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.platform-magnet-panel-header h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.platform-magnet-panel-tag {
+  font-size: 11px;
+  color: rgba(57, 33, 76, 0.72);
+  border: 1px solid rgba(173, 131, 214, 0.38);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.platform-magnet-panel-desc,
+.platform-magnet-panel-summary,
+.platform-magnet-panel-empty,
+.platform-magnet-note,
+.platform-magnet-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.platform-magnet-note {
+  color: #5a3d79;
+}
+
+.platform-magnet-error {
+  color: #c03952;
+}
+
+.platform-magnet-mini-btn,
+.platform-magnet-search-row button {
+  border: 1px solid rgba(173, 131, 214, 0.4);
+  background: rgba(255, 255, 255, 0.88);
+  color: #4f326e;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.platform-magnet-mini-btn:disabled,
+.platform-magnet-search-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.platform-magnet-bilibili {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.platform-magnet-bilibili-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  padding-right: 2px;
+}
+
+.platform-magnet-bilibili-layout {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+
+.platform-magnet-bilibili-layout--drawers {
+  height: 100%;
+}
+
+.platform-magnet-bilibili-folders,
+.platform-magnet-bilibili-resources,
+.platform-magnet-bilibili-playlists {
+  min-height: 0;
+}
+
+.platform-magnet-bilibili-resources--main {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.platform-magnet-bilibili-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.platform-magnet-bilibili-folders,
+.platform-magnet-bilibili-playlists {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: min(340px, 86vw);
+  z-index: 5;
+  box-shadow: 0 12px 28px rgba(44, 20, 74, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.platform-magnet-bilibili-folders {
+  left: 0;
+  transform: translateX(calc(-100% - 12px));
+}
+
+.platform-magnet-bilibili-playlists {
+  right: 0;
+  transform: translateX(calc(100% + 12px));
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(150, 102, 198, 0.52);
+  box-shadow: 0 18px 38px rgba(37, 17, 64, 0.34);
+}
+
+.platform-magnet-bilibili-drawer-open.platform-magnet-bilibili-folders,
+.platform-magnet-bilibili-drawer-open.platform-magnet-bilibili-playlists {
+  transform: translateX(0);
+}
+
+.platform-magnet-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: rgba(25, 14, 37, 0.24);
+  z-index: 4;
+  cursor: pointer;
+  border-radius: 10px;
+}
+
+.platform-magnet-bilibili-folder-list,
+.platform-magnet-bilibili-resource-list,
+.platform-magnet-bilibili-playlist-track-list,
+.platform-magnet-result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.platform-magnet-bilibili-folder-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(173, 131, 214, 0.28);
+  background: rgba(255, 255, 255, 0.76);
+  color: #4a2f67;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.platform-magnet-bilibili-folder-item--active {
+  border-color: rgba(171, 95, 255, 0.72);
+  background: rgba(171, 95, 255, 0.14);
+}
+
+.platform-magnet-bilibili-folder-title {
+  font-size: 12px;
+}
+
+.platform-magnet-bilibili-folder-count {
+  font-size: 11px;
+  color: rgba(57, 33, 76, 0.66);
+}
+
+.platform-magnet-bilibili-resource-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.platform-magnet-bilibili-resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+  padding-right: 2px;
+}
+
+.platform-magnet-bilibili-resource-load-more {
+  grid-column: 1 / -1;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: rgba(57, 33, 76, 0.7);
+  border: 1px dashed rgba(173, 131, 214, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.platform-magnet-bilibili-resource-load-more-actions {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.platform-magnet-bilibili-resource-card {
+  border: 1px solid rgba(173, 131, 214, 0.28);
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: context-menu;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.platform-magnet-bilibili-resource-card:hover {
+  border-color: rgba(171, 95, 255, 0.55);
+  box-shadow: 0 6px 16px rgba(74, 37, 115, 0.12);
+}
+
+.platform-magnet-bilibili-resource-card--preparing {
+  opacity: 0.72;
+}
+
+.platform-magnet-bilibili-resource-toolbar input,
+.platform-magnet-bilibili-resource-toolbar select,
+.platform-magnet-bilibili-playlist-create input,
+.platform-magnet-bilibili-playlist-actions select,
+.platform-magnet-search-row select,
+.platform-magnet-search-row input {
+  border: 1px solid rgba(173, 131, 214, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #3d2558;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.platform-magnet-bilibili-resource-item,
+.platform-magnet-result-item,
+.platform-magnet-bilibili-playlist-track-item {
+  border: 1px solid rgba(173, 131, 214, 0.28);
+  background: rgba(255, 255, 255, 0.86);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.platform-magnet-bilibili-resource-cover {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  position: relative;
+  border-radius: 8px;
+  border: 1px solid rgba(173, 131, 214, 0.22);
+  overflow: hidden;
+  background: rgba(171, 95, 255, 0.08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7b56a8;
+  font-weight: 700;
+}
+
+.platform-magnet-bilibili-resource-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.platform-magnet-bilibili-resource-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.platform-magnet-bilibili-resource-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.platform-magnet-bilibili-resource-meta-row .platform-magnet-panel-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-magnet-bilibili-resource-bvid {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: rgba(57, 33, 76, 0.62);
+  word-break: break-all;
+}
+
+.platform-magnet-bilibili-resource-title,
+.platform-magnet-bilibili-resource-meta,
+.platform-magnet-result-main,
+.platform-magnet-result-sub,
+.platform-magnet-bilibili-playlist-track-title,
+.platform-magnet-bilibili-playlist-track-meta,
+.platform-magnet-player-title,
+.platform-magnet-player-subtitle,
+.platform-magnet-bilibili-lyric-card p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.platform-magnet-bilibili-resource-title,
+.platform-magnet-bilibili-playlist-track-title,
+.platform-magnet-player-title {
+  font-size: 12px;
+  color: #3f255a;
+}
+
+.platform-magnet-bilibili-resource-meta,
+.platform-magnet-result-sub,
+.platform-magnet-bilibili-playlist-track-meta,
+.platform-magnet-player-subtitle {
+  font-size: 11px;
+  color: rgba(57, 33, 76, 0.68);
+}
+
+.platform-magnet-bilibili-resource-badge {
+  display: inline-flex;
+  margin-top: 4px;
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #5d2f93;
+  border: 1px solid rgba(171, 95, 255, 0.45);
+  background: rgba(171, 95, 255, 0.12);
+}
+
+.platform-magnet-bilibili-resource-quality-tags {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 1;
+}
+
+.platform-magnet-bilibili-resource-quality-tag {
+  display: inline-flex;
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #f7fff9;
+  border: 1px solid rgba(30, 92, 58, 0.55);
+  background: rgba(27, 96, 58, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+.platform-magnet-bilibili-playlist-action-btns {
+  display: grid;
+  gap: 6px;
+}
+
+.platform-magnet-bilibili-bottom-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.platform-magnet-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(19, 10, 29, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.platform-magnet-settings-modal {
+  width: min(620px, 92vw);
+  border: 1px solid rgba(173, 131, 214, 0.32);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.platform-magnet-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.platform-magnet-settings-row select {
+  border: 1px solid rgba(173, 131, 214, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #3d2558;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.platform-magnet-settings-row .platform-magnet-settings-input {
+  border: 1px solid rgba(173, 131, 214, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #3d2558;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.platform-magnet-settings-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(173, 131, 214, 0.18);
+}
+
+.platform-magnet-settings-section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #3d2558;
+}
+
+.platform-magnet-settings-path-item {
+  display: grid;
+  gap: 4px;
+}
+
+.platform-magnet-settings-path-label {
+  font-size: 11px;
+  color: rgba(61, 37, 88, 0.78);
+}
+
+.platform-magnet-settings-path-value {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #3d2558;
+  word-break: break-all;
+}
+
+.platform-magnet-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.platform-magnet-bilibili-playlist-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.platform-magnet-bilibili-playlist-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.platform-magnet-player-bar {
+  border: 1px solid rgba(173, 131, 214, 0.35);
+  border-radius: 10px;
+  background: rgba(36, 21, 53, 0.92);
+  color: rgba(255, 255, 255, 0.95);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(220px, 1fr) 180px;
+  align-items: center;
+  gap: 10px;
+}
+
+.platform-magnet-player-controls {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.platform-magnet-player-progress,
+.platform-magnet-player-volume {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.platform-magnet-player-volume {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.platform-magnet-player-progress input,
+.platform-magnet-player-volume input {
+  width: 100%;
+}
+
+.platform-magnet-search-row {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.platform-magnet-generic {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.platform-magnet-generic .platform-magnet-panel {
+  flex: 1;
+  overflow: hidden;
+}
+
+@media (max-width: 1260px) {
+  .platform-magnet-settings-row {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-magnet-player-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-magnet-player-controls {
+    justify-content: flex-start;
+  }
+
+  .platform-magnet-search-row,
+  .platform-magnet-bilibili-playlist-actions,
+  .platform-magnet-bilibili-playlist-create {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-magnet-bilibili-resource-item {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .platform-magnet-bilibili-resource-grid {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  }
+
+  .platform-magnet-bilibili-folders,
+  .platform-magnet-bilibili-playlists {
+    width: min(360px, calc(100vw - 24px));
+  }
+}
+
+@media (max-width: 700px) {
+  .platform-magnet-mode-row {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-magnet-mode-switcher {
+    width: fit-content;
+  }
+}
+
+@media (max-width: 760px) {
+  .platform-magnet-bilibili-resource-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-magnet-bilibili-bottom-actions {
+    flex-direction: column;
+  }
+}
+
+@media (max-height: 860px) {
+  .platform-magnet-player-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-magnet-player-controls {
+    justify-content: flex-start;
+  }
+}
