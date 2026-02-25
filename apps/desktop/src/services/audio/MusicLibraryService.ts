@@ -7,9 +7,15 @@ import { readJson } from '../../modules/storage';
 import { PMP_STORAGE_CHANGE_EVENT, type PmpStorageChangeDetail } from '../../modules/storage/localStorage';
 import {
   cleanupNativeLibrarySourceTracks,
+  clearNativeLibrarySyncFailedSources,
   clearNativeLibraryTracks,
   deleteNativeLibraryUserEntry,
   deleteNativeLibraryTracks,
+  generateNativeBilibiliQrCodeSession,
+  getNativeBilibiliAuthStatus,
+  getNativeLibrarySyncFailureOverview,
+  getNativeLibrarySyncSchedulerStatus,
+  getNativeLibrarySyncStatus,
   getNativeLibraryStats,
   listNativeLibraryCloudHashJobs,
   listNativeLibraryFallbackTasks,
@@ -23,7 +29,13 @@ import {
   listNativeLibraryUserEntries,
   queryNativeLibraryTracks,
   removeNativeLibrarySource,
+  retryNativeLibrarySyncFailedSources,
+  runNativeLibrarySyncTick,
   syncNativeLibraryTracks,
+  startNativeLibrarySyncScheduler,
+  stopNativeLibrarySyncScheduler,
+  pollNativeBilibiliQrCodeSession,
+  logoutNativeBilibili,
   updateNativeLibraryCloudHashJobStatus,
   updateNativeLibraryFallbackTaskStatus,
   upsertNativeLibraryCloudHashJob,
@@ -31,8 +43,17 @@ import {
   upsertNativeLibrarySource,
   upsertNativeLibraryUserEntry,
   type NativeLibraryAlbumRecord,
+  type NativeBilibiliAuthStatus,
+  type NativeBilibiliQrCodeSession,
+  type NativeBilibiliQrPollResult,
   type NativeLibraryCloudHashJobQuery,
   type NativeLibraryCloudHashJobRecord,
+  type NativeLibrarySyncSchedulerStatus,
+  type NativeLibrarySyncFailureOverview,
+  type NativeLibrarySyncClearResult,
+  type NativeLibrarySyncRetryResult,
+  type NativeLibrarySyncStatus,
+  type NativeLibrarySyncTickResult,
   type NativeLibrarySourceHealthRecord,
   type NativeLibrarySourceRecord,
   type NativeLibraryStatsRecord,
@@ -49,6 +70,12 @@ import {
   type CloudPlaybackFallbackDispatchResult,
   type CloudPlaybackFallbackRequest,
 } from './cloudPlaybackFallbackAdapter';
+import {
+  listMusicSourceFacadeItems,
+  searchMusicSourceTracks,
+  type MusicSourceFacadeItem,
+  type MusicSourceTrackCandidate,
+} from './musicSourceFacade';
 
 // 音乐库数据库版本
 const DB_VERSION = 5;
@@ -114,6 +141,12 @@ export interface CloudLibraryPlaybackPlan {
   networkFallback?: CloudLibraryNetworkFallbackRequest;
   fallbackDispatch?: CloudPlaybackFallbackDispatchResult;
 }
+
+export type UnifiedMusicSource = MusicSourceFacadeItem;
+export type UnifiedTrackCandidate = MusicSourceTrackCandidate;
+export type BilibiliAuthStatus = NativeBilibiliAuthStatus;
+export type BilibiliQrCodeSession = NativeBilibiliQrCodeSession;
+export type BilibiliQrPollResult = NativeBilibiliQrPollResult;
 
 export type CloudFallbackTaskStatus =
   | 'queued'
@@ -1819,7 +1852,18 @@ export class MusicLibraryService {
     const direct = await promise;
     if (direct) return direct;
 
-    if (!allowAlbumFallback) return undefined;
+    const fallbackExistingUrl =
+      normalizedExistingUrl && (!this.isPmpCoverUrl(normalizedExistingUrl) || allowPmpCoverUrl)
+        ? normalizedExistingUrl
+        : undefined;
+
+    if (!allowAlbumFallback) {
+      if (fallbackExistingUrl) {
+        this.coverUrlCache.set(effectiveCacheKey, fallbackExistingUrl);
+        this.touchCoverBlobCache(effectiveCacheKey);
+      }
+      return fallbackExistingUrl;
+    }
 
     const albumKey = this.albumKeyForTrack(track);
     if (!albumKey) return undefined;
@@ -1867,7 +1911,16 @@ export class MusicLibraryService {
       });
 
     this.albumCoverUrlInflight.set(albumCacheKey, albumPromise);
-    return albumPromise;
+    const albumResolved = await albumPromise;
+    if (albumResolved) return albumResolved;
+
+    if (fallbackExistingUrl) {
+      this.coverUrlCache.set(effectiveCacheKey, fallbackExistingUrl);
+      this.touchCoverBlobCache(effectiveCacheKey);
+      return fallbackExistingUrl;
+    }
+
+    return undefined;
   }
 
   getCoverRuntimeCacheStats(): {
@@ -3999,6 +4052,197 @@ export class MusicLibraryService {
     } catch (error) {
       console.warn('[MusicLibraryService] failed to update cloud hash job status:', error);
       return false;
+    }
+  }
+
+  async getSyncOrchestratorStatus(): Promise<NativeLibrarySyncStatus | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      return await getNativeLibrarySyncStatus();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to get sync orchestrator status:', error);
+      return null;
+    }
+  }
+
+  async runSyncOrchestratorTick(reason?: string): Promise<NativeLibrarySyncTickResult | null> {
+    if (!isTauriRuntime()) return null;
+    const normalizedReason =
+      typeof reason === 'string' && reason.trim().length > 0 ? reason.trim() : undefined;
+
+    try {
+      return await runNativeLibrarySyncTick(normalizedReason);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to run sync orchestrator tick:', error);
+      return null;
+    }
+  }
+
+  async getSyncSchedulerStatus(): Promise<NativeLibrarySyncSchedulerStatus | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      return await getNativeLibrarySyncSchedulerStatus();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to get sync scheduler status:', error);
+      return null;
+    }
+  }
+
+  async startSyncScheduler(intervalMs?: number): Promise<NativeLibrarySyncSchedulerStatus | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedIntervalMs =
+      typeof intervalMs === 'number' && Number.isFinite(intervalMs)
+        ? Math.max(1000, Math.floor(intervalMs))
+        : undefined;
+
+    try {
+      return await startNativeLibrarySyncScheduler({ intervalMs: normalizedIntervalMs });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to start sync scheduler:', error);
+      return null;
+    }
+  }
+
+  async stopSyncScheduler(): Promise<NativeLibrarySyncSchedulerStatus | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      return await stopNativeLibrarySyncScheduler();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to stop sync scheduler:', error);
+      return null;
+    }
+  }
+
+  async getSyncFailureOverview(limit?: number): Promise<NativeLibrarySyncFailureOverview | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedLimit =
+      typeof limit === 'number' && Number.isFinite(limit)
+        ? Math.max(1, Math.min(1000, Math.floor(limit)))
+        : undefined;
+
+    try {
+      return await getNativeLibrarySyncFailureOverview({ limit: normalizedLimit });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to get sync failure overview:', error);
+      return null;
+    }
+  }
+
+  async retrySyncFailedSources(options?: {
+    sourceIds?: string[];
+    reason?: string;
+  }): Promise<NativeLibrarySyncRetryResult | null> {
+    if (!isTauriRuntime()) return null;
+
+    const sourceIds = Array.isArray(options?.sourceIds) ? options.sourceIds : undefined;
+    const normalizedSourceIds = sourceIds
+      ? sourceIds
+          .map((sourceId) => (typeof sourceId === 'string' ? sourceId.trim() : ''))
+          .filter((sourceId) => sourceId.length > 0)
+      : undefined;
+    const normalizedReason =
+      typeof options?.reason === 'string' && options.reason.trim().length > 0
+        ? options.reason.trim()
+        : undefined;
+
+    try {
+      return await retryNativeLibrarySyncFailedSources({
+        sourceIds: normalizedSourceIds,
+        reason: normalizedReason,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to retry sync failed sources:', error);
+      return null;
+    }
+  }
+
+  async clearSyncFailedSources(options?: {
+    sourceIds?: string[];
+  }): Promise<NativeLibrarySyncClearResult | null> {
+    if (!isTauriRuntime()) return null;
+
+    const sourceIds = Array.isArray(options?.sourceIds) ? options.sourceIds : undefined;
+    const normalizedSourceIds = sourceIds
+      ? sourceIds
+          .map((sourceId) => (typeof sourceId === 'string' ? sourceId.trim() : ''))
+          .filter((sourceId) => sourceId.length > 0)
+      : undefined;
+
+    try {
+      return await clearNativeLibrarySyncFailedSources({
+        sourceIds: normalizedSourceIds,
+      });
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to clear sync failed sources:', error);
+      return null;
+    }
+  }
+
+  async listUnifiedMusicSources(): Promise<UnifiedMusicSource[]> {
+    if (!isTauriRuntime()) return [];
+    try {
+      return await listMusicSourceFacadeItems();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to list unified music sources:', error);
+      return [];
+    }
+  }
+
+  async searchUnifiedTracks(options: {
+    query: string;
+    limit?: number;
+    sourceIds?: string[];
+  }): Promise<UnifiedTrackCandidate[]> {
+    if (!isTauriRuntime()) return [];
+    try {
+      return await searchMusicSourceTracks(options);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to search unified tracks:', error);
+      return [];
+    }
+  }
+
+  async getBilibiliAuthStatus(): Promise<BilibiliAuthStatus | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      return await getNativeBilibiliAuthStatus();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to get Bilibili auth status:', error);
+      return null;
+    }
+  }
+
+  async generateBilibiliQrCodeSession(): Promise<BilibiliQrCodeSession | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      return await generateNativeBilibiliQrCodeSession();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to generate Bilibili QR session:', error);
+      return null;
+    }
+  }
+
+  async pollBilibiliQrCodeSession(sessionId: string): Promise<BilibiliQrPollResult | null> {
+    if (!isTauriRuntime()) return null;
+    const normalizedSessionId = String(sessionId || '').trim();
+    if (!normalizedSessionId) return null;
+    try {
+      return await pollNativeBilibiliQrCodeSession(normalizedSessionId);
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to poll Bilibili QR session:', error);
+      return null;
+    }
+  }
+
+  async logoutBilibili(): Promise<BilibiliAuthStatus | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+      return await logoutNativeBilibili();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to logout Bilibili:', error);
+      return null;
     }
   }
 

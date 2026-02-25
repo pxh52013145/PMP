@@ -1,0 +1,44 @@
+export {
+  beginBilibiliQrLogin,
+  emitPlatformConnectorAuthChanged,
+  getBilibiliConnectorAuthSnapshot,
+  listPlatformConnectorAuthSnapshots,
+  logoutBilibiliConnector,
+  pollBilibiliQrLogin,
+  refreshAndEmitBilibiliConnectorAuthSnapshot,
+  subscribePlatformConnectorAuthChanged,
+  PLATFORM_CONNECTOR_AUTH_CHANGED_EVENT,
+  type BilibiliQrLoginPollResult,
+  type BilibiliQrLoginSession,
+  type PlatformConnectorAuthSnapshot,
+  type PlatformConnectorAuthState,
+  type PlatformConnectorId,
+} from './connectorAuth';
+
+export {
+  getBilibiliPlaybackCacheSettings,
+  listBilibiliFavoriteFolders,
+  listBilibiliFavoriteResources,
+  listBilibiliPlaybackQualities,
+  pickBilibiliCacheDirectory,
+  prepareBilibiliCachedPlayback,
+  resolveBilibiliCoverAssetUrl,
+  resolveBilibiliLyricLocator,
+  setBilibiliPlaybackCacheSettings,
+  searchBilibiliResourceByBvid,
+  type BilibiliPlaybackCacheSettings,
+  type BilibiliFavoriteFolderItem,
+  type BilibiliFavoriteResourceItem,
+  type BilibiliFavoriteResourcePage,
+  type BilibiliPreparedPlayback,
+  type BilibiliPlaybackQualityOption,
+  type BilibiliLyricLocatorResolved,
+} from './bilibiliFacade';
+
+export {
+  listPlatformConnectorFacadeItems,
+  searchPlatformTracks,
+  type PlatformConnectorFacadeItem,
+  type PlatformTrackSearchOptions,
+  type PlatformTrackSearchResult,
+} from './platformFacade';

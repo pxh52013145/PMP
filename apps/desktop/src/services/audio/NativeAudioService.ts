@@ -3037,7 +3037,28 @@ export class NativeAudioService implements IAudioService {
         if (shouldApplyCurrentTime && typeof nextCurrentTime === 'number') {
           update.currentTime = nextCurrentTime;
         }
-        if (typeof next.duration !== 'undefined') update.duration = next.duration;
+        if (typeof next.duration !== 'undefined') {
+          const reportedDuration =
+            typeof next.duration === 'number' && Number.isFinite(next.duration) ? next.duration : 0;
+          const trackDuration = this.state.currentTrack?.duration;
+          const hasTrackDuration =
+            typeof trackDuration === 'number' && Number.isFinite(trackDuration) && trackDuration > 0;
+
+          if (reportedDuration > 0) {
+            update.duration = reportedDuration;
+          } else if (hasTrackDuration) {
+            update.duration = trackDuration;
+          } else {
+            update.duration = reportedDuration;
+          }
+        } else {
+          const trackDuration = this.state.currentTrack?.duration;
+          const hasTrackDuration =
+            typeof trackDuration === 'number' && Number.isFinite(trackDuration) && trackDuration > 0;
+          if ((this.state.duration ?? 0) <= 0 && hasTrackDuration) {
+            update.duration = trackDuration;
+          }
+        }
         if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
         if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
         if (typeof next.decodeBufferedAhead !== 'undefined') {

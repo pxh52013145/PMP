@@ -25,6 +25,119 @@ export interface NativeLibrarySourceRecord {
   updatedAtMs: number;
 }
 
+export interface NativeLibraryConnectorRecord {
+  id: string;
+  kind: string;
+  driver: string;
+  displayName?: string;
+  status: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface NativeLibraryConnectorAccountRecord {
+  id: string;
+  connectorId: string;
+  accountUid?: string;
+  authState: string;
+  tokenRef?: string;
+  refreshTokenRef?: string;
+  expiresAtMs?: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface NativeBilibiliQrCodeSession {
+  connectorId: string;
+  sessionId: string;
+  qrcodeKey: string;
+  qrUrl: string;
+  qrImageDataUrl: string;
+  generatedAtMs: number;
+  expiresAtMs: number;
+}
+
+export interface NativeBilibiliQrPollResult {
+  connectorId: string;
+  sessionId: string;
+  state: string;
+  stateCode: number;
+  stateMessage: string;
+  authState: string;
+  accountUid?: string;
+  expiresAtMs?: number;
+}
+
+export interface NativeBilibiliAuthStatus {
+  connectorId: string;
+  authState: string;
+  accountUid?: string;
+  updatedAtMs?: number;
+  expiresAtMs?: number;
+  availability?: 'available' | 'degraded' | 'unavailable';
+  availabilityMessage?: string;
+}
+
+export interface NativeBilibiliPlaybackCacheSettings {
+  customRootPath?: string;
+  effectiveRootPath: string;
+  defaultRootPath: string;
+}
+
+export interface NativeBilibiliFavoriteFolder {
+  folderId: string;
+  title: string;
+  mediaCount: number;
+  coverUrl?: string;
+  updatedAtMs?: number;
+}
+
+export interface NativeBilibiliFavoriteResourceItem {
+  resourceId: string;
+  title: string;
+  ownerName?: string;
+  durationSeconds?: number;
+  coverUrl?: string;
+  sourceLocator: string;
+  lyricLocator?: string;
+  bvid?: string;
+  cid?: string;
+  contentKind: string;
+}
+
+export interface NativeBilibiliFavoriteResourcePage {
+  folderId: string;
+  pageNum: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: NativeBilibiliFavoriteResourceItem[];
+}
+
+export interface NativeBilibiliLyricLocatorRef {
+  locator: string;
+  format: string;
+  lang?: string;
+  sourceKind: string;
+}
+
+export interface NativeBilibiliPlaybackPrepared {
+  sourceLocator: string;
+  streamUrl: string;
+  cachePath: string;
+  mimeType?: string;
+  durationSeconds?: number;
+  contentKind: string;
+  selectedQualityKey: string;
+  selectedQualityLabel: string;
+}
+
+export interface NativeBilibiliPlaybackQualityOption {
+  key: string;
+  label: string;
+  available: boolean;
+}
+
 export interface NativeLibraryTrackUpsertInput {
   id: string;
   filePath: string;
@@ -231,6 +344,86 @@ export interface NativeLibraryCloudHashJobRecord {
   updatedAtMs: number;
 }
 
+export interface NativeLibrarySyncStatus {
+  initialized: boolean;
+  running: boolean;
+  totalTicks: number;
+  lastTickReason?: string;
+  lastTickStartedAtMs?: number;
+  lastTickFinishedAtMs?: number;
+  lastError?: string;
+  updatedAtMs?: number;
+}
+
+export interface NativeLibrarySyncTickResult {
+  reason: string;
+  startedAtMs: number;
+  finishedAtMs: number;
+  durationMs: number;
+  scannedSources: number;
+  changedSources: number;
+  skippedSources: number;
+  failedSources: number;
+  failedSourceItems: NativeLibrarySyncFailedSource[];
+  enqueuedMetadataJobs: number;
+}
+
+export interface NativeLibrarySyncFailedSource {
+  sourceId: string;
+  sourcePath: string;
+  error: string;
+  backoffUntilMs?: number;
+  failedAtMs: number;
+}
+
+export interface NativeLibrarySyncFailureSourceSummary {
+  sourceId: string;
+  sourcePath: string;
+  sourceDisplayName?: string;
+  connectorId: string;
+  lastError?: string;
+  backoffUntilMs?: number;
+  backoffRemainingMs?: number;
+  backoffActive: boolean;
+  lastSuccessAtMs?: number;
+  incrementalScanAtMs?: number;
+  updatedAtMs: number;
+}
+
+export interface NativeLibrarySyncFailureOverview {
+  generatedAtMs: number;
+  totalFailedSources: number;
+  backoffActiveSources: number;
+  items: NativeLibrarySyncFailureSourceSummary[];
+}
+
+export interface NativeLibrarySyncRetryResult {
+  allSources: boolean;
+  requestedSources: number;
+  clearedSources: number;
+  tickResult: NativeLibrarySyncTickResult;
+}
+
+export interface NativeLibrarySyncClearResult {
+  allSources: boolean;
+  requestedSources: number;
+  clearedSources: number;
+  clearedAtMs: number;
+}
+
+export interface NativeLibrarySyncSchedulerStatus {
+  running: boolean;
+  intervalMs: number;
+  startedAtMs?: number;
+  nextRunAtMs?: number;
+  ticksTotal: number;
+  lastTickStartedAtMs?: number;
+  lastTickFinishedAtMs?: number;
+  lastError?: string;
+  lastTickResult?: NativeLibrarySyncTickResult;
+  updatedAtMs?: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -295,6 +488,323 @@ function ensureSourceRecord(value: unknown): NativeLibrarySourceRecord | null {
     addedAtMs,
     lastScannedAtMs: asNumber(value.lastScannedAtMs),
     updatedAtMs,
+  };
+}
+
+function ensureConnectorRecord(value: unknown): NativeLibraryConnectorRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(readRecordField(value, 'id'));
+  const kind = asTrimmedString(readRecordField(value, 'kind'));
+  const driver = asTrimmedString(readRecordField(value, 'driver'));
+  const status = asTrimmedString(readRecordField(value, 'status'));
+  const createdAtMs = asNumber(readRecordField(value, 'createdAtMs', 'created_at_ms'));
+  const updatedAtMs = asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms'));
+  if (!id || !kind || !driver || !status || createdAtMs === undefined || updatedAtMs === undefined) {
+    return null;
+  }
+
+  return {
+    id,
+    kind,
+    driver,
+    displayName: asOptionalString(readRecordField(value, 'displayName', 'display_name')),
+    status,
+    createdAtMs,
+    updatedAtMs,
+  };
+}
+
+function ensureConnectorAccountRecord(value: unknown): NativeLibraryConnectorAccountRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(readRecordField(value, 'id'));
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const authState = asTrimmedString(readRecordField(value, 'authState', 'auth_state'));
+  const createdAtMs = asNumber(readRecordField(value, 'createdAtMs', 'created_at_ms'));
+  const updatedAtMs = asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms'));
+  if (!id || !connectorId || !authState || createdAtMs === undefined || updatedAtMs === undefined) {
+    return null;
+  }
+
+  return {
+    id,
+    connectorId,
+    accountUid: asOptionalString(readRecordField(value, 'accountUid', 'account_uid')),
+    authState,
+    tokenRef: asOptionalString(readRecordField(value, 'tokenRef', 'token_ref')),
+    refreshTokenRef: asOptionalString(readRecordField(value, 'refreshTokenRef', 'refresh_token_ref')),
+    expiresAtMs: asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms')),
+    createdAtMs,
+    updatedAtMs,
+  };
+}
+
+function ensureBilibiliQrCodeSession(value: unknown): NativeBilibiliQrCodeSession | null {
+  if (!isRecord(value)) return null;
+
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const sessionId = asTrimmedString(readRecordField(value, 'sessionId', 'session_id'));
+  const qrcodeKey = asTrimmedString(readRecordField(value, 'qrcodeKey', 'qrcode_key'));
+  const qrUrl = asTrimmedString(readRecordField(value, 'qrUrl', 'qr_url'));
+  const qrImageDataUrl = asTrimmedString(readRecordField(value, 'qrImageDataUrl', 'qr_image_data_url'));
+  const generatedAtMs = asNumber(readRecordField(value, 'generatedAtMs', 'generated_at_ms'));
+  const expiresAtMs = asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms'));
+  if (
+    !connectorId ||
+    !sessionId ||
+    !qrcodeKey ||
+    !qrUrl ||
+    !qrImageDataUrl ||
+    generatedAtMs === undefined ||
+    expiresAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    connectorId,
+    sessionId,
+    qrcodeKey,
+    qrUrl,
+    qrImageDataUrl,
+    generatedAtMs,
+    expiresAtMs,
+  };
+}
+
+function ensureBilibiliQrPollResult(value: unknown): NativeBilibiliQrPollResult | null {
+  if (!isRecord(value)) return null;
+
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const sessionId = asTrimmedString(readRecordField(value, 'sessionId', 'session_id'));
+  const state = asTrimmedString(readRecordField(value, 'state'));
+  const stateCode = asNumber(readRecordField(value, 'stateCode', 'state_code'));
+  const stateMessage = asTrimmedString(readRecordField(value, 'stateMessage', 'state_message'));
+  const authState = asTrimmedString(readRecordField(value, 'authState', 'auth_state'));
+  if (
+    !connectorId ||
+    !sessionId ||
+    !state ||
+    stateCode === undefined ||
+    !stateMessage ||
+    !authState
+  ) {
+    return null;
+  }
+
+  return {
+    connectorId,
+    sessionId,
+    state,
+    stateCode,
+    stateMessage,
+    authState,
+    accountUid: asOptionalString(readRecordField(value, 'accountUid', 'account_uid')),
+    expiresAtMs: asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms')),
+  };
+}
+
+function ensureBilibiliAuthStatus(value: unknown): NativeBilibiliAuthStatus | null {
+  if (!isRecord(value)) return null;
+
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const authState = asTrimmedString(readRecordField(value, 'authState', 'auth_state'));
+  if (!connectorId || !authState) return null;
+
+  const availabilityRaw = asTrimmedString(readRecordField(value, 'availability'));
+  const availability = (() => {
+    const normalized = availabilityRaw.toLowerCase();
+    if (normalized === 'available' || normalized === 'degraded' || normalized === 'unavailable') {
+      return normalized;
+    }
+    return undefined;
+  })();
+
+  return {
+    connectorId,
+    authState,
+    accountUid: asOptionalString(readRecordField(value, 'accountUid', 'account_uid')),
+    updatedAtMs: asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms')),
+    expiresAtMs: asNumber(readRecordField(value, 'expiresAtMs', 'expires_at_ms')),
+    availability,
+    availabilityMessage: asOptionalString(
+      readRecordField(value, 'availabilityMessage', 'availability_message')
+    ),
+  };
+}
+
+function ensureBilibiliPlaybackCacheSettings(
+  value: unknown
+): NativeBilibiliPlaybackCacheSettings | null {
+  if (!isRecord(value)) return null;
+
+  const effectiveRootPath = asTrimmedString(
+    readRecordField(value, 'effectiveRootPath', 'effective_root_path')
+  );
+  const defaultRootPath = asTrimmedString(
+    readRecordField(value, 'defaultRootPath', 'default_root_path')
+  );
+
+  if (!effectiveRootPath || !defaultRootPath) return null;
+
+  return {
+    customRootPath: asOptionalString(readRecordField(value, 'customRootPath', 'custom_root_path')),
+    effectiveRootPath,
+    defaultRootPath,
+  };
+}
+
+function ensureBilibiliFavoriteFolder(value: unknown): NativeBilibiliFavoriteFolder | null {
+  if (!isRecord(value)) return null;
+
+  const folderId = asTrimmedString(readRecordField(value, 'folderId', 'folder_id'));
+  const title = asTrimmedString(readRecordField(value, 'title'));
+  const mediaCount = asNumber(readRecordField(value, 'mediaCount', 'media_count'));
+  if (!folderId || !title || mediaCount === undefined) return null;
+
+  return {
+    folderId,
+    title,
+    mediaCount: Math.max(0, Math.floor(mediaCount)),
+    coverUrl: asOptionalString(readRecordField(value, 'coverUrl', 'cover_url')),
+    updatedAtMs: asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms')),
+  };
+}
+
+function ensureBilibiliFavoriteResourceItem(value: unknown): NativeBilibiliFavoriteResourceItem | null {
+  if (!isRecord(value)) return null;
+
+  const resourceId = asTrimmedString(readRecordField(value, 'resourceId', 'resource_id'));
+  const title = asTrimmedString(readRecordField(value, 'title'));
+  const sourceLocator = asTrimmedString(readRecordField(value, 'sourceLocator', 'source_locator'));
+  const contentKind = asTrimmedString(readRecordField(value, 'contentKind', 'content_kind'));
+  if (!resourceId || !title || !sourceLocator || !contentKind) return null;
+
+  const durationSeconds = asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds'));
+
+  return {
+    resourceId,
+    title,
+    ownerName: asOptionalString(readRecordField(value, 'ownerName', 'owner_name')),
+    durationSeconds:
+      durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),
+    coverUrl: asOptionalString(readRecordField(value, 'coverUrl', 'cover_url')),
+    sourceLocator,
+    lyricLocator: asOptionalString(readRecordField(value, 'lyricLocator', 'lyric_locator')),
+    bvid: asOptionalString(readRecordField(value, 'bvid')),
+    cid: asOptionalString(readRecordField(value, 'cid')),
+    contentKind,
+  };
+}
+
+function ensureBilibiliFavoriteResourcePage(value: unknown): NativeBilibiliFavoriteResourcePage | null {
+  if (!isRecord(value)) return null;
+
+  const folderId = asTrimmedString(readRecordField(value, 'folderId', 'folder_id'));
+  const pageNum = asNumber(readRecordField(value, 'pageNum', 'page_num'));
+  const pageSize = asNumber(readRecordField(value, 'pageSize', 'page_size'));
+  const total = asNumber(readRecordField(value, 'total'));
+  const hasMore = asBool(readRecordField(value, 'hasMore', 'has_more'));
+  if (
+    !folderId ||
+    pageNum === undefined ||
+    pageSize === undefined ||
+    total === undefined ||
+    hasMore === undefined
+  ) {
+    return null;
+  }
+
+  const itemsRaw = readRecordField(value, 'items');
+  const items: NativeBilibiliFavoriteResourceItem[] = [];
+  if (Array.isArray(itemsRaw)) {
+    for (const item of itemsRaw) {
+      const parsed = ensureBilibiliFavoriteResourceItem(item);
+      if (!parsed) continue;
+      items.push(parsed);
+    }
+  }
+
+  return {
+    folderId,
+    pageNum: Math.max(1, Math.floor(pageNum)),
+    pageSize: Math.max(1, Math.floor(pageSize)),
+    total: Math.max(0, Math.floor(total)),
+    hasMore,
+    items,
+  };
+}
+
+function ensureBilibiliLyricLocatorRef(value: unknown): NativeBilibiliLyricLocatorRef | null {
+  if (!isRecord(value)) return null;
+
+  const locator = asTrimmedString(readRecordField(value, 'locator'));
+  const format = asTrimmedString(readRecordField(value, 'format'));
+  const sourceKind = asTrimmedString(readRecordField(value, 'sourceKind', 'source_kind'));
+  if (!locator || !format || !sourceKind) return null;
+
+  return {
+    locator,
+    format,
+    lang: asOptionalString(readRecordField(value, 'lang')),
+    sourceKind,
+  };
+}
+
+function ensureBilibiliPlaybackPrepared(value: unknown): NativeBilibiliPlaybackPrepared | null {
+  if (!isRecord(value)) return null;
+
+  const sourceLocator = asTrimmedString(readRecordField(value, 'sourceLocator', 'source_locator'));
+  const streamUrl = asTrimmedString(readRecordField(value, 'streamUrl', 'stream_url'));
+  const cachePath = asTrimmedString(readRecordField(value, 'cachePath', 'cache_path'));
+  const contentKind = asTrimmedString(readRecordField(value, 'contentKind', 'content_kind'));
+  const selectedQualityKey = asTrimmedString(
+    readRecordField(value, 'selectedQualityKey', 'selected_quality_key')
+  );
+  const selectedQualityLabel = asTrimmedString(
+    readRecordField(value, 'selectedQualityLabel', 'selected_quality_label')
+  );
+  if (
+    !sourceLocator ||
+    !streamUrl ||
+    !cachePath ||
+    !contentKind ||
+    !selectedQualityKey ||
+    !selectedQualityLabel
+  ) {
+    return null;
+  }
+
+  const durationSeconds = asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds'));
+
+  return {
+    sourceLocator,
+    streamUrl,
+    cachePath,
+    mimeType: asOptionalString(readRecordField(value, 'mimeType', 'mime_type')),
+    durationSeconds:
+      durationSeconds === undefined ? undefined : Math.max(0, Math.floor(durationSeconds)),
+    contentKind,
+    selectedQualityKey,
+    selectedQualityLabel,
+  };
+}
+
+function ensureBilibiliPlaybackQualityOption(
+  value: unknown
+): NativeBilibiliPlaybackQualityOption | null {
+  if (!isRecord(value)) return null;
+
+  const key = asTrimmedString(readRecordField(value, 'key'));
+  const label = asTrimmedString(readRecordField(value, 'label'));
+  const available = asBool(readRecordField(value, 'available'));
+  if (!key || !label || available === undefined) return null;
+
+  return {
+    key,
+    label,
+    available,
   };
 }
 
@@ -570,6 +1080,255 @@ function ensureCloudHashJobRecord(value: unknown): NativeLibraryCloudHashJobReco
   };
 }
 
+function ensureSyncStatus(value: unknown): NativeLibrarySyncStatus | null {
+  if (!isRecord(value)) return null;
+
+  const initialized = asBool(readRecordField(value, 'initialized'));
+  const running = asBool(readRecordField(value, 'running'));
+  const totalTicks = asNumber(readRecordField(value, 'totalTicks', 'total_ticks'));
+  if (initialized === undefined || running === undefined || totalTicks === undefined) {
+    return null;
+  }
+
+  return {
+    initialized,
+    running,
+    totalTicks: Math.max(0, Math.floor(totalTicks)),
+    lastTickReason: asOptionalString(readRecordField(value, 'lastTickReason', 'last_tick_reason')),
+    lastTickStartedAtMs: asNumber(
+      readRecordField(value, 'lastTickStartedAtMs', 'last_tick_started_at_ms')
+    ),
+    lastTickFinishedAtMs: asNumber(
+      readRecordField(value, 'lastTickFinishedAtMs', 'last_tick_finished_at_ms')
+    ),
+    lastError: asOptionalString(readRecordField(value, 'lastError', 'last_error')),
+    updatedAtMs: asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms')),
+  };
+}
+
+function ensureSyncFailedSource(value: unknown): NativeLibrarySyncFailedSource | null {
+  if (!isRecord(value)) return null;
+
+  const sourceId = asTrimmedString(readRecordField(value, 'sourceId', 'source_id'));
+  const sourcePath = asTrimmedString(readRecordField(value, 'sourcePath', 'source_path'));
+  const error = asTrimmedString(readRecordField(value, 'error'));
+  const failedAtMs = asNumber(readRecordField(value, 'failedAtMs', 'failed_at_ms'));
+  if (!sourceId || !sourcePath || !error || failedAtMs === undefined) {
+    return null;
+  }
+
+  return {
+    sourceId,
+    sourcePath,
+    error,
+    backoffUntilMs: asNumber(readRecordField(value, 'backoffUntilMs', 'backoff_until_ms')),
+    failedAtMs,
+  };
+}
+
+function ensureSyncFailureSourceSummary(
+  value: unknown
+): NativeLibrarySyncFailureSourceSummary | null {
+  if (!isRecord(value)) return null;
+
+  const sourceId = asTrimmedString(readRecordField(value, 'sourceId', 'source_id'));
+  const sourcePath = asTrimmedString(readRecordField(value, 'sourcePath', 'source_path'));
+  const connectorId = asTrimmedString(readRecordField(value, 'connectorId', 'connector_id'));
+  const backoffActive = asBool(readRecordField(value, 'backoffActive', 'backoff_active'));
+  const updatedAtMs = asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms'));
+  if (!sourceId || !sourcePath || !connectorId || backoffActive === undefined || updatedAtMs === undefined) {
+    return null;
+  }
+
+  return {
+    sourceId,
+    sourcePath,
+    sourceDisplayName: asOptionalString(
+      readRecordField(value, 'sourceDisplayName', 'source_display_name')
+    ),
+    connectorId,
+    lastError: asOptionalString(readRecordField(value, 'lastError', 'last_error')),
+    backoffUntilMs: asNumber(readRecordField(value, 'backoffUntilMs', 'backoff_until_ms')),
+    backoffRemainingMs: asNumber(
+      readRecordField(value, 'backoffRemainingMs', 'backoff_remaining_ms')
+    ),
+    backoffActive,
+    lastSuccessAtMs: asNumber(readRecordField(value, 'lastSuccessAtMs', 'last_success_at_ms')),
+    incrementalScanAtMs: asNumber(
+      readRecordField(value, 'incrementalScanAtMs', 'incremental_scan_at_ms')
+    ),
+    updatedAtMs,
+  };
+}
+
+function ensureSyncFailureOverview(value: unknown): NativeLibrarySyncFailureOverview | null {
+  if (!isRecord(value)) return null;
+
+  const generatedAtMs = asNumber(readRecordField(value, 'generatedAtMs', 'generated_at_ms'));
+  const totalFailedSources = asNumber(
+    readRecordField(value, 'totalFailedSources', 'total_failed_sources')
+  );
+  const backoffActiveSources = asNumber(
+    readRecordField(value, 'backoffActiveSources', 'backoff_active_sources')
+  );
+  const rawItems = readRecordField(value, 'items');
+
+  if (
+    generatedAtMs === undefined ||
+    totalFailedSources === undefined ||
+    backoffActiveSources === undefined ||
+    !Array.isArray(rawItems)
+  ) {
+    return null;
+  }
+
+  const items: NativeLibrarySyncFailureSourceSummary[] = [];
+  for (const item of rawItems) {
+    const parsed = ensureSyncFailureSourceSummary(item);
+    if (!parsed) continue;
+    items.push(parsed);
+  }
+
+  return {
+    generatedAtMs,
+    totalFailedSources: Math.max(0, Math.floor(totalFailedSources)),
+    backoffActiveSources: Math.max(0, Math.floor(backoffActiveSources)),
+    items,
+  };
+}
+
+function ensureSyncTickResult(value: unknown): NativeLibrarySyncTickResult | null {
+  if (!isRecord(value)) return null;
+
+  const reason = asTrimmedString(readRecordField(value, 'reason'));
+  const startedAtMs = asNumber(readRecordField(value, 'startedAtMs', 'started_at_ms'));
+  const finishedAtMs = asNumber(readRecordField(value, 'finishedAtMs', 'finished_at_ms'));
+  const durationMs = asNumber(readRecordField(value, 'durationMs', 'duration_ms'));
+  const scannedSources = asNumber(readRecordField(value, 'scannedSources', 'scanned_sources'));
+  const changedSources = asNumber(readRecordField(value, 'changedSources', 'changed_sources'));
+  const skippedSources = asNumber(readRecordField(value, 'skippedSources', 'skipped_sources'));
+  const failedSources = asNumber(readRecordField(value, 'failedSources', 'failed_sources'));
+  const enqueuedMetadataJobs = asNumber(
+    readRecordField(value, 'enqueuedMetadataJobs', 'enqueued_metadata_jobs')
+  );
+  const failedSourceItemsRaw = readRecordField(value, 'failedSourceItems', 'failed_source_items');
+
+  if (
+    !reason ||
+    startedAtMs === undefined ||
+    finishedAtMs === undefined ||
+    durationMs === undefined ||
+    scannedSources === undefined ||
+    changedSources === undefined ||
+    skippedSources === undefined ||
+    failedSources === undefined ||
+    enqueuedMetadataJobs === undefined ||
+    !Array.isArray(failedSourceItemsRaw)
+  ) {
+    return null;
+  }
+
+  const failedSourceItems: NativeLibrarySyncFailedSource[] = [];
+  for (const item of failedSourceItemsRaw) {
+    const parsed = ensureSyncFailedSource(item);
+    if (!parsed) continue;
+    failedSourceItems.push(parsed);
+  }
+
+  return {
+    reason,
+    startedAtMs,
+    finishedAtMs,
+    durationMs,
+    scannedSources: Math.max(0, Math.floor(scannedSources)),
+    changedSources: Math.max(0, Math.floor(changedSources)),
+    skippedSources: Math.max(0, Math.floor(skippedSources)),
+    failedSources: Math.max(0, Math.floor(failedSources)),
+    failedSourceItems,
+    enqueuedMetadataJobs: Math.max(0, Math.floor(enqueuedMetadataJobs)),
+  };
+}
+
+function ensureSyncSchedulerStatus(value: unknown): NativeLibrarySyncSchedulerStatus | null {
+  if (!isRecord(value)) return null;
+
+  const running = asBool(readRecordField(value, 'running'));
+  const intervalMs = asNumber(readRecordField(value, 'intervalMs', 'interval_ms'));
+  const ticksTotal = asNumber(readRecordField(value, 'ticksTotal', 'ticks_total'));
+  if (running === undefined || intervalMs === undefined || ticksTotal === undefined) {
+    return null;
+  }
+
+  return {
+    running,
+    intervalMs: Math.max(0, Math.floor(intervalMs)),
+    startedAtMs: asNumber(readRecordField(value, 'startedAtMs', 'started_at_ms')),
+    nextRunAtMs: asNumber(readRecordField(value, 'nextRunAtMs', 'next_run_at_ms')),
+    ticksTotal: Math.max(0, Math.floor(ticksTotal)),
+    lastTickStartedAtMs: asNumber(
+      readRecordField(value, 'lastTickStartedAtMs', 'last_tick_started_at_ms')
+    ),
+    lastTickFinishedAtMs: asNumber(
+      readRecordField(value, 'lastTickFinishedAtMs', 'last_tick_finished_at_ms')
+    ),
+    lastError: asOptionalString(readRecordField(value, 'lastError', 'last_error')),
+    lastTickResult: ensureSyncTickResult(
+      readRecordField(value, 'lastTickResult', 'last_tick_result')
+    ) ?? undefined,
+    updatedAtMs: asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms')),
+  };
+}
+
+function ensureSyncRetryResult(value: unknown): NativeLibrarySyncRetryResult | null {
+  if (!isRecord(value)) return null;
+
+  const allSources = asBool(readRecordField(value, 'allSources', 'all_sources'));
+  const requestedSources = asNumber(readRecordField(value, 'requestedSources', 'requested_sources'));
+  const clearedSources = asNumber(readRecordField(value, 'clearedSources', 'cleared_sources'));
+  const tickResult = ensureSyncTickResult(readRecordField(value, 'tickResult', 'tick_result'));
+
+  if (
+    allSources === undefined ||
+    requestedSources === undefined ||
+    clearedSources === undefined ||
+    !tickResult
+  ) {
+    return null;
+  }
+
+  return {
+    allSources,
+    requestedSources: Math.max(0, Math.floor(requestedSources)),
+    clearedSources: Math.max(0, Math.floor(clearedSources)),
+    tickResult,
+  };
+}
+
+function ensureSyncClearResult(value: unknown): NativeLibrarySyncClearResult | null {
+  if (!isRecord(value)) return null;
+
+  const allSources = asBool(readRecordField(value, 'allSources', 'all_sources'));
+  const requestedSources = asNumber(readRecordField(value, 'requestedSources', 'requested_sources'));
+  const clearedSources = asNumber(readRecordField(value, 'clearedSources', 'cleared_sources'));
+  const clearedAtMs = asNumber(readRecordField(value, 'clearedAtMs', 'cleared_at_ms'));
+
+  if (
+    allSources === undefined ||
+    requestedSources === undefined ||
+    clearedSources === undefined ||
+    clearedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    allSources,
+    requestedSources: Math.max(0, Math.floor(requestedSources)),
+    clearedSources: Math.max(0, Math.floor(clearedSources)),
+    clearedAtMs,
+  };
+}
+
 export async function upsertNativeLibrarySource(
   source: NativeLibrarySourceUpsertInput
 ): Promise<NativeLibrarySourceRecord | null> {
@@ -590,6 +1349,228 @@ export async function listNativeLibrarySources(): Promise<NativeLibrarySourceRec
     result.push(parsed);
   }
   return result;
+}
+
+export async function listNativeLibraryConnectors(): Promise<NativeLibraryConnectorRecord[]> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_db_list_connectors').catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeLibraryConnectorRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureConnectorRecord(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+  return result;
+}
+
+export async function listNativeLibraryConnectorAccounts(
+  connectorId?: string
+): Promise<NativeLibraryConnectorAccountRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const normalizedConnectorId =
+    typeof connectorId === 'string' && connectorId.trim().length > 0
+      ? connectorId.trim()
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_db_list_connector_accounts', {
+    connectorId: normalizedConnectorId,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeLibraryConnectorAccountRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureConnectorAccountRecord(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+  return result;
+}
+
+export async function generateNativeBilibiliQrCodeSession(): Promise<NativeBilibiliQrCodeSession | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_bilibili_qr_generate').catch(() => null);
+  return ensureBilibiliQrCodeSession(raw);
+}
+
+export async function pollNativeBilibiliQrCodeSession(
+  sessionId: string
+): Promise<NativeBilibiliQrPollResult | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) return null;
+
+  const raw = await invoke<unknown>('music_library_bilibili_qr_poll', {
+    sessionId: normalizedSessionId,
+  }).catch(() => null);
+  return ensureBilibiliQrPollResult(raw);
+}
+
+export async function getNativeBilibiliAuthStatus(): Promise<NativeBilibiliAuthStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_bilibili_get_auth_status').catch(() => null);
+  return ensureBilibiliAuthStatus(raw);
+}
+
+export async function getNativeBilibiliPlaybackCacheSettings(): Promise<NativeBilibiliPlaybackCacheSettings | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_bilibili_get_playback_cache_settings').catch(
+    () => null
+  );
+  return ensureBilibiliPlaybackCacheSettings(raw);
+}
+
+export async function setNativeBilibiliPlaybackCacheSettings(
+  customRootPath?: string | null
+): Promise<NativeBilibiliPlaybackCacheSettings | null> {
+  if (!isTauriRuntime()) return null;
+
+  const normalizedCustomRootPath =
+    typeof customRootPath === 'string' && customRootPath.trim().length > 0
+      ? customRootPath.trim()
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_bilibili_set_playback_cache_settings', {
+    customRootPath: normalizedCustomRootPath,
+  }).catch(() => null);
+
+  return ensureBilibiliPlaybackCacheSettings(raw);
+}
+
+export async function logoutNativeBilibili(): Promise<NativeBilibiliAuthStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_bilibili_logout').catch(() => null);
+  return ensureBilibiliAuthStatus(raw);
+}
+
+export async function listNativeBilibiliFavoriteFolders(): Promise<NativeBilibiliFavoriteFolder[]> {
+  if (!isTauriRuntime()) return [];
+  const raw = await invoke<unknown>('music_library_bilibili_list_favorite_folders').catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeBilibiliFavoriteFolder[] = [];
+  for (const item of raw) {
+    const parsed = ensureBilibiliFavoriteFolder(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+
+  return result;
+}
+
+export async function listNativeBilibiliFavoriteResources(options: {
+  folderId: string;
+  pageNum?: number;
+  pageSize?: number;
+}): Promise<NativeBilibiliFavoriteResourcePage | null> {
+  if (!isTauriRuntime()) return null;
+
+  const folderId = options.folderId.trim();
+  if (!folderId) return null;
+
+  const pageNum =
+    typeof options.pageNum === 'number' && Number.isFinite(options.pageNum)
+      ? Math.max(1, Math.floor(options.pageNum))
+      : undefined;
+  const pageSize =
+    typeof options.pageSize === 'number' && Number.isFinite(options.pageSize)
+      ? Math.max(1, Math.floor(options.pageSize))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_bilibili_list_favorite_resources', {
+    folderId,
+    pageNum,
+    pageSize,
+  }).catch(() => null);
+  return ensureBilibiliFavoriteResourcePage(raw);
+}
+
+export async function searchNativeBilibiliResourceByBvid(
+  bvid: string
+): Promise<NativeBilibiliFavoriteResourceItem | null> {
+  if (!isTauriRuntime()) return null;
+
+  const normalizedBvid = bvid.trim();
+  if (!normalizedBvid) return null;
+
+  const raw = await invoke<unknown>('music_library_bilibili_search_resource_by_bvid', {
+    bvid: normalizedBvid,
+  }).catch(() => null);
+
+  return ensureBilibiliFavoriteResourceItem(raw);
+}
+
+export async function prepareNativeBilibiliCoverCache(coverUrl: string): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+
+  const normalizedCoverUrl = coverUrl.trim();
+  if (!normalizedCoverUrl) return null;
+
+  const raw = await invoke<unknown>('music_library_bilibili_prepare_cover_cache', {
+    coverUrl: normalizedCoverUrl,
+  });
+
+  const cachePath = asTrimmedString(raw);
+  return cachePath || null;
+}
+
+export async function listNativeBilibiliPlaybackQualities(
+  sourceLocator: string
+): Promise<NativeBilibiliPlaybackQualityOption[]> {
+  if (!isTauriRuntime()) return [];
+
+  const normalizedSourceLocator = sourceLocator.trim();
+  if (!normalizedSourceLocator) return [];
+
+  const raw = await invoke<unknown>('music_library_bilibili_list_playback_qualities', {
+    sourceLocator: normalizedSourceLocator,
+  });
+  if (!Array.isArray(raw)) return [];
+
+  const items: NativeBilibiliPlaybackQualityOption[] = [];
+  for (const item of raw) {
+    const parsed = ensureBilibiliPlaybackQualityOption(item);
+    if (parsed) items.push(parsed);
+  }
+  return items;
+}
+
+export async function prepareNativeBilibiliCachedPlayback(
+  sourceLocator: string,
+  qualityHint?: string
+): Promise<NativeBilibiliPlaybackPrepared | null> {
+  if (!isTauriRuntime()) return null;
+
+  const normalizedSourceLocator = sourceLocator.trim();
+  if (!normalizedSourceLocator) return null;
+
+  const normalizedQualityHint =
+    typeof qualityHint === 'string' && qualityHint.trim().length > 0
+      ? qualityHint.trim().toLowerCase()
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_bilibili_prepare_cached_playback', {
+    sourceLocator: normalizedSourceLocator,
+    qualityHint: normalizedQualityHint,
+  });
+
+  return ensureBilibiliPlaybackPrepared(raw);
+}
+
+export async function resolveNativeBilibiliLyricLocator(
+  lyricLocator: string
+): Promise<NativeBilibiliLyricLocatorRef | null> {
+  if (!isTauriRuntime()) return null;
+
+  const normalizedLocator = lyricLocator.trim();
+  if (!normalizedLocator) return null;
+
+  const raw = await invoke<unknown>('music_library_bilibili_resolve_lyric_locator', {
+    lyricLocator: normalizedLocator,
+  }).catch(() => null);
+  return ensureBilibiliLyricLocatorRef(raw);
 }
 
 export async function removeNativeLibrarySource(sourceId: string): Promise<void> {
@@ -615,6 +1596,111 @@ export async function syncNativeLibraryTracks(
   }).catch(() => null);
 
   return ensureTrackSyncResult(raw);
+}
+
+export async function getNativeLibrarySyncStatus(): Promise<NativeLibrarySyncStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_sync_get_status').catch(() => null);
+  return ensureSyncStatus(raw);
+}
+
+export async function runNativeLibrarySyncTick(
+  reason?: string
+): Promise<NativeLibrarySyncTickResult | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedReason =
+    typeof reason === 'string' && reason.trim().length > 0 ? reason.trim() : undefined;
+  const raw = await invoke<unknown>('music_library_sync_run_tick', {
+    reason: normalizedReason,
+  }).catch(() => null);
+  return ensureSyncTickResult(raw);
+}
+
+export async function getNativeLibrarySyncSchedulerStatus(): Promise<NativeLibrarySyncSchedulerStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_sync_scheduler_get_status').catch(() => null);
+  return ensureSyncSchedulerStatus(raw);
+}
+
+export async function startNativeLibrarySyncScheduler(
+  options?: { intervalMs?: number }
+): Promise<NativeLibrarySyncSchedulerStatus | null> {
+  if (!isTauriRuntime()) return null;
+
+  const intervalMs =
+    typeof options?.intervalMs === 'number' && Number.isFinite(options.intervalMs)
+      ? Math.max(1, Math.floor(options.intervalMs))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_sync_scheduler_start', {
+    intervalMs,
+  }).catch(() => null);
+  return ensureSyncSchedulerStatus(raw);
+}
+
+export async function stopNativeLibrarySyncScheduler(): Promise<NativeLibrarySyncSchedulerStatus | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('music_library_sync_scheduler_stop').catch(() => null);
+  return ensureSyncSchedulerStatus(raw);
+}
+
+export async function getNativeLibrarySyncFailureOverview(
+  options?: { limit?: number }
+): Promise<NativeLibrarySyncFailureOverview | null> {
+  if (!isTauriRuntime()) return null;
+
+  const limit =
+    typeof options?.limit === 'number' && Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(1000, Math.floor(options.limit)))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_sync_get_failure_overview', {
+    limit,
+  }).catch(() => null);
+  return ensureSyncFailureOverview(raw);
+}
+
+export async function retryNativeLibrarySyncFailedSources(options?: {
+  sourceIds?: string[];
+  reason?: string;
+}): Promise<NativeLibrarySyncRetryResult | null> {
+  if (!isTauriRuntime()) return null;
+
+  const sourceIds = Array.isArray(options?.sourceIds) ? options.sourceIds : undefined;
+  const normalizedSourceIds = sourceIds
+    ? sourceIds
+        .map((sourceId) => (typeof sourceId === 'string' ? sourceId.trim() : ''))
+        .filter((sourceId) => sourceId.length > 0)
+    : undefined;
+
+  const reason =
+    typeof options?.reason === 'string' && options.reason.trim().length > 0
+      ? options.reason.trim()
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_sync_retry_failed_sources', {
+    sourceIds: normalizedSourceIds,
+    reason,
+  }).catch(() => null);
+  return ensureSyncRetryResult(raw);
+}
+
+export async function clearNativeLibrarySyncFailedSources(options?: {
+  sourceIds?: string[];
+}): Promise<NativeLibrarySyncClearResult | null> {
+  if (!isTauriRuntime()) return null;
+
+  const sourceIds = Array.isArray(options?.sourceIds) ? options.sourceIds : undefined;
+  const normalizedSourceIds = sourceIds
+    ? sourceIds
+        .map((sourceId) => (typeof sourceId === 'string' ? sourceId.trim() : ''))
+        .filter((sourceId) => sourceId.length > 0)
+    : undefined;
+
+  const raw = await invoke<unknown>('music_library_sync_clear_failed_sources', {
+    sourceIds: normalizedSourceIds,
+  }).catch(() => null);
+  return ensureSyncClearResult(raw);
 }
 
 export async function clearNativeLibraryTracks(): Promise<number> {
