@@ -1,4 +1,4 @@
-use crate::{music_library, music_library_db};
+use crate::{music_library, music_library_db, music_library_sync, music_platform_bilibili};
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_scan(
@@ -40,6 +40,88 @@ pub fn music_library_cancel_scan() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn music_library_sync_get_status() -> Result<music_library_sync::MusicLibrarySyncStatus, String>
+{
+    music_library_sync::get_status()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_sync_run_tick(
+    app: tauri::AppHandle,
+    reason: Option<String>,
+) -> Result<music_library_sync::MusicLibrarySyncTickResult, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_sync::run_tick(&app, reason))
+        .await
+        .map_err(|e| format!("Music library sync tick task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn music_library_sync_scheduler_get_status(
+) -> Result<music_library_sync::MusicLibrarySyncSchedulerStatus, String> {
+    music_library_sync::get_scheduler_status()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_sync_scheduler_start(
+    app: tauri::AppHandle,
+    interval_ms: Option<u64>,
+) -> Result<music_library_sync::MusicLibrarySyncSchedulerStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_sync::start_scheduler(&app, interval_ms)
+    })
+    .await
+    .map_err(|e| format!("Music library sync scheduler start task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_sync_scheduler_stop(
+    app: tauri::AppHandle,
+) -> Result<music_library_sync::MusicLibrarySyncSchedulerStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_sync::stop_scheduler_with_event(&app)
+    })
+    .await
+    .map_err(|e| format!("Music library sync scheduler stop task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_sync_get_failure_overview(
+    app: tauri::AppHandle,
+    limit: Option<u32>,
+) -> Result<music_library_sync::MusicLibrarySyncFailureOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_sync::get_failure_overview(&app, limit)
+    })
+    .await
+    .map_err(|e| format!("Music library sync failure overview task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_sync_retry_failed_sources(
+    app: tauri::AppHandle,
+    source_ids: Option<Vec<String>>,
+    reason: Option<String>,
+) -> Result<music_library_sync::MusicLibrarySyncRetryResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_sync::retry_failed_sources(&app, source_ids, reason)
+    })
+    .await
+    .map_err(|e| format!("Music library sync retry failed sources task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_sync_clear_failed_sources(
+    app: tauri::AppHandle,
+    source_ids: Option<Vec<String>>,
+) -> Result<music_library_sync::MusicLibrarySyncClearResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_sync::clear_failed_sources(&app, source_ids)
+    })
+    .await
+    .map_err(|e| format!("Music library sync clear failed sources task failed: {e}"))?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_upsert_source(
     app: tauri::AppHandle,
@@ -57,6 +139,173 @@ pub async fn music_library_db_list_sources(
     tauri::async_runtime::spawn_blocking(move || music_library_db::list_sources(&app))
         .await
         .map_err(|e| format!("Music library source list task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_db_list_connectors(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_library_db::LibraryConnectorRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_connectors(&app))
+        .await
+        .map_err(|e| format!("Music library connector list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_connector_accounts(
+    app: tauri::AppHandle,
+    connector_id: Option<String>,
+) -> Result<Vec<music_library_db::LibraryConnectorAccountRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::list_connector_accounts(&app, connector_id.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Music library connector account list task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_bilibili_qr_generate(
+    app: tauri::AppHandle,
+) -> Result<music_platform_bilibili::BilibiliQrCodeSession, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::qr_generate(&app))
+        .await
+        .map_err(|e| format!("Bilibili QR generate task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_bilibili_get_playback_cache_settings(
+    app: tauri::AppHandle,
+) -> Result<music_platform_bilibili::BilibiliPlaybackCacheSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::get_playback_cache_settings(&app)
+    })
+    .await
+    .map_err(|e| format!("Bilibili get playback cache settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_set_playback_cache_settings(
+    app: tauri::AppHandle,
+    custom_root_path: Option<String>,
+) -> Result<music_platform_bilibili::BilibiliPlaybackCacheSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::set_playback_cache_settings(&app, custom_root_path)
+    })
+    .await
+    .map_err(|e| format!("Bilibili set playback cache settings task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_qr_poll(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<music_platform_bilibili::BilibiliQrPollResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::qr_poll(&app, &session_id)
+    })
+    .await
+    .map_err(|e| format!("Bilibili QR poll task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_bilibili_get_auth_status(
+    app: tauri::AppHandle,
+) -> Result<music_platform_bilibili::BilibiliAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::get_auth_status(&app))
+        .await
+        .map_err(|e| format!("Bilibili auth status task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_bilibili_logout(
+    app: tauri::AppHandle,
+) -> Result<music_platform_bilibili::BilibiliAuthStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::logout(&app))
+        .await
+        .map_err(|e| format!("Bilibili logout task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_bilibili_list_favorite_folders(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_platform_bilibili::BilibiliFavoriteFolder>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::list_favorite_folders(&app))
+        .await
+        .map_err(|e| format!("Bilibili favorite folder list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_list_favorite_resources(
+    app: tauri::AppHandle,
+    folder_id: String,
+    page_num: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<music_platform_bilibili::BilibiliFavoriteResourcePage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::list_favorite_resources(&app, &folder_id, page_num, page_size)
+    })
+    .await
+    .map_err(|e| format!("Bilibili favorite resource list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_search_resource_by_bvid(
+    app: tauri::AppHandle,
+    bvid: String,
+) -> Result<Option<music_platform_bilibili::BilibiliFavoriteResourceItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::search_resource_by_bvid(&app, &bvid)
+    })
+    .await
+    .map_err(|e| format!("Bilibili search resource by BV task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_prepare_cover_cache(
+    app: tauri::AppHandle,
+    cover_url: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::prepare_cover_cache(&app, &cover_url)
+    })
+    .await
+    .map_err(|e| format!("Bilibili prepare cover cache task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_list_playback_qualities(
+    app: tauri::AppHandle,
+    source_locator: String,
+) -> Result<Vec<music_platform_bilibili::BilibiliPlaybackQualityOption>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::list_playback_qualities(&app, &source_locator)
+    })
+    .await
+    .map_err(|e| format!("Bilibili list playback qualities task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_prepare_cached_playback(
+    app: tauri::AppHandle,
+    source_locator: String,
+    quality_hint: Option<String>,
+) -> Result<music_platform_bilibili::BilibiliPlaybackPrepared, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::prepare_cached_playback(&app, &source_locator, quality_hint.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Bilibili prepare cached playback task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_resolve_lyric_locator(
+    app: tauri::AppHandle,
+    lyric_locator: String,
+) -> Result<Option<music_platform_bilibili::BilibiliLyricLocatorRef>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::resolve_lyric_locator(&app, &lyric_locator)
+    })
+    .await
+    .map_err(|e| format!("Bilibili lyric locator resolve task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

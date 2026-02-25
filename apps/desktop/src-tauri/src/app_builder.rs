@@ -161,6 +161,12 @@ fn init_music_library_services(app: &tauri::AppHandle) {
     if let Err(error) = crate::music_library_db::init(app) {
         eprintln!("[MusicLibrary] Failed to init sqlite store: {error}");
     }
+    if let Err(error) = crate::music_platform_bilibili::init(app) {
+        eprintln!("[MusicLibrary] Failed to init Bilibili connector: {error}");
+    }
+    if let Err(error) = crate::music_library_sync::init(app) {
+        eprintln!("[MusicLibrary] Failed to init sync orchestrator: {error}");
+    }
 }
 
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {

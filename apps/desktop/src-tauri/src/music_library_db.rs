@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 4;
+const DB_VERSION: i32 = 5;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -38,6 +38,46 @@ pub struct LibrarySourceRecord {
     pub is_scanned: bool,
     pub added_at_ms: i64,
     pub last_scanned_at_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryConnectorRecord {
+    pub id: String,
+    pub kind: String,
+    pub driver: String,
+    pub display_name: Option<String>,
+    pub status: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryConnectorAccountUpsertInput {
+    pub id: String,
+    pub connector_id: String,
+    pub account_uid: Option<String>,
+    pub auth_state: String,
+    pub token_ref: Option<String>,
+    pub refresh_token_ref: Option<String>,
+    pub expires_at_ms: Option<i64>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryConnectorAccountRecord {
+    pub id: String,
+    pub connector_id: String,
+    pub account_uid: Option<String>,
+    pub auth_state: String,
+    pub token_ref: Option<String>,
+    pub refresh_token_ref: Option<String>,
+    pub expires_at_ms: Option<i64>,
+    pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
 
@@ -283,6 +323,101 @@ pub struct LibraryCloudHashJobRecord {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct LibrarySourceSyncStateRecord {
+    pub source_id: String,
+    pub connector_id: String,
+    pub sync_cursor: Option<String>,
+    pub full_scan_at_ms: Option<i64>,
+    pub incremental_scan_at_ms: Option<i64>,
+    pub last_success_at_ms: Option<i64>,
+    pub last_error: Option<String>,
+    pub backoff_until_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct LibrarySourceFingerprintStateRecord {
+    pub source_id: String,
+    pub tree_fingerprint: Option<String>,
+    pub file_count: u64,
+    pub total_size: u64,
+    pub sampled_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct LibraryMetadataRefreshJobClaimRecord {
+    pub id: String,
+    pub entry_id: String,
+    pub kind: String,
+    pub priority: i64,
+    pub attempt_count: u64,
+    pub track_id: Option<String>,
+    pub track_file_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryCoverRefUpsertInput {
+    pub entry_id: String,
+    pub provider_cover_id: Option<String>,
+    pub cover_locator: String,
+    pub etag: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryLyricRefUpsertInput {
+    pub entry_id: String,
+    pub provider_lyric_id: Option<String>,
+    pub lyric_locator: String,
+    pub format: Option<String>,
+    pub lang: Option<String>,
+    pub etag: Option<String>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibrarySourceSyncFailureRecord {
+    pub source_id: String,
+    pub source_path: String,
+    pub source_display_name: Option<String>,
+    pub connector_id: String,
+    pub last_error: Option<String>,
+    pub backoff_until_ms: Option<i64>,
+    pub last_success_at_ms: Option<i64>,
+    pub incremental_scan_at_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibrarySourceSyncStateUpsertInput {
+    pub source_id: String,
+    pub connector_id: String,
+    pub sync_cursor: Option<String>,
+    pub full_scan_at_ms: Option<i64>,
+    pub incremental_scan_at_ms: Option<i64>,
+    pub last_success_at_ms: Option<i64>,
+    pub last_error: Option<String>,
+    pub backoff_until_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibrarySourceFingerprintStateUpsertInput {
+    pub source_id: String,
+    pub tree_fingerprint: Option<String>,
+    pub file_count: u64,
+    pub total_size: u64,
+    pub sampled_at_ms: i64,
+    pub updated_at_ms: Option<i64>,
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -313,6 +448,139 @@ fn with_conn<T>(op: impl FnOnce(&mut Connection) -> Result<T, String>) -> Result
         return Err("Music library DB is not initialized".to_string());
     };
     op(conn)
+}
+
+fn ensure_sangreal_v5_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS connectors (
+          id TEXT PRIMARY KEY NOT NULL,
+          kind TEXT NOT NULL,
+          driver TEXT NOT NULL,
+          display_name TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS connectors_kind_idx ON connectors(kind);
+        CREATE INDEX IF NOT EXISTS connectors_status_idx ON connectors(status);
+
+        CREATE TABLE IF NOT EXISTS connector_accounts (
+          id TEXT PRIMARY KEY NOT NULL,
+          connector_id TEXT NOT NULL,
+          account_uid TEXT,
+          auth_state TEXT NOT NULL,
+          token_ref TEXT,
+          refresh_token_ref TEXT,
+          expires_at_ms INTEGER,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS connector_accounts_connector_id_idx ON connector_accounts(connector_id);
+        CREATE INDEX IF NOT EXISTS connector_accounts_auth_state_idx ON connector_accounts(auth_state);
+
+        CREATE TABLE IF NOT EXISTS source_sync_state (
+          source_id TEXT PRIMARY KEY NOT NULL,
+          connector_id TEXT NOT NULL,
+          sync_cursor TEXT,
+          full_scan_at_ms INTEGER,
+          incremental_scan_at_ms INTEGER,
+          last_success_at_ms INTEGER,
+          last_error TEXT,
+          backoff_until_ms INTEGER,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE,
+          FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS source_sync_state_connector_id_idx ON source_sync_state(connector_id);
+        CREATE INDEX IF NOT EXISTS source_sync_state_backoff_until_ms_idx ON source_sync_state(backoff_until_ms);
+
+        CREATE TABLE IF NOT EXISTS source_fingerprint_state (
+          source_id TEXT PRIMARY KEY NOT NULL,
+          tree_fingerprint TEXT,
+          file_count INTEGER NOT NULL DEFAULT 0,
+          total_size INTEGER NOT NULL DEFAULT 0,
+          sampled_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS source_fingerprint_state_sampled_at_ms_idx ON source_fingerprint_state(sampled_at_ms);
+
+        CREATE TABLE IF NOT EXISTS track_provider_refs (
+          id TEXT PRIMARY KEY NOT NULL,
+          entry_id TEXT NOT NULL,
+          source_id TEXT,
+          connector_id TEXT NOT NULL,
+          provider_track_id TEXT,
+          provider_album_id TEXT,
+          source_locator TEXT,
+          quality_tier TEXT,
+          availability TEXT NOT NULL DEFAULT 'unknown',
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(entry_id) REFERENCES user_entries(id) ON DELETE CASCADE,
+          FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE SET NULL,
+          FOREIGN KEY(connector_id) REFERENCES connectors(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS track_provider_refs_entry_id_idx ON track_provider_refs(entry_id);
+        CREATE INDEX IF NOT EXISTS track_provider_refs_connector_id_idx ON track_provider_refs(connector_id);
+        CREATE INDEX IF NOT EXISTS track_provider_refs_provider_track_id_idx ON track_provider_refs(provider_track_id);
+        CREATE INDEX IF NOT EXISTS track_provider_refs_source_locator_idx ON track_provider_refs(source_locator);
+
+        CREATE TABLE IF NOT EXISTS cover_refs (
+          id TEXT PRIMARY KEY NOT NULL,
+          entry_id TEXT NOT NULL,
+          provider_cover_id TEXT,
+          cover_locator TEXT,
+          etag TEXT,
+          width INTEGER,
+          height INTEGER,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(entry_id) REFERENCES user_entries(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS cover_refs_entry_id_idx ON cover_refs(entry_id);
+
+        CREATE TABLE IF NOT EXISTS lyric_refs (
+          id TEXT PRIMARY KEY NOT NULL,
+          entry_id TEXT NOT NULL,
+          provider_lyric_id TEXT,
+          lyric_locator TEXT,
+          format TEXT,
+          lang TEXT,
+          etag TEXT,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(entry_id) REFERENCES user_entries(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS lyric_refs_entry_id_idx ON lyric_refs(entry_id);
+        CREATE INDEX IF NOT EXISTS lyric_refs_provider_lyric_id_idx ON lyric_refs(provider_lyric_id);
+
+        CREATE TABLE IF NOT EXISTS metadata_refresh_jobs (
+          id TEXT PRIMARY KEY NOT NULL,
+          entry_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          priority INTEGER NOT NULL DEFAULT 100,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          next_run_at_ms INTEGER,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(entry_id) REFERENCES user_entries(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS metadata_refresh_jobs_status_idx ON metadata_refresh_jobs(status);
+        CREATE INDEX IF NOT EXISTS metadata_refresh_jobs_next_run_at_ms_idx ON metadata_refresh_jobs(next_run_at_ms);
+        CREATE INDEX IF NOT EXISTS metadata_refresh_jobs_priority_idx ON metadata_refresh_jobs(priority);
+        "#,
+    )
+    .map_err(|error| format!("Failed to ensure music library schema v5 extensions: {error}"))
 }
 
 fn migrate(conn: &Connection) -> Result<(), String> {
@@ -543,6 +811,13 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("Failed to migrate music library schema to v4: {error}"))?;
         version = 4;
+    }
+
+    if version == 4 {
+        ensure_sangreal_v5_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 5;")
+            .map_err(|error| format!("Failed to migrate music library schema to v5: {error}"))?;
+        version = 5;
     }
 
     if version != DB_VERSION {
@@ -847,6 +1122,44 @@ fn cloud_hash_job_record_by_id(
     .map_err(|error| format!("Failed to load cloud hash job record: {error}"))
 }
 
+fn connector_account_record_by_id(
+    conn: &Connection,
+    account_id: &str,
+) -> Result<LibraryConnectorAccountRecord, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          connector_id,
+          account_uid,
+          auth_state,
+          token_ref,
+          refresh_token_ref,
+          expires_at_ms,
+          created_at_ms,
+          updated_at_ms
+        FROM connector_accounts
+        WHERE id = ?1
+        LIMIT 1
+        "#,
+        params![account_id],
+        |row| {
+            Ok(LibraryConnectorAccountRecord {
+                id: row.get(0)?,
+                connector_id: row.get(1)?,
+                account_uid: row.get(2)?,
+                auth_state: row.get(3)?,
+                token_ref: row.get(4)?,
+                refresh_token_ref: row.get(5)?,
+                expires_at_ms: row.get(6)?,
+                created_at_ms: row.get(7)?,
+                updated_at_ms: row.get(8)?,
+            })
+        },
+    )
+    .map_err(|error| format!("Failed to load connector account record: {error}"))
+}
+
 fn source_record_by_id(conn: &Connection, source_id: &str) -> Result<LibrarySourceRecord, String> {
     conn.query_row(
         r#"
@@ -1008,6 +1321,1081 @@ pub fn remove_source(app: &AppHandle, source_id: &str) -> Result<(), String> {
     with_conn(|conn| {
         conn.execute("DELETE FROM sources WHERE id = ?1", params![source_id])
             .map_err(|error| format!("Failed to remove source: {error}"))?;
+        Ok(())
+    })
+}
+
+pub fn list_connectors(app: &AppHandle) -> Result<Vec<LibraryConnectorRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  kind,
+                  driver,
+                  display_name,
+                  status,
+                  created_at_ms,
+                  updated_at_ms
+                FROM connectors
+                ORDER BY
+                  CASE kind
+                    WHEN 'local' THEN 0
+                    WHEN 'nas' THEN 1
+                    WHEN 'platform' THEN 2
+                    ELSE 3
+                  END,
+                  updated_at_ms DESC,
+                  id ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare connector list query: {error}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(LibraryConnectorRecord {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    driver: row.get(2)?,
+                    display_name: row.get(3)?,
+                    status: row.get(4)?,
+                    created_at_ms: row.get(5)?,
+                    updated_at_ms: row.get(6)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query connectors: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse connector row: {error}"))?);
+        }
+
+        Ok(items)
+    })
+}
+
+pub fn ensure_connector(
+    app: &AppHandle,
+    connector_id: &str,
+    kind: &str,
+    driver: &str,
+    display_name: Option<&str>,
+    status: Option<&str>,
+) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let id = connector_id.trim();
+        if id.is_empty() {
+            return Err("Connector id is required".to_string());
+        }
+
+        let normalized_kind = normalize_text(Some(kind))
+            .unwrap_or_else(|| "local".to_string())
+            .to_ascii_lowercase();
+        let normalized_driver =
+            normalize_text(Some(driver)).unwrap_or_else(|| "filesystem".to_string());
+        let normalized_status = normalize_text(status)
+            .unwrap_or_else(|| "active".to_string())
+            .to_ascii_lowercase();
+        let normalized_display_name = normalize_text(display_name);
+        let now = now_ms();
+
+        conn.execute(
+            r#"
+            INSERT INTO connectors(
+              id,
+              kind,
+              driver,
+              display_name,
+              status,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(id) DO UPDATE SET
+              kind = excluded.kind,
+              driver = excluded.driver,
+              display_name = excluded.display_name,
+              status = excluded.status,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                id,
+                normalized_kind,
+                normalized_driver,
+                normalized_display_name,
+                normalized_status,
+                now,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to ensure connector: {error}"))?;
+
+        Ok(())
+    })
+}
+
+pub fn upsert_connector_account(
+    app: &AppHandle,
+    input: LibraryConnectorAccountUpsertInput,
+) -> Result<LibraryConnectorAccountRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let account_id = input.id.trim();
+        if account_id.is_empty() {
+            return Err("Connector account id is required".to_string());
+        }
+
+        let connector_id = input.connector_id.trim();
+        if connector_id.is_empty() {
+            return Err("Connector account connectorId is required".to_string());
+        }
+
+        let auth_state = normalize_text(Some(input.auth_state.as_str()))
+            .unwrap_or_else(|| "unauthorized".to_string())
+            .to_ascii_lowercase();
+        let account_uid = normalize_text(input.account_uid.as_deref());
+        let token_ref = normalize_text(input.token_ref.as_deref());
+        let refresh_token_ref = normalize_text(input.refresh_token_ref.as_deref());
+
+        let now = now_ms();
+        let created_at_ms = input.created_at_ms.unwrap_or(now);
+        let updated_at_ms = input.updated_at_ms.unwrap_or(now);
+
+        conn.execute(
+            r#"
+            INSERT INTO connector_accounts(
+              id,
+              connector_id,
+              account_uid,
+              auth_state,
+              token_ref,
+              refresh_token_ref,
+              expires_at_ms,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+              connector_id = excluded.connector_id,
+              account_uid = excluded.account_uid,
+              auth_state = excluded.auth_state,
+              token_ref = excluded.token_ref,
+              refresh_token_ref = excluded.refresh_token_ref,
+              expires_at_ms = excluded.expires_at_ms,
+              created_at_ms = connector_accounts.created_at_ms,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                account_id,
+                connector_id,
+                account_uid,
+                auth_state,
+                token_ref,
+                refresh_token_ref,
+                input.expires_at_ms,
+                created_at_ms,
+                updated_at_ms,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert connector account: {error}"))?;
+
+        connector_account_record_by_id(conn, account_id)
+    })
+}
+
+pub fn list_connector_accounts(
+    app: &AppHandle,
+    connector_id: Option<&str>,
+) -> Result<Vec<LibraryConnectorAccountRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_connector_id = normalize_text(connector_id);
+        let mut items = Vec::new();
+
+        if let Some(connector_id) = normalized_connector_id {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT
+                      id,
+                      connector_id,
+                      account_uid,
+                      auth_state,
+                      token_ref,
+                      refresh_token_ref,
+                      expires_at_ms,
+                      created_at_ms,
+                      updated_at_ms
+                    FROM connector_accounts
+                    WHERE connector_id = ?1
+                    ORDER BY updated_at_ms DESC, created_at_ms DESC, id ASC
+                    "#,
+                )
+                .map_err(|error| {
+                    format!("Failed to prepare connector account list query (filtered): {error}")
+                })?;
+
+            let rows = stmt
+                .query_map(params![connector_id], |row| {
+                    Ok(LibraryConnectorAccountRecord {
+                        id: row.get(0)?,
+                        connector_id: row.get(1)?,
+                        account_uid: row.get(2)?,
+                        auth_state: row.get(3)?,
+                        token_ref: row.get(4)?,
+                        refresh_token_ref: row.get(5)?,
+                        expires_at_ms: row.get(6)?,
+                        created_at_ms: row.get(7)?,
+                        updated_at_ms: row.get(8)?,
+                    })
+                })
+                .map_err(|error| format!("Failed to query connector account list rows: {error}"))?;
+
+            for row in rows {
+                items.push(row.map_err(|error| {
+                    format!("Failed to parse connector account list row: {error}")
+                })?);
+            }
+
+            return Ok(items);
+        }
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  connector_id,
+                  account_uid,
+                  auth_state,
+                  token_ref,
+                  refresh_token_ref,
+                  expires_at_ms,
+                  created_at_ms,
+                  updated_at_ms
+                FROM connector_accounts
+                ORDER BY updated_at_ms DESC, created_at_ms DESC, id ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare connector account list query: {error}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(LibraryConnectorAccountRecord {
+                    id: row.get(0)?,
+                    connector_id: row.get(1)?,
+                    account_uid: row.get(2)?,
+                    auth_state: row.get(3)?,
+                    token_ref: row.get(4)?,
+                    refresh_token_ref: row.get(5)?,
+                    expires_at_ms: row.get(6)?,
+                    created_at_ms: row.get(7)?,
+                    updated_at_ms: row.get(8)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query connector account list rows: {error}"))?;
+
+        for row in rows {
+            items.push(
+                row.map_err(|error| {
+                    format!("Failed to parse connector account list row: {error}")
+                })?,
+            );
+        }
+
+        Ok(items)
+    })
+}
+
+pub fn get_latest_connector_account_by_connector_id(
+    app: &AppHandle,
+    connector_id: &str,
+) -> Result<Option<LibraryConnectorAccountRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let connector_id = connector_id.trim();
+        if connector_id.is_empty() {
+            return Ok(None);
+        }
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  connector_id,
+                  account_uid,
+                  auth_state,
+                  token_ref,
+                  refresh_token_ref,
+                  expires_at_ms,
+                  created_at_ms,
+                  updated_at_ms
+                FROM connector_accounts
+                WHERE connector_id = ?1
+                ORDER BY updated_at_ms DESC, created_at_ms DESC, id ASC
+                LIMIT 1
+                "#,
+            )
+            .map_err(|error| {
+                format!("Failed to prepare latest connector account query: {error}")
+            })?;
+
+        let mut rows = stmt
+            .query(params![connector_id])
+            .map_err(|error| format!("Failed to query latest connector account: {error}"))?;
+
+        let Some(row) = rows
+            .next()
+            .map_err(|error| format!("Failed to parse latest connector account row: {error}"))?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(LibraryConnectorAccountRecord {
+            id: row.get(0).map_err(|error| {
+                format!("Failed to read latest connector account id column: {error}")
+            })?,
+            connector_id: row.get(1).map_err(|error| {
+                format!("Failed to read latest connector account connector_id column: {error}")
+            })?,
+            account_uid: row.get(2).map_err(|error| {
+                format!("Failed to read latest connector account account_uid column: {error}")
+            })?,
+            auth_state: row.get(3).map_err(|error| {
+                format!("Failed to read latest connector account auth_state column: {error}")
+            })?,
+            token_ref: row.get(4).map_err(|error| {
+                format!("Failed to read latest connector account token_ref column: {error}")
+            })?,
+            refresh_token_ref: row.get(5).map_err(|error| {
+                format!("Failed to read latest connector account refresh_token_ref column: {error}")
+            })?,
+            expires_at_ms: row.get(6).map_err(|error| {
+                format!("Failed to read latest connector account expires_at_ms column: {error}")
+            })?,
+            created_at_ms: row.get(7).map_err(|error| {
+                format!("Failed to read latest connector account created_at_ms column: {error}")
+            })?,
+            updated_at_ms: row.get(8).map_err(|error| {
+                format!("Failed to read latest connector account updated_at_ms column: {error}")
+            })?,
+        }))
+    })
+}
+
+pub fn get_source_sync_state(
+    app: &AppHandle,
+    source_id: &str,
+) -> Result<Option<LibrarySourceSyncStateRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  source_id,
+                  connector_id,
+                  sync_cursor,
+                  full_scan_at_ms,
+                  incremental_scan_at_ms,
+                  last_success_at_ms,
+                  last_error,
+                  backoff_until_ms,
+                  updated_at_ms
+                FROM source_sync_state
+                WHERE source_id = ?1
+                LIMIT 1
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare source sync state query: {error}"))?;
+
+        let mut rows = stmt
+            .query(params![source_id])
+            .map_err(|error| format!("Failed to query source sync state: {error}"))?;
+
+        let Some(row) = rows
+            .next()
+            .map_err(|error| format!("Failed to parse source sync state row: {error}"))?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(LibrarySourceSyncStateRecord {
+            source_id: row.get(0).map_err(|error| {
+                format!("Failed to read source sync state source_id column: {error}")
+            })?,
+            connector_id: row.get(1).map_err(|error| {
+                format!("Failed to read source sync state connector_id column: {error}")
+            })?,
+            sync_cursor: row.get(2).map_err(|error| {
+                format!("Failed to read source sync state sync_cursor: {error}")
+            })?,
+            full_scan_at_ms: row.get(3).map_err(|error| {
+                format!("Failed to read source sync state full_scan_at_ms column: {error}")
+            })?,
+            incremental_scan_at_ms: row.get(4).map_err(|error| {
+                format!("Failed to read source sync state incremental_scan_at_ms column: {error}")
+            })?,
+            last_success_at_ms: row.get(5).map_err(|error| {
+                format!("Failed to read source sync state last_success_at_ms column: {error}")
+            })?,
+            last_error: row.get(6).map_err(|error| {
+                format!("Failed to read source sync state last_error column: {error}")
+            })?,
+            backoff_until_ms: row.get(7).map_err(|error| {
+                format!("Failed to read source sync state backoff_until_ms column: {error}")
+            })?,
+            updated_at_ms: row.get(8).map_err(|error| {
+                format!("Failed to read source sync state updated_at_ms column: {error}")
+            })?,
+        }))
+    })
+}
+
+pub fn upsert_source_sync_state(
+    app: &AppHandle,
+    input: LibrarySourceSyncStateUpsertInput,
+) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let source_id = input.source_id.trim();
+        if source_id.is_empty() {
+            return Err("Source sync state source_id is required".to_string());
+        }
+
+        let connector_id = input.connector_id.trim();
+        if connector_id.is_empty() {
+            return Err("Source sync state connector_id is required".to_string());
+        }
+
+        let now = input.updated_at_ms.unwrap_or_else(now_ms);
+        let sync_cursor = normalize_text(input.sync_cursor.as_deref());
+        let last_error = normalize_text(input.last_error.as_deref());
+
+        conn.execute(
+            r#"
+            INSERT INTO source_sync_state(
+              source_id,
+              connector_id,
+              sync_cursor,
+              full_scan_at_ms,
+              incremental_scan_at_ms,
+              last_success_at_ms,
+              last_error,
+              backoff_until_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(source_id) DO UPDATE SET
+              connector_id = excluded.connector_id,
+              sync_cursor = excluded.sync_cursor,
+              full_scan_at_ms = COALESCE(excluded.full_scan_at_ms, source_sync_state.full_scan_at_ms),
+              incremental_scan_at_ms = excluded.incremental_scan_at_ms,
+              last_success_at_ms = excluded.last_success_at_ms,
+              last_error = excluded.last_error,
+              backoff_until_ms = excluded.backoff_until_ms,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                source_id,
+                connector_id,
+                sync_cursor,
+                input.full_scan_at_ms,
+                input.incremental_scan_at_ms,
+                input.last_success_at_ms,
+                last_error,
+                input.backoff_until_ms,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert source sync state: {error}"))?;
+
+        Ok(())
+    })
+}
+
+pub fn list_source_sync_failures(
+    app: &AppHandle,
+    limit: Option<u32>,
+) -> Result<Vec<LibrarySourceSyncFailureRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = limit
+            .map(|value| value.clamp(1, 1000) as i64)
+            .unwrap_or(200);
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  sss.source_id,
+                  COALESCE(src.path, ''),
+                  src.display_name,
+                  sss.connector_id,
+                  sss.last_error,
+                  sss.backoff_until_ms,
+                  sss.last_success_at_ms,
+                  sss.incremental_scan_at_ms,
+                  sss.updated_at_ms
+                FROM source_sync_state sss
+                LEFT JOIN sources src ON src.id = sss.source_id
+                WHERE sss.last_error IS NOT NULL OR sss.backoff_until_ms IS NOT NULL
+                ORDER BY
+                  CASE WHEN sss.backoff_until_ms IS NULL THEN 0 ELSE 1 END DESC,
+                  sss.backoff_until_ms DESC,
+                  sss.updated_at_ms DESC
+                LIMIT ?1
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare source sync failures query: {error}"))?;
+
+        let rows = stmt
+            .query_map(params![normalized_limit], |row| {
+                let source_id: String = row.get(0)?;
+                let source_path_raw: String = row.get(1)?;
+                let source_path = if source_path_raw.trim().is_empty() {
+                    source_id.clone()
+                } else {
+                    source_path_raw
+                };
+
+                Ok(LibrarySourceSyncFailureRecord {
+                    source_id,
+                    source_path,
+                    source_display_name: row.get(2)?,
+                    connector_id: row.get(3)?,
+                    last_error: row.get(4)?,
+                    backoff_until_ms: row.get(5)?,
+                    last_success_at_ms: row.get(6)?,
+                    incremental_scan_at_ms: row.get(7)?,
+                    updated_at_ms: row.get(8)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query source sync failures: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(
+                row.map_err(|error| format!("Failed to parse source sync failure row: {error}"))?,
+            );
+        }
+        Ok(items)
+    })
+}
+
+pub fn clear_source_sync_failures(
+    app: &AppHandle,
+    source_ids: Option<Vec<String>>,
+) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let now = now_ms();
+
+        let Some(source_ids) = source_ids else {
+            conn.execute(
+                r#"
+                UPDATE source_sync_state
+                SET
+                  last_error = NULL,
+                  backoff_until_ms = NULL,
+                  updated_at_ms = ?1
+                WHERE last_error IS NOT NULL OR backoff_until_ms IS NOT NULL
+                "#,
+                params![now],
+            )
+            .map_err(|error| format!("Failed to clear source sync failures: {error}"))?;
+            return Ok(conn.changes());
+        };
+
+        let mut normalized_source_ids: Vec<String> = Vec::new();
+        for source_id in source_ids {
+            let normalized = source_id.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            if normalized_source_ids.iter().any(|item| item == normalized) {
+                continue;
+            }
+            normalized_source_ids.push(normalized.to_string());
+        }
+
+        if normalized_source_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = conn.transaction().map_err(|error| {
+            format!("Failed to start clear source sync failures transaction: {error}")
+        })?;
+        let mut stmt = tx
+            .prepare(
+                r#"
+                UPDATE source_sync_state
+                SET
+                  last_error = NULL,
+                  backoff_until_ms = NULL,
+                  updated_at_ms = ?2
+                WHERE source_id = ?1
+                  AND (last_error IS NOT NULL OR backoff_until_ms IS NOT NULL)
+                "#,
+            )
+            .map_err(|error| {
+                format!("Failed to prepare clear source sync failures statement: {error}")
+            })?;
+
+        let mut affected: u64 = 0;
+        for source_id in normalized_source_ids {
+            let changed = stmt
+                .execute(params![source_id, now])
+                .map_err(|error| format!("Failed to clear source sync failure row: {error}"))?;
+            affected = affected.saturating_add(changed as u64);
+        }
+
+        drop(stmt);
+        tx.commit().map_err(|error| {
+            format!("Failed to commit clear source sync failures transaction: {error}")
+        })?;
+
+        Ok(affected)
+    })
+}
+
+pub fn get_source_fingerprint_state(
+    app: &AppHandle,
+    source_id: &str,
+) -> Result<Option<LibrarySourceFingerprintStateRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  source_id,
+                  tree_fingerprint,
+                  file_count,
+                  total_size,
+                  sampled_at_ms,
+                  updated_at_ms
+                FROM source_fingerprint_state
+                WHERE source_id = ?1
+                LIMIT 1
+                "#,
+            )
+            .map_err(|error| {
+                format!("Failed to prepare source fingerprint state query: {error}")
+            })?;
+
+        let mut rows = stmt
+            .query(params![source_id])
+            .map_err(|error| format!("Failed to query source fingerprint state: {error}"))?;
+
+        let Some(row) = rows
+            .next()
+            .map_err(|error| format!("Failed to parse source fingerprint state row: {error}"))?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(LibrarySourceFingerprintStateRecord {
+            source_id: row.get(0).map_err(|error| {
+                format!("Failed to read source fingerprint state source_id column: {error}")
+            })?,
+            tree_fingerprint: row.get(1).map_err(|error| {
+                format!("Failed to read source fingerprint state tree_fingerprint: {error}")
+            })?,
+            file_count: row
+                .get::<_, i64>(2)
+                .map_err(|error| {
+                    format!("Failed to read source fingerprint state file_count column: {error}")
+                })?
+                .max(0) as u64,
+            total_size: row
+                .get::<_, i64>(3)
+                .map_err(|error| {
+                    format!("Failed to read source fingerprint state total_size column: {error}")
+                })?
+                .max(0) as u64,
+            sampled_at_ms: row.get(4).map_err(|error| {
+                format!("Failed to read source fingerprint state sampled_at_ms column: {error}")
+            })?,
+            updated_at_ms: row.get(5).map_err(|error| {
+                format!("Failed to read source fingerprint state updated_at_ms column: {error}")
+            })?,
+        }))
+    })
+}
+
+pub fn upsert_source_fingerprint_state(
+    app: &AppHandle,
+    input: LibrarySourceFingerprintStateUpsertInput,
+) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let source_id = input.source_id.trim();
+        if source_id.is_empty() {
+            return Err("Source fingerprint state source_id is required".to_string());
+        }
+
+        let now = input.updated_at_ms.unwrap_or_else(now_ms);
+        let tree_fingerprint = normalize_text(input.tree_fingerprint.as_deref());
+        let file_count = (input.file_count.min(i64::MAX as u64)) as i64;
+        let total_size = (input.total_size.min(i64::MAX as u64)) as i64;
+
+        conn.execute(
+            r#"
+            INSERT INTO source_fingerprint_state(
+              source_id,
+              tree_fingerprint,
+              file_count,
+              total_size,
+              sampled_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(source_id) DO UPDATE SET
+              tree_fingerprint = excluded.tree_fingerprint,
+              file_count = excluded.file_count,
+              total_size = excluded.total_size,
+              sampled_at_ms = excluded.sampled_at_ms,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                source_id,
+                tree_fingerprint,
+                file_count,
+                total_size,
+                input.sampled_at_ms,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert source fingerprint state: {error}"))?;
+
+        Ok(())
+    })
+}
+
+pub fn enqueue_metadata_refresh_jobs_for_source(
+    app: &AppHandle,
+    source_id: &str,
+    limit: Option<u32>,
+) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let source_key = source_id.trim();
+        if source_key.is_empty() {
+            return Err("Metadata refresh source_id is required".to_string());
+        }
+
+        let normalized_limit = limit
+            .map(|value| value.clamp(1, 5000) as i64)
+            .unwrap_or(500);
+        let now = now_ms();
+
+        conn.execute(
+            r#"
+            INSERT OR IGNORE INTO metadata_refresh_jobs(
+              id,
+              entry_id,
+              kind,
+              status,
+              priority,
+              attempt_count,
+              next_run_at_ms,
+              created_at_ms,
+              updated_at_ms
+            )
+            SELECT
+              'meta::' || ue.id || '::both',
+              ue.id,
+              'both',
+              'queued',
+              100,
+              0,
+              ?1,
+              ?1,
+              ?1
+            FROM user_entries ue
+            JOIN local_tracks lt ON lt.id = ue.track_id
+            LEFT JOIN cover_refs cr ON cr.entry_id = ue.id
+            LEFT JOIN lyric_refs lr ON lr.entry_id = ue.id
+            WHERE lt.source_id = ?2
+              AND (cr.id IS NULL OR lr.id IS NULL)
+            LIMIT ?3
+            "#,
+            params![now, source_key, normalized_limit],
+        )
+        .map_err(|error| format!("Failed to enqueue metadata refresh jobs: {error}"))?;
+
+        Ok(conn.changes())
+    })
+}
+
+pub fn claim_metadata_refresh_jobs(
+    app: &AppHandle,
+    limit: Option<u32>,
+) -> Result<Vec<LibraryMetadataRefreshJobClaimRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = limit.map(|value| value.clamp(1, 500) as i64).unwrap_or(50);
+        let now = now_ms();
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("Failed to start metadata job claim transaction: {error}"))?;
+
+        let mut query_stmt = tx
+            .prepare(
+                r#"
+                SELECT
+                  mrj.id,
+                  mrj.entry_id,
+                  mrj.kind,
+                  mrj.priority,
+                  mrj.attempt_count,
+                  ue.track_id,
+                  lt.file_path
+                FROM metadata_refresh_jobs mrj
+                LEFT JOIN user_entries ue ON ue.id = mrj.entry_id
+                LEFT JOIN local_tracks lt ON lt.id = ue.track_id
+                WHERE mrj.status IN ('queued', 'retrying')
+                  AND (mrj.next_run_at_ms IS NULL OR mrj.next_run_at_ms <= ?1)
+                ORDER BY mrj.priority ASC, COALESCE(mrj.next_run_at_ms, mrj.created_at_ms) ASC, mrj.id ASC
+                LIMIT ?2
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare metadata job claim query: {error}"))?;
+
+        let rows = query_stmt
+            .query_map(params![now, normalized_limit], |row| {
+                Ok(LibraryMetadataRefreshJobClaimRecord {
+                    id: row.get(0)?,
+                    entry_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    priority: row.get(3)?,
+                    attempt_count: row.get::<_, i64>(4)?.max(0) as u64,
+                    track_id: row.get(5)?,
+                    track_file_path: row.get(6)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query metadata jobs: {error}"))?;
+
+        let mut selected: Vec<LibraryMetadataRefreshJobClaimRecord> = Vec::new();
+        for row in rows {
+            selected
+                .push(row.map_err(|error| format!("Failed to parse metadata job row: {error}"))?);
+        }
+
+        drop(query_stmt);
+
+        if selected.is_empty() {
+            tx.commit()
+                .map_err(|error| format!("Failed to commit metadata claim transaction: {error}"))?;
+            return Ok(selected);
+        }
+
+        let mut update_stmt = tx
+            .prepare(
+                r#"
+                UPDATE metadata_refresh_jobs
+                SET
+                  status = 'running',
+                  attempt_count = attempt_count + 1,
+                  updated_at_ms = ?2,
+                  last_error = NULL
+                WHERE id = ?1
+                  AND status IN ('queued', 'retrying')
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare metadata job claim update: {error}"))?;
+
+        let mut claimed: Vec<LibraryMetadataRefreshJobClaimRecord> = Vec::new();
+        for mut job in selected {
+            let affected = update_stmt
+                .execute(params![job.id.as_str(), now])
+                .map_err(|error| format!("Failed to mark metadata job as running: {error}"))?;
+            if affected == 0 {
+                continue;
+            }
+            job.attempt_count = job.attempt_count.saturating_add(1);
+            claimed.push(job);
+        }
+
+        drop(update_stmt);
+        tx.commit()
+            .map_err(|error| format!("Failed to commit metadata job claim transaction: {error}"))?;
+
+        Ok(claimed)
+    })
+}
+
+pub fn complete_metadata_refresh_job(app: &AppHandle, job_id: &str) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let id = job_id.trim();
+        if id.is_empty() {
+            return Ok(false);
+        }
+
+        let now = now_ms();
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE metadata_refresh_jobs
+                SET
+                  status = 'completed',
+                  last_error = NULL,
+                  next_run_at_ms = NULL,
+                  updated_at_ms = ?2
+                WHERE id = ?1
+                "#,
+                params![id, now],
+            )
+            .map_err(|error| format!("Failed to complete metadata refresh job: {error}"))?;
+        Ok(affected > 0)
+    })
+}
+
+pub fn reschedule_metadata_refresh_job(
+    app: &AppHandle,
+    job_id: &str,
+    last_error: &str,
+    next_run_at_ms: Option<i64>,
+    terminal_failed: bool,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let id = job_id.trim();
+        if id.is_empty() {
+            return Ok(false);
+        }
+
+        let status = if terminal_failed {
+            "failed"
+        } else {
+            "retrying"
+        };
+        let normalized_error = normalize_text(Some(last_error));
+        let now = now_ms();
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE metadata_refresh_jobs
+                SET
+                  status = ?2,
+                  last_error = ?3,
+                  next_run_at_ms = ?4,
+                  updated_at_ms = ?5
+                WHERE id = ?1
+                "#,
+                params![id, status, normalized_error, next_run_at_ms, now],
+            )
+            .map_err(|error| format!("Failed to reschedule metadata refresh job: {error}"))?;
+        Ok(affected > 0)
+    })
+}
+
+pub fn upsert_cover_ref(app: &AppHandle, input: LibraryCoverRefUpsertInput) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let entry_id = input.entry_id.trim();
+        if entry_id.is_empty() {
+            return Err("Cover ref entry_id is required".to_string());
+        }
+
+        let locator = input.cover_locator.trim();
+        if locator.is_empty() {
+            return Err("Cover ref cover_locator is required".to_string());
+        }
+
+        let now = input.updated_at_ms.unwrap_or_else(now_ms);
+        let ref_id = format!("cover::{entry_id}");
+        conn.execute(
+            "DELETE FROM cover_refs WHERE entry_id = ?1",
+            params![entry_id],
+        )
+        .map_err(|error| format!("Failed to cleanup cover refs before upsert: {error}"))?;
+
+        conn.execute(
+            r#"
+            INSERT INTO cover_refs(
+              id,
+              entry_id,
+              provider_cover_id,
+              cover_locator,
+              etag,
+              width,
+              height,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                ref_id,
+                entry_id,
+                normalize_text(input.provider_cover_id.as_deref()),
+                locator,
+                normalize_text(input.etag.as_deref()),
+                input.width.map(|value| value as i64),
+                input.height.map(|value| value as i64),
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert cover ref: {error}"))?;
+
+        Ok(())
+    })
+}
+
+pub fn upsert_lyric_ref(app: &AppHandle, input: LibraryLyricRefUpsertInput) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let entry_id = input.entry_id.trim();
+        if entry_id.is_empty() {
+            return Err("Lyric ref entry_id is required".to_string());
+        }
+
+        let locator = input.lyric_locator.trim();
+        if locator.is_empty() {
+            return Err("Lyric ref lyric_locator is required".to_string());
+        }
+
+        let now = input.updated_at_ms.unwrap_or_else(now_ms);
+        let ref_id = format!("lyric::{entry_id}");
+        conn.execute(
+            "DELETE FROM lyric_refs WHERE entry_id = ?1",
+            params![entry_id],
+        )
+        .map_err(|error| format!("Failed to cleanup lyric refs before upsert: {error}"))?;
+
+        conn.execute(
+            r#"
+            INSERT INTO lyric_refs(
+              id,
+              entry_id,
+              provider_lyric_id,
+              lyric_locator,
+              format,
+              lang,
+              etag,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                ref_id,
+                entry_id,
+                normalize_text(input.provider_lyric_id.as_deref()),
+                locator,
+                normalize_text(input.format.as_deref()),
+                normalize_text(input.lang.as_deref()),
+                normalize_text(input.etag.as_deref()),
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert lyric ref: {error}"))?;
+
         Ok(())
     })
 }
@@ -2441,4 +3829,124 @@ pub fn get_stats(
         )
         .map_err(|error| format!("Failed to query library stats: {error}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    fn open_temp_db(prefix: &str) -> (Connection, PathBuf) {
+        let mut path = std::env::temp_dir();
+        let unique = format!(
+            "{prefix}-{}-{}-{}.sqlite3",
+            std::process::id(),
+            now_ms(),
+            std::thread::current().name().unwrap_or("test")
+        );
+        path.push(unique.replace(':', "_"));
+        let conn = Connection::open(&path).expect("open temp sqlite db");
+        (conn, path)
+    }
+
+    fn cleanup_temp_db(path: &Path) {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(path.with_extension("sqlite3-shm"));
+        let _ = fs::remove_file(path.with_extension("sqlite3-wal"));
+    }
+
+    fn has_table(conn: &Connection, table_name: &str) -> bool {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            params![table_name],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .unwrap_or(false)
+    }
+
+    fn has_index(conn: &Connection, index_name: &str) -> bool {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",
+            params![index_name],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .unwrap_or(false)
+    }
+
+    fn read_user_version(conn: &Connection) -> i32 {
+        conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
+            .expect("read user_version")
+    }
+
+    #[test]
+    fn migrate_empty_db_to_v5_schema() {
+        let (conn, path) = open_temp_db("music-library-migrate-empty");
+        migrate(&conn).expect("migrate empty db");
+
+        assert_eq!(read_user_version(&conn), 5);
+        assert!(has_table(&conn, "connectors"));
+        assert!(has_table(&conn, "source_sync_state"));
+        assert!(has_table(&conn, "source_fingerprint_state"));
+        assert!(has_table(&conn, "track_provider_refs"));
+        assert!(has_table(&conn, "metadata_refresh_jobs"));
+        assert!(has_index(&conn, "source_sync_state_backoff_until_ms_idx"));
+        assert!(has_index(&conn, "metadata_refresh_jobs_next_run_at_ms_idx"));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn migrate_v4_db_to_v5_schema() {
+        let (conn, path) = open_temp_db("music-library-migrate-v4");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS sources (
+              id TEXT PRIMARY KEY NOT NULL,
+              path TEXT NOT NULL UNIQUE,
+              updated_at_ms INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS local_tracks (
+              id TEXT PRIMARY KEY NOT NULL,
+              source_id TEXT NOT NULL,
+              file_path TEXT NOT NULL,
+              artist TEXT,
+              album TEXT,
+              last_played_at_ms INTEGER,
+              FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE,
+              UNIQUE(source_id, file_path)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_entries (
+              id TEXT PRIMARY KEY NOT NULL,
+              owner_uid TEXT NOT NULL,
+              track_id TEXT,
+              updated_at_ms INTEGER NOT NULL
+            );
+
+            PRAGMA user_version = 4;
+            "#,
+        )
+        .expect("seed v4 db schema");
+
+        migrate(&conn).expect("migrate v4 db");
+
+        assert_eq!(read_user_version(&conn), 5);
+        assert!(has_table(&conn, "connector_accounts"));
+        assert!(has_table(&conn, "cover_refs"));
+        assert!(has_table(&conn, "lyric_refs"));
+        assert!(has_index(
+            &conn,
+            "track_provider_refs_provider_track_id_idx"
+        ));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
 }

@@ -16,6 +16,8 @@ mod magnet_layout_store;
 mod modules;
 mod music_library;
 mod music_library_db;
+mod music_library_sync;
+mod music_platform_bilibili;
 mod native_audio;
 mod ornament_media;
 mod perf_monitor;

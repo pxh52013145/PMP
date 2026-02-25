@@ -32,12 +32,16 @@ rustfft = { version = "6.4.1", default-features = false }
 rubato = { version = "0.16", default-features = false }
 
 # HTTP客户端（使用 rustls 避免依赖系统 OpenSSL）
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+url = "2"
 
 # 数据库
 rusqlite = { version = "0.30", features = ["bundled"] }
 gif = "0.14"
+qrcode = "0.14"
 sha2 = "0.10"
+md5 = "0.7"
+keyring = "2.3"
 
 [target.'cfg(windows)'.dependencies]
 asio-sys = { version = "0.2.5", optional = true }
