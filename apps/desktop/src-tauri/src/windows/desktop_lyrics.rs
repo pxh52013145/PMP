@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
 
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::Lazy;
 use tauri::AppHandle;
 
 use crate::audio::events::NativeAudioStatePayload;
@@ -99,8 +99,7 @@ impl Default for DesktopLyricsState {
     }
 }
 
-static STARTED: OnceCell<()> = OnceCell::new();
-static OVERLAY_TX: OnceCell<Sender<OverlayCommand>> = OnceCell::new();
+static OVERLAY_TX: Lazy<Mutex<Option<Sender<OverlayCommand>>>> = Lazy::new(|| Mutex::new(None));
 static DESKTOP_LYRICS_STATE: Lazy<Mutex<DesktopLyricsState>> =
     Lazy::new(|| Mutex::new(DesktopLyricsState::default()));
 const MAX_TRACK_CACHE_ENTRIES: usize = 32;
@@ -286,6 +285,7 @@ pub fn sync_from_native_audio_state(app: &AppHandle, payload: &NativeAudioStateP
             .as_ref()
             .is_some_and(|track_key| !state.track_lines.contains_key(track_key));
 
+        sync_overlay_runtime_if_needed(&state);
         refresh_overlay_locked(&mut state);
         should_resolve
     };
@@ -315,29 +315,55 @@ pub fn sync_from_native_audio_state(app: &AppHandle, payload: &NativeAudioStateP
     };
 
     cache_track_lines(&mut state, track_key, resolved_lines);
+    sync_overlay_runtime_if_needed(&state);
     refresh_overlay_locked(&mut state);
 }
 
 fn send_overlay_command(command: OverlayCommand) {
-    let Some(tx) = OVERLAY_TX.get() else {
+    let tx = OVERLAY_TX
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned());
+    let Some(tx) = tx else {
         return;
     };
-    let _ = tx.send(command);
+
+    if tx.send(command).is_err() {
+        if let Ok(mut guard) = OVERLAY_TX.lock() {
+            *guard = None;
+        }
+    }
 }
 
 fn ensure_overlay_runtime_started() {
-    STARTED.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<OverlayCommand>();
-        let _ = OVERLAY_TX.set(tx);
+    let mut should_spawn = false;
 
-        std::thread::spawn(move || {
-            backend::run(rx);
-        });
-    });
+    if let Ok(mut guard) = OVERLAY_TX.lock() {
+        if guard.is_none() {
+            let (tx, rx) = mpsc::channel::<OverlayCommand>();
+            *guard = Some(tx);
+            should_spawn = true;
+
+            std::thread::spawn(move || {
+                backend::run(rx);
+            });
+        }
+    }
+
+    if !should_spawn {
+        return;
+    }
+}
+
+fn overlay_runtime_started() -> bool {
+    OVERLAY_TX
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
 }
 
 fn ensure_overlay_runtime_bootstrapped(state: &DesktopLyricsState) {
-    if OVERLAY_TX.get().is_some() {
+    if overlay_runtime_started() {
         return;
     }
 
@@ -350,6 +376,12 @@ fn ensure_overlay_runtime_bootstrapped(state: &DesktopLyricsState) {
         state.position_offset_x,
         state.position_offset_y,
     ));
+}
+
+fn sync_overlay_runtime_if_needed(state: &DesktopLyricsState) {
+    if state.visible {
+        ensure_overlay_runtime_bootstrapped(state);
+    }
 }
 
 fn normalize_track_path(value: &str) -> Option<String> {
