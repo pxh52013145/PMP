@@ -121,6 +121,87 @@ export interface NativeBilibiliLyricLocatorRef {
   sourceKind: string;
 }
 
+export type NativeLyricSourceKind = 'embedded' | 'sidecar' | 'cache' | 'web';
+
+export interface NativeLyricToken {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface NativeLyricLine {
+  startMs: number;
+  endMs?: number;
+  text: string;
+  translation?: string;
+  tokens: NativeLyricToken[];
+}
+
+export interface NativeLyricDocument {
+  id: string;
+  entryId?: string;
+  trackId?: string;
+  quickFingerprint?: string;
+  sourceKind: NativeLyricSourceKind;
+  sourceLocator?: string;
+  format: string;
+  language?: string;
+  isDynamic: boolean;
+  hasWordTiming: boolean;
+  confidence: number;
+  lines: NativeLyricLine[];
+  rawText?: string;
+  updatedAtMs: number;
+}
+
+export interface NativeLyricResolveRequest {
+  entryId?: string;
+  trackId?: string;
+  trackFilePath?: string;
+  quickFingerprint?: string;
+  title?: string;
+  artist?: string;
+  durationSeconds?: number;
+  embeddedLyrics?: string;
+  lyricLocator?: string;
+  cacheKey?: string;
+  language?: string;
+  forceWebLookup?: boolean;
+}
+
+export interface NativeLyricResolveQuery {
+  entryId?: string;
+  trackId?: string;
+  trackFilePath?: string;
+  quickFingerprint?: string;
+  cacheKey?: string;
+}
+
+export interface NativeLyricResolveResult {
+  selectionKey: string;
+  selected?: NativeLyricDocument;
+  selectedSource?: string;
+  triedSources: string[];
+  diagnostics: string[];
+}
+
+export type NativeLyricWriteBackPolicy = 'none' | 'sidecar' | 'embedded';
+
+export interface NativeLyricWriteBackRequest {
+  query: NativeLyricResolveQuery;
+  trackFilePath?: string;
+  policy?: NativeLyricWriteBackPolicy;
+  formatHint?: string;
+}
+
+export interface NativeLyricWriteBackResult {
+  applied: boolean;
+  policy: string;
+  outputPath?: string;
+  skippedReason?: string;
+  updatedAtMs: number;
+}
+
 export interface NativeBilibiliPlaybackPrepared {
   sourceLocator: string;
   streamUrl: string;
@@ -749,6 +830,194 @@ function ensureBilibiliLyricLocatorRef(value: unknown): NativeBilibiliLyricLocat
     format,
     lang: asOptionalString(readRecordField(value, 'lang')),
     sourceKind,
+  };
+}
+
+function ensureLyricSourceKind(value: unknown): NativeLyricSourceKind | null {
+  const normalized = asTrimmedString(value).toLowerCase();
+  if (
+    normalized !== 'embedded' &&
+    normalized !== 'sidecar' &&
+    normalized !== 'cache' &&
+    normalized !== 'web'
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function ensureLyricToken(value: unknown): NativeLyricToken | null {
+  if (!isRecord(value)) return null;
+  const startMs = asNumber(readRecordField(value, 'startMs', 'start_ms'));
+  const endMs = asNumber(readRecordField(value, 'endMs', 'end_ms'));
+  const text = asTrimmedString(readRecordField(value, 'text'));
+  if (startMs === undefined || endMs === undefined || !text) return null;
+  return {
+    startMs: Math.max(0, Math.floor(startMs)),
+    endMs: Math.max(0, Math.floor(endMs)),
+    text,
+  };
+}
+
+function ensureLyricLine(value: unknown): NativeLyricLine | null {
+  if (!isRecord(value)) return null;
+  const startMs = asNumber(readRecordField(value, 'startMs', 'start_ms'));
+  if (startMs === undefined) return null;
+
+  const rawTokens = readRecordField(value, 'tokens');
+  const tokens: NativeLyricToken[] = [];
+  if (Array.isArray(rawTokens)) {
+    for (const item of rawTokens) {
+      const parsed = ensureLyricToken(item);
+      if (!parsed) continue;
+      tokens.push(parsed);
+    }
+  }
+
+  const explicitText = asTrimmedString(readRecordField(value, 'text'));
+  const tokenText = tokens.map((token) => token.text).join('').trim();
+  const text = explicitText || tokenText;
+  if (!text) return null;
+
+  return {
+    startMs: Math.max(0, Math.floor(startMs)),
+    endMs: asNumber(readRecordField(value, 'endMs', 'end_ms')),
+    text,
+    translation: asOptionalString(readRecordField(value, 'translation')),
+    tokens,
+  };
+}
+
+function ensureLyricDocument(value: unknown): NativeLyricDocument | null {
+  if (!isRecord(value)) return null;
+
+  const rawId = asTrimmedString(readRecordField(value, 'id'));
+  const sourceKind = ensureLyricSourceKind(readRecordField(value, 'sourceKind', 'source_kind'));
+  const format = asTrimmedString(readRecordField(value, 'format'));
+  const isDynamic = asBool(readRecordField(value, 'isDynamic', 'is_dynamic'));
+  const hasWordTiming = asBool(readRecordField(value, 'hasWordTiming', 'has_word_timing'));
+  const confidence = asNumber(readRecordField(value, 'confidence'));
+  const updatedAtMs = asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms'));
+  if (
+    !sourceKind ||
+    !format ||
+    isDynamic === undefined ||
+    hasWordTiming === undefined ||
+    confidence === undefined ||
+    updatedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  const rawLines = readRecordField(value, 'lines');
+  const lines: NativeLyricLine[] = [];
+  if (Array.isArray(rawLines)) {
+    for (const item of rawLines) {
+      const parsed = ensureLyricLine(item);
+      if (!parsed) continue;
+      lines.push(parsed);
+    }
+  }
+
+  const entryId = asOptionalString(readRecordField(value, 'entryId', 'entry_id'));
+  const trackId = asOptionalString(readRecordField(value, 'trackId', 'track_id'));
+  const id =
+    rawId ||
+    `transient:${sourceKind}:${Math.max(0, Math.floor(updatedAtMs))}:${trackId || entryId || 'unknown'}`;
+
+  return {
+    id,
+    entryId,
+    trackId,
+    quickFingerprint: asOptionalString(
+      readRecordField(value, 'quickFingerprint', 'quick_fingerprint')
+    ),
+    sourceKind,
+    sourceLocator: asOptionalString(readRecordField(value, 'sourceLocator', 'source_locator')),
+    format,
+    language: asOptionalString(readRecordField(value, 'language')),
+    isDynamic,
+    hasWordTiming,
+    confidence: Math.max(0, Math.min(1, confidence)),
+    lines,
+    rawText: asOptionalString(readRecordField(value, 'rawText', 'raw_text')),
+    updatedAtMs: Math.max(0, Math.floor(updatedAtMs)),
+  };
+}
+
+function ensureLyricResolveResult(value: unknown): NativeLyricResolveResult | null {
+  if (!isRecord(value)) return null;
+  const selectionKey = asTrimmedString(readRecordField(value, 'selectionKey', 'selection_key'));
+  if (!selectionKey) return null;
+
+  const selected = ensureLyricDocument(readRecordField(value, 'selected')) || undefined;
+  const triedRaw = readRecordField(value, 'triedSources', 'tried_sources');
+  const diagnosticsRaw = readRecordField(value, 'diagnostics');
+
+  const triedSources: string[] = [];
+  if (Array.isArray(triedRaw)) {
+    for (const item of triedRaw) {
+      const normalized = asTrimmedString(item);
+      if (!normalized) continue;
+      triedSources.push(normalized);
+    }
+  }
+
+  const diagnostics: string[] = [];
+  if (Array.isArray(diagnosticsRaw)) {
+    for (const item of diagnosticsRaw) {
+      const normalized = asTrimmedString(item);
+      if (!normalized) continue;
+      diagnostics.push(normalized);
+    }
+  }
+
+  return {
+    selectionKey,
+    selected,
+    selectedSource: asOptionalString(readRecordField(value, 'selectedSource', 'selected_source')),
+    triedSources,
+    diagnostics,
+  };
+}
+
+function ensureLyricWriteBackResult(value: unknown): NativeLyricWriteBackResult | null {
+  if (!isRecord(value)) return null;
+  const applied = asBool(readRecordField(value, 'applied'));
+  const policy = asTrimmedString(readRecordField(value, 'policy'));
+  const updatedAtMs = asNumber(readRecordField(value, 'updatedAtMs', 'updated_at_ms'));
+  if (applied === undefined || !policy || updatedAtMs === undefined) return null;
+
+  return {
+    applied,
+    policy,
+    outputPath: asOptionalString(readRecordField(value, 'outputPath', 'output_path')),
+    skippedReason: asOptionalString(readRecordField(value, 'skippedReason', 'skipped_reason')),
+    updatedAtMs: Math.max(0, Math.floor(updatedAtMs)),
+  };
+}
+
+function normalizeLyricResolveQuery(
+  query?: NativeLyricResolveQuery
+): NativeLyricResolveQuery {
+  return {
+    entryId:
+      typeof query?.entryId === 'string' && query.entryId.trim().length > 0
+        ? query.entryId.trim()
+        : undefined,
+    trackId:
+      typeof query?.trackId === 'string' && query.trackId.trim().length > 0
+        ? query.trackId.trim()
+        : undefined,
+    trackFilePath:
+      typeof query?.trackFilePath === 'string' && query.trackFilePath.trim().length > 0
+        ? query.trackFilePath.trim()
+        : undefined,
+    quickFingerprint: normalizeQuickFingerprint(query?.quickFingerprint),
+    cacheKey:
+      typeof query?.cacheKey === 'string' && query.cacheKey.trim().length > 0
+        ? query.cacheKey.trim()
+        : undefined,
   };
 }
 
@@ -1571,6 +1840,133 @@ export async function resolveNativeBilibiliLyricLocator(
     lyricLocator: normalizedLocator,
   }).catch(() => null);
   return ensureBilibiliLyricLocatorRef(raw);
+}
+
+export async function resolveNativeLibraryLyrics(
+  request: NativeLyricResolveRequest
+): Promise<NativeLyricResolveResult | null> {
+  if (!isTauriRuntime()) return null;
+
+  const payload: NativeLyricResolveRequest = {
+    entryId:
+      typeof request.entryId === 'string' && request.entryId.trim().length > 0
+        ? request.entryId.trim()
+        : undefined,
+    trackId:
+      typeof request.trackId === 'string' && request.trackId.trim().length > 0
+        ? request.trackId.trim()
+        : undefined,
+    trackFilePath:
+      typeof request.trackFilePath === 'string' && request.trackFilePath.trim().length > 0
+        ? request.trackFilePath.trim()
+        : undefined,
+    quickFingerprint: normalizeQuickFingerprint(request.quickFingerprint),
+    title:
+      typeof request.title === 'string' && request.title.trim().length > 0
+        ? request.title.trim()
+        : undefined,
+    artist:
+      typeof request.artist === 'string' && request.artist.trim().length > 0
+        ? request.artist.trim()
+        : undefined,
+    durationSeconds:
+      typeof request.durationSeconds === 'number' && Number.isFinite(request.durationSeconds)
+        ? Math.max(0, request.durationSeconds)
+        : undefined,
+    embeddedLyrics:
+      typeof request.embeddedLyrics === 'string' && request.embeddedLyrics.trim().length > 0
+        ? request.embeddedLyrics.trim()
+        : undefined,
+    lyricLocator:
+      typeof request.lyricLocator === 'string' && request.lyricLocator.trim().length > 0
+        ? request.lyricLocator.trim()
+        : undefined,
+    cacheKey:
+      typeof request.cacheKey === 'string' && request.cacheKey.trim().length > 0
+        ? request.cacheKey.trim()
+        : undefined,
+    language:
+      typeof request.language === 'string' && request.language.trim().length > 0
+        ? request.language.trim()
+        : undefined,
+    forceWebLookup: request.forceWebLookup === true,
+  };
+
+  if (
+    !payload.entryId &&
+    !payload.trackId &&
+    !payload.quickFingerprint &&
+    !payload.trackFilePath
+  ) {
+    return null;
+  }
+
+  const raw = await invoke<unknown>('music_library_lyrics_resolve', {
+    request: payload,
+  }).catch(() => null);
+  return ensureLyricResolveResult(raw);
+}
+
+export async function getNativeLibrarySelectedLyrics(
+  query: NativeLyricResolveQuery
+): Promise<NativeLyricDocument | null> {
+  if (!isTauriRuntime()) return null;
+  const payload = normalizeLyricResolveQuery(query);
+
+  if (
+    !payload.entryId &&
+    !payload.trackId &&
+    !payload.quickFingerprint &&
+    !payload.trackFilePath &&
+    !payload.cacheKey
+  ) {
+    return null;
+  }
+
+  const raw = await invoke<unknown>('music_library_lyrics_get_selected', {
+    query: payload,
+  }).catch(() => null);
+  return ensureLyricDocument(raw);
+}
+
+export async function writeBackNativeLibraryLyrics(
+  request: NativeLyricWriteBackRequest
+): Promise<NativeLyricWriteBackResult | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedQuery = normalizeLyricResolveQuery(request.query);
+
+  if (
+    !normalizedQuery.entryId &&
+    !normalizedQuery.trackId &&
+    !normalizedQuery.quickFingerprint &&
+    !normalizedQuery.trackFilePath &&
+    !normalizedQuery.cacheKey
+  ) {
+    return null;
+  }
+
+  const normalizedPolicy =
+    request.policy === 'none' || request.policy === 'sidecar' || request.policy === 'embedded'
+      ? request.policy
+      : undefined;
+  const normalizedTrackFilePath =
+    typeof request.trackFilePath === 'string' && request.trackFilePath.trim().length > 0
+      ? request.trackFilePath.trim()
+      : undefined;
+  const normalizedFormatHint =
+    typeof request.formatHint === 'string' && request.formatHint.trim().length > 0
+      ? request.formatHint.trim().toLowerCase()
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_lyrics_write_back', {
+    request: {
+      query: normalizedQuery,
+      trackFilePath: normalizedTrackFilePath,
+      policy: normalizedPolicy,
+      formatHint: normalizedFormatHint,
+    },
+  }).catch(() => null);
+  return ensureLyricWriteBackResult(raw);
 }
 
 export async function removeNativeLibrarySource(sourceId: string): Promise<void> {

@@ -4,6 +4,7 @@ import {
   clearNativeLibraryTracks,
   deleteNativeLibraryUserEntry,
   deleteNativeLibraryTracks,
+  getNativeLibrarySelectedLyrics,
   listNativeLibraryCloudHashJobs,
   listNativeLibraryFallbackTasks,
   listNativeLibraryUserEntries,
@@ -12,11 +13,13 @@ import {
   markNativeLibraryUserEntryPlayed,
   markNativeLibraryTrackPlayed,
   queryNativeLibraryTracks,
+  resolveNativeLibraryLyrics,
   updateNativeLibraryCloudHashJobStatus,
   updateNativeLibraryFallbackTaskStatus,
   upsertNativeLibraryCloudHashJob,
   upsertNativeLibraryFallbackTask,
   upsertNativeLibraryUserEntry,
+  writeBackNativeLibraryLyrics,
 } from '../nativeLibraryDb';
 
 const tauriMocks = vi.hoisted(() => ({
@@ -441,5 +444,146 @@ describe('nativeLibraryDb', () => {
         lastError: undefined,
       }
     );
+  });
+
+  it('normalizes lyrics resolve payload and parses selected document', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      selectionKey: 'track::track-1',
+      selectedSource: 'sidecar',
+      triedSources: ['embedded', 'sidecar'],
+      diagnostics: [],
+      selected: {
+        id: 'lydoc-1',
+        sourceKind: 'sidecar',
+        format: 'lrc',
+        isDynamic: true,
+        hasWordTiming: false,
+        confidence: 0.92,
+        lines: [{ startMs: 0, text: 'hello', tokens: [] }],
+        updatedAtMs: 1700000600,
+      },
+    });
+
+    const result = await resolveNativeLibraryLyrics({
+      trackId: '  track-1  ',
+      trackFilePath: '  D:/Music/hello.mp3  ',
+      quickFingerprint: '  ABCDEF1234567890  ',
+      title: '  Hello  ',
+      artist: '  Artist  ',
+      durationSeconds: 245.6,
+      embeddedLyrics: '  [00:01.00]hello  ',
+      cacheKey: '  cache-1  ',
+      forceWebLookup: true,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_lyrics_resolve', {
+      request: {
+        trackId: 'track-1',
+        trackFilePath: 'D:/Music/hello.mp3',
+        quickFingerprint: 'qf2:abcdef1234567890',
+        title: 'Hello',
+        artist: 'Artist',
+        durationSeconds: 245.6,
+        embeddedLyrics: '[00:01.00]hello',
+        cacheKey: 'cache-1',
+        forceWebLookup: true,
+        entryId: undefined,
+        lyricLocator: undefined,
+        language: undefined,
+      },
+    });
+    expect(result?.selectionKey).toBe('track::track-1');
+    expect(result?.selected?.sourceKind).toBe('sidecar');
+    expect(result?.selected?.lines[0]?.text).toBe('hello');
+  });
+
+  it('parses transient lyric document without persisted id', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      selectionKey: 'track::track-2',
+      selectedSource: 'embedded',
+      triedSources: ['embedded'],
+      diagnostics: ['persist-selected-document-failed: db unavailable'],
+      selected: {
+        trackId: 'track-2',
+        sourceKind: 'embedded',
+        format: 'lrc',
+        isDynamic: true,
+        hasWordTiming: true,
+        confidence: 0.96,
+        lines: [
+          {
+            startMs: 1000,
+            text: '',
+            tokens: [
+              { startMs: 1000, endMs: 1300, text: '你' },
+              { startMs: 1300, endMs: 1600, text: '好' },
+            ],
+          },
+        ],
+        updatedAtMs: 1700000800,
+      },
+    });
+
+    const result = await resolveNativeLibraryLyrics({
+      trackId: 'track-2',
+    });
+
+    expect(result?.selected?.id).toContain('transient:embedded:1700000800:track-2');
+    expect(result?.selected?.lines[0]?.text).toBe('你好');
+  });
+
+  it('reads selected lyrics and normalizes write-back payload', async () => {
+    tauriMocks.invoke
+      .mockResolvedValueOnce({
+        id: 'lydoc-1',
+        source_kind: 'cache',
+        format: 'lrc',
+        is_dynamic: true,
+        has_word_timing: false,
+        confidence: 0.8,
+        lines: [{ start_ms: 0, text: 'line-a', tokens: [] }],
+        updated_at_ms: 1700000700,
+      })
+      .mockResolvedValueOnce({
+        applied: true,
+        policy: 'sidecar',
+        output_path: 'D:/Music/hello.lrc',
+        updated_at_ms: 1700000701,
+      });
+
+    const selected = await getNativeLibrarySelectedLyrics({
+      trackId: '  track-1  ',
+      quickFingerprint: '  qf2:abcdef1234567890  ',
+      cacheKey: '  cache-1  ',
+    });
+    expect(selected?.sourceKind).toBe('cache');
+    expect(selected?.lines[0]?.text).toBe('line-a');
+
+    const writeBack = await writeBackNativeLibraryLyrics({
+      query: {
+        trackId: '  track-1  ',
+        quickFingerprint: '  ABCDEF1234567890  ',
+      },
+      trackFilePath: '  D:/Music/hello.mp3  ',
+      policy: 'sidecar',
+      formatHint: '  LRC  ',
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenLastCalledWith('music_library_lyrics_write_back', {
+      request: {
+        query: {
+          entryId: undefined,
+          trackId: 'track-1',
+          trackFilePath: undefined,
+          quickFingerprint: 'qf2:abcdef1234567890',
+          cacheKey: undefined,
+        },
+        trackFilePath: 'D:/Music/hello.mp3',
+        policy: 'sidecar',
+        formatHint: 'lrc',
+      },
+    });
+    expect(writeBack?.applied).toBe(true);
+    expect(writeBack?.outputPath).toBe('D:/Music/hello.lrc');
   });
 });

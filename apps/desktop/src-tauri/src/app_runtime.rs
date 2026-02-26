@@ -48,6 +48,7 @@ pub fn request_app_exit(app: &tauri::AppHandle) {
     });
 
     crate::audio::shutdown();
+    crate::windows::desktop_lyrics::shutdown();
     crate::vst_runtime::shutdown_session_status_broadcaster();
     if let Err(error) = crate::music_platform_bilibili::cleanup_session_cover_cache(app) {
         eprintln!("[MusicLibrary] Failed to cleanup Bilibili session cover cache: {error}");

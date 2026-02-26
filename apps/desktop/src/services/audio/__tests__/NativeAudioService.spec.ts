@@ -368,6 +368,101 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('clears currentTrack when backend reports stopped with null trackPath', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await service.loadTrack({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
+    expect(service.getState().currentTrack).not.toBeNull();
+
+    handlers.native_audio_state?.({
+      payload: { trackPath: null, playbackState: 'stopped', currentIndex: -1, queue: [] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = service.getState();
+    expect(state.currentTrack).toBeNull();
+    expect(state.currentIndex).toBe(-1);
+    service.destroy();
+  });
+
+  it('resets playback state when removing the last queued track', async () => {
+    const service = new NativeAudioService();
+    service.addToQueue({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
+    await service.playTrackAtIndex(0);
+
+    service.removeFromQueue(0);
+
+    const state = service.getState();
+    expect(state.queue).toHaveLength(0);
+    expect(state.currentIndex).toBe(-1);
+    expect(state.currentTrack).toBeNull();
+    expect(state.playbackState).toBe('stopped');
+    expect(state.currentTime).toBe(0);
+    service.destroy();
+  });
+
+  it('ignores stale trackPath update after queue is cleared', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await service.loadTrack({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
+    service.clearQueue();
+
+    handlers.native_audio_state?.({
+      payload: {
+        trackPath: 'C:\\\\Music\\\\a.mp3',
+        playbackState: 'stopped',
+        currentIndex: -1,
+        queue: [],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = service.getState();
+    expect(state.currentTrack).toBeNull();
+    expect(state.currentIndex).toBe(-1);
+    expect(state.queue).toHaveLength(0);
+    service.destroy();
+  });
+
+  it('ignores stale paused trackPath update after queue is cleared locally', async () => {
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const service = new NativeAudioService();
+    await service.loadTrack({ id: 't1', title: 'A', filePath: 'C:\\\\Music\\\\a.mp3' });
+    service.clearQueue();
+
+    handlers.native_audio_state?.({
+      payload: {
+        trackPath: 'C:\\\\Music\\\\a.mp3',
+        playbackState: 'paused',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = service.getState();
+    expect(state.currentTrack).toBeNull();
+    expect(state.currentIndex).toBe(-1);
+    expect(state.queue).toHaveLength(0);
+    service.destroy();
+  });
+
   it('keeps currentTrack when backend tick payload omits trackPath while playing', async () => {
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
     const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};

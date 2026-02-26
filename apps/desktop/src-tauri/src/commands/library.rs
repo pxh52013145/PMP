@@ -1,4 +1,4 @@
-use crate::{music_library, music_library_db, music_library_sync, music_platform_bilibili};
+use crate::{lyrics, music_library, music_library_db, music_library_sync, music_platform_bilibili};
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_scan(
@@ -228,9 +228,11 @@ pub async fn music_library_bilibili_logout(
 pub async fn music_library_bilibili_list_favorite_folders(
     app: tauri::AppHandle,
 ) -> Result<Vec<music_platform_bilibili::BilibiliFavoriteFolder>, String> {
-    tauri::async_runtime::spawn_blocking(move || music_platform_bilibili::list_favorite_folders(&app))
-        .await
-        .map_err(|e| format!("Bilibili favorite folder list task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::list_favorite_folders(&app)
+    })
+    .await
+    .map_err(|e| format!("Bilibili favorite folder list task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -290,7 +292,11 @@ pub async fn music_library_bilibili_prepare_cached_playback(
     quality_hint: Option<String>,
 ) -> Result<music_platform_bilibili::BilibiliPlaybackPrepared, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_platform_bilibili::prepare_cached_playback(&app, &source_locator, quality_hint.as_deref())
+        music_platform_bilibili::prepare_cached_playback(
+            &app,
+            &source_locator,
+            quality_hint.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("Bilibili prepare cached playback task failed: {e}"))?
@@ -306,6 +312,40 @@ pub async fn music_library_bilibili_resolve_lyric_locator(
     })
     .await
     .map_err(|e| format!("Bilibili lyric locator resolve task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_lyrics_resolve(
+    app: tauri::AppHandle,
+    request: lyrics::LyricResolveRequest,
+) -> Result<lyrics::LyricResolveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || lyrics::service::resolve_for_track(&app, request))
+        .await
+        .map_err(|e| format!("Lyrics resolve task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_lyrics_get_selected(
+    app: tauri::AppHandle,
+    query: lyrics::LyricResolveQuery,
+) -> Result<Option<lyrics::PMPLyricDocument>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lyrics::service::get_selected_for_query(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Lyrics selected query task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_lyrics_write_back(
+    app: tauri::AppHandle,
+    request: lyrics::LyricWriteBackRequest,
+) -> Result<lyrics::LyricWriteBackResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lyrics::service::write_back_selected(&app, request)
+    })
+    .await
+    .map_err(|e| format!("Lyrics write-back task failed: {e}"))?
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -22,6 +22,7 @@ export const BUILTIN_MAGNET_ID_LIST = [
   'btn-volume',
   'progress-bar',
   'track-info',
+  'btn-desktop-lyrics',
   'btn-editor',
   'btn-play-queue',
   'btn-playlists',
@@ -74,6 +75,7 @@ export const DEFAULT_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-volume',
   'progress-bar',
   'track-info',
+  'btn-desktop-lyrics',
   'audio-visualizer',
   // 音乐功能按钮
   'btn-play-queue',
@@ -98,6 +100,7 @@ export const MINIMAL_ACTIVE_MAGNET_IDS = new Set<string>([
   'btn-volume',
   'progress-bar',
   'track-info',
+  'btn-desktop-lyrics',
 ]);
 
 /**

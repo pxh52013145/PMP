@@ -11,7 +11,9 @@ mod audio_smoke;
 mod background_media;
 mod commands;
 mod debug_config;
+mod desktop_lyrics_sidecar;
 mod dsp_graph;
+mod lyrics;
 mod magnet_layout_store;
 mod modules;
 mod music_library;
@@ -65,6 +67,10 @@ fn is_blank_baseline_profile(
 }
 
 fn main() {
+    if let Some(exit_code) = desktop_lyrics_sidecar::maybe_run_from_cli() {
+        std::process::exit(exit_code);
+    }
+
     let context = tauri::generate_context!();
 
     if is_minimal_boot_enabled() || is_blank_baseline_profile(&context) {

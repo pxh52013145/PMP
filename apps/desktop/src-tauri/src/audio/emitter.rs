@@ -191,6 +191,8 @@ pub(crate) fn emit_state(
     app_handle: &AppHandle,
     payload: NativeAudioStatePayload,
 ) -> Result<(), String> {
+    crate::windows::desktop_lyrics::sync_from_native_audio_state(app_handle, &payload);
+
     app_handle
         .emit_all(NATIVE_AUDIO_STATE_EVENT, payload)
         .map_err(|e| format!("Failed to emit state: {e}"))

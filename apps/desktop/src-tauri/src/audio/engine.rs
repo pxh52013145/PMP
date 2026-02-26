@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
+    io::Write,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -87,7 +88,8 @@ static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
 
 fn info_log(message: impl AsRef<str>) {
     if *NATIVE_AUDIO_INFO_LOG_ENABLED {
-        eprintln!("{}", message.as_ref());
+        let mut stderr = std::io::stderr();
+        let _ = writeln!(stderr, "{}", message.as_ref());
     }
 }
 

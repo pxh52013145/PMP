@@ -1,3 +1,4 @@
+pub mod desktop_lyrics;
 pub mod editor;
 pub mod plugin;
 pub mod vst_manager;

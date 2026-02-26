@@ -12,23 +12,21 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{
+    collections::hash_map::DefaultHasher,
+    collections::{HashMap, HashSet},
+    fs,
+    hash::{Hash, Hasher},
+    io::{Cursor, Read, Write},
+    path::{Path, PathBuf},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use symphonia::core::{
     formats::FormatOptions,
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
     probe::Hint,
-};
-use std::{
-    collections::hash_map::DefaultHasher,
-    collections::{HashMap, HashSet},
-    fs,
-    io::{Cursor, Read, Write},
-    path::{Path, PathBuf},
-    hash::{Hash, Hasher},
-    sync::{
-        Arc, Condvar, Mutex, MutexGuard,
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
 use url::Url;
@@ -46,7 +44,8 @@ const BILIBILI_QR_POLL_ENDPOINT: &str =
 const BILIBILI_NAV_ENDPOINT: &str = "https://api.bilibili.com/x/web-interface/nav";
 const BILIBILI_FAVORITE_FOLDERS_ENDPOINT: &str =
     "https://api.bilibili.com/x/v3/fav/folder/created/list-all";
-const BILIBILI_FAVORITE_RESOURCES_ENDPOINT: &str = "https://api.bilibili.com/x/v3/fav/resource/list";
+const BILIBILI_FAVORITE_RESOURCES_ENDPOINT: &str =
+    "https://api.bilibili.com/x/v3/fav/resource/list";
 const BILIBILI_VIEW_ENDPOINT: &str = "https://api.bilibili.com/x/web-interface/view";
 const BILIBILI_PLAYER_V2_ENDPOINT: &str = "https://api.bilibili.com/x/player/v2";
 const BILIBILI_PLAYER_PLAYURL_ENDPOINT: &str = "https://api.bilibili.com/x/player/playurl";
@@ -73,9 +72,9 @@ const BILIBILI_PLAYBACK_CACHE_STALE_FILE_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 const BILIBILI_PLAYBACK_CACHE_SETTINGS_FILE: &str = "playback-cache-settings.json";
 const BILIBILI_WBI_MIXIN_KEY_TTL_MS: i64 = 60 * 60 * 1000;
 const BILIBILI_WBI_MIXIN_KEY_INDEX: [usize; 64] = [
-    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42,
-    19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51,
-    30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
+    28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
+    54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
 ];
 
 const QUALITY_KEY_AUTO: &str = "auto";
@@ -353,10 +352,9 @@ fn lock_playback_cache_settings_state(
 }
 
 fn playback_cache_settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path_resolver()
-        .app_data_dir()
-        .ok_or_else(|| "Failed to resolve app data directory for Bilibili cache settings".to_string())?;
+    let app_data_dir = app.path_resolver().app_data_dir().ok_or_else(|| {
+        "Failed to resolve app data directory for Bilibili cache settings".to_string()
+    })?;
 
     let dir = app_data_dir.join("music-platform").join("bilibili");
     fs::create_dir_all(&dir)
@@ -399,7 +397,11 @@ fn read_playback_cache_settings_from_disk(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(BilibiliPlaybackCacheSettingsState::default())
         }
-        Err(error) => return Err(format!("Failed to read Bilibili playback cache settings: {error}")),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read Bilibili playback cache settings: {error}"
+            ))
+        }
     };
 
     let parsed = serde_json::from_slice::<BilibiliPlaybackCacheSettingsState>(&payload)
@@ -456,8 +458,13 @@ fn resolve_default_playback_cache_root(app: &AppHandle) -> Result<PathBuf, Strin
     let root = resolver
         .app_cache_dir()
         .or_else(|| resolver.app_data_dir())
-        .ok_or_else(|| "Failed to resolve app cache directory for Bilibili playback cache".to_string())?;
-    Ok(root.join("music-platform").join("bilibili").join("playback-cache"))
+        .ok_or_else(|| {
+            "Failed to resolve app cache directory for Bilibili playback cache".to_string()
+        })?;
+    Ok(root
+        .join("music-platform")
+        .join("bilibili")
+        .join("playback-cache"))
 }
 
 fn resolve_effective_playback_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -535,12 +542,15 @@ fn ensure_playback_cache_dirs_for_root(
     let marker_dir = root_dir.join("markers");
     let cover_dir = root_dir.join("session-covers");
 
-    fs::create_dir_all(&object_dir)
-        .map_err(|error| format!("Failed to create Bilibili playback cache object directory: {error}"))?;
-    fs::create_dir_all(&marker_dir)
-        .map_err(|error| format!("Failed to create Bilibili playback cache marker directory: {error}"))?;
-    fs::create_dir_all(&cover_dir)
-        .map_err(|error| format!("Failed to create Bilibili playback cache cover directory: {error}"))?;
+    fs::create_dir_all(&object_dir).map_err(|error| {
+        format!("Failed to create Bilibili playback cache object directory: {error}")
+    })?;
+    fs::create_dir_all(&marker_dir).map_err(|error| {
+        format!("Failed to create Bilibili playback cache marker directory: {error}")
+    })?;
+    fs::create_dir_all(&cover_dir).map_err(|error| {
+        format!("Failed to create Bilibili playback cache cover directory: {error}")
+    })?;
 
     allow_playback_cover_dir_in_asset_scope(app, &cover_dir);
 
@@ -588,7 +598,10 @@ fn is_playback_cache_file_ready(cache_path: &Path, marker_path: &Path) -> bool {
 }
 
 fn mark_playback_cache_file_complete(marker_path: &Path, bytes_written: u64) {
-    let payload = format!("bytes_written={bytes_written}\nupdated_at_ms={}\n", now_ms());
+    let payload = format!(
+        "bytes_written={bytes_written}\nupdated_at_ms={}\n",
+        now_ms()
+    );
     let _ = fs::write(marker_path, payload);
 }
 
@@ -647,8 +660,9 @@ fn prune_completed_playback_cache(
     max_bytes: u64,
 ) -> Result<(), String> {
     let mut entries = Vec::<(PathBuf, PathBuf, u64, i64)>::new();
-    let read_dir = fs::read_dir(&dirs.object_dir)
-        .map_err(|error| format!("Failed to read Bilibili playback cache objects for prune: {error}"))?;
+    let read_dir = fs::read_dir(&dirs.object_dir).map_err(|error| {
+        format!("Failed to read Bilibili playback cache objects for prune: {error}")
+    })?;
 
     for entry in read_dir {
         let entry = match entry {
@@ -714,7 +728,10 @@ fn spawn_or_get_playback_download_job(
 
         let job = Arc::new(BilibiliPlaybackDownloadJob {
             state: Mutex::new(BilibiliPlaybackDownloadState {
-                bytes_written: fs::metadata(&cache_path).ok().map(|meta| meta.len()).unwrap_or(0),
+                bytes_written: fs::metadata(&cache_path)
+                    .ok()
+                    .map(|meta| meta.len())
+                    .unwrap_or(0),
                 completed: false,
                 last_error: None,
             }),
@@ -749,17 +766,21 @@ fn spawn_or_get_playback_download_job(
 
             let result = (|| -> Result<u64, String> {
                 let client = build_http_client()?;
-                let cookie_value = HeaderValue::from_str(&cookie_header)
-                    .map_err(|error| format!("Invalid Bilibili cookie for stream download: {error}"))?;
-                let referer_value = HeaderValue::from_str(&referer)
-                    .map_err(|error| format!("Invalid Bilibili referer for stream download: {error}"))?;
+                let cookie_value = HeaderValue::from_str(&cookie_header).map_err(|error| {
+                    format!("Invalid Bilibili cookie for stream download: {error}")
+                })?;
+                let referer_value = HeaderValue::from_str(&referer).map_err(|error| {
+                    format!("Invalid Bilibili referer for stream download: {error}")
+                })?;
 
                 let mut response = client
                     .get(&stream_url)
                     .header(COOKIE, cookie_value)
                     .header(REFERER, referer_value)
                     .send()
-                    .map_err(|error| format!("Failed to download Bilibili playback stream: {error}"))?;
+                    .map_err(|error| {
+                        format!("Failed to download Bilibili playback stream: {error}")
+                    })?;
 
                 let status = response.status();
                 if !status.is_success() {
@@ -768,15 +789,16 @@ fn spawn_or_get_playback_download_job(
                     ));
                 }
 
-                let mut file = fs::File::create(&cache_path)
-                    .map_err(|error| format!("Failed to create Bilibili playback cache file: {error}"))?;
+                let mut file = fs::File::create(&cache_path).map_err(|error| {
+                    format!("Failed to create Bilibili playback cache file: {error}")
+                })?;
 
                 let mut bytes_written: u64 = 0;
                 let mut buf = [0u8; 64 * 1024];
                 loop {
-                    let read = response
-                        .read(&mut buf)
-                        .map_err(|error| format!("Failed to read Bilibili playback stream bytes: {error}"))?;
+                    let read = response.read(&mut buf).map_err(|error| {
+                        format!("Failed to read Bilibili playback stream bytes: {error}")
+                    })?;
                     if read == 0 {
                         break;
                     }
@@ -791,8 +813,9 @@ fn spawn_or_get_playback_download_job(
                     update_playback_download_job_state(&thread_job, bytes_written, false, None);
                 }
 
-                file.flush()
-                    .map_err(|error| format!("Failed to flush Bilibili playback cache file: {error}"))?;
+                file.flush().map_err(|error| {
+                    format!("Failed to flush Bilibili playback cache file: {error}")
+                })?;
                 Ok(bytes_written)
             })();
 
@@ -870,11 +893,9 @@ fn can_probe_playback_cache(path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    probed
-        .format
-        .tracks()
-        .iter()
-        .any(|track| track.codec_params.sample_rate.is_some() || track.codec_params.channels.is_some())
+    probed.format.tracks().iter().any(|track| {
+        track.codec_params.sample_rate.is_some() || track.codec_params.channels.is_some()
+    })
 }
 
 fn build_http_client() -> Result<Client, String> {
@@ -907,11 +928,9 @@ fn to_non_empty_string(value: Option<&Value>) -> Option<String> {
 
 fn to_i64(value: Option<&Value>) -> Option<i64> {
     match value {
-        Some(Value::Number(number)) => {
-            number
-                .as_i64()
-                .or_else(|| number.as_u64().and_then(|v| i64::try_from(v).ok()))
-        }
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|v| i64::try_from(v).ok())),
         Some(Value::String(raw)) => raw.trim().parse::<i64>().ok(),
         _ => None,
     }
@@ -919,13 +938,11 @@ fn to_i64(value: Option<&Value>) -> Option<i64> {
 
 fn to_u64(value: Option<&Value>) -> Option<u64> {
     match value {
-        Some(Value::Number(number)) => number.as_u64().or_else(|| number.as_i64().and_then(|v| {
-            if v >= 0 {
-                Some(v as u64)
-            } else {
-                None
-            }
-        })),
+        Some(Value::Number(number)) => number.as_u64().or_else(|| {
+            number
+                .as_i64()
+                .and_then(|v| if v >= 0 { Some(v as u64) } else { None })
+        }),
         Some(Value::String(raw)) => raw.trim().parse::<u64>().ok(),
         _ => None,
     }
@@ -1188,7 +1205,9 @@ fn encode_cookie_header_token_ref_legacy(cookie_header: &str) -> Option<String> 
         return None;
     }
     let encoded = URL_SAFE_NO_PAD.encode(normalized.as_bytes());
-    Some(format!("{BILIBILI_LEGACY_COOKIE_TOKEN_REF_PREFIX}{encoded}"))
+    Some(format!(
+        "{BILIBILI_LEGACY_COOKIE_TOKEN_REF_PREFIX}{encoded}"
+    ))
 }
 
 fn decode_cookie_header_token_ref_legacy(token_ref: &str) -> Option<String> {
@@ -1257,7 +1276,8 @@ fn ensure_auth_context(app: &AppHandle) -> Result<AuthContext, String> {
                 .and_then(read_cookie_header_from_token_ref)
         })
         .ok_or_else(|| {
-            "Bilibili login token is unavailable in current session, please scan QR again".to_string()
+            "Bilibili login token is unavailable in current session, please scan QR again"
+                .to_string()
         })?;
 
     set_auth_cookie_state(cookie_header.clone());
@@ -1334,7 +1354,9 @@ fn request_bilibili_data_with_optional_cookie_and_headers(
 
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("Bilibili {context} returned non-success status: {status}"));
+        return Err(format!(
+            "Bilibili {context} returned non-success status: {status}"
+        ));
     }
 
     let payload: BilibiliApiEnvelope<Value> = response
@@ -1345,7 +1367,9 @@ fn request_bilibili_data_with_optional_cookie_and_headers(
         return Err(format!(
             "Bilibili {context} failed (code={}): {}",
             payload.code,
-            payload.message.unwrap_or_else(|| "unknown failure".to_string())
+            payload
+                .message
+                .unwrap_or_else(|| "unknown failure".to_string())
         ));
     }
 
@@ -1621,9 +1645,12 @@ fn request_video_playinfo_from_page(
     let page_url = format!("https://www.bilibili.com/video/{bvid}?cid={cid}&p=1");
     let mut request = client
         .get(&page_url)
-        .header(REFERER, HeaderValue::from_str(&referer).map_err(|error| {
-            format!("Invalid Bilibili referer for playinfo page fetch: {error}")
-        })?)
+        .header(
+            REFERER,
+            HeaderValue::from_str(&referer).map_err(|error| {
+                format!("Invalid Bilibili referer for playinfo page fetch: {error}")
+            })?,
+        )
         .header(ORIGIN, HeaderValue::from_static("https://www.bilibili.com"));
 
     if let Some(cookie_header) = cookie_header {
@@ -1637,7 +1664,9 @@ fn request_video_playinfo_from_page(
         .map_err(|error| format!("Bilibili playinfo page request failed: {error}"))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("Bilibili playinfo page returned non-success status: {status}"));
+        return Err(format!(
+            "Bilibili playinfo page returned non-success status: {status}"
+        ));
     }
 
     let html = response
@@ -1700,7 +1729,10 @@ fn build_wbi_signed_playurl_query(
         serializer.append_pair(key, value);
     }
     let unsigned_query = serializer.finish();
-    let w_rid = format!("{:x}", md5::compute(format!("{}{mixin_key}", unsigned_query)));
+    let w_rid = format!(
+        "{:x}",
+        md5::compute(format!("{}{mixin_key}", unsigned_query))
+    );
 
     let mut query = vec![
         ("bvid", bvid_value),
@@ -1728,7 +1760,8 @@ fn request_video_playurl_data_wbi(
     platform: Option<&str>,
     context: &str,
 ) -> Result<Value, String> {
-    let query = build_wbi_signed_playurl_query(client, cookie_header, bvid, cid, qn, fnval, platform)?;
+    let query =
+        build_wbi_signed_playurl_query(client, cookie_header, bvid, cid, qn, fnval, platform)?;
     let referer = format!("https://www.bilibili.com/video/{bvid}");
     request_bilibili_data_with_optional_cookie_and_headers(
         client,
@@ -1875,7 +1908,11 @@ fn probe_auth_availability(client: &Client, cookie_header: &str) -> AuthAvailabi
     }
 }
 
-fn resolve_account_uid(app: &AppHandle, client: &Client, context: &AuthContext) -> Result<String, String> {
+fn resolve_account_uid(
+    app: &AppHandle,
+    client: &Client,
+    context: &AuthContext,
+) -> Result<String, String> {
     if let Some(account_uid) = context
         .account
         .account_uid
@@ -1923,19 +1960,27 @@ fn normalize_content_kind(value: Option<&Value>) -> String {
     }
 }
 
-fn infer_resource_locators(resource: &Value, resource_id: &str) -> (String, Option<String>, Option<String>, Option<String>, String) {
+fn infer_resource_locators(
+    resource: &Value,
+    resource_id: &str,
+) -> (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+) {
     let bvid = to_non_empty_string(resource.get("bvid"));
-    let cid = to_i64(
-        resource
-            .get("ugc")
-            .and_then(|ugc| ugc.get("first_cid")),
-    )
-    .map(|value| value.to_string())
-    .or_else(|| parse_cid_from_text(&to_non_empty_string(resource.get("link")).unwrap_or_default()));
+    let cid = to_i64(resource.get("ugc").and_then(|ugc| ugc.get("first_cid")))
+        .map(|value| value.to_string())
+        .or_else(|| {
+            parse_cid_from_text(&to_non_empty_string(resource.get("link")).unwrap_or_default())
+        });
 
     let linked_text = to_non_empty_string(resource.get("link")).unwrap_or_default();
-    let sid = parse_sid_from_text(&linked_text)
-        .or_else(|| parse_sid_from_text(&to_non_empty_string(resource.get("short_link")).unwrap_or_default()));
+    let sid = parse_sid_from_text(&linked_text).or_else(|| {
+        parse_sid_from_text(&to_non_empty_string(resource.get("short_link")).unwrap_or_default())
+    });
 
     if let Some(normalized_bvid) = bvid.clone().or_else(|| parse_bvid_from_text(&linked_text)) {
         let source_locator = if let Some(cid) = cid.clone() {
@@ -2199,7 +2244,10 @@ fn find_existing_cover_cache_path(dirs: &BilibiliPlaybackCacheDirs, key: &str) -
     let candidates = ["jpg", "png", "webp"];
     for ext in candidates {
         let path = build_cover_cache_path(dirs, key, ext);
-        let exists = fs::metadata(&path).ok().map(|meta| meta.len() > 0).unwrap_or(false);
+        let exists = fs::metadata(&path)
+            .ok()
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false);
         if exists {
             return Some(path);
         }
@@ -2354,7 +2402,10 @@ fn map_dash_quality_by_audio_item(
         30251 => (QUALITY_KEY_HIRES, "Hi-Res Lossless"),
         _ => {
             if let Some(inferred_quality_key) = infer_quality_key_from_codec_or_mime(item) {
-                return (inferred_quality_key, quality_label_by_key(inferred_quality_key));
+                return (
+                    inferred_quality_key,
+                    quality_label_by_key(inferred_quality_key),
+                );
             }
 
             if bandwidth >= 180_000 {
@@ -2415,8 +2466,10 @@ fn build_stream_candidates(playurl_data: &Value) -> Vec<BilibiliPlaybackStreamCa
             };
             let audio_id = to_u64(item.get("id"));
             let bandwidth = to_u64(item.get("bandwidth")).unwrap_or(0);
-            let (quality_key, quality_label) = map_dash_quality_by_audio_item(item, audio_id, bandwidth);
-            let score = quality_score_by_key(quality_key) + i64::try_from(bandwidth / 1024).unwrap_or(0);
+            let (quality_key, quality_label) =
+                map_dash_quality_by_audio_item(item, audio_id, bandwidth);
+            let score =
+                quality_score_by_key(quality_key) + i64::try_from(bandwidth / 1024).unwrap_or(0);
             candidates.push(BilibiliPlaybackStreamCandidate {
                 quality_key: quality_key.to_string(),
                 quality_label: quality_label.to_string(),
@@ -2572,7 +2625,12 @@ fn request_video_playurl_data_with_fallback(
     ];
     let public_attempts: [(&str, &str, Option<&str>, &str); 2] = [
         ("0", "80", Some("html5"), "player playurl public durl"),
-        ("0", "64", Some("html5"), "player playurl public durl fallback"),
+        (
+            "0",
+            "64",
+            Some("html5"),
+            "player playurl public durl fallback",
+        ),
     ];
     let mut errors: Vec<String> = Vec::new();
 
@@ -2724,7 +2782,14 @@ fn resolve_video_playback_stream(
     bvid: &str,
     cid: &str,
     quality_hint: Option<&str>,
-) -> Result<(BilibiliPlaybackStreamCandidate, Option<u32>, Vec<BilibiliPlaybackQualityOption>), String> {
+) -> Result<
+    (
+        BilibiliPlaybackStreamCandidate,
+        Option<u32>,
+        Vec<BilibiliPlaybackQualityOption>,
+    ),
+    String,
+> {
     let playurl_data = request_video_playurl_data_with_fallback(client, cookie_header, bvid, cid)?;
     let candidates = build_stream_candidates(&playurl_data);
     let selected = select_stream_candidate(&candidates, quality_hint)
@@ -2784,7 +2849,9 @@ pub fn cleanup_session_cover_cache(app: &AppHandle) -> Result<(), String> {
     cleanup_session_cover_cache_internal(app)
 }
 
-pub fn get_playback_cache_settings(app: &AppHandle) -> Result<BilibiliPlaybackCacheSettings, String> {
+pub fn get_playback_cache_settings(
+    app: &AppHandle,
+) -> Result<BilibiliPlaybackCacheSettings, String> {
     let state = get_playback_cache_settings_state(app)?;
     let effective_root_path = resolve_effective_playback_cache_root(app)?;
     let default_root_path = resolve_default_playback_cache_root(app)?;
@@ -3115,7 +3182,12 @@ pub fn get_auth_status(app: &AppHandle) -> Result<BilibiliAuthStatus, String> {
                 if probe.should_mark_expired {
                     auth_state = "expired".to_string();
                     availability = Some(AUTH_AVAILABILITY_UNAVAILABLE.to_string());
-                    persist_connector_account_auth_state(app, account, "expired", account_uid.clone());
+                    persist_connector_account_auth_state(
+                        app,
+                        account,
+                        "expired",
+                        account_uid.clone(),
+                    );
                     updated_at_ms = Some(now_ms());
                 }
             } else {
@@ -3318,11 +3390,8 @@ pub fn list_favorite_resources(
         });
     }
 
-    let total = to_u64(
-        data.get("info")
-            .and_then(|info| info.get("media_count")),
-    )
-    .unwrap_or_else(|| items.len() as u64);
+    let total = to_u64(data.get("info").and_then(|info| info.get("media_count")))
+        .unwrap_or_else(|| items.len() as u64);
     let has_more = data
         .get("has_more")
         .and_then(Value::as_bool)
@@ -3345,11 +3414,13 @@ pub fn search_resource_by_bvid(
     bvid: &str,
 ) -> Result<Option<BilibiliFavoriteResourceItem>, String> {
     ensure_connector(app)?;
-    let auth_cookie = ensure_auth_context(app).ok().map(|context| context.cookie_header);
+    let auth_cookie = ensure_auth_context(app)
+        .ok()
+        .map(|context| context.cookie_header);
     let client = build_http_client()?;
 
-    let normalized_bvid = parse_bvid_from_text(bvid)
-        .ok_or_else(|| "Invalid Bilibili BV id".to_string())?;
+    let normalized_bvid =
+        parse_bvid_from_text(bvid).ok_or_else(|| "Invalid Bilibili BV id".to_string())?;
 
     let data = request_bilibili_data_with_optional_cookie(
         &client,
@@ -3369,13 +3440,15 @@ pub fn search_resource_by_bvid(
         .and_then(|owner| to_non_empty_string(owner.get("name")));
     let duration_seconds = to_u64(data.get("duration")).and_then(|value| u32::try_from(value).ok());
     let cover_url = to_non_empty_string(data.get("pic")).map(|url| normalize_url(&url));
-    let cid = to_i64(data.get("cid")).map(|value| value.to_string()).or_else(|| {
-        data.get("pages")
-            .and_then(Value::as_array)
-            .and_then(|pages| pages.first())
-            .and_then(|page| to_i64(page.get("cid")))
-            .map(|value| value.to_string())
-    });
+    let cid = to_i64(data.get("cid"))
+        .map(|value| value.to_string())
+        .or_else(|| {
+            data.get("pages")
+                .and_then(Value::as_array)
+                .and_then(|pages| pages.first())
+                .and_then(|page| to_i64(page.get("cid")))
+                .map(|value| value.to_string())
+        });
 
     let source_locator = if let Some(value) = cid.clone() {
         format!("bilibili://video/{normalized_bvid}?cid={value}")
@@ -3414,7 +3487,9 @@ pub fn prepare_cover_cache(app: &AppHandle, cover_url: &str) -> Result<Option<St
         return Ok(Some(existing_path.to_string_lossy().to_string()));
     }
 
-    let auth_cookie = ensure_auth_context(app).ok().map(|context| context.cookie_header);
+    let auth_cookie = ensure_auth_context(app)
+        .ok()
+        .map(|context| context.cookie_header);
     let client = build_http_client()?;
 
     let mut request = client.get(&normalized_cover_url).header(
@@ -3472,11 +3547,19 @@ pub fn list_playback_qualities(
     let bvid = parse_bvid_from_text(normalized_source_locator)
         .ok_or_else(|| "Only Bilibili video playback is supported in current MVP".to_string())?;
     let cid = parse_cid_from_text(normalized_source_locator)
-        .or_else(|| resolve_video_first_cid(&client, &auth_context.cookie_header, &bvid).ok().flatten())
+        .or_else(|| {
+            resolve_video_first_cid(&client, &auth_context.cookie_header, &bvid)
+                .ok()
+                .flatten()
+        })
         .ok_or_else(|| "Failed to resolve cid for Bilibili playback".to_string())?;
 
-    let playurl_data =
-        request_video_playurl_data_with_fallback(&client, &auth_context.cookie_header, &bvid, &cid)?;
+    let playurl_data = request_video_playurl_data_with_fallback(
+        &client,
+        &auth_context.cookie_header,
+        &bvid,
+        &cid,
+    )?;
     Ok(build_playback_quality_options(&playurl_data))
 }
 
@@ -3499,16 +3582,15 @@ pub fn prepare_cached_playback(
     let bvid = parse_bvid_from_text(normalized_source_locator)
         .ok_or_else(|| "Only Bilibili video playback is supported in current MVP".to_string())?;
     let cid = parse_cid_from_text(normalized_source_locator)
-        .or_else(|| resolve_video_first_cid(&client, &auth_context.cookie_header, &bvid).ok().flatten())
+        .or_else(|| {
+            resolve_video_first_cid(&client, &auth_context.cookie_header, &bvid)
+                .ok()
+                .flatten()
+        })
         .ok_or_else(|| "Failed to resolve cid for Bilibili playback".to_string())?;
 
-    let (selected_stream, duration_seconds, _quality_options) = resolve_video_playback_stream(
-        &client,
-        &playback_cookie_header,
-        &bvid,
-        &cid,
-        quality_hint,
-    )?;
+    let (selected_stream, duration_seconds, _quality_options) =
+        resolve_video_playback_stream(&client, &playback_cookie_header, &bvid, &cid, quality_hint)?;
     let stream_url = selected_stream.stream_url.clone();
     let selected_quality_key = selected_stream.quality_key.clone();
     let selected_quality_label = selected_stream.quality_label.clone();
@@ -3547,7 +3629,9 @@ pub fn prepare_cached_playback(
             .map(|meta| meta.len())
             .unwrap_or(state.bytes_written);
         if ready_bytes == 0 {
-            return Err("Bilibili stream prebuffer failed before any cache bytes were ready".to_string());
+            return Err(
+                "Bilibili stream prebuffer failed before any cache bytes were ready".to_string(),
+            );
         }
     }
 
@@ -3632,8 +3716,11 @@ pub fn resolve_lyric_locator(
     }
 
     if let Some(bvid) = parse_bvid_from_text(normalized_locator) {
-        let cid = parse_cid_from_text(normalized_locator)
-            .or_else(|| resolve_video_first_cid(&client, &auth_context.cookie_header, &bvid).ok().flatten());
+        let cid = parse_cid_from_text(normalized_locator).or_else(|| {
+            resolve_video_first_cid(&client, &auth_context.cookie_header, &bvid)
+                .ok()
+                .flatten()
+        });
         let Some(cid) = cid else {
             return Ok(None);
         };
@@ -3646,12 +3733,8 @@ pub fn resolve_lyric_locator(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_stream_candidates,
-        build_wbi_mixin_key,
-        parse_bvid_from_text,
-        sanitize_wbi_query_value,
-        QUALITY_KEY_DOLBY,
-        QUALITY_KEY_HIRES,
+        build_stream_candidates, build_wbi_mixin_key, parse_bvid_from_text,
+        sanitize_wbi_query_value, QUALITY_KEY_DOLBY, QUALITY_KEY_HIRES,
     };
     use serde_json::json;
 
@@ -3682,7 +3765,10 @@ mod tests {
     #[test]
     fn parse_invalid_bvid_returns_none() {
         assert_eq!(parse_bvid_from_text("BV1xx41"), None);
-        assert_eq!(parse_bvid_from_text("https://www.bilibili.com/video/"), None);
+        assert_eq!(
+            parse_bvid_from_text("https://www.bilibili.com/video/"),
+            None
+        );
         assert_eq!(parse_bvid_from_text(""), None);
     }
 
@@ -3709,7 +3795,9 @@ mod tests {
 
         let candidates = build_stream_candidates(&payload);
         assert!(
-            candidates.iter().any(|item| item.quality_key == QUALITY_KEY_HIRES),
+            candidates
+                .iter()
+                .any(|item| item.quality_key == QUALITY_KEY_HIRES),
             "expected hires candidate from dash.flac.audio"
         );
     }
@@ -3739,7 +3827,9 @@ mod tests {
 
         let candidates = build_stream_candidates(&payload);
         assert!(
-            candidates.iter().any(|item| item.quality_key == QUALITY_KEY_DOLBY),
+            candidates
+                .iter()
+                .any(|item| item.quality_key == QUALITY_KEY_DOLBY),
             "expected dolby candidate from dash.dolby.audio"
         );
     }

@@ -206,6 +206,13 @@ export const STORAGE_KEYS = {
 
   // === Window Pin ===
   WINDOW_PIN_STATE: 'pixel-matrix-window-pin-state',
+  DESKTOP_LYRICS_ENABLED: 'pixel-matrix-desktop-lyrics-enabled',
+  DESKTOP_LYRICS_CLICK_THROUGH: 'pixel-matrix-desktop-lyrics-click-through',
+  DESKTOP_LYRICS_FONT_SIZE: 'pixel-matrix-desktop-lyrics-font-size',
+  DESKTOP_LYRICS_OPACITY_PERCENT: 'pixel-matrix-desktop-lyrics-opacity-percent',
+  DESKTOP_LYRICS_POSITION_PRESET: 'pixel-matrix-desktop-lyrics-position-preset',
+  DESKTOP_LYRICS_POSITION_OFFSET_X: 'pixel-matrix-desktop-lyrics-position-offset-x',
+  DESKTOP_LYRICS_POSITION_OFFSET_Y: 'pixel-matrix-desktop-lyrics-position-offset-y',
 
   // === Main Window Close Behavior ===
   MAIN_WINDOW_CLOSE_BEHAVIOR_MAGNET: 'pixel-matrix-main-window-close-behavior-magnet',

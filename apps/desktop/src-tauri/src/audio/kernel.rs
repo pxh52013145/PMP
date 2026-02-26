@@ -1,4 +1,5 @@
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -31,6 +32,11 @@ pub(crate) struct TransportExecution {
 pub(crate) enum CrossfadeExecution {
     Applied(TransportExecution),
     FallbackLoad { was_playing: bool },
+}
+
+fn safe_stderr_log_line(message: impl AsRef<str>) {
+    let mut stderr = std::io::stderr();
+    let _ = writeln!(stderr, "{}", message.as_ref());
 }
 
 fn with_engine_mut<T>(f: impl FnOnce(&mut NativeAudioEngine) -> T) -> Result<T, String> {
@@ -80,7 +86,7 @@ fn prepare_load_for_operation(
         source,
     } = opened;
 
-    eprintln!("[NativeAudio] Input: {input_id}");
+    safe_stderr_log_line(format!("[NativeAudio] Input: {input_id}"));
 
     let mut streaming: Option<StreamingPlayback> = None;
     let mut decoded_samples: Option<Arc<Vec<f32>>> = None;
@@ -147,7 +153,7 @@ fn prepare_crossfade_for_operation(
         source,
     } = opened;
 
-    eprintln!("[NativeAudio] Input: {input_id}");
+    safe_stderr_log_line(format!("[NativeAudio] Input: {input_id}"));
 
     let mut streaming: Option<StreamingPlayback> = None;
     let mut decoded_samples: Option<Arc<Vec<f32>>> = None;

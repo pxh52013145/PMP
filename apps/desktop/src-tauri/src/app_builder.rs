@@ -74,6 +74,8 @@ pub fn handle_system_tray_event(app: &tauri::AppHandle, event: SystemTrayEvent) 
 }
 
 pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    crate::windows::desktop_lyrics::init();
+
     if let Err(error) = crate::debug_config::apply_from_disk(&app.handle()) {
         eprintln!("[debug] Failed to apply debug config: {error}");
     }

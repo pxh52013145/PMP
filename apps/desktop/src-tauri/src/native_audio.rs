@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
+    io::Write,
     path::PathBuf,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     sync::{Arc, Condvar, Mutex},
@@ -36,6 +37,11 @@ pub use crate::audio::policy::{
 pub use crate::audio::pipeline::{DspNodeConfig, EqBandConfig};
 
 static LATEST_REQUESTED_SEEK_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn safe_stderr_log_line(message: impl AsRef<str>) {
+    let mut stderr = std::io::stderr();
+    let _ = writeln!(stderr, "{}", message.as_ref());
+}
 
 fn record_latest_requested_seek_seq(seq: u64) {
     if seq == 0 {
@@ -1702,9 +1708,9 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
                 });
             }
             Err(err) => {
-                eprintln!(
+                safe_stderr_log_line(format!(
                     "[NativeAudio][VST] ensure session failed (node={id}, plugin={plugin_id}): {err}"
-                );
+                ));
             }
         }
     }

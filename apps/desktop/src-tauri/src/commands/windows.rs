@@ -117,3 +117,45 @@ pub async fn set_editor_blur_enabled(
     effects.blur_enabled.store(enabled, Ordering::SeqCst);
     windows::editor::set_editor_windows_blur_enabled(&app, enabled)
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_visible(visible: bool) -> Result<(), String> {
+    windows::desktop_lyrics::set_visible(visible)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_click_through(enabled: bool) -> Result<(), String> {
+    windows::desktop_lyrics::set_click_through(enabled)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_font_size(font_size: u32) -> Result<(), String> {
+    windows::desktop_lyrics::set_font_size(font_size)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_position_preset(preset: String) -> Result<(), String> {
+    windows::desktop_lyrics::set_position_preset(preset)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_opacity_percent(opacity_percent: u8) -> Result<(), String> {
+    windows::desktop_lyrics::set_opacity_percent(opacity_percent)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_set_position_offset(
+    offset_x: i32,
+    offset_y: i32,
+) -> Result<(), String> {
+    windows::desktop_lyrics::set_position_offset(offset_x, offset_y)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_debug_set_text(
+    primary: Option<String>,
+    secondary: Option<String>,
+    visible: Option<bool>,
+) -> Result<(), String> {
+    windows::desktop_lyrics::debug_set_text(primary, secondary, visible)
+}

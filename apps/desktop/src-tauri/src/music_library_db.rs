@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 5;
+const DB_VERSION: i32 = 6;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -383,6 +383,85 @@ pub struct LibraryLyricRefUpsertInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct LibraryLyricDocumentUpsertInput {
+    pub id: Option<String>,
+    pub selection_key: String,
+    pub entry_id: Option<String>,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub source_kind: String,
+    pub source_locator: Option<String>,
+    pub format: String,
+    pub language: Option<String>,
+    pub is_dynamic: bool,
+    pub has_word_timing: bool,
+    pub confidence: Option<f32>,
+    pub payload_json: String,
+    pub content_hash: Option<String>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryLyricDocumentRecord {
+    pub id: String,
+    pub selection_key: String,
+    pub entry_id: Option<String>,
+    pub track_id: Option<String>,
+    pub quick_fingerprint: Option<String>,
+    pub source_kind: String,
+    pub source_locator: Option<String>,
+    pub format: String,
+    pub language: Option<String>,
+    pub is_dynamic: bool,
+    pub has_word_timing: bool,
+    pub confidence: f32,
+    pub payload_json: String,
+    pub content_hash: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryLyricCandidateUpsertInput {
+    pub id: Option<String>,
+    pub selection_key: String,
+    pub entry_id: Option<String>,
+    pub document_id: String,
+    pub source_kind: String,
+    pub rank_score: Option<f64>,
+    pub source_priority: Option<i64>,
+    pub resolver: Option<String>,
+    pub status: Option<String>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryLyricSelectionUpsertInput {
+    pub selection_key: String,
+    pub entry_id: Option<String>,
+    pub selected_document_id: String,
+    pub selected_candidate_id: Option<String>,
+    pub selected_by: Option<String>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryLyricFetchJobUpsertInput {
+    pub id: Option<String>,
+    pub selection_key: String,
+    pub entry_id: Option<String>,
+    pub track_id: Option<String>,
+    pub priority: Option<i64>,
+    pub status: Option<String>,
+    pub attempt_count: Option<u64>,
+    pub next_run_at_ms: Option<i64>,
+    pub last_error: Option<String>,
+    pub payload_json: Option<String>,
+    pub updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct LibrarySourceSyncFailureRecord {
     pub source_id: String,
     pub source_path: String,
@@ -581,6 +660,110 @@ fn ensure_sangreal_v5_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|error| format!("Failed to ensure music library schema v5 extensions: {error}"))
+}
+
+fn ensure_sangreal_v6_lyrics_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS lyric_documents (
+          id TEXT PRIMARY KEY NOT NULL,
+          selection_key TEXT NOT NULL,
+          entry_id TEXT,
+          track_id TEXT,
+          quick_fingerprint TEXT,
+          source_kind TEXT NOT NULL,
+          source_locator TEXT,
+          format TEXT NOT NULL DEFAULT 'plain',
+          language TEXT,
+          is_dynamic INTEGER NOT NULL DEFAULT 0,
+          has_word_timing INTEGER NOT NULL DEFAULT 0,
+          confidence REAL NOT NULL DEFAULT 0,
+          payload_json TEXT NOT NULL,
+          content_hash TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS lyric_documents_selection_key_idx
+          ON lyric_documents(selection_key);
+        CREATE INDEX IF NOT EXISTS lyric_documents_entry_id_idx
+          ON lyric_documents(entry_id);
+        CREATE INDEX IF NOT EXISTS lyric_documents_track_id_idx
+          ON lyric_documents(track_id);
+        CREATE INDEX IF NOT EXISTS lyric_documents_quick_fingerprint_idx
+          ON lyric_documents(quick_fingerprint);
+        CREATE INDEX IF NOT EXISTS lyric_documents_content_hash_idx
+          ON lyric_documents(content_hash);
+
+        CREATE TABLE IF NOT EXISTS lyric_candidates (
+          id TEXT PRIMARY KEY NOT NULL,
+          selection_key TEXT NOT NULL,
+          entry_id TEXT,
+          document_id TEXT NOT NULL,
+          source_kind TEXT NOT NULL,
+          rank_score REAL NOT NULL DEFAULT 0,
+          source_priority INTEGER NOT NULL DEFAULT 1000,
+          resolver TEXT,
+          status TEXT NOT NULL DEFAULT 'ready',
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(document_id) REFERENCES lyric_documents(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS lyric_candidates_selection_key_idx
+          ON lyric_candidates(selection_key);
+        CREATE INDEX IF NOT EXISTS lyric_candidates_entry_id_idx
+          ON lyric_candidates(entry_id);
+        CREATE INDEX IF NOT EXISTS lyric_candidates_document_id_idx
+          ON lyric_candidates(document_id);
+        CREATE INDEX IF NOT EXISTS lyric_candidates_rank_score_idx
+          ON lyric_candidates(rank_score DESC);
+        CREATE INDEX IF NOT EXISTS lyric_candidates_source_priority_idx
+          ON lyric_candidates(source_priority);
+
+        CREATE TABLE IF NOT EXISTS lyric_selection (
+          selection_key TEXT PRIMARY KEY NOT NULL,
+          entry_id TEXT,
+          selected_document_id TEXT NOT NULL,
+          selected_candidate_id TEXT,
+          selected_by TEXT NOT NULL DEFAULT 'system',
+          selected_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(selected_document_id) REFERENCES lyric_documents(id) ON DELETE CASCADE,
+          FOREIGN KEY(selected_candidate_id) REFERENCES lyric_candidates(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS lyric_selection_entry_id_idx
+          ON lyric_selection(entry_id);
+        CREATE INDEX IF NOT EXISTS lyric_selection_selected_document_id_idx
+          ON lyric_selection(selected_document_id);
+
+        CREATE TABLE IF NOT EXISTS lyric_fetch_jobs (
+          id TEXT PRIMARY KEY NOT NULL,
+          selection_key TEXT NOT NULL,
+          entry_id TEXT,
+          track_id TEXT,
+          priority INTEGER NOT NULL DEFAULT 100,
+          status TEXT NOT NULL DEFAULT 'queued',
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          next_run_at_ms INTEGER,
+          last_error TEXT,
+          payload_json TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS lyric_fetch_jobs_selection_key_idx
+          ON lyric_fetch_jobs(selection_key);
+        CREATE INDEX IF NOT EXISTS lyric_fetch_jobs_entry_id_idx
+          ON lyric_fetch_jobs(entry_id);
+        CREATE INDEX IF NOT EXISTS lyric_fetch_jobs_status_idx
+          ON lyric_fetch_jobs(status);
+        CREATE INDEX IF NOT EXISTS lyric_fetch_jobs_next_run_at_ms_idx
+          ON lyric_fetch_jobs(next_run_at_ms);
+        "#,
+    )
+    .map_err(|error| format!("Failed to ensure music library schema v6 lyric pipeline: {error}"))
 }
 
 fn migrate(conn: &Connection) -> Result<(), String> {
@@ -820,6 +1003,13 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         version = 5;
     }
 
+    if version == 5 {
+        ensure_sangreal_v6_lyrics_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 6;")
+            .map_err(|error| format!("Failed to migrate music library schema to v6: {error}"))?;
+        version = 6;
+    }
+
     if version != DB_VERSION {
         return Err(format!(
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
@@ -948,6 +1138,48 @@ fn normalize_cloud_hash_job_status(value: Option<&str>) -> String {
         Some("completed") => "completed".to_string(),
         Some("failed") => "failed".to_string(),
         _ => "pending".to_string(),
+    }
+}
+
+fn normalize_lyric_source_kind(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("embedded") => "embedded".to_string(),
+        Some("sidecar") => "sidecar".to_string(),
+        Some("cache") => "cache".to_string(),
+        Some("web") => "web".to_string(),
+        _ => "cache".to_string(),
+    }
+}
+
+fn normalize_lyric_candidate_status(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("ready") => "ready".to_string(),
+        Some("rejected") => "rejected".to_string(),
+        Some("stale") => "stale".to_string(),
+        _ => "ready".to_string(),
+    }
+}
+
+fn normalize_lyric_fetch_job_status(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("queued") => "queued".to_string(),
+        Some("running") => "running".to_string(),
+        Some("retrying") => "retrying".to_string(),
+        Some("failed") => "failed".to_string(),
+        Some("completed") => "completed".to_string(),
+        _ => "queued".to_string(),
     }
 }
 
@@ -2397,6 +2629,597 @@ pub fn upsert_lyric_ref(app: &AppHandle, input: LibraryLyricRefUpsertInput) -> R
         .map_err(|error| format!("Failed to upsert lyric ref: {error}"))?;
 
         Ok(())
+    })
+}
+
+pub fn upsert_lyric_document(
+    app: &AppHandle,
+    input: LibraryLyricDocumentUpsertInput,
+) -> Result<LibraryLyricDocumentRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let selection_key = input.selection_key.trim();
+        if selection_key.is_empty() {
+            return Err("Lyric document selection_key is required".to_string());
+        }
+
+        let payload_json = input.payload_json.trim();
+        if payload_json.is_empty() {
+            return Err("Lyric document payload_json is required".to_string());
+        }
+
+        let source_kind = normalize_lyric_source_kind(Some(input.source_kind.as_str()));
+        let normalized_format = normalize_text(Some(input.format.as_str()))
+            .map(|value| value.to_ascii_lowercase())
+            .filter(|value| matches!(value.as_str(), "lrc" | "yrc" | "plain"))
+            .unwrap_or_else(|| "plain".to_string());
+        let confidence = input.confidence.unwrap_or(0.0).clamp(0.0, 1.0);
+        let now = input.updated_at_ms.unwrap_or_else(now_ms).max(0);
+
+        let document_id = normalize_text(input.id.as_deref()).unwrap_or_else(|| {
+            format!(
+                "lydoc::{selection_key}::{:x}",
+                md5::compute(
+                    format!(
+                        "{}|{}|{}",
+                        selection_key,
+                        input.source_locator.as_deref().unwrap_or_default(),
+                        payload_json
+                    )
+                    .as_bytes()
+                )
+            )
+        });
+
+        conn.execute(
+            r#"
+            INSERT INTO lyric_documents(
+              id,
+              selection_key,
+              entry_id,
+              track_id,
+              quick_fingerprint,
+              source_kind,
+              source_locator,
+              format,
+              language,
+              is_dynamic,
+              has_word_timing,
+              confidence,
+              payload_json,
+              content_hash,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+            ON CONFLICT(id) DO UPDATE SET
+              selection_key = excluded.selection_key,
+              entry_id = excluded.entry_id,
+              track_id = excluded.track_id,
+              quick_fingerprint = excluded.quick_fingerprint,
+              source_kind = excluded.source_kind,
+              source_locator = excluded.source_locator,
+              format = excluded.format,
+              language = excluded.language,
+              is_dynamic = excluded.is_dynamic,
+              has_word_timing = excluded.has_word_timing,
+              confidence = excluded.confidence,
+              payload_json = excluded.payload_json,
+              content_hash = excluded.content_hash,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                document_id,
+                selection_key,
+                normalize_text(input.entry_id.as_deref()),
+                normalize_text(input.track_id.as_deref()),
+                normalize_quick_fingerprint(input.quick_fingerprint.as_deref()),
+                source_kind,
+                normalize_text(input.source_locator.as_deref()),
+                normalized_format,
+                normalize_text(input.language.as_deref()),
+                if input.is_dynamic { 1_i64 } else { 0_i64 },
+                if input.has_word_timing { 1_i64 } else { 0_i64 },
+                confidence,
+                payload_json,
+                normalize_text(input.content_hash.as_deref()),
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert lyric document: {error}"))?;
+
+        conn.query_row(
+            r#"
+            SELECT
+              id,
+              selection_key,
+              entry_id,
+              track_id,
+              quick_fingerprint,
+              source_kind,
+              source_locator,
+              format,
+              language,
+              is_dynamic,
+              has_word_timing,
+              confidence,
+              payload_json,
+              content_hash,
+              created_at_ms,
+              updated_at_ms
+            FROM lyric_documents
+            WHERE id = ?1
+            "#,
+            params![document_id],
+            |row| {
+                Ok(LibraryLyricDocumentRecord {
+                    id: row.get(0)?,
+                    selection_key: row.get(1)?,
+                    entry_id: row.get(2)?,
+                    track_id: row.get(3)?,
+                    quick_fingerprint: row.get(4)?,
+                    source_kind: row.get(5)?,
+                    source_locator: row.get(6)?,
+                    format: row.get(7)?,
+                    language: row.get(8)?,
+                    is_dynamic: row.get::<_, i64>(9)? != 0,
+                    has_word_timing: row.get::<_, i64>(10)? != 0,
+                    confidence: row.get::<_, f64>(11)?.clamp(0.0, 1.0) as f32,
+                    payload_json: row.get(12)?,
+                    content_hash: row.get(13)?,
+                    created_at_ms: row.get(14)?,
+                    updated_at_ms: row.get(15)?,
+                })
+            },
+        )
+        .map_err(|error| format!("Failed to read lyric document record: {error}"))
+    })
+}
+
+pub fn upsert_lyric_candidate(
+    app: &AppHandle,
+    input: LibraryLyricCandidateUpsertInput,
+) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let selection_key = input.selection_key.trim();
+        if selection_key.is_empty() {
+            return Err("Lyric candidate selection_key is required".to_string());
+        }
+
+        let document_id = input.document_id.trim();
+        if document_id.is_empty() {
+            return Err("Lyric candidate document_id is required".to_string());
+        }
+
+        let source_kind = normalize_lyric_source_kind(Some(input.source_kind.as_str()));
+        let source_priority = input
+            .source_priority
+            .unwrap_or_else(|| match source_kind.as_str() {
+                "embedded" => 10,
+                "sidecar" => 20,
+                "cache" => 30,
+                "web" => 40,
+                _ => 100,
+            });
+        let rank_score = input.rank_score.unwrap_or(0.0).clamp(0.0, 1.0);
+        let status = normalize_lyric_candidate_status(input.status.as_deref());
+        let now = input.updated_at_ms.unwrap_or_else(now_ms).max(0);
+
+        let candidate_id = normalize_text(input.id.as_deref())
+            .unwrap_or_else(|| format!("lycand::{selection_key}::{document_id}"));
+
+        conn.execute(
+            r#"
+            INSERT INTO lyric_candidates(
+              id,
+              selection_key,
+              entry_id,
+              document_id,
+              source_kind,
+              rank_score,
+              source_priority,
+              resolver,
+              status,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+            ON CONFLICT(id) DO UPDATE SET
+              selection_key = excluded.selection_key,
+              entry_id = excluded.entry_id,
+              document_id = excluded.document_id,
+              source_kind = excluded.source_kind,
+              rank_score = excluded.rank_score,
+              source_priority = excluded.source_priority,
+              resolver = excluded.resolver,
+              status = excluded.status,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                candidate_id,
+                selection_key,
+                normalize_text(input.entry_id.as_deref()),
+                document_id,
+                source_kind,
+                rank_score,
+                source_priority,
+                normalize_text(input.resolver.as_deref()),
+                status,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert lyric candidate: {error}"))?;
+
+        Ok(())
+    })
+}
+
+pub fn upsert_lyric_selection(
+    app: &AppHandle,
+    input: LibraryLyricSelectionUpsertInput,
+) -> Result<(), String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let selection_key = input.selection_key.trim();
+        if selection_key.is_empty() {
+            return Err("Lyric selection selection_key is required".to_string());
+        }
+
+        let selected_document_id = input.selected_document_id.trim();
+        if selected_document_id.is_empty() {
+            return Err("Lyric selection selected_document_id is required".to_string());
+        }
+
+        let selected_by =
+            normalize_text(input.selected_by.as_deref()).unwrap_or_else(|| "system".to_string());
+        let now = input.updated_at_ms.unwrap_or_else(now_ms).max(0);
+
+        conn.execute(
+            r#"
+            INSERT INTO lyric_selection(
+              selection_key,
+              entry_id,
+              selected_document_id,
+              selected_candidate_id,
+              selected_by,
+              selected_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+            ON CONFLICT(selection_key) DO UPDATE SET
+              entry_id = excluded.entry_id,
+              selected_document_id = excluded.selected_document_id,
+              selected_candidate_id = excluded.selected_candidate_id,
+              selected_by = excluded.selected_by,
+              selected_at_ms = excluded.selected_at_ms,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                selection_key,
+                normalize_text(input.entry_id.as_deref()),
+                selected_document_id,
+                normalize_text(input.selected_candidate_id.as_deref()),
+                selected_by,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert lyric selection: {error}"))?;
+
+        if let Some(entry_id) = normalize_text(input.entry_id.as_deref()) {
+            let selected = conn
+                .query_row(
+                    r#"
+                    SELECT source_locator, format, language, content_hash
+                    FROM lyric_documents
+                    WHERE id = ?1
+                    LIMIT 1
+                    "#,
+                    params![selected_document_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .ok();
+
+            if let Some((source_locator, format, language, content_hash)) = selected {
+                if let Some(locator) = normalize_text(source_locator.as_deref()) {
+                    let ref_id = format!("lyric::{entry_id}");
+                    conn.execute(
+                        "DELETE FROM lyric_refs WHERE entry_id = ?1",
+                        params![entry_id],
+                    )
+                    .map_err(|error| {
+                        format!("Failed to cleanup lyric refs before selection sync: {error}")
+                    })?;
+
+                    conn.execute(
+                        r#"
+                        INSERT INTO lyric_refs(
+                          id,
+                          entry_id,
+                          provider_lyric_id,
+                          lyric_locator,
+                          format,
+                          lang,
+                          etag,
+                          updated_at_ms
+                        )
+                        VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7)
+                        "#,
+                        params![
+                            ref_id,
+                            entry_id,
+                            locator,
+                            normalize_text(Some(format.as_str())),
+                            normalize_text(language.as_deref()),
+                            normalize_text(content_hash.as_deref()),
+                            now,
+                        ],
+                    )
+                    .map_err(|error| format!("Failed to sync lyric ref from selection: {error}"))?;
+                }
+            }
+        }
+
+        Ok(())
+    })
+}
+
+pub fn get_selected_lyric_document(
+    app: &AppHandle,
+    selection_key: &str,
+) -> Result<Option<LibraryLyricDocumentRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let key = selection_key.trim();
+        if key.is_empty() {
+            return Ok(None);
+        }
+
+        let selected = conn
+            .query_row(
+                r#"
+                SELECT
+                  ld.id,
+                  ld.selection_key,
+                  ld.entry_id,
+                  ld.track_id,
+                  ld.quick_fingerprint,
+                  ld.source_kind,
+                  ld.source_locator,
+                  ld.format,
+                  ld.language,
+                  ld.is_dynamic,
+                  ld.has_word_timing,
+                  ld.confidence,
+                  ld.payload_json,
+                  ld.content_hash,
+                  ld.created_at_ms,
+                  ld.updated_at_ms
+                FROM lyric_selection ls
+                JOIN lyric_documents ld ON ld.id = ls.selected_document_id
+                WHERE ls.selection_key = ?1
+                LIMIT 1
+                "#,
+                params![key],
+                |row| {
+                    Ok(LibraryLyricDocumentRecord {
+                        id: row.get(0)?,
+                        selection_key: row.get(1)?,
+                        entry_id: row.get(2)?,
+                        track_id: row.get(3)?,
+                        quick_fingerprint: row.get(4)?,
+                        source_kind: row.get(5)?,
+                        source_locator: row.get(6)?,
+                        format: row.get(7)?,
+                        language: row.get(8)?,
+                        is_dynamic: row.get::<_, i64>(9)? != 0,
+                        has_word_timing: row.get::<_, i64>(10)? != 0,
+                        confidence: row.get::<_, f64>(11)?.clamp(0.0, 1.0) as f32,
+                        payload_json: row.get(12)?,
+                        content_hash: row.get(13)?,
+                        created_at_ms: row.get(14)?,
+                        updated_at_ms: row.get(15)?,
+                    })
+                },
+            )
+            .ok();
+
+        if selected.is_some() {
+            return Ok(selected);
+        }
+
+        let legacy_entry_id = key
+            .strip_prefix("entry::")
+            .and_then(|value| normalize_text(Some(value)));
+        let Some(entry_id) = legacy_entry_id else {
+            return Ok(None);
+        };
+
+        let legacy = conn
+            .query_row(
+                r#"
+                SELECT
+                  ue.id,
+                  ue.track_id,
+                  ue.quick_fingerprint,
+                  lr.lyric_locator,
+                  lr.format,
+                  lr.lang,
+                  lr.etag,
+                  lr.updated_at_ms
+                FROM lyric_refs lr
+                LEFT JOIN user_entries ue ON ue.id = lr.entry_id
+                WHERE lr.entry_id = ?1
+                LIMIT 1
+                "#,
+                params![entry_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                    ))
+                },
+            )
+            .ok();
+
+        let Some((
+            entry_id_raw,
+            track_id,
+            quick_fingerprint,
+            locator,
+            format,
+            language,
+            etag,
+            updated_at_ms,
+        )) = legacy
+        else {
+            return Ok(None);
+        };
+
+        let locator_value = locator.unwrap_or_default();
+        if locator_value.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let source_kind =
+            if locator_value.starts_with("http://") || locator_value.starts_with("https://") {
+                "web".to_string()
+            } else if locator_value.contains("lyrics-cache") {
+                "cache".to_string()
+            } else {
+                "sidecar".to_string()
+            };
+        let format_value = format
+            .as_deref()
+            .and_then(|value| normalize_text(Some(value)))
+            .map(|value| value.to_ascii_lowercase())
+            .unwrap_or_else(|| {
+                if locator_value.to_ascii_lowercase().ends_with(".txt") {
+                    "plain".to_string()
+                } else {
+                    "lrc".to_string()
+                }
+            });
+
+        let now = updated_at_ms.unwrap_or_else(now_ms).max(0);
+        let is_dynamic = format_value == "lrc" || format_value == "yrc";
+        let payload_json = serde_json::json!({
+            "id": format!("legacy::{entry_id}"),
+            "entryId": entry_id_raw,
+            "trackId": track_id,
+            "quickFingerprint": quick_fingerprint,
+            "sourceKind": source_kind,
+            "sourceLocator": locator_value,
+            "format": format_value,
+            "language": language,
+            "isDynamic": is_dynamic,
+            "hasWordTiming": false,
+            "confidence": 0.6,
+            "lines": [],
+            "rawText": null,
+            "updatedAtMs": now,
+        })
+        .to_string();
+
+        Ok(Some(LibraryLyricDocumentRecord {
+            id: format!("legacy::{entry_id}"),
+            selection_key: key.to_string(),
+            entry_id: entry_id_raw,
+            track_id,
+            quick_fingerprint,
+            source_kind,
+            source_locator: Some(locator_value),
+            format: format_value.clone(),
+            language,
+            is_dynamic,
+            has_word_timing: false,
+            confidence: 0.6,
+            payload_json,
+            content_hash: etag,
+            created_at_ms: now,
+            updated_at_ms: now,
+        }))
+    })
+}
+
+pub fn upsert_lyric_fetch_job(
+    app: &AppHandle,
+    input: LibraryLyricFetchJobUpsertInput,
+) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let selection_key = input.selection_key.trim();
+        if selection_key.is_empty() {
+            return Err("Lyric fetch job selection_key is required".to_string());
+        }
+
+        let now = input.updated_at_ms.unwrap_or_else(now_ms).max(0);
+        let status = normalize_lyric_fetch_job_status(input.status.as_deref());
+        let priority = input.priority.unwrap_or(100).clamp(0, 1000);
+        let attempt_count = input.attempt_count.unwrap_or(0).min(i64::MAX as u64) as i64;
+
+        let job_id = normalize_text(input.id.as_deref())
+            .unwrap_or_else(|| format!("lyjob::{selection_key}"));
+
+        conn.execute(
+            r#"
+            INSERT INTO lyric_fetch_jobs(
+              id,
+              selection_key,
+              entry_id,
+              track_id,
+              priority,
+              status,
+              attempt_count,
+              next_run_at_ms,
+              last_error,
+              payload_json,
+              created_at_ms,
+              updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+            ON CONFLICT(id) DO UPDATE SET
+              selection_key = excluded.selection_key,
+              entry_id = excluded.entry_id,
+              track_id = excluded.track_id,
+              priority = excluded.priority,
+              status = excluded.status,
+              attempt_count = excluded.attempt_count,
+              next_run_at_ms = excluded.next_run_at_ms,
+              last_error = excluded.last_error,
+              payload_json = excluded.payload_json,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                job_id,
+                selection_key,
+                normalize_text(input.entry_id.as_deref()),
+                normalize_text(input.track_id.as_deref()),
+                priority,
+                status,
+                attempt_count,
+                input.next_run_at_ms,
+                normalize_text(input.last_error.as_deref()),
+                normalize_text(input.payload_json.as_deref()),
+                now,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert lyric fetch job: {error}"))?;
+
+        Ok(conn.changes())
     })
 }
 
@@ -3884,25 +4707,31 @@ mod tests {
     }
 
     #[test]
-    fn migrate_empty_db_to_v5_schema() {
+    fn migrate_empty_db_to_v6_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 5);
+        assert_eq!(read_user_version(&conn), 6);
         assert!(has_table(&conn, "connectors"));
         assert!(has_table(&conn, "source_sync_state"));
         assert!(has_table(&conn, "source_fingerprint_state"));
         assert!(has_table(&conn, "track_provider_refs"));
         assert!(has_table(&conn, "metadata_refresh_jobs"));
+        assert!(has_table(&conn, "lyric_documents"));
+        assert!(has_table(&conn, "lyric_candidates"));
+        assert!(has_table(&conn, "lyric_selection"));
+        assert!(has_table(&conn, "lyric_fetch_jobs"));
         assert!(has_index(&conn, "source_sync_state_backoff_until_ms_idx"));
         assert!(has_index(&conn, "metadata_refresh_jobs_next_run_at_ms_idx"));
+        assert!(has_index(&conn, "lyric_documents_selection_key_idx"));
+        assert!(has_index(&conn, "lyric_fetch_jobs_status_idx"));
 
         drop(conn);
         cleanup_temp_db(&path);
     }
 
     #[test]
-    fn migrate_v4_db_to_v5_schema() {
+    fn migrate_v4_db_to_v6_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-v4");
         conn.execute_batch(
             r#"
@@ -3937,14 +4766,18 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 5);
+        assert_eq!(read_user_version(&conn), 6);
         assert!(has_table(&conn, "connector_accounts"));
         assert!(has_table(&conn, "cover_refs"));
         assert!(has_table(&conn, "lyric_refs"));
+        assert!(has_table(&conn, "lyric_documents"));
+        assert!(has_table(&conn, "lyric_selection"));
+        assert!(has_table(&conn, "lyric_fetch_jobs"));
         assert!(has_index(
             &conn,
             "track_provider_refs_provider_track_id_idx"
         ));
+        assert!(has_index(&conn, "lyric_candidates_document_id_idx"));
 
         drop(conn);
         cleanup_temp_db(&path);

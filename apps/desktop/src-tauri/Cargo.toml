@@ -11,6 +11,7 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "1.5", features = [] }
+zerovec = { version = "0.11.4", features = ["alloc"] }
 
 [dependencies]
 tauri = { version = "1.5", features = [ "protocol-asset", "system-tray", "dialog-confirm", "dialog-message", "dialog-ask", "fs-all", "dialog-open", "window-all", "shell-open"] }
@@ -19,6 +20,7 @@ serde_json = "1.0"
 window-shadows = "0.2"
 once_cell = "1.18"
 crossbeam-queue = "0.3"
+zerovec = { version = "0.11.4", features = ["alloc"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 windows-sys = { version = "0.60.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
@@ -27,6 +29,7 @@ windows = { version = "0.54", features = ["Foundation", "Media", "Media_Playback
 # 音频处理
 rodio = "0.17"
 symphonia = { version = "0.5", features = ["all"] }
+lofty = "0.22"
 dsf = "0.2.2"
 rustfft = { version = "6.4.1", default-features = false }
 rubato = { version = "0.16", default-features = false }
@@ -46,8 +49,10 @@ keyring = "2.3"
 [target.'cfg(windows)'.dependencies]
 asio-sys = { version = "0.2.5", optional = true }
 cpal = { version = "0.15", optional = true, features = ["asio"] }
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
 
 [features]
+default = []
 # This feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

@@ -60,6 +60,7 @@ export const SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID: Record<string, PixelAnc
     { id: 'left', gridX: 6, gridY: 19, role: 'anchor' },
     { id: 'right', gridX: 8, gridY: 19, role: 'boundary' },
   ],
+  'btn-desktop-lyrics': [{ id: 'anchor', gridX: 9, gridY: 19, role: 'anchor' }],
   'btn-previous': [{ id: 'anchor', gridX: 10, gridY: 19, role: 'anchor' }],
   'btn-play-pause': [{ id: 'anchor', gridX: 12, gridY: 19, role: 'anchor' }],
   'btn-next': [{ id: 'anchor', gridX: 14, gridY: 19, role: 'anchor' }],

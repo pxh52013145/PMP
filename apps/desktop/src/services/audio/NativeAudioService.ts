@@ -3400,15 +3400,32 @@ export class NativeAudioService implements IAudioService {
             : null;
           const normalizedCurrentTrackPath =
             this.normalizeTrackPathForCompare(currentTrackPath);
+          const normalizedPlaybackState =
+            typeof next.playbackState === 'string' ? next.playbackState : null;
+          const queueClearedByPayload = Array.isArray(next.queue) && next.queue.length === 0;
+          const indexClearedByPayload =
+            typeof next.currentIndex === 'number' && next.currentIndex < 0;
+          const localQueueEmpty =
+            (Array.isArray(update.queue) ? update.queue.length === 0 : this.state.queue.length === 0) ||
+            queueClearedByPayload;
+          const playbackNotActive =
+            normalizedPlaybackState !== 'playing' &&
+            normalizedPlaybackState !== 'buffering' &&
+            normalizedPlaybackState !== 'loading';
 
           if (typeof next.trackPath === 'string') {
             const nextTrackPath = next.trackPath.trim();
             if (nextTrackPath.length > 0) {
-              const normalizedNextTrackPath = this.normalizeTrackPathForCompare(nextTrackPath);
-              if (normalizedNextTrackPath !== normalizedCurrentTrackPath) {
-                const resolved = this.resolveTrackFromPath(nextTrackPath);
-                if (resolved) {
-                  update.currentTrack = resolved.track;
+              const shouldIgnoreStaleTrackPath = localQueueEmpty && playbackNotActive;
+              if (shouldIgnoreStaleTrackPath) {
+                update.currentTrack = null;
+                update.currentIndex = -1;
+              } else {
+                const normalizedNextTrackPath = this.normalizeTrackPathForCompare(nextTrackPath);
+                if (normalizedNextTrackPath !== normalizedCurrentTrackPath) {
+                  const resolved = this.resolveTrackFromPath(nextTrackPath);
+                  if (resolved) {
+                    update.currentTrack = resolved.track;
                   update.currentIndex = resolved.index;
                 } else {
                   update.currentTrack = {
@@ -3416,14 +3433,25 @@ export class NativeAudioService implements IAudioService {
                     title: this.deriveTitleFromPath(nextTrackPath),
                     filePath: nextTrackPath,
                     path: nextTrackPath,
-                    originalPath: nextTrackPath,
-                  };
+                      originalPath: nextTrackPath,
+                    };
+                  }
                 }
               }
             }
           } else if (next.trackPath === null && currentTrackPath) {
-            if (next.ended === true) {
+            const shouldClearCurrentTrack =
+              next.ended === true ||
+              normalizedPlaybackState === 'stopped' ||
+              normalizedPlaybackState === 'idle' ||
+              queueClearedByPayload ||
+              indexClearedByPayload ||
+              this.state.queue.length === 0;
+            if (shouldClearCurrentTrack) {
               update.currentTrack = null;
+              if (indexClearedByPayload) {
+                update.currentIndex = -1;
+              }
             }
           }
         }
@@ -4002,11 +4030,44 @@ export class NativeAudioService implements IAudioService {
   }
 
   removeFromQueue(index: number): void {
+    if (index < 0 || index >= this.state.queue.length) {
+      return;
+    }
+
     const queue = [...this.state.queue];
     queue.splice(index, 1);
-    const currentIndex =
-      this.state.currentIndex >= queue.length ? queue.length - 1 : this.state.currentIndex;
-    this.updateState({ queue, currentIndex });
+
+    let currentIndex = this.state.currentIndex;
+    if (queue.length === 0) {
+      this.clearQueue();
+      return;
+    }
+
+    if (currentIndex === index) {
+      currentIndex = Math.min(index, queue.length - 1);
+    } else if (currentIndex > index) {
+      currentIndex -= 1;
+    }
+
+    if (currentIndex >= queue.length) {
+      currentIndex = queue.length - 1;
+    }
+
+    const previousTrack = this.state.currentTrack;
+    const previousTrackPath = previousTrack ? this.normalizeTrackPathForCompare(this.getTrackPath(previousTrack)) : '';
+    const trackAtCurrentIndex = queue[currentIndex] ?? null;
+    const trackAtCurrentIndexPath = trackAtCurrentIndex
+      ? this.normalizeTrackPathForCompare(this.getTrackPath(trackAtCurrentIndex))
+      : '';
+
+    const currentTrack =
+      previousTrackPath && previousTrackPath === trackAtCurrentIndexPath
+        ? previousTrack
+        : currentIndex >= 0
+          ? trackAtCurrentIndex
+          : null;
+
+    this.updateState({ queue, currentIndex, currentTrack });
     this.syncQueueToNative(queue, currentIndex);
   }
 

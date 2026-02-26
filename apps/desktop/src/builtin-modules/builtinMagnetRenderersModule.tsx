@@ -36,6 +36,9 @@ const PlayModeButtonLazy = React.lazy(async () => ({
 const VolumeControlLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/VolumeControl')).VolumeControl,
 }));
+const DesktopLyricsButtonLazy = React.lazy(async () => ({
+  default: (await import('../components/magnet/DesktopLyricsButton')).DesktopLyricsButton,
+}));
 const TrackInfoLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/trackInfo/TrackInfo')).TrackInfo,
 }));
@@ -160,6 +163,15 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
       preview: () => createTextPreview(t('magnet.renderers.btn-volume.preview')),
       description: t('magnet.renderers.btn-volume.description'),
       group: 'playback',
+      source: 'builtin',
+    },
+    {
+      id: 'btn-desktop-lyrics',
+      render: () => renderWithLazyBoundary(<DesktopLyricsButtonLazy />),
+      preview: () => createTextPreview(t('magnet.renderers.btn-desktop-lyrics.preview')),
+      description: t('magnet.renderers.btn-desktop-lyrics.description'),
+      group: 'playback',
+      tags: ['lyrics', 'desktop', 'overlay', 'native'],
       source: 'builtin',
     },
     {
