@@ -54,6 +54,12 @@ pub enum DesktopLyricsSidecarEvent {
         region_width: i32,
         region_height: i32,
     },
+    ControlsChanged {
+        visible: bool,
+        click_through: bool,
+        font_size: u32,
+        opacity_percent: u8,
+    },
     Error {
         message: String,
     },
@@ -719,6 +725,15 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             });
         }
 
+        fn emit_controls_changed_event(&self) {
+            emit_sidecar_event(&DesktopLyricsSidecarEvent::ControlsChanged {
+                visible: self.state.visible,
+                click_through: self.state.click_through,
+                font_size: self.state.font_size,
+                opacity_percent: self.state.opacity_percent,
+            });
+        }
+
         fn handle_command(&mut self, command: DesktopLyricsSidecarCommand) {
             let command_name = sidecar_command_name(&command).to_string();
 
@@ -815,6 +830,7 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             self.apply_state_to_native_window();
 
             let mut layout_changed = false;
+            let mut controls_changed = false;
             let mut drag_gesture_active = false;
             let mut resize_gesture_active = false;
             let mut force_emit_layout_event = false;
@@ -825,6 +841,102 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                     let panel_rect = ui.max_rect();
 
                     if !self.state.click_through {
+                        let toolbar_height = 28.0;
+                        let toolbar_rect = egui::Rect::from_min_max(
+                            panel_rect.min,
+                            egui::pos2(panel_rect.max.x, panel_rect.min.y + toolbar_height),
+                        );
+
+                        ui.allocate_ui_at_rect(toolbar_rect, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                let click_through_response = ui
+                                    .small_button(if self.state.click_through {
+                                        "🔒"
+                                    } else {
+                                        "🔓"
+                                    })
+                                    .on_hover_text(if self.state.click_through {
+                                        "已锁定穿透（可点击窗口）"
+                                    } else {
+                                        "已关闭穿透（可拖拽/缩放）"
+                                    });
+                                if click_through_response.clicked() {
+                                    self.state.click_through = !self.state.click_through;
+                                    self.native_state_dirty = true;
+                                    controls_changed = true;
+                                }
+
+                                let font_down_response =
+                                    ui.small_button("A-").on_hover_text("减小歌词字号");
+                                if font_down_response.clicked() {
+                                    let next_font =
+                                        self.state.font_size.saturating_sub(2).max(MIN_FONT_SIZE);
+                                    if next_font != self.state.font_size {
+                                        self.state.font_size = next_font;
+                                        controls_changed = true;
+                                    }
+                                }
+
+                                let font_up_response =
+                                    ui.small_button("A+").on_hover_text("增大歌词字号");
+                                if font_up_response.clicked() {
+                                    let next_font = self.state.font_size.saturating_add(2).min(72);
+                                    if next_font != self.state.font_size {
+                                        self.state.font_size = next_font;
+                                        controls_changed = true;
+                                    }
+                                }
+
+                                let opacity_down_response =
+                                    ui.small_button("⊖").on_hover_text("降低窗口透明度");
+                                if opacity_down_response.clicked() {
+                                    let next_opacity = self.state.opacity_percent.saturating_sub(5);
+                                    let next_opacity = normalize_opacity(next_opacity);
+                                    if next_opacity != self.state.opacity_percent {
+                                        self.state.opacity_percent = next_opacity;
+                                        self.native_state_dirty = true;
+                                        controls_changed = true;
+                                    }
+                                }
+
+                                let opacity_up_response =
+                                    ui.small_button("⊕").on_hover_text("提高窗口不透明度");
+                                if opacity_up_response.clicked() {
+                                    let next_opacity = self.state.opacity_percent.saturating_add(5);
+                                    let next_opacity = normalize_opacity(next_opacity);
+                                    if next_opacity != self.state.opacity_percent {
+                                        self.state.opacity_percent = next_opacity;
+                                        self.native_state_dirty = true;
+                                        controls_changed = true;
+                                    }
+                                }
+
+                                let reset_response =
+                                    ui.small_button("↺").on_hover_text("重置位置与大小到默认值");
+                                if reset_response.clicked() {
+                                    self.state.position_offset_x = 0;
+                                    self.state.position_offset_y = 0;
+                                    self.state.region_width = DEFAULT_REGION_WIDTH;
+                                    self.state.region_height = DEFAULT_REGION_HEIGHT;
+                                    self.state.absolute_x = None;
+                                    self.state.absolute_y = None;
+                                    self.native_state_dirty = true;
+                                    layout_changed = true;
+                                    force_emit_layout_event = true;
+                                }
+
+                                let close_response =
+                                    ui.small_button("✕").on_hover_text("关闭桌面歌词窗口");
+                                if close_response.clicked() {
+                                    if self.state.visible {
+                                        self.state.visible = false;
+                                        self.native_state_dirty = true;
+                                        controls_changed = true;
+                                    }
+                                }
+                            });
+                        });
+
                         let resize_edge = 8.0;
                         let corner_size = 16.0;
 
@@ -955,11 +1067,12 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                         }
 
                         let drag_margin = resize_edge + 2.0;
+                        let drag_top = toolbar_height + 2.0;
                         let drag_rect = if panel_rect.width() > drag_margin * 2.0
-                            && panel_rect.height() > drag_margin * 2.0
+                            && panel_rect.height() > drag_margin + drag_top
                         {
                             egui::Rect::from_min_max(
-                                panel_rect.min + egui::vec2(drag_margin, drag_margin),
+                                panel_rect.min + egui::vec2(drag_margin, drag_top),
                                 panel_rect.max - egui::vec2(drag_margin, drag_margin),
                             )
                         } else {
@@ -1050,6 +1163,10 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             if (interaction_ended || force_emit_layout_event) && self.layout_dirty {
                 self.emit_layout_changed_event();
                 self.layout_dirty = false;
+            }
+
+            if controls_changed {
+                self.emit_controls_changed_event();
             }
 
             self.drag_active = drag_gesture_active;

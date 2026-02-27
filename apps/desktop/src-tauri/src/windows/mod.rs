@@ -28,6 +28,7 @@ pub const EVENT_VST_MANAGER_WINDOW_SHOWN: &str = "vst-manager-window-shown";
 pub const EVENT_VST_MANAGER_WINDOW_HIDDEN: &str = "vst-manager-window-hidden";
 
 pub const EVENT_DESKTOP_LYRICS_LAYOUT_CHANGED: &str = "desktop-lyrics-layout-changed";
+pub const EVENT_DESKTOP_LYRICS_CONTROLS_CHANGED: &str = "desktop-lyrics-controls-changed";
 
 pub const EVENT_TASKBAR_MEDIA_CONTROL: &str = "taskbar-media-control";
 

@@ -114,6 +114,19 @@ mod sidecar_client {
                             region_height,
                         );
                     }
+                    Ok(DesktopLyricsSidecarEvent::ControlsChanged {
+                        visible,
+                        click_through,
+                        font_size,
+                        opacity_percent,
+                    }) => {
+                        crate::windows::desktop_lyrics::apply_sidecar_controls_changed(
+                            visible,
+                            click_through,
+                            font_size,
+                            opacity_percent,
+                        );
+                    }
                     Ok(DesktopLyricsSidecarEvent::Error { message }) => {
                         safe_stderr_log(format!(
                             "[desktop-lyrics] sidecar reported error: {message}"

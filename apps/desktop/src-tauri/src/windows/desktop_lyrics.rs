@@ -154,6 +154,15 @@ struct DesktopLyricsLayoutChangedPayload {
     region_height: i32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DesktopLyricsControlsChangedPayload {
+    visible: bool,
+    click_through: bool,
+    font_size: u32,
+    opacity_percent: u8,
+}
+
 mod backend;
 
 pub fn init() {
@@ -489,6 +498,47 @@ pub(super) fn apply_sidecar_layout_changed(
     emit_layout_changed_event(payload);
 }
 
+pub(super) fn apply_sidecar_controls_changed(
+    visible: bool,
+    click_through: bool,
+    font_size: u32,
+    opacity_percent: u8,
+) {
+    let payload = {
+        let Ok(mut state) = DESKTOP_LYRICS_STATE.lock() else {
+            return;
+        };
+
+        let normalized_payload = DesktopLyricsControlsChangedPayload {
+            visible,
+            click_through,
+            font_size: font_size.clamp(MIN_OVERLAY_FONT_SIZE, MAX_OVERLAY_FONT_SIZE),
+            opacity_percent: normalize_overlay_opacity_percent(opacity_percent),
+        };
+
+        if state.visible == normalized_payload.visible
+            && state.click_through == normalized_payload.click_through
+            && state.font_size == normalized_payload.font_size
+            && state.opacity_percent == normalized_payload.opacity_percent
+        {
+            return;
+        }
+
+        state.visible = normalized_payload.visible;
+        state.click_through = normalized_payload.click_through;
+        state.font_size = normalized_payload.font_size;
+        state.opacity_percent = normalized_payload.opacity_percent;
+
+        if !normalized_payload.visible {
+            state.last_rendered_text = None;
+        }
+
+        normalized_payload
+    };
+
+    emit_controls_changed_event(payload);
+}
+
 fn emit_layout_changed_event(payload: DesktopLyricsLayoutChangedPayload) {
     let app_handle = DESKTOP_LYRICS_APP_HANDLE
         .lock()
@@ -500,6 +550,19 @@ fn emit_layout_changed_event(payload: DesktopLyricsLayoutChangedPayload) {
     };
 
     let _ = app_handle.emit_all(super::EVENT_DESKTOP_LYRICS_LAYOUT_CHANGED, payload);
+}
+
+fn emit_controls_changed_event(payload: DesktopLyricsControlsChangedPayload) {
+    let app_handle = DESKTOP_LYRICS_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+
+    let Some(app_handle) = app_handle else {
+        return;
+    };
+
+    let _ = app_handle.emit_all(super::EVENT_DESKTOP_LYRICS_CONTROLS_CHANGED, payload);
 }
 
 fn send_overlay_command(command: OverlayCommand) -> bool {

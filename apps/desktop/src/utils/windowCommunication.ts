@@ -321,6 +321,7 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE_UPDATED:
     'native-audio-dynamic-src-learning-profile-updated',
   DESKTOP_LYRICS_LAYOUT_CHANGED: 'desktop-lyrics-layout-changed',
+  DESKTOP_LYRICS_CONTROLS_CHANGED: 'desktop-lyrics-controls-changed',
   DSP_RACK_LOCATE_NODE: 'dsp-rack-locate-node',
   NAVIGATION_REQUESTED: 'navigation-requested',
 

@@ -23,24 +23,12 @@ interface DesktopLyricsLayoutChangedPayload {
   regionHeight: number;
 }
 
-const FONT_SIZE_OPTIONS: ReadonlyArray<{
-  key: 'small' | 'medium' | 'large';
-  value: number;
-}> = [
-  { key: 'small', value: 20 },
-  { key: 'medium', value: 26 },
-  { key: 'large', value: 32 },
-];
-
-const OPACITY_OPTIONS: ReadonlyArray<{
-  key: 'p60' | 'p80' | 'p92' | 'p100';
-  value: number;
-}> = [
-  { key: 'p60', value: 60 },
-  { key: 'p80', value: 80 },
-  { key: 'p92', value: 92 },
-  { key: 'p100', value: 100 },
-];
+interface DesktopLyricsControlsChangedPayload {
+  visible: boolean;
+  clickThrough: boolean;
+  fontSize: number;
+  opacityPercent: number;
+}
 
 const CHECKMARK_ICON = '✓';
 const LYRIC_OFFSET_OPTIONS: ReadonlyArray<{
@@ -54,7 +42,6 @@ const LYRIC_OFFSET_OPTIONS: ReadonlyArray<{
   { key: 'plus500', value: 500 },
 ];
 
-const POSITION_NUDGE_STEP = 24;
 const LYRIC_OFFSET_NUDGE_STEP = 100;
 
 export const DesktopLyricsButton: React.FC = () => {
@@ -71,6 +58,7 @@ export const DesktopLyricsButton: React.FC = () => {
 
   const {
     enabled,
+    setEnabled,
     clickThrough,
     setClickThrough,
     fontSize,
@@ -126,11 +114,12 @@ export const DesktopLyricsButton: React.FC = () => {
   }, [applyOverlaySettings]);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    let unlistenLayout: (() => void) | null = null;
+    let unlistenControls: (() => void) | null = null;
     let cancelled = false;
 
     const sync = async () => {
-      unlisten = await setupTauriListenerWithPayload<DesktopLyricsLayoutChangedPayload>(
+      unlistenLayout = await setupTauriListenerWithPayload<DesktopLyricsLayoutChangedPayload>(
         TAURI_EVENTS.DESKTOP_LYRICS_LAYOUT_CHANGED,
         (payload) => {
           const nextOffsetX = normalizeDesktopLyricsPositionOffset(payload.offsetX);
@@ -145,9 +134,25 @@ export const DesktopLyricsButton: React.FC = () => {
         }
       );
 
-      if (cancelled && unlisten) {
-        unlisten();
-        unlisten = null;
+      unlistenControls = await setupTauriListenerWithPayload<DesktopLyricsControlsChangedPayload>(
+        TAURI_EVENTS.DESKTOP_LYRICS_CONTROLS_CHANGED,
+        (payload) => {
+          setEnabled(payload.visible === true);
+          setClickThrough(payload.clickThrough === true);
+          setFontSize(normalizeDesktopLyricsFontSize(payload.fontSize));
+          setOpacityPercent(normalizeDesktopLyricsOpacityPercent(payload.opacityPercent));
+        }
+      );
+
+      if (cancelled) {
+        if (unlistenLayout) {
+          unlistenLayout();
+          unlistenLayout = null;
+        }
+        if (unlistenControls) {
+          unlistenControls();
+          unlistenControls = null;
+        }
       }
     };
 
@@ -155,55 +160,23 @@ export const DesktopLyricsButton: React.FC = () => {
 
     return () => {
       cancelled = true;
-      if (unlisten) {
-        unlisten();
+      if (unlistenLayout) {
+        unlistenLayout();
+      }
+      if (unlistenControls) {
+        unlistenControls();
       }
     };
-  }, [setPositionOffsetX, setPositionOffsetY, setRegionHeight, setRegionWidth]);
-
-  const applyClickThrough = useCallback(
-    async (next: boolean) => {
-      const previous = clickThrough;
-      setClickThrough(next);
-      try {
-        await logic.applyClickThrough(next);
-      } catch (error) {
-        setClickThrough(previous);
-        console.error('[desktop-lyrics-button] failed to set click-through:', error);
-      }
-    },
-    [clickThrough, logic, setClickThrough]
-  );
-
-  const applyFontSize = useCallback(
-    async (next: number) => {
-      const normalized = normalizeDesktopLyricsFontSize(next);
-      const previous = fontSize;
-      setFontSize(normalized);
-      try {
-        await logic.applyFontSize(normalized);
-      } catch (error) {
-        setFontSize(previous);
-        console.error('[desktop-lyrics-button] failed to set font size:', error);
-      }
-    },
-    [fontSize, logic, setFontSize]
-  );
-
-  const applyOpacityPercent = useCallback(
-    async (next: number) => {
-      const normalized = normalizeDesktopLyricsOpacityPercent(next);
-      const previous = opacityPercent;
-      setOpacityPercent(normalized);
-      try {
-        await logic.applyOpacityPercent(normalized);
-      } catch (error) {
-        setOpacityPercent(previous);
-        console.error('[desktop-lyrics-button] failed to set opacity percent:', error);
-      }
-    },
-    [logic, opacityPercent, setOpacityPercent]
-  );
+  }, [
+    setClickThrough,
+    setEnabled,
+    setFontSize,
+    setOpacityPercent,
+    setPositionOffsetX,
+    setPositionOffsetY,
+    setRegionHeight,
+    setRegionWidth,
+  ]);
 
   const applyPositionOffset = useCallback(
     async (nextX: number, nextY: number) => {
@@ -241,13 +214,6 @@ export const DesktopLyricsButton: React.FC = () => {
     [logic, lyricOffsetMs, setLyricOffsetMs]
   );
 
-  const nudgePositionOffset = useCallback(
-    (deltaX: number, deltaY: number) => {
-      void applyPositionOffset(positionOffsetX + deltaX, positionOffsetY + deltaY);
-    },
-    [applyPositionOffset, positionOffsetX, positionOffsetY]
-  );
-
   const nudgeLyricOffset = useCallback(
     (deltaMs: number) => {
       void applyLyricOffsetMs(lyricOffsetMs + deltaMs);
@@ -258,42 +224,6 @@ export const DesktopLyricsButton: React.FC = () => {
   const openContextMenuAt = useCallback(
     (x: number, y: number) => {
       const items: ContextMenuItem[] = [
-        {
-          icon: clickThrough ? CHECKMARK_ICON : '',
-          label: clickThrough
-            ? t('magnet.desktopLyricsButton.contextMenu.clickThrough.disable')
-            : t('magnet.desktopLyricsButton.contextMenu.clickThrough.enable'),
-          onClick: () => void applyClickThrough(!clickThrough),
-        },
-        { divider: true } as ContextMenuItem,
-        ...FONT_SIZE_OPTIONS.map((option) => ({
-          icon: fontSize === option.value ? CHECKMARK_ICON : '',
-          label: t(`magnet.desktopLyricsButton.contextMenu.fontSize.${option.key}`),
-          onClick: () => void applyFontSize(option.value),
-        })),
-        { divider: true } as ContextMenuItem,
-        ...OPACITY_OPTIONS.map((option) => ({
-          icon: opacityPercent === option.value ? CHECKMARK_ICON : '',
-          label: t(`magnet.desktopLyricsButton.contextMenu.opacity.${option.key}`),
-          onClick: () => void applyOpacityPercent(option.value),
-        })),
-        { divider: true } as ContextMenuItem,
-        {
-          label: t('magnet.desktopLyricsButton.contextMenu.position.moveLeft'),
-          onClick: () => nudgePositionOffset(-POSITION_NUDGE_STEP, 0),
-        },
-        {
-          label: t('magnet.desktopLyricsButton.contextMenu.position.moveRight'),
-          onClick: () => nudgePositionOffset(POSITION_NUDGE_STEP, 0),
-        },
-        {
-          label: t('magnet.desktopLyricsButton.contextMenu.position.moveUp'),
-          onClick: () => nudgePositionOffset(0, -POSITION_NUDGE_STEP),
-        },
-        {
-          label: t('magnet.desktopLyricsButton.contextMenu.position.moveDown'),
-          onClick: () => nudgePositionOffset(0, POSITION_NUDGE_STEP),
-        },
         {
           icon: positionOffsetX === 0 && positionOffsetY === 0 ? CHECKMARK_ICON : '',
           label: t('magnet.desktopLyricsButton.contextMenu.position.resetOffset'),
@@ -318,17 +248,10 @@ export const DesktopLyricsButton: React.FC = () => {
       setContextMenu({ x, y, items });
     },
     [
-      applyClickThrough,
-      applyFontSize,
-      applyOpacityPercent,
       applyPositionOffset,
       applyLyricOffsetMs,
-      clickThrough,
-      fontSize,
-      opacityPercent,
       lyricOffsetMs,
       nudgeLyricOffset,
-      nudgePositionOffset,
       positionOffsetX,
       positionOffsetY,
       t,
