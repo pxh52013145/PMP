@@ -17,10 +17,7 @@ out/
 # Tauri
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/target-test/
-apps/desktop/src-tauri/target-test-no-run/
 apps/desktop/src-tauri/target-codex/
-apps/desktop/src-tauri/target-test-temp/
-target-codex/
 
 # Misc
 .DS_Store
@@ -65,7 +62,6 @@ scripts/
 snapshots/
 
 # Local scratch
-problem_test/
 logs/
 
 # OS generated files
@@ -78,7 +74,6 @@ Thumbs.db
 *.log
 *.flac
 tmp/
-%TEMP%/
 
 # Cache directories
 .cache/
@@ -95,6 +90,7 @@ tmp/
 
 # Agent / local automation
 .sisyphus/
+.githooks/
 
 # Local references (do not commit)
 reference/
@@ -115,9 +111,6 @@ docs/perf-snapshots/*.csv
 docs/examples/**/*.pmpm
 
 # Root docs and local architecture notes
-/MUSIC_LIBRARY.md
-/AGENTS.md
-/PMP_STORAGE_LOCATIONS.md
 /docs/
 
 # Local blueprint drafts (do not commit)
