@@ -1756,6 +1756,42 @@ export async function listNativeBilibiliFavoriteResources(options: {
   return ensureBilibiliFavoriteResourcePage(raw);
 }
 
+export async function listNativeBilibiliRecommendedResources(): Promise<
+  NativeBilibiliFavoriteResourcePage | null
+> {
+  if (!isTauriRuntime()) return null;
+
+  const raw = await invoke<unknown>('music_library_bilibili_list_recommended_resources');
+  return ensureBilibiliFavoriteResourcePage(raw);
+}
+
+export async function listNativeBilibiliSearchResources(options: {
+  keyword: string;
+  pageNum?: number;
+  pageSize?: number;
+}): Promise<NativeBilibiliFavoriteResourcePage | null> {
+  if (!isTauriRuntime()) return null;
+
+  const keyword = options.keyword.trim();
+  if (!keyword) return null;
+
+  const pageNum =
+    typeof options.pageNum === 'number' && Number.isFinite(options.pageNum)
+      ? Math.max(1, Math.floor(options.pageNum))
+      : undefined;
+  const pageSize =
+    typeof options.pageSize === 'number' && Number.isFinite(options.pageSize)
+      ? Math.max(1, Math.floor(options.pageSize))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_bilibili_search_resources', {
+    keyword,
+    pageNum,
+    pageSize,
+  });
+  return ensureBilibiliFavoriteResourcePage(raw);
+}
+
 export async function searchNativeBilibiliResourceByBvid(
   bvid: string
 ): Promise<NativeBilibiliFavoriteResourceItem | null> {

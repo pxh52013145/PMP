@@ -12,6 +12,8 @@ export {
   generateNativeBilibiliQrCodeSession,
   listNativeBilibiliFavoriteFolders,
   listNativeBilibiliFavoriteResources,
+  listNativeBilibiliRecommendedResources,
+  listNativeBilibiliSearchResources,
   searchNativeBilibiliResourceByBvid,
   prepareNativeBilibiliCoverCache,
   listNativeBilibiliPlaybackQualities,

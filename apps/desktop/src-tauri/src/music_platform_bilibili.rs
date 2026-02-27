@@ -46,6 +46,10 @@ const BILIBILI_FAVORITE_FOLDERS_ENDPOINT: &str =
     "https://api.bilibili.com/x/v3/fav/folder/created/list-all";
 const BILIBILI_FAVORITE_RESOURCES_ENDPOINT: &str =
     "https://api.bilibili.com/x/v3/fav/resource/list";
+const BILIBILI_RECOMMENDED_FEED_ENDPOINT: &str =
+    "https://api.bilibili.com/x/web-interface/index/top/feed/rcmd";
+const BILIBILI_POPULAR_FEED_ENDPOINT: &str = "https://api.bilibili.com/x/web-interface/popular";
+const BILIBILI_SEARCH_ALL_ENDPOINT: &str = "https://api.bilibili.com/x/web-interface/search/all/v2";
 const BILIBILI_VIEW_ENDPOINT: &str = "https://api.bilibili.com/x/web-interface/view";
 const BILIBILI_PLAYER_V2_ENDPOINT: &str = "https://api.bilibili.com/x/player/v2";
 const BILIBILI_PLAYER_PLAYURL_ENDPOINT: &str = "https://api.bilibili.com/x/player/playurl";
@@ -66,7 +70,9 @@ const QR_SESSION_TTL_MS: i64 = 180_000;
 const BILIBILI_PLAYBACK_CACHE_PREBUFFER_BYTES: u64 = 1 * 1024 * 1024;
 const BILIBILI_PLAYBACK_CACHE_WAIT_TIMEOUT_MS: u64 = 12_000;
 const BILIBILI_PLAYBACK_CACHE_PROBE_SOFT_BYTES: u64 = 2 * 1024 * 1024;
-const BILIBILI_PLAYBACK_CACHE_PROBE_SOFT_WAIT_MS: u64 = 4_000;
+const BILIBILI_PLAYBACK_CACHE_PROBE_HARD_WAIT_MS: u64 = 16_000;
+const BILIBILI_PLAYBACK_CACHE_PROBE_RETRY_WAIT_MS: u64 = 800;
+const BILIBILI_PLAYBACK_CACHE_PROBE_STEP_BYTES: u64 = 512 * 1024;
 const BILIBILI_PLAYBACK_CACHE_MAX_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const BILIBILI_PLAYBACK_CACHE_STALE_FILE_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 const BILIBILI_PLAYBACK_CACHE_SETTINGS_FILE: &str = "playback-cache-settings.json";
@@ -898,6 +904,55 @@ fn can_probe_playback_cache(path: &Path) -> bool {
     })
 }
 
+fn wait_for_playback_cache_probe_ready(
+    job: &Arc<BilibiliPlaybackDownloadJob>,
+    cache_path: &Path,
+) -> Result<(), String> {
+    if can_probe_playback_cache(cache_path) {
+        return Ok(());
+    }
+
+    let deadline =
+        Instant::now() + Duration::from_millis(BILIBILI_PLAYBACK_CACHE_PROBE_HARD_WAIT_MS);
+    let mut min_bytes_target = BILIBILI_PLAYBACK_CACHE_PROBE_SOFT_BYTES;
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            let bytes_written = fs::metadata(cache_path)
+                .ok()
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            return Err(format!(
+                "Bilibili playback cache is not ready for decoding within timeout (bytes={bytes_written})"
+            ));
+        }
+
+        let remaining = deadline.saturating_duration_since(now);
+        let wait_window =
+            Duration::from_millis(BILIBILI_PLAYBACK_CACHE_PROBE_RETRY_WAIT_MS).min(remaining);
+        let state = wait_for_playback_prebuffer(job, min_bytes_target, wait_window)?;
+
+        if can_probe_playback_cache(cache_path) {
+            return Ok(());
+        }
+
+        if state.completed {
+            return Err(format!(
+                "Bilibili playback cache download completed but remains undecodable (bytes={})",
+                state.bytes_written
+            ));
+        }
+
+        let next_target = state
+            .bytes_written
+            .saturating_add(BILIBILI_PLAYBACK_CACHE_PROBE_STEP_BYTES);
+        if next_target > min_bytes_target {
+            min_bytes_target = next_target;
+        }
+    }
+}
+
 fn build_http_client() -> Result<Client, String> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -1117,6 +1172,53 @@ fn parse_bvid_from_text(value: &str) -> Option<String> {
 
 fn parse_cid_from_text(value: &str) -> Option<String> {
     extract_query_param_case_insensitive(value, "cid")
+}
+
+fn strip_html_tags(value: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(ch),
+            _ => {}
+        }
+    }
+    result.trim().to_string()
+}
+
+fn parse_duration_text_to_seconds(value: &str) -> Option<u32> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = normalized.split(':').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    if parts.len() > 3 {
+        return None;
+    }
+
+    let mut acc: u64 = 0;
+    for part in parts {
+        let parsed = part.trim().parse::<u64>().ok()?;
+        acc = acc.saturating_mul(60).saturating_add(parsed);
+    }
+
+    u32::try_from(acc).ok()
+}
+
+fn parse_search_duration_seconds(value: Option<&Value>) -> Option<u32> {
+    to_u64(value)
+        .and_then(|seconds| u32::try_from(seconds).ok())
+        .or_else(|| {
+            value
+                .and_then(Value::as_str)
+                .and_then(parse_duration_text_to_seconds)
+        })
 }
 
 fn build_cookie_header_from_auth_callback_url(url: &str) -> Option<String> {
@@ -1971,13 +2073,16 @@ fn infer_resource_locators(
     String,
 ) {
     let bvid = to_non_empty_string(resource.get("bvid"));
-    let cid = to_i64(resource.get("ugc").and_then(|ugc| ugc.get("first_cid")))
-        .map(|value| value.to_string())
-        .or_else(|| {
-            parse_cid_from_text(&to_non_empty_string(resource.get("link")).unwrap_or_default())
-        });
+    let linked_text = to_non_empty_string(resource.get("link"))
+        .or_else(|| to_non_empty_string(resource.get("uri")))
+        .or_else(|| to_non_empty_string(resource.get("arcurl")))
+        .or_else(|| to_non_empty_string(resource.get("url")))
+        .unwrap_or_default();
 
-    let linked_text = to_non_empty_string(resource.get("link")).unwrap_or_default();
+    let cid = to_i64(resource.get("ugc").and_then(|ugc| ugc.get("first_cid")))
+        .or_else(|| to_i64(resource.get("cid")))
+        .map(|value| value.to_string())
+        .or_else(|| parse_cid_from_text(&linked_text));
     let sid = parse_sid_from_text(&linked_text).or_else(|| {
         parse_sid_from_text(&to_non_empty_string(resource.get("short_link")).unwrap_or_default())
     });
@@ -3409,6 +3514,220 @@ pub fn list_favorite_resources(
     })
 }
 
+pub fn list_recommended_resources(app: &AppHandle) -> Result<BilibiliFavoriteResourcePage, String> {
+    ensure_connector(app)?;
+    let client = build_http_client()?;
+
+    let map_resource_to_item = |resource: &Value, index: usize| {
+        let resource_id = to_u64(resource.get("id"))
+            .map(|value| value.to_string())
+            .or_else(|| to_non_empty_string(resource.get("id")))
+            .or_else(|| to_non_empty_string(resource.get("bvid")))
+            .or_else(|| to_u64(resource.get("aid")).map(|value| value.to_string()))
+            .or_else(|| to_non_empty_string(resource.get("aid")))
+            .unwrap_or_else(|| format!("resource-{}", index + 1));
+
+        let title = to_non_empty_string(resource.get("title"))
+            .unwrap_or_else(|| "Untitled resource".to_string());
+        let owner_name = resource
+            .get("owner")
+            .and_then(|owner| to_non_empty_string(owner.get("name")))
+            .or_else(|| to_non_empty_string(resource.get("owner")));
+        let duration_seconds = to_u64(resource.get("duration"))
+            .or_else(|| to_u64(resource.get("duration_sec")))
+            .and_then(|value| u32::try_from(value).ok());
+        let cover_url = to_non_empty_string(resource.get("pic"))
+            .or_else(|| to_non_empty_string(resource.get("cover")))
+            .map(|url| normalize_url(&url));
+
+        let (source_locator, lyric_locator, bvid, cid, inferred_kind) =
+            infer_resource_locators(resource, &resource_id);
+        let content_kind = if inferred_kind == "unknown" {
+            normalize_content_kind(resource.get("type"))
+        } else {
+            inferred_kind
+        };
+
+        BilibiliFavoriteResourceItem {
+            resource_id,
+            title,
+            owner_name,
+            duration_seconds,
+            cover_url,
+            source_locator,
+            lyric_locator,
+            bvid,
+            cid,
+            content_kind,
+        }
+    };
+
+    let items_data = request_bilibili_data_with_optional_cookie_and_headers(
+        &client,
+        BILIBILI_RECOMMENDED_FEED_ENDPOINT,
+        &[("ps", "40".to_string()), ("fresh_type", "3".to_string())],
+        None,
+        "recommended feed",
+        Some("https://www.bilibili.com/"),
+        Some("https://www.bilibili.com"),
+    )
+    .ok()
+    .and_then(|data| data.get("item").and_then(Value::as_array).cloned())
+    .unwrap_or_default();
+
+    let mut items: Vec<BilibiliFavoriteResourceItem> = Vec::with_capacity(items_data.len());
+    for (index, resource) in items_data.iter().enumerate() {
+        items.push(map_resource_to_item(resource, index));
+    }
+
+    if items.is_empty() {
+        let popular_data = request_bilibili_data_with_optional_cookie_and_headers(
+            &client,
+            BILIBILI_POPULAR_FEED_ENDPOINT,
+            &[("pn", "1".to_string()), ("ps", "40".to_string())],
+            None,
+            "popular feed",
+            Some("https://www.bilibili.com/"),
+            Some("https://www.bilibili.com"),
+        )?;
+
+        let popular_items = popular_data
+            .get("list")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        for (index, resource) in popular_items.iter().enumerate() {
+            items.push(map_resource_to_item(resource, index));
+        }
+    }
+
+    let page_size = u32::try_from(items.len()).unwrap_or(0);
+    let total = items.len() as u64;
+
+    Ok(BilibiliFavoriteResourcePage {
+        folder_id: "bilibili:recommended".to_string(),
+        page_num: 1,
+        page_size,
+        total,
+        has_more: false,
+        items,
+    })
+}
+
+pub fn search_resources(
+    app: &AppHandle,
+    keyword: &str,
+    page_num: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<BilibiliFavoriteResourcePage, String> {
+    ensure_connector(app)?;
+
+    let normalized_keyword = keyword.trim();
+    if normalized_keyword.is_empty() {
+        return Err("keyword is required".to_string());
+    }
+
+    let normalized_page_num = page_num.unwrap_or(1).clamp(1, 50);
+    let normalized_page_size = page_size.unwrap_or(40).clamp(1, 50);
+
+    let client = build_http_client()?;
+    let data = request_bilibili_data_with_optional_cookie_and_headers(
+        &client,
+        BILIBILI_SEARCH_ALL_ENDPOINT,
+        &[
+            ("keyword", normalized_keyword.to_string()),
+            ("page", normalized_page_num.to_string()),
+            ("page_size", normalized_page_size.to_string()),
+        ],
+        None,
+        "search all",
+        Some("https://www.bilibili.com/"),
+        Some("https://www.bilibili.com"),
+    )?;
+
+    let buckets = data
+        .get("result")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut raw_items: Vec<Value> = Vec::new();
+    for bucket in buckets {
+        let result_type = bucket
+            .get("result_type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if result_type != "video" {
+            continue;
+        }
+        if let Some(items) = bucket.get("data").and_then(Value::as_array) {
+            raw_items = items.clone();
+        }
+        break;
+    }
+
+    let mut items: Vec<BilibiliFavoriteResourceItem> = Vec::with_capacity(raw_items.len());
+    for (index, resource) in raw_items.iter().enumerate() {
+        let resource_id = to_u64(resource.get("aid"))
+            .map(|value| value.to_string())
+            .or_else(|| to_non_empty_string(resource.get("aid")))
+            .or_else(|| to_u64(resource.get("id")).map(|value| value.to_string()))
+            .or_else(|| to_non_empty_string(resource.get("id")))
+            .or_else(|| to_non_empty_string(resource.get("bvid")))
+            .unwrap_or_else(|| format!("search-resource-{}", index + 1));
+
+        let title = to_non_empty_string(resource.get("title"))
+            .map(|value| strip_html_tags(&value))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "Untitled resource".to_string());
+        let owner_name = resource
+            .get("author")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| to_non_empty_string(resource.get("uname")));
+        let duration_seconds = parse_search_duration_seconds(resource.get("duration"));
+        let cover_url = to_non_empty_string(resource.get("pic"))
+            .or_else(|| to_non_empty_string(resource.get("cover")))
+            .map(|url| normalize_url(&url));
+
+        let (source_locator, lyric_locator, bvid, cid, inferred_kind) =
+            infer_resource_locators(resource, &resource_id);
+        let content_kind = if inferred_kind == "unknown" {
+            normalize_content_kind(resource.get("type"))
+        } else {
+            inferred_kind
+        };
+
+        items.push(BilibiliFavoriteResourceItem {
+            resource_id,
+            title,
+            owner_name,
+            duration_seconds,
+            cover_url,
+            source_locator,
+            lyric_locator,
+            bvid,
+            cid,
+            content_kind,
+        });
+    }
+
+    let total = to_u64(data.get("numResults")).unwrap_or(items.len() as u64);
+
+    Ok(BilibiliFavoriteResourcePage {
+        folder_id: format!("bilibili:search:{normalized_keyword}"),
+        page_num: normalized_page_num,
+        page_size: normalized_page_size,
+        total,
+        has_more: false,
+        items,
+    })
+}
+
 pub fn search_resource_by_bvid(
     app: &AppHandle,
     bvid: &str,
@@ -3637,18 +3956,7 @@ pub fn prepare_cached_playback(
 
     if !can_probe_playback_cache(&cache_path) {
         if let Some(job) = active_job.as_ref() {
-            let state = wait_for_playback_prebuffer(
-                &job,
-                BILIBILI_PLAYBACK_CACHE_PROBE_SOFT_BYTES,
-                Duration::from_millis(BILIBILI_PLAYBACK_CACHE_PROBE_SOFT_WAIT_MS),
-            )?;
-
-            if state.completed && !can_probe_playback_cache(&cache_path) {
-                return Err(
-                    "Bilibili playback cache download completed but remains undecodable"
-                        .to_string(),
-                );
-            }
+            wait_for_playback_cache_probe_ready(job, &cache_path)?;
         } else {
             return Err(
                 "Bilibili playback cache exists but is not decodable; please refresh and retry"

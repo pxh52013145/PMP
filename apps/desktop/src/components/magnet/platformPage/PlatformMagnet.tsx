@@ -272,6 +272,8 @@ export const PlatformMagnet: React.FC = () => {
     bilibiliResources,
     filteredBilibiliResources,
     refreshBilibiliFolders,
+    refreshBilibiliRecommendedResources,
+    searchBilibiliHomepageResources,
     refreshBilibiliResources,
     loadMoreBilibiliResources,
     handleBvSearch,
@@ -671,13 +673,32 @@ export const PlatformMagnet: React.FC = () => {
             onCloseFolderDrawer={() => {
               setFolderDrawerOpen(false);
             }}
+            onShowRecommended={() => {
+              setSelectedFolderId(null);
+              setFolderDrawerOpen(false);
+            }}
             onSelectFolder={(folderId) => {
               setSelectedFolderId(folderId);
               setFolderDrawerOpen(false);
             }}
             onResourceFilterQueryChange={setResourceFilterQuery}
+            onResourceSearchSubmit={() => {
+              if (!selectedFolderId) {
+                void searchBilibiliHomepageResources(resourceFilterQuery);
+                return;
+              }
+              void refreshBilibiliResources(selectedFolderId);
+            }}
             onRefreshResources={() => {
-              if (!selectedFolderId) return;
+              if (!selectedFolderId) {
+                const keyword = resourceFilterQuery.trim();
+                if (keyword) {
+                  void searchBilibiliHomepageResources(keyword);
+                  return;
+                }
+                void refreshBilibiliRecommendedResources();
+                return;
+              }
               void refreshBilibiliResources(selectedFolderId);
             }}
             onOpenResourceContextMenu={openResourceContextMenu}

@@ -162,6 +162,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
   }, [filteredBilibiliResources, getResourceCacheKey, resourceCoverUrlMap]);
 
   useEffect(() => {
+    if (!selectedFolderId) return;
     const now = Date.now();
     const candidates = filteredBilibiliResources
       .filter((item) => {
@@ -229,6 +230,7 @@ export function useBilibiliResourceEnhancer(params: UseBilibiliResourceEnhancerP
     getResourceCacheKey,
     isVideoSourceLocator,
     resourceQualityTagMap,
+    selectedFolderId,
   ]);
 
   return {

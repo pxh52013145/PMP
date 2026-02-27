@@ -5,6 +5,8 @@ import {
   deleteNativeLibraryUserEntry,
   deleteNativeLibraryTracks,
   getNativeLibrarySelectedLyrics,
+  listNativeBilibiliRecommendedResources,
+  listNativeBilibiliSearchResources,
   listNativeLibraryCloudHashJobs,
   listNativeLibraryFallbackTasks,
   listNativeLibraryUserEntries,
@@ -495,6 +497,62 @@ describe('nativeLibraryDb', () => {
     expect(result?.selectionKey).toBe('track::track-1');
     expect(result?.selected?.sourceKind).toBe('sidecar');
     expect(result?.selected?.lines[0]?.text).toBe('hello');
+  });
+
+  it('loads bilibili homepage recommendations through native command', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      folderId: 'bilibili:recommended',
+      pageNum: 1,
+      pageSize: 2,
+      total: 2,
+      hasMore: false,
+      items: [
+        {
+          resourceId: '123',
+          title: 'Video 1',
+          sourceLocator: 'bilibili://video/BV1xx411c7mD',
+          contentKind: 'video',
+        },
+      ],
+    });
+
+    const page = await listNativeBilibiliRecommendedResources();
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_bilibili_list_recommended_resources');
+    expect(page?.folderId).toBe('bilibili:recommended');
+    expect(page?.items[0]?.resourceId).toBe('123');
+  });
+
+  it('loads bilibili homepage search results through native command', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      folderId: 'bilibili:search:music',
+      pageNum: 1,
+      pageSize: 20,
+      total: 1,
+      hasMore: false,
+      items: [
+        {
+          resourceId: '456',
+          title: 'Music Video',
+          sourceLocator: 'bilibili://video/BV1xx411c7mD',
+          contentKind: 'video',
+        },
+      ],
+    });
+
+    const page = await listNativeBilibiliSearchResources({
+      keyword: '  music  ',
+      pageNum: 1,
+      pageSize: 20,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_bilibili_search_resources', {
+      keyword: 'music',
+      pageNum: 1,
+      pageSize: 20,
+    });
+    expect(page?.folderId).toBe('bilibili:search:music');
+    expect(page?.items[0]?.resourceId).toBe('456');
   });
 
   it('parses transient lyric document without persisted id', async () => {

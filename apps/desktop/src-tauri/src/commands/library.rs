@@ -249,6 +249,31 @@ pub async fn music_library_bilibili_list_favorite_resources(
     .map_err(|e| format!("Bilibili favorite resource list task failed: {e}"))?
 }
 
+#[tauri::command]
+pub async fn music_library_bilibili_list_recommended_resources(
+    app: tauri::AppHandle,
+) -> Result<music_platform_bilibili::BilibiliFavoriteResourcePage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::list_recommended_resources(&app)
+    })
+    .await
+    .map_err(|e| format!("Bilibili recommended resource list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_bilibili_search_resources(
+    app: tauri::AppHandle,
+    keyword: String,
+    page_num: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<music_platform_bilibili::BilibiliFavoriteResourcePage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_platform_bilibili::search_resources(&app, &keyword, page_num, page_size)
+    })
+    .await
+    .map_err(|e| format!("Bilibili search resource task failed: {e}"))?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_bilibili_search_resource_by_bvid(
     app: tauri::AppHandle,

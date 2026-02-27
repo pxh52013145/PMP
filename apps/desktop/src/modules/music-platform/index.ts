@@ -19,6 +19,8 @@ export {
   getBilibiliPlaybackCacheSettings,
   listBilibiliFavoriteFolders,
   listBilibiliFavoriteResources,
+  listBilibiliRecommendedResources,
+  searchBilibiliResources,
   listBilibiliPlaybackQualities,
   pickBilibiliCacheDirectory,
   prepareBilibiliCachedPlayback,

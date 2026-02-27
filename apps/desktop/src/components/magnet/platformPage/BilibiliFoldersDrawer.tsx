@@ -11,6 +11,7 @@ type BilibiliFoldersDrawerProps = {
   selectedFolderId: string | null;
   onRefresh: () => void;
   onClose: () => void;
+  onShowRecommended: () => void;
   onSelectFolder: (folderId: string) => void;
   t: Translator;
 };
@@ -25,6 +26,7 @@ export function BilibiliFoldersDrawer(props: BilibiliFoldersDrawerProps) {
     selectedFolderId,
     onRefresh,
     onClose,
+    onShowRecommended,
     onSelectFolder,
     t,
   } = props;
@@ -58,10 +60,30 @@ export function BilibiliFoldersDrawer(props: BilibiliFoldersDrawerProps) {
 
       {!bilibiliAuthorized ? (
         <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.folder.waiting')}</p>
-      ) : folders.length === 0 ? (
-        <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.folder.empty')}</p>
       ) : (
         <div className="platform-magnet-bilibili-folder-list">
+          <button
+            type="button"
+            className={`platform-magnet-bilibili-folder-item ${
+              selectedFolderId === null ? 'platform-magnet-bilibili-folder-item--active' : ''
+            }`}
+            onClick={onShowRecommended}
+          >
+            <span className="platform-magnet-bilibili-folder-title">
+              {t('magnet.platform.bilibili.folder.recommendedEntry')}
+            </span>
+            <span
+              className="platform-magnet-bilibili-folder-count platform-magnet-bilibili-folder-count--placeholder"
+              aria-hidden="true"
+            >
+              {t('magnet.platform.bilibili.folder.count', { count: 0 })}
+            </span>
+          </button>
+
+          {folders.length === 0 ? (
+            <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.folder.empty')}</p>
+          ) : null}
+
           {folders.map((folder) => (
             <button
               key={folder.folderId}

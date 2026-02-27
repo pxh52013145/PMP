@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   listBilibiliFavoriteFolders,
   listBilibiliFavoriteResources,
+  listBilibiliRecommendedResources,
+  searchBilibiliResources,
   searchBilibiliResourceByBvid,
   type BilibiliFavoriteFolderItem,
   type BilibiliFavoriteResourceItem,
@@ -125,11 +127,12 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   const filteredBilibiliResources = useMemo(() => {
     const query = resourceFilterQuery.trim().toLowerCase();
     if (!query) return bilibiliResources;
+    if (!selectedFolderId) return bilibiliResources;
     return bilibiliResources.filter((item) => {
       const haystack = `${item.title} ${item.ownerName ?? ''} ${item.bvid ?? ''}`.toLowerCase();
       return haystack.includes(query);
     });
-  }, [bilibiliResources, resourceFilterQuery]);
+  }, [bilibiliResources, resourceFilterQuery, selectedFolderId]);
 
   const refreshBilibiliFolders = useCallback(async () => {
     if (!bilibiliAuthorized) {
@@ -156,7 +159,7 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
 
       setSelectedFolderId((prev) => {
         if (prev && folders.some((item) => item.folderId === prev)) return prev;
-        return folders[0]?.folderId ?? null;
+        return null;
       });
     } catch (err) {
       setFolderError(toErrorMessage(err, t('magnet.platform.bilibili.folder.error')));
@@ -164,6 +167,73 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
       setFolderLoading(false);
     }
   }, [bilibiliAuthorized, t]);
+
+  const refreshBilibiliRecommendedResources = useCallback(async () => {
+    if (!bilibiliAuthorized) {
+      setResourcePage(null);
+      setResourceLoadingMore(false);
+      return;
+    }
+
+    setResourceLoading(true);
+    try {
+      const page = await listBilibiliRecommendedResources();
+      setResourcePage(
+        page
+          ? {
+              ...page,
+              items: [...page.items],
+            }
+          : null
+      );
+      setResourceLoadingMore(false);
+      setResourceError(null);
+    } catch (err) {
+      setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
+    } finally {
+      setResourceLoading(false);
+    }
+  }, [bilibiliAuthorized, t]);
+
+  const searchBilibiliHomepageResources = useCallback(
+    async (keyword: string) => {
+      if (!bilibiliAuthorized) {
+        setResourcePage(null);
+        setResourceLoadingMore(false);
+        return;
+      }
+
+      const normalizedKeyword = keyword.trim();
+      if (!normalizedKeyword) {
+        await refreshBilibiliRecommendedResources();
+        return;
+      }
+
+      setResourceLoading(true);
+      try {
+        const page = await searchBilibiliResources({
+          keyword: normalizedKeyword,
+          pageNum: 1,
+          pageSize: BILIBILI_RESOURCE_PAGE_SIZE,
+        });
+        setResourcePage(
+          page
+            ? {
+                ...page,
+                items: [...page.items],
+              }
+            : null
+        );
+        setResourceLoadingMore(false);
+        setResourceError(null);
+      } catch (err) {
+        setResourceError(toErrorMessage(err, t('magnet.platform.bilibili.resource.error')));
+      } finally {
+        setResourceLoading(false);
+      }
+    },
+    [bilibiliAuthorized, refreshBilibiliRecommendedResources, t]
+  );
 
   const refreshBilibiliResources = useCallback(
     async (folderId: string) => {
@@ -292,9 +362,12 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
   }, [refreshBilibiliFolders]);
 
   useEffect(() => {
-    if (!selectedFolderId) return;
-    void refreshBilibiliResources(selectedFolderId);
-  }, [refreshBilibiliResources, selectedFolderId]);
+    if (selectedFolderId) {
+      void refreshBilibiliResources(selectedFolderId);
+      return;
+    }
+    void refreshBilibiliRecommendedResources();
+  }, [refreshBilibiliRecommendedResources, refreshBilibiliResources, selectedFolderId]);
 
   return {
     folderLoading,
@@ -317,6 +390,8 @@ export function useBilibiliResourceBrowser(params: UseBilibiliResourceBrowserPar
     bilibiliResources,
     filteredBilibiliResources,
     refreshBilibiliFolders,
+    refreshBilibiliRecommendedResources,
+    searchBilibiliHomepageResources,
     refreshBilibiliResources,
     loadMoreBilibiliResources,
     handleBvSearch,

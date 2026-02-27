@@ -296,6 +296,10 @@
   color: rgba(57, 33, 76, 0.66);
 }
 
+.platform-magnet-bilibili-folder-count--placeholder {
+  visibility: hidden;
+}
+
 .platform-magnet-bilibili-resource-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

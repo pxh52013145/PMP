@@ -70,8 +70,10 @@ type BilibiliWorkspaceProps = {
   qualityLabelForKey: (qualityKey: string) => string;
   onRefreshFolders: () => void;
   onCloseFolderDrawer: () => void;
+  onShowRecommended: () => void;
   onSelectFolder: (folderId: string) => void;
   onResourceFilterQueryChange: (query: string) => void;
+  onResourceSearchSubmit: () => void;
   onRefreshResources: () => void;
   onOpenResourceContextMenu: (item: BilibiliFavoriteResourceItem, event: React.MouseEvent) => void;
   onLoadMoreResources: () => void;
@@ -147,8 +149,10 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
     qualityLabelForKey,
     onRefreshFolders,
     onCloseFolderDrawer,
+    onShowRecommended,
     onSelectFolder,
     onResourceFilterQueryChange,
+    onResourceSearchSubmit,
     onRefreshResources,
     onOpenResourceContextMenu,
     onLoadMoreResources,
@@ -189,6 +193,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
             selectedFolderId={selectedFolderId}
             onRefresh={onRefreshFolders}
             onClose={onCloseFolderDrawer}
+            onShowRecommended={onShowRecommended}
             onSelectFolder={onSelectFolder}
             t={t}
           />
@@ -197,13 +202,22 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
             <div className="platform-magnet-bilibili-resource-toolbar">
               <input
                 value={resourceFilterQuery}
-                placeholder={t('magnet.platform.bilibili.resource.searchPlaceholder')}
+                placeholder={
+                  selectedFolderId
+                    ? t('magnet.platform.bilibili.resource.searchPlaceholder')
+                    : t('magnet.platform.bilibili.resource.searchPlaceholderHomepage')
+                }
                 onChange={(event) => onResourceFilterQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return;
+                  event.preventDefault();
+                  onResourceSearchSubmit();
+                }}
               />
               <button
                 type="button"
                 className="platform-magnet-mini-btn"
-                disabled={!selectedFolderId || resourceLoading || resourceLoadingMore}
+                disabled={!bilibiliAuthorized || resourceLoading || resourceLoadingMore}
                 onClick={onRefreshResources}
               >
                 {resourceLoading
@@ -219,6 +233,10 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
                     {t('magnet.platform.bilibili.drawer.currentFolderName', {
                       folder: selectedBilibiliFolder.title,
                     })}
+                  </p>
+                ) : resourcePage ? (
+                  <p className="platform-magnet-panel-summary">
+                    {t('magnet.platform.bilibili.resource.recommended')}
                   </p>
                 ) : (
                   <span />
@@ -236,12 +254,16 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
             {resourceError ? <p className="platform-magnet-error">{resourceError}</p> : null}
             {bvidSearchError ? <p className="platform-magnet-error">{bvidSearchError}</p> : null}
 
-            {!selectedFolderId && !bvidSearchResult ? (
-              <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.resource.selectFolder')}</p>
-            ) : resourceLoading ? (
+            {resourceLoading ? (
               <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.resource.loading')}</p>
             ) : filteredBilibiliResources.length === 0 ? (
-              <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.resource.emptyFiltered')}</p>
+              <p className="platform-magnet-panel-empty">
+                {resourceFilterQuery.trim().length > 0
+                  ? t('magnet.platform.bilibili.resource.emptyFiltered')
+                  : selectedFolderId
+                    ? t('magnet.platform.bilibili.resource.empty')
+                    : t('magnet.platform.bilibili.resource.recommendedEmpty')}
+              </p>
             ) : (
               <BilibiliResourceGrid
                 items={filteredBilibiliResources}

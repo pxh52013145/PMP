@@ -2,6 +2,8 @@ import {
   getNativeBilibiliPlaybackCacheSettings,
   listNativeBilibiliFavoriteFolders,
   listNativeBilibiliFavoriteResources,
+  listNativeBilibiliRecommendedResources,
+  listNativeBilibiliSearchResources,
   listNativeBilibiliPlaybackQualities,
   prepareNativeBilibiliCoverCache,
   prepareNativeBilibiliCachedPlayback,
@@ -117,6 +119,67 @@ export async function listBilibiliFavoriteResources(options: {
 
   const page = await listNativeBilibiliFavoriteResources({
     folderId,
+    pageNum: options.pageNum,
+    pageSize: options.pageSize,
+  });
+  if (!page) return null;
+
+  return {
+    folderId: page.folderId,
+    pageNum: normalizePositiveInt(page.pageNum) || 1,
+    pageSize: normalizePositiveInt(page.pageSize) || 1,
+    total: normalizePositiveInt(page.total),
+    hasMore: page.hasMore,
+    items: page.items.map((item) => ({
+      resourceId: item.resourceId,
+      title: item.title,
+      ownerName: normalizeString(item.ownerName) || undefined,
+      durationSeconds: item.durationSeconds,
+      coverUrl: normalizeString(item.coverUrl) || undefined,
+      sourceLocator: item.sourceLocator,
+      lyricLocator: normalizeString(item.lyricLocator) || undefined,
+      bvid: normalizeString(item.bvid) || undefined,
+      cid: normalizeString(item.cid) || undefined,
+      contentKind: normalizeString(item.contentKind) || 'unknown',
+    })),
+  };
+}
+
+export async function listBilibiliRecommendedResources(): Promise<BilibiliFavoriteResourcePage | null> {
+  const page = await listNativeBilibiliRecommendedResources();
+  if (!page) return null;
+
+  return {
+    folderId: page.folderId,
+    pageNum: normalizePositiveInt(page.pageNum) || 1,
+    pageSize: normalizePositiveInt(page.pageSize) || 1,
+    total: normalizePositiveInt(page.total),
+    hasMore: page.hasMore,
+    items: page.items.map((item) => ({
+      resourceId: item.resourceId,
+      title: item.title,
+      ownerName: normalizeString(item.ownerName) || undefined,
+      durationSeconds: item.durationSeconds,
+      coverUrl: normalizeString(item.coverUrl) || undefined,
+      sourceLocator: item.sourceLocator,
+      lyricLocator: normalizeString(item.lyricLocator) || undefined,
+      bvid: normalizeString(item.bvid) || undefined,
+      cid: normalizeString(item.cid) || undefined,
+      contentKind: normalizeString(item.contentKind) || 'unknown',
+    })),
+  };
+}
+
+export async function searchBilibiliResources(options: {
+  keyword: string;
+  pageNum?: number;
+  pageSize?: number;
+}): Promise<BilibiliFavoriteResourcePage | null> {
+  const keyword = normalizeString(options.keyword);
+  if (!keyword) return null;
+
+  const page = await listNativeBilibiliSearchResources({
+    keyword,
     pageNum: options.pageNum,
     pageSize: options.pageSize,
   });
