@@ -31,6 +31,10 @@ pub enum DesktopLyricsSidecarCommand {
         offset_x: i32,
         offset_y: i32,
     },
+    SetRegionSize {
+        width: i32,
+        height: i32,
+    },
     SetText {
         text: Option<DesktopLyricsSidecarText>,
     },
@@ -41,8 +45,18 @@ pub enum DesktopLyricsSidecarCommand {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum DesktopLyricsSidecarEvent {
     Ready,
-    Ack { command: String },
-    Error { message: String },
+    Ack {
+        command: String,
+    },
+    LayoutChanged {
+        offset_x: i32,
+        offset_y: i32,
+        region_width: i32,
+        region_height: i32,
+    },
+    Error {
+        message: String,
+    },
 }
 
 static SIDECAR_EVENT_STDOUT_LOCK: Mutex<()> = Mutex::new(());
@@ -136,6 +150,7 @@ fn sidecar_command_name(command: &DesktopLyricsSidecarCommand) -> &'static str {
         DesktopLyricsSidecarCommand::SetOpacityPercent { .. } => "setOpacityPercent",
         DesktopLyricsSidecarCommand::SetPositionPreset { .. } => "setPositionPreset",
         DesktopLyricsSidecarCommand::SetPositionOffset { .. } => "setPositionOffset",
+        DesktopLyricsSidecarCommand::SetRegionSize { .. } => "setRegionSize",
         DesktopLyricsSidecarCommand::SetText { .. } => "setText",
         DesktopLyricsSidecarCommand::Shutdown => "shutdown",
     }
@@ -144,17 +159,17 @@ fn sidecar_command_name(command: &DesktopLyricsSidecarCommand) -> &'static str {
 #[cfg(target_os = "windows")]
 fn run_windows_sidecar_loop() -> Result<(), String> {
     use eframe::egui;
-    use eframe::egui::{Color32, RichText};
+    use eframe::egui::{Color32, RichText, Stroke};
     use std::ptr;
     use std::sync::mpsc::{self, Receiver, TryRecvError};
     use std::time::Duration;
-    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Foundation::{HWND, POINT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetSystemMetrics, GetWindowLongPtrW, SetLayeredWindowAttributes,
+        FindWindowW, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, SetLayeredWindowAttributes,
         SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA,
-        SM_CXSCREEN, SM_CYSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE,
+        WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     const WINDOW_TITLE: &str = "PMP Desktop Lyrics Overlay";
@@ -163,7 +178,13 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
     const MIN_OPACITY_PERCENT: u8 = 35;
     const MAX_OPACITY_PERCENT: u8 = 100;
     const DEFAULT_OPACITY_PERCENT: u8 = 92;
-    const MAX_POSITION_OFFSET: i32 = 960;
+    const MAX_POSITION_OFFSET: i32 = 16384;
+    const DEFAULT_REGION_WIDTH: i32 = 0;
+    const DEFAULT_REGION_HEIGHT: i32 = 0;
+    const MIN_REGION_WIDTH: i32 = 320;
+    const MAX_REGION_WIDTH: i32 = 8192;
+    const MIN_REGION_HEIGHT: i32 = 72;
+    const MAX_REGION_HEIGHT: i32 = 2160;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum PositionPreset {
@@ -195,6 +216,10 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
         position_preset: PositionPreset,
         position_offset_x: i32,
         position_offset_y: i32,
+        region_width: i32,
+        region_height: i32,
+        absolute_x: Option<i32>,
+        absolute_y: Option<i32>,
         primary_text: String,
         secondary_text: String,
         shutdown_requested: bool,
@@ -211,11 +236,23 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                 position_preset: PositionPreset::BottomCenter,
                 position_offset_x: 0,
                 position_offset_y: 0,
+                region_width: DEFAULT_REGION_WIDTH,
+                region_height: DEFAULT_REGION_HEIGHT,
+                absolute_x: None,
+                absolute_y: None,
                 primary_text: String::new(),
                 secondary_text: String::new(),
                 shutdown_requested: false,
             }
         }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct AppliedNativeWindowState {
+        click_through: bool,
+        opacity_percent: u8,
+        visible: bool,
+        bounds: (i32, i32, i32, i32),
     }
 
     fn normalize_opacity(value: u8) -> u8 {
@@ -224,6 +261,91 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
 
     fn normalize_offset(value: i32) -> i32 {
         value.clamp(-MAX_POSITION_OFFSET, MAX_POSITION_OFFSET)
+    }
+
+    fn normalize_region_width(value: i32) -> i32 {
+        value.clamp(MIN_REGION_WIDTH, MAX_REGION_WIDTH)
+    }
+
+    fn normalize_region_height(value: i32) -> i32 {
+        value.clamp(MIN_REGION_HEIGHT, MAX_REGION_HEIGHT)
+    }
+
+    fn virtual_desktop_metrics() -> (i32, i32, i32, i32) {
+        unsafe {
+            let desktop_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let desktop_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            let desktop_w = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1280);
+            let desktop_h = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(720);
+            (desktop_x, desktop_y, desktop_w, desktop_h)
+        }
+    }
+
+    fn resolve_overlay_size(region_width: i32, region_height: i32) -> (i32, i32) {
+        let (_, _, desktop_w, desktop_h) = virtual_desktop_metrics();
+        let requested_width = if region_width <= 0 {
+            ((desktop_w as f64) * 0.66).round() as i32
+        } else {
+            normalize_region_width(region_width)
+        };
+        let requested_height = if region_height <= 0 {
+            132
+        } else {
+            normalize_region_height(region_height)
+        };
+
+        let max_width = (desktop_w - 24).max(MIN_REGION_WIDTH);
+        let max_height = (desktop_h - 24).max(MIN_REGION_HEIGHT);
+        let width = requested_width.clamp(MIN_REGION_WIDTH, max_width);
+        let height = requested_height.clamp(MIN_REGION_HEIGHT, max_height);
+        (width, height)
+    }
+
+    fn clamp_to_virtual_desktop(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
+        let (desktop_x, desktop_y, desktop_w, desktop_h) = virtual_desktop_metrics();
+        let min_x = desktop_x;
+        let min_y = desktop_y;
+        let max_x = desktop_x.saturating_add((desktop_w - width).max(0));
+        let max_y = desktop_y.saturating_add((desktop_h - height).max(0));
+        (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+    }
+
+    fn overlay_anchor_position(preset: PositionPreset, width: i32, height: i32) -> (i32, i32) {
+        let (desktop_x, desktop_y, desktop_w, desktop_h) = virtual_desktop_metrics();
+        let margin_x = 48;
+        let margin_bottom = 120;
+        let margin_top = 84;
+
+        let base_x = match preset {
+            PositionPreset::BottomLeft => desktop_x.saturating_add(margin_x),
+            PositionPreset::BottomRight => {
+                desktop_x.saturating_add((desktop_w - width - margin_x).max(0))
+            }
+            PositionPreset::BottomCenter | PositionPreset::TopCenter => {
+                desktop_x.saturating_add(((desktop_w - width) / 2).max(0))
+            }
+        };
+
+        let base_y = match preset {
+            PositionPreset::TopCenter => desktop_y.saturating_add(margin_top),
+            _ => desktop_y.saturating_add((desktop_h - height - margin_bottom).max(0)),
+        };
+
+        clamp_to_virtual_desktop(base_x, base_y, width, height)
+    }
+
+    fn offset_from_absolute_position(
+        absolute_x: i32,
+        absolute_y: i32,
+        preset: PositionPreset,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32) {
+        let (anchor_x, anchor_y) = overlay_anchor_position(preset, width, height);
+        (
+            normalize_offset(absolute_x.saturating_sub(anchor_x)),
+            normalize_offset(absolute_y.saturating_sub(anchor_y)),
+        )
     }
 
     fn to_wide(value: &str) -> Vec<u16> {
@@ -241,46 +363,32 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
         }
     }
 
+    fn current_cursor_screen_position() -> Option<(i32, i32)> {
+        unsafe {
+            let mut point = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut point as *mut POINT) == 0 {
+                return None;
+            }
+            Some((point.x, point.y))
+        }
+    }
+
     fn overlay_window_bounds(
         preset: PositionPreset,
         offset_x: i32,
         offset_y: i32,
+        region_width: i32,
+        region_height: i32,
     ) -> (i32, i32, i32, i32) {
-        unsafe {
-            let screen_w = GetSystemMetrics(SM_CXSCREEN).max(1280);
-            let screen_h = GetSystemMetrics(SM_CYSCREEN).max(720);
-            let width = ((screen_w as f64) * 0.66).round() as i32;
-            let height = 132;
-            let margin_x = 48;
-            let margin_bottom = 120;
-            let margin_top = 84;
-
-            let base_x = match preset {
-                PositionPreset::BottomLeft => margin_x,
-                PositionPreset::BottomRight => (screen_w - width - margin_x).max(0),
-                PositionPreset::BottomCenter | PositionPreset::TopCenter => {
-                    ((screen_w - width) / 2).max(0)
-                }
-            };
-
-            let base_y = match preset {
-                PositionPreset::TopCenter => margin_top,
-                _ => (screen_h - height - margin_bottom).max(0),
-            };
-
-            let safe_width = width.max(640);
-            let max_x = (screen_w - safe_width).max(0);
-            let max_y = (screen_h - height).max(0);
-
-            let x = base_x
-                .saturating_add(normalize_offset(offset_x))
-                .clamp(0, max_x);
-            let y = base_y
-                .saturating_add(normalize_offset(offset_y))
-                .clamp(0, max_y);
-
-            (x, y, safe_width, height)
-        }
+        let (width, height) = resolve_overlay_size(region_width, region_height);
+        let (anchor_x, anchor_y) = overlay_anchor_position(preset, width, height);
+        let (x, y) = clamp_to_virtual_desktop(
+            anchor_x.saturating_add(normalize_offset(offset_x)),
+            anchor_y.saturating_add(normalize_offset(offset_y)),
+            width,
+            height,
+        );
+        (x, y, width, height)
     }
 
     fn apply_native_window_style(hwnd: HWND, click_through: bool, opacity_percent: u8) {
@@ -314,13 +422,7 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
         }
     }
 
-    fn apply_native_window_bounds(
-        hwnd: HWND,
-        preset: PositionPreset,
-        offset_x: i32,
-        offset_y: i32,
-    ) {
-        let (x, y, width, height) = overlay_window_bounds(preset, offset_x, offset_y);
+    fn apply_native_window_bounds(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
         unsafe {
             let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
         }
@@ -337,6 +439,13 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
         state: OverlayRuntimeState,
         window_title: Vec<u16>,
         ready_emitted: bool,
+        last_drag_cursor_position: Option<(i32, i32)>,
+        last_resize_cursor_position: Option<(i32, i32)>,
+        drag_active: bool,
+        resize_active: bool,
+        layout_dirty: bool,
+        native_state_dirty: bool,
+        last_applied_native_state: Option<AppliedNativeWindowState>,
     }
 
     impl DesktopLyricsEguiApp {
@@ -346,6 +455,13 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                 state: OverlayRuntimeState::default(),
                 window_title,
                 ready_emitted: false,
+                last_drag_cursor_position: None,
+                last_resize_cursor_position: None,
+                drag_active: false,
+                resize_active: false,
+                layout_dirty: false,
+                native_state_dirty: true,
+                last_applied_native_state: None,
             }
         }
 
@@ -355,19 +471,9 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             }
 
             self.state.hwnd = resolve_overlay_hwnd(self.window_title.as_slice());
-            if let Some(hwnd) = self.state.hwnd {
-                apply_native_window_style(
-                    hwnd,
-                    self.state.click_through,
-                    self.state.opacity_percent,
-                );
-                apply_native_window_bounds(
-                    hwnd,
-                    self.state.position_preset,
-                    self.state.position_offset_x,
-                    self.state.position_offset_y,
-                );
-                apply_native_window_visibility(hwnd, self.state.visible);
+            if self.state.hwnd.is_some() {
+                self.last_applied_native_state = None;
+                self.native_state_dirty = true;
 
                 if !self.ready_emitted {
                     emit_sidecar_event(&DesktopLyricsSidecarEvent::Ready);
@@ -383,14 +489,148 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                 return;
             };
 
-            apply_native_window_style(hwnd, self.state.click_through, self.state.opacity_percent);
-            apply_native_window_bounds(
-                hwnd,
+            if !self.native_state_dirty && self.last_applied_native_state.is_some() {
+                return;
+            }
+
+            let bounds = self.current_window_bounds();
+            let next_applied = AppliedNativeWindowState {
+                click_through: self.state.click_through,
+                opacity_percent: self.state.opacity_percent,
+                visible: self.state.visible,
+                bounds,
+            };
+
+            let previous = self.last_applied_native_state;
+            let style_changed = previous
+                .map(|prior| {
+                    prior.click_through != next_applied.click_through
+                        || prior.opacity_percent != next_applied.opacity_percent
+                })
+                .unwrap_or(true);
+            let bounds_changed = previous
+                .map(|prior| prior.bounds != next_applied.bounds)
+                .unwrap_or(true);
+            let visibility_changed = previous
+                .map(|prior| prior.visible != next_applied.visible)
+                .unwrap_or(true);
+
+            if style_changed {
+                apply_native_window_style(
+                    hwnd,
+                    next_applied.click_through,
+                    next_applied.opacity_percent,
+                );
+            }
+
+            if bounds_changed {
+                apply_native_window_bounds(
+                    hwnd,
+                    next_applied.bounds.0,
+                    next_applied.bounds.1,
+                    next_applied.bounds.2,
+                    next_applied.bounds.3,
+                );
+            }
+
+            if visibility_changed {
+                apply_native_window_visibility(hwnd, next_applied.visible);
+            }
+
+            self.last_applied_native_state = Some(next_applied);
+            self.native_state_dirty = false;
+        }
+
+        fn current_window_bounds(&self) -> (i32, i32, i32, i32) {
+            let (width, height) =
+                resolve_overlay_size(self.state.region_width, self.state.region_height);
+
+            if let (Some(absolute_x), Some(absolute_y)) =
+                (self.state.absolute_x, self.state.absolute_y)
+            {
+                let (x, y) = clamp_to_virtual_desktop(absolute_x, absolute_y, width, height);
+                return (x, y, width, height);
+            }
+
+            overlay_window_bounds(
                 self.state.position_preset,
                 self.state.position_offset_x,
                 self.state.position_offset_y,
+                self.state.region_width,
+                self.state.region_height,
+            )
+        }
+
+        fn sync_offsets_from_absolute_position(&mut self, absolute_x: i32, absolute_y: i32) {
+            let (width, height) =
+                resolve_overlay_size(self.state.region_width, self.state.region_height);
+            let (offset_x, offset_y) = offset_from_absolute_position(
+                absolute_x,
+                absolute_y,
+                self.state.position_preset,
+                width,
+                height,
             );
-            apply_native_window_visibility(hwnd, self.state.visible);
+            self.state.position_offset_x = offset_x;
+            self.state.position_offset_y = offset_y;
+        }
+
+        fn apply_drag_delta(&mut self, delta_x: i32, delta_y: i32) -> bool {
+            if delta_x == 0 && delta_y == 0 {
+                return false;
+            }
+
+            let (current_x, current_y, current_width, current_height) =
+                self.current_window_bounds();
+            let (next_x, next_y) = clamp_to_virtual_desktop(
+                current_x.saturating_add(delta_x),
+                current_y.saturating_add(delta_y),
+                current_width,
+                current_height,
+            );
+
+            if next_x == current_x && next_y == current_y {
+                return false;
+            }
+
+            self.state.absolute_x = Some(next_x);
+            self.state.absolute_y = Some(next_y);
+            self.sync_offsets_from_absolute_position(next_x, next_y);
+            true
+        }
+
+        fn apply_resize_delta(&mut self, delta_x: i32, delta_y: i32) -> bool {
+            if delta_x == 0 && delta_y == 0 {
+                return false;
+            }
+
+            let (current_x, current_y, current_width, current_height) =
+                self.current_window_bounds();
+            let next_width = normalize_region_width(current_width.saturating_add(delta_x));
+            let next_height = normalize_region_height(current_height.saturating_add(delta_y));
+
+            if next_width == current_width && next_height == current_height {
+                return false;
+            }
+
+            self.state.region_width = next_width;
+            self.state.region_height = next_height;
+
+            let (next_x, next_y) =
+                clamp_to_virtual_desktop(current_x, current_y, next_width, next_height);
+            self.state.absolute_x = Some(next_x);
+            self.state.absolute_y = Some(next_y);
+            self.sync_offsets_from_absolute_position(next_x, next_y);
+            true
+        }
+
+        fn emit_layout_changed_event(&self) {
+            emit_sidecar_event(&DesktopLyricsSidecarEvent::LayoutChanged {
+                offset_x: self.state.position_offset_x,
+                offset_y: self.state.position_offset_y,
+                region_width: self.state.region_width,
+                region_height: self.state.region_height,
+            });
         }
 
         fn handle_command(&mut self, command: DesktopLyricsSidecarCommand) {
@@ -399,23 +639,47 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             match command {
                 DesktopLyricsSidecarCommand::SetVisible { visible } => {
                     self.state.visible = visible;
+                    self.native_state_dirty = true;
                 }
                 DesktopLyricsSidecarCommand::SetClickThrough { enabled } => {
                     self.state.click_through = enabled;
+                    self.native_state_dirty = true;
                 }
                 DesktopLyricsSidecarCommand::SetFontSize { font_size } => {
                     self.state.font_size = font_size.max(MIN_FONT_SIZE);
                 }
                 DesktopLyricsSidecarCommand::SetOpacityPercent { opacity_percent } => {
                     self.state.opacity_percent = normalize_opacity(opacity_percent);
+                    self.native_state_dirty = true;
                 }
                 DesktopLyricsSidecarCommand::SetPositionPreset { preset } => {
                     self.state.position_preset = PositionPreset::parse(preset.as_str())
                         .unwrap_or(PositionPreset::BottomCenter);
+                    self.state.absolute_x = None;
+                    self.state.absolute_y = None;
+                    self.native_state_dirty = true;
                 }
                 DesktopLyricsSidecarCommand::SetPositionOffset { offset_x, offset_y } => {
                     self.state.position_offset_x = normalize_offset(offset_x);
                     self.state.position_offset_y = normalize_offset(offset_y);
+                    self.state.absolute_x = None;
+                    self.state.absolute_y = None;
+                    self.native_state_dirty = true;
+                }
+                DesktopLyricsSidecarCommand::SetRegionSize { width, height } => {
+                    self.state.region_width = if width <= 0 {
+                        DEFAULT_REGION_WIDTH
+                    } else {
+                        normalize_region_width(width)
+                    };
+                    self.state.region_height = if height <= 0 {
+                        DEFAULT_REGION_HEIGHT
+                    } else {
+                        normalize_region_height(height)
+                    };
+                    self.state.absolute_x = None;
+                    self.state.absolute_y = None;
+                    self.native_state_dirty = true;
                 }
                 DesktopLyricsSidecarCommand::SetText { text } => match text {
                     Some(DesktopLyricsSidecarText { primary, secondary }) => {
@@ -464,9 +728,107 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
 
             self.apply_state_to_native_window();
 
+            let mut layout_changed = false;
+            let mut drag_gesture_active = false;
+            let mut resize_gesture_active = false;
+            let mut force_emit_layout_event = false;
+
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
                 .show(ctx, |ui| {
+                    if !self.state.click_through {
+                        let panel_rect = ui.max_rect();
+                        let handle_size = 16.0;
+                        let handle_padding = 6.0;
+                        let handle_rect = egui::Rect::from_min_size(
+                            panel_rect.right_bottom()
+                                - egui::vec2(
+                                    handle_size + handle_padding,
+                                    handle_size + handle_padding,
+                                ),
+                            egui::vec2(handle_size, handle_size),
+                        );
+
+                        let resize_response = ui.interact(
+                            handle_rect,
+                            ui.id().with("resize-handle"),
+                            egui::Sense::drag(),
+                        );
+
+                        if resize_response.hovered() || resize_response.dragged() {
+                            ui.output_mut(|output| {
+                                output.cursor_icon = egui::CursorIcon::ResizeNwSe;
+                            });
+                        }
+
+                        if resize_response.dragged() {
+                            resize_gesture_active = true;
+                            if let Some((cursor_x, cursor_y)) = current_cursor_screen_position() {
+                                if let Some((last_x, last_y)) = self.last_resize_cursor_position {
+                                    layout_changed |= self.apply_resize_delta(
+                                        cursor_x.saturating_sub(last_x),
+                                        cursor_y.saturating_sub(last_y),
+                                    );
+                                }
+                                self.last_resize_cursor_position = Some((cursor_x, cursor_y));
+                            }
+                            self.last_drag_cursor_position = None;
+                        } else {
+                            self.last_resize_cursor_position = None;
+                        }
+
+                        let drag_response =
+                            ui.interact(panel_rect, ui.id().with("drag-area"), egui::Sense::drag());
+
+                        if drag_response.hovered() || drag_response.dragged() {
+                            ui.output_mut(|output| {
+                                output.cursor_icon = egui::CursorIcon::Grab;
+                            });
+                        }
+
+                        if drag_response.double_clicked() {
+                            self.state.position_offset_x = 0;
+                            self.state.position_offset_y = 0;
+                            self.state.region_width = DEFAULT_REGION_WIDTH;
+                            self.state.region_height = DEFAULT_REGION_HEIGHT;
+                            self.state.absolute_x = None;
+                            self.state.absolute_y = None;
+                            layout_changed = true;
+                            force_emit_layout_event = true;
+                        }
+
+                        if drag_response.dragged() && !resize_response.dragged() {
+                            drag_gesture_active = true;
+                            if let Some((cursor_x, cursor_y)) = current_cursor_screen_position() {
+                                if let Some((last_x, last_y)) = self.last_drag_cursor_position {
+                                    layout_changed |= self.apply_drag_delta(
+                                        cursor_x.saturating_sub(last_x),
+                                        cursor_y.saturating_sub(last_y),
+                                    );
+                                }
+                                self.last_drag_cursor_position = Some((cursor_x, cursor_y));
+                            }
+                        } else {
+                            self.last_drag_cursor_position = None;
+                        }
+
+                        let handle_color = if resize_response.dragged() {
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 180)
+                        } else {
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 120)
+                        };
+                        ui.painter().rect_filled(handle_rect, 3.0, handle_color);
+                        ui.painter().line_segment(
+                            [handle_rect.left_top(), handle_rect.right_bottom()],
+                            Stroke::new(1.0, Color32::from_rgba_unmultiplied(32, 32, 32, 180)),
+                        );
+                    } else {
+                        self.last_drag_cursor_position = None;
+                        self.last_resize_cursor_position = None;
+                        drag_gesture_active = false;
+                        resize_gesture_active = false;
+                    }
+
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| {
                         if !self.state.primary_text.trim().is_empty() {
@@ -490,6 +852,24 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                         }
                     });
                 });
+
+            if layout_changed {
+                self.native_state_dirty = true;
+                self.apply_state_to_native_window();
+                self.layout_dirty = true;
+            }
+
+            let interaction_ended = (self.drag_active || self.resize_active)
+                && !drag_gesture_active
+                && !resize_gesture_active;
+
+            if (interaction_ended || force_emit_layout_event) && self.layout_dirty {
+                self.emit_layout_changed_event();
+                self.layout_dirty = false;
+            }
+
+            self.drag_active = drag_gesture_active;
+            self.resize_active = resize_gesture_active;
 
             if self.state.visible {
                 ctx.request_repaint_after(Duration::from_millis(16));

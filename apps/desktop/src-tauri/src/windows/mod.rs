@@ -27,6 +27,8 @@ pub const EVENT_PLUGIN_WINDOW_HIDDEN: &str = "plugin-window-hidden";
 pub const EVENT_VST_MANAGER_WINDOW_SHOWN: &str = "vst-manager-window-shown";
 pub const EVENT_VST_MANAGER_WINDOW_HIDDEN: &str = "vst-manager-window-hidden";
 
+pub const EVENT_DESKTOP_LYRICS_LAYOUT_CHANGED: &str = "desktop-lyrics-layout-changed";
+
 pub const EVENT_TASKBAR_MEDIA_CONTROL: &str = "taskbar-media-control";
 
 // Best-effort: mouse side buttons (XButton1/XButton2) captured on Windows.

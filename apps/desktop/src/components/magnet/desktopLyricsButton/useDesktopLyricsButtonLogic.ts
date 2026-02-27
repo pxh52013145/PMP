@@ -5,25 +5,28 @@ import { useT } from '../../../i18n';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import {
   type DesktopLyricsOverlaySettings,
-  type DesktopLyricsPositionPreset,
   normalizeDesktopLyricsFontSize,
+  normalizeDesktopLyricsLyricOffsetMs,
   normalizeDesktopLyricsOpacityPercent,
-  normalizeDesktopLyricsPositionPreset,
   normalizeDesktopLyricsPositionOffset,
+  normalizeDesktopLyricsRegionHeight,
+  normalizeDesktopLyricsRegionWidth,
 } from './DesktopLyricsButtonModel';
 
 export interface DesktopLyricsButtonLogic {
   toggleDesktopLyrics: (
     settings: DesktopLyricsOverlaySettings,
     setEnabled: (next: boolean) => void,
+    setClickThrough: (next: boolean) => void,
     event: MouseEvent<HTMLButtonElement>
   ) => Promise<void>;
   applyOverlaySettings: (settings: DesktopLyricsOverlaySettings) => Promise<void>;
   applyClickThrough: (enabled: boolean) => Promise<void>;
   applyFontSize: (fontSize: number) => Promise<void>;
   applyOpacityPercent: (opacityPercent: number) => Promise<void>;
-  applyPositionPreset: (preset: DesktopLyricsPositionPreset) => Promise<void>;
   applyPositionOffset: (offsetX: number, offsetY: number) => Promise<void>;
+  applyRegionSize: (width: number, height: number) => Promise<void>;
+  applyLyricOffsetMs: (offsetMs: number) => Promise<void>;
   getButtonTitle: (enabled: boolean) => string;
 }
 
@@ -42,13 +45,6 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
     });
   }, []);
 
-  const applyPositionPreset = useCallback(async (preset: DesktopLyricsPositionPreset) => {
-    if (!isTauriRuntime()) return;
-    await invoke('desktop_lyrics_set_position_preset', {
-      preset: normalizeDesktopLyricsPositionPreset(preset),
-    });
-  }, []);
-
   const applyOpacityPercent = useCallback(async (opacityPercent: number) => {
     if (!isTauriRuntime()) return;
     await invoke('desktop_lyrics_set_opacity_percent', {
@@ -64,6 +60,21 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
     });
   }, []);
 
+  const applyRegionSize = useCallback(async (width: number, height: number) => {
+    if (!isTauriRuntime()) return;
+    await invoke('desktop_lyrics_set_region_size', {
+      width: normalizeDesktopLyricsRegionWidth(width),
+      height: normalizeDesktopLyricsRegionHeight(height),
+    });
+  }, []);
+
+  const applyLyricOffsetMs = useCallback(async (offsetMs: number) => {
+    if (!isTauriRuntime()) return;
+    await invoke('desktop_lyrics_set_lyric_offset_ms', {
+      offsetMs: normalizeDesktopLyricsLyricOffsetMs(offsetMs),
+    });
+  }, []);
+
   const applyOverlaySettings = useCallback(
     async (settings: DesktopLyricsOverlaySettings) => {
       if (!isTauriRuntime()) return;
@@ -71,16 +82,18 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
       await applyClickThrough(settings.clickThrough);
       await applyFontSize(settings.fontSize);
       await applyOpacityPercent(settings.opacityPercent);
-      await applyPositionPreset(settings.positionPreset);
       await applyPositionOffset(settings.positionOffsetX, settings.positionOffsetY);
+      await applyRegionSize(settings.regionWidth, settings.regionHeight);
+      await applyLyricOffsetMs(settings.lyricOffsetMs);
       await invoke('desktop_lyrics_set_visible', { visible: settings.enabled });
     },
     [
       applyClickThrough,
       applyFontSize,
+      applyLyricOffsetMs,
       applyOpacityPercent,
       applyPositionOffset,
-      applyPositionPreset,
+      applyRegionSize,
     ]
   );
 
@@ -88,21 +101,30 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
     async (
       settings: DesktopLyricsOverlaySettings,
       setEnabled: (next: boolean) => void,
+      setClickThrough: (next: boolean) => void,
       event: MouseEvent<HTMLButtonElement>
     ) => {
       event.preventDefault();
       event.stopPropagation();
 
       const nextEnabled = !settings.enabled;
+      const nextClickThrough = nextEnabled ? false : settings.clickThrough;
       setEnabled(nextEnabled);
+      if (settings.clickThrough !== nextClickThrough) {
+        setClickThrough(nextClickThrough);
+      }
 
       try {
         await applyOverlaySettings({
           ...settings,
           enabled: nextEnabled,
+          clickThrough: nextClickThrough,
         });
       } catch (error) {
         setEnabled(settings.enabled);
+        if (settings.clickThrough !== nextClickThrough) {
+          setClickThrough(settings.clickThrough);
+        }
         console.error('[desktop-lyrics-button] failed to toggle desktop lyrics:', error);
       }
     },
@@ -123,8 +145,9 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
     applyClickThrough,
     applyFontSize,
     applyOpacityPercent,
-    applyPositionPreset,
     applyPositionOffset,
+    applyRegionSize,
+    applyLyricOffsetMs,
     getButtonTitle,
   };
 }

@@ -5,9 +5,12 @@ import {
   DESKTOP_LYRICS_DEFAULT_SETTINGS,
   type DesktopLyricsPositionPreset,
   normalizeDesktopLyricsFontSize,
+  normalizeDesktopLyricsLyricOffsetMs,
   normalizeDesktopLyricsOpacityPercent,
   normalizeDesktopLyricsPositionPreset,
   normalizeDesktopLyricsPositionOffset,
+  normalizeDesktopLyricsRegionHeight,
+  normalizeDesktopLyricsRegionWidth,
 } from './DesktopLyricsButtonModel';
 
 export interface DesktopLyricsButtonData {
@@ -25,6 +28,12 @@ export interface DesktopLyricsButtonData {
   setPositionOffsetX: (next: number) => void;
   positionOffsetY: number;
   setPositionOffsetY: (next: number) => void;
+  regionWidth: number;
+  setRegionWidth: (next: number) => void;
+  regionHeight: number;
+  setRegionHeight: (next: number) => void;
+  lyricOffsetMs: number;
+  setLyricOffsetMs: (next: number) => void;
 }
 
 export function useDesktopLyricsButtonData(): DesktopLyricsButtonData {
@@ -84,14 +93,41 @@ export function useDesktopLyricsButtonData(): DesktopLyricsButtonData {
       listenStorageEvents: true,
     }
   );
+  const [lyricOffsetMsRaw, setLyricOffsetMsRaw] = usePersistentSetting<number>(
+    STORAGE_KEYS.DESKTOP_LYRICS_LYRIC_OFFSET_MS,
+    DESKTOP_LYRICS_DEFAULT_SETTINGS.lyricOffsetMs,
+    {
+      format: 'json',
+      listenStorageEvents: true,
+    }
+  );
+  const [regionWidthRaw, setRegionWidthRaw] = usePersistentSetting<number>(
+    STORAGE_KEYS.DESKTOP_LYRICS_REGION_WIDTH,
+    DESKTOP_LYRICS_DEFAULT_SETTINGS.regionWidth,
+    {
+      format: 'json',
+      listenStorageEvents: true,
+    }
+  );
+  const [regionHeightRaw, setRegionHeightRaw] = usePersistentSetting<number>(
+    STORAGE_KEYS.DESKTOP_LYRICS_REGION_HEIGHT,
+    DESKTOP_LYRICS_DEFAULT_SETTINGS.regionHeight,
+    {
+      format: 'json',
+      listenStorageEvents: true,
+    }
+  );
 
   const enabled = enabledRaw === true;
-  const clickThrough = clickThroughRaw !== false;
+  const clickThrough = clickThroughRaw === true;
   const fontSize = normalizeDesktopLyricsFontSize(fontSizeRaw);
   const opacityPercent = normalizeDesktopLyricsOpacityPercent(opacityPercentRaw);
   const positionPreset = normalizeDesktopLyricsPositionPreset(positionPresetRaw);
   const positionOffsetX = normalizeDesktopLyricsPositionOffset(positionOffsetXRaw);
   const positionOffsetY = normalizeDesktopLyricsPositionOffset(positionOffsetYRaw);
+  const lyricOffsetMs = normalizeDesktopLyricsLyricOffsetMs(lyricOffsetMsRaw);
+  const regionWidth = normalizeDesktopLyricsRegionWidth(regionWidthRaw);
+  const regionHeight = normalizeDesktopLyricsRegionHeight(regionHeightRaw);
 
   const setEnabled = useCallback((next: boolean) => {
     setEnabledRaw(next === true);
@@ -121,6 +157,18 @@ export function useDesktopLyricsButtonData(): DesktopLyricsButtonData {
     setPositionOffsetYRaw(normalizeDesktopLyricsPositionOffset(next));
   }, [setPositionOffsetYRaw]);
 
+  const setLyricOffsetMs = useCallback((next: number) => {
+    setLyricOffsetMsRaw(normalizeDesktopLyricsLyricOffsetMs(next));
+  }, [setLyricOffsetMsRaw]);
+
+  const setRegionWidth = useCallback((next: number) => {
+    setRegionWidthRaw(normalizeDesktopLyricsRegionWidth(next));
+  }, [setRegionWidthRaw]);
+
+  const setRegionHeight = useCallback((next: number) => {
+    setRegionHeightRaw(normalizeDesktopLyricsRegionHeight(next));
+  }, [setRegionHeightRaw]);
+
   return {
     enabled,
     setEnabled,
@@ -136,5 +184,11 @@ export function useDesktopLyricsButtonData(): DesktopLyricsButtonData {
     setPositionOffsetX,
     positionOffsetY,
     setPositionOffsetY,
+    regionWidth,
+    setRegionWidth,
+    regionHeight,
+    setRegionHeight,
+    lyricOffsetMs,
+    setLyricOffsetMs,
   };
 }

@@ -48,6 +48,9 @@ fn map_overlay_command(command: OverlayCommand) -> DesktopLyricsSidecarCommand {
         OverlayCommand::SetPositionOffset(offset_x, offset_y) => {
             DesktopLyricsSidecarCommand::SetPositionOffset { offset_x, offset_y }
         }
+        OverlayCommand::SetRegionSize(width, height) => {
+            DesktopLyricsSidecarCommand::SetRegionSize { width, height }
+        }
         OverlayCommand::SetText(text) => DesktopLyricsSidecarCommand::SetText {
             text: text.map(
                 |OverlayText { primary, secondary }| DesktopLyricsSidecarText {
@@ -98,6 +101,19 @@ mod sidecar_client {
                         ready_flag.store(true, Ordering::SeqCst);
                     }
                     Ok(DesktopLyricsSidecarEvent::Ack { .. }) => {}
+                    Ok(DesktopLyricsSidecarEvent::LayoutChanged {
+                        offset_x,
+                        offset_y,
+                        region_width,
+                        region_height,
+                    }) => {
+                        crate::windows::desktop_lyrics::apply_sidecar_layout_changed(
+                            offset_x,
+                            offset_y,
+                            region_width,
+                            region_height,
+                        );
+                    }
                     Ok(DesktopLyricsSidecarEvent::Error { message }) => {
                         safe_stderr_log(format!(
                             "[desktop-lyrics] sidecar reported error: {message}"

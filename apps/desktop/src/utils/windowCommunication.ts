@@ -213,6 +213,9 @@ export const STORAGE_KEYS = {
   DESKTOP_LYRICS_POSITION_PRESET: 'pixel-matrix-desktop-lyrics-position-preset',
   DESKTOP_LYRICS_POSITION_OFFSET_X: 'pixel-matrix-desktop-lyrics-position-offset-x',
   DESKTOP_LYRICS_POSITION_OFFSET_Y: 'pixel-matrix-desktop-lyrics-position-offset-y',
+  DESKTOP_LYRICS_REGION_WIDTH: 'pixel-matrix-desktop-lyrics-region-width',
+  DESKTOP_LYRICS_REGION_HEIGHT: 'pixel-matrix-desktop-lyrics-region-height',
+  DESKTOP_LYRICS_LYRIC_OFFSET_MS: 'pixel-matrix-desktop-lyrics-lyric-offset-ms',
 
   // === Main Window Close Behavior ===
   MAIN_WINDOW_CLOSE_BEHAVIOR_MAGNET: 'pixel-matrix-main-window-close-behavior-magnet',
@@ -317,6 +320,7 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED: 'native-audio-dynamic-src-settings-updated',
   NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE_UPDATED:
     'native-audio-dynamic-src-learning-profile-updated',
+  DESKTOP_LYRICS_LAYOUT_CHANGED: 'desktop-lyrics-layout-changed',
   DSP_RACK_LOCATE_NODE: 'dsp-rack-locate-node',
   NAVIGATION_REQUESTED: 'navigation-requested',
 

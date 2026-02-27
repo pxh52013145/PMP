@@ -35,6 +35,8 @@ pub const WINDOW_COMMAND_NAMES: &[&str] = &[
     "desktop_lyrics_set_position_preset",
     "desktop_lyrics_set_opacity_percent",
     "desktop_lyrics_set_position_offset",
+    "desktop_lyrics_set_region_size",
+    "desktop_lyrics_set_lyric_offset_ms",
     "desktop_lyrics_debug_set_text",
 ];
 
@@ -286,6 +288,8 @@ macro_rules! pmp_generate_handler {
             crate::commands::windows::desktop_lyrics_set_position_preset,
             crate::commands::windows::desktop_lyrics_set_opacity_percent,
             crate::commands::windows::desktop_lyrics_set_position_offset,
+            crate::commands::windows::desktop_lyrics_set_region_size,
+            crate::commands::windows::desktop_lyrics_set_lyric_offset_ms,
             crate::commands::windows::desktop_lyrics_debug_set_text,
             crate::commands::library::music_library_scan,
             crate::commands::library::music_library_get_cover,

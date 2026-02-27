@@ -10,11 +10,15 @@ export const StandardDesktopLyricsButton: React.FC<DesktopLyricsButtonVariantPro
     enabled,
     setEnabled,
     clickThrough,
+    setClickThrough,
     fontSize,
     opacityPercent,
     positionPreset,
     positionOffsetX,
     positionOffsetY,
+    regionWidth,
+    regionHeight,
+    lyricOffsetMs,
   } = data;
   const { toggleDesktopLyrics, getButtonTitle } = logic;
   const title = getButtonTitle(enabled);
@@ -32,8 +36,12 @@ export const StandardDesktopLyricsButton: React.FC<DesktopLyricsButtonVariantPro
             positionPreset,
             positionOffsetX,
             positionOffsetY,
+            regionWidth,
+            regionHeight,
+            lyricOffsetMs,
           },
           setEnabled,
+          setClickThrough,
           event
         )
       }
