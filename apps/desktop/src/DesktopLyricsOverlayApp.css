@@ -1,0 +1,89 @@
+html.desktop-lyrics-overlay-page,
+html.desktop-lyrics-overlay-page body,
+html.desktop-lyrics-overlay-page #root,
+body.desktop-lyrics-overlay-page,
+body.desktop-lyrics-overlay-page #root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+}
+
+.desktop-lyrics-overlay {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  box-sizing: border-box;
+  color: #f5f7fa;
+  font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  user-select: none;
+}
+
+.desktop-lyrics-overlay__background {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: rgba(10, 12, 16, var(--desktop-lyrics-bg-alpha, 0.92));
+}
+
+.desktop-lyrics-overlay__toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.desktop-lyrics-overlay__toolbar button {
+  min-width: 30px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(18, 22, 30, 0.82);
+  color: #f5f7fa;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.desktop-lyrics-overlay__toolbar button:hover {
+  background: rgba(56, 66, 86, 0.9);
+}
+
+.desktop-lyrics-overlay__content {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px 28px 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.desktop-lyrics-overlay__primary {
+  margin: 0;
+  font-size: var(--desktop-lyrics-font-size, 26px);
+  font-weight: 700;
+  line-height: 1.18;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.72);
+  word-break: break-word;
+}
+
+.desktop-lyrics-overlay__secondary {
+  margin: 0;
+  font-size: calc(var(--desktop-lyrics-font-size, 26px) * 0.58);
+  font-weight: 500;
+  line-height: 1.2;
+  color: rgba(239, 244, 255, 0.92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.64);
+  word-break: break-word;
+}
+

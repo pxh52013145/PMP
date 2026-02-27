@@ -1,278 +1,298 @@
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-use super::{OverlayCommand, OverlayPositionPreset, OverlayText};
-
-#[cfg(target_os = "windows")]
-use crate::desktop_lyrics_sidecar::{
-    DesktopLyricsSidecarCommand, DesktopLyricsSidecarEvent, DesktopLyricsSidecarText,
+use super::{
+    DesktopLyricsOverlaySnapshot, DesktopLyricsOverlaySnapshotText, OverlayCommand,
+    OverlayPositionPreset, OverlayText,
 };
 
 #[cfg(target_os = "windows")]
-fn safe_stderr_log(message: impl AsRef<str>) {
-    use std::io::Write;
+use tauri::{
+    LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size, Window,
+    WindowBuilder, WindowUrl,
+};
 
-    let mut stderr = std::io::stderr();
-    let _ = writeln!(stderr, "{}", message.as_ref());
+#[cfg(target_os = "windows")]
+const DEFAULT_OVERLAY_WIDTH: i32 = 960;
+#[cfg(target_os = "windows")]
+const DEFAULT_OVERLAY_HEIGHT: i32 = 188;
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+struct OverlayRuntimeState {
+    visible: bool,
+    click_through: bool,
+    font_size: u32,
+    opacity_percent: u8,
+    position_preset: OverlayPositionPreset,
+    position_offset_x: i32,
+    position_offset_y: i32,
+    region_width: i32,
+    region_height: i32,
+    has_explicit_position: bool,
+    has_explicit_region: bool,
+    text: Option<OverlayText>,
 }
 
 #[cfg(target_os = "windows")]
-fn position_preset_to_wire(preset: OverlayPositionPreset) -> String {
-    match preset {
-        OverlayPositionPreset::BottomCenter => "bottom-center",
-        OverlayPositionPreset::BottomLeft => "bottom-left",
-        OverlayPositionPreset::BottomRight => "bottom-right",
-        OverlayPositionPreset::TopCenter => "top-center",
+impl Default for OverlayRuntimeState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            click_through: false,
+            font_size: 26,
+            opacity_percent: 92,
+            position_preset: OverlayPositionPreset::BottomCenter,
+            position_offset_x: 0,
+            position_offset_y: 0,
+            region_width: 0,
+            region_height: 0,
+            has_explicit_position: false,
+            has_explicit_region: false,
+            text: None,
+        }
     }
-    .to_string()
 }
 
 #[cfg(target_os = "windows")]
-fn map_overlay_command(command: OverlayCommand) -> DesktopLyricsSidecarCommand {
+impl OverlayRuntimeState {
+    fn to_snapshot(&self) -> DesktopLyricsOverlaySnapshot {
+        DesktopLyricsOverlaySnapshot {
+            visible: self.visible,
+            click_through: self.click_through,
+            font_size: self.font_size,
+            opacity_percent: self.opacity_percent,
+            text: self
+                .text
+                .as_ref()
+                .map(|text| DesktopLyricsOverlaySnapshotText {
+                    primary: text.primary.clone(),
+                    secondary: text.secondary.clone(),
+                }),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, Default)]
+struct CommandEffects {
+    shutdown: bool,
+    visible_changed: bool,
+    controls_changed: bool,
+    layout_changed: bool,
+    text_changed: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn apply_command(state: &mut OverlayRuntimeState, command: OverlayCommand) -> CommandEffects {
+    let mut effects = CommandEffects::default();
+
     match command {
-        OverlayCommand::SetVisible(visible) => DesktopLyricsSidecarCommand::SetVisible { visible },
+        OverlayCommand::SetVisible(visible) => {
+            if state.visible != visible {
+                state.visible = visible;
+                effects.visible_changed = true;
+            }
+            effects.controls_changed = true;
+            effects.layout_changed = visible;
+            effects.text_changed = true;
+        }
         OverlayCommand::SetClickThrough(enabled) => {
-            DesktopLyricsSidecarCommand::SetClickThrough { enabled }
+            if state.click_through != enabled {
+                state.click_through = enabled;
+                effects.controls_changed = true;
+            }
         }
         OverlayCommand::SetFontSize(font_size) => {
-            DesktopLyricsSidecarCommand::SetFontSize { font_size }
+            if state.font_size != font_size {
+                state.font_size = font_size;
+                effects.controls_changed = true;
+                effects.text_changed = true;
+            }
         }
         OverlayCommand::SetOpacityPercent(opacity_percent) => {
-            DesktopLyricsSidecarCommand::SetOpacityPercent { opacity_percent }
+            if state.opacity_percent != opacity_percent {
+                state.opacity_percent = opacity_percent;
+                effects.controls_changed = true;
+                effects.text_changed = true;
+            }
         }
         OverlayCommand::SetPositionPreset(preset) => {
-            DesktopLyricsSidecarCommand::SetPositionPreset {
-                preset: position_preset_to_wire(preset),
+            if state.position_preset != preset {
+                state.position_preset = preset;
             }
         }
         OverlayCommand::SetPositionOffset(offset_x, offset_y) => {
-            DesktopLyricsSidecarCommand::SetPositionOffset { offset_x, offset_y }
+            let next_has_explicit = offset_x != 0 || offset_y != 0;
+            if state.position_offset_x != offset_x
+                || state.position_offset_y != offset_y
+                || state.has_explicit_position != next_has_explicit
+            {
+                state.position_offset_x = offset_x;
+                state.position_offset_y = offset_y;
+                state.has_explicit_position = next_has_explicit;
+                effects.layout_changed = true;
+            }
         }
         OverlayCommand::SetRegionSize(width, height) => {
-            DesktopLyricsSidecarCommand::SetRegionSize { width, height }
+            let next_has_explicit = width > 0 && height > 0;
+            if state.region_width != width
+                || state.region_height != height
+                || state.has_explicit_region != next_has_explicit
+            {
+                state.region_width = width;
+                state.region_height = height;
+                state.has_explicit_region = next_has_explicit;
+                effects.layout_changed = true;
+            }
         }
-        OverlayCommand::SetText(text) => DesktopLyricsSidecarCommand::SetText {
-            text: text.map(
-                |OverlayText { primary, secondary }| DesktopLyricsSidecarText {
-                    primary,
-                    secondary,
-                },
-            ),
-        },
-        OverlayCommand::Shutdown => DesktopLyricsSidecarCommand::Shutdown,
+        OverlayCommand::SetText(text) => {
+            if state.text != text {
+                state.text = text;
+                effects.text_changed = true;
+            }
+        }
+        OverlayCommand::Shutdown => {
+            effects.shutdown = true;
+            effects.visible_changed = state.visible;
+            state.visible = false;
+        }
+    }
+
+    effects
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_overlay_window(app: &tauri::AppHandle) -> Result<(Window, bool), String> {
+    if let Some(existing) = app.get_window(super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL) {
+        return Ok((existing, false));
+    }
+
+    let window = WindowBuilder::new(
+        app,
+        super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL,
+        WindowUrl::App("/#/desktop-lyrics-overlay".into()),
+    )
+    .title("Desktop Lyrics")
+    .inner_size(DEFAULT_OVERLAY_WIDTH as f64, DEFAULT_OVERLAY_HEIGHT as f64)
+    .center()
+    .transparent(true)
+    .decorations(false)
+    .resizable(true)
+    .maximizable(false)
+    .minimizable(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("Create desktop lyrics overlay window failed: {error}"))?;
+
+    bind_overlay_window_events(&window);
+    Ok((window, true))
+}
+
+#[cfg(target_os = "windows")]
+fn bind_overlay_window_events(window: &Window) {
+    let window_for_events = window.clone();
+
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+            emit_layout_from_window(&window_for_events);
+        }
+        tauri::WindowEvent::Destroyed => {
+            let _ = crate::windows::desktop_lyrics::set_visible(false);
+        }
+        _ => {}
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_layout_from_window(window: &Window) {
+    let Some((offset_x, offset_y, region_width, region_height)) = read_layout_from_window(window)
+    else {
+        return;
+    };
+
+    crate::windows::desktop_lyrics::apply_sidecar_layout_changed(
+        offset_x,
+        offset_y,
+        region_width,
+        region_height,
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn read_layout_from_window(window: &Window) -> Option<(i32, i32, i32, i32)> {
+    let scale = window.scale_factor().ok().filter(|value| *value > 0.0)?;
+
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+
+    let logical_position = to_logical_position(position, scale);
+    let logical_size = to_logical_size(size, scale);
+
+    Some((
+        logical_position.0,
+        logical_position.1,
+        logical_size.0,
+        logical_size.1,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn to_logical_position(position: PhysicalPosition<i32>, scale: f64) -> (i32, i32) {
+    let logical: LogicalPosition<f64> = position.to_logical(scale);
+    (logical.x.round() as i32, logical.y.round() as i32)
+}
+
+#[cfg(target_os = "windows")]
+fn to_logical_size(size: PhysicalSize<u32>, scale: f64) -> (i32, i32) {
+    let logical: LogicalSize<f64> = size.to_logical(scale);
+    (logical.width.round() as i32, logical.height.round() as i32)
+}
+
+#[cfg(target_os = "windows")]
+fn apply_window_layout(window: &Window, state: &OverlayRuntimeState) {
+    if state.has_explicit_region {
+        let width = state.region_width.max(1) as f64;
+        let height = state.region_height.max(1) as f64;
+        let _ = window.set_size(Size::Logical(LogicalSize::new(width, height)));
+    }
+
+    if state.has_explicit_position {
+        let x = state.position_offset_x as f64;
+        let y = state.position_offset_y as f64;
+        let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
     }
 }
 
 #[cfg(target_os = "windows")]
-mod sidecar_client {
-    use super::{safe_stderr_log, DesktopLyricsSidecarCommand, DesktopLyricsSidecarEvent};
-    use std::io::{BufRead, BufReader, Write};
-    use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
+fn apply_window_controls(window: &Window, state: &OverlayRuntimeState) {
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_ignore_cursor_events(state.click_through);
+}
 
-    #[cfg(target_os = "windows")]
-    use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+fn emit_overlay_sync(window: &Window, state: &OverlayRuntimeState) {
+    let _ = window.emit(
+        super::DESKTOP_LYRICS_OVERLAY_SYNC_EVENT,
+        state.to_snapshot(),
+    );
+}
 
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(target_os = "windows")]
+fn destroy_overlay_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_window(super::DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL) else {
+        return;
+    };
 
-    fn spawn_stdout_reader(stdout: ChildStdout, ready_flag: Arc<AtomicBool>) {
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                let payload = match line {
-                    Ok(content) => content,
-                    Err(error) => {
-                        safe_stderr_log(format!(
-                            "[desktop-lyrics] failed reading sidecar stdout: {error}"
-                        ));
-                        break;
-                    }
-                };
-
-                let payload = payload.trim();
-                if payload.is_empty() {
-                    continue;
-                }
-
-                match serde_json::from_str::<DesktopLyricsSidecarEvent>(payload) {
-                    Ok(DesktopLyricsSidecarEvent::Ready) => {
-                        ready_flag.store(true, Ordering::SeqCst);
-                    }
-                    Ok(DesktopLyricsSidecarEvent::Ack { .. }) => {}
-                    Ok(DesktopLyricsSidecarEvent::LayoutChanged {
-                        offset_x,
-                        offset_y,
-                        region_width,
-                        region_height,
-                    }) => {
-                        crate::windows::desktop_lyrics::apply_sidecar_layout_changed(
-                            offset_x,
-                            offset_y,
-                            region_width,
-                            region_height,
-                        );
-                    }
-                    Ok(DesktopLyricsSidecarEvent::ControlsChanged {
-                        visible,
-                        click_through,
-                        font_size,
-                        opacity_percent,
-                    }) => {
-                        crate::windows::desktop_lyrics::apply_sidecar_controls_changed(
-                            visible,
-                            click_through,
-                            font_size,
-                            opacity_percent,
-                        );
-                    }
-                    Ok(DesktopLyricsSidecarEvent::Error { message }) => {
-                        safe_stderr_log(format!(
-                            "[desktop-lyrics] sidecar reported error: {message}"
-                        ));
-                    }
-                    Err(error) => {
-                        safe_stderr_log(format!(
-                            "[desktop-lyrics] invalid sidecar stdout payload: {error}"
-                        ));
-                    }
-                }
-            }
-        });
-    }
-
-    fn spawn_stderr_reader(stderr: ChildStderr) {
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                let payload = match line {
-                    Ok(content) => content,
-                    Err(error) => {
-                        safe_stderr_log(format!(
-                            "[desktop-lyrics] failed reading sidecar stderr: {error}"
-                        ));
-                        break;
-                    }
-                };
-
-                let payload = payload.trim();
-                if payload.is_empty() {
-                    continue;
-                }
-
-                safe_stderr_log(format!("[desktop-lyrics-sidecar] {payload}"));
-            }
-        });
-    }
-
-    pub struct SidecarProcess {
-        child: Child,
-        stdin: ChildStdin,
-        ready_flag: Arc<AtomicBool>,
-    }
-
-    impl SidecarProcess {
-        pub fn spawn() -> Result<Self, String> {
-            let executable_path = std::env::current_exe()
-                .map_err(|error| format!("Resolve current exe failed: {error}"))?;
-
-            let mut command = Command::new(executable_path);
-            command
-                .arg("--desktop-lyrics-sidecar")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-
-            #[cfg(target_os = "windows")]
-            {
-                command.creation_flags(CREATE_NO_WINDOW);
-            }
-
-            let mut child = command
-                .spawn()
-                .map_err(|error| format!("Spawn desktop lyrics sidecar failed: {error}"))?;
-            let stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| "Desktop lyrics sidecar stdin unavailable".to_string())?;
-
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| "Desktop lyrics sidecar stdout unavailable".to_string())?;
-            let stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| "Desktop lyrics sidecar stderr unavailable".to_string())?;
-
-            let ready_flag = Arc::new(AtomicBool::new(false));
-            spawn_stdout_reader(stdout, ready_flag.clone());
-            spawn_stderr_reader(stderr);
-
-            Ok(Self {
-                child,
-                stdin,
-                ready_flag,
-            })
-        }
-
-        pub fn wait_until_ready(&mut self, timeout: Duration) -> bool {
-            if self.ready_flag.load(Ordering::SeqCst) {
-                return true;
-            }
-
-            let start = Instant::now();
-            while start.elapsed() < timeout {
-                if self.ready_flag.load(Ordering::SeqCst) {
-                    return true;
-                }
-
-                if self.child.try_wait().ok().flatten().is_some() {
-                    return false;
-                }
-
-                std::thread::sleep(Duration::from_millis(16));
-            }
-
-            self.ready_flag.load(Ordering::SeqCst)
-        }
-
-        pub fn send(&mut self, command: &DesktopLyricsSidecarCommand) -> Result<(), String> {
-            serde_json::to_writer(&mut self.stdin, command)
-                .map_err(|error| format!("Serialize desktop lyrics command failed: {error}"))?;
-            self.stdin
-                .write_all(b"\n")
-                .map_err(|error| format!("Write desktop lyrics command failed: {error}"))?;
-            self.stdin
-                .flush()
-                .map_err(|error| format!("Flush desktop lyrics command failed: {error}"))?;
-            Ok(())
-        }
-
-        pub fn shutdown(mut self) {
-            let _ = self.send(&DesktopLyricsSidecarCommand::Shutdown);
-
-            if self.child.try_wait().ok().flatten().is_none() {
-                std::thread::sleep(Duration::from_millis(120));
-            }
-
-            if self.child.try_wait().ok().flatten().is_none() {
-                let _ = self.child.kill();
-            }
-            let _ = self.child.wait();
-        }
-    }
+    let _ = window.close();
 }
 
 #[cfg(target_os = "windows")]
 pub fn run(rx: Receiver<OverlayCommand>) {
-    use sidecar_client::SidecarProcess;
-    use std::sync::mpsc::RecvTimeoutError;
-
-    const SIDECAR_READY_TIMEOUT: Duration = Duration::from_millis(1000);
-
-    let mut sidecar: Option<SidecarProcess> = None;
+    let mut state = OverlayRuntimeState::default();
 
     loop {
         let command = match rx.recv_timeout(Duration::from_millis(250)) {
@@ -281,76 +301,62 @@ pub fn run(rx: Receiver<OverlayCommand>) {
             Err(RecvTimeoutError::Disconnected) => break,
         };
 
-        let wire_command = map_overlay_command(command);
-        let is_shutdown = matches!(wire_command, DesktopLyricsSidecarCommand::Shutdown);
+        let effects = apply_command(&mut state, command);
 
-        if sidecar.is_none() {
-            match SidecarProcess::spawn() {
-                Ok(mut process) => {
-                    if !process.wait_until_ready(SIDECAR_READY_TIMEOUT) {
-                        safe_stderr_log(
-                            "[desktop-lyrics] sidecar ready timeout, continue with best effort",
-                        );
-                    }
-                    sidecar = Some(process);
-                }
-                Err(error) => {
-                    safe_stderr_log(format!("[desktop-lyrics] failed to spawn sidecar: {error}"));
-                    if is_shutdown {
-                        break;
-                    }
-                    continue;
-                }
-            }
-        }
-
-        let send_result = sidecar
-            .as_mut()
-            .map(|process| process.send(&wire_command))
-            .unwrap_or_else(|| Ok(()));
-
-        if let Err(error) = send_result {
-            safe_stderr_log(format!("[desktop-lyrics] sidecar send failed: {error}"));
-            sidecar = None;
-
-            if !is_shutdown {
-                match SidecarProcess::spawn() {
-                    Ok(mut process) => {
-                        if !process.wait_until_ready(SIDECAR_READY_TIMEOUT) {
-                            safe_stderr_log("[desktop-lyrics] sidecar ready timeout after restart");
+        if let Some(app) = super::current_app_handle() {
+            if effects.shutdown || !state.visible {
+                destroy_overlay_window(&app);
+            } else {
+                match ensure_overlay_window(&app) {
+                    Ok((window, created)) => {
+                        if created || effects.layout_changed {
+                            apply_window_layout(&window, &state);
                         }
 
-                        if let Err(retry_error) = process.send(&wire_command) {
-                            safe_stderr_log(format!(
-                                "[desktop-lyrics] retry send after sidecar restart failed: {retry_error}"
-                            ));
-                        } else {
-                            sidecar = Some(process);
+                        if created || effects.controls_changed {
+                            apply_window_controls(&window, &state);
+                        }
+
+                        if created || effects.visible_changed {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                        }
+
+                        if created
+                            || effects.layout_changed
+                            || effects.controls_changed
+                            || effects.text_changed
+                            || effects.visible_changed
+                        {
+                            emit_overlay_sync(&window, &state);
                         }
                     }
-                    Err(spawn_error) => {
-                        safe_stderr_log(format!(
-                            "[desktop-lyrics] sidecar restart failed after send error: {spawn_error}"
-                        ));
+                    Err(error) => {
+                        eprintln!("[desktop-lyrics] {error}");
                     }
                 }
             }
         }
 
-        if is_shutdown {
+        crate::windows::desktop_lyrics::apply_sidecar_controls_changed(
+            state.visible,
+            state.click_through,
+            state.font_size,
+            state.opacity_percent,
+        );
+
+        if effects.shutdown {
             break;
         }
     }
 
-    if let Some(process) = sidecar {
-        process.shutdown();
+    if let Some(app) = super::current_app_handle() {
+        destroy_overlay_window(&app);
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn run(rx: Receiver<OverlayCommand>) {
-    use std::sync::mpsc::RecvTimeoutError;
-
     loop {
         let command = match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(command) => command,

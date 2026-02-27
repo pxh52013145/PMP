@@ -107,28 +107,47 @@ export function useDesktopLyricsButtonLogic(): DesktopLyricsButtonLogic {
       event.preventDefault();
       event.stopPropagation();
 
-      const nextEnabled = !settings.enabled;
-      const nextClickThrough = nextEnabled ? false : settings.clickThrough;
-      setEnabled(nextEnabled);
-      if (settings.clickThrough !== nextClickThrough) {
-        setClickThrough(nextClickThrough);
-      }
-
       try {
-        await applyOverlaySettings({
-          ...settings,
-          enabled: nextEnabled,
-          clickThrough: nextClickThrough,
-        });
+        if (!isTauriRuntime()) {
+          const fallbackEnabled = !settings.enabled;
+          const fallbackClickThrough = fallbackEnabled ? false : settings.clickThrough;
+          setEnabled(fallbackEnabled);
+          if (settings.clickThrough !== fallbackClickThrough) {
+            setClickThrough(fallbackClickThrough);
+          }
+          return;
+        }
+
+        const nextEnabled = await invoke<boolean>('desktop_lyrics_toggle_visible');
+        const nextClickThrough = nextEnabled ? false : settings.clickThrough;
+
+        setEnabled(nextEnabled);
+        if (settings.clickThrough !== nextClickThrough) {
+          setClickThrough(nextClickThrough);
+        }
+
+        if (nextEnabled) {
+          await applyClickThrough(nextClickThrough);
+          await applyFontSize(settings.fontSize);
+          await applyOpacityPercent(settings.opacityPercent);
+          await applyPositionOffset(settings.positionOffsetX, settings.positionOffsetY);
+          await applyRegionSize(settings.regionWidth, settings.regionHeight);
+          await applyLyricOffsetMs(settings.lyricOffsetMs);
+        }
       } catch (error) {
         setEnabled(settings.enabled);
-        if (settings.clickThrough !== nextClickThrough) {
-          setClickThrough(settings.clickThrough);
-        }
+        setClickThrough(settings.clickThrough);
         console.error('[desktop-lyrics-button] failed to toggle desktop lyrics:', error);
       }
     },
-    [applyOverlaySettings]
+    [
+      applyClickThrough,
+      applyFontSize,
+      applyLyricOffsetMs,
+      applyOpacityPercent,
+      applyPositionOffset,
+      applyRegionSize,
+    ]
   );
 
   const getButtonTitle = useCallback(

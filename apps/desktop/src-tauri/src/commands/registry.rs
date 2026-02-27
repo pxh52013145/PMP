@@ -30,6 +30,7 @@ pub const WINDOW_COMMAND_NAMES: &[&str] = &[
     "close_vst_manager_window",
     "set_editor_blur_enabled",
     "desktop_lyrics_set_visible",
+    "desktop_lyrics_toggle_visible",
     "desktop_lyrics_set_click_through",
     "desktop_lyrics_set_font_size",
     "desktop_lyrics_set_position_preset",
@@ -38,6 +39,7 @@ pub const WINDOW_COMMAND_NAMES: &[&str] = &[
     "desktop_lyrics_set_region_size",
     "desktop_lyrics_set_lyric_offset_ms",
     "desktop_lyrics_debug_set_text",
+    "desktop_lyrics_overlay_get_snapshot",
 ];
 
 pub const LIBRARY_COMMAND_NAMES: &[&str] = &[
@@ -283,6 +285,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::windows::close_vst_manager_window,
             crate::commands::windows::set_editor_blur_enabled,
             crate::commands::windows::desktop_lyrics_set_visible,
+            crate::commands::windows::desktop_lyrics_toggle_visible,
             crate::commands::windows::desktop_lyrics_set_click_through,
             crate::commands::windows::desktop_lyrics_set_font_size,
             crate::commands::windows::desktop_lyrics_set_position_preset,
@@ -291,6 +294,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::windows::desktop_lyrics_set_region_size,
             crate::commands::windows::desktop_lyrics_set_lyric_offset_ms,
             crate::commands::windows::desktop_lyrics_debug_set_text,
+            crate::commands::windows::desktop_lyrics_overlay_get_snapshot,
             crate::commands::library::music_library_scan,
             crate::commands::library::music_library_get_cover,
             crate::commands::library::music_library_remove_cover,

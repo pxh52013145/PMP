@@ -108,7 +108,7 @@ function shouldRunStartupBackgroundMigration(): boolean {
 
 type RootAppResolveResult = {
   component: React.ComponentType;
-  kind: 'main' | 'editor' | 'plugin' | 'vst-manager';
+  kind: 'main' | 'editor' | 'plugin' | 'vst-manager' | 'desktop-lyrics-overlay';
 };
 
 async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult> {
@@ -127,6 +127,11 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
     return { component: mod.VstManagerWindowApp, kind: 'vst-manager' };
   }
 
+  if (hash.startsWith('#/desktop-lyrics-overlay')) {
+    const mod = await import('./DesktopLyricsOverlayApp');
+    return { component: mod.DesktopLyricsOverlayApp, kind: 'desktop-lyrics-overlay' };
+  }
+
   const mod = await import('./App');
   return { component: mod.default, kind: 'main' };
 }
@@ -134,15 +139,19 @@ async function resolveRootAppByHash(hash: string): Promise<RootAppResolveResult>
 async function bootstrap(): Promise<void> {
   const rootApp = await resolveRootAppByHash(window.location.hash);
   const RootApp = rootApp.component;
+  const rootContent = (
+    <StartupReadyGate>
+      <RootApp />
+    </StartupReadyGate>
+  );
+
+  const appContent =
+    rootApp.kind === 'desktop-lyrics-overlay' ? rootContent : <KernelProvider>{rootContent}</KernelProvider>;
 
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <I18nSync />
-      <KernelProvider>
-        <StartupReadyGate>
-          <RootApp />
-        </StartupReadyGate>
-      </KernelProvider>
+      {appContent}
     </React.StrictMode>
   );
 

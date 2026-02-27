@@ -125,7 +125,7 @@ const MAX_TRACK_CACHE_ENTRIES: usize = 32;
 const MIN_OVERLAY_FONT_SIZE: u32 = 16;
 const MAX_OVERLAY_FONT_SIZE: u32 = 56;
 const DEFAULT_OVERLAY_FONT_SIZE: u32 = 26;
-const MIN_OVERLAY_OPACITY_PERCENT: u8 = 35;
+const MIN_OVERLAY_OPACITY_PERCENT: u8 = 0;
 const MAX_OVERLAY_OPACITY_PERCENT: u8 = 100;
 const DEFAULT_OVERLAY_OPACITY_PERCENT: u8 = 92;
 const MAX_OVERLAY_POSITION_OFFSET: i32 = 16384;
@@ -163,6 +163,26 @@ struct DesktopLyricsControlsChangedPayload {
     opacity_percent: u8,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopLyricsOverlaySnapshotText {
+    pub primary: String,
+    pub secondary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopLyricsOverlaySnapshot {
+    pub visible: bool,
+    pub click_through: bool,
+    pub font_size: u32,
+    pub opacity_percent: u8,
+    pub text: Option<DesktopLyricsOverlaySnapshotText>,
+}
+
+pub(super) const DESKTOP_LYRICS_OVERLAY_WINDOW_LABEL: &str = "desktop-lyrics-overlay";
+pub(super) const DESKTOP_LYRICS_OVERLAY_SYNC_EVENT: &str = "desktop-lyrics-overlay-sync";
+
 mod backend;
 
 pub fn init() {
@@ -175,8 +195,36 @@ pub fn register_app_handle(app: &AppHandle) {
     }
 }
 
+pub(super) fn current_app_handle() -> Option<AppHandle> {
+    DESKTOP_LYRICS_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned())
+}
+
 pub fn shutdown() {
     stop_overlay_runtime();
+}
+
+pub fn get_overlay_snapshot() -> Result<DesktopLyricsOverlaySnapshot, String> {
+    let state = DESKTOP_LYRICS_STATE
+        .lock()
+        .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
+
+    Ok(DesktopLyricsOverlaySnapshot {
+        visible: state.visible,
+        click_through: state.click_through,
+        font_size: state.font_size,
+        opacity_percent: state.opacity_percent,
+        text: state
+            .debug_override_text
+            .as_ref()
+            .or(state.last_rendered_text.as_ref())
+            .map(|value| DesktopLyricsOverlaySnapshotText {
+                primary: value.primary.clone(),
+                secondary: value.secondary.clone(),
+            }),
+    })
 }
 
 pub fn set_visible(visible: bool) -> Result<(), String> {
@@ -184,21 +232,43 @@ pub fn set_visible(visible: bool) -> Result<(), String> {
         .lock()
         .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
 
+    apply_visible_locked(&mut state, visible);
+    Ok(())
+}
+
+pub fn toggle_visible() -> Result<bool, String> {
+    let mut state = DESKTOP_LYRICS_STATE
+        .lock()
+        .map_err(|_| "Desktop lyrics state lock poisoned".to_string())?;
+
+    let next_visible = !state.visible;
+    apply_visible_locked(&mut state, next_visible);
+    Ok(next_visible)
+}
+
+fn apply_visible_locked(state: &mut DesktopLyricsState, visible: bool) {
     if !visible {
         state.visible = false;
         state.last_rendered_text = None;
+        emit_controls_changed_from_state(state);
         stop_overlay_runtime();
-        return Ok(());
+        return;
     }
 
-    if visible {
-        ensure_overlay_runtime_bootstrapped(&state);
-    }
+    state.visible = true;
+    emit_controls_changed_from_state(state);
+    ensure_overlay_runtime_bootstrapped(state);
+    send_overlay_command_with_recover(OverlayCommand::SetVisible(true), Some(state));
+    refresh_overlay_locked(state);
+}
 
-    state.visible = visible;
-    send_overlay_command_with_recover(OverlayCommand::SetVisible(visible), Some(&state));
-    refresh_overlay_locked(&mut state);
-    Ok(())
+fn emit_controls_changed_from_state(state: &DesktopLyricsState) {
+    emit_controls_changed_event(DesktopLyricsControlsChangedPayload {
+        visible: state.visible,
+        click_through: state.click_through,
+        font_size: state.font_size,
+        opacity_percent: state.opacity_percent,
+    });
 }
 
 pub fn debug_set_text(
@@ -1179,8 +1249,8 @@ mod tests {
 
     #[test]
     fn normalize_overlay_opacity_percent_clamps_range() {
-        assert_eq!(normalize_overlay_opacity_percent(0), 35);
-        assert_eq!(normalize_overlay_opacity_percent(35), 35);
+        assert_eq!(normalize_overlay_opacity_percent(0), 0);
+        assert_eq!(normalize_overlay_opacity_percent(10), 10);
         assert_eq!(normalize_overlay_opacity_percent(92), 92);
         assert_eq!(normalize_overlay_opacity_percent(120), 100);
     }

@@ -128,6 +128,12 @@ pub async fn desktop_lyrics_set_visible(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_toggle_visible(app: tauri::AppHandle) -> Result<bool, String> {
+    windows::desktop_lyrics::register_app_handle(&app);
+    windows::desktop_lyrics::toggle_visible()
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn desktop_lyrics_set_click_through(enabled: bool) -> Result<(), String> {
     windows::desktop_lyrics::set_click_through(enabled)
 }
@@ -172,4 +178,10 @@ pub async fn desktop_lyrics_debug_set_text(
     visible: Option<bool>,
 ) -> Result<(), String> {
     windows::desktop_lyrics::debug_set_text(primary, secondary, visible)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn desktop_lyrics_overlay_get_snapshot(
+) -> Result<windows::desktop_lyrics::DesktopLyricsOverlaySnapshot, String> {
+    windows::desktop_lyrics::get_overlay_snapshot()
 }
