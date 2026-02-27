@@ -605,10 +605,11 @@ fn overlay_runtime_started() -> bool {
 }
 
 fn ensure_overlay_runtime_bootstrapped(state: &DesktopLyricsState) {
-    if !overlay_runtime_started() {
-        ensure_overlay_runtime_started();
+    if overlay_runtime_started() {
+        return;
     }
 
+    ensure_overlay_runtime_started();
     bootstrap_overlay_runtime_state(state);
 }
 

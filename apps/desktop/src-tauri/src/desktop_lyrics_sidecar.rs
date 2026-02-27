@@ -159,7 +159,7 @@ fn sidecar_command_name(command: &DesktopLyricsSidecarCommand) -> &'static str {
 #[cfg(target_os = "windows")]
 fn run_windows_sidecar_loop() -> Result<(), String> {
     use eframe::egui;
-    use eframe::egui::{Color32, RichText, Stroke};
+    use eframe::egui::{Color32, RichText};
     use std::ptr;
     use std::sync::mpsc::{self, Receiver, TryRecvError};
     use std::time::Duration;
@@ -202,6 +202,45 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                 "bottom-right" => Some(Self::BottomRight),
                 "top-center" => Some(Self::TopCenter),
                 _ => None,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ResizeMode {
+        North,
+        South,
+        West,
+        East,
+        NorthWest,
+        NorthEast,
+        SouthWest,
+        SouthEast,
+    }
+
+    impl ResizeMode {
+        fn has_left(self) -> bool {
+            matches!(self, Self::West | Self::NorthWest | Self::SouthWest)
+        }
+
+        fn has_right(self) -> bool {
+            matches!(self, Self::East | Self::NorthEast | Self::SouthEast)
+        }
+
+        fn has_top(self) -> bool {
+            matches!(self, Self::North | Self::NorthWest | Self::NorthEast)
+        }
+
+        fn has_bottom(self) -> bool {
+            matches!(self, Self::South | Self::SouthWest | Self::SouthEast)
+        }
+
+        fn cursor_icon(self) -> egui::CursorIcon {
+            match self {
+                Self::North | Self::South => egui::CursorIcon::ResizeVertical,
+                Self::West | Self::East => egui::CursorIcon::ResizeHorizontal,
+                Self::NorthWest | Self::SouthEast => egui::CursorIcon::ResizeNwSe,
+                Self::NorthEast | Self::SouthWest => egui::CursorIcon::ResizeNeSw,
             }
         }
     }
@@ -281,8 +320,18 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
         }
     }
 
-    fn resolve_overlay_size(region_width: i32, region_height: i32) -> (i32, i32) {
+    fn dynamic_region_limits() -> (i32, i32, i32, i32) {
         let (_, _, desktop_w, desktop_h) = virtual_desktop_metrics();
+        let max_width = (desktop_w - 24).max(MIN_REGION_WIDTH).min(MAX_REGION_WIDTH);
+        let max_height = (desktop_h - 24)
+            .max(MIN_REGION_HEIGHT)
+            .min(MAX_REGION_HEIGHT);
+        (MIN_REGION_WIDTH, max_width, MIN_REGION_HEIGHT, max_height)
+    }
+
+    fn resolve_overlay_size(region_width: i32, region_height: i32) -> (i32, i32) {
+        let (_, _, desktop_w, _) = virtual_desktop_metrics();
+        let (min_width, max_width, min_height, max_height) = dynamic_region_limits();
         let requested_width = if region_width <= 0 {
             ((desktop_w as f64) * 0.66).round() as i32
         } else {
@@ -294,10 +343,8 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             normalize_region_height(region_height)
         };
 
-        let max_width = (desktop_w - 24).max(MIN_REGION_WIDTH);
-        let max_height = (desktop_h - 24).max(MIN_REGION_HEIGHT);
-        let width = requested_width.clamp(MIN_REGION_WIDTH, max_width);
-        let height = requested_height.clamp(MIN_REGION_HEIGHT, max_height);
+        let width = requested_width.clamp(min_width, max_width);
+        let height = requested_height.clamp(min_height, max_height);
         (width, height)
     }
 
@@ -599,25 +646,64 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             true
         }
 
-        fn apply_resize_delta(&mut self, delta_x: i32, delta_y: i32) -> bool {
+        fn apply_resize_delta(&mut self, mode: ResizeMode, delta_x: i32, delta_y: i32) -> bool {
             if delta_x == 0 && delta_y == 0 {
                 return false;
             }
 
             let (current_x, current_y, current_width, current_height) =
                 self.current_window_bounds();
-            let next_width = normalize_region_width(current_width.saturating_add(delta_x));
-            let next_height = normalize_region_height(current_height.saturating_add(delta_y));
 
-            if next_width == current_width && next_height == current_height {
+            let mut left = current_x;
+            let mut top = current_y;
+            let mut right = current_x.saturating_add(current_width);
+            let mut bottom = current_y.saturating_add(current_height);
+
+            if mode.has_left() {
+                left = left.saturating_add(delta_x);
+            }
+            if mode.has_right() {
+                right = right.saturating_add(delta_x);
+            }
+            if mode.has_top() {
+                top = top.saturating_add(delta_y);
+            }
+            if mode.has_bottom() {
+                bottom = bottom.saturating_add(delta_y);
+            }
+
+            let (min_width, max_width, min_height, max_height) = dynamic_region_limits();
+
+            let mut next_width = right.saturating_sub(left).clamp(min_width, max_width);
+            let mut next_height = bottom.saturating_sub(top).clamp(min_height, max_height);
+
+            if mode.has_left() && !mode.has_right() {
+                left = right.saturating_sub(next_width);
+            } else {
+                right = left.saturating_add(next_width);
+            }
+
+            if mode.has_top() && !mode.has_bottom() {
+                top = bottom.saturating_sub(next_height);
+            } else {
+                bottom = top.saturating_add(next_height);
+            }
+
+            next_width = right.saturating_sub(left).clamp(min_width, max_width);
+            next_height = bottom.saturating_sub(top).clamp(min_height, max_height);
+
+            let (next_x, next_y) = clamp_to_virtual_desktop(left, top, next_width, next_height);
+
+            if next_width == current_width
+                && next_height == current_height
+                && next_x == current_x
+                && next_y == current_y
+            {
                 return false;
             }
 
             self.state.region_width = next_width;
             self.state.region_height = next_height;
-
-            let (next_x, next_y) =
-                clamp_to_virtual_desktop(current_x, current_y, next_width, next_height);
             self.state.absolute_x = Some(next_x);
             self.state.absolute_y = Some(next_y);
             self.sync_offsets_from_absolute_position(next_x, next_y);
@@ -736,36 +822,127 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
                 .show(ctx, |ui| {
+                    let panel_rect = ui.max_rect();
+
                     if !self.state.click_through {
-                        let panel_rect = ui.max_rect();
-                        let handle_size = 16.0;
-                        let handle_padding = 6.0;
-                        let handle_rect = egui::Rect::from_min_size(
-                            panel_rect.right_bottom()
-                                - egui::vec2(
-                                    handle_size + handle_padding,
-                                    handle_size + handle_padding,
-                                ),
-                            egui::vec2(handle_size, handle_size),
+                        let resize_edge = 8.0;
+                        let corner_size = 16.0;
+
+                        let top_left_rect = egui::Rect::from_min_size(
+                            panel_rect.left_top(),
+                            egui::vec2(corner_size, corner_size),
+                        );
+                        let top_right_rect = egui::Rect::from_min_size(
+                            egui::pos2(panel_rect.right() - corner_size, panel_rect.top()),
+                            egui::vec2(corner_size, corner_size),
+                        );
+                        let bottom_left_rect = egui::Rect::from_min_size(
+                            egui::pos2(panel_rect.left(), panel_rect.bottom() - corner_size),
+                            egui::vec2(corner_size, corner_size),
+                        );
+                        let bottom_right_rect = egui::Rect::from_min_size(
+                            panel_rect.right_bottom() - egui::vec2(corner_size, corner_size),
+                            egui::vec2(corner_size, corner_size),
                         );
 
-                        let resize_response = ui.interact(
-                            handle_rect,
-                            ui.id().with("resize-handle"),
+                        let top_rect = egui::Rect::from_min_max(
+                            egui::pos2(top_left_rect.right(), panel_rect.top()),
+                            egui::pos2(top_right_rect.left(), panel_rect.top() + resize_edge),
+                        );
+                        let bottom_rect = egui::Rect::from_min_max(
+                            egui::pos2(bottom_left_rect.right(), panel_rect.bottom() - resize_edge),
+                            egui::pos2(bottom_right_rect.left(), panel_rect.bottom()),
+                        );
+                        let left_rect = egui::Rect::from_min_max(
+                            egui::pos2(panel_rect.left(), top_left_rect.bottom()),
+                            egui::pos2(panel_rect.left() + resize_edge, bottom_left_rect.top()),
+                        );
+                        let right_rect = egui::Rect::from_min_max(
+                            egui::pos2(panel_rect.right() - resize_edge, top_right_rect.bottom()),
+                            egui::pos2(panel_rect.right(), bottom_right_rect.top()),
+                        );
+
+                        let resize_nw = ui.interact(
+                            top_left_rect,
+                            ui.id().with("resize-nw"),
                             egui::Sense::drag(),
                         );
+                        let resize_ne = ui.interact(
+                            top_right_rect,
+                            ui.id().with("resize-ne"),
+                            egui::Sense::drag(),
+                        );
+                        let resize_sw = ui.interact(
+                            bottom_left_rect,
+                            ui.id().with("resize-sw"),
+                            egui::Sense::drag(),
+                        );
+                        let resize_se = ui.interact(
+                            bottom_right_rect,
+                            ui.id().with("resize-se"),
+                            egui::Sense::drag(),
+                        );
+                        let resize_n =
+                            ui.interact(top_rect, ui.id().with("resize-n"), egui::Sense::drag());
+                        let resize_s =
+                            ui.interact(bottom_rect, ui.id().with("resize-s"), egui::Sense::drag());
+                        let resize_w =
+                            ui.interact(left_rect, ui.id().with("resize-w"), egui::Sense::drag());
+                        let resize_e =
+                            ui.interact(right_rect, ui.id().with("resize-e"), egui::Sense::drag());
 
-                        if resize_response.hovered() || resize_response.dragged() {
+                        let dragged_resize_mode = if resize_nw.dragged() {
+                            Some(ResizeMode::NorthWest)
+                        } else if resize_ne.dragged() {
+                            Some(ResizeMode::NorthEast)
+                        } else if resize_sw.dragged() {
+                            Some(ResizeMode::SouthWest)
+                        } else if resize_se.dragged() {
+                            Some(ResizeMode::SouthEast)
+                        } else if resize_n.dragged() {
+                            Some(ResizeMode::North)
+                        } else if resize_s.dragged() {
+                            Some(ResizeMode::South)
+                        } else if resize_w.dragged() {
+                            Some(ResizeMode::West)
+                        } else if resize_e.dragged() {
+                            Some(ResizeMode::East)
+                        } else {
+                            None
+                        };
+
+                        let hovered_resize_mode = if resize_nw.hovered() {
+                            Some(ResizeMode::NorthWest)
+                        } else if resize_ne.hovered() {
+                            Some(ResizeMode::NorthEast)
+                        } else if resize_sw.hovered() {
+                            Some(ResizeMode::SouthWest)
+                        } else if resize_se.hovered() {
+                            Some(ResizeMode::SouthEast)
+                        } else if resize_n.hovered() {
+                            Some(ResizeMode::North)
+                        } else if resize_s.hovered() {
+                            Some(ResizeMode::South)
+                        } else if resize_w.hovered() {
+                            Some(ResizeMode::West)
+                        } else if resize_e.hovered() {
+                            Some(ResizeMode::East)
+                        } else {
+                            None
+                        };
+
+                        if let Some(mode) = dragged_resize_mode.or(hovered_resize_mode) {
                             ui.output_mut(|output| {
-                                output.cursor_icon = egui::CursorIcon::ResizeNwSe;
+                                output.cursor_icon = mode.cursor_icon();
                             });
                         }
 
-                        if resize_response.dragged() {
+                        if let Some(mode) = dragged_resize_mode {
                             resize_gesture_active = true;
                             if let Some((cursor_x, cursor_y)) = current_cursor_screen_position() {
                                 if let Some((last_x, last_y)) = self.last_resize_cursor_position {
                                     layout_changed |= self.apply_resize_delta(
+                                        mode,
                                         cursor_x.saturating_sub(last_x),
                                         cursor_y.saturating_sub(last_y),
                                     );
@@ -777,10 +954,23 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                             self.last_resize_cursor_position = None;
                         }
 
+                        let drag_margin = resize_edge + 2.0;
+                        let drag_rect = if panel_rect.width() > drag_margin * 2.0
+                            && panel_rect.height() > drag_margin * 2.0
+                        {
+                            egui::Rect::from_min_max(
+                                panel_rect.min + egui::vec2(drag_margin, drag_margin),
+                                panel_rect.max - egui::vec2(drag_margin, drag_margin),
+                            )
+                        } else {
+                            panel_rect
+                        };
                         let drag_response =
-                            ui.interact(panel_rect, ui.id().with("drag-area"), egui::Sense::drag());
+                            ui.interact(drag_rect, ui.id().with("drag-area"), egui::Sense::drag());
 
-                        if drag_response.hovered() || drag_response.dragged() {
+                        if (drag_response.hovered() || drag_response.dragged())
+                            && dragged_resize_mode.is_none()
+                        {
                             ui.output_mut(|output| {
                                 output.cursor_icon = egui::CursorIcon::Grab;
                             });
@@ -797,7 +987,7 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                             force_emit_layout_event = true;
                         }
 
-                        if drag_response.dragged() && !resize_response.dragged() {
+                        if drag_response.dragged() && dragged_resize_mode.is_none() {
                             drag_gesture_active = true;
                             if let Some((cursor_x, cursor_y)) = current_cursor_screen_position() {
                                 if let Some((last_x, last_y)) = self.last_drag_cursor_position {
@@ -811,17 +1001,6 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                         } else {
                             self.last_drag_cursor_position = None;
                         }
-
-                        let handle_color = if resize_response.dragged() {
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 180)
-                        } else {
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 120)
-                        };
-                        ui.painter().rect_filled(handle_rect, 3.0, handle_color);
-                        ui.painter().line_segment(
-                            [handle_rect.left_top(), handle_rect.right_bottom()],
-                            Stroke::new(1.0, Color32::from_rgba_unmultiplied(32, 32, 32, 180)),
-                        );
                     } else {
                         self.last_drag_cursor_position = None;
                         self.last_resize_cursor_position = None;
@@ -829,12 +1008,19 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
                         resize_gesture_active = false;
                     }
 
+                    let width_scale = (panel_rect.width() / 960.0).clamp(0.6, 3.0);
+                    let height_scale = (panel_rect.height() / 132.0).clamp(0.6, 3.0);
+                    let region_scale = (width_scale * 0.35 + height_scale * 0.65).clamp(0.6, 3.0);
+                    let primary_size =
+                        (self.state.font_size as f32 * region_scale).clamp(14.0, 120.0);
+                    let secondary_size = (primary_size * 0.72).clamp(12.0, 96.0);
+
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| {
                         if !self.state.primary_text.trim().is_empty() {
                             ui.label(
                                 RichText::new(self.state.primary_text.as_str())
-                                    .size(self.state.font_size as f32)
+                                    .size(primary_size)
                                     .strong()
                                     .color(Color32::WHITE),
                             );
@@ -842,8 +1028,6 @@ fn run_windows_sidecar_loop() -> Result<(), String> {
 
                         if !self.state.secondary_text.trim().is_empty() {
                             ui.add_space(4.0);
-                            let secondary_size =
-                                (self.state.font_size.saturating_sub(8)).max(12) as f32;
                             ui.label(
                                 RichText::new(self.state.secondary_text.as_str())
                                     .size(secondary_size)
