@@ -10,6 +10,7 @@ type BilibiliPlaybackSettingsModalProps = {
   t: Translator;
   bilibiliAuthorized: boolean;
   normalizedPlaybackQualityHint: string;
+  normalizedBilibiliThemePreference: string;
   playbackQualityOptions: BilibiliPlaybackQualityOption[];
   playbackQualityLoading: boolean;
   qualityProbeSourceLocator: string | null;
@@ -17,6 +18,7 @@ type BilibiliPlaybackSettingsModalProps = {
   qualityLabelForKey: (qualityKey: string) => string;
   onClose: () => void;
   onQualityHintChange: (qualityKey: string) => void;
+  onBilibiliThemePreferenceChange: (themePreference: string) => void;
   onRefreshQualityOptions: () => void;
   playbackCacheSettingsLoading: boolean;
   playbackCacheSettingsSaving: boolean;
@@ -36,6 +38,7 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
     t,
     bilibiliAuthorized,
     normalizedPlaybackQualityHint,
+    normalizedBilibiliThemePreference,
     playbackQualityOptions,
     playbackQualityLoading,
     qualityProbeSourceLocator,
@@ -43,6 +46,7 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
     qualityLabelForKey,
     onClose,
     onQualityHintChange,
+    onBilibiliThemePreferenceChange,
     onRefreshQualityOptions,
     playbackCacheSettingsLoading,
     playbackCacheSettingsSaving,
@@ -111,6 +115,27 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
           })}
         </p>
         <p className="platform-magnet-note">{t('magnet.platform.bilibili.quality.fallbackHint')}</p>
+
+        <div className="platform-magnet-settings-section">
+          <h5 className="platform-magnet-settings-section-title">
+            {t('magnet.platform.bilibili.settings.theme.title')}
+          </h5>
+
+          <div className="platform-magnet-settings-row">
+            <select
+              value={normalizedBilibiliThemePreference}
+              onChange={(event) => {
+                onBilibiliThemePreferenceChange(event.target.value);
+              }}
+            >
+              <option value="auto">{t('magnet.platform.bilibili.settings.theme.mode.auto')}</option>
+              <option value="light">{t('magnet.platform.bilibili.settings.theme.mode.light')}</option>
+              <option value="dark">{t('magnet.platform.bilibili.settings.theme.mode.dark')}</option>
+            </select>
+          </div>
+
+          <p className="platform-magnet-note">{t('magnet.platform.bilibili.settings.theme.hint')}</p>
+        </div>
 
         <div className="platform-magnet-settings-section">
           <h5 className="platform-magnet-settings-section-title">

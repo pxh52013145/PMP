@@ -28,10 +28,12 @@ const DEFAULT_SEARCH_LIMIT = 30;
 const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
 const BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY =
   'music-platform.bilibili.playback-quality-preference';
+const BILIBILI_UI_THEME_PREFERENCE_KEY = 'music-platform.bilibili.ui-theme-preference';
 
 type PlatformMode = 'bilibili' | 'generic';
 type PlatformTrackSearchItem = Awaited<ReturnType<typeof searchPlatformTracks>>['tracks'][number];
 type BilibiliPlaybackQualityKey = 'auto' | '64k' | '132k' | '192k' | 'dolby' | 'hires';
+type BilibiliThemePreference = 'auto' | 'light' | 'dark';
 
 const BILIBILI_QUALITY_OPTION_ORDER: BilibiliPlaybackQualityKey[] = [
   'auto',
@@ -106,6 +108,13 @@ function normalizeBilibiliQualityHint(value: string): BilibiliPlaybackQualityKey
   if (normalized === '192k') return '192k';
   if (normalized === 'dolby') return 'dolby';
   if (normalized === 'hires') return 'hires';
+  return 'auto';
+}
+
+function normalizeBilibiliThemePreference(value: string): BilibiliThemePreference {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'light') return 'light';
+  if (normalized === 'dark') return 'dark';
   return 'auto';
 }
 
@@ -185,6 +194,13 @@ export const PlatformMagnet: React.FC = () => {
   const t = useT();
   const audioService = useAudioService();
 
+  const [prefersDarkMode, setPrefersDarkMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return false;
+    }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
   const [mode, setMode] = useState<PlatformMode>('bilibili');
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<PlatformConnectorFacadeItem[]>([]);
@@ -198,6 +214,11 @@ export const PlatformMagnet: React.FC = () => {
 
   const [playbackQualityHint, setPlaybackQualityHint] = usePersistentSetting<string>(
     BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY,
+    'auto',
+    { format: 'string' }
+  );
+  const [bilibiliThemePreference, setBilibiliThemePreference] = usePersistentSetting<string>(
+    BILIBILI_UI_THEME_PREFERENCE_KEY,
     'auto',
     { format: 'string' }
   );
@@ -232,6 +253,24 @@ export const PlatformMagnet: React.FC = () => {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [playlistError, setPlaylistError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setPrefersDarkMode(event.matches);
+    };
+
+    setPrefersDarkMode(mediaQuery.matches);
+    mediaQuery.addEventListener('change', handleChange);
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+    };
+  }, []);
 
   const refreshConnectors = useCallback(async () => {
     try {
@@ -303,6 +342,11 @@ export const PlatformMagnet: React.FC = () => {
   const normalizedPlaybackQualityHint = useMemo(
     () => normalizeBilibiliQualityHint(playbackQualityHint),
     [playbackQualityHint]
+  );
+
+  const normalizedBilibiliThemePreference = useMemo(
+    () => normalizeBilibiliThemePreference(bilibiliThemePreference),
+    [bilibiliThemePreference]
   );
 
   const qualityProbeSourceLocator = useMemo(() => {
@@ -544,8 +588,16 @@ export const PlatformMagnet: React.FC = () => {
     [items]
   );
 
+  const useDarkMode =
+    normalizedBilibiliThemePreference === 'dark' ||
+    (normalizedBilibiliThemePreference === 'auto' && prefersDarkMode);
+
+  const rootClassName = useDarkMode
+    ? 'platform-magnet-root platform-magnet-root--dark'
+    : 'platform-magnet-root';
+
   return (
-    <div className="platform-magnet-root">
+    <div className={rootClassName}>
       <div className="platform-magnet-header">
         <div className="platform-magnet-header-main">
           <div className="platform-magnet-mode-row">
@@ -636,6 +688,7 @@ export const PlatformMagnet: React.FC = () => {
             filteredBilibiliResources={filteredBilibiliResources}
             preparingResourceId={preparingResourceId}
             normalizedPlaybackQualityHint={normalizedPlaybackQualityHint}
+            normalizedBilibiliThemePreference={normalizedBilibiliThemePreference}
             resourceCoverUrlMap={resourceCoverUrlMap}
             resourceQualityTagMap={resourceQualityTagMap}
             resourceGridRef={resourceGridRef}
@@ -747,6 +800,9 @@ export const PlatformMagnet: React.FC = () => {
             }}
             onQualityHintChange={(qualityKey) => {
               setPlaybackQualityHint(normalizeBilibiliQualityHint(qualityKey));
+            }}
+            onBilibiliThemePreferenceChange={(themePreference) => {
+              setBilibiliThemePreference(normalizeBilibiliThemePreference(themePreference));
             }}
             onRefreshQualityOptions={() => {
               if (!qualityProbeSourceLocator) return;

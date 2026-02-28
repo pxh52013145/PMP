@@ -39,6 +39,7 @@ type BilibiliWorkspaceProps = {
   filteredBilibiliResources: BilibiliFavoriteResourceItem[];
   preparingResourceId: string | null;
   normalizedPlaybackQualityHint: string;
+  normalizedBilibiliThemePreference: string;
   resourceCoverUrlMap: Record<string, string>;
   resourceQualityTagMap: Record<string, BilibiliQualityBadge[]>;
   resourceGridRef: React.RefObject<HTMLDivElement>;
@@ -89,6 +90,7 @@ type BilibiliWorkspaceProps = {
   onTogglePlaylistDrawer: () => void;
   onClosePlaybackSettings: () => void;
   onQualityHintChange: (qualityKey: string) => void;
+  onBilibiliThemePreferenceChange: (themePreference: string) => void;
   onRefreshQualityOptions: () => void;
   onPlaybackCachePathDraftChange: (path: string) => void;
   onBrowsePlaybackCachePath: () => void;
@@ -118,6 +120,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
     filteredBilibiliResources,
     preparingResourceId,
     normalizedPlaybackQualityHint,
+    normalizedBilibiliThemePreference,
     resourceCoverUrlMap,
     resourceQualityTagMap,
     resourceGridRef,
@@ -168,6 +171,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
     onTogglePlaylistDrawer,
     onClosePlaybackSettings,
     onQualityHintChange,
+    onBilibiliThemePreferenceChange,
     onRefreshQualityOptions,
     onPlaybackCachePathDraftChange,
     onBrowsePlaybackCachePath,
@@ -373,6 +377,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
         t={t}
         bilibiliAuthorized={bilibiliAuthorized}
         normalizedPlaybackQualityHint={normalizedPlaybackQualityHint}
+        normalizedBilibiliThemePreference={normalizedBilibiliThemePreference}
         playbackQualityOptions={playbackQualityOptions}
         playbackQualityLoading={playbackQualityLoading}
         qualityProbeSourceLocator={qualityProbeSourceLocator}
@@ -380,6 +385,7 @@ export function BilibiliWorkspace(props: BilibiliWorkspaceProps) {
         qualityLabelForKey={qualityLabelForKey}
         onClose={onClosePlaybackSettings}
         onQualityHintChange={onQualityHintChange}
+        onBilibiliThemePreferenceChange={onBilibiliThemePreferenceChange}
         onRefreshQualityOptions={onRefreshQualityOptions}
         playbackCacheSettingsLoading={playbackCacheSettingsLoading}
         playbackCacheSettingsSaving={playbackCacheSettingsSaving}

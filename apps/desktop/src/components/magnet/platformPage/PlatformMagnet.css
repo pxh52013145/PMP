@@ -723,3 +723,127 @@
     justify-content: flex-start;
   }
 }
+
+.platform-magnet-root--dark {
+  background: linear-gradient(180deg, rgba(32, 23, 47, 0.96), rgba(16, 12, 25, 0.98));
+  color: #ede4ff;
+  color-scheme: dark;
+}
+
+.platform-magnet-root--dark .platform-magnet-mode-switcher {
+  border-color: rgba(178, 139, 226, 0.52);
+  background: rgba(34, 23, 51, 0.9);
+}
+
+.platform-magnet-root--dark .platform-magnet-mode-btn {
+  color: rgba(230, 214, 255, 0.85);
+}
+
+.platform-magnet-root--dark .platform-magnet-mode-btn.active {
+  background: rgba(171, 95, 255, 0.34);
+  color: #f8f2ff;
+}
+
+.platform-magnet-root--dark .platform-magnet-summary-row p,
+.platform-magnet-root--dark .platform-magnet-panel-tag,
+.platform-magnet-root--dark .platform-magnet-bilibili-folder-count,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-bvid,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-meta,
+.platform-magnet-root--dark .platform-magnet-result-sub,
+.platform-magnet-root--dark .platform-magnet-bilibili-playlist-track-meta,
+.platform-magnet-root--dark .platform-magnet-player-subtitle,
+.platform-magnet-root--dark .platform-magnet-settings-path-label {
+  color: rgba(215, 196, 243, 0.82);
+}
+
+.platform-magnet-root--dark .platform-magnet-note {
+  color: #d2b5ff;
+}
+
+.platform-magnet-root--dark .platform-magnet-error {
+  color: #ff8ea1;
+}
+
+.platform-magnet-root--dark .platform-magnet-panel,
+.platform-magnet-root--dark .platform-magnet-bilibili-playlists,
+.platform-magnet-root--dark .platform-magnet-bilibili-folder-item,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-card,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-item,
+.platform-magnet-root--dark .platform-magnet-result-item,
+.platform-magnet-root--dark .platform-magnet-bilibili-playlist-track-item,
+.platform-magnet-root--dark .platform-magnet-settings-modal {
+  border-color: rgba(181, 143, 225, 0.42);
+  background: rgba(37, 27, 53, 0.9);
+}
+
+.platform-magnet-root--dark .platform-magnet-bilibili-folder-item--active {
+  border-color: rgba(186, 118, 255, 0.78);
+  background: rgba(163, 82, 243, 0.28);
+}
+
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-toolbar,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-load-more {
+  background: rgba(31, 22, 46, 0.9);
+  border-color: rgba(181, 143, 225, 0.4);
+}
+
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-cover {
+  border-color: rgba(181, 143, 225, 0.34);
+  background: rgba(171, 95, 255, 0.18);
+  color: rgba(225, 205, 252, 0.9);
+}
+
+.platform-magnet-root--dark .platform-magnet-mini-btn,
+.platform-magnet-root--dark .platform-magnet-search-row button,
+.platform-magnet-root--dark .platform-magnet-bv-top-search input,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-toolbar input,
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-toolbar select,
+.platform-magnet-root--dark .platform-magnet-bilibili-playlist-create input,
+.platform-magnet-root--dark .platform-magnet-bilibili-playlist-actions select,
+.platform-magnet-root--dark .platform-magnet-search-row select,
+.platform-magnet-root--dark .platform-magnet-search-row input,
+.platform-magnet-root--dark .platform-magnet-settings-row select,
+.platform-magnet-root--dark .platform-magnet-settings-row .platform-magnet-settings-input {
+  border-color: rgba(181, 143, 225, 0.45);
+  background: rgba(25, 18, 38, 0.92);
+  color: #f0e6ff;
+}
+
+.platform-magnet-root--dark
+  :is(
+    .platform-magnet-bv-top-search input,
+    .platform-magnet-bilibili-resource-toolbar input,
+    .platform-magnet-bilibili-playlist-create input,
+    .platform-magnet-search-row input,
+    .platform-magnet-settings-row .platform-magnet-settings-input
+  )::placeholder {
+  color: rgba(196, 171, 231, 0.76);
+}
+
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-title,
+.platform-magnet-root--dark .platform-magnet-bilibili-playlist-track-title,
+.platform-magnet-root--dark .platform-magnet-player-title,
+.platform-magnet-root--dark .platform-magnet-settings-section-title,
+.platform-magnet-root--dark .platform-magnet-settings-path-value {
+  color: #f2e9ff;
+}
+
+.platform-magnet-root--dark .platform-magnet-bilibili-resource-badge {
+  color: #e7d4ff;
+  border-color: rgba(186, 118, 255, 0.6);
+  background: rgba(156, 74, 238, 0.26);
+}
+
+.platform-magnet-root--dark .platform-magnet-drawer-backdrop {
+  background: rgba(10, 6, 16, 0.54);
+}
+
+.platform-magnet-root--dark .platform-magnet-settings-overlay {
+  background: rgba(6, 4, 12, 0.62);
+}
+
+.platform-magnet-root--dark .platform-magnet-player-bar {
+  border-color: rgba(181, 143, 225, 0.42);
+  background: rgba(19, 14, 30, 0.96);
+  color: rgba(248, 241, 255, 0.96);
+}
