@@ -89,6 +89,15 @@ export {
   type NativeLibraryFallbackTaskRecord,
   type NativeLibraryFallbackTaskUpsertInput,
   type NativeLibraryTrackQuery,
+  type NativeLibraryTrackFilterField,
+  type NativeLibraryTrackLogicalOperator,
+  type NativeLibraryTrackFilterOperator,
+  type NativeLibraryTrackFilterInput,
+  type NativeLibraryTrackFilterGroupInput,
+  type NativeLibraryTrackGroupByInput,
+  type NativeLibraryTrackSortField,
+  type NativeLibraryTrackSortInput,
+  type NativeLibraryTrackBaseQueryInput,
   type NativeLibraryTrackRecord,
   type NativeLibraryStatsRecord,
   type NativeLibrarySourceHealthQuery,
@@ -101,3 +110,96 @@ export {
   type NativeLibraryUserEntryRecord,
   type NativeLibraryUserEntryUpsertInput,
 } from './nativeLibraryDb';
+
+export {
+  applyMusicLibraryBaseQuery,
+  canUseNativeBaseFilter,
+  canUseNativeBaseFilterGroup,
+  canUseNativeBaseOrderRule,
+  canUseNativeBaseSort,
+  createDefaultMusicLibraryBaseFilterGroup,
+  createDefaultMusicLibraryBaseSchema,
+  flattenMusicLibraryBaseFilters,
+  normalizeMusicLibraryBaseSchema,
+  type MusicLibraryBaseView,
+  type MusicLibraryBaseField,
+  type MusicLibraryBaseOperator,
+  type MusicLibraryBaseLogicalOperator,
+  type MusicLibraryBaseOrderField,
+  type MusicLibraryBaseSortField,
+  type MusicLibraryBaseFilter,
+  type MusicLibraryBaseFilterGroup,
+  type MusicLibraryBaseOrderRule,
+  type MusicLibraryBaseSortRule,
+  type MusicLibraryBaseGroupRule,
+  type MusicLibraryBaseQuery,
+  type MusicLibraryBaseViewProperty,
+  type MusicLibraryBaseViewSchema,
+  type MusicLibraryBaseSchema,
+} from './baseQuery';
+
+export {
+  appendMusicLibraryBaseFilter,
+  appendMusicLibraryBaseFilterGroup,
+  appendMusicLibraryBaseGroupByRule,
+  appendMusicLibraryBaseSortRule,
+  createMusicLibraryBaseEmptyFilterState,
+  createMusicLibraryBaseEntityId,
+  createMusicLibraryBaseQuickFilterState,
+  moveMusicLibraryBaseGroupByRule,
+  moveMusicLibraryBaseSortRule,
+  removeMusicLibraryBaseFilter,
+  removeMusicLibraryBaseFilterGroup,
+  removeMusicLibraryBaseGroupByRule,
+  removeMusicLibraryBaseSortRule,
+  updateMusicLibraryBaseFilterGroupOperator,
+  updateMusicLibraryBaseGroupByRule,
+  updateMusicLibraryBaseSortRule,
+  type MusicLibraryBaseFilterGroupState,
+} from './baseState';
+
+export {
+  MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP,
+  MUSIC_LIBRARY_BASE_FILTER_FIELDS,
+  MUSIC_LIBRARY_BASE_OPERATORS,
+  MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP,
+  MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS,
+} from './baseMeta';
+
+export {
+  loadMusicLibraryBaseState,
+  persistMusicLibraryBaseState,
+  type LoadMusicLibraryBaseStateOptions,
+  type LoadedMusicLibraryBaseState,
+  type PersistMusicLibraryBaseStateOptions,
+} from './basePersistence';
+
+export {
+  applyBaseViewPropertiesToLocalTrackColumns,
+  cloneDefaultLocalTrackColumnSettings,
+  LEFT_ALIGNED_LOCAL_TRACK_COLUMNS,
+  LOCAL_TRACK_COLUMN_DEFINITIONS,
+  LOCAL_TRACK_COLUMN_ORDER,
+  normalizeLocalTrackColumnSettings,
+  normalizeLocalTrackColumnWidth,
+  type LocalTrackColumnConfig,
+  type LocalTrackColumnDefinition,
+  type LocalTrackColumnId,
+} from './localTrackColumns';
+
+export {
+  deriveLocalTrackLayoutModel,
+  type LocalTrackLayoutModel,
+} from './localTrackLayout';
+
+export {
+  buildStableFallbackAuditSnapshot,
+  buildTagsJsonFromText,
+  collectStableFallbackAuditEntries,
+  deriveStableLibraryStats,
+  normalizeStableFallbackAuditEntry,
+  parseTagsJsonAsText,
+  type StableFallbackAuditEntry,
+  type StableFallbackAuditSnapshot,
+  type StableLibraryStats,
+} from './stableLibraryModel';

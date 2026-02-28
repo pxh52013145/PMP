@@ -253,6 +253,253 @@ export interface NativeLibraryTrackQuery {
   sourceId?: string;
   quickFingerprint?: string;
   filePath?: string;
+  baseQuery?: NativeLibraryTrackBaseQueryInput;
+  filters?: NativeLibraryTrackFilterInput[];
+  groupBy?: NativeLibraryTrackGroupByInput[];
+  sort?: NativeLibraryTrackSortInput[];
+}
+
+export type NativeLibraryTrackFilterField =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'genre'
+  | 'durationSeconds'
+  | 'playCount'
+  | 'fileSize'
+  | 'sampleRate'
+  | 'bitDepth'
+  | 'status'
+  | 'sourceId';
+
+export type NativeLibraryTrackFilterOperator =
+  | 'contains'
+  | 'equals'
+  | 'not_equals'
+  | 'gte'
+  | 'lte'
+  | 'is_empty'
+  | 'is_not_empty';
+
+export interface NativeLibraryTrackFilterInput {
+  field: NativeLibraryTrackFilterField;
+  operator: NativeLibraryTrackFilterOperator;
+  value?: string;
+}
+
+export type NativeLibraryTrackLogicalOperator = 'and' | 'or';
+
+export interface NativeLibraryTrackFilterGroupInput {
+  operator?: NativeLibraryTrackLogicalOperator;
+  filters?: NativeLibraryTrackFilterInput[];
+}
+
+export type NativeLibraryTrackSortField =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'genre'
+  | 'durationSeconds'
+  | 'playCount'
+  | 'fileSize'
+  | 'sampleRate'
+  | 'bitDepth'
+  | 'updatedAtMs';
+
+export interface NativeLibraryTrackSortInput {
+  field: NativeLibraryTrackSortField;
+  order?: 'asc' | 'desc';
+}
+
+export interface NativeLibraryTrackGroupByInput {
+  field: NativeLibraryTrackSortField;
+  order?: 'asc' | 'desc';
+}
+
+export interface NativeLibraryTrackBaseQueryInput {
+  filterOperator?: NativeLibraryTrackLogicalOperator;
+  filterGroups?: NativeLibraryTrackFilterGroupInput[];
+  filters?: NativeLibraryTrackFilterInput[];
+  groupBy?: NativeLibraryTrackGroupByInput[];
+  sort?: NativeLibraryTrackSortInput[];
+}
+
+const NATIVE_LIBRARY_TRACK_FILTER_FIELDS = new Set<NativeLibraryTrackFilterField>([
+  'title',
+  'artist',
+  'album',
+  'genre',
+  'durationSeconds',
+  'playCount',
+  'fileSize',
+  'sampleRate',
+  'bitDepth',
+  'status',
+  'sourceId',
+]);
+
+const NATIVE_LIBRARY_TRACK_FILTER_OPERATORS = new Set<NativeLibraryTrackFilterOperator>([
+  'contains',
+  'equals',
+  'not_equals',
+  'gte',
+  'lte',
+  'is_empty',
+  'is_not_empty',
+]);
+
+const NATIVE_LIBRARY_TRACK_SORT_FIELDS = new Set<NativeLibraryTrackSortField>([
+  'title',
+  'artist',
+  'album',
+  'genre',
+  'durationSeconds',
+  'playCount',
+  'fileSize',
+  'sampleRate',
+  'bitDepth',
+  'updatedAtMs',
+]);
+
+function normalizeNativeTrackFilters(
+  filters: NativeLibraryTrackQuery['filters']
+): NativeLibraryTrackFilterInput[] | undefined {
+  if (!Array.isArray(filters) || filters.length === 0) return undefined;
+
+  const normalized: NativeLibraryTrackFilterInput[] = [];
+  for (const rawFilter of filters) {
+    if (!rawFilter || typeof rawFilter !== 'object') continue;
+
+    const field = rawFilter.field;
+    const operator = rawFilter.operator;
+    if (!NATIVE_LIBRARY_TRACK_FILTER_FIELDS.has(field)) continue;
+    if (!NATIVE_LIBRARY_TRACK_FILTER_OPERATORS.has(operator)) continue;
+
+    const needsValue =
+      operator === 'contains' ||
+      operator === 'equals' ||
+      operator === 'not_equals' ||
+      operator === 'gte' ||
+      operator === 'lte';
+
+    const normalizedValue =
+      typeof rawFilter.value === 'string' && rawFilter.value.trim().length > 0
+        ? rawFilter.value.trim()
+        : undefined;
+
+    if (needsValue && !normalizedValue) continue;
+
+    normalized.push({
+      field,
+      operator,
+      value: needsValue ? normalizedValue : undefined,
+    });
+
+    if (normalized.length >= 20) break;
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeNativeTrackFilterGroups(
+  groups: NativeLibraryTrackBaseQueryInput['filterGroups']
+): NativeLibraryTrackFilterGroupInput[] | undefined {
+  if (!Array.isArray(groups) || groups.length === 0) return undefined;
+
+  const normalized: NativeLibraryTrackFilterGroupInput[] = [];
+  for (const rawGroup of groups) {
+    if (!rawGroup || typeof rawGroup !== 'object') continue;
+
+    const normalizedFilters = normalizeNativeTrackFilters(rawGroup.filters);
+    if (!normalizedFilters || normalizedFilters.length === 0) continue;
+
+    normalized.push({
+      operator: rawGroup.operator === 'or' ? 'or' : 'and',
+      filters: normalizedFilters,
+    });
+
+    if (normalized.length >= 8) break;
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeNativeTrackSort(sort: NativeLibraryTrackQuery['sort']): NativeLibraryTrackSortInput[] | undefined {
+  if (!Array.isArray(sort) || sort.length === 0) return undefined;
+
+  const normalized: NativeLibraryTrackSortInput[] = [];
+  for (const rawSort of sort) {
+    if (!rawSort || typeof rawSort !== 'object') continue;
+    const field = rawSort.field;
+    if (!NATIVE_LIBRARY_TRACK_SORT_FIELDS.has(field)) continue;
+
+    normalized.push({
+      field,
+      order: rawSort.order === 'desc' ? 'desc' : 'asc',
+    });
+
+    if (normalized.length >= 4) break;
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeNativeTrackGroupBy(
+  groupBy: NativeLibraryTrackQuery['groupBy']
+): NativeLibraryTrackGroupByInput[] | undefined {
+  if (!Array.isArray(groupBy) || groupBy.length === 0) return undefined;
+
+  const normalized: NativeLibraryTrackGroupByInput[] = [];
+  for (const rawGroup of groupBy) {
+    if (!rawGroup || typeof rawGroup !== 'object') continue;
+    const field = rawGroup.field;
+    if (!NATIVE_LIBRARY_TRACK_SORT_FIELDS.has(field)) continue;
+
+    normalized.push({
+      field,
+      order: rawGroup.order === 'desc' ? 'desc' : 'asc',
+    });
+
+    if (normalized.length >= 4) break;
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeNativeTrackBaseQuery(
+  baseQuery: NativeLibraryTrackQuery['baseQuery'],
+  fallbackFilters?: NativeLibraryTrackFilterInput[],
+  fallbackGroupBy?: NativeLibraryTrackGroupByInput[],
+  fallbackSort?: NativeLibraryTrackSortInput[]
+): NativeLibraryTrackBaseQueryInput | undefined {
+  const normalizedFilterOperator: NativeLibraryTrackLogicalOperator =
+    baseQuery?.filterOperator === 'or' ? 'or' : 'and';
+  const normalizedFilterGroups = normalizeNativeTrackFilterGroups(baseQuery?.filterGroups);
+  const normalizedFilters = normalizeNativeTrackFilters(baseQuery?.filters) ?? fallbackFilters;
+  const normalizedGroupBy = normalizeNativeTrackGroupBy(baseQuery?.groupBy) ?? fallbackGroupBy;
+  const normalizedSort = normalizeNativeTrackSort(baseQuery?.sort) ?? fallbackSort;
+
+  const effectiveFilterGroups =
+    normalizedFilterGroups ??
+    (normalizedFilters && normalizedFilters.length > 0
+      ? [
+          {
+            operator: normalizedFilterOperator,
+            filters: normalizedFilters,
+          },
+        ]
+      : undefined);
+
+  if (!effectiveFilterGroups && !normalizedFilters && !normalizedGroupBy && !normalizedSort) {
+    return undefined;
+  }
+  return {
+    filterOperator: normalizedFilterOperator,
+    filterGroups: effectiveFilterGroups,
+    filters: normalizedFilters,
+    groupBy: normalizedGroupBy,
+    sort: normalizedSort,
+  };
 }
 
 export interface NativeLibraryTrackRecord {
@@ -2232,6 +2479,16 @@ export async function queryNativeLibraryTracks(
 ): Promise<NativeLibraryTrackRecord[]> {
   if (!isTauriRuntime()) return [];
 
+  const normalizedFilters = normalizeNativeTrackFilters(query?.filters);
+  const normalizedGroupBy = normalizeNativeTrackGroupBy(query?.groupBy);
+  const normalizedSort = normalizeNativeTrackSort(query?.sort);
+  const normalizedBaseQuery = normalizeNativeTrackBaseQuery(
+    query?.baseQuery,
+    normalizedFilters,
+    normalizedGroupBy,
+    normalizedSort
+  );
+
   const payload: NativeLibraryTrackQuery = {
     limit:
       typeof query?.limit === 'number' && Number.isFinite(query.limit)
@@ -2268,6 +2525,10 @@ export async function queryNativeLibraryTracks(
       typeof query?.filePath === 'string' && query.filePath.trim().length > 0
         ? query.filePath.trim()
         : undefined,
+    baseQuery: normalizedBaseQuery,
+    filters: normalizedFilters,
+    groupBy: normalizedGroupBy,
+    sort: normalizedSort,
   };
 
   const raw = await invoke<unknown>('music_library_db_query_tracks', { query: payload }).catch(

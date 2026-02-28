@@ -909,6 +909,10 @@ fn query_track_record_by_path(
         source_id: None,
         quick_fingerprint: None,
         file_path: Some(track_path.to_string()),
+        base_query: None,
+        filters: None,
+        group_by: None,
+        sort: None,
     };
 
     let tracks = music_library_db::query_tracks(app, Some(query))?;

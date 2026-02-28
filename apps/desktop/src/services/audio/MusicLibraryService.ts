@@ -60,10 +60,23 @@ import {
   type NativeLibraryFallbackTaskQuery,
   type NativeLibraryFallbackTaskRecord,
   type NativeLibraryTrackRecord,
+  type NativeLibraryTrackFilterInput,
+  type NativeLibraryTrackFilterGroupInput,
+  type NativeLibraryTrackSortInput,
   type NativeLibraryTrackUpsertInput,
   type NativeLibraryUserEntryQuery,
   type NativeLibraryUserEntryRecord,
 } from '../../modules/music-library';
+import {
+  canUseNativeBaseFilter,
+  canUseNativeBaseFilterGroup,
+  canUseNativeBaseOrderRule,
+  type MusicLibraryBaseGroupRule,
+  type MusicLibraryBaseFilter,
+  type MusicLibraryBaseQuery,
+  type MusicLibraryBaseSortRule,
+  type MusicLibraryBaseSortField,
+} from '../../modules/music-library/baseQuery';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
   getCloudPlaybackFallbackAdapter,
@@ -256,6 +269,15 @@ export type ViewMode = 'artists' | 'albums' | 'folders' | 'genres' | 'years' | '
 
 // 排序选项
 export type SortBy = 'title' | 'artist' | 'album' | 'duration' | 'addedAt' | 'year';
+
+export interface LocalBaseTracksQuery {
+  searchQuery?: string;
+  baseQuery: MusicLibraryBaseQuery;
+  limit?: number;
+  offset?: number;
+  includeMissing?: boolean;
+  visibleOnly?: boolean;
+}
 
 export type CoverRuntimeCachePolicy = 'default' | 'watch' | 'high' | 'critical' | 'hidden';
 export type CoverSizeHint = 'small' | 'medium' | 'large';
@@ -708,6 +730,218 @@ export class MusicLibraryService {
     if (available) return available;
 
     return records[0] || null;
+  }
+
+  private toNativeTrackFilterFromBase(
+    filter: MusicLibraryBaseFilter
+  ): NativeLibraryTrackFilterInput | null {
+    const mapField = (): NativeLibraryTrackFilterInput['field'] | null => {
+      switch (filter.field) {
+        case 'title':
+          return 'title';
+        case 'artist':
+          return 'artist';
+        case 'album':
+          return 'album';
+        case 'genre':
+          return 'genre';
+        case 'duration':
+          return 'durationSeconds';
+        case 'playCount':
+          return 'playCount';
+        default:
+          return null;
+      }
+    };
+
+    const field = mapField();
+    if (!field) return null;
+
+    const operator = filter.operator;
+    const normalizedValue = typeof filter.value === 'string' ? filter.value.trim() : '';
+    const isNumericField = field === 'durationSeconds' || field === 'playCount';
+
+    if (operator === 'is_empty' || operator === 'is_not_empty') {
+      return { field, operator };
+    }
+
+    if (!normalizedValue) return null;
+
+    if (isNumericField) {
+      if (operator !== 'equals' && operator !== 'not_equals' && operator !== 'gte' && operator !== 'lte') {
+        return null;
+      }
+      const numeric = Number(normalizedValue);
+      if (!Number.isFinite(numeric)) return null;
+      return {
+        field,
+        operator,
+        value: String(numeric),
+      };
+    }
+
+    if (operator !== 'contains' && operator !== 'equals' && operator !== 'not_equals') {
+      return null;
+    }
+
+    return {
+      field,
+      operator,
+      value: normalizedValue,
+    };
+  }
+
+  private toNativeTrackSortFieldFromBase(
+    field: MusicLibraryBaseSortField
+  ): NativeLibraryTrackSortInput['field'] | null {
+    switch (field) {
+      case 'title':
+        return 'title';
+      case 'artist':
+        return 'artist';
+      case 'album':
+        return 'album';
+      case 'genre':
+        return 'genre';
+      case 'duration':
+        return 'durationSeconds';
+      case 'playCount':
+        return 'playCount';
+      default:
+        return null;
+    }
+  }
+
+  private buildNativeTrackSortFromBase(
+    groupByRules: MusicLibraryBaseGroupRule[],
+    sortRules: MusicLibraryBaseSortRule[]
+  ): {
+    groupBy?: NativeLibraryTrackSortInput[];
+    sort?: NativeLibraryTrackSortInput[];
+  } {
+    const normalizedGroupBy: NativeLibraryTrackSortInput[] = [];
+    const normalizedSort: NativeLibraryTrackSortInput[] = [];
+    const seenFields = new Set<NativeLibraryTrackSortInput['field']>();
+
+    for (const rule of groupByRules) {
+      const mappedField = this.toNativeTrackSortFieldFromBase(rule.field);
+      if (!mappedField) continue;
+      if (seenFields.has(mappedField)) continue;
+      seenFields.add(mappedField);
+
+      normalizedGroupBy.push({
+        field: mappedField,
+        order: rule.order === 'desc' ? 'desc' : 'asc',
+      });
+    }
+
+    for (const rule of sortRules) {
+      const mappedField = this.toNativeTrackSortFieldFromBase(rule.field);
+      if (!mappedField) continue;
+      if (seenFields.has(mappedField)) continue;
+      seenFields.add(mappedField);
+
+      normalizedSort.push({
+        field: mappedField,
+        order: rule.order === 'desc' ? 'desc' : 'asc',
+      });
+    }
+
+    return {
+      groupBy: normalizedGroupBy.length > 0 ? normalizedGroupBy : undefined,
+      sort: normalizedSort.length > 0 ? normalizedSort : undefined,
+    };
+  }
+
+  async queryLocalTracksByBase(query: LocalBaseTracksQuery): Promise<Track[] | null> {
+    if (!isTauriRuntime()) return null;
+
+    const normalizedBaseQuery: MusicLibraryBaseQuery = {
+      filterOperator: query.baseQuery.filterOperator === 'or' ? 'or' : 'and',
+      filterGroups: Array.isArray(query.baseQuery.filterGroups) ? query.baseQuery.filterGroups : [],
+      groupByRules: Array.isArray(query.baseQuery.groupByRules) ? query.baseQuery.groupByRules : [],
+      sortRules: Array.isArray(query.baseQuery.sortRules) ? query.baseQuery.sortRules : [],
+    };
+
+    const nativeFilterGroups: NativeLibraryTrackFilterGroupInput[] = [];
+    for (const group of normalizedBaseQuery.filterGroups) {
+      if (!canUseNativeBaseFilterGroup(group)) {
+        return null;
+      }
+
+      const mappedFilters: NativeLibraryTrackFilterInput[] = [];
+      for (const filter of group.filters) {
+        if (!canUseNativeBaseFilter(filter)) {
+          return null;
+        }
+        const mapped = this.toNativeTrackFilterFromBase(filter);
+        if (!mapped) {
+          return null;
+        }
+        mappedFilters.push(mapped);
+      }
+
+      if (mappedFilters.length > 0) {
+        nativeFilterGroups.push({
+          operator: group.operator === 'or' ? 'or' : 'and',
+          filters: mappedFilters,
+        });
+      }
+    }
+
+    const nativeFilters =
+      nativeFilterGroups.length > 0
+        ? nativeFilterGroups.flatMap((group) => group.filters ?? [])
+        : undefined;
+
+    const invalidRule = [...normalizedBaseQuery.groupByRules, ...normalizedBaseQuery.sortRules].find(
+      (rule) => !canUseNativeBaseOrderRule(rule)
+    );
+    if (invalidRule) {
+      return null;
+    }
+
+    const nativeOrdering = this.buildNativeTrackSortFromBase(
+      normalizedBaseQuery.groupByRules,
+      normalizedBaseQuery.sortRules
+    );
+
+    const normalizedSearchQuery =
+      typeof query.searchQuery === 'string' && query.searchQuery.trim().length > 0
+        ? query.searchQuery.trim()
+        : undefined;
+
+    const normalizedLimit =
+      typeof query.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : 2000;
+
+    const normalizedOffset =
+      typeof query.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : 0;
+
+    try {
+      const rows = await queryNativeLibraryTracks({
+        includeMissing: query.includeMissing === true,
+        visibleOnly: query.visibleOnly !== false,
+        searchQuery: normalizedSearchQuery,
+        baseQuery: {
+          filterOperator: normalizedBaseQuery.filterOperator,
+          filterGroups: nativeFilterGroups.length > 0 ? nativeFilterGroups : undefined,
+          filters: nativeFilters,
+          groupBy: nativeOrdering.groupBy,
+          sort: nativeOrdering.sort,
+        },
+        limit: normalizedLimit,
+        offset: normalizedOffset,
+      });
+
+      return rows.map((item) => this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item)));
+    } catch (error) {
+      console.warn('[MusicLibraryService] native base-track query failed:', error);
+      return null;
+    }
   }
 
   private async tryGetAllTracksFromNativeDb(limit?: number, offset?: number): Promise<Track[] | null> {
@@ -2482,6 +2716,24 @@ export class MusicLibraryService {
         console.warn('[MusicLibraryService] failed to upsert path scanning in IndexedDB:', error);
       });
       await this.tryUpsertNativeLibrarySource(updatedPath);
+    }
+  }
+
+  async openInFileManager(path: string): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+
+    const normalizedPath = String(path || '').trim();
+    if (!normalizedPath) return false;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      await invoke('music_library_open_in_file_manager', {
+        path: normalizedPath,
+      });
+      return true;
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to open in file manager:', normalizedPath, error);
+      return false;
     }
   }
 

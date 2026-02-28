@@ -1,5 +1,5 @@
 use once_cell::sync::{Lazy, OnceCell};
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
@@ -121,6 +121,49 @@ pub struct LibraryTrackQueryInput {
     pub source_id: Option<String>,
     pub quick_fingerprint: Option<String>,
     pub file_path: Option<String>,
+    pub base_query: Option<LibraryTrackBaseQueryInput>,
+    pub filters: Option<Vec<LibraryTrackFilterInput>>,
+    pub group_by: Option<Vec<LibraryTrackGroupByInput>>,
+    pub sort: Option<Vec<LibraryTrackSortInput>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackBaseQueryInput {
+    pub filter_operator: Option<String>,
+    pub filter_groups: Option<Vec<LibraryTrackFilterGroupInput>>,
+    pub filters: Option<Vec<LibraryTrackFilterInput>>,
+    pub group_by: Option<Vec<LibraryTrackGroupByInput>>,
+    pub sort: Option<Vec<LibraryTrackSortInput>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackFilterGroupInput {
+    pub operator: Option<String>,
+    pub filters: Option<Vec<LibraryTrackFilterInput>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackFilterInput {
+    pub field: String,
+    pub operator: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackSortInput {
+    pub field: String,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackGroupByInput {
+    pub field: String,
+    pub order: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4249,122 +4292,165 @@ pub fn cleanup_source_tracks(
     })
 }
 
+fn normalize_logic_operator(raw: Option<&String>, default_value: &'static str) -> &'static str {
+    match raw {
+        Some(value) if value.trim().eq_ignore_ascii_case("or") => "OR",
+        Some(value) if value.trim().eq_ignore_ascii_case("and") => "AND",
+        _ => default_value,
+    }
+}
+
+fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String, Vec<Value>)> {
+    let field = filter.field.trim().to_ascii_lowercase();
+    let operator = filter.operator.trim().to_ascii_lowercase();
+    let value_text = filter
+        .value
+        .as_ref()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+
+    let text_expr = match field.as_str() {
+        "title" => Some("LOWER(TRIM(COALESCE(t.title, '')))"),
+        "artist" => Some("LOWER(TRIM(COALESCE(t.artist, '')))"),
+        "album" => Some("LOWER(TRIM(COALESCE(t.album, '')))"),
+        "genre" => Some("LOWER(TRIM(COALESCE(t.genre, '')))"),
+        "status" => Some("LOWER(TRIM(COALESCE(t.status, '')))"),
+        "sourceid" => Some("LOWER(TRIM(COALESCE(t.source_id, '')))"),
+        _ => None,
+    };
+    let numeric_expr = match field.as_str() {
+        "durationseconds" => Some("t.duration_seconds"),
+        "playcount" => Some("t.play_count"),
+        "filesize" => Some("t.file_size"),
+        "samplerate" => Some("t.sample_rate"),
+        "bitdepth" => Some("t.bit_depth"),
+        _ => None,
+    };
+
+    match operator.as_str() {
+        "contains" => {
+            if let (Some(expr), Some(value)) = (text_expr, value_text.as_ref()) {
+                return Some((
+                    format!("{expr} LIKE ?"),
+                    vec![Value::Text(format!("%{}%", value.to_ascii_lowercase()))],
+                ));
+            }
+        }
+        "equals" => {
+            if let Some(expr) = text_expr {
+                if let Some(value) = value_text.as_ref() {
+                    return Some((
+                        format!("{expr} = ?"),
+                        vec![Value::Text(value.to_ascii_lowercase())],
+                    ));
+                }
+            } else if let Some(expr) = numeric_expr {
+                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                    return Some((format!("{expr} = ?"), vec![Value::Real(value)]));
+                }
+            }
+        }
+        "not_equals" => {
+            if let Some(expr) = text_expr {
+                if let Some(value) = value_text.as_ref() {
+                    return Some((
+                        format!("{expr} <> ?"),
+                        vec![Value::Text(value.to_ascii_lowercase())],
+                    ));
+                }
+            } else if let Some(expr) = numeric_expr {
+                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                    return Some((format!("{expr} <> ?"), vec![Value::Real(value)]));
+                }
+            }
+        }
+        "gte" => {
+            if let Some(expr) = numeric_expr {
+                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                    return Some((
+                        format!("{expr} IS NOT NULL AND {expr} >= ?"),
+                        vec![Value::Real(value)],
+                    ));
+                }
+            }
+        }
+        "lte" => {
+            if let Some(expr) = numeric_expr {
+                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                    return Some((
+                        format!("{expr} IS NOT NULL AND {expr} <= ?"),
+                        vec![Value::Real(value)],
+                    ));
+                }
+            }
+        }
+        "is_empty" => {
+            if let Some(expr) = text_expr {
+                return Some((format!("{expr} = ''"), vec![]));
+            }
+            if let Some(expr) = numeric_expr {
+                return Some((format!("{expr} IS NULL"), vec![]));
+            }
+        }
+        "is_not_empty" => {
+            if let Some(expr) = text_expr {
+                return Some((format!("{expr} <> ''"), vec![]));
+            }
+            if let Some(expr) = numeric_expr {
+                return Some((format!("{expr} IS NOT NULL"), vec![]));
+            }
+        }
+        _ => {}
+    }
+
+    None
+}
+
 pub fn query_tracks(
     app: &AppHandle,
     query: Option<LibraryTrackQueryInput>,
 ) -> Result<Vec<LibraryTrackRecord>, String> {
     ensure_initialized(app)?;
     with_conn(|conn| {
-        let normalized_limit = query
-            .as_ref()
+        let query_ref = query.as_ref();
+        let normalized_limit = query_ref
             .and_then(|item| item.limit)
             .map(|value| value.clamp(1, 2000) as i64)
             .unwrap_or(i64::MAX);
-        let normalized_offset = query
-            .as_ref()
+        let normalized_offset = query_ref
             .and_then(|item| item.offset)
             .map(|value| value.max(0) as i64)
             .unwrap_or(0);
-        let include_missing_flag = if query
-            .as_ref()
+        let include_missing = query_ref
             .and_then(|item| item.include_missing)
-            .unwrap_or(false)
-        {
-            1_i64
-        } else {
-            0_i64
-        };
-        let visible_only_flag = if query
-            .as_ref()
+            .unwrap_or(false);
+        let visible_only = query_ref
             .and_then(|item| item.visible_only)
-            .unwrap_or(true)
-        {
-            1_i64
-        } else {
-            0_i64
+            .unwrap_or(true);
+
+        let normalize_lower = |value: Option<&String>| -> Option<String> {
+            value
+                .map(|item| item.trim().to_ascii_lowercase())
+                .filter(|item| !item.is_empty())
         };
-        let normalized_search_query = query
-            .as_ref()
-            .and_then(|item| item.search_query.as_ref())
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty());
-        let normalized_artist = query
-            .as_ref()
-            .and_then(|item| item.artist.as_ref())
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty());
-        let normalized_album = query
-            .as_ref()
-            .and_then(|item| item.album.as_ref())
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty());
-        let normalized_track_id = query
-            .as_ref()
-            .and_then(|item| item.track_id.as_ref())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let normalized_source_id = query
-            .as_ref()
-            .and_then(|item| item.source_id.as_ref())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let normalized_quick_fingerprint = query
-            .as_ref()
+        let normalize_trimmed = |value: Option<&String>| -> Option<String> {
+            value
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+        };
+
+        let normalized_search_query = normalize_lower(query_ref.and_then(|item| item.search_query.as_ref()));
+        let normalized_artist = normalize_lower(query_ref.and_then(|item| item.artist.as_ref()));
+        let normalized_album = normalize_lower(query_ref.and_then(|item| item.album.as_ref()));
+        let normalized_track_id = normalize_trimmed(query_ref.and_then(|item| item.track_id.as_ref()));
+        let normalized_source_id = normalize_trimmed(query_ref.and_then(|item| item.source_id.as_ref()));
+        let normalized_quick_fingerprint = query_ref
             .and_then(|item| item.quick_fingerprint.as_ref())
             .and_then(|value| normalize_quick_fingerprint(Some(value.as_str())));
-        let normalized_file_path = query
-            .as_ref()
-            .and_then(|item| item.file_path.as_ref())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let search_enabled_flag = if normalized_search_query.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let artist_enabled_flag = if normalized_artist.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let album_enabled_flag = if normalized_album.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let track_id_enabled_flag = if normalized_track_id.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let source_id_enabled_flag = if normalized_source_id.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let quick_fingerprint_enabled_flag = if normalized_quick_fingerprint.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let file_path_enabled_flag = if normalized_file_path.is_some() {
-            1_i64
-        } else {
-            0_i64
-        };
-        let search_like_pattern = normalized_search_query
-            .map(|value| format!("%{value}%"))
-            .unwrap_or_else(|| "%".to_string());
-        let artist_exact_value = normalized_artist.unwrap_or_default();
-        let album_exact_value = normalized_album.unwrap_or_default();
-        let track_id_exact_value = normalized_track_id.unwrap_or_default();
-        let source_id_exact_value = normalized_source_id.unwrap_or_default();
-        let quick_fingerprint_exact_value = normalized_quick_fingerprint.unwrap_or_default();
-        let file_path_exact_value = normalized_file_path.unwrap_or_default();
+        let normalized_file_path = normalize_trimmed(query_ref.and_then(|item| item.file_path.as_ref()));
 
-        let mut stmt = conn
-            .prepare(
-                r#"
+        let mut sql = String::from(
+            r#"
                 SELECT
                   t.id,
                   t.source_id,
@@ -4387,77 +4473,228 @@ pub fn query_tracks(
                   t.updated_at_ms
                 FROM local_tracks t
                 JOIN sources s ON s.id = t.source_id
-                WHERE (?1 = 0 OR s.is_visible = 1)
-                  AND (?2 = 1 OR t.status = 'available')
-                  AND (
-                    ?5 = 0
-                    OR LOWER(COALESCE(t.title, '')) LIKE ?6
-                    OR LOWER(COALESCE(t.artist, '')) LIKE ?6
-                    OR LOWER(COALESCE(t.album, '')) LIKE ?6
-                    OR LOWER(t.file_path) LIKE ?6
-                  )
-                  AND (?7 = 0 OR LOWER(TRIM(COALESCE(t.artist, ''))) = ?8)
-                  AND (?9 = 0 OR LOWER(TRIM(COALESCE(t.album, ''))) = ?10)
-                  AND (?11 = 0 OR t.id = ?12)
-                  AND (?13 = 0 OR t.source_id = ?14)
-                  AND (?15 = 0 OR t.quick_fingerprint = ?16)
-                  AND (?17 = 0 OR t.file_path = ?18)
-                ORDER BY
-                  LOWER(COALESCE(t.title, t.file_path)) ASC,
-                  t.updated_at_ms DESC,
-                  t.id ASC
-                LIMIT ?3
-                OFFSET ?4
-                "#,
-            )
+                WHERE 1 = 1
+            "#,
+        );
+        let mut bind_values: Vec<Value> = Vec::new();
+
+        if visible_only {
+            sql.push_str("\n AND s.is_visible = 1");
+        }
+
+        if !include_missing {
+            sql.push_str("\n AND t.status = 'available'");
+        }
+
+        if let Some(search_query) = normalized_search_query {
+            let like_pattern = format!("%{search_query}%");
+            sql.push_str(
+                "\n AND (\
+                 LOWER(COALESCE(t.title, '')) LIKE ?\
+                 OR LOWER(COALESCE(t.artist, '')) LIKE ?\
+                 OR LOWER(COALESCE(t.album, '')) LIKE ?\
+                 OR LOWER(t.file_path) LIKE ?\
+                )",
+            );
+            bind_values.push(Value::Text(like_pattern.clone()));
+            bind_values.push(Value::Text(like_pattern.clone()));
+            bind_values.push(Value::Text(like_pattern.clone()));
+            bind_values.push(Value::Text(like_pattern));
+        }
+
+        if let Some(artist) = normalized_artist {
+            sql.push_str("\n AND LOWER(TRIM(COALESCE(t.artist, ''))) = ?");
+            bind_values.push(Value::Text(artist));
+        }
+
+        if let Some(album) = normalized_album {
+            sql.push_str("\n AND LOWER(TRIM(COALESCE(t.album, ''))) = ?");
+            bind_values.push(Value::Text(album));
+        }
+
+        if let Some(track_id) = normalized_track_id {
+            sql.push_str("\n AND t.id = ?");
+            bind_values.push(Value::Text(track_id));
+        }
+
+        if let Some(source_id) = normalized_source_id {
+            sql.push_str("\n AND t.source_id = ?");
+            bind_values.push(Value::Text(source_id));
+        }
+
+        if let Some(quick_fingerprint) = normalized_quick_fingerprint {
+            sql.push_str("\n AND t.quick_fingerprint = ?");
+            bind_values.push(Value::Text(quick_fingerprint));
+        }
+
+        if let Some(file_path) = normalized_file_path {
+            sql.push_str("\n AND t.file_path = ?");
+            bind_values.push(Value::Text(file_path));
+        }
+
+        let base_query_ref = query_ref.and_then(|item| item.base_query.as_ref());
+
+        let mut has_applied_group_filters = false;
+        if let Some(filter_groups) = base_query_ref.and_then(|base| base.filter_groups.as_ref()) {
+            let groups_joiner = normalize_logic_operator(
+                base_query_ref.and_then(|base| base.filter_operator.as_ref()),
+                "AND",
+            );
+
+            let mut rendered_group_clauses: Vec<String> = Vec::new();
+            let mut rendered_group_bind_values: Vec<Value> = Vec::new();
+
+            for group in filter_groups.iter().take(8) {
+                let filters = match group.filters.as_ref() {
+                    Some(items) => items,
+                    None => continue,
+                };
+                let group_joiner = normalize_logic_operator(group.operator.as_ref(), "AND");
+
+                let mut rendered_filter_clauses: Vec<String> = Vec::new();
+                let mut rendered_filter_bind_values: Vec<Value> = Vec::new();
+
+                for filter in filters.iter().take(20) {
+                    if let Some((clause, values)) = build_track_filter_clause(filter) {
+                        rendered_filter_clauses.push(clause);
+                        rendered_filter_bind_values.extend(values);
+                    }
+                }
+
+                if rendered_filter_clauses.is_empty() {
+                    continue;
+                }
+
+                rendered_group_clauses
+                    .push(format!("({})", rendered_filter_clauses.join(&format!(" {group_joiner} "))));
+                rendered_group_bind_values.extend(rendered_filter_bind_values);
+            }
+
+            if !rendered_group_clauses.is_empty() {
+                sql.push_str("\n AND (");
+                sql.push_str(&rendered_group_clauses.join(&format!(" {groups_joiner} ")));
+                sql.push(')');
+                bind_values.extend(rendered_group_bind_values);
+                has_applied_group_filters = true;
+            }
+        }
+
+        if !has_applied_group_filters {
+            let filter_inputs = base_query_ref
+                .and_then(|base| base.filters.as_ref())
+                .or_else(|| query_ref.and_then(|item| item.filters.as_ref()));
+
+            if let Some(filters) = filter_inputs {
+                for filter in filters.iter().take(20) {
+                    if let Some((clause, values)) = build_track_filter_clause(filter) {
+                        sql.push_str("\n AND ");
+                        sql.push_str(&clause);
+                        bind_values.extend(values);
+                    }
+                }
+            }
+        }
+
+        let mut order_clauses: Vec<String> = Vec::new();
+        let mut order_fields: Vec<String> = Vec::new();
+
+        let mut push_order_input = |field_raw: &str, order_raw: Option<&String>| {
+            let field = field_raw.trim().to_ascii_lowercase();
+            if field.is_empty() {
+                return;
+            }
+
+            if order_fields.iter().any(|item| item == &field) {
+                return;
+            }
+
+            let maybe_expr = match field.as_str() {
+                "title" => Some("LOWER(COALESCE(t.title, t.file_path))"),
+                "artist" => Some("LOWER(COALESCE(t.artist, ''))"),
+                "album" => Some("LOWER(COALESCE(t.album, ''))"),
+                "genre" => Some("LOWER(COALESCE(t.genre, ''))"),
+                "durationseconds" => Some("COALESCE(t.duration_seconds, 0)"),
+                "playcount" => Some("COALESCE(t.play_count, 0)"),
+                "filesize" => Some("COALESCE(t.file_size, 0)"),
+                "samplerate" => Some("COALESCE(t.sample_rate, 0)"),
+                "bitdepth" => Some("COALESCE(t.bit_depth, 0)"),
+                "updatedatms" => Some("COALESCE(t.updated_at_ms, 0)"),
+                _ => None,
+            };
+
+            if let Some(expr) = maybe_expr {
+                let direction = match order_raw {
+                    Some(order) if order.trim().eq_ignore_ascii_case("desc") => "DESC",
+                    _ => "ASC",
+                };
+
+                order_fields.push(field);
+                order_clauses.push(format!("{expr} {direction}"));
+            }
+        };
+
+        let group_inputs = query_ref
+            .and_then(|item| item.base_query.as_ref())
+            .and_then(|base| base.group_by.as_ref())
+            .or_else(|| query_ref.and_then(|item| item.group_by.as_ref()));
+
+        if let Some(groups) = group_inputs {
+            for group in groups.iter().take(4) {
+                push_order_input(group.field.as_str(), group.order.as_ref());
+            }
+        }
+
+        let sort_inputs = query_ref
+            .and_then(|item| item.base_query.as_ref())
+            .and_then(|base| base.sort.as_ref())
+            .or_else(|| query_ref.and_then(|item| item.sort.as_ref()));
+
+        if let Some(sorts) = sort_inputs {
+            for sort in sorts.iter().take(4) {
+                push_order_input(sort.field.as_str(), sort.order.as_ref());
+            }
+        }
+
+        if order_clauses.is_empty() {
+            order_clauses.push("LOWER(COALESCE(t.title, t.file_path)) ASC".to_string());
+            order_clauses.push("t.updated_at_ms DESC".to_string());
+        }
+        order_clauses.push("t.id ASC".to_string());
+
+        sql.push_str("\n ORDER BY ");
+        sql.push_str(&order_clauses.join(", "));
+        sql.push_str("\n LIMIT ?\n OFFSET ?");
+        bind_values.push(Value::Integer(normalized_limit));
+        bind_values.push(Value::Integer(normalized_offset));
+
+        let mut stmt = conn
+            .prepare(sql.as_str())
             .map_err(|error| format!("Failed to prepare query tracks statement: {error}"))?;
 
         let rows = stmt
-            .query_map(
-                params![
-                    visible_only_flag,
-                    include_missing_flag,
-                    normalized_limit,
-                    normalized_offset,
-                    search_enabled_flag,
-                    search_like_pattern,
-                    artist_enabled_flag,
-                    artist_exact_value,
-                    album_enabled_flag,
-                    album_exact_value,
-                    track_id_enabled_flag,
-                    track_id_exact_value,
-                    source_id_enabled_flag,
-                    source_id_exact_value,
-                    quick_fingerprint_enabled_flag,
-                    quick_fingerprint_exact_value,
-                    file_path_enabled_flag,
-                    file_path_exact_value,
-                ],
-                |row| {
-                    Ok(LibraryTrackRecord {
-                        id: row.get(0)?,
-                        source_id: row.get(1)?,
-                        file_path: row.get(2)?,
-                        quick_fingerprint: row.get(3)?,
-                        title: row.get(4)?,
-                        artist: row.get(5)?,
-                        album: row.get(6)?,
-                        genre: row.get(7)?,
-                        duration_seconds: row.get(8)?,
-                        sample_rate: row.get::<_, Option<i64>>(9)?.map(|value| value as u32),
-                        bit_depth: row.get::<_, Option<i64>>(10)?.map(|value| value as u32),
-                        file_size: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
-                        mtime_ms: row.get(12)?,
-                        replay_gain_track_db: row.get(13)?,
-                        replay_gain_album_db: row.get(14)?,
-                        play_count: row.get::<_, i64>(15)?.max(0) as u64,
-                        last_played_at_ms: row.get(16)?,
-                        status: row.get(17)?,
-                        updated_at_ms: row.get(18)?,
-                    })
-                },
-            )
+            .query_map(params_from_iter(bind_values.iter()), |row| {
+                Ok(LibraryTrackRecord {
+                    id: row.get(0)?,
+                    source_id: row.get(1)?,
+                    file_path: row.get(2)?,
+                    quick_fingerprint: row.get(3)?,
+                    title: row.get(4)?,
+                    artist: row.get(5)?,
+                    album: row.get(6)?,
+                    genre: row.get(7)?,
+                    duration_seconds: row.get(8)?,
+                    sample_rate: row.get::<_, Option<i64>>(9)?.map(|value| value as u32),
+                    bit_depth: row.get::<_, Option<i64>>(10)?.map(|value| value as u32),
+                    file_size: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+                    mtime_ms: row.get(12)?,
+                    replay_gain_track_db: row.get(13)?,
+                    replay_gain_album_db: row.get(14)?,
+                    play_count: row.get::<_, i64>(15)?.max(0) as u64,
+                    last_played_at_ms: row.get(16)?,
+                    status: row.get(17)?,
+                    updated_at_ms: row.get(18)?,
+                })
+            })
             .map_err(|error| format!("Failed to query tracks: {error}"))?;
 
         let mut items = Vec::new();

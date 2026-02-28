@@ -23,6 +23,7 @@ use symphonia::core::{
     meta::{Limit, MetadataOptions, StandardVisualKey},
     probe::Hint,
 };
+use url::Url;
 
 pub const EVENT_MUSIC_LIBRARY_SCAN_PROGRESS: &str = "music-library-scan-progress";
 
@@ -31,6 +32,107 @@ static COVER_ASSET_SCOPE_READY: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(
 
 pub fn request_cancel_scan() {
     MUSIC_LIBRARY_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+pub fn open_in_file_manager(path: &str) -> Result<(), String> {
+    let normalized = path.trim();
+    if normalized.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    let mut target = if normalized.to_ascii_lowercase().starts_with("file://") {
+        let parsed = Url::parse(normalized).map_err(|error| format!("Invalid file URL: {error}"))?;
+        parsed
+            .to_file_path()
+            .map_err(|_| format!("Invalid file URL path: {normalized}"))?
+    } else {
+        PathBuf::from(normalized)
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        // Explorer 对正斜杠兼容较差，统一转回 Windows 风格。
+        let normalized_windows = target.to_string_lossy().replace('/', "\\");
+        target = PathBuf::from(normalized_windows);
+    }
+
+    if !target.exists() {
+        if let Some(parent) = target.parent() {
+            if parent.exists() {
+                target = parent.to_path_buf();
+            } else {
+                return Err(format!("Path does not exist: {normalized}"));
+            }
+        } else {
+            return Err(format!("Path does not exist: {normalized}"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if target.is_file() {
+            let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+            let mut select_target = canonical.to_string_lossy().replace('/', "\\");
+            if let Some(stripped) = select_target.strip_prefix("\\\\?\\") {
+                select_target = stripped.to_string();
+            }
+
+            std::process::Command::new("explorer")
+                .arg("/select,")
+                .arg(select_target)
+                .spawn()
+                .map_err(|error| format!("Failed to open file manager: {error}"))?;
+        } else {
+            let mut folder_target = target.to_string_lossy().replace('/', "\\");
+            if let Some(stripped) = folder_target.strip_prefix("\\\\?\\") {
+                folder_target = stripped.to_string();
+            }
+            std::process::Command::new("explorer")
+                .arg(folder_target)
+                .spawn()
+                .map_err(|error| format!("Failed to open file manager: {error}"))?;
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if target.is_file() {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(&target)
+                .spawn()
+                .map_err(|error| format!("Failed to open file manager: {error}"))?;
+        } else {
+            std::process::Command::new("open")
+                .arg(&target)
+                .spawn()
+                .map_err(|error| format!("Failed to open file manager: {error}"))?;
+        }
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let open_target = if target.is_file() {
+            target
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| target.clone())
+        } else {
+            target.clone()
+        };
+
+        std::process::Command::new("xdg-open")
+            .arg(open_target)
+            .spawn()
+            .map_err(|error| format!("Failed to open file manager: {error}"))?;
+
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("Unsupported platform".to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]

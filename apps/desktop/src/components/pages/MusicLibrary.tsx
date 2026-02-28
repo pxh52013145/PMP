@@ -1,31 +1,93 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Track } from '../../services/audio';
 import {
   musicLibraryService,
   LibraryStats,
   ScanProgress,
-  ViewMode,
   LibraryPath,
   LibraryPathHealth,
-  AlbumSummary,
   CoverRuntimeCachePolicy,
   CloudFallbackTaskStatus,
   CloudHashJobStatus,
 } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
-import { useNavigation } from '../../contexts/NavigationContext';
 import { useAudioService } from '../../contexts/AudioEngineContext';
-import { readJson, writeJson } from '../../modules/storage';
+import { readJson } from '../../modules/storage';
 import {
   MUSIC_LIBRARY_SOURCE_CHANGE_EVENT,
+  MUSIC_LIBRARY_STATS_CHANGE_EVENT,
+  type MusicLibraryFooterStatItem,
+  type MusicLibraryStatsChangeDetail,
   type MusicLibrarySourceChangeDetail,
   type MusicLibrarySourceMode,
 } from '../../contracts/musicLibrarySource';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useLocale, useT } from '../../i18n';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import {
+  applyMusicLibraryBaseQuery,
+  canUseNativeBaseFilterGroup,
+  canUseNativeBaseOrderRule,
+  type MusicLibraryBaseField,
+  type MusicLibraryBaseFilterGroup,
+  type MusicLibraryBaseGroupRule,
+  type MusicLibraryBaseLogicalOperator,
+  type MusicLibraryBaseOperator,
+  type MusicLibraryBaseQuery,
+  type MusicLibraryBaseSortRule,
+  type MusicLibraryBaseView,
+} from '../../modules/music-library/baseQuery';
+import {
+  appendMusicLibraryBaseFilter,
+  appendMusicLibraryBaseFilterGroup,
+  appendMusicLibraryBaseGroupByRule,
+  appendMusicLibraryBaseSortRule,
+  createMusicLibraryBaseEmptyFilterState,
+  createMusicLibraryBaseQuickFilterState,
+  moveMusicLibraryBaseGroupByRule,
+  moveMusicLibraryBaseSortRule,
+  removeMusicLibraryBaseFilter,
+  removeMusicLibraryBaseFilterGroup,
+  removeMusicLibraryBaseGroupByRule,
+  removeMusicLibraryBaseSortRule,
+  updateMusicLibraryBaseFilterGroupOperator,
+  updateMusicLibraryBaseGroupByRule,
+  updateMusicLibraryBaseSortRule,
+} from '../../modules/music-library/baseState';
+import {
+  MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP,
+  MUSIC_LIBRARY_BASE_FILTER_FIELDS,
+  MUSIC_LIBRARY_BASE_OPERATORS,
+  MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP,
+  MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS,
+} from '../../modules/music-library/baseMeta';
+import {
+  loadMusicLibraryBaseState,
+  persistMusicLibraryBaseState,
+} from '../../modules/music-library/basePersistence';
+import {
+  applyBaseViewPropertiesToLocalTrackColumns,
+  cloneDefaultLocalTrackColumnSettings,
+  LEFT_ALIGNED_LOCAL_TRACK_COLUMNS,
+  LOCAL_TRACK_COLUMN_DEFINITIONS,
+  normalizeLocalTrackColumnSettings,
+  normalizeLocalTrackColumnWidth,
+  type LocalTrackColumnConfig,
+  type LocalTrackColumnId,
+} from '../../modules/music-library/localTrackColumns';
+import { deriveLocalTrackLayoutModel } from '../../modules/music-library/localTrackLayout';
+import {
+  buildStableFallbackAuditSnapshot,
+  buildTagsJsonFromText,
+  collectStableFallbackAuditEntries,
+  deriveStableLibraryStats,
+  parseTagsJsonAsText,
+  type StableFallbackAuditSnapshot,
+} from '../../modules/music-library/stableLibraryModel';
+import { useCoverUrlForTrack } from '../magnet/shared/useCoverUrlForTrack';
+import { useBaseControlPanels } from './useBaseControlPanels';
 import './MusicLibrary.css';
 
 interface MusicLibraryProps {
@@ -33,15 +95,12 @@ interface MusicLibraryProps {
   onClose?: () => void;
   onAddToQueue?: (tracks: Track[]) => void;
   onPlayNow?: (tracks: Track[], startIndex?: number) => void;
-  embedded?: boolean; // 閺勵垰鎯佸畵灞藉弳濡€崇础閿涘牆婀狽avigationPage娑擃叏绱?
+  embedded?: boolean; // 闁哄嫷鍨伴幆浣哥暤鐏炶棄寮虫俊顖椻偓宕囩闁挎稑鐗嗗﹢鐙絘vigationPage濞戞搩鍙忕槐?
 }
 
-// 閴?濡€虫健缁狙呯处鐎涙﹫绱扮捄銊х矋娴犺泛鐤勬笟瀣彙娴滎偓绱濇稉宥勭窗閸ョ姳璐熺紒鍕閸楁瓕娴囬懓灞兼丢婢?
+// 闁?婵☆垪鈧櫕鍋ョ紒鐙欏懐澶勯悗娑欙公缁辨壆鎹勯妸褏鐭嬪ù鐘烘硾閻ゅ嫭绗熺€ｎ亜褰欏ù婊庡亾缁辨繃绋夊鍕獥闁搞儳濮崇拹鐔虹磼閸曨亝顐介柛妤佺摃濞村洭鎳撶仦鍏间涪濠?
 type ModuleCacheSnapshot = {
   tracks: Track[];
-  artists: string[];
-  albums: AlbumSummary[];
-  genres: string[];
   trackNextOffset: number;
   hasMoreTracks: boolean;
   timestamp: number;
@@ -49,56 +108,21 @@ type ModuleCacheSnapshot = {
 
 let moduleCache: ModuleCacheSnapshot | null = null;
 
-// ? 濡€虫健缁狙勭泊閸斻劋缍呯純顔剧处鐎涙﹫绱伴幐?viewMode 鐠佹澘绻傛稉缁樼泊閸斻劍娼担宥囩枂娑撳酣鏁嬮悙鐧哥礄鐠恒劑銆夐棃銏ｇ儲鏉?缂佸嫪娆㈤崡姝屾祰娣囨繃瀵旈敍?
+// ? 婵☆垪鈧櫕鍋ョ紒鐙欏嫮娉婇柛鏂诲妺缂嶅懐绱旈鍓у閻庢稒锕槐浼村箰?viewMode 閻犱焦婢樼换鍌涚▔缂佹娉婇柛鏂诲妽濞碱垱鎷呭鍥╂瀭濞戞挸閰ｉ弫瀣倷閻у摜绀勯悹鎭掑姂閵嗗妫冮姀锝囧劜閺?缂備礁瀚▎銏ゅ础濮濆本绁板ǎ鍥ㄧ箖鐎垫棃鏁?
 type MainScrollAnchor =
-  | { kind: 'track'; id: string; offset: number }
-  | { kind: 'album'; key: string; offset: number };
+  | { kind: 'track'; id: string; offset: number };
 
 type MainScrollRootKind = 'main' | 'navigation';
 type MainScrollMemory = { scrollTop: number; anchor?: MainScrollAnchor; rootKind?: MainScrollRootKind };
 
-type ViewScrollMemory = Partial<Record<ViewMode, MainScrollMemory>>;
-const moduleScrollMemory: ViewScrollMemory = {};
-let moduleLastViewMode: ViewMode | null = null;
+type MusicLibraryViewMode = 'all';
 
-type SidebarViewMode = Extract<ViewMode, 'artists' | 'genres'>;
+type ViewScrollMemory = Partial<Record<MusicLibraryViewMode, MainScrollMemory>>;
+const moduleScrollMemory: ViewScrollMemory = {};
 
 type StableLibraryEntry = Awaited<ReturnType<typeof musicLibraryService.listCloudLibraryEntries>>[number];
 type StableFallbackTask = Awaited<ReturnType<typeof musicLibraryService.listCloudFallbackTasks>>[number];
 type StableHashJob = Awaited<ReturnType<typeof musicLibraryService.listCloudHashJobs>>[number];
-
-type LocalTrackColumnId =
-  | 'title'
-  | 'artist'
-  | 'album'
-  | 'duration'
-  | 'year'
-  | 'genre'
-  | 'trackNumber'
-  | 'discNumber'
-  | 'composer'
-  | 'bitrate'
-  | 'sampleRate'
-  | 'format'
-  | 'playCount'
-  | 'lastPlayed'
-  | 'rating'
-  | 'fileSize'
-  | 'dateAdded';
-
-type LocalTrackColumnConfig = {
-  id: LocalTrackColumnId;
-  visible: boolean;
-  widthPx?: number;
-};
-
-type LocalTrackColumnDefinition = {
-  headerKey: string;
-  defaultWidthPx: number;
-  minWidthPx: number;
-  maxWidthPx?: number;
-  className: string;
-};
 
 type LocalTrackColumnResizeSession = {
   pointerId: number;
@@ -115,197 +139,6 @@ type LocalTrackColumnReorderSession = {
   dragging: boolean;
 };
 
-type StableFallbackAuditEntry = {
-  atMs: number;
-  request: {
-    entryId: string;
-    ownerUid: string;
-    cloudContentId?: string;
-    trackId?: string;
-    quickFingerprint?: string;
-    requestedAtMs: number;
-    reason?: string;
-  };
-  dispatch: {
-    accepted: boolean;
-    deduped: boolean;
-    queueSize: number;
-  };
-};
-
-type StableFallbackAuditSnapshot = {
-  stats: {
-    totalEvents: number;
-    acceptedEvents: number;
-    dedupedEvents: number;
-    rejectedEvents: number;
-    lastQueuedAtMs?: number;
-  };
-  recent: StableFallbackAuditEntry[];
-};
-
-const LOCAL_TRACK_COLUMN_ORDER: LocalTrackColumnId[] = [
-  'title',
-  'artist',
-  'album',
-  'duration',
-  'year',
-  'genre',
-  'trackNumber',
-  'discNumber',
-  'composer',
-  'bitrate',
-  'sampleRate',
-  'format',
-  'playCount',
-  'lastPlayed',
-  'rating',
-  'fileSize',
-  'dateAdded',
-];
-
-const DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS = new Set<LocalTrackColumnId>([
-  'title',
-  'artist',
-  'album',
-  'duration',
-]);
-
-const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTrackColumnDefinition> = {
-  title: {
-    headerKey: 'pages.music-library.tracks.header.title',
-    defaultWidthPx: 280,
-    minWidthPx: 160,
-    maxWidthPx: 640,
-    className: 'music-library-track-title',
-  },
-  artist: {
-    headerKey: 'pages.music-library.tracks.header.artist',
-    defaultWidthPx: 220,
-    minWidthPx: 120,
-    maxWidthPx: 520,
-    className: 'music-library-track-artist',
-  },
-  album: {
-    headerKey: 'pages.music-library.tracks.header.album',
-    defaultWidthPx: 220,
-    minWidthPx: 120,
-    maxWidthPx: 520,
-    className: 'music-library-track-album',
-  },
-  duration: {
-    headerKey: 'pages.music-library.tracks.header.duration',
-    defaultWidthPx: 84,
-    minWidthPx: 72,
-    maxWidthPx: 140,
-    className: 'music-library-track-duration',
-  },
-  year: {
-    headerKey: 'pages.music-library.columns.year',
-    defaultWidthPx: 80,
-    minWidthPx: 60,
-    maxWidthPx: 120,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  genre: {
-    headerKey: 'pages.music-library.columns.genre',
-    defaultWidthPx: 160,
-    minWidthPx: 100,
-    maxWidthPx: 360,
-    className: 'music-library-track-meta',
-  },
-  trackNumber: {
-    headerKey: 'pages.music-library.columns.trackNumber',
-    defaultWidthPx: 84,
-    minWidthPx: 68,
-    maxWidthPx: 120,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  discNumber: {
-    headerKey: 'pages.music-library.columns.discNumber',
-    defaultWidthPx: 84,
-    minWidthPx: 68,
-    maxWidthPx: 120,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  composer: {
-    headerKey: 'pages.music-library.columns.composer',
-    defaultWidthPx: 180,
-    minWidthPx: 120,
-    maxWidthPx: 420,
-    className: 'music-library-track-meta',
-  },
-  bitrate: {
-    headerKey: 'pages.music-library.columns.bitrate',
-    defaultWidthPx: 110,
-    minWidthPx: 88,
-    maxWidthPx: 160,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  sampleRate: {
-    headerKey: 'pages.music-library.columns.sampleRate',
-    defaultWidthPx: 126,
-    minWidthPx: 96,
-    maxWidthPx: 180,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  format: {
-    headerKey: 'pages.music-library.columns.format',
-    defaultWidthPx: 100,
-    minWidthPx: 82,
-    maxWidthPx: 160,
-    className: 'music-library-track-meta music-library-track-meta-code',
-  },
-  playCount: {
-    headerKey: 'pages.music-library.columns.playCount',
-    defaultWidthPx: 100,
-    minWidthPx: 76,
-    maxWidthPx: 140,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  lastPlayed: {
-    headerKey: 'pages.music-library.columns.lastPlayed',
-    defaultWidthPx: 180,
-    minWidthPx: 130,
-    maxWidthPx: 360,
-    className: 'music-library-track-meta',
-  },
-  rating: {
-    headerKey: 'pages.music-library.columns.rating',
-    defaultWidthPx: 84,
-    minWidthPx: 64,
-    maxWidthPx: 120,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  fileSize: {
-    headerKey: 'pages.music-library.columns.fileSize',
-    defaultWidthPx: 120,
-    minWidthPx: 96,
-    maxWidthPx: 180,
-    className: 'music-library-track-meta music-library-track-meta-number',
-  },
-  dateAdded: {
-    headerKey: 'pages.music-library.columns.dateAdded',
-    defaultWidthPx: 180,
-    minWidthPx: 130,
-    maxWidthPx: 360,
-    className: 'music-library-track-meta',
-  },
-};
-
-const LOCAL_TRACK_INDEX_COLUMN_WIDTH_PX = 40;
-const LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX = 72;
-const LOCAL_TRACK_GRID_GAP_PX = 10;
-const LOCAL_TRACK_TITLE_MAX_VIEWPORT_RATIO = 0.5;
-
-const LEFT_ALIGNED_LOCAL_TRACK_COLUMNS = new Set<LocalTrackColumnId>(['title', 'artist', 'album']);
-
-const DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS: LocalTrackColumnConfig[] = LOCAL_TRACK_COLUMN_ORDER.map((id) => ({
-  id,
-  visible: DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS.has(id),
-  widthPx: LOCAL_TRACK_COLUMN_DEFINITIONS[id].defaultWidthPx,
-}));
-
 const STABLE_FALLBACK_STATUS_OPTIONS: CloudFallbackTaskStatus[] = [
   'queued',
   'dispatching',
@@ -316,229 +149,13 @@ const STABLE_FALLBACK_STATUS_OPTIONS: CloudFallbackTaskStatus[] = [
 
 const STABLE_HASH_STATUS_OPTIONS: CloudHashJobStatus[] = ['pending', 'running', 'completed', 'failed'];
 
-const STABLE_FALLBACK_AUDIT_MAX = 120;
-
-function isLocalTrackColumnId(value: unknown): value is LocalTrackColumnId {
-  return typeof value === 'string' && LOCAL_TRACK_COLUMN_ORDER.includes(value as LocalTrackColumnId);
-}
-
-function normalizeLocalTrackColumnWidth(columnId: LocalTrackColumnId, widthPx: unknown): number {
-  const definition = LOCAL_TRACK_COLUMN_DEFINITIONS[columnId];
-  const fallback = definition.defaultWidthPx;
-  if (typeof widthPx !== 'number' || !Number.isFinite(widthPx)) {
-    return fallback;
-  }
-
-  const rounded = Math.round(widthPx);
-  const min = definition.minWidthPx;
-  const max = definition.maxWidthPx;
-
-  if (typeof max === 'number') {
-    return Math.min(max, Math.max(min, rounded));
-  }
-  return Math.max(min, rounded);
-}
-
-function normalizeLocalTrackColumnSettings(input: unknown): LocalTrackColumnConfig[] {
-  const orderedIds: LocalTrackColumnId[] = [];
-  const visibilityMap = new Map<LocalTrackColumnId, boolean>();
-  const widthMap = new Map<LocalTrackColumnId, number>();
-  let hasExplicitVisibility = false;
-
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      if (isLocalTrackColumnId(item)) {
-        if (!orderedIds.includes(item)) orderedIds.push(item);
-        visibilityMap.set(item, true);
-        continue;
-      }
-
-      if (!item || typeof item !== 'object') continue;
-      const rawId = (item as { id?: unknown }).id;
-      if (!isLocalTrackColumnId(rawId)) continue;
-      if (!orderedIds.includes(rawId)) orderedIds.push(rawId);
-      const rawVisible = (item as { visible?: unknown }).visible;
-      const visible = typeof rawVisible === 'boolean' ? rawVisible : true;
-      const rawWidthPx = (item as { widthPx?: unknown }).widthPx;
-      visibilityMap.set(rawId, visible);
-      widthMap.set(rawId, normalizeLocalTrackColumnWidth(rawId, rawWidthPx));
-      hasExplicitVisibility = true;
-    }
-  }
-
-  if (orderedIds.length === 0) {
-    return DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item }));
-  }
-
-  for (const id of LOCAL_TRACK_COLUMN_ORDER) {
-    if (!orderedIds.includes(id)) {
-      orderedIds.push(id);
-    }
-  }
-
-  const useImplicitVisibleOnly = !hasExplicitVisibility;
-  const normalized = orderedIds.map((id) => {
-    const persistedVisible = visibilityMap.get(id);
-    const visible =
-      persistedVisible ??
-      (useImplicitVisibleOnly ? false : DEFAULT_VISIBLE_LOCAL_TRACK_COLUMNS.has(id));
-    return {
-      id,
-      visible,
-      widthPx: widthMap.get(id) ?? LOCAL_TRACK_COLUMN_DEFINITIONS[id].defaultWidthPx,
-    };
-  });
-
-  if (normalized.some((item) => item.visible)) {
-    return normalized;
-  }
-
-  return normalized.map((item) =>
-    item.id === 'title'
-      ? {
-          ...item,
-          visible: true,
-        }
-      : item
-  );
-}
-
-function asTrimmedString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function asOptionalString(value: unknown): string | undefined {
-  const normalized = asTrimmedString(value);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeStableFallbackAuditEntry(value: unknown): StableFallbackAuditEntry | null {
-  if (!value || typeof value !== 'object') return null;
-  const entry = value as {
-    atMs?: unknown;
-    request?: Record<string, unknown>;
-    dispatch?: Record<string, unknown>;
-  };
-  if (!entry.request || typeof entry.request !== 'object') return null;
-  if (!entry.dispatch || typeof entry.dispatch !== 'object') return null;
-
-  const ownerUid = asTrimmedString(entry.request.ownerUid);
-  const entryId = asTrimmedString(entry.request.entryId);
-  if (!ownerUid || !entryId) return null;
-
-  const atMs =
-    typeof entry.atMs === 'number' && Number.isFinite(entry.atMs)
-      ? Math.max(0, Math.floor(entry.atMs))
-      : Date.now();
-  const requestedAtMs =
-    typeof entry.request.requestedAtMs === 'number' && Number.isFinite(entry.request.requestedAtMs)
-      ? Math.max(0, Math.floor(entry.request.requestedAtMs))
-      : atMs;
-  const queueSize =
-    typeof entry.dispatch.queueSize === 'number' && Number.isFinite(entry.dispatch.queueSize)
-      ? Math.max(0, Math.floor(entry.dispatch.queueSize))
-      : 0;
-
-  return {
-    atMs,
-    request: {
-      entryId,
-      ownerUid,
-      cloudContentId: asOptionalString(entry.request.cloudContentId),
-      trackId: asOptionalString(entry.request.trackId),
-      quickFingerprint: asOptionalString(entry.request.quickFingerprint),
-      requestedAtMs,
-      reason: asOptionalString(entry.request.reason),
-    },
-    dispatch: {
-      accepted: Boolean(entry.dispatch.accepted),
-      deduped: Boolean(entry.dispatch.deduped),
-      queueSize,
-    },
-  };
-}
-
-function buildStableFallbackAuditSnapshot(entries: StableFallbackAuditEntry[]): StableFallbackAuditSnapshot {
-  const recent = [...entries]
-    .sort((a, b) => b.atMs - a.atMs)
-    .slice(0, STABLE_FALLBACK_AUDIT_MAX)
-    .map((item) => ({
-      atMs: item.atMs,
-      request: { ...item.request },
-      dispatch: { ...item.dispatch },
-    }));
-
-  let acceptedEvents = 0;
-  let dedupedEvents = 0;
-  let rejectedEvents = 0;
-  let lastQueuedAtMs: number | undefined;
-
-  for (const item of recent) {
-    if (item.dispatch.accepted) {
-      acceptedEvents += 1;
-      if (lastQueuedAtMs === undefined || item.atMs > lastQueuedAtMs) {
-        lastQueuedAtMs = item.atMs;
-      }
-    } else {
-      rejectedEvents += 1;
-    }
-    if (item.dispatch.deduped) {
-      dedupedEvents += 1;
-    }
-  }
-
-  return {
-    stats: {
-      totalEvents: recent.length,
-      acceptedEvents,
-      dedupedEvents,
-      rejectedEvents,
-      lastQueuedAtMs,
-    },
-    recent,
-  };
-}
-
-function parseTagsJsonAsText(tagsJson?: string): string {
-  const normalized = asTrimmedString(tagsJson);
-  if (!normalized) return '';
-  try {
-    const parsed = JSON.parse(normalized) as unknown;
-    if (!Array.isArray(parsed)) return normalized;
-    const tags = parsed
-      .map((item) => asTrimmedString(item))
-      .filter((item) => item.length > 0);
-    return tags.join(', ');
-  } catch {
-    return normalized;
-  }
-}
-
-function buildTagsJsonFromText(raw: string): string | undefined {
-  const tags = raw
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  if (tags.length === 0) return undefined;
-  return JSON.stringify(Array.from(new Set(tags)));
-}
-
-type SidebarScrollAnchor =
-  | { kind: 'artist'; key: string; offset: number }
-  | { kind: 'genre'; key: string; offset: number };
-
-type SidebarScrollMemory = { scrollTop: number; anchor?: SidebarScrollAnchor };
-
-type SidebarViewScrollMemory = Partial<Record<SidebarViewMode, SidebarScrollMemory>>;
-const moduleSidebarScrollMemory: SidebarViewScrollMemory = {};
-
 type MainViewportSnapshot = {
   scrollTop: number;
   clientHeight: number;
   clientWidth: number;
 };
 
-const CACHE_DURATION = 5 * 60 * 1000; // 5閸掑棝鎸撶紓鎾崇摠
+const CACHE_DURATION = 5 * 60 * 1000; // 5闁告帒妫濋幐鎾剁磽閹惧磭鎽?
 const INITIAL_TRACK_LOAD_LIMIT = 180;
 const TRACK_LOAD_CHUNK_SIZE = 120;
 const TRACK_RENDER_CHUNK_SIZE = 160;
@@ -550,10 +167,6 @@ const SEARCH_DEBOUNCE_MS = 180;
 const TRACK_ROW_HEIGHT_PX = 46;
 const TRACK_LIST_HEADER_HEIGHT_PX = 52;
 const TRACK_WINDOW_OVERSCAN_ROWS = 20;
-const ALBUM_CARD_MIN_WIDTH_PX = 150;
-const ALBUM_GRID_GAP_PX = 15;
-const ALBUM_CARD_VERTICAL_EXTRA_PX = 72;
-const ALBUM_WINDOW_OVERSCAN_ROWS = 3;
 
 const trackTextInternPool = new Map<string, string>();
 
@@ -576,9 +189,6 @@ function trimTracksForModuleCache(tracks: Track[]): Track[] {
 
 function buildModuleCacheSnapshot(input: {
   tracks: Track[];
-  artists: string[];
-  albums: AlbumSummary[];
-  genres: string[];
   trackNextOffset: number;
   hasMoreTracks: boolean;
   normalizeForIncrementalLoad?: boolean;
@@ -594,9 +204,6 @@ function buildModuleCacheSnapshot(input: {
 
   return {
     tracks: trimmedTracks,
-    artists: input.artists,
-    albums: input.albums,
-    genres: input.genres,
     trackNextOffset: normalizedOffset,
     hasMoreTracks: normalizedHasMore,
     timestamp: Date.now(),
@@ -700,13 +307,110 @@ function compactTracksForLibrary(tracks: Track[]): Track[] {
   return tracks.map(compactTrackForLibrary);
 }
 
-// 濞撳懘娅庡Ο鈥虫健缂傛挸鐡?
+type LocalTrackCardProps = {
+  track: Track;
+  index: number;
+  isPlayPending: boolean;
+  subtitle: string;
+  onTrackDoubleClick: (track: Track, index: number) => void;
+  onTrackContextMenu: (track: Track, index: number, event: React.MouseEvent) => void;
+  onPlaySingleTrack?: (track: Track, event: React.MouseEvent) => void;
+  onAddSingleTrack?: (track: Track, event: React.MouseEvent) => void;
+  playButtonTitle: string;
+  addButtonTitle: string;
+};
+
+const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
+  track,
+  index,
+  isPlayPending,
+  subtitle,
+  onTrackDoubleClick,
+  onTrackContextMenu,
+  onPlaySingleTrack,
+  onAddSingleTrack,
+  playButtonTitle,
+  addButtonTitle,
+}) => {
+  const coverUrl = useCoverUrlForTrack(track, { coverSizeHint: 'small' });
+  const [coverLoadFailed, setCoverLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setCoverLoadFailed(false);
+  }, [coverUrl, track.id]);
+
+  const normalizedCoverUrl = typeof coverUrl === 'string' ? coverUrl.trim() : '';
+  const displayCoverUrl = !coverLoadFailed && normalizedCoverUrl.length > 0 ? normalizedCoverUrl : undefined;
+  const fallbackCoverGlyph =
+    typeof track.title === 'string' && track.title.trim().length > 0
+      ? track.title.trim().slice(0, 1).toUpperCase()
+      : '♪';
+
+  return (
+    <div
+      data-track-id={track.id}
+      className={`music-library-track-card${isPlayPending ? ' is-play-pending' : ''}`}
+      onDoubleClick={() => onTrackDoubleClick(track, index)}
+      onContextMenu={(event) => onTrackContextMenu(track, index, event)}
+    >
+      <div className="music-library-track-card-cover" aria-hidden="true">
+        {displayCoverUrl ? (
+          <img
+            src={displayCoverUrl}
+            alt={track.title || subtitle}
+            loading="lazy"
+            decoding="async"
+            onLoad={(event) => {
+              const target = event.currentTarget;
+              musicLibraryService.reportCoverDecoded(
+                displayCoverUrl,
+                target.naturalWidth,
+                target.naturalHeight
+              );
+            }}
+            onError={() => setCoverLoadFailed(true)}
+          />
+        ) : (
+          <div className="music-library-track-card-cover-fallback">{fallbackCoverGlyph}</div>
+        )}
+      </div>
+
+      <div className="music-library-track-card-body">
+        <div className="music-library-track-card-title" title={track.title || '-'}>
+          {track.title || '-'}
+        </div>
+        <div className="music-library-track-card-subtitle" title={subtitle}>
+          {subtitle}
+        </div>
+      </div>
+
+      <div className="music-library-track-card-actions">
+        {onPlaySingleTrack && (
+          <button
+            onClick={(event) => onPlaySingleTrack(track, event)}
+            title={playButtonTitle}
+            className="track-action-play"
+          >
+            ▶
+          </button>
+        )}
+        {onAddSingleTrack && (
+          <button
+            onClick={(event) => onAddSingleTrack(track, event)}
+            title={addButtonTitle}
+            className="track-action-add"
+          >
+            +
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// 婵炴挸鎳樺▍搴∥熼垾铏仴缂傚倹鎸搁悺?
 export function clearModuleCache() {
   moduleCache = null;
-}
-
-function albumKey(album: string, artist: string): string {
-  return `${album}::${artist}`;
 }
 
 export const MusicLibrary: React.FC<MusicLibraryProps> = ({
@@ -717,18 +421,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   embedded = false,
 }) => {
   const audioService = useAudioService();
-  const { navigateTo } = useNavigation();
   const t = useT();
   const locale = useLocale();
   const [librarySourceMode, setLibrarySourceMode] = useState<MusicLibrarySourceMode>('local');
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    return moduleLastViewMode ?? (isTauriRuntime() ? 'all' : 'albums');
-  });
+  const viewMode: MusicLibraryViewMode = 'all';
   const [searchQuery, setSearchQuery] = useState('');
   const [tracks, setTracks] = useState<Track[]>([]);
-  const [artists, setArtists] = useState<string[]>([]);
-  const [albums, setAlbums] = useState<AlbumSummary[]>([]);
-  const [genres, setGenres] = useState<string[]>([]);
   const [libraryStats, setLibraryStats] = useState<LibraryStats>({
     totalTracks: 0,
     totalArtists: 0,
@@ -737,9 +435,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     totalDuration: 0,
   });
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
-  const [selectedArtist, setSelectedArtist] = useState<string | null>(null);
-  const [selectedAlbum, setSelectedAlbum] = useState<string | null>(null);
-  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [libraryPaths, setLibraryPaths] = useState<LibraryPath[]>([]);
@@ -762,25 +457,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [isStableQueueLoading, setIsStableQueueLoading] = useState(false);
   const [stableFallbackTasks, setStableFallbackTasks] = useState<StableFallbackTask[]>([]);
   const [stableHashJobs, setStableHashJobs] = useState<StableHashJob[]>([]);
-  const [stableFallbackAudit, setStableFallbackAudit] = useState<StableFallbackAuditSnapshot>({
-    stats: {
-      totalEvents: 0,
-      acceptedEvents: 0,
-      dedupedEvents: 0,
-      rejectedEvents: 0,
-    },
-    recent: [],
-  });
+  const [stableFallbackAudit, setStableFallbackAudit] = useState<StableFallbackAuditSnapshot>(() =>
+    buildStableFallbackAuditSnapshot([])
+  );
   const [fallbackTaskStatusPendingId, setFallbackTaskStatusPendingId] = useState<string | null>(null);
   const [hashJobStatusPendingId, setHashJobStatusPendingId] = useState<string | null>(null);
   const [editingStableEntry, setEditingStableEntry] = useState<StableLibraryEntry | null>(null);
   const [stableEntryRatingInput, setStableEntryRatingInput] = useState('');
   const [stableEntryTagsInput, setStableEntryTagsInput] = useState('');
   const [isStableMetadataSaving, setIsStableMetadataSaving] = useState(false);
-  const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [localTrackColumnsLoaded, setLocalTrackColumnsLoaded] = useState(false);
   const [localTrackColumnSettings, setLocalTrackColumnSettings] = useState<LocalTrackColumnConfig[]>(() =>
-    DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item }))
+    cloneDefaultLocalTrackColumnSettings()
   );
   const [localTrackLayoutWidth, setLocalTrackLayoutWidth] = useState(0);
   const [pendingPlayTrackIdentity, setPendingPlayTrackIdentity] = useState<string | null>(null);
@@ -805,26 +493,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     clientHeight: 0,
     clientWidth: 0,
   });
-  const facetLoadingRef = useRef<{ artists: boolean; albums: boolean; genres: boolean }>({
-    artists: false,
-    albums: false,
-    genres: false,
-  });
   const currentCoverPolicyRef = useRef<CoverRuntimeCachePolicy>('default');
-  const requestedAlbumCoversRef = useRef<Set<string>>(new Set());
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
-  const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
-  const albumCardElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  const albumCardRefCallbacksRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(
-    new Map()
-  );
-  const albumCoverObserverRef = useRef<IntersectionObserver | null>(null);
-  const albumCoverQueueRef = useRef<string[]>([]);
-  const albumCoverInFlightRef = useRef<number>(0);
-  const albumCoverDrainRafRef = useRef<number | null>(null);
-  const albumInfoByKeyRef = useRef<Map<string, AlbumSummary>>(new Map());
-  const albumCoverGenerationRef = useRef<number>(0);
-  const albumOffscreenReclaimTimerRef = useRef<number | null>(null);
+  const baseToolbarRegionRef = useRef<HTMLDivElement | null>(null);
   const localTrackColumnResizeSessionRef = useRef<LocalTrackColumnResizeSession | null>(null);
   const localTrackColumnResizeRafRef = useRef<number | null>(null);
   const localTrackColumnResizePendingRef = useRef<
@@ -839,6 +510,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const dragOverLocalTrackColumnIdRef = useRef<LocalTrackColumnId | null>(null);
   const pendingPlayTrackIdentityRef = useRef<string | null>(null);
   const pendingPlayResetTimerRef = useRef<number | null>(null);
+
+  const {
+    showBaseSortPanel,
+    showBaseFilterPanel,
+    showColumnSettings,
+    toggleBaseControlPanel,
+  } = useBaseControlPanels({
+    enabled: isOpen && librarySourceMode === 'local',
+    toolbarRegionRef: baseToolbarRegionRef,
+  });
 
   const beginAudioProtection = useCallback(
     (reason: string, durationMs: number = 20_000): (() => void) => {
@@ -920,11 +601,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [audioService, clearPendingPlayTrack, resolveTrackIdentity]);
 
-  // ? 鐠佹澘绻傚姘З娴ｅ秶鐤嗛敍姘瘻 viewMode 缂佸瓨濮㈡稉缁樼泊閸斻劍娼?scrollTop + 闁挎氨鍋ｉ敍宀勪缉閸忓秷娉曟い鐢告桨/閸掑洦宕?tab 娑撱垹銇戞担宥囩枂
+  // ? 閻犱焦婢樼换鍌氼煥濮橆剙袟濞达絽绉堕悿鍡涙晬濮橆厼鐦?viewMode 缂備礁鐡ㄦ慨銏＄▔缂佹娉婇柛鏂诲妽濞?scrollTop + 闂佹寧姘ㄩ崑锝夋晬瀹€鍕級闁稿繐绉峰▔鏇熴亜閻㈠憡妗?闁告帒娲﹀畷?tab 濞戞挶鍨归妵鎴炴媴瀹ュ洨鏋?
   const isRestoringMainScrollRef = useRef(false);
   const mainScrollUserDirtyRef = useRef(false);
   const mainScrollAnchorDebounceRef = useRef<number | null>(null);
-  const mainScrollRestoreStateRef = useRef<{ viewMode: ViewMode | null; done: boolean }>({
+  const mainScrollRestoreStateRef = useRef<{ viewMode: MusicLibraryViewMode | null; done: boolean }>({
     viewMode: null,
     done: false,
   });
@@ -999,7 +680,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, []);
 
   const computeMainScrollAnchor = useCallback(
-    (root: HTMLElement, mode: ViewMode): MainScrollAnchor | null => {
+    (root: HTMLElement): MainScrollAnchor | null => {
       const rootRect = root.getBoundingClientRect();
 
       const findFirstVisible = (selector: string): HTMLElement | null => {
@@ -1012,14 +693,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         return null;
       };
 
-      if (mode === 'albums') {
-        const element = findFirstVisible('.music-library-album-card[data-album-key]');
-        const key = element?.getAttribute('data-album-key')?.trim();
-        if (!element || !key) return null;
-        const rect = element.getBoundingClientRect();
-        return { kind: 'album', key, offset: rect.top - rootRect.top };
-      }
-
       const element = findFirstVisible('.music-library-track[data-track-id]');
       const id = element?.getAttribute('data-track-id')?.trim();
       if (!element || !id) return null;
@@ -1030,7 +703,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   const captureMainScrollMemory = useCallback(
-    (mode: ViewMode) => {
+    (mode: MusicLibraryViewMode) => {
       const root = getMainScrollRoot();
       if (!root) return;
 
@@ -1041,7 +714,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       const navigationContent = main?.closest<HTMLElement>('.navigation-content') ?? null;
       memory.rootKind = navigationContent && root === navigationContent ? 'navigation' : 'main';
 
-      const anchor = computeMainScrollAnchor(root, mode);
+      const anchor = computeMainScrollAnchor(root);
       if (anchor) memory.anchor = anchor;
 
       moduleScrollMemory[mode] = memory;
@@ -1050,7 +723,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   const scheduleMainScrollAnchorUpdate = useCallback(
-    (mode: ViewMode) => {
+    (mode: MusicLibraryViewMode) => {
       if (typeof window === 'undefined') return;
       if (mainScrollAnchorDebounceRef.current !== null) {
         window.clearTimeout(mainScrollAnchorDebounceRef.current);
@@ -1062,7 +735,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         const root = getMainScrollRoot(moduleScrollMemory[mode]?.rootKind);
         if (!root) return;
 
-        const anchor = computeMainScrollAnchor(root, mode);
+        const anchor = computeMainScrollAnchor(root);
         if (!anchor) return;
 
         const previous = moduleScrollMemory[mode];
@@ -1085,10 +758,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       }
     };
   }, []);
-
-  useEffect(() => {
-    moduleLastViewMode = viewMode;
-  }, [viewMode]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -1121,166 +790,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [captureMainScrollMemory, getMainScrollRoot, isOpen, librarySourceMode, viewMode]);
 
-  // ? Artists/Genres sidebar: 閻欘剛鐝涘姘З鐠佹澘绻傞敍鍫ユ晪閻愮懓绱￠幁銏狀槻閿?
-  const isRestoringSidebarScrollRef = useRef(false);
-  const sidebarScrollUserDirtyRef = useRef(false);
-  const sidebarScrollRestoreStateRef = useRef<{ viewMode: SidebarViewMode | null; done: boolean }>({
-    viewMode: null,
-    done: false,
-  });
+  // 闁圭儤甯掔花顓㈡偐閼哥鍋?
+  const [baseView, setBaseView] = useState<MusicLibraryBaseView>('table');
+  const [baseFilterJoinOperator, setBaseFilterJoinOperator] =
+    useState<MusicLibraryBaseLogicalOperator>('and');
+  const [baseFilterGroups, setBaseFilterGroups] = useState<MusicLibraryBaseFilterGroup[]>([]);
+  const [activeBaseFilterGroupId, setActiveBaseFilterGroupId] = useState<string | null>(null);
+  const [baseGroupByRules, setBaseGroupByRules] = useState<MusicLibraryBaseGroupRule[]>([]);
+  const [baseSortRules, setBaseSortRules] = useState<MusicLibraryBaseSortRule[]>([]);
+  const [baseFilterField, setBaseFilterField] = useState<MusicLibraryBaseField>('artist');
+  const [baseFilterRuleOperator, setBaseFilterRuleOperator] =
+    useState<MusicLibraryBaseOperator>('contains');
+  const [baseFilterValue, setBaseFilterValue] = useState('');
+  const [propertySearchQuery, setPropertySearchQuery] = useState('');
+  const [nativeBaseTracks, setNativeBaseTracks] = useState<Track[] | null>(null);
+  const [isNativeBaseTracksLoading, setIsNativeBaseTracksLoading] = useState(false);
 
-  const getSidebarScrollRoot = useCallback((): HTMLElement | null => {
-    return sidebarScrollRef.current;
-  }, []);
-
-  const computeSidebarScrollAnchor = useCallback(
-    (root: HTMLElement, mode: SidebarViewMode): SidebarScrollAnchor | null => {
-      const rootRect = root.getBoundingClientRect();
-      const selector =
-        mode === 'artists'
-          ? '.music-library-sidebar-item[data-artist-name]'
-          : '.music-library-sidebar-item[data-genre-name]';
-
-      const elements = Array.from(root.querySelectorAll<HTMLElement>(selector));
-      for (const element of elements) {
-        const rect = element.getBoundingClientRect();
-        if (rect.bottom <= rootRect.top) continue;
-        if (mode === 'artists') {
-          const key = element.getAttribute('data-artist-name')?.trim();
-          if (!key) return null;
-          return { kind: 'artist', key, offset: rect.top - rootRect.top };
-        }
-        const key = element.getAttribute('data-genre-name')?.trim();
-        if (!key) return null;
-        return { kind: 'genre', key, offset: rect.top - rootRect.top };
-      }
-      return null;
-    },
-    []
-  );
-
-  const captureSidebarScrollMemory = useCallback(
-    (mode: ViewMode) => {
-      if (mode !== 'artists' && mode !== 'genres') return;
-      const root = getSidebarScrollRoot();
-      if (!root) return;
-
-      const memory: SidebarScrollMemory = {
-        scrollTop: root.scrollTop,
-      };
-
-      const anchor = computeSidebarScrollAnchor(root, mode);
-      if (anchor) memory.anchor = anchor;
-
-      moduleSidebarScrollMemory[mode] = memory;
-    },
-    [computeSidebarScrollAnchor, getSidebarScrollRoot]
-  );
-
-  const handleSidebarScroll = useCallback(() => {
-    if (isRestoringSidebarScrollRef.current) return;
-    if (viewMode !== 'artists' && viewMode !== 'genres') return;
-    const root = getSidebarScrollRoot();
-    if (!root) return;
-    sidebarScrollUserDirtyRef.current = true;
-
-    const previous = moduleSidebarScrollMemory[viewMode];
-    moduleSidebarScrollMemory[viewMode] = {
-      ...(previous ?? { scrollTop: 0 }),
-      scrollTop: root.scrollTop,
-    };
-  }, [getSidebarScrollRoot, viewMode]);
-
-  useLayoutEffect(() => {
-    if (!isOpen) return;
-    if (viewMode !== 'artists' && viewMode !== 'genres') return;
-    const root = getSidebarScrollRoot();
-    if (!root) return;
-
-    if (sidebarScrollRestoreStateRef.current.viewMode !== viewMode) {
-      sidebarScrollRestoreStateRef.current = { viewMode, done: false };
-      sidebarScrollUserDirtyRef.current = false;
-    }
-
-    if (sidebarScrollRestoreStateRef.current.done) return;
-
-    const memory = moduleSidebarScrollMemory[viewMode];
-    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
-
-    const setScrollTop = (target: number) => {
-      const clamped = Math.min(Math.max(0, target), maxScrollTop);
-      if (root.scrollTop === clamped) return;
-      isRestoringSidebarScrollRef.current = true;
-      root.scrollTop = clamped;
-      window.requestAnimationFrame(() => {
-        isRestoringSidebarScrollRef.current = false;
-      });
-    };
-
-    const tryRestoreFromScrollTop = (scrollTop: number): boolean => {
-      setScrollTop(scrollTop);
-      return scrollTop === 0 || scrollTop <= maxScrollTop;
-    };
-
-    if (!memory) {
-      setScrollTop(0);
-      sidebarScrollRestoreStateRef.current.done = true;
-      return;
-    }
-
-    const anchor = memory.anchor;
-    if (anchor) {
-      const selector =
-        viewMode === 'artists'
-          ? `[data-artist-name="${escapeCssSelector(anchor.key)}"]`
-          : `[data-genre-name="${escapeCssSelector(anchor.key)}"]`;
-      const element = root.querySelector<HTMLElement>(selector);
-      if (element) {
-        const rootRect = root.getBoundingClientRect();
-        const elementRect = element.getBoundingClientRect();
-        const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
-        const targetScrollTop = elementTopInContent - anchor.offset;
-        setScrollTop(targetScrollTop);
-        sidebarScrollRestoreStateRef.current.done = true;
-        return;
-      }
-    }
-
-    if (tryRestoreFromScrollTop(memory.scrollTop)) {
-      sidebarScrollRestoreStateRef.current.done = true;
-    }
-  }, [
-    artists.length,
-    escapeCssSelector,
-    genres.length,
-    getSidebarScrollRoot,
-    isOpen,
-    viewMode,
-  ]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    return () => {
-      if (viewMode !== 'artists' && viewMode !== 'genres') return;
-      const root = getSidebarScrollRoot();
-      const currentScrollTop = root?.scrollTop ?? 0;
-      const existing = moduleSidebarScrollMemory[viewMode];
-      const shouldCapture =
-        sidebarScrollUserDirtyRef.current ||
-        !existing ||
-        (currentScrollTop > 0 && existing.scrollTop !== currentScrollTop);
-
-      if (shouldCapture) captureSidebarScrollMemory(viewMode);
-    };
-  }, [captureSidebarScrollMemory, getSidebarScrollRoot, isOpen, viewMode]);
-
-  // 閹烘帒绨悩鑸碘偓?
-  const [sortBy, setSortBy] = useState<
-    'title' | 'artist' | 'album' | 'duration' | 'year' | 'default'
-  >('default');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-
-  // 閸欐娊鏁懣婊冨礋閻樿埖鈧?
+  // 闁告瑦濞婇弫顓㈡嚕濠婂啫绀嬮柣妯垮煐閳?
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -1292,89 +818,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     currentCoverPolicyRef.current = policy;
     musicLibraryService.applyCoverRuntimeCachePolicy(policy);
   }, []);
-
-  const loadFacetCollections = useCallback(
-    async (mode: ViewMode, trackSource?: Track[]) => {
-      if (mode === 'artists') {
-        if (artists.length > 0 || facetLoadingRef.current.artists) return;
-        facetLoadingRef.current.artists = true;
-        try {
-          if (trackSource && trackSource.length > 0) {
-            const uniqueArtists = Array.from(
-              new Set(trackSource.map((track) => track.artist).filter(Boolean))
-            ).sort();
-            setArtists(uniqueArtists as string[]);
-            return;
-          }
-          setArtists(await musicLibraryService.getAllArtists());
-        } catch (error) {
-          console.warn('[MusicLibrary] Failed to load artists facet:', error);
-        } finally {
-          facetLoadingRef.current.artists = false;
-        }
-        return;
-      }
-
-      if (mode === 'genres') {
-        if (genres.length > 0 || facetLoadingRef.current.genres) return;
-        facetLoadingRef.current.genres = true;
-        try {
-          if (trackSource && trackSource.length > 0) {
-            const uniqueGenres = Array.from(
-              new Set(trackSource.map((track) => track.genre).filter(Boolean))
-            ).sort();
-            setGenres(uniqueGenres as string[]);
-            return;
-          }
-          setGenres(await musicLibraryService.getAllGenres());
-        } catch (error) {
-          console.warn('[MusicLibrary] Failed to load genres facet:', error);
-        } finally {
-          facetLoadingRef.current.genres = false;
-        }
-        return;
-      }
-
-      if (mode === 'albums') {
-        if (albums.length > 0 || facetLoadingRef.current.albums) return;
-        facetLoadingRef.current.albums = true;
-        try {
-          if (trackSource && trackSource.length > 0) {
-            const albumMap = new Map<string, AlbumSummary>();
-            for (const track of trackSource) {
-              if (!track.album) continue;
-              const artist = track.artist || t('common.unknown.artist');
-              const key = albumKey(track.album, artist);
-              if (albumMap.has(key)) continue;
-
-              albumMap.set(key, {
-                album: track.album,
-                artist,
-                cover:
-                  typeof track.coverUrl === 'string' &&
-                  (track.coverUrl.startsWith('blob:') ||
-                    track.coverUrl.startsWith('data:') ||
-                    track.coverUrl.startsWith('http://') ||
-                    track.coverUrl.startsWith('https://'))
-                    ? track.coverUrl
-                    : undefined,
-                coverTrackPath: track.filePath || track.path,
-                coverTrackId: track.id,
-              });
-            }
-            setAlbums(Array.from(albumMap.values()));
-            return;
-          }
-          setAlbums(await musicLibraryService.getAllAlbums({ includeStoredCover: false }));
-        } catch (error) {
-          console.warn('[MusicLibrary] Failed to load albums facet:', error);
-        } finally {
-          facetLoadingRef.current.albums = false;
-        }
-      }
-    },
-    [albums.length, artists.length, genres.length, t]
-  );
 
   const scheduleTrackChunkLoad = useCallback(async (): Promise<boolean> => {
     if (trackChunkLoadingRef.current) return false;
@@ -1402,9 +845,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         if (moduleCache) {
           moduleCache = buildModuleCacheSnapshot({
             tracks: merged,
-            artists: moduleCache.artists,
-            albums: moduleCache.albums,
-            genres: moduleCache.genres,
             trackNextOffset: trackNextOffsetRef.current,
             hasMoreTracks: chunkHasMore,
             normalizeForIncrementalLoad: true,
@@ -1462,13 +902,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         })(),
     };
 
-    if (viewMode !== 'albums') {
-      const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
-      if (remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
-        setRenderedTrackLimit((prev) => prev + TRACK_RENDER_CHUNK_SIZE);
-      }
-      maybeLoadTrackChunkFromScroll();
+    const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
+    if (remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
+      setRenderedTrackLimit((prev) => prev + TRACK_RENDER_CHUNK_SIZE);
     }
+    maybeLoadTrackChunkFromScroll();
 
     syncMainViewport(root);
     scheduleMainScrollAnchorUpdate(viewMode);
@@ -1511,10 +949,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return () => {
       window.removeEventListener('resize', refreshViewport);
     };
-  }, [albums.length, getMainScrollRoot, isOpen, syncMainViewport, tracks.length, viewMode]);
+  }, [getMainScrollRoot, isOpen, syncMainViewport, tracks.length, viewMode]);
 
   useLayoutEffect(() => {
-    if (!isOpen || librarySourceMode !== 'local' || viewMode === 'albums') {
+    if (!isOpen || librarySourceMode !== 'local') {
       setLocalTrackLayoutWidth((prev) => (prev === 0 ? prev : 0));
       return;
     }
@@ -1554,29 +992,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       }
       window.removeEventListener('resize', refreshLocalTrackLayoutWidth);
     };
-  }, [isOpen, librarySourceMode, refreshLocalTrackLayoutWidth, viewMode]);
-
-  // 鍒囨崲瑙嗗浘妯″紡鏃舵竻闄ょ瓫閫夌姸鎬?
-  const handleViewModeChange = (
-    newMode: ViewMode,
-    options?: { artist?: string; genre?: string }
-  ) => {
-    captureMainScrollMemory(viewMode);
-    captureSidebarScrollMemory(viewMode);
-    moduleLastViewMode = newMode;
-    setViewMode(newMode);
-    // 濞撳懘娅庨幍鈧張澶岀摣闁娼禒璁圭礉鐠佲晜鐦℃稉顏囶潒閸ュ墽瀚粩?
-    setSelectedArtist(options?.artist || null);
-    setSelectedAlbum(null);
-    setSelectedGenre(options?.genre || null);
-  };
+  }, [isOpen, librarySourceMode, refreshLocalTrackLayoutWidth]);
 
   const loadLibraryData = useCallback(async () => {
     const token = ++libraryLoadTokenRef.current;
     console.log('Loading library data...');
     const releaseProtection = beginAudioProtection('music-library-load', 25_000);
 
-    // 閴?缁斿宓嗛弰鍓с仛濡€虫健缂傛挸鐡ㄩ弫鐗堝祦閿涘牆顩ч弸婊勬箒閺佸牞绱?
+    // 闁?缂佹柨顑呭畵鍡涘及閸撗佷粵婵☆垪鈧櫕鍋ョ紓鍌涙尭閻°劑寮悧鍫濈ウ闁挎稑鐗嗛々褔寮稿鍕畳闁轰礁鐗炵槐?
     const now = Date.now();
     if (
       moduleCache &&
@@ -1585,32 +1008,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     ) {
       console.log('Using module cache for instant display');
       setTracks(moduleCache.tracks);
-      setArtists(moduleCache.artists);
-      requestedAlbumCoversRef.current.clear();
-      setAlbums(moduleCache.albums);
-      setGenres(moduleCache.genres);
       trackNextOffsetRef.current = moduleCache.trackNextOffset;
       setHasMoreTracks(moduleCache.hasMoreTracks);
       setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
-      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
+      updateCoverRuntimePolicy('high');
 
-      if (viewMode === 'albums' || viewMode === 'artists' || viewMode === 'genres') {
-        void loadFacetCollections(viewMode, moduleCache.tracks);
-      }
-
-      // 閸︺劌鎮楅崣鏉跨磽濮濄儲娲块弬鎵埠鐠佲€蹭繆閹?
+      // 闁革负鍔岄幃妤呭矗閺夎法纾芥慨婵勫劜濞插潡寮幍顔惧煚閻犱讲鈧弓绻嗛柟?
       musicLibraryService.getLibraryStats().then((stats) => {
         if (token !== libraryLoadTokenRef.current) return;
         setLibraryStats(stats);
       });
-      return; // 閴?閻╁瓨甯存潻鏂挎礀閿涘奔绗夐柌宥嗘煀閸旂姾娴?
+      return; // 闁?闁烩晛鐡ㄧ敮瀛樻交閺傛寧绀€闁挎稑濂旂粭澶愭煂瀹ュ棙鐓€闁告梻濮惧ù?
     }
 
-    // 濞屸剝婀佺紓鎾崇摠閹存牜绱︾€涙绻冮張鐕傜礉娴?IndexedDB 閸旂姾娴?
+    // 婵炲备鍓濆﹢浣虹磽閹惧磭鎽犻柟瀛樼墱缁憋妇鈧稒顭堢换鍐嫉閻曞倻绀夊ù?IndexedDB 闁告梻濮惧ù?
     console.log('Loading from IndexedDB...');
 
     try {
-      // 閴?娴兼ê瀵查敍姘辨纯閹恒儱濮炴潪鑺ユ殶閹诡噯绱濋梽鎰煑娑?1000 妫ｆ牭绱欓柆鍨帳闁插秴顦茬拠璇插絿閿?
+      // 闁?濞村吋锚鐎垫煡鏁嶅杈ㄧ函闁规亽鍎辨慨鐐存姜閼恒儲娈堕柟璇″櫙缁辨繈姊介幇顒€鐓戝☉?1000 濡絾鐗槐娆撴焼閸喖甯抽梺鎻掔Т椤﹁尙鎷犵拠鎻掔悼闁?
       const initialTracks = await musicLibraryService.getAllTracks(INITIAL_TRACK_LOAD_LIMIT);
 
       if (token !== libraryLoadTokenRef.current) return;
@@ -1620,35 +1035,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       trackNextOffsetRef.current = initialTracks.length;
       setHasMoreTracks(hasMore);
       setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
-      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
+      updateCoverRuntimePolicy('high');
 
       console.log('Library data loaded:', {
         tracks: compactInitialTracks.length,
       });
 
-      // 閺囧瓨鏌婇弰鍓с仛閺佺増宓侀崪灞灸侀崸妤冪处鐎?
+      // 闁哄洤鐡ㄩ弻濠囧及閸撗佷粵闁轰胶澧楀畵渚€宕仦鐏镐線宕稿Δ鍐閻?
       moduleCache = buildModuleCacheSnapshot({
         tracks: compactInitialTracks,
-        artists: [],
-        albums: [],
-        genres: [],
         trackNextOffset: trackNextOffsetRef.current,
         hasMoreTracks: hasMore,
         normalizeForIncrementalLoad: true,
       });
 
       setTracks(compactInitialTracks);
-      setArtists([]);
-      requestedAlbumCoversRef.current.clear();
-      setAlbums([]);
-      setGenres([]);
-      facetLoadingRef.current = { artists: false, albums: false, genres: false };
 
-      if (viewMode === 'albums' || viewMode === 'artists' || viewMode === 'genres') {
-        void loadFacetCollections(viewMode, compactInitialTracks);
-      }
-
-      // 閸︺劌鎮楅崣鏉跨磽濮濄儴顓哥粻妤冪埠鐠佲€蹭繆閹垽绱欐稉宥夋▎婵夋拷I閿?
+      // 闁革负鍔岄幃妤呭矗閺夎法纾芥慨婵勫劥椤撳摜绮诲Δ鍐煚閻犱讲鈧弓绻嗛柟顓у灲缁辨瑦绋夊澶嬧枎濠靛鎷稩闁?
       musicLibraryService.getLibraryStats().then((stats) => {
         if (token !== libraryLoadTokenRef.current) return;
         setLibraryStats(stats);
@@ -1660,9 +1063,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     } finally {
       releaseProtection();
     }
-  }, [beginAudioProtection, loadFacetCollections, updateCoverRuntimePolicy, viewMode]);
+  }, [beginAudioProtection, updateCoverRuntimePolicy]);
 
-  // 閸旂姾娴囨惔鎾圭熅瀵?
+  // 闁告梻濮惧ù鍥ㄦ償閹惧湱鐔呯€?
   const loadStableLibraryEntries = useCallback(
     async (
       query?: string,
@@ -1765,7 +1168,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       if (librarySourceMode === nextMode) return;
 
       captureMainScrollMemory(viewMode);
-      captureSidebarScrollMemory(viewMode);
       setLibrarySourceMode(nextMode);
       setShowPathsManager(false);
       setSearchQuery('');
@@ -1775,19 +1177,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         searchDebounceTimerRef.current = null;
       }
 
+      {
+        const emptyFilterState = createMusicLibraryBaseEmptyFilterState();
+        setBaseFilterJoinOperator(emptyFilterState.filterJoinOperator);
+        setBaseFilterGroups(emptyFilterState.filterGroups);
+        setActiveBaseFilterGroupId(emptyFilterState.activeFilterGroupId);
+      }
+
       if (nextMode === 'local') {
         searchTokenRef.current += 1;
-        setSelectedArtist(null);
-        setSelectedAlbum(null);
-        setSelectedGenre(null);
         void resetLibraryDataFromStorage();
         return;
       }
 
-      setSelectedArtist(null);
-      setSelectedAlbum(null);
-      setSelectedGenre(null);
-      setViewMode('all');
       setMainViewport((prev) => ({ ...prev, scrollTop: 0 }));
       const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
       root?.scrollTo({ top: 0 });
@@ -1795,7 +1197,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     },
     [
       captureMainScrollMemory,
-      captureSidebarScrollMemory,
       getMainScrollRoot,
       librarySourceMode,
       loadStableLibraryEntries,
@@ -1827,7 +1228,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       void loadStableLibraryEntries(searchQuery);
       return;
     }
-    updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
+    updateCoverRuntimePolicy('high');
     void loadLibraryData();
   }, [
     isOpen,
@@ -1836,7 +1237,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     loadStableLibraryEntries,
     searchQuery,
     updateCoverRuntimePolicy,
-    viewMode,
   ]);
 
   useEffect(() => {
@@ -1867,45 +1267,33 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [isOpen, updateCoverRuntimePolicy]);
 
-  // 鐠併垽妲勯幍顐ｅ伎鏉╂稑瀹?
+  // 閻犱降鍨藉Σ鍕箥椤愶絽浼庨弶鈺傜☉鐎?
   useEffect(() => {
     if (librarySourceMode !== 'local') return;
     const unsubscribe = musicLibraryService.onScanProgress((progress) => {
       console.log('Scan progress:', progress);
       setScanProgress(progress);
 
-      // 閹殿偅寮跨€瑰本鍨氶崥搴ゅ殰閸斻劌鍩涢弬鐗堟殶閹诡喖鎷扮捄顖氱窞閸掓銆?
+      // 闁规鍋呭璺ㄢ偓鐟版湰閸ㄦ岸宕ユ惔銈呮闁告柣鍔岄崺娑㈠棘閻楀牊娈堕柟璇″枛閹锋壆鎹勯姘辩獮闁告帗顨夐妴?
       if (!progress.isScanning && progress.current > 0) {
         console.log('Scan completed, refreshing library...');
-        clearModuleCache(); // 閴?濞撳懘娅庣紓鎾崇摠
-        // 瀵ゆ儼绻滄稉鈧悙鍦€樻穱婵囨殶閹诡喖鍟撻崗銉ョ暚閹?
+        clearModuleCache(); // 闁?婵炴挸鎳樺▍搴ｇ磽閹惧磭鎽?
+        // 鐎点倖鍎肩换婊勭▔閳ь剟鎮欓崷顓涒偓妯荤┍濠靛洦娈堕柟璇″枛閸熸捇宕楅妷銉ф殮闁?
         setTimeout(() => {
           Promise.all([
             loadLibraryData(),
-            loadLibraryPaths(), // 閸氬本妞傞崚閿嬫煀鐠侯垰绶為崚妤勩€?
+            loadLibraryPaths(), // 闁告艾鏈鍌炲礆闁垮鐓€閻犱警鍨扮欢鐐哄礆濡ゅ嫨鈧?
           ]);
-        }, 300); // 閸戝繐鐨鎯扮箿閸?300ms
+        }, 300); // 闁告垵绻愰惃顖氼嚈閹壆绠块柛?300ms
       }
     });
     return unsubscribe;
   }, [librarySourceMode, loadLibraryData, loadLibraryPaths]);
 
   useEffect(() => {
-    const map = new Map<string, AlbumSummary>();
-    for (const a of albums) {
-      map.set(albumKey(a.album, a.artist), a);
-    }
-    albumInfoByKeyRef.current = map;
-  }, [albums]);
-
-  useEffect(() => {
     if (!isOpen) return;
     if (librarySourceMode !== 'local') {
       updateCoverRuntimePolicy('hidden');
-      return;
-    }
-    if (viewMode === 'albums') {
-      updateCoverRuntimePolicy('watch');
       return;
     }
 
@@ -1921,165 +1309,23 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     librarySourceMode,
     searchQuery,
     updateCoverRuntimePolicy,
-    viewMode,
   ]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    if (librarySourceMode !== 'local') return;
-    if (searchQuery.trim()) return;
-    if (viewMode !== 'albums' && viewMode !== 'artists' && viewMode !== 'genres') return;
-    void loadFacetCollections(viewMode, tracks);
-  }, [isOpen, librarySourceMode, loadFacetCollections, searchQuery, tracks, viewMode]);
+  // Desktop/Tauri: 濞戞挻鎹佺欢顐や焊娓氣偓濞间即骞婇幒鎴濐潱閺夌偞鏋荤槐姗tersectionObserver + 妤犵偠娉涜ぐ鍌炴⒓閻斿嘲鐏欓柨?
+  
 
-  const getAlbumCardRef = useCallback((key: string) => {
-    const existing = albumCardRefCallbacksRef.current.get(key);
-    if (existing) return existing;
-
-    const cb = (el: HTMLDivElement | null) => {
-      const previousEl = albumCardElementsRef.current.get(key);
-      if (previousEl && previousEl !== el) {
-        albumCoverObserverRef.current?.unobserve(previousEl);
-      }
-
-      if (el) {
-        albumCardElementsRef.current.set(key, el);
-        albumCoverObserverRef.current?.observe(el);
-      } else {
-        albumCardElementsRef.current.delete(key);
-      }
-    };
-
-    albumCardRefCallbacksRef.current.set(key, cb);
-    return cb;
-  }, []);
-
-  // Desktop/Tauri: 娑撴捁绶亸渚€娼伴幊鎺戝鏉炴枻绱橧ntersectionObserver + 楠炶泛褰傞梼鐔峰灙閿?
-  useEffect(() => {
-    if (!isOpen) return;
-    if (!isTauriRuntime()) return;
-    if (viewMode !== 'albums') return;
-    if (typeof IntersectionObserver === 'undefined') return;
-
-    const root = mainScrollRef.current;
-    if (!root) return;
-
-    const generation = (albumCoverGenerationRef.current += 1);
-    let disposed = false;
-
-    albumCoverQueueRef.current = [];
-    albumCoverInFlightRef.current = 0;
-
-    const maxConcurrency = searchQuery.trim() ? 2 : hasMoreTracks ? 2 : 3;
-    const rootMargin = searchQuery.trim() ? '220px 0px' : hasMoreTracks ? '280px 0px' : '360px 0px';
-
-    function scheduleDrain() {
-      if (disposed) return;
-      if (albumCoverDrainRafRef.current != null) return;
-      albumCoverDrainRafRef.current = window.requestAnimationFrame(() => {
-        albumCoverDrainRafRef.current = null;
-        drainQueue();
-      });
-    }
-
-    async function loadCoverForAlbumKey(key: string) {
-      const info = albumInfoByKeyRef.current.get(key);
-      if (!info || info.cover || !info.coverTrackPath) return;
-
-      const stub: Track = {
-        id: info.coverTrackId || `cover-${info.album}-${info.artist}`,
-        title: info.album,
-        album: info.album,
-        artist: info.artist,
-        filePath: info.coverTrackPath,
-        path: info.coverTrackPath,
-      };
-
-      const url = await musicLibraryService.getCoverUrlForTrack(stub, { coverSizeHint: 'small' });
-      if (!url) return;
-      if (disposed) return;
-      if (albumCoverGenerationRef.current !== generation) return;
-
-      setAlbums((prev) =>
-        prev.map((a) => (albumKey(a.album, a.artist) === key ? { ...a, cover: url } : a))
-      );
-    }
-
-    function drainQueue() {
-      if (disposed) return;
-
-      while (albumCoverInFlightRef.current < maxConcurrency) {
-        const nextKey = albumCoverQueueRef.current.shift();
-        if (!nextKey) return;
-
-        albumCoverInFlightRef.current += 1;
-        void loadCoverForAlbumKey(nextKey)
-          .catch(() => {})
-          .finally(() => {
-            albumCoverInFlightRef.current = Math.max(0, albumCoverInFlightRef.current - 1);
-            scheduleDrain();
-          });
-      }
-    }
-
-    function enqueue(key: string) {
-      if (disposed) return;
-      if (requestedAlbumCoversRef.current.has(key)) return;
-
-      const info = albumInfoByKeyRef.current.get(key);
-      if (!info || info.cover || !info.coverTrackPath) return;
-
-      requestedAlbumCoversRef.current.add(key);
-      albumCoverQueueRef.current.push(key);
-      scheduleDrain();
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const key = (entry.target as HTMLElement).dataset.albumKey;
-          if (!key) continue;
-          enqueue(key);
-        }
-      },
-      {
-        root,
-        rootMargin,
-        threshold: 0.01,
-      }
-    );
-
-    albumCoverObserverRef.current = observer;
-    for (const el of albumCardElementsRef.current.values()) {
-      observer.observe(el);
-    }
-
-    return () => {
-      disposed = true;
-      if (albumCoverDrainRafRef.current != null) {
-        cancelAnimationFrame(albumCoverDrainRafRef.current);
-        albumCoverDrainRafRef.current = null;
-      }
-      observer.disconnect();
-      if (albumCoverObserverRef.current === observer) {
-        albumCoverObserverRef.current = null;
-      }
-    };
-  }, [hasMoreTracks, isOpen, searchQuery, viewMode]);
-
-  // 婢跺嫮鎮婇弬鍥︽婢惰澹傞幓?
+  // 濠㈣泛瀚幃濠囧棘閸ワ附顐藉鎯邦潐婢瑰倿骞?
   const handleScanFolder = async () => {
     const releaseProtection = beginAudioProtection('music-library-scan', 90_000);
     try {
       console.log('Starting folder scan...');
       await musicLibraryService.scanFolder();
       console.log('Folder scan completed, refreshing library data...');
-      // 閹殿偅寮跨€瑰本鍨氶崥搴㈢闂勩倗绱︾€涙ê鑻熼崚閿嬫煀閺佺増宓侀崪宀冪熅瀵板嫬鍨悰?
-      clearModuleCache(); // 閴?濞撳懘娅庣紓鎾崇摠閿涘苯宸遍崚鍫曞櫢閺傛澘濮炴潪?
+      // 闁规鍋呭璺ㄢ偓鐟版湰閸ㄦ岸宕ユ惔銏㈩伕闂傚嫨鍊楃槐锔锯偓娑櫭懟鐔煎礆闁垮鐓€闁轰胶澧楀畵渚€宕畝鍐唴鐎垫澘瀚崹顏嗘偘?
+      clearModuleCache(); // 闁?婵炴挸鎳樺▍搴ｇ磽閹惧磭鎽犻柨娑樿嫰瀹搁亶宕氶崼鏇炴闁哄倹婢樻慨鐐存姜?
       await Promise.all([
         loadLibraryData(),
-        loadLibraryPaths(), // 閸掗攱鏌婄捄顖氱窞閸掓銆?
+        loadLibraryPaths(), // 闁告帡鏀遍弻濠勬崉椤栨氨绐為柛鎺擃殙閵?
       ]);
       console.log('Library data and paths refreshed');
       setErrorMessage(null);
@@ -2122,57 +1368,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       setTracks(compactResults);
       trackNextOffsetRef.current = results.length;
       setHasMoreTracks(false);
-      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
-
-      const uniqueArtists = Array.from(
-        new Set(compactResults.map((track) => track.artist).filter(Boolean))
-      );
-      const uniqueGenres = Array.from(
-        new Set(compactResults.map((track) => track.genre).filter(Boolean))
-      );
-
-      const albumMap = new Map<string, AlbumSummary>();
-      compactResults.forEach((track) => {
-        if (!track.album) return;
-
-        const key = `${track.album}-${track.artist}`;
-        if (albumMap.has(key)) return;
-
-        albumMap.set(key, {
-          album: track.album,
-          artist: track.artist || t('common.unknown.artist'),
-          cover:
-            typeof track.coverUrl === 'string' &&
-            (track.coverUrl.toLowerCase().startsWith('data:') ||
-              track.coverUrl.toLowerCase().startsWith('blob:') ||
-              track.coverUrl.toLowerCase().startsWith('http:') ||
-              track.coverUrl.toLowerCase().startsWith('https:') ||
-              track.coverUrl.toLowerCase().startsWith('pmp://cover/'))
-              ? track.coverUrl
-              : undefined,
-          coverTrackPath: track.filePath || track.path,
-          coverTrackId: track.id,
-        });
-      });
-
-      const uniqueAlbums = Array.from(albumMap.values());
-
-      setArtists(uniqueArtists as string[]);
-      setGenres(uniqueGenres as string[]);
-      requestedAlbumCoversRef.current.clear();
-      setAlbums(uniqueAlbums);
+      updateCoverRuntimePolicy('high');
       moduleCache = buildModuleCacheSnapshot({
         tracks: compactResults,
-        artists: uniqueArtists as string[],
-        albums: uniqueAlbums,
-        genres: uniqueGenres as string[],
         trackNextOffset: trackNextOffsetRef.current,
         hasMoreTracks: false,
       });
     } else {
       await resetLibraryDataFromStorage();
       if (token !== searchTokenRef.current) return;
-      updateCoverRuntimePolicy(viewMode === 'albums' ? 'watch' : 'high');
+      updateCoverRuntimePolicy('high');
     }
 
     maybeLoadTrackChunkFromScroll();
@@ -2181,8 +1386,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     maybeLoadTrackChunkFromScroll,
     resetLibraryDataFromStorage,
     updateCoverRuntimePolicy,
-    viewMode,
-    t,
   ]);
 
   const handleSearchInputChange = useCallback(
@@ -2212,21 +1415,45 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, []);
 
   useEffect(() => {
-    const stored = readJson<unknown>(
-      STORAGE_KEYS.MUSIC_LIBRARY_TRACK_COLUMNS_V1,
-      DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS
-    );
-    setLocalTrackColumnSettings(normalizeLocalTrackColumnSettings(stored));
+    const loadedState = loadMusicLibraryBaseState<LocalTrackColumnConfig>({
+      createDefaultColumns: cloneDefaultLocalTrackColumnSettings,
+      normalizeColumns: normalizeLocalTrackColumnSettings,
+      applyBaseViewPropertiesToColumns: applyBaseViewPropertiesToLocalTrackColumns,
+    });
+
+    setBaseView(loadedState.schema.view.mode);
+    setBaseFilterJoinOperator(loadedState.schema.query.filterOperator);
+    setBaseFilterGroups(loadedState.schema.query.filterGroups);
+    setActiveBaseFilterGroupId(loadedState.schema.query.filterGroups[0]?.id ?? null);
+    setBaseGroupByRules(loadedState.schema.query.groupByRules);
+    setBaseSortRules(loadedState.schema.query.sortRules);
+    setLocalTrackColumnSettings(loadedState.columns);
+
     setLocalTrackColumnsLoaded(true);
   }, []);
 
   useEffect(() => {
     if (!localTrackColumnsLoaded) return;
-    writeJson(STORAGE_KEYS.MUSIC_LIBRARY_TRACK_COLUMNS_V1, localTrackColumnSettings, {
-      mode: 'idle',
+    persistMusicLibraryBaseState<LocalTrackColumnConfig>({
+      query: {
+        filterOperator: baseFilterJoinOperator,
+        filterGroups: baseFilterGroups,
+        groupByRules: baseGroupByRules,
+        sortRules: baseSortRules,
+      },
+      viewMode: baseView,
+      columns: localTrackColumnSettings,
       debounceMs: 150,
     });
-  }, [localTrackColumnSettings, localTrackColumnsLoaded]);
+  }, [
+    baseFilterGroups,
+    baseFilterJoinOperator,
+    baseGroupByRules,
+    baseSortRules,
+    baseView,
+    localTrackColumnSettings,
+    localTrackColumnsLoaded,
+  ]);
 
   const toggleLocalTrackColumn = useCallback(
     (columnId: LocalTrackColumnId) => {
@@ -2517,7 +1744,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   const resetLocalTrackColumns = useCallback(() => {
-    setLocalTrackColumnSettings(DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item })));
+    setLocalTrackColumnSettings(cloneDefaultLocalTrackColumnSettings());
   }, []);
 
   useEffect(() => {
@@ -2601,87 +1828,204 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     if (librarySourceMode !== 'local') return;
-    if (viewMode === 'albums') return;
     if (searchQuery.trim()) return;
     maybeLoadTrackChunkFromScroll();
-  }, [isOpen, librarySourceMode, maybeLoadTrackChunkFromScroll, searchQuery, viewMode, tracks.length]);
+  }, [isOpen, librarySourceMode, maybeLoadTrackChunkFromScroll, searchQuery, tracks.length]);
 
-  // 閹烘帒绨径鍕倞閸戣姤鏆?
-  const handleSort = (field: typeof sortBy) => {
-    if (sortBy === field) {
-      // 婵″倹鐏夊鑼病閺勵垰缍嬮崜宥嗗笓鎼村繐鐡у▓纰夌礉閸掑洦宕查幒鎺戠碍閺傜懓鎮?
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      // 閸掑洦宕查崚鐗堟煀閻ㄥ嫭甯撴惔蹇撶摟濞堢绱濇妯款吇閸楀洤绨?
-      setSortBy(field);
-      setSortOrder('asc');
-    }
-  };
+  const addBaseSortRule = useCallback(() => {
+    setBaseSortRules((prev) => appendMusicLibraryBaseSortRule(prev));
+  }, []);
 
-  // 鎼存梻鏁ら幒鎺戠碍閸掔増鏆熺紒?
-  const applySorting = useCallback(<T extends Track | { album: string; artist: string }>(items: T[]): T[] => {
-    if (sortBy === 'default') return items;
+  const addBaseGroupByRule = useCallback(() => {
+    setBaseGroupByRules((prev) => appendMusicLibraryBaseGroupByRule(prev));
+  }, []);
 
-    const sorted = [...items];
-    sorted.sort((a, b) => {
-      let compareA: string | number = '';
-      let compareB: string | number = '';
+  const updateBaseSortRule = useCallback(
+    (id: string, patch: Partial<Pick<MusicLibraryBaseSortRule, 'field' | 'order'>>) => {
+      setBaseSortRules((prev) => updateMusicLibraryBaseSortRule(prev, id, patch));
+    },
+    []
+  );
 
-      // 閺嶈宓侀幒鎺戠碍鐎涙顔岄懢宄板絿濮ｆ棁绶濋崐?
-      if ('title' in a && sortBy === 'title') {
-        compareA = (a as Track).title?.toLowerCase() || '';
-        compareB = (b as Track).title?.toLowerCase() || '';
-      } else if (sortBy === 'artist') {
-        compareA = ('artist' in a ? a.artist : '')?.toLowerCase() || '';
-        compareB = ('artist' in b ? b.artist : '')?.toLowerCase() || '';
-      } else if (sortBy === 'album') {
-        compareA = ('album' in a ? a.album : '')?.toLowerCase() || '';
-        compareB = ('album' in b ? b.album : '')?.toLowerCase() || '';
-      } else if ('duration' in a && sortBy === 'duration') {
-        compareA = (a as Track).duration || 0;
-        compareB = (b as Track).duration || 0;
-      } else if ('year' in a && sortBy === 'year') {
-        compareA = (a as Track).year || 0;
-        compareB = (b as Track).year || 0;
-      } else {
-        return 0;
-      }
+  const updateBaseGroupByRule = useCallback(
+    (id: string, patch: Partial<Pick<MusicLibraryBaseGroupRule, 'field' | 'order'>>) => {
+      setBaseGroupByRules((prev) => updateMusicLibraryBaseGroupByRule(prev, id, patch));
+    },
+    []
+  );
 
-      // 濮ｆ棁绶?
-      let result = 0;
-      if (typeof compareA === 'string' && typeof compareB === 'string') {
-        result = compareA.localeCompare(compareB);
-      } else {
-        result = Number(compareA) - Number(compareB);
-      }
+  const removeBaseSortRule = useCallback((id: string) => {
+    setBaseSortRules((prev) => removeMusicLibraryBaseSortRule(prev, id));
+  }, []);
 
-      // 鎼存梻鏁ら幒鎺戠碍閺傜懓鎮?
-      return sortOrder === 'asc' ? result : -result;
+  const removeBaseGroupByRule = useCallback((id: string) => {
+    setBaseGroupByRules((prev) => removeMusicLibraryBaseGroupByRule(prev, id));
+  }, []);
+
+  const moveBaseSortRule = useCallback((id: string, offset: -1 | 1) => {
+    setBaseSortRules((prev) => moveMusicLibraryBaseSortRule(prev, id, offset));
+  }, []);
+
+  const moveBaseGroupByRule = useCallback((id: string, offset: -1 | 1) => {
+    setBaseGroupByRules((prev) => moveMusicLibraryBaseGroupByRule(prev, id, offset));
+  }, []);
+
+  const filteredPropertyColumns = useMemo(() => {
+    const keyword = propertySearchQuery.trim().toLowerCase();
+    if (!keyword) return localTrackColumnSettings;
+
+    return localTrackColumnSettings.filter((column) => {
+      const label = t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey).toLowerCase();
+      return label.includes(keyword) || column.id.toLowerCase().includes(keyword);
     });
+  }, [localTrackColumnSettings, propertySearchQuery, t]);
 
-    return sorted;
-  }, [sortBy, sortOrder]);
+  const baseQueryState = useMemo<MusicLibraryBaseQuery>(
+    () => ({
+      filterOperator: baseFilterJoinOperator,
+      filterGroups: baseFilterGroups,
+      groupByRules: baseGroupByRules,
+      sortRules: baseSortRules,
+    }),
+    [baseFilterJoinOperator, baseFilterGroups, baseGroupByRules, baseSortRules]
+  );
 
-  // 閼惧嘲褰囨潻鍥ㄦ姢閸滃本甯撴惔蹇撴倵閻ㄥ嫯寤洪柆?
+  const handleAddBaseFilter = useCallback(() => {
+    const nextState = appendMusicLibraryBaseFilter(
+      {
+        filterGroups: baseFilterGroups,
+        activeFilterGroupId: activeBaseFilterGroupId,
+      },
+      baseFilterField,
+      baseFilterRuleOperator,
+      baseFilterValue
+    );
+    if (!nextState.added) return;
+
+    setBaseFilterGroups(nextState.filterGroups);
+    setActiveBaseFilterGroupId(nextState.activeFilterGroupId);
+    setBaseFilterValue('');
+  }, [
+    activeBaseFilterGroupId,
+    baseFilterField,
+    baseFilterGroups,
+    baseFilterRuleOperator,
+    baseFilterValue,
+  ]);
+
+  const handleRemoveBaseFilter = useCallback((groupId: string, filterId: string) => {
+    setBaseFilterGroups((previous) => removeMusicLibraryBaseFilter(previous, groupId, filterId));
+  }, []);
+
+  const handleAddBaseFilterGroup = useCallback(() => {
+    const nextState = appendMusicLibraryBaseFilterGroup({
+      filterGroups: baseFilterGroups,
+      activeFilterGroupId: activeBaseFilterGroupId,
+    });
+    setBaseFilterGroups(nextState.filterGroups);
+    setActiveBaseFilterGroupId(nextState.activeFilterGroupId);
+  }, [activeBaseFilterGroupId, baseFilterGroups]);
+
+  const handleUpdateBaseFilterGroupOperator = useCallback(
+    (groupId: string, operator: MusicLibraryBaseLogicalOperator) => {
+      setBaseFilterGroups((previous) =>
+        updateMusicLibraryBaseFilterGroupOperator(previous, groupId, operator)
+      );
+    },
+    []
+  );
+
+  const handleRemoveBaseFilterGroup = useCallback(
+    (groupId: string) => {
+      const nextState = removeMusicLibraryBaseFilterGroup(
+        {
+          filterGroups: baseFilterGroups,
+          activeFilterGroupId: activeBaseFilterGroupId,
+        },
+        groupId
+      );
+      setBaseFilterGroups(nextState.filterGroups);
+      setActiveBaseFilterGroupId(nextState.activeFilterGroupId);
+    },
+    [activeBaseFilterGroupId, baseFilterGroups]
+  );
+
+  const handleClearBaseFilters = useCallback(() => {
+    const emptyFilterState = createMusicLibraryBaseEmptyFilterState();
+    setBaseFilterJoinOperator(emptyFilterState.filterJoinOperator);
+    setBaseFilterGroups(emptyFilterState.filterGroups);
+    setActiveBaseFilterGroupId(emptyFilterState.activeFilterGroupId);
+    setBaseFilterValue('');
+  }, []);
+
+  const handleApplyQuickBaseFilter = useCallback((field: MusicLibraryBaseField, value: string) => {
+    const quickFilterState = createMusicLibraryBaseQuickFilterState(field, value);
+    if (!quickFilterState) return;
+
+    setBaseFilterJoinOperator(quickFilterState.filterJoinOperator);
+    setBaseFilterGroups(quickFilterState.filterGroups);
+    setActiveBaseFilterGroupId(quickFilterState.activeFilterGroupId);
+  }, []);
+
+  const canUseNativeBaseQuery = useMemo(() => {
+    if (librarySourceMode !== 'local') return false;
+    if (!isTauriRuntime()) return false;
+    if (!baseQueryState.filterGroups.every((group) => canUseNativeBaseFilterGroup(group))) return false;
+    if (!baseQueryState.groupByRules.every((rule) => canUseNativeBaseOrderRule(rule))) return false;
+    if (!baseQueryState.sortRules.every((rule) => canUseNativeBaseOrderRule(rule))) return false;
+
+    return true;
+  }, [baseQueryState, librarySourceMode]);
+
+  const shouldUseNativeBaseQuery =
+    canUseNativeBaseQuery &&
+    (baseQueryState.filterGroups.some((group) => group.filters.length > 0) ||
+      baseQueryState.groupByRules.length > 0 ||
+      baseQueryState.sortRules.length > 0);
+
+  useEffect(() => {
+    if (!isOpen || !shouldUseNativeBaseQuery) {
+      setNativeBaseTracks(null);
+      setIsNativeBaseTracksLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsNativeBaseTracksLoading(true);
+
+    void musicLibraryService
+      .queryLocalTracksByBase({
+        searchQuery,
+        baseQuery: baseQueryState,
+        limit: 2000,
+        offset: 0,
+        includeMissing: false,
+        visibleOnly: true,
+      })
+      .then((rows) => {
+        if (cancelled) return;
+        setNativeBaseTracks(rows);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsNativeBaseTracksLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, shouldUseNativeBaseQuery, searchQuery, baseQueryState]);
+
+  // 闁兼儳鍢茶ぐ鍥ㄦ交閸ャ劍濮㈤柛婊冩湰鐢挻鎯旇箛鎾村€甸柣銊ュ瀵ゆ椽鏌?
   const filteredTracks = useMemo(() => {
-    let filtered = tracks;
-
-    if (selectedArtist) {
-      filtered = filtered.filter((t) => t.artist === selectedArtist);
-    }
-    if (selectedAlbum) {
-      filtered = filtered.filter((t) => t.album === selectedAlbum);
-    }
-    if (selectedGenre) {
-      filtered = filtered.filter((t) => t.genre === selectedGenre);
+    if (nativeBaseTracks) {
+      return nativeBaseTracks;
     }
 
-    return applySorting(filtered);
-  }, [applySorting, selectedAlbum, selectedArtist, selectedGenre, tracks]);
+    return applyMusicLibraryBaseQuery(tracks, baseQueryState);
+  }, [nativeBaseTracks, tracks, baseQueryState]);
 
-  // 閼惧嘲褰囬幒鎺戠碍閸氬海娈戞稉鎾圭帆閸掓銆?
-  const sortedAlbums = useMemo(() => applySorting(albums), [albums, applySorting]);
-
+  // 闁兼儳鍢茶ぐ鍥箳閹烘垹纰嶉柛姘捣濞堟垶绋夐幘鍦竼闁告帗顨夐妴?
   const sortedStableEntries = useMemo(() => {
     return [...stableEntries].sort((a, b) => {
       const updatedDiff = (b.updatedAtMs || 0) - (a.updatedAtMs || 0);
@@ -2690,123 +2034,21 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
   }, [stableEntries]);
 
-  const stableLibraryStats = useMemo(() => {
-    const totalEntries = stableEntries.length;
-    const inCloud = stableEntries.filter((entry) => entry.inCloud).length;
-    const missing = stableEntries.filter((entry) => entry.isMissing).length;
-    return {
-      totalEntries,
-      inCloud,
-      missing,
-      localReady: Math.max(0, totalEntries - missing),
-    };
-  }, [stableEntries]);
+  const stableLibraryStats = useMemo(() => deriveStableLibraryStats(stableEntries), [stableEntries]);
 
-  const visibleLocalTrackColumns = useMemo(
-    () => localTrackColumnSettings.filter((item) => item.visible),
-    [localTrackColumnSettings]
+  const {
+    renderedLocalTrackColumns,
+    visibleLocalTrackColumnCount,
+    localTrackGridTemplate,
+  } = useMemo(
+    () =>
+      deriveLocalTrackLayoutModel({
+        localTrackColumnSettings,
+        localTrackLayoutWidth,
+        mainViewportClientWidth: mainViewport.clientWidth,
+      }),
+    [localTrackColumnSettings, localTrackLayoutWidth, mainViewport.clientWidth]
   );
-
-  const localTrackResponsiveWidth =
-    localTrackLayoutWidth > 0
-      ? localTrackLayoutWidth
-      : mainViewport.clientWidth > 0
-        ? mainViewport.clientWidth
-        : 960;
-
-  const renderedLocalTrackColumns = useMemo(() => {
-    return visibleLocalTrackColumns;
-  }, [visibleLocalTrackColumns]);
-
-  const resolvedLocalTrackColumnWidths = useMemo(() => {
-    const widthById = new Map<LocalTrackColumnId, number>();
-
-    for (const column of renderedLocalTrackColumns) {
-      widthById.set(column.id, normalizeLocalTrackColumnWidth(column.id, column.widthPx));
-    }
-
-    if (renderedLocalTrackColumns.length === 0) {
-      return widthById;
-    }
-
-    const viewportWidth = localTrackResponsiveWidth;
-    const totalColumnCount = renderedLocalTrackColumns.length + 2;
-    const gapTotal = Math.max(0, totalColumnCount - 1) * LOCAL_TRACK_GRID_GAP_PX;
-    const reservedWidth =
-      LOCAL_TRACK_INDEX_COLUMN_WIDTH_PX + LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX + gapTotal;
-    const contentWidthBudget = Math.max(0, viewportWidth - reservedWidth);
-    const totalMinWidth = renderedLocalTrackColumns.reduce((sum, column) => {
-      return sum + LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].minWidthPx;
-    }, 0);
-
-    const titleColumn = renderedLocalTrackColumns.find((column) => column.id === 'title');
-    if (titleColumn) {
-      const titleDefinition = LOCAL_TRACK_COLUMN_DEFINITIONS.title;
-      const nonTitleMinimumWidth = totalMinWidth - titleDefinition.minWidthPx;
-      const titleSoftMax = Math.floor(contentWidthBudget * LOCAL_TRACK_TITLE_MAX_VIEWPORT_RATIO);
-      const titleHardMax = contentWidthBudget - nonTitleMinimumWidth;
-      const definitionMax = titleDefinition.maxWidthPx ?? Number.POSITIVE_INFINITY;
-      const cappedTitleMax = Math.max(
-        titleDefinition.minWidthPx,
-        Math.min(definitionMax, Math.min(titleSoftMax, titleHardMax))
-      );
-
-      const currentTitleWidth = widthById.get('title') ?? titleDefinition.defaultWidthPx;
-      widthById.set('title', Math.min(currentTitleWidth, cappedTitleMax));
-    }
-
-    const totalAdjustedWidth = renderedLocalTrackColumns.reduce((sum, column) => {
-      return sum + (widthById.get(column.id) ?? LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].defaultWidthPx);
-    }, 0);
-
-    if (totalAdjustedWidth <= contentWidthBudget) {
-      return widthById;
-    }
-
-    if (totalMinWidth >= contentWidthBudget) {
-      for (const column of renderedLocalTrackColumns) {
-        widthById.set(column.id, LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].minWidthPx);
-      }
-      return widthById;
-    }
-
-    const shrinkableWidth = renderedLocalTrackColumns.reduce((sum, column) => {
-      const minWidth = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].minWidthPx;
-      const currentWidth =
-        widthById.get(column.id) ?? LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].defaultWidthPx;
-      return sum + Math.max(0, currentWidth - minWidth);
-    }, 0);
-
-    if (shrinkableWidth <= 0) {
-      return widthById;
-    }
-
-    const reduceWidth = totalAdjustedWidth - contentWidthBudget;
-    for (const column of renderedLocalTrackColumns) {
-      const definition = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id];
-      const currentWidth = widthById.get(column.id) ?? definition.defaultWidthPx;
-      const capacity = Math.max(0, currentWidth - definition.minWidthPx);
-      if (capacity <= 0) continue;
-      const ratio = capacity / shrinkableWidth;
-      const nextWidth = currentWidth - reduceWidth * ratio;
-      widthById.set(column.id, Math.max(definition.minWidthPx, Math.round(nextWidth)));
-    }
-
-    return widthById;
-  }, [localTrackResponsiveWidth, renderedLocalTrackColumns]);
-
-  const localTrackGridTemplate = useMemo(() => {
-    const columnWidths = renderedLocalTrackColumns
-      .map((item) => {
-        const definition = LOCAL_TRACK_COLUMN_DEFINITIONS[item.id];
-        const widthPx =
-          resolvedLocalTrackColumnWidths.get(item.id) ??
-          normalizeLocalTrackColumnWidth(item.id, item.widthPx);
-        return `minmax(${definition.minWidthPx}px, ${widthPx}px)`;
-      })
-      .join(' ');
-    return `${LOCAL_TRACK_INDEX_COLUMN_WIDTH_PX}px ${columnWidths} ${LOCAL_TRACK_ACTIONS_COLUMN_WIDTH_PX}px`;
-  }, [renderedLocalTrackColumns, resolvedLocalTrackColumnWidths]);
 
   useEffect(() => {
     const header = localTrackListHeaderScrollRef.current;
@@ -2815,23 +2057,18 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     header.scrollLeft = body.scrollLeft;
   }, [localTrackGridTemplate, renderedLocalTrackColumns.length]);
 
-  const visibleLocalTrackColumnCount = visibleLocalTrackColumns.length;
+  const isUsingNativeBaseTracks = nativeBaseTracks != null;
 
   const filteredTracksTotal = filteredTracks.length;
 
   useEffect(() => {
-    if (viewMode === 'albums') {
-      setRenderedTrackLimit(filteredTracksTotal);
-      return;
-    }
-
     setRenderedTrackLimit((prev) => {
       if (!Number.isFinite(prev) || prev <= 0) {
         return Math.min(filteredTracksTotal, TRACK_RENDER_CHUNK_SIZE);
       }
       return Math.min(filteredTracksTotal, prev);
     });
-  }, [filteredTracksTotal, viewMode]);
+  }, [filteredTracksTotal]);
 
   const renderedTracks = useMemo(() => {
     if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
@@ -2864,119 +2101,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [renderedTracks, trackVirtualWindow.end, trackVirtualWindow.start]
   );
 
-  const albumVirtualWindow = useMemo(() => {
-    const viewportHeight = mainViewport.clientHeight > 0 ? mainViewport.clientHeight : 720;
-    const contentWidth = Math.max(240, (mainViewport.clientWidth || 900) - 40);
-    const columns = Math.max(
-      1,
-      Math.floor((contentWidth + ALBUM_GRID_GAP_PX) / (ALBUM_CARD_MIN_WIDTH_PX + ALBUM_GRID_GAP_PX))
-    );
-    const cardWidth =
-      (contentWidth - (columns - 1) * ALBUM_GRID_GAP_PX) / Math.max(1, columns);
-    const rowHeight = Math.max(180, cardWidth + ALBUM_CARD_VERTICAL_EXTRA_PX);
-    const totalRows = Math.ceil(sortedAlbums.length / columns);
-    const visibleRows = Math.max(1, Math.ceil(viewportHeight / rowHeight));
-    const startRow = Math.max(
-      0,
-      Math.floor(mainViewport.scrollTop / rowHeight) - ALBUM_WINDOW_OVERSCAN_ROWS
-    );
-    const endRow = Math.min(
-      totalRows,
-      startRow + visibleRows + ALBUM_WINDOW_OVERSCAN_ROWS * 2
-    );
-    const start = Math.min(sortedAlbums.length, startRow * columns);
-    const end = Math.min(sortedAlbums.length, endRow * columns);
-
-    return {
-      start,
-      end,
-      topSpacerPx: startRow * rowHeight,
-      bottomSpacerPx: Math.max(0, (totalRows - endRow) * rowHeight),
-    };
-  }, [
-    mainViewport.clientHeight,
-    mainViewport.clientWidth,
-    mainViewport.scrollTop,
-    sortedAlbums.length,
-  ]);
-
-  const virtualizedAlbums = useMemo(
-    () => sortedAlbums.slice(albumVirtualWindow.start, albumVirtualWindow.end),
-    [albumVirtualWindow.end, albumVirtualWindow.start, sortedAlbums]
-  );
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (viewMode !== 'albums') {
-      const releaseUrls: string[] = [];
-      setAlbums((previousAlbums) => {
-        let changed = false;
-        const nextAlbums = previousAlbums.map((albumItem) => {
-          if (!albumItem.cover) return albumItem;
-          const coverUrl = albumItem.cover.trim();
-          if (coverUrl) releaseUrls.push(coverUrl);
-          changed = true;
-          return { ...albumItem, cover: undefined };
-        });
-        return changed ? nextAlbums : previousAlbums;
-      });
-
-      requestedAlbumCoversRef.current.clear();
-      if (releaseUrls.length > 0) {
-        musicLibraryService.releaseCoverUrls(releaseUrls);
-      }
-      return;
-    }
-
-    if (albumOffscreenReclaimTimerRef.current != null) {
-      window.clearTimeout(albumOffscreenReclaimTimerRef.current);
-    }
-
-    albumOffscreenReclaimTimerRef.current = window.setTimeout(() => {
-      albumOffscreenReclaimTimerRef.current = null;
-
-      const keepAlbumKeys = new Set<string>(
-        virtualizedAlbums.map((albumItem) => albumKey(albumItem.album, albumItem.artist))
-      );
-      const releaseUrls: string[] = [];
-      const droppedAlbumKeys: string[] = [];
-
-      setAlbums((previousAlbums) => {
-        let changed = false;
-        const nextAlbums = previousAlbums.map((albumItem) => {
-          if (!albumItem.cover) return albumItem;
-
-          const key = albumKey(albumItem.album, albumItem.artist);
-          if (keepAlbumKeys.has(key)) return albumItem;
-
-          const coverUrl = albumItem.cover.trim();
-          if (coverUrl) releaseUrls.push(coverUrl);
-          droppedAlbumKeys.push(key);
-          changed = true;
-          return { ...albumItem, cover: undefined };
-        });
-
-        return changed ? nextAlbums : previousAlbums;
-      });
-
-      if (droppedAlbumKeys.length > 0) {
-        for (const key of droppedAlbumKeys) {
-          requestedAlbumCoversRef.current.delete(key);
-        }
-      }
-
-      if (releaseUrls.length > 0) {
-        musicLibraryService.releaseCoverUrls(releaseUrls);
-      }
-    }, 450);
-
-    return () => {
-      if (albumOffscreenReclaimTimerRef.current != null) {
-        window.clearTimeout(albumOffscreenReclaimTimerRef.current);
-        albumOffscreenReclaimTimerRef.current = null;
-      }
-    };
-  }, [isOpen, viewMode, virtualizedAlbums]);
+  const showTrackLoadHint =
+    !isUsingNativeBaseTracks &&
+    (isTrackChunkLoading || hasMoreTracks || renderedTracks.length < filteredTracksTotal);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -2993,7 +2120,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     if (!root) return;
     const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
 
-    if (viewMode !== 'albums' && memory) {
+    if (memory) {
       const anchor = memory.anchor;
       if (anchor?.kind === 'track') {
         const anchorIndex = filteredTracks.findIndex((track) => track.id === anchor.id);
@@ -3059,30 +2186,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const anchor = memory.anchor;
     if (anchor) {
-      if (anchor.kind === 'track') {
-        const selector = `[data-track-id="${escapeCssSelector(anchor.id)}"]`;
-        const element = root.querySelector<HTMLElement>(selector);
-        if (element) {
-          const rootRect = root.getBoundingClientRect();
-          const elementRect = element.getBoundingClientRect();
-          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
-          const targetScrollTop = elementTopInContent - anchor.offset;
-          setScrollTop(targetScrollTop);
-          mainScrollRestoreStateRef.current.done = true;
-          return;
-        }
-      } else if (anchor.kind === 'album') {
-        const selector = `[data-album-key="${escapeCssSelector(anchor.key)}"]`;
-        const element = root.querySelector<HTMLElement>(selector);
-        if (element) {
-          const rootRect = root.getBoundingClientRect();
-          const elementRect = element.getBoundingClientRect();
-          const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
-          const targetScrollTop = elementTopInContent - anchor.offset;
-          setScrollTop(targetScrollTop);
-          mainScrollRestoreStateRef.current.done = true;
-          return;
-        }
+      const selector = `[data-track-id="${escapeCssSelector(anchor.id)}"]`;
+      const element = root.querySelector<HTMLElement>(selector);
+      if (element) {
+        const rootRect = root.getBoundingClientRect();
+        const elementRect = element.getBoundingClientRect();
+        const elementTopInContent = elementRect.top - rootRect.top + root.scrollTop;
+        const targetScrollTop = elementTopInContent - anchor.offset;
+        setScrollTop(targetScrollTop);
+        mainScrollRestoreStateRef.current.done = true;
+        return;
       }
     }
 
@@ -3090,11 +2203,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       mainScrollRestoreStateRef.current.done = true;
     }
   }, [
-    albums.length,
-    artists.length,
     escapeCssSelector,
     filteredTracks,
-    genres.length,
     getMainScrollRoot,
     hasMoreTracks,
     isOpen,
@@ -3106,39 +2216,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     viewMode,
   ]);
 
-  // 閸楁洖鍤稉鎾圭帆 - 鐎佃壈鍩呴崚棰佺瑩鏉堟垼顕涢幆鍛淬€?
-  const handleAlbumClick = (albumName: string, artist: string) => {
-    if (embedded) {
-      // 閸︹暋mbedded濡€崇础娑撳绱濈€佃壈鍩呴崚棰佺瑩鏉堟垿銆夐棃?
-      navigateTo('album', { albumName, artist });
-    }
-  };
-
-  // 閸欏苯鍤稉鎾圭帆 - 閹绢厽鏂佹稉鎾圭帆
-  const handlePlayAlbum = async (album: string) => {
-    if (!onPlayNow) {
-      console.log('Play album:', album, '(embedded mode - no playback)');
-      return;
-    }
-    const albumTracks = await musicLibraryService.getTracksByAlbum(album);
-    if (albumTracks.length > 0) {
-      onPlayNow(albumTracks);
-    }
-  };
-
-  // 閹绢厽鏂侀懝鐑樻钩鐎?
-  const handlePlayArtist = async (artist: string) => {
-    if (!onPlayNow) {
-      console.log('Play artist:', artist, '(embedded mode - no playback)');
-      return;
-    }
-    const artistTracks = await musicLibraryService.getTracksByArtist(artist);
-    if (artistTracks.length > 0) {
-      onPlayNow(artistTracks);
-    }
-  };
-
-  // 閸欏苯鍤灞炬锤閿涙碍鍧婇崝鐘冲閺堝绻冨銈呮倵閻ㄥ嫭鐡曢弴鎻掑煂闂冪喎鍨敍灞肩矤闁鑵戦惃鍕摃閺囨彃绱戞慨瀣尡閺€?
+  // 闁告娲栭崵顔界▔閹惧湱甯?- 閻庝絻澹堥崺鍛村礆妫颁胶鐟╅弶鍫熷灱椤曟盯骞嗛崨娣偓?
+  // 闁告瑥鑻崵顔界▔閹惧湱甯?- 闁圭虎鍘介弬浣圭▔閹惧湱甯?
+  // 闁圭虎鍘介弬渚€鎳濋悜妯婚挬閻?
+  // 闁告瑥鑻崵顔碱潰鐏炵偓閿ら柨娑欑閸у﹪宕濋悩鍐差暡闁哄牆顦崇换鍐煥閵堝懏鍊甸柣銊ュ閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹顏堟晬鐏炶偐鐭ら梺顐㈩槷閼垫垿鎯冮崟顒傛憙闁哄洦褰冪槐鎴炴叏鐎ｎ偅灏￠柡鈧?
   const handleTrackDoubleClick = (track: Track, index: number) => {
     if (!onPlayNow) {
       console.log('Play track:', track.title, '(embedded mode - no playback)');
@@ -3152,7 +2233,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     onPlayNow(filteredTracks, startIndex);
   };
 
-  // 閸欘亝鎸遍弨鎯у礋妫ｆ牗鐡曢弴?
+  // 闁告瑯浜濋幐閬嶅绩閹冪濡絾鐗楅悺鏇㈠即?
   const handlePlaySingleTrack = (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onPlayNow) {
@@ -3164,14 +2245,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     onPlayNow([track]);
   };
 
-  // 閸欘亝鍧婇崝鐘插礋妫ｆ牗鐡曢弴鎻掑煂闂冪喎鍨?
+  // 闁告瑯浜濋崸濠囧礉閻樻彃绀嬪Λ锝嗙墬閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹?
   const handleAddSingleTrack = (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onAddToQueue) {
       console.log('Add track:', track.title, '(embedded mode - no queue)');
       return;
     }
-    console.log('閴?Adding single track:', track.title);
+    console.log('闁?Adding single track:', track.title);
     onAddToQueue([track]);
   };
 
@@ -3258,14 +2339,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         setStableHashJobs(nextJobs);
 
         const rawAudit = readJson<unknown[]>(STORAGE_KEYS.MUSIC_LIBRARY_CLOUD_FALLBACK_AUDIT_V1, []);
-        const normalizedAudit = Array.isArray(rawAudit)
-          ? rawAudit
-              .map((item) => normalizeStableFallbackAuditEntry(item))
-              .filter((item): item is StableFallbackAuditEntry => item !== null)
-          : [];
-        const filteredAudit = normalizedOwnerUid
-          ? normalizedAudit.filter((item) => item.request.ownerUid === normalizedOwnerUid)
-          : normalizedAudit;
+        const filteredAudit = collectStableFallbackAuditEntries(
+          rawAudit,
+          normalizedOwnerUid || undefined
+        );
         setStableFallbackAudit(buildStableFallbackAuditSnapshot(filteredAudit));
       } catch (error) {
         console.warn('Failed to load stable queue data:', error);
@@ -3403,13 +2480,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     }
   }, [loadStableLibraryEntries, loadStableQueueData, searchQuery, showStableQueuePanel]);
 
-  // 婢跺嫮鎮婂灞炬锤閸欐娊鏁懣婊冨礋
+  // 濠㈣泛瀚幃濠傤潰鐏炵偓閿ら柛娆愬▕閺侇參鎳ｅ鍐ㄧ
   const handleTrackContextMenu = (track: Track, index: number, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
     const playTracks = filteredTracks;
     const playStartIndex = playTracks.findIndex((candidate) => candidate.id === track.id);
+    const localFilePath = String(track.filePath || track.path || track.originalPath || '').trim();
 
     const menuItems: ContextMenuItem[] = [
       {
@@ -3429,22 +2507,34 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       },
       { divider: true } as ContextMenuItem,
       {
+        label: t('pages.music-library.contextMenu.openInFileManager'),
+        icon: '📂',
+        onClick: () => {
+          if (!localFilePath) return;
+          void musicLibraryService.openInFileManager(localFilePath).then((opened) => {
+            if (!opened) {
+              setErrorMessage(t('pages.music-library.contextMenu.openInFileManagerFailed'));
+            }
+          });
+        },
+        disabled: !localFilePath,
+      },
+      { divider: true } as ContextMenuItem,
+      {
         label: t('pages.music-library.contextMenu.viewAlbum'),
         icon: 'A',
         onClick: () => {
-          if (track.album && embedded) {
-            handleAlbumClick(track.album, track.artist || '');
-          }
+          if (!track.album) return;
+          handleApplyQuickBaseFilter('album', track.album);
         },
-        disabled: !track.album || !embedded,
+        disabled: !track.album,
       },
       {
         label: t('pages.music-library.contextMenu.viewArtist'),
         icon: 'R',
         onClick: () => {
-          if (track.artist) {
-            handleViewModeChange('artists', { artist: track.artist });
-          }
+          if (!track.artist) return;
+          handleApplyQuickBaseFilter('artist', track.artist);
         },
         disabled: !track.artist,
       },
@@ -3457,49 +2547,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
   };
 
-  // 婢跺嫮鎮婃稉鎾圭帆閸欐娊鏁懣婊冨礋
-  const handleAlbumContextMenu = (album: string, artist: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const menuItems: ContextMenuItem[] = [
-      {
-        label: t('pages.music-library.contextMenu.viewAlbum'),
-        icon: 'A',
-        onClick: () => handleAlbumClick(album, artist),
-        disabled: !embedded,
-      },
-      {
-        label: t('pages.music-library.contextMenu.playAlbum'),
-        icon: '>',
-        onClick: () => handlePlayAlbum(album),
-      },
-      {
-        label: t('pages.music-library.contextMenu.addToQueue'),
-        icon: '+',
-        onClick: async () => {
-          const albumTracks = await musicLibraryService.getTracksByAlbum(album);
-          onAddToQueue?.(albumTracks);
-        },
-      },
-      { divider: true } as ContextMenuItem,
-      {
-        label: t('pages.music-library.contextMenu.viewArtist'),
-        icon: 'R',
-        onClick: () => {
-          handleViewModeChange('artists', { artist: artist });
-        },
-      },
-    ];
-
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: menuItems,
-    });
-  };
-
-  // 閺嶇厧绱￠崠鏍ㄦ瀮娴犺泛銇囩亸?
+  // 濠㈣泛瀚幃濠冪▔閹惧湱甯嗛柛娆愬▕閺侇參鎳ｅ鍐ㄧ
+  // 闁哄秶鍘х槐锟犲礌閺嶃劍鐎ù鐘烘硾閵囧洨浜?
   const formatStableUpdatedAt = useCallback(
     (timestampMs?: number) => {
       if (!timestampMs || !Number.isFinite(timestampMs)) {
@@ -3523,17 +2572,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
   }, []);
 
-  // 閺嶇厧绱￠崠鏍ㄦ闂€?
-  const formatTotalDuration = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (hours > 0) {
-      return t('pages.music-library.duration.hoursMinutes', { hours, minutes });
-    }
-    return t('pages.music-library.duration.minutes', { minutes });
-  };
+  // 闁哄秶鍘х槐锟犲礌閺嶃劍顦ч梻鈧?
+  const formatTotalDuration = useCallback(
+    (seconds: number): string => {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (hours > 0) {
+        return t('pages.music-library.duration.hoursMinutes', { hours, minutes });
+      }
+      return t('pages.music-library.duration.minutes', { minutes });
+    },
+    [t]
+  );
 
-  // 閺嶇厧绱￠崠鏍缓闁挻妞傞梹?
+  // 闁哄秶鍘х槐锟犲礌閺嶎剙缂撻梺顒佹尰濡炲倿姊?
   const formatDuration = useCallback((seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -3769,6 +2821,94 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     });
   }, [cleanupConfirmTarget, t]);
 
+  const footerStatItems = useMemo<MusicLibraryFooterStatItem[]>(() => {
+    if (!isOpen) return [];
+
+    if (librarySourceMode === 'stable') {
+      return [
+        {
+          value: String(stableLibraryStats.totalEntries),
+          unit: t('pages.music-library.stable.stats.entries'),
+        },
+        {
+          value: String(stableLibraryStats.localReady),
+          unit: t('pages.music-library.stable.stats.localReady'),
+        },
+        {
+          value: String(stableLibraryStats.inCloud),
+          unit: t('pages.music-library.stable.stats.inCloud'),
+        },
+        {
+          value: String(stableLibraryStats.missing),
+          unit: t('pages.music-library.stable.stats.missing'),
+        },
+      ];
+    }
+
+    return [
+      {
+        value: String(libraryStats.totalTracks),
+        unit: t('pages.music-library.stats.tracksUnit'),
+      },
+      {
+        value: String(libraryStats.totalArtists),
+        unit: t('pages.music-library.stats.artistsUnit'),
+      },
+      {
+        value: String(libraryStats.totalAlbums),
+        unit: t('pages.music-library.stats.albumsUnit'),
+      },
+      {
+        value: formatFileSize(libraryStats.totalSize),
+      },
+      {
+        value: formatTotalDuration(libraryStats.totalDuration),
+      },
+    ];
+  }, [
+    formatFileSize,
+    formatTotalDuration,
+    isOpen,
+    librarySourceMode,
+    libraryStats.totalAlbums,
+    libraryStats.totalArtists,
+    libraryStats.totalSize,
+    libraryStats.totalDuration,
+    libraryStats.totalTracks,
+    stableLibraryStats.inCloud,
+    stableLibraryStats.localReady,
+    stableLibraryStats.missing,
+    stableLibraryStats.totalEntries,
+    t,
+  ]);
+
+  useEffect(() => {
+    const detail: MusicLibraryStatsChangeDetail = {
+      mode: librarySourceMode,
+      items: footerStatItems,
+    };
+
+    window.dispatchEvent(
+      new CustomEvent<MusicLibraryStatsChangeDetail>(MUSIC_LIBRARY_STATS_CHANGE_EVENT, {
+        detail,
+      })
+    );
+  }, [footerStatItems, librarySourceMode]);
+
+  useEffect(
+    () => () => {
+      window.dispatchEvent(
+        new CustomEvent<MusicLibraryStatsChangeDetail>(MUSIC_LIBRARY_STATS_CHANGE_EVENT, {
+          detail: {
+            mode: 'local',
+            items: [],
+          },
+        })
+      );
+    },
+    []
+  );
+
   if (!isOpen) return null;
 
   const libraryContent = (
@@ -3800,179 +2940,450 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
       )}
 
-      <div className="music-library-toolbar">
-        <div className="music-library-actions">
-          {librarySourceMode === 'local' ? (
-            <>
-              <button
-                className="music-library-btn"
-                onClick={() => setShowPathsManager(true)}
-                title={t('pages.music-library.paths.manageTitle')}
-              >
-                <span>{t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
-              </button>
-              <button className="music-library-btn" onClick={() => setShowColumnSettings(true)}>
-                {t('pages.music-library.columns.button')}
-              </button>
-              <button
-                className="music-library-btn"
-                onClick={() => setShowClearConfirm(true)}
-                disabled={libraryStats.totalTracks === 0}
-              >
-                {t('common.action.clear')}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                className="music-library-btn"
-                onClick={() => {
-                  void loadStableLibraryEntries(searchQuery);
-                }}
-                disabled={isStableEntriesLoading}
-              >
-                {t('common.action.refresh')}
-              </button>
-              <button className="music-library-btn" onClick={() => setShowStableQueuePanel(true)}>
-                {t('pages.music-library.stable.queue.button')}
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="music-library-search">
-          <input
-            type="text"
-            placeholder={
-              librarySourceMode === 'local'
-                ? t('pages.music-library.search.placeholder')
-                : t('pages.music-library.stable.search.placeholder')
-            }
-            value={searchQuery}
-            onChange={(e) => handleSearchInputChange(e.target.value)}
-          />
-          <span className="music-library-search-icon">🔍</span>
-        </div>
-
-        {librarySourceMode === 'local' && (
-        <div className="music-library-sort">
-          <label htmlFor="sort-select">{t('pages.music-library.sort.label')}</label>
-          <select
-            id="sort-select"
-            className="music-library-sort-select"
-            value={sortBy}
-            onChange={(e) => handleSort(e.target.value as typeof sortBy)}
-          >
-            <option value="default">{t('pages.music-library.sort.option.default')}</option>
-            {/* Albums 鐟欏棗娴橀崣顏呮▔缁€杞扮瑩鏉堟垵鎷伴懝鐑樻钩鐎硅埖甯撴惔?*/}
-            {viewMode !== 'albums' && <option value="title">{t('pages.music-library.sort.option.title')}</option>}
-            <option value="artist">{t('pages.music-library.sort.option.artist')}</option>
-            <option value="album">{t('pages.music-library.sort.option.album')}</option>
-            {viewMode !== 'albums' && (
-              <option value="duration">{t('pages.music-library.sort.option.duration')}</option>
+      <div
+        className="music-library-toolbar-region"
+        ref={librarySourceMode === 'local' ? baseToolbarRegionRef : undefined}
+      >
+        <div className="music-library-toolbar">
+          <div className="music-library-actions">
+            {librarySourceMode === 'local' ? (
+              <div className="music-library-base-toolbar-left">
+                <div className="music-library-base-view-switch" role="group" aria-label="视图模式">
+                  <button
+                    className={`music-library-base-view-btn ${baseView === 'table' ? 'active' : ''}`}
+                    onClick={() => setBaseView('table')}
+                  >
+                    表格
+                  </button>
+                  <button
+                    className={`music-library-base-view-btn ${baseView === 'card' ? 'active' : ''}`}
+                    onClick={() => setBaseView('card')}
+                  >
+                    卡片
+                  </button>
+                </div>
+                <span className="music-library-base-results">共 {filteredTracksTotal} 首</span>
+              </div>
+            ) : (
+              <>
+                <button
+                  className="music-library-btn"
+                  onClick={() => {
+                    void loadStableLibraryEntries(searchQuery);
+                  }}
+                  disabled={isStableEntriesLoading}
+                >
+                  {t('common.action.refresh')}
+                </button>
+                <button className="music-library-btn" onClick={() => setShowStableQueuePanel(true)}>
+                  {t('pages.music-library.stable.queue.button')}
+                </button>
+              </>
             )}
-            {viewMode !== 'albums' && <option value="year">{t('pages.music-library.sort.option.year')}</option>}
-          </select>
-          <button
-            className={`music-library-sort-order-btn ${sortBy === 'default' ? 'disabled' : ''}`}
-            onClick={() =>
-              sortBy !== 'default' && setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
-            }
-            disabled={sortBy === 'default'}
-            title={
-              sortBy === 'default'
-                ? t('pages.music-library.sortOrder.disabledTitle')
-                : sortOrder === 'asc'
-                  ? t('pages.music-library.sortOrder.ascTitle')
-                  : t('pages.music-library.sortOrder.descTitle')
-            }
-          >
-            {sortOrder === 'asc' ? '↑' : '↓'}
-          </button>
-          <span
-            className="music-library-sort-hint"
-            title={
-              sortBy === 'default'
-                ? t('pages.music-library.sortHint.defaultTitle')
-                : t('pages.music-library.sortHint.playTitle')
-            }
-            style={{ opacity: sortBy === 'default' ? 0.4 : 1 }}
-          >
-            ▶
-          </span>
-        </div>
-        )}
+          </div>
 
-        {librarySourceMode === 'local' && (
-        <div className="music-library-view-modes">
-          <button
-            className={`music-library-view-btn ${viewMode === 'all' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('all')}
-          >
-            {t('pages.music-library.viewMode.all')}
-          </button>
-          <button
-            className={`music-library-view-btn ${viewMode === 'albums' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('albums')}
-          >
-            {t('pages.music-library.viewMode.albums')}
-          </button>
-          <button
-            className={`music-library-view-btn ${viewMode === 'artists' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('artists')}
-          >
-            {t('pages.music-library.viewMode.artists')}
-          </button>
-          <button
-            className={`music-library-view-btn ${viewMode === 'genres' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('genres')}
-          >
-            {t('pages.music-library.viewMode.genres')}
-          </button>
-        </div>
-        )}
+          <div className="music-library-search">
+            <input
+              type="text"
+              placeholder={
+                librarySourceMode === 'local'
+                  ? t('pages.music-library.search.placeholder')
+                  : t('pages.music-library.stable.search.placeholder')
+              }
+              value={searchQuery}
+              onChange={(e) => handleSearchInputChange(e.target.value)}
+            />
+            <span className="music-library-search-icon">🔍</span>
+          </div>
 
-        <div className="music-library-stats">
-          {librarySourceMode === 'local' ? (
-            <>
-              <div className="music-library-stat">
-                <strong>{libraryStats.totalTracks}</strong> {t('pages.music-library.stats.tracksUnit')}
-              </div>
-              <div className="music-library-stat">
-                <strong>{libraryStats.totalArtists}</strong> {t('pages.music-library.stats.artistsUnit')}
-              </div>
-              <div className="music-library-stat">
-                <strong>{libraryStats.totalAlbums}</strong> {t('pages.music-library.stats.albumsUnit')}
-              </div>
-              <div className="music-library-stat">
-                <strong>{formatFileSize(libraryStats.totalSize)}</strong>
-              </div>
-              <div className="music-library-stat">
-                <strong>{formatTotalDuration(libraryStats.totalDuration)}</strong>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="music-library-stat">
-                <strong>{stableLibraryStats.totalEntries}</strong>{' '}
-                {t('pages.music-library.stable.stats.entries')}
-              </div>
-              <div className="music-library-stat">
-                <strong>{stableLibraryStats.localReady}</strong>{' '}
-                {t('pages.music-library.stable.stats.localReady')}
-              </div>
-              <div className="music-library-stat">
-                <strong>{stableLibraryStats.inCloud}</strong>{' '}
-                {t('pages.music-library.stable.stats.inCloud')}
-              </div>
-              <div className="music-library-stat">
-                <strong>{stableLibraryStats.missing}</strong>{' '}
-                {t('pages.music-library.stable.stats.missing')}
-              </div>
-            </>
+          {librarySourceMode === 'local' && (
+            <div className="music-library-base-toolbar-actions">
+              <button
+                className={`music-library-btn ${showBaseSortPanel ? 'is-active' : ''}`}
+                onClick={() => toggleBaseControlPanel('sort')}
+              >
+                排序
+              </button>
+              <button
+                className={`music-library-btn ${showBaseFilterPanel ? 'is-active' : ''}`}
+                onClick={() => toggleBaseControlPanel('filter')}
+              >
+                筛选
+              </button>
+              <button
+                className={`music-library-btn ${showColumnSettings ? 'is-active' : ''}`}
+                onClick={() => toggleBaseControlPanel('properties')}
+              >
+                属性
+              </button>
+            </div>
           )}
         </div>
+
+        {librarySourceMode === 'local' &&
+          (showBaseSortPanel || showBaseFilterPanel || showColumnSettings) && (
+            <div className="music-library-base-popover-region">
+              {showBaseSortPanel && (
+                <div className="music-library-base-popover-panel" role="dialog" aria-label="排序面板">
+                  <div className="music-library-base-popover-section">
+                    <div className="music-library-base-popover-title">Group by</div>
+                    {baseGroupByRules.length === 0 ? (
+                      <div className="music-library-base-popover-note">未设置分组</div>
+                    ) : (
+                      <div className="music-library-base-rule-list">
+                        {baseGroupByRules.map((rule, index) => (
+                          <div className="music-library-base-popover-row" key={rule.id}>
+                            <select
+                              className="music-library-sort-select"
+                              value={rule.field}
+                              onChange={(event) =>
+                                updateBaseGroupByRule(rule.id, {
+                                  field: event.target.value as MusicLibraryBaseGroupRule['field'],
+                                })
+                              }
+                            >
+                              {MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS.map((field) => (
+                                <option key={field} value={field}>
+                                  {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[field]}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              className="music-library-sort-select"
+                              value={rule.order}
+                              onChange={(event) =>
+                                updateBaseGroupByRule(rule.id, {
+                                  order: event.target.value as MusicLibraryBaseGroupRule['order'],
+                                })
+                              }
+                            >
+                              <option value="asc">A → Z</option>
+                              <option value="desc">Z → A</option>
+                            </select>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="上移"
+                              onClick={() => moveBaseGroupByRule(rule.id, -1)}
+                              disabled={index === 0}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="下移"
+                              onClick={() => moveBaseGroupByRule(rule.id, 1)}
+                              disabled={index === baseGroupByRules.length - 1}
+                            >
+                              ↓
+                            </button>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="移除分组"
+                              onClick={() => removeBaseGroupByRule(rule.id)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button className="music-library-btn" onClick={addBaseGroupByRule}>
+                      + 添加分组
+                    </button>
+                  </div>
+                  <div className="music-library-base-popover-section">
+                    <div className="music-library-base-popover-title">Sort by</div>
+                    {baseSortRules.length === 0 ? (
+                      <div className="music-library-base-popover-note">未设置排序</div>
+                    ) : (
+                      <div className="music-library-base-rule-list">
+                        {baseSortRules.map((rule, index) => (
+                          <div className="music-library-base-popover-row" key={rule.id}>
+                            <select
+                              className="music-library-sort-select"
+                              value={rule.field}
+                              onChange={(event) =>
+                                updateBaseSortRule(rule.id, {
+                                  field: event.target.value as MusicLibraryBaseSortRule['field'],
+                                })
+                              }
+                            >
+                              {MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS.map((field) => (
+                                <option key={field} value={field}>
+                                  {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[field]}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              className="music-library-sort-select"
+                              value={rule.order}
+                              onChange={(event) =>
+                                updateBaseSortRule(rule.id, {
+                                  order: event.target.value as MusicLibraryBaseSortRule['order'],
+                                })
+                              }
+                            >
+                              <option value="asc">A → Z</option>
+                              <option value="desc">Z → A</option>
+                            </select>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="上移"
+                              onClick={() => moveBaseSortRule(rule.id, -1)}
+                              disabled={index === 0}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="下移"
+                              onClick={() => moveBaseSortRule(rule.id, 1)}
+                              disabled={index === baseSortRules.length - 1}
+                            >
+                              ↓
+                            </button>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="移除排序"
+                              onClick={() => removeBaseSortRule(rule.id)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button className="music-library-btn" onClick={addBaseSortRule}>
+                      + 添加排序
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showBaseFilterPanel && (
+                <div className="music-library-base-popover-panel" role="dialog" aria-label="筛选面板">
+                  <div className="music-library-base-popover-section">
+                    <div className="music-library-base-popover-title">筛选规则组</div>
+                    <div className="music-library-base-filter-editor">
+                      <select
+                        className="music-library-sort-select"
+                        value={baseFilterJoinOperator}
+                        onChange={(event) =>
+                          setBaseFilterJoinOperator(
+                            event.target.value as MusicLibraryBaseLogicalOperator
+                          )
+                        }
+                      >
+                        <option value="and">组之间 AND</option>
+                        <option value="or">组之间 OR</option>
+                      </select>
+                      <select
+                        className="music-library-sort-select"
+                        value={activeBaseFilterGroupId ?? ''}
+                        onChange={(event) =>
+                          setActiveBaseFilterGroupId(event.target.value || null)
+                        }
+                      >
+                        <option value="">选择分组</option>
+                        {baseFilterGroups.map((group, index) => (
+                          <option key={group.id} value={group.id}>
+                            规则组 {index + 1}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="music-library-btn" onClick={handleAddBaseFilterGroup}>
+                        + 分组
+                      </button>
+                    </div>
+
+                    <div className="music-library-base-filter-editor">
+                      <select
+                        className="music-library-sort-select"
+                        value={baseFilterField}
+                        onChange={(event) =>
+                          setBaseFilterField(event.target.value as MusicLibraryBaseField)
+                        }
+                      >
+                        {MUSIC_LIBRARY_BASE_FILTER_FIELDS.map((field) => (
+                          <option key={field} value={field}>
+                            {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[field]}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        className="music-library-sort-select"
+                        value={baseFilterRuleOperator}
+                        onChange={(event) =>
+                          setBaseFilterRuleOperator(event.target.value as MusicLibraryBaseOperator)
+                        }
+                      >
+                        {MUSIC_LIBRARY_BASE_OPERATORS.map((operator) => (
+                          <option key={operator} value={operator}>
+                            {MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP[operator]}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={baseFilterValue}
+                        onChange={(event) => setBaseFilterValue(event.target.value)}
+                        placeholder="值"
+                        className="music-library-base-filter-input"
+                      />
+                      <button className="music-library-btn" onClick={handleAddBaseFilter}>
+                        添加筛选
+                      </button>
+                      <button
+                        className="music-library-btn"
+                        onClick={handleClearBaseFilters}
+                        disabled={baseFilterGroups.length === 0}
+                      >
+                        清空筛选
+                      </button>
+                    </div>
+                  </div>
+
+                  {baseFilterGroups.length > 0 && (
+                    <div className="music-library-base-filter-groups">
+                      {baseFilterGroups.map((group, index) => (
+                        <div className="music-library-base-filter-group" key={group.id}>
+                          <div className="music-library-base-filter-group-header">
+                            <strong>规则组 {index + 1}</strong>
+                            <select
+                              className="music-library-sort-select"
+                              value={group.operator}
+                              onChange={(event) =>
+                                handleUpdateBaseFilterGroupOperator(
+                                  group.id,
+                                  event.target.value as MusicLibraryBaseLogicalOperator
+                                )
+                              }
+                            >
+                              <option value="and">组内 AND</option>
+                              <option value="or">组内 OR</option>
+                            </select>
+                            <button
+                              className="music-library-base-popover-icon-btn"
+                              title="移除分组"
+                              onClick={() => handleRemoveBaseFilterGroup(group.id)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          {group.filters.length > 0 ? (
+                            <div className="music-library-base-filter-chips">
+                              {group.filters.map((filter) => {
+                                const valueText = filter.value?.trim() ? ` ${filter.value}` : '';
+                                return (
+                                  <button
+                                    key={filter.id}
+                                    className="music-library-base-filter-chip"
+                                    onClick={() => handleRemoveBaseFilter(group.id, filter.id)}
+                                    title="移除筛选"
+                                  >
+                                    {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[filter.field]}{' '}
+                                    {MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP[filter.operator]}
+                                    {valueText} ×
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="music-library-base-popover-note">该分组暂无条件</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {showColumnSettings && (
+                <div
+                  className="music-library-base-popover-panel music-library-base-properties-popover"
+                  role="dialog"
+                  aria-label="属性面板"
+                >
+                  <div className="music-library-base-property-search">
+                    <input
+                      type="text"
+                      value={propertySearchQuery}
+                      onChange={(event) => setPropertySearchQuery(event.target.value)}
+                      placeholder="查找属性..."
+                    />
+                  </div>
+                  <div className="music-library-column-list music-library-base-property-list">
+                    {filteredPropertyColumns.length === 0 ? (
+                      <div className="music-library-modal-empty">未找到匹配属性</div>
+                    ) : (
+                      filteredPropertyColumns.map((column) => {
+                        const columnIndex = localTrackColumnSettings.findIndex(
+                          (item) => item.id === column.id
+                        );
+
+                        return (
+                          <div className="music-library-column-item" key={column.id}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={column.visible}
+                                disabled={column.visible && visibleLocalTrackColumnCount <= 1}
+                                onChange={() => toggleLocalTrackColumn(column.id)}
+                              />
+                              <span>{t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}</span>
+                            </label>
+                            <div className="music-library-column-actions">
+                              <button
+                                className="music-library-column-move"
+                                disabled={columnIndex <= 0}
+                                title={t('pages.music-library.columns.action.moveUp')}
+                                onClick={() => moveLocalTrackColumn(column.id, -1)}
+                              >
+                                ↑
+                              </button>
+                              <button
+                                className="music-library-column-move"
+                                disabled={columnIndex === localTrackColumnSettings.length - 1}
+                                title={t('pages.music-library.columns.action.moveDown')}
+                                onClick={() => moveLocalTrackColumn(column.id, 1)}
+                              >
+                                ↓
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div className="music-library-base-property-footer">
+                    <button className="music-library-btn" onClick={resetLocalTrackColumns}>
+                      重置属性
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
       </div>
+
+      {librarySourceMode === 'local' && (
+        <div className="music-library-local-ops">
+          <button
+            className="music-library-btn"
+            onClick={() => setShowPathsManager(true)}
+            title={t('pages.music-library.paths.manageTitle')}
+          >
+            <span>{t('pages.music-library.paths.button', { count: libraryPaths.length })}</span>
+          </button>
+          <button
+            className="music-library-btn"
+            onClick={() => setShowClearConfirm(true)}
+            disabled={libraryStats.totalTracks === 0}
+          >
+            {t('common.action.clear')}
+          </button>
+        </div>
+      )}
 
       {librarySourceMode === 'stable' && (
         <div className="music-library-stable-filters">
@@ -4015,12 +3426,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
           <div className="music-library-main music-library-main-stable" ref={mainScrollRef}>
             {isStableEntriesLoading ? (
               <div className="music-library-empty">
-                <div className="music-library-empty-icon">…</div>
+                <div className="music-library-empty-icon">⏳</div>
                 <div className="music-library-empty-text">{t('pages.music-library.stable.loading')}</div>
               </div>
             ) : sortedStableEntries.length === 0 ? (
               <div className="music-library-empty">
-                <div className="music-library-empty-icon">★</div>
+                <div className="music-library-empty-icon">☁️</div>
                 <div className="music-library-empty-text">{t('pages.music-library.stable.empty.title')}</div>
                 <div className="music-library-empty-subtext">
                   {t('pages.music-library.stable.empty.hint')}
@@ -4124,122 +3535,50 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             )}
           </div>
         ) : (
-          <>
-        {(viewMode === 'artists' || viewMode === 'genres') && (
-          <div className="music-library-sidebar" ref={sidebarScrollRef} onScroll={handleSidebarScroll}>
-            {viewMode === 'artists' && (
-              <div className="music-library-sidebar-section">
-                <div className="music-library-sidebar-title">{t('pages.music-library.sidebar.artists')}</div>
-                {artists.map((artist) => (
-                  <div
-                    key={artist}
-                    data-artist-name={artist}
-                    className={`music-library-sidebar-item ${selectedArtist === artist ? 'selected' : ''}`}
-                    onClick={() => setSelectedArtist(selectedArtist === artist ? null : artist)}
-                    onDoubleClick={() => handlePlayArtist(artist)}
-                  >
-                    <span>{artist}</span>
-                    <span className="music-library-sidebar-count">
-                      {tracks.filter((t) => t.artist === artist).length}
-                    </span>
-                  </div>
-                ))}
+          <div className="music-library-main music-library-main-local" ref={mainScrollRef}>
+            {libraryStats.totalTracks === 0 ? (
+              <div className="music-library-empty">
+                <div className="music-library-empty-icon">🎵</div>
+                <div className="music-library-empty-text">{t('pages.music-library.empty.title')}</div>
+                <button className="music-library-btn" onClick={handleScanFolder}>
+                  {t('pages.music-library.empty.scanButton')}
+                </button>
               </div>
-            )}
+            ) : (
+              <>
 
-            {viewMode === 'genres' && (
-              <div className="music-library-sidebar-section">
-                <div className="music-library-sidebar-title">{t('pages.music-library.sidebar.genres')}</div>
-                {genres.map((genre) => (
-                  <div
-                    key={genre}
-                    data-genre-name={genre}
-                    className={`music-library-sidebar-item ${selectedGenre === genre ? 'selected' : ''}`}
-                    onClick={() => setSelectedGenre(selectedGenre === genre ? null : genre)}
-                  >
-                    <span>{genre}</span>
-                    <span className="music-library-sidebar-count">
-                      {tracks.filter((t) => t.genre === genre).length}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+              {baseView === 'card' && (
+                <div className="music-library-card-list">
+                  {renderedTracks.map((track, index) => {
+                    const isPlayPending =
+                      pendingPlayTrackIdentity !== null &&
+                      resolveTrackIdentity(track) === pendingPlayTrackIdentity;
+                    const normalizedArtist = String(track.artist || '').trim();
+                    const normalizedAlbum = String(track.album || '').trim();
+                    const subtitle = normalizedAlbum
+                      ? `${normalizedArtist || t('common.unknown.artist')} · ${normalizedAlbum}`
+                      : normalizedArtist || t('common.unknown.artist');
 
-          <div className="music-library-main" ref={mainScrollRef}>
-          {libraryStats.totalTracks === 0 ? (
-            <div className="music-library-empty">
-              <div className="music-library-empty-icon">♪</div>
-              <div className="music-library-empty-text">{t('pages.music-library.empty.title')}</div>
-              <button className="music-library-btn" onClick={handleScanFolder}>
-                {t('pages.music-library.empty.scanButton')}
-              </button>
-            </div>
-          ) : (
-            <>
-              {viewMode === 'albums' && (
-                <>
-                  {albumVirtualWindow.topSpacerPx > 0 && (
-                    <div
-                      className="music-library-virtual-spacer"
-                      style={{ height: `${albumVirtualWindow.topSpacerPx}px` }}
-                      aria-hidden="true"
-                    />
-                  )}
-                  <div className="music-library-grid">
-                  {virtualizedAlbums.map(({ album, artist, cover }) => {
-                    const key = albumKey(album, artist);
                     return (
-                      <div
-                        key={`${album}-${artist}`}
-                        ref={getAlbumCardRef(key)}
-                        data-album-key={key}
-                        className="music-library-album-card"
-                        onClick={() => handleAlbumClick(album, artist)}
-                        onDoubleClick={() => handlePlayAlbum(album)}
-                        onContextMenu={(e) => handleAlbumContextMenu(album, artist, e)}
-                        title={t('pages.music-library.albums.cardTooltip')}
-                      >
-                        <div className="music-library-album-cover">
-                          {cover ? (
-                            <img
-                              src={cover}
-                              alt={album}
-                              loading="lazy"
-                              decoding="async"
-                              onLoad={(event) => {
-                                musicLibraryService.reportCoverDecoded(
-                                  cover,
-                                  event.currentTarget.naturalWidth,
-                                  event.currentTarget.naturalHeight
-                                );
-                              }}
-                            />
-                          ) : (
-                            '♫'
-                          )}
-                        </div>
-                        <div className="music-library-album-title">{album}</div>
-                        <div className="music-library-album-artist">{artist}</div>
-                      </div>
+                      <LocalTrackCard
+                        key={`card-${track.id}`}
+                        track={track}
+                        index={index}
+                        isPlayPending={isPlayPending}
+                        subtitle={subtitle}
+                        onTrackDoubleClick={handleTrackDoubleClick}
+                        onTrackContextMenu={handleTrackContextMenu}
+                        onPlaySingleTrack={onPlayNow ? handlePlaySingleTrack : undefined}
+                        onAddSingleTrack={onAddToQueue ? handleAddSingleTrack : undefined}
+                        playButtonTitle={t('pages.music-library.tracks.action.playOneTitle')}
+                        addButtonTitle={t('pages.music-library.tracks.action.addOneTitle')}
+                      />
                     );
                   })}
-                  </div>
-                  {albumVirtualWindow.bottomSpacerPx > 0 && (
-                    <div
-                      className="music-library-virtual-spacer"
-                      style={{ height: `${albumVirtualWindow.bottomSpacerPx}px` }}
-                      aria-hidden="true"
-                    />
-                  )}
-                </>
+                </div>
               )}
-
-              {(viewMode === 'all' || viewMode === 'artists' || viewMode === 'genres') && (
                 <div
-                  className={`music-library-list${resizingLocalTrackColumnId ? ' is-resizing-columns' : ''}`}
+                  className={`music-library-list${resizingLocalTrackColumnId ? ' is-resizing-columns' : ''}${baseView === 'card' ? ' is-hidden' : ''}`}
                   ref={localTrackListLayoutRef}
                 >
                   <div className="music-library-list-header-shell">
@@ -4370,7 +3709,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                   )}
                     </div>
                   </div>
-                  {(isTrackChunkLoading || hasMoreTracks || renderedTracks.length < filteredTracksTotal) && (
+                  {showTrackLoadHint && (
                     <div className="music-library-track-load-hint" role="status" aria-live="polite">
                       {isTrackChunkLoading
                         ? t('pages.music-library.loading.tracksChunk')
@@ -4382,73 +3721,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           : t('pages.music-library.loading.scrollToLoadMore')}
                     </div>
                   )}
+                  {isNativeBaseTracksLoading && (
+                    <div className="music-library-track-load-hint" role="status" aria-live="polite">
+                      {t('pages.music-library.loading.tracksChunk')}
+                    </div>
+                  )}
                 </div>
-              )}
-            </>
-          )}
-        </div>
-          </>
+              </>
+            )}
+          </div>
         )}
       </div>
-
-      {showColumnSettings && (
-        <div className="music-library-modal-overlay" onClick={() => setShowColumnSettings(false)}>
-          <div
-            className="music-library-modal music-library-columns-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="music-library-modal-header">
-              <h3>{t('pages.music-library.columns.modal.title')}</h3>
-              <div className="music-library-modal-header-actions">
-                <button className="music-library-btn" onClick={resetLocalTrackColumns}>
-                  {t('pages.music-library.columns.modal.reset')}
-                </button>
-                <button className="music-library-modal-close" onClick={() => setShowColumnSettings(false)}>
-                  X
-                </button>
-              </div>
-            </div>
-            <div className="music-library-modal-body">
-              <div className="music-library-modal-description">
-                {t('pages.music-library.columns.modal.description')}
-              </div>
-              <div className="music-library-column-list">
-                {localTrackColumnSettings.map((column, index) => (
-                  <div className="music-library-column-item" key={column.id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={column.visible}
-                        disabled={column.visible && visibleLocalTrackColumnCount <= 1}
-                        onChange={() => toggleLocalTrackColumn(column.id)}
-                      />
-                      <span>{t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}</span>
-                    </label>
-                    <div className="music-library-column-actions">
-                      <button
-                        className="music-library-column-move"
-                        disabled={index === 0}
-                        title={t('pages.music-library.columns.action.moveUp')}
-                        onClick={() => moveLocalTrackColumn(column.id, -1)}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        className="music-library-column-move"
-                        disabled={index === localTrackColumnSettings.length - 1}
-                        title={t('pages.music-library.columns.action.moveDown')}
-                        onClick={() => moveLocalTrackColumn(column.id, 1)}
-                      >
-                        ↓
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showStableQueuePanel && (
         <div className="music-library-modal-overlay" onClick={() => setShowStableQueuePanel(false)}>
@@ -4734,7 +4017,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
       )}
 
-      {/* 濞撳懐鈹栫涵顔款吇鐎电鐦藉?*/}
+      {/* 婵炴挸鎳愰埞鏍兜椤旀鍚囬悗鐢殿攰閻﹁棄顩?*/}
       <ConfirmDialog
         isOpen={showClearConfirm}
         title={t('pages.music-library.clear.title')}
@@ -4759,7 +4042,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         onCancel={() => setCleanupConfirmTarget(null)}
       />
 
-      {/* 鎼存捁鐭惧鍕吀閻炲棗娅?*/}
+      {/* 閹煎瓨鎹侀惌鎯ь嚗閸曨収鍚€闁荤偛妫楀▍?*/}
       {showPathsManager && (
         <div className="paths-manager-overlay" onClick={() => setShowPathsManager(false)}>
           <div className="paths-manager-modal" onClick={(e) => e.stopPropagation()}>
@@ -4905,7 +4188,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               : t('pages.music-library.pathsManager.path.enableScanTitle')
                           }
                         >
-                          {path.isScanned ? '🔄' : '⏸'}
+                          {path.isScanned ? '停止' : '启用'}
                         </button>
                         <button
                           className="path-item-action-btn path-item-clean-missing"
@@ -4991,7 +4274,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         </div>
       )}
 
-      {/* 闁挎瑨顕ら幓鎰仛鐎电鐦藉?*/}
+      {/* 闂佹寧鐟ㄩ銈夊箵閹邦喓浠涢悗鐢殿攰閻﹁棄顩?*/}
       {errorMessage && (
         <ConfirmDialog
           isOpen={true}
@@ -5007,7 +4290,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     </div>
   );
 
-  // 瀹撳苯鍙嗗Ο鈥崇础閻╁瓨甯存潻鏂挎礀閸愬懎顔愰敍宀勬姜瀹撳苯鍙嗗Ο鈥崇础娴ｈ法鏁ortal
+  // 鐎规挸鑻崣鍡椢熼垾宕囩闁烩晛鐡ㄧ敮瀛樻交閺傛寧绀€闁告劕鎳庨鎰版晬瀹€鍕鐎规挸鑻崣鍡椢熼垾宕囩濞达綀娉曢弫顥秓rtal
   return (
     <>
       {embedded ? libraryContent : createPortal(libraryContent, document.body)}
@@ -5022,3 +4305,5 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     </>
   );
 };
+
+

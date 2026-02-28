@@ -51,6 +51,17 @@ describe('nativeLibraryDb', () => {
       sourceId: '  source-1  ',
       quickFingerprint: '  qf2:ABCDEF1234567890  ',
       filePath: '  C:\\Music\\a.mp3  ',
+      groupBy: [{ field: 'artist', order: 'asc' }],
+      filters: [
+        { field: 'artist', operator: 'contains', value: '  artist-x  ' },
+        { field: 'playCount', operator: 'gte', value: ' 10 ' },
+        { field: 'genre', operator: 'is_not_empty' },
+        { field: 'genre', operator: 'contains', value: '   ' },
+      ],
+      sort: [
+        { field: 'playCount', order: 'desc' },
+        { field: 'title', order: 'asc' },
+      ],
     });
 
     expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_query_tracks', {
@@ -66,6 +77,39 @@ describe('nativeLibraryDb', () => {
         sourceId: 'source-1',
         quickFingerprint: 'qf2:abcdef1234567890',
         filePath: 'C:\\Music\\a.mp3',
+        baseQuery: {
+          filterOperator: 'and',
+          filterGroups: [
+            {
+              operator: 'and',
+              filters: [
+                { field: 'artist', operator: 'contains', value: 'artist-x' },
+                { field: 'playCount', operator: 'gte', value: '10' },
+                { field: 'genre', operator: 'is_not_empty', value: undefined },
+              ],
+            },
+          ],
+          filters: [
+            { field: 'artist', operator: 'contains', value: 'artist-x' },
+            { field: 'playCount', operator: 'gte', value: '10' },
+            { field: 'genre', operator: 'is_not_empty', value: undefined },
+          ],
+          groupBy: [{ field: 'artist', order: 'asc' }],
+          sort: [
+            { field: 'playCount', order: 'desc' },
+            { field: 'title', order: 'asc' },
+          ],
+        },
+        filters: [
+          { field: 'artist', operator: 'contains', value: 'artist-x' },
+          { field: 'playCount', operator: 'gte', value: '10' },
+          { field: 'genre', operator: 'is_not_empty', value: undefined },
+        ],
+        sort: [
+          { field: 'playCount', order: 'desc' },
+          { field: 'title', order: 'asc' },
+        ],
+        groupBy: [{ field: 'artist', order: 'asc' }],
       },
     });
   });

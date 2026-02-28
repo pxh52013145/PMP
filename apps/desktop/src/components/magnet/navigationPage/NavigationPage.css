@@ -115,6 +115,40 @@
   justify-content: flex-start;
 }
 
+.navigation-footer-music-library-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.navigation-footer-music-library-stats {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.navigation-footer-music-library-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.navigation-footer-music-library-stat strong {
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.navigation-footer-music-library-stat span {
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .page-indicator {
   display: flex;
   gap: 10px;
@@ -219,6 +253,15 @@
 @media (max-width: 600px) {
   .navigation-content {
     padding: 16px;
+  }
+
+  .navigation-footer-music-library-row {
+    gap: 10px;
+  }
+
+  .navigation-footer-music-library-stats {
+    gap: 10px;
+    font-size: 11px;
   }
 
   .welcome-message {

@@ -954,6 +954,8 @@
   "pages.music-library.contextMenu.play": "Play",
   "pages.music-library.contextMenu.addToQueue": "Add to queue",
   "pages.music-library.contextMenu.playAllFromHere": "Play all (from here)",
+  "pages.music-library.contextMenu.openInFileManager": "Open in file manager",
+  "pages.music-library.contextMenu.openInFileManagerFailed": "Failed to open in file manager",
   "pages.music-library.contextMenu.viewAlbum": "View album",
   "pages.music-library.contextMenu.viewArtist": "View artist",
   "pages.music-library.contextMenu.playAlbum": "Play album",

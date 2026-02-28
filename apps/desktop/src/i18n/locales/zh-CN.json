@@ -943,6 +943,8 @@
   "pages.music-library.contextMenu.play": "播放",
   "pages.music-library.contextMenu.addToQueue": "添加到队列",
   "pages.music-library.contextMenu.playAllFromHere": "播放全部（从此开始）",
+  "pages.music-library.contextMenu.openInFileManager": "从文件管理器打开",
+  "pages.music-library.contextMenu.openInFileManagerFailed": "无法在文件管理器中打开",
   "pages.music-library.contextMenu.viewAlbum": "查看专辑",
   "pages.music-library.contextMenu.viewArtist": "查看艺术家",
   "pages.music-library.contextMenu.playAlbum": "播放专辑",

@@ -34,6 +34,13 @@ pub async fn music_library_remove_cover(app: tauri::AppHandle, key: String) -> R
         .map_err(|e| format!("Remove cover task failed: {e}"))?
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_open_in_file_manager(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || music_library::open_in_file_manager(&path))
+        .await
+        .map_err(|e| format!("Open in file manager task failed: {e}"))?
+}
+
 #[tauri::command]
 pub fn music_library_cancel_scan() -> Result<(), String> {
     music_library::request_cancel_scan();
