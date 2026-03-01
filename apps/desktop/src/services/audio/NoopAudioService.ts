@@ -7,6 +7,7 @@ import type {
   PlaylistCreateOptions,
   Track,
 } from './types';
+import { prependTrackWithDedup } from './trackIdentity';
 
 type TimeListener = (time: number) => void;
 type StateListener = (state: AudioState) => void;
@@ -288,17 +289,6 @@ export class NoopAudioService implements IAudioService {
     this.emitState();
   }
 
-  setPlaylistCover(playlistId: string, coverUrl?: string): void {
-    const playlist = this.playlists.find((p) => p.id === playlistId);
-    if (!playlist) return;
-    if (playlist.readonly || playlist.kind === 'smart') return;
-
-    const normalizedCoverUrl = typeof coverUrl === 'string' ? coverUrl.trim() : '';
-    playlist.coverUrl = normalizedCoverUrl || undefined;
-    playlist.updatedAt = Date.now();
-    this.emitState();
-  }
-
   getPlaylists(): Playlist[] {
     return [...this.playlists];
   }
@@ -310,7 +300,8 @@ export class NoopAudioService implements IAudioService {
   addTrackToPlaylist(playlistId: string, track: Track): void {
     const playlist = this.playlists.find((p) => p.id === playlistId);
     if (!playlist) return;
-    playlist.tracks.push(track);
+
+    playlist.tracks = prependTrackWithDedup(playlist.tracks, track);
     playlist.trackCount = playlist.tracks.length;
     playlist.totalDuration = playlist.tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
     playlist.updatedAt = Date.now();

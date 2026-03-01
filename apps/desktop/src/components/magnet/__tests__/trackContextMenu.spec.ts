@@ -4,6 +4,7 @@ import {
   buildAddToPlaylistMenuItem,
   buildLibraryTrackContextMenu,
   buildPlaylistTrackContextMenu,
+  resolveTrackPlaylistMemberships,
   resolveWritablePlaylistTargets,
 } from '../trackContextMenu';
 
@@ -82,6 +83,63 @@ describe('trackContextMenu', () => {
 
     menu.children?.[0].onClick?.();
     expect(onAddToPlaylist).toHaveBeenCalledWith('a', track);
+  });
+
+  it('marks already-added playlist and disables repeated add action', () => {
+    const onAddToPlaylist = vi.fn();
+    const track = createTrack({
+      id: 'track-existing',
+      title: 'Existing Track',
+      filePath: 'C:\\Music\\existing.mp3',
+      path: 'C:\\Music\\existing.mp3',
+    });
+    const menu = buildAddToPlaylistMenuItem({
+      t: (key) => key,
+      track,
+      playlists: [
+        createPlaylist({
+          id: 'a',
+          name: 'A',
+          kind: 'manual',
+          tracks: [
+            createTrack({
+              id: 'track-existing',
+              title: 'Existing Track (Old)',
+              filePath: 'C:\\Music\\existing-old.mp3',
+              path: 'C:\\Music\\existing-old.mp3',
+            }),
+          ],
+        }),
+      ],
+      onAddToPlaylist,
+    });
+
+    expect(menu.children).toHaveLength(1);
+    expect(menu.children?.[0].label).toBe('A ✓');
+    expect(menu.children?.[0].disabled).toBe(true);
+
+    menu.children?.[0].onClick?.();
+    expect(onAddToPlaylist).not.toHaveBeenCalled();
+  });
+
+  it('resolves memberships while excluding smart playlists', () => {
+    const track = createTrack({ id: 'track-membership', title: 'Member Track' });
+    const memberships = resolveTrackPlaylistMemberships(track, [
+      createPlaylist({
+        id: 'manual-1',
+        name: 'Manual 1',
+        kind: 'manual',
+        tracks: [createTrack({ id: 'track-membership', title: 'Member Track' })],
+      }),
+      createPlaylist({
+        id: 'smart-recently-played',
+        name: 'Recently Played',
+        kind: 'smart',
+        tracks: [createTrack({ id: 'track-membership', title: 'Member Track' })],
+      }),
+    ]);
+
+    expect(memberships.map((item) => item.playlistId)).toEqual(['manual-1']);
   });
 
   it('builds playlist track menu with remove action', () => {

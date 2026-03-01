@@ -5,6 +5,7 @@ import {
   prepareBilibiliCachedPlayback,
   resolveBilibiliCoverAssetUrl,
   resolveBilibiliLyricLocator,
+  searchBilibiliResourceByBvid,
   type BilibiliFavoriteResourceItem,
   type BilibiliLyricLocatorResolved,
   type BilibiliPreparedPlayback,
@@ -36,6 +37,45 @@ function toBilibiliWebUrl(item: BilibiliFavoriteResourceItem): string | null {
   const locator = item.sourceLocator.trim();
   if (locator.startsWith('https://') || locator.startsWith('http://')) return locator;
   return null;
+}
+
+const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
+
+function extractBvidFromText(value: string | null | undefined): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) return null;
+  const matched = normalized.match(BILIBILI_BVID_PATTERN);
+  if (!matched || !matched[0]) return null;
+  return matched[0].toUpperCase();
+}
+
+function buildStableBilibiliResourceIdentity(item: BilibiliFavoriteResourceItem): string {
+  const resourceId = typeof item.resourceId === 'string' ? item.resourceId.trim() : '';
+  if (resourceId) {
+    return `rid:${resourceId}`;
+  }
+
+  const bvid = typeof item.bvid === 'string' ? item.bvid.trim().toUpperCase() : '';
+  const cid = typeof item.cid === 'string' ? item.cid.trim() : '';
+  if (bvid && cid) {
+    return `bvid:${bvid}::cid:${cid}`;
+  }
+  if (bvid) {
+    return `bvid:${bvid}`;
+  }
+
+  const sourceLocator = typeof item.sourceLocator === 'string' ? item.sourceLocator.trim() : '';
+  if (sourceLocator) {
+    return `locator:${sourceLocator}`;
+  }
+
+  const title = typeof item.title === 'string' ? item.title.trim() : '';
+  const ownerName = typeof item.ownerName === 'string' ? item.ownerName.trim() : '';
+  const duration =
+    typeof item.durationSeconds === 'number' && Number.isFinite(item.durationSeconds)
+      ? String(Math.max(0, Math.floor(item.durationSeconds)))
+      : '0';
+  return `meta:${title || 'unknown'}::${ownerName}::${duration}`;
 }
 
 type UseBilibiliResourcePlaybackActionsParams = {
@@ -104,7 +144,8 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
 
   const ensurePreparedTrack = useCallback(
     async (item: BilibiliFavoriteResourceItem): Promise<Track> => {
-      const cacheKey = `${item.resourceId || item.sourceLocator}::${normalizedPlaybackQualityHint}`;
+      const stableIdentity = buildStableBilibiliResourceIdentity(item);
+      const cacheKey = `${stableIdentity}::${normalizedPlaybackQualityHint}`;
       const cached = preparedTrackMapRef.current.get(cacheKey);
       if (cached) return cached;
 
@@ -115,7 +156,22 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
           throw new Error(t('magnet.platform.bilibili.player.error.prepareFailed'));
         }
 
-        const resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(item.coverUrl);
+        let resolvedCoverUrl = await resolveBilibiliCoverAssetUrl(item.coverUrl);
+        if (!resolvedCoverUrl) {
+          const bvid =
+            extractBvidFromText(item.bvid) ||
+            extractBvidFromText(item.sourceLocator) ||
+            extractBvidFromText(item.lyricLocator);
+          if (bvid) {
+            const matched = await searchBilibiliResourceByBvid(bvid).catch(() => null);
+            const discoveredCoverUrl =
+              typeof matched?.coverUrl === 'string' ? matched.coverUrl.trim() : '';
+            if (discoveredCoverUrl) {
+              resolvedCoverUrl =
+                (await resolveBilibiliCoverAssetUrl(discoveredCoverUrl)) || discoveredCoverUrl;
+            }
+          }
+        }
 
         setResourceInfo(
           t('magnet.platform.bilibili.player.qualityResolved', {
@@ -125,7 +181,11 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
         );
         setResourceError(null);
 
-        const track = buildTrackFromPreparedPlayback(item, prepared, resolvedCoverUrl ?? item.coverUrl);
+        const track = buildTrackFromPreparedPlayback(
+          item,
+          prepared,
+          resolvedCoverUrl ?? item.coverUrl
+        );
         preparedTrackMapRef.current.set(cacheKey, track);
         return track;
       } finally {

@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AudioState, Playlist, Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
+import { resolveBilibiliCoverAssetUrl, searchBilibiliResourceByBvid } from '../../modules/music-platform';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { InputDialog } from './InputDialog';
@@ -15,13 +16,9 @@ interface PlaylistsProps {
   onClose: () => void;
 }
 
-type PlaylistTrackSort =
-  | 'default'
-  | 'title'
-  | 'artist'
-  | 'album'
-  | 'durationAsc'
-  | 'durationDesc';
+type PlaylistTrackSortField = 'default' | 'title' | 'artist' | 'album' | 'duration';
+
+type PlaylistTrackSortDirection = 'asc' | 'desc';
 
 type PlaylistTrackEntry = {
   track: Track;
@@ -29,9 +26,32 @@ type PlaylistTrackEntry = {
   key: string;
 };
 
-const MAX_TRACKS = 200;
+type PopupMenuState = {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+};
 
 const makeTrackKey = (track: Track, index: number): string => `${track.id}::${index}`;
+
+const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
+
+const isBilibiliConnectorId = (value: string | null | undefined): boolean => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!normalized) return false;
+  return normalized.includes('bilibili');
+};
+
+const extractBvidFromText = (value: string | null | undefined): string | null => {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) return null;
+  const matched = normalized.match(BILIBILI_BVID_PATTERN);
+  if (!matched || !matched[0]) return null;
+  return matched[0].toUpperCase();
+};
+
+const toNonEmptyString = (value: string | null | undefined): string =>
+  typeof value === 'string' ? value.trim() : '';
 
 export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const t = useT();
@@ -40,48 +60,40 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [audioState, setAudioState] = useState<AudioState>(audioService.getState());
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
 
-  const [showAddTrackModal, setShowAddTrackModal] = useState(false);
-  const [availableTracks, setAvailableTracks] = useState<Track[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isLoadingTracks, setIsLoadingTracks] = useState(false);
-
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [showCoverDialog, setShowCoverDialog] = useState(false);
 
   const [playlistToDelete, setPlaylistToDelete] = useState<string | null>(null);
   const [playlistToRename, setPlaylistToRename] = useState<Playlist | null>(null);
   const [playlistToClear, setPlaylistToClear] = useState<string | null>(null);
 
   const [playlistTrackSearchQuery, setPlaylistTrackSearchQuery] = useState('');
-  const [playlistTrackSort, setPlaylistTrackSort] = useState<PlaylistTrackSort>('default');
+  const [playlistTrackSortField, setPlaylistTrackSortField] =
+    useState<PlaylistTrackSortField>('default');
+  const [playlistTrackSortDirection, setPlaylistTrackSortDirection] =
+    useState<PlaylistTrackSortDirection>('asc');
+  const [showPlaylistTrackSearch, setShowPlaylistTrackSearch] = useState(false);
+  const [showSortMenu, setShowSortMenu] = useState(false);
   const [playlistBatchMode, setPlaylistBatchMode] = useState(false);
   const [selectedTrackKeys, setSelectedTrackKeys] = useState<string[]>([]);
+  const [resolvedPlaylistCoverMap, setResolvedPlaylistCoverMap] = useState<Record<string, string>>({});
+  const pendingPlaylistCoverIdsRef = useRef<Set<string>>(new Set());
+  const playlistTrackSearchControlRef = useRef<HTMLDivElement | null>(null);
+  const playlistTrackSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const sortMenuRef = useRef<HTMLDivElement | null>(null);
+  const sortMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
 
-  const [trackContextMenu, setTrackContextMenu] = useState<{
-    x: number;
-    y: number;
-    items: ContextMenuItem[];
-  } | null>(null);
+  const [trackContextMenu, setTrackContextMenu] = useState<PopupMenuState | null>(null);
+  const [playlistActionsMenu, setPlaylistActionsMenu] = useState<PopupMenuState | null>(null);
 
   useEffect(() => {
     setAudioState(audioService.getState());
     setSelectedPlaylist(null);
-    setShowAddTrackModal(false);
-    setSearchQuery('');
     const unsubscribe = audioService.onStateChange(setAudioState);
     return unsubscribe;
   }, [audioService]);
-
-  useEffect(() => {
-    if (!showAddTrackModal) return;
-    const handle = setTimeout(() => {
-      void loadAvailableTracks(searchQuery);
-    }, 200);
-    return () => clearTimeout(handle);
-  }, [searchQuery, showAddTrackModal]);
 
   useEffect(() => {
     if (!selectedPlaylist?.id) return;
@@ -95,22 +107,214 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     setSelectedTrackKeys([]);
     setTrackContextMenu(null);
+    setPlaylistActionsMenu(null);
+    setShowSortMenu(false);
+    setShowPlaylistTrackSearch(false);
   }, [selectedPlaylist?.id, selectedPlaylist?.updatedAt]);
 
-  const loadAvailableTracks = async (query: string) => {
-    try {
-      setIsLoadingTracks(true);
-      const normalizedQuery = query.trim();
-      const tracks = normalizedQuery
-        ? await musicLibraryService.searchTracks(normalizedQuery, MAX_TRACKS)
-        : await musicLibraryService.getAllTracks(MAX_TRACKS);
-      setAvailableTracks(tracks);
-    } catch (error) {
-      console.error('Failed to load tracks:', error);
-    } finally {
-      setIsLoadingTracks(false);
-    }
-  };
+  useEffect(() => {
+    if (!showPlaylistTrackSearch) return;
+    playlistTrackSearchInputRef.current?.focus();
+  }, [showPlaylistTrackSearch]);
+
+  useEffect(() => {
+    if (!showPlaylistTrackSearch) return;
+
+    const collapseSearch = () => {
+      setShowPlaylistTrackSearch(false);
+      setPlaylistTrackSearchQuery('');
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (playlistTrackSearchControlRef.current?.contains(target)) return;
+      collapseSearch();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        collapseSearch();
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showPlaylistTrackSearch]);
+
+  useEffect(() => {
+    if (!showSortMenu) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (sortMenuRef.current?.contains(target)) return;
+      if (sortMenuTriggerRef.current?.contains(target)) return;
+      setShowSortMenu(false);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowSortMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showSortMenu]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const pruneRemovedPlaylistCovers = () => {
+      const validPlaylistIds = new Set(audioState.playlists.map((playlist) => playlist.id));
+      setResolvedPlaylistCoverMap((previous) => {
+        let changed = false;
+        const next: Record<string, string> = {};
+        for (const [playlistId, url] of Object.entries(previous)) {
+          if (!validPlaylistIds.has(playlistId)) {
+            changed = true;
+            continue;
+          }
+          next[playlistId] = url;
+        }
+        return changed ? next : previous;
+      });
+    };
+
+    const resolvePlaylistCovers = async () => {
+      for (const playlist of audioState.playlists) {
+        const playlistId = String(playlist.id || '').trim();
+        if (!playlistId) continue;
+        if (pendingPlaylistCoverIdsRef.current.has(playlistId)) continue;
+
+        if (playlist.kind === 'smart') {
+          setResolvedPlaylistCoverMap((previous) => {
+            if (!(playlistId in previous)) return previous;
+            const next = { ...previous };
+            delete next[playlistId];
+            return next;
+          });
+          continue;
+        }
+
+        const explicitPlaylistCover =
+          typeof playlist.coverUrl === 'string' ? playlist.coverUrl.trim() : '';
+        if (explicitPlaylistCover) {
+          setResolvedPlaylistCoverMap((previous) => {
+            if (!(playlistId in previous)) return previous;
+            const next = { ...previous };
+            delete next[playlistId];
+            return next;
+          });
+          continue;
+        }
+
+        const trackCandidates = playlist.tracks.slice(0, 5);
+        if (trackCandidates.length === 0) {
+          setResolvedPlaylistCoverMap((previous) => {
+            if (!(playlistId in previous)) return previous;
+            const next = { ...previous };
+            delete next[playlistId];
+            return next;
+          });
+          continue;
+        }
+
+        pendingPlaylistCoverIdsRef.current.add(playlistId);
+        try {
+          let resolvedCoverUrl: string | undefined;
+
+          for (const candidate of trackCandidates) {
+            const embeddedCoverUrl = toNonEmptyString(candidate.coverUrl);
+            if (embeddedCoverUrl) {
+              resolvedCoverUrl = embeddedCoverUrl;
+              break;
+            }
+
+            try {
+              const resolvedFromLibrary = await musicLibraryService.getCoverUrlForTrack(candidate, {
+                coverSizeHint: 'small',
+                bypassRuntimePolicy: true,
+              });
+              const normalizedResolved = toNonEmptyString(resolvedFromLibrary);
+              if (normalizedResolved) {
+                resolvedCoverUrl = normalizedResolved;
+                break;
+              }
+            } catch {
+              // best-effort per candidate: continue trying next tracks in the playlist head.
+            }
+          }
+
+          const isBilibiliPlaylist =
+            playlist.kind === 'platform' && isBilibiliConnectorId(playlist.sourceConnectorId);
+          if (!resolvedCoverUrl && isBilibiliPlaylist) {
+            const bvid = trackCandidates
+              .map(
+                (candidate) =>
+                  extractBvidFromText(candidate.originalPath) ||
+                  extractBvidFromText(candidate.comment) ||
+                  extractBvidFromText(candidate.path)
+              )
+              .find((value): value is string => Boolean(value));
+            if (bvid) {
+              const resource = await searchBilibiliResourceByBvid(bvid).catch(() => null);
+              const discoveredCoverUrl =
+                typeof resource?.coverUrl === 'string' ? resource.coverUrl.trim() : '';
+              if (discoveredCoverUrl) {
+                resolvedCoverUrl = discoveredCoverUrl;
+              }
+            }
+          }
+
+          if (resolvedCoverUrl && isBilibiliPlaylist) {
+            const cachedBilibiliCover = await resolveBilibiliCoverAssetUrl(resolvedCoverUrl);
+            if (typeof cachedBilibiliCover === 'string' && cachedBilibiliCover.trim().length > 0) {
+              resolvedCoverUrl = cachedBilibiliCover.trim();
+            }
+          }
+
+          if (cancelled) continue;
+
+          if (resolvedCoverUrl) {
+            const finalCoverUrl = resolvedCoverUrl.trim();
+            setResolvedPlaylistCoverMap((previous) => {
+              if (previous[playlistId] === finalCoverUrl) return previous;
+              return {
+                ...previous,
+                [playlistId]: finalCoverUrl,
+              };
+            });
+          } else {
+            setResolvedPlaylistCoverMap((previous) => {
+              if (!(playlistId in previous)) return previous;
+              const next = { ...previous };
+              delete next[playlistId];
+              return next;
+            });
+          }
+        } catch {
+          // best-effort: keep fallback icon when cover cannot be resolved.
+        } finally {
+          pendingPlaylistCoverIdsRef.current.delete(playlistId);
+        }
+      }
+    };
+
+    pruneRemovedPlaylistCovers();
+    void resolvePlaylistCovers();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [audioState.playlists]);
 
   const handleCreatePlaylist = (name: string) => {
     audioService.createPlaylist(name);
@@ -163,32 +367,12 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     setSelectedTrackKeys([]);
   };
 
-  const handleAddTrackToPlaylist = (track: Track) => {
-    if (!selectedPlaylist) {
-      return;
-    }
-    audioService.addTrackToPlaylist(selectedPlaylist.id, track);
-  };
-
   const handlePlayTrackFromPlaylist = (playlist: Playlist, trackIndex: number) => {
     audioService.clearQueue();
     audioService.addMultipleToQueue(playlist.tracks);
     void audioService.playTrackAtIndex(trackIndex).catch((error) => {
       console.error('[Playlists] Failed to play track:', error);
     });
-  };
-
-  const handleSetPlaylistCover = (playlistId: string, coverUrl: string) => {
-    const normalizedCoverUrl = coverUrl.trim();
-    if (!normalizedCoverUrl) {
-      return;
-    }
-
-    audioService.setPlaylistCover(playlistId, normalizedCoverUrl);
-  };
-
-  const handleResetPlaylistCover = (playlistId: string) => {
-    audioService.setPlaylistCover(playlistId, undefined);
   };
 
   const formatDuration = (seconds: number): string => {
@@ -205,8 +389,53 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return t('pages.music-library.duration.minutes', { minutes });
   };
 
-  const getFilteredTracks = () => {
-    return availableTracks;
+  const playlistSortOptions = useMemo<
+    Array<{ field: PlaylistTrackSortField; label: string }>
+  >(
+    () => [
+      { field: 'default', label: t('pages.playlists.manage.sort.field.default') },
+      { field: 'title', label: t('pages.playlists.manage.sort.field.title') },
+      { field: 'artist', label: t('pages.playlists.manage.sort.field.artist') },
+      { field: 'album', label: t('pages.playlists.manage.sort.field.album') },
+      { field: 'duration', label: t('pages.playlists.manage.sort.field.duration') },
+    ],
+    [t]
+  );
+
+  const currentSortOptionLabel =
+    playlistSortOptions.find((option) => option.field === playlistTrackSortField)?.label ??
+    playlistSortOptions[0]?.label ??
+    t('pages.playlists.manage.sort.field.default');
+
+  const handleSelectPlaylistSortField = (field: PlaylistTrackSortField) => {
+    if (field === 'default') {
+      setPlaylistTrackSortField('default');
+      setPlaylistTrackSortDirection('asc');
+      setShowSortMenu(false);
+      return;
+    }
+
+    if (playlistTrackSortField === field) {
+      setPlaylistTrackSortDirection((previous) => (previous === 'asc' ? 'desc' : 'asc'));
+      setShowSortMenu(false);
+      return;
+    }
+
+    setPlaylistTrackSortField(field);
+    setPlaylistTrackSortDirection('asc');
+    setShowSortMenu(false);
+  };
+
+  const handleTogglePlaylistTrackSearch = () => {
+    if (!showPlaylistTrackSearch) {
+      setShowPlaylistTrackSearch(true);
+      return;
+    }
+
+    setShowPlaylistTrackSearch(false);
+    if (playlistTrackSearchQuery.trim().length > 0) {
+      setPlaylistTrackSearchQuery('');
+    }
   };
 
   const isReadonlyPlaylist = (playlist: Playlist | null): boolean => {
@@ -252,19 +481,34 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       return '';
     }
 
+    if (playlist.kind === 'smart') {
+      return '';
+    }
+
     if (typeof playlist.coverUrl === 'string' && playlist.coverUrl.trim()) {
       return playlist.coverUrl.trim();
     }
 
-    const fallbackFromTrack = playlist.tracks.find((item) => typeof item.coverUrl === 'string' && item.coverUrl.trim());
-    if (!fallbackFromTrack) {
-      return '';
+    const resolvedCoverUrl = resolvedPlaylistCoverMap[playlist.id] ?? '';
+    if (resolvedCoverUrl) return resolvedCoverUrl;
+
+    const firstTrack = playlist.tracks[0] ?? null;
+    const fallbackFromFirstTrack = toNonEmptyString(firstTrack?.coverUrl);
+    if (fallbackFromFirstTrack) {
+      return fallbackFromFirstTrack;
     }
 
-    return String(fallbackFromTrack.coverUrl ?? '').trim();
+    const fallbackFromHeadTracks = playlist.tracks
+      .slice(1, 5)
+      .map((track) => toNonEmptyString(track.coverUrl))
+      .find((value) => value.length > 0);
+    if (!fallbackFromHeadTracks) return '';
+
+    return fallbackFromHeadTracks;
   };
 
   const selectedPlaylistReadonly = isReadonlyPlaylist(selectedPlaylist);
+  const selectedPlaylistCoverUrl = getPlaylistCoverUrl(selectedPlaylist);
 
   const filteredPlaylistTrackEntries = useMemo<PlaylistTrackEntry[]>(() => {
     if (!selectedPlaylist) {
@@ -291,7 +535,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         })
       : entries;
 
-    if (playlistTrackSort === 'default') {
+    if (playlistTrackSortField === 'default') {
       return queryFiltered;
     }
 
@@ -299,31 +543,27 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     const sorted = [...queryFiltered];
 
     sorted.sort((a, b) => {
-      if (playlistTrackSort === 'title') {
-        return collator.compare(a.track.title || '', b.track.title || '');
+      let result = 0;
+
+      if (playlistTrackSortField === 'title') {
+        result = collator.compare(a.track.title || '', b.track.title || '');
+      } else if (playlistTrackSortField === 'artist') {
+        result = collator.compare(a.track.artist || '', b.track.artist || '');
+      } else if (playlistTrackSortField === 'album') {
+        result = collator.compare(a.track.album || '', b.track.album || '');
+      } else if (playlistTrackSortField === 'duration') {
+        result = (a.track.duration ?? 0) - (b.track.duration ?? 0);
       }
 
-      if (playlistTrackSort === 'artist') {
-        return collator.compare(a.track.artist || '', b.track.artist || '');
+      if (result === 0) {
+        result = a.index - b.index;
       }
 
-      if (playlistTrackSort === 'album') {
-        return collator.compare(a.track.album || '', b.track.album || '');
-      }
-
-      if (playlistTrackSort === 'durationAsc') {
-        return (a.track.duration ?? 0) - (b.track.duration ?? 0);
-      }
-
-      if (playlistTrackSort === 'durationDesc') {
-        return (b.track.duration ?? 0) - (a.track.duration ?? 0);
-      }
-
-      return a.index - b.index;
+      return playlistTrackSortDirection === 'desc' ? -result : result;
     });
 
     return sorted;
-  }, [selectedPlaylist, playlistTrackSearchQuery, playlistTrackSort]);
+  }, [selectedPlaylist, playlistTrackSearchQuery, playlistTrackSortDirection, playlistTrackSortField]);
 
   const selectedTrackEntryList = useMemo<PlaylistTrackEntry[]>(() => {
     if (!selectedPlaylist) {
@@ -387,6 +627,51 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     setSelectedTrackKeys([]);
   };
 
+  const handleOpenPlaylistActionsMenu = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    playlist: Playlist
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const readonly = isReadonlyPlaylist(playlist);
+    const buttonRect = event.currentTarget.getBoundingClientRect();
+
+    setTrackContextMenu(null);
+    setPlaylistActionsMenu({
+      x: buttonRect.right - 8,
+      y: buttonRect.bottom + 8,
+      items: [
+        {
+          label: t('common.action.rename'),
+          disabled: readonly,
+          onClick: () => {
+            setPlaylistToRename(playlist);
+            setShowRenameDialog(true);
+          },
+        },
+        { divider: true },
+        {
+          label: t('common.action.clear'),
+          disabled: readonly || playlist.trackCount === 0,
+          onClick: () => {
+            setPlaylistToClear(playlist.id);
+            setShowClearConfirm(true);
+          },
+        },
+        {
+          label: t('pages.playlists.action.deletePlaylist'),
+          danger: true,
+          disabled: readonly,
+          onClick: () => {
+            setPlaylistToDelete(playlist.id);
+            setShowDeleteConfirm(true);
+          },
+        },
+      ],
+    });
+  };
+
   const handleTrackContextMenu = (
     playlist: Playlist,
     track: Track,
@@ -417,6 +702,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       y: event.clientY,
       items: menuItems,
     });
+    setPlaylistActionsMenu(null);
   };
 
   if (!isOpen) return null;
@@ -475,16 +761,9 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
         <div className="playlists-detail">
           <div className="playlists-detail-header">
-            <h2 className="playlists-detail-title">
-              {selectedPlaylist ? (
-                <>
-                  <span>{selectedPlaylist.name}</span>
-                  {renderPlaylistSourceBadge(selectedPlaylist, 'playlists-detail-source-badge')}
-                </>
-              ) : (
-                t('pages.playlists.detail.title')
-              )}
-            </h2>
+            {!selectedPlaylist ? (
+              <h2 className="playlists-detail-title">{t('pages.playlists.detail.title')}</h2>
+            ) : null}
             <button className="playlists-close-btn" onClick={onClose}>
               ×
             </button>
@@ -492,104 +771,60 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
 
           {selectedPlaylist ? (
             <>
-              <div className="playlists-detail-toolbar">
-                <div className="playlists-detail-info">
-                  <span className="playlists-detail-stat">
-                    <strong>{selectedPlaylist.trackCount}</strong> {t('pages.playlists.trackCount.unit')}
-                  </span>
-                  <span className="playlists-detail-stat">
-                    <strong>{formatTotalDuration(selectedPlaylist.totalDuration)}</strong>
-                  </span>
-                </div>
-
-                <div className="playlists-detail-actions">
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => handlePlayPlaylist(selectedPlaylist.id)}
-                    disabled={selectedPlaylist.trackCount === 0}
-                  >
-                    {t('common.action.play')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => handleAddPlaylistToQueue(selectedPlaylist.id)}
-                    disabled={selectedPlaylist.trackCount === 0}
-                  >
-                    {t('common.action.addToQueue')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => setShowAddTrackModal(true)}
-                    disabled={selectedPlaylistReadonly}
-                  >
-                    {t('pages.playlists.action.addTrack')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => {
-                      setPlaylistToRename(selectedPlaylist);
-                      setShowRenameDialog(true);
-                    }}
-                    disabled={selectedPlaylistReadonly}
-                  >
-                    {t('common.action.rename')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => setShowCoverDialog(true)}
-                    disabled={selectedPlaylistReadonly}
-                  >
-                    {t('pages.playlists.editor.cover.set')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => handleResetPlaylistCover(selectedPlaylist.id)}
-                    disabled={
-                      selectedPlaylistReadonly ||
-                      !(typeof selectedPlaylist.coverUrl === 'string' && selectedPlaylist.coverUrl.trim())
-                    }
-                  >
-                    {t('pages.playlists.editor.cover.reset')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn"
-                    onClick={() => {
-                      setPlaylistToClear(selectedPlaylist.id);
-                      setShowClearConfirm(true);
-                    }}
-                    disabled={selectedPlaylist.trackCount === 0}
-                  >
-                    {t('common.action.clear')}
-                  </button>
-                  <button
-                    className="playlists-detail-btn playlists-delete-btn"
-                    onClick={() => {
-                      setPlaylistToDelete(selectedPlaylist.id);
-                      setShowDeleteConfirm(true);
-                    }}
-                    disabled={selectedPlaylistReadonly}
-                  >
-                    {t('pages.playlists.action.deletePlaylist')}
-                  </button>
-                </div>
-              </div>
-
-              <div className="playlists-detail-editor-row">
-                <div className="playlists-detail-cover-card">
-                  <div className="playlists-detail-cover-preview">
-                    {getPlaylistCoverUrl(selectedPlaylist) ? (
+              <div className="playlists-hero">
+                <div className="playlists-hero-cover-column">
+                  <div className="playlists-hero-cover">
+                    {selectedPlaylistCoverUrl ? (
                       <img
-                        src={getPlaylistCoverUrl(selectedPlaylist)}
+                        src={selectedPlaylistCoverUrl}
                         alt={selectedPlaylist.name}
-                        className="playlists-detail-cover-image"
+                        className="playlists-hero-cover-image"
                       />
                     ) : (
-                      <span className="playlists-detail-cover-fallback">♪</span>
+                      <span className="playlists-hero-cover-fallback">♪</span>
                     )}
                   </div>
-                  <div className="playlists-detail-cover-meta">
-                    <div className="playlists-detail-cover-title">{t('pages.playlists.editor.cover.title')}</div>
-                    <div className="playlists-detail-cover-hint">{t('pages.playlists.editor.cover.hint')}</div>
+
+                </div>
+
+                <div className="playlists-hero-main">
+                  <div className="playlists-hero-title-row">
+                    <h2 className="playlists-hero-title">{selectedPlaylist.name}</h2>
+                    {renderPlaylistSourceBadge(selectedPlaylist, 'playlists-detail-source-badge')}
+                  </div>
+
+                  <div className="playlists-hero-meta">
+                    <span className="playlists-hero-stat">
+                      <strong>{selectedPlaylist.trackCount}</strong> {t('pages.playlists.trackCount.unit')}
+                    </span>
+                    <span className="playlists-hero-stat">
+                      <strong>{formatTotalDuration(selectedPlaylist.totalDuration)}</strong>
+                    </span>
+                  </div>
+
+                  <div className="playlists-hero-actions">
+                    <button
+                      className="playlists-hero-btn playlists-hero-btn-primary"
+                      onClick={() => handlePlayPlaylist(selectedPlaylist.id)}
+                      disabled={selectedPlaylist.trackCount === 0}
+                    >
+                      {t('common.action.play')}
+                    </button>
+                    <button
+                      className="playlists-hero-btn"
+                      onClick={() => handleAddPlaylistToQueue(selectedPlaylist.id)}
+                      disabled={selectedPlaylist.trackCount === 0}
+                    >
+                      {t('common.action.addToQueue')}
+                    </button>
+                    {!selectedPlaylistReadonly ? (
+                      <button
+                        className="playlists-hero-btn playlists-hero-btn-more"
+                        onClick={(event) => handleOpenPlaylistActionsMenu(event, selectedPlaylist)}
+                      >
+                        {t('pages.playlists.action.more')}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -599,97 +834,275 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                   <div className="playlists-tracks-empty">
                     <div className="playlists-tracks-empty-icon">♪</div>
                     <div className="playlists-tracks-empty-text">{t('pages.playlists.tracks.empty.title')}</div>
-                    <button
-                      className="playlists-tracks-empty-btn"
-                      onClick={() => setShowAddTrackModal(true)}
-                      disabled={selectedPlaylistReadonly}
-                    >
-                      {t('pages.playlists.tracks.empty.action.addTracks')}
-                    </button>
                   </div>
                 ) : (
                   <>
-                    <div className="playlists-tracks-manage">
-                      <input
-                        className="playlists-tracks-search"
-                        type="text"
-                        value={playlistTrackSearchQuery}
-                        onChange={(event) => setPlaylistTrackSearchQuery(event.target.value)}
-                        placeholder={t('pages.playlists.manage.search.placeholder')}
-                      />
-                      <select
-                        className="playlists-tracks-sort"
-                        value={playlistTrackSort}
-                        onChange={(event) => setPlaylistTrackSort(event.target.value as PlaylistTrackSort)}
-                      >
-                        <option value="default">{t('pages.playlists.manage.sort.default')}</option>
-                        <option value="title">{t('pages.playlists.manage.sort.title')}</option>
-                        <option value="artist">{t('pages.playlists.manage.sort.artist')}</option>
-                        <option value="album">{t('pages.playlists.manage.sort.album')}</option>
-                        <option value="durationAsc">{t('pages.playlists.manage.sort.durationAsc')}</option>
-                        <option value="durationDesc">{t('pages.playlists.manage.sort.durationDesc')}</option>
-                      </select>
-                      <button
-                        className="playlists-detail-btn"
-                        onClick={() => {
-                          setPlaylistBatchMode((previous) => {
-                            const next = !previous;
-                            if (!next) {
-                              setSelectedTrackKeys([]);
-                            }
-                            return next;
-                          });
-                        }}
-                      >
-                        {playlistBatchMode
-                          ? t('pages.playlists.manage.batch.exit')
-                          : t('pages.playlists.manage.batch.enter')}
-                      </button>
+                    <div className="playlists-tracks-manage-row">
+                      {playlistBatchMode ? (
+                        <div className="playlists-tracks-batch-actions playlists-tracks-batch-actions-inline">
+                          <span
+                            className="playlists-tracks-batch-count playlists-tracks-batch-count-badge"
+                            title={t('pages.playlists.manage.batch.selectedCount', {
+                              count: selectedTrackCount,
+                            })}
+                          >
+                            <svg
+                              className="playlists-tracks-batch-count-icon"
+                              viewBox="0 0 24 24"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M12 4.5a7.5 7.5 0 1 0 7.5 7.5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.7"
+                                strokeLinecap="round"
+                              />
+                              <path
+                                d="M12 4.5v3.2M9.9 6.1l2.1 1.6"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.7"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                            <strong>{selectedTrackCount}</strong>
+                          </span>
+                          <button
+                            className="playlists-tracks-batch-icon-btn"
+                            onClick={handleSelectAllFilteredTracks}
+                            disabled={filteredPlaylistTrackEntries.length === 0}
+                            title={t('pages.playlists.manage.batch.selectAll')}
+                            aria-label={t('pages.playlists.manage.batch.selectAll')}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                d="M6.8 12.3l3.2 3.1 7-7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.9"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                              <rect
+                                x="4"
+                                y="4"
+                                width="16"
+                                height="16"
+                                rx="4"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            className="playlists-tracks-batch-icon-btn"
+                            onClick={handleClearTrackSelection}
+                            disabled={selectedTrackCount === 0}
+                            title={t('pages.playlists.manage.batch.clearSelection')}
+                            aria-label={t('pages.playlists.manage.batch.clearSelection')}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                d="M6.2 6.2l11.6 11.6"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.9"
+                                strokeLinecap="round"
+                              />
+                              <circle
+                                cx="12"
+                                cy="12"
+                                r="8"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.6"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            className="playlists-tracks-batch-icon-btn"
+                            onClick={handleBatchAddToQueue}
+                            disabled={selectedTrackCount === 0}
+                            title={t('pages.playlists.manage.batch.addToQueue')}
+                            aria-label={t('pages.playlists.manage.batch.addToQueue')}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                d="M5 8.5h10M5 12h10M5 15.5h7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                              />
+                              <path
+                                d="M16.5 14.2v5.3M13.9 16.8h5.2"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            className="playlists-tracks-batch-icon-btn playlists-tracks-batch-icon-btn-danger"
+                            onClick={handleBatchRemoveFromPlaylist}
+                            disabled={selectedPlaylistReadonly || selectedTrackCount === 0}
+                            title={t('pages.playlists.manage.batch.removeFromPlaylist')}
+                            aria-label={t('pages.playlists.manage.batch.removeFromPlaylist')}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                d="M7 7.5h10M9.1 7.5l.6-1.7h4.6l.6 1.7M9.4 10.3v6.2M12 10.3v6.2M14.6 10.3v6.2M8.4 7.5l.6 10.7h6l.6-10.7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.7"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      ) : null}
 
-                      <span className="playlists-tracks-filter-count">
-                        {t('pages.playlists.manage.resultCount', {
-                          count: filteredPlaylistTrackEntries.length,
-                        })}
-                      </span>
-                    </div>
+                      <div className="playlists-tracks-manage">
+                        <div
+                          className={`playlists-tracks-search-control ${
+                            showPlaylistTrackSearch ? 'is-expanded' : ''
+                          }`}
+                          ref={playlistTrackSearchControlRef}
+                        >
+                          <button
+                            className={`playlists-tracks-icon-btn ${showPlaylistTrackSearch ? 'is-active' : ''}`}
+                            onClick={handleTogglePlaylistTrackSearch}
+                            title={t('pages.playlists.manage.search.placeholder')}
+                          >
+                            <svg className="playlists-tracks-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                              <circle
+                                cx="11"
+                                cy="11"
+                                r="6.5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                              />
+                              <path
+                                d="M16.2 16.2L20 20"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          </button>
 
-                    {playlistBatchMode ? (
-                      <div className="playlists-tracks-batch-actions">
-                        <span className="playlists-tracks-batch-count">
-                          {t('pages.playlists.manage.batch.selectedCount', {
-                            count: selectedTrackCount,
-                          })}
-                        </span>
+                          <div
+                            className={`playlists-tracks-search-inline-wrap ${
+                              showPlaylistTrackSearch ? 'is-expanded' : ''
+                            }`}
+                          >
+                            <input
+                              ref={playlistTrackSearchInputRef}
+                              className="playlists-tracks-search-inline"
+                              type="text"
+                              value={playlistTrackSearchQuery}
+                              onChange={(event) => setPlaylistTrackSearchQuery(event.target.value)}
+                              placeholder={t('pages.playlists.manage.search.placeholder')}
+                            />
+                          </div>
+                        </div>
+
+                        <span className="playlists-tracks-icon-divider" />
+
+                        <div className="playlists-tracks-sort-menu" ref={sortMenuRef}>
+                          <button
+                            ref={sortMenuTriggerRef}
+                            className={`playlists-tracks-icon-btn ${showSortMenu ? 'is-active' : ''}`}
+                            onClick={() => setShowSortMenu((previous) => !previous)}
+                            title={currentSortOptionLabel}
+                          >
+                            <svg className="playlists-tracks-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                d="M8 6v12M8 6l-2.2 2.2M8 6l2.2 2.2M16 18V6M16 18l-2.2-2.2M16 18l2.2-2.2"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.7"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </button>
+
+                          {showSortMenu ? (
+                            <div className="playlists-tracks-sort-dropdown">
+                              {playlistSortOptions.map((option) => {
+                                const isActive = option.field === playlistTrackSortField;
+                                return (
+                                  <button
+                                    key={option.field}
+                                    className={`playlists-tracks-sort-option ${
+                                      isActive ? 'is-active' : ''
+                                    }`}
+                                    onClick={() => handleSelectPlaylistSortField(option.field)}
+                                  >
+                                    <span>{option.label}</span>
+                                    {isActive && option.field !== 'default' ? (
+                                      <span className="playlists-tracks-sort-option-direction">
+                                        <svg
+                                          className="playlists-tracks-sort-option-arrow"
+                                          viewBox="0 0 24 24"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d={
+                                              playlistTrackSortDirection === 'asc'
+                                                ? 'M12 7l4.8 6H7.2L12 7z'
+                                                : 'M12 17l-4.8-6h9.6L12 17z'
+                                            }
+                                            fill="currentColor"
+                                          />
+                                        </svg>
+                                      </span>
+                                    ) : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <span className="playlists-tracks-icon-divider" />
+
                         <button
-                          className="playlists-detail-btn"
-                          onClick={handleSelectAllFilteredTracks}
-                          disabled={filteredPlaylistTrackEntries.length === 0}
+                          className={`playlists-tracks-icon-btn ${playlistBatchMode ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setPlaylistBatchMode((previous) => {
+                              const next = !previous;
+                              if (!next) {
+                                setSelectedTrackKeys([]);
+                              }
+                              return next;
+                            });
+                          }}
+                          title={
+                            playlistBatchMode
+                              ? t('pages.playlists.manage.batch.exit')
+                              : t('pages.playlists.manage.batch.enter')
+                          }
                         >
-                          {t('pages.playlists.manage.batch.selectAll')}
-                        </button>
-                        <button
-                          className="playlists-detail-btn"
-                          onClick={handleClearTrackSelection}
-                          disabled={selectedTrackCount === 0}
-                        >
-                          {t('pages.playlists.manage.batch.clearSelection')}
-                        </button>
-                        <button
-                          className="playlists-detail-btn"
-                          onClick={handleBatchAddToQueue}
-                          disabled={selectedTrackCount === 0}
-                        >
-                          {t('pages.playlists.manage.batch.addToQueue')}
-                        </button>
-                        <button
-                          className="playlists-detail-btn playlists-delete-btn"
-                          onClick={handleBatchRemoveFromPlaylist}
-                          disabled={selectedPlaylistReadonly || selectedTrackCount === 0}
-                        >
-                          {t('pages.playlists.manage.batch.removeFromPlaylist')}
+                          <svg className="playlists-tracks-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                              d="M6 7h12M6 12h9M6 17h12"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                            />
+                          </svg>
                         </button>
                       </div>
-                    ) : null}
+                    </div>
 
                     {filteredPlaylistTrackEntries.length === 0 ? (
                       <div className="playlists-tracks-empty playlists-tracks-empty-query">
@@ -699,43 +1112,29 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       </div>
                     ) : (
                       <>
-                        <div
-                          className={`playlists-tracks-header ${playlistBatchMode ? 'playlists-tracks-header-batch' : ''}`}
-                        >
-                          {playlistBatchMode ? <div>{t('pages.playlists.manage.batch.selectColumn')}</div> : null}
-                          <div>#</div>
-                          <div>{t('pages.playlists.tracks.header.title')}</div>
-                          <div>{t('pages.playlists.tracks.header.artist')}</div>
-                          <div>{t('pages.playlists.tracks.header.album')}</div>
-                          <div>{t('pages.playlists.tracks.header.duration')}</div>
-                          <div>{t('pages.playlists.tracks.header.actions')}</div>
-                        </div>
-
                         {filteredPlaylistTrackEntries.map((entry) => {
                           const isSelected = selectedTrackKeys.includes(entry.key);
 
                           return (
                             <div
                               key={entry.key}
-                              className={`playlists-track ${playlistBatchMode ? 'playlists-track-batch' : ''} ${isSelected ? 'playlists-track-selected' : ''}`}
+                              className={`playlists-track ${playlistBatchMode ? 'playlists-track-batch-selectable' : ''} ${isSelected ? 'playlists-track-selected' : ''}`}
                               onContextMenu={(event) =>
                                 handleTrackContextMenu(selectedPlaylist, entry.track, entry.index, event)
                               }
-                              onDoubleClick={() => handlePlayTrackFromPlaylist(selectedPlaylist, entry.index)}
+                              onDoubleClick={() => {
+                                if (playlistBatchMode) {
+                                  return;
+                                }
+                                handlePlayTrackFromPlaylist(selectedPlaylist, entry.index);
+                              }}
+                              onClick={() => {
+                                if (!playlistBatchMode) {
+                                  return;
+                                }
+                                handleToggleTrackSelection(entry.key, !isSelected);
+                              }}
                             >
-                              {playlistBatchMode ? (
-                                <div className="playlists-track-select">
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={(event) =>
-                                      handleToggleTrackSelection(entry.key, event.target.checked)
-                                    }
-                                    onClick={(event) => event.stopPropagation()}
-                                  />
-                                </div>
-                              ) : null}
-
                               <div className="playlists-track-number">
                                 {String(entry.index + 1).padStart(2, '0')}
                               </div>
@@ -789,64 +1188,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           )}
         </div>
 
-        {showAddTrackModal && selectedPlaylist && (
-          <div className="playlists-add-modal-overlay" onClick={() => setShowAddTrackModal(false)}>
-            <div className="playlists-add-modal" onClick={(event) => event.stopPropagation()}>
-              <div className="playlists-add-modal-header">
-                <h3>{t('pages.playlists.addTrackModal.title', { name: selectedPlaylist.name })}</h3>
-                <button onClick={() => setShowAddTrackModal(false)}>×</button>
-              </div>
-
-              <div className="playlists-add-modal-search">
-                <input
-                  type="text"
-                  placeholder={t('pages.playlists.addTrackModal.search.placeholder')}
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                />
-              </div>
-
-              <div className="playlists-add-modal-tracks">
-                {isLoadingTracks ? (
-                  <div className="playlists-add-modal-empty">
-                    <div>{t('common.state.loading')}</div>
-                  </div>
-                ) : availableTracks.length === 0 ? (
-                  <div className="playlists-add-modal-empty">
-                    <div>{t('pages.playlists.addTrackModal.empty.libraryTitle')}</div>
-                    <div>{t('pages.playlists.addTrackModal.empty.libraryHint')}</div>
-                  </div>
-                ) : (
-                  getFilteredTracks().map((track) => (
-                    <div key={track.id} className="playlists-add-modal-track">
-                      <div className="playlists-add-modal-track-info">
-                        <div className="playlists-add-modal-track-title">{track.title}</div>
-                        <div className="playlists-add-modal-track-artist">
-                          {track.artist || t('common.unknown.artist')}
-                        </div>
-                      </div>
-                      <button
-                        className="playlists-add-modal-track-btn"
-                        onClick={() => {
-                          handleAddTrackToPlaylist(track);
-                          setShowAddTrackModal(false);
-                          setSearchQuery('');
-                        }}
-                      >
-                        {t('common.action.add')}
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="playlists-add-modal-footer">
-                <span>{t('pages.playlists.addTrackModal.footerHint', { count: MAX_TRACKS })}</span>
-              </div>
-            </div>
-          </div>
-        )}
-
         <InputDialog
           isOpen={showCreateDialog}
           title={t('pages.playlists.dialog.create.title')}
@@ -867,23 +1208,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             setShowRenameDialog(false);
             setPlaylistToRename(null);
           }}
-        />
-
-        <InputDialog
-          isOpen={showCoverDialog}
-          title={t('pages.playlists.editor.cover.dialog.title')}
-          message={t('pages.playlists.editor.cover.dialog.message')}
-          defaultValue={getPlaylistCoverUrl(selectedPlaylist)}
-          placeholder={t('pages.playlists.editor.cover.dialog.placeholder')}
-          confirmText={t('common.action.save')}
-          onConfirm={(value) => {
-            if (!selectedPlaylist) {
-              return;
-            }
-            handleSetPlaylistCover(selectedPlaylist.id, value);
-            setShowCoverDialog(false);
-          }}
-          onCancel={() => setShowCoverDialog(false)}
         />
 
         <ConfirmDialog
@@ -913,6 +1237,15 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             setPlaylistToClear(null);
           }}
         />
+
+        {playlistActionsMenu ? (
+          <ContextMenu
+            x={playlistActionsMenu.x}
+            y={playlistActionsMenu.y}
+            items={playlistActionsMenu.items}
+            onClose={() => setPlaylistActionsMenu(null)}
+          />
+        ) : null}
 
         {trackContextMenu ? (
           <ContextMenu

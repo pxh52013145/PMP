@@ -50,6 +50,62 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('prepends newly added tracks to playlist order', () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Order Test');
+
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'track-1',
+      title: 'Track 1',
+      duration: 100,
+      filePath: 'C:\\Music\\track-1.mp3',
+      path: 'C:\\Music\\track-1.mp3',
+    });
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'track-2',
+      title: 'Track 2',
+      duration: 120,
+      filePath: 'C:\\Music\\track-2.mp3',
+      path: 'C:\\Music\\track-2.mp3',
+    });
+
+    const updated = service.getPlaylist(playlist.id);
+    expect(updated?.tracks.map((track) => track.id)).toEqual(['track-2', 'track-1']);
+    expect(updated?.trackCount).toBe(2);
+    expect(updated?.totalDuration).toBe(220);
+
+    service.destroy();
+  });
+
+  it('deduplicates playlist tracks and keeps latest at top', () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Dedup Test');
+
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'track-dup-1',
+      title: 'Track Duplicate Old',
+      duration: 100,
+      filePath: 'C:\\Music\\duplicate-old.mp3',
+      path: 'C:\\Music\\duplicate-old.mp3',
+    });
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'track-dup-1',
+      title: 'Track Duplicate New',
+      duration: 180,
+      filePath: 'C:\\Music\\duplicate-new.mp3',
+      path: 'C:\\Music\\duplicate-new.mp3',
+    });
+
+    const updated = service.getPlaylist(playlist.id);
+    expect(updated?.tracks).toHaveLength(1);
+    expect(updated?.tracks[0]?.id).toBe('track-dup-1');
+    expect(updated?.tracks[0]?.title).toBe('Track Duplicate New');
+    expect(updated?.trackCount).toBe(1);
+    expect(updated?.totalDuration).toBe(180);
+
+    service.destroy();
+  });
+
   it('emits a coded error when track has no absolute file path', async () => {
     const service = new NativeAudioService();
     const onError = vi.fn();
@@ -241,6 +297,78 @@ describe('NativeAudioService', () => {
       'music_library_db_mark_track_played',
       expect.anything()
     );
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('stores compact recent tracks and avoids repeated smart playlist bootstrap queries', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        return [];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        return [];
+      }
+      if (cmd === 'music_library_db_replace_playlist_items') {
+        return true;
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      {
+        id: 'local-track-compact-1',
+        title: 'Compact Track',
+        artist: 'Tester',
+        filePath: 'C:\\\\Music\\\\compact-track.mp3',
+        path: 'C:\\\\Music\\\\compact-track.mp3',
+        fileContent: new ArrayBuffer(1024 * 1024),
+      },
+    ]);
+
+    await service.playTrackAtIndex(0);
+    await flushMicrotasks(6);
+
+    await vi.waitFor(() => {
+      expect(
+        invokeMock.mock.calls.some(([cmd]) => cmd === 'music_library_db_replace_playlist_items')
+      ).toBe(true);
+    });
+
+    const recentPlaylist = service.getPlaylist('smart-recently-played');
+    expect(recentPlaylist).not.toBeNull();
+    expect(recentPlaylist?.tracks[0]?.fileContent).toBeUndefined();
+    expect(recentPlaylist?.tracks[0]?.file).toBeUndefined();
+    expect(recentPlaylist?.tracks[0]?.fileHandle).toBeUndefined();
+
+    const smartBootstrapCalls = invokeMock.mock.calls.filter(
+      ([cmd, payload]) =>
+        cmd === 'music_library_db_list_playlists' &&
+        Boolean(
+          (payload as { query?: { kind?: string } } | undefined)?.query?.kind === 'smart'
+        )
+    );
+    expect(smartBootstrapCalls).toHaveLength(1);
 
     service.destroy();
     restoreRuntime();

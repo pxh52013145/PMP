@@ -419,11 +419,6 @@ export interface IAudioService {
   renamePlaylist(playlistId: string, newName: string): void;
 
   /**
-   * 设置播放列表封面（传空字符串或 undefined 可清空）
-   */
-  setPlaylistCover(playlistId: string, coverUrl?: string): void;
-
-  /**
    * 获取所有播放列表
    */
   getPlaylists(): Playlist[];

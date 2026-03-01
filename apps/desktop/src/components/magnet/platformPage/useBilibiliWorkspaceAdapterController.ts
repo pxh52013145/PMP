@@ -136,7 +136,31 @@ function formatDuration(seconds: number | undefined): string {
 }
 
 function toResourceCacheKey(item: BilibiliFavoriteResourceItem): string {
-  return item.resourceId || item.sourceLocator;
+  return buildStableBilibiliResourceIdentity(item);
+}
+
+function buildStableBilibiliResourceIdentity(item: BilibiliFavoriteResourceItem): string {
+  const resourceId = item.resourceId.trim();
+  if (resourceId) {
+    return `rid:${resourceId}`;
+  }
+
+  const bvid = (item.bvid || '').trim();
+  const cid = (item.cid || '').trim();
+  if (bvid && cid) {
+    return `bvid:${bvid.toUpperCase()}::cid:${cid}`;
+  }
+  if (bvid) {
+    return `bvid:${bvid.toUpperCase()}`;
+  }
+
+  const sourceLocator = item.sourceLocator.trim();
+  if (sourceLocator) {
+    return `locator:${sourceLocator}`;
+  }
+
+  const fallbackSeed = `${item.title || 'unknown'}::${item.ownerName || ''}::${item.durationSeconds || 0}`;
+  return `meta:${fallbackSeed.trim() || 'unknown'}`;
 }
 
 function isBilibiliVideoSourceLocator(sourceLocator: string): boolean {
@@ -154,8 +178,9 @@ function buildTrackFromPreparedPlayback(
   prepared: BilibiliPreparedPlayback,
   coverUrl?: string
 ): Track {
+  const stableIdentity = buildStableBilibiliResourceIdentity(item);
   return {
-    id: `bilibili:${item.resourceId}`,
+    id: `bilibili:${stableIdentity}`,
     title: item.title,
     artist: item.ownerName ?? 'Bilibili',
     duration: item.durationSeconds ?? prepared.durationSeconds,
@@ -634,4 +659,3 @@ export function useBilibiliWorkspaceAdapterController(
     bilibiliWorkspaceProps,
   };
 }
-

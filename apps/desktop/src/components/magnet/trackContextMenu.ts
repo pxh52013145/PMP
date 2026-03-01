@@ -1,4 +1,5 @@
 import type { Playlist, Track } from '../../services/audio';
+import { isSameTrackByIdentityOrPath } from '../../services/audio/trackIdentity';
 import type { ContextMenuItem } from './ContextMenu';
 
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
@@ -41,6 +42,12 @@ interface BuildLibraryTrackContextMenuOptions extends BuildTrackContextMenuBaseO
   onViewArtist: () => void;
 }
 
+export interface TrackPlaylistMembership {
+  playlistId: string;
+  playlistName: string;
+  playlistKind: 'manual' | 'platform';
+}
+
 const isReadonlyPlaylist = (playlist: Playlist): boolean => {
   if (playlist.readonly) {
     return true;
@@ -63,6 +70,30 @@ export const resolveWritablePlaylistTargets = (
   });
 };
 
+export const resolveTrackPlaylistMemberships = (
+  track: Track,
+  playlists: Playlist[],
+  excludePlaylistId?: string
+): TrackPlaylistMembership[] => {
+  const memberships: TrackPlaylistMembership[] = [];
+
+  for (const playlist of playlists) {
+    if (excludePlaylistId && playlist.id === excludePlaylistId) continue;
+    if (playlist.kind === 'smart') continue;
+
+    const isMember = playlist.tracks.some((candidate) => isSameTrackByIdentityOrPath(candidate, track));
+    if (!isMember) continue;
+
+    memberships.push({
+      playlistId: playlist.id,
+      playlistName: playlist.name,
+      playlistKind: playlist.kind === 'platform' ? 'platform' : 'manual',
+    });
+  }
+
+  return memberships;
+};
+
 export const buildAddToPlaylistMenuItem = ({
   t,
   track,
@@ -71,13 +102,19 @@ export const buildAddToPlaylistMenuItem = ({
   excludePlaylistId,
 }: BuildAddToPlaylistMenuItemOptions): ContextMenuItem => {
   const targets = resolveWritablePlaylistTargets(playlists, excludePlaylistId);
+  const membershipSet = new Set(
+    resolveTrackPlaylistMemberships(track, targets).map((membership) => membership.playlistId)
+  );
 
   const children: ContextMenuItem[] =
     targets.length > 0
       ? targets.map((playlist) => ({
-          label: playlist.name,
+          label: membershipSet.has(playlist.id) ? `${playlist.name} ✓` : playlist.name,
           icon: playlist.kind === 'platform' ? 'C' : 'M',
-          onClick: () => onAddToPlaylist(playlist.id, track),
+          disabled: membershipSet.has(playlist.id),
+          onClick: membershipSet.has(playlist.id)
+            ? undefined
+            : () => onAddToPlaylist(playlist.id, track),
         }))
       : [
           {
@@ -171,4 +208,3 @@ export const buildLibraryTrackContextMenu = (
     },
   ];
 };
-
