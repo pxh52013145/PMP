@@ -45,6 +45,11 @@ import {
   type NativeLibraryPlaylistItemUpsertInput,
 } from '../../modules/music-library';
 import { readString } from '../../modules/storage';
+import {
+  getAudioPerformanceTelemetrySnapshot,
+  recordRecentPlaylistWriteFlushed,
+  recordRecentPlaylistWriteScheduled,
+} from './audioPerformanceTelemetry';
 
 type StateListener = (state: AudioState) => void;
 
@@ -163,6 +168,11 @@ type ReplayGainSettings = {
   preampDb: number;
 };
 
+type RecentSmartPlaylistWriteEntry = {
+  track: Track;
+  playedAtMs: number;
+};
+
 type RuntimeControlSettings = {
   dynamicGainEnabled: boolean;
   volumeDebounceEnabled: boolean;
@@ -260,6 +270,8 @@ export class NativeAudioService implements IAudioService {
   private visibilityListenerAttached = false;
   private visibilityListenerCleanup: (() => void) | null = null;
   private recentSmartPlaylistWriteQueue: Promise<void> = Promise.resolve();
+  private recentSmartPlaylistWriteBuffer: RecentSmartPlaylistWriteEntry[] = [];
+  private recentSmartPlaylistWriteTimer: number | null = null;
   private builtinSmartPlaylistsReady = false;
   private builtinSmartPlaylistsInitPromise: Promise<void> | null = null;
   private lastNativeErrorSeq = 0;
@@ -413,6 +425,8 @@ export class NativeAudioService implements IAudioService {
   private static readonly SMART_PLAYLIST_RECENT_ID = 'smart-recently-played';
   private static readonly SMART_PLAYLIST_RECENT_NAME = 'Recently Played';
   private static readonly SMART_PLAYLIST_RECENT_LIMIT = 1000;
+  private static readonly RECENT_SMART_PLAYLIST_WRITE_DEBOUNCE_MS = 500;
+  private static readonly RECENT_SMART_PLAYLIST_MAX_BUFFERED_EVENTS = 64;
 
   private dynamicSrcRestoreDebounceMs = NativeAudioService.DYNAMIC_SRC_RESTORE_DEBOUNCE_MS;
   private dynamicSrcMinSwitchIntervalMs = NativeAudioService.DYNAMIC_SRC_MIN_SWITCH_INTERVAL_MS;
@@ -820,6 +834,116 @@ export class NativeAudioService implements IAudioService {
     this.updateState({ playlists: nextPlaylists, currentPlaylist });
   }
 
+  private clearRecentSmartPlaylistWriteTimer(): void {
+    if (this.recentSmartPlaylistWriteTimer === null) return;
+    if (typeof window === 'undefined') {
+      this.recentSmartPlaylistWriteTimer = null;
+      return;
+    }
+    window.clearTimeout(this.recentSmartPlaylistWriteTimer);
+    this.recentSmartPlaylistWriteTimer = null;
+  }
+
+  private scheduleRecentSmartPlaylistWriteFlush(): void {
+    if (typeof window === 'undefined') {
+      this.flushRecentSmartPlaylistWriteBufferBestEffort();
+      return;
+    }
+    this.clearRecentSmartPlaylistWriteTimer();
+    this.recentSmartPlaylistWriteTimer = window.setTimeout(() => {
+      this.recentSmartPlaylistWriteTimer = null;
+      this.flushRecentSmartPlaylistWriteBufferBestEffort();
+    }, NativeAudioService.RECENT_SMART_PLAYLIST_WRITE_DEBOUNCE_MS);
+  }
+
+  private flushRecentSmartPlaylistWriteBufferBestEffort(): void {
+    if (!isTauriRuntime()) {
+      this.recentSmartPlaylistWriteBuffer = [];
+      return;
+    }
+
+    if (this.recentSmartPlaylistWriteBuffer.length === 0) return;
+    const bufferedEntries = this.recentSmartPlaylistWriteBuffer.splice(0);
+
+    this.recentSmartPlaylistWriteQueue = this.recentSmartPlaylistWriteQueue
+      .then(async () => {
+        await this.flushRecentSmartPlaylistWriteBatch(bufferedEntries);
+      })
+      .catch((error) => {
+        console.warn('[NativeAudioService] failed to update recent smart playlist:', error);
+      })
+      .finally(() => {
+        if (
+          this.recentSmartPlaylistWriteBuffer.length > 0 &&
+          this.recentSmartPlaylistWriteTimer === null
+        ) {
+          this.scheduleRecentSmartPlaylistWriteFlush();
+        }
+      });
+  }
+
+  private async flushRecentSmartPlaylistWriteBatch(
+    bufferedEntries: RecentSmartPlaylistWriteEntry[]
+  ): Promise<void> {
+    if (bufferedEntries.length === 0) return;
+
+    await this.ensureBuiltinSmartPlaylistsInLibraryDb();
+
+    const existingTracksFromState =
+      this.state.playlists.find((item) => item.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID)
+        ?.tracks ?? [];
+    const existingTracks =
+      existingTracksFromState.length > 0
+        ? existingTracksFromState
+        : this.parseTracksFromPlaylistItems(
+            NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+            await listNativeLibraryPlaylistItems(NativeAudioService.SMART_PLAYLIST_RECENT_ID)
+          );
+
+    let mergedTracks = existingTracks.map((item) => this.compactTrackForRecentPlaylist(item));
+    let latestPlayedAtMs = 0;
+
+    const orderedEntries = [...bufferedEntries].sort((left, right) => left.playedAtMs - right.playedAtMs);
+    for (const entry of orderedEntries) {
+      latestPlayedAtMs = Math.max(latestPlayedAtMs, entry.playedAtMs);
+      mergedTracks = prependTrackWithDedup(mergedTracks, entry.track).slice(
+        0,
+        NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT
+      );
+    }
+
+    const updatedAtMs = latestPlayedAtMs > 0 ? latestPlayedAtMs : Date.now();
+    this.applyRecentSmartPlaylistSnapshot(mergedTracks, updatedAtMs);
+
+    const payloadPlaylist: Playlist = {
+      id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+      name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
+      tracks: mergedTracks,
+      kind: NativeAudioService.PLAYLIST_KIND_SMART,
+      readonly: true,
+      createdAt: updatedAtMs,
+      updatedAt: updatedAtMs,
+      trackCount: mergedTracks.length,
+      totalDuration: mergedTracks.reduce((sum, item) => sum + (item.duration ?? 0), 0),
+    };
+
+    const playlistItems = this.toPlaylistItemUpserts(payloadPlaylist);
+    await replaceNativeLibraryPlaylistItems(
+      NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+      playlistItems
+    );
+
+    const payloadBytes = playlistItems.reduce((total, item) => {
+      const jsonLength = typeof item.trackPayloadJson === 'string' ? item.trackPayloadJson.length : 0;
+      return total + jsonLength;
+    }, 0);
+    recordRecentPlaylistWriteFlushed({
+      eventCount: bufferedEntries.length,
+      trackCount: mergedTracks.length,
+      payloadBytes,
+    });
+  }
+
   private enqueueRecentSmartPlaylistTrackBestEffort(track: Track, playedAtMs: number): void {
     if (!isTauriRuntime()) return;
     if (!track || typeof track !== 'object') return;
@@ -833,52 +957,22 @@ export class NativeAudioService implements IAudioService {
           : 1,
     });
 
-    this.recentSmartPlaylistWriteQueue = this.recentSmartPlaylistWriteQueue
-      .then(async () => {
-        await this.ensureBuiltinSmartPlaylistsInLibraryDb();
+    this.recentSmartPlaylistWriteBuffer.push({
+      track: recentTrack,
+      playedAtMs,
+    });
+    recordRecentPlaylistWriteScheduled();
 
-        const existingTracksFromState =
-          this.state.playlists.find((item) => item.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID)
-            ?.tracks ?? [];
-        const existingTracks =
-          existingTracksFromState.length > 0
-            ? existingTracksFromState
-            : this.parseTracksFromPlaylistItems(
-                NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-                await listNativeLibraryPlaylistItems(NativeAudioService.SMART_PLAYLIST_RECENT_ID)
-              );
+    if (
+      this.recentSmartPlaylistWriteBuffer.length >=
+      NativeAudioService.RECENT_SMART_PLAYLIST_MAX_BUFFERED_EVENTS
+    ) {
+      this.clearRecentSmartPlaylistWriteTimer();
+      this.flushRecentSmartPlaylistWriteBufferBestEffort();
+      return;
+    }
 
-        const compactExistingTracks = existingTracks.map((item) =>
-          this.compactTrackForRecentPlaylist(item)
-        );
-
-        const mergedTracks = prependTrackWithDedup(
-          compactExistingTracks,
-          recentTrack
-        ).slice(0, NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT);
-
-        this.applyRecentSmartPlaylistSnapshot(mergedTracks, playedAtMs);
-
-        const payloadPlaylist: Playlist = {
-          id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-          name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
-          tracks: mergedTracks,
-          kind: NativeAudioService.PLAYLIST_KIND_SMART,
-          readonly: true,
-          createdAt: playedAtMs,
-          updatedAt: playedAtMs,
-          trackCount: mergedTracks.length,
-          totalDuration: mergedTracks.reduce((sum, item) => sum + (item.duration ?? 0), 0),
-        };
-
-        await replaceNativeLibraryPlaylistItems(
-          NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-          this.toPlaylistItemUpserts(payloadPlaylist)
-        );
-      })
-      .catch((error) => {
-        console.warn('[NativeAudioService] failed to update recent smart playlist:', error);
-      });
+    this.scheduleRecentSmartPlaylistWriteFlush();
   }
 
   private isReadonlyPlaylist(playlist: Playlist | null | undefined): boolean {
@@ -3308,6 +3402,7 @@ export class NativeAudioService implements IAudioService {
     const learningDeviceKey = this.buildDynamicSrcLearningDeviceKey();
     const learningStressIndex = this.dynamicSrcLearningProfile[learningDeviceKey]?.stressIndex ?? 0;
     const learningScale = this.getDynamicSrcLearningScale();
+    const audioPerfTelemetry = getAudioPerformanceTelemetrySnapshot();
 
     const bufferedAheadNow =
       typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
@@ -3408,6 +3503,17 @@ export class NativeAudioService implements IAudioService {
       sharedRenderLowWatermarkSamples: this.sharedRenderLowWatermarkSamples,
       diagnosticTimelineDroppedEvents: this.diagnosticTimelineDroppedEvents,
       diagnosticTimeline: [...this.diagnosticTimeline],
+      recentPlaylistWriteScheduledCount: audioPerfTelemetry.recentPlaylistWriteScheduledCount,
+      recentPlaylistWriteFlushCount: audioPerfTelemetry.recentPlaylistWriteFlushCount,
+      recentPlaylistWriteEventCount: audioPerfTelemetry.recentPlaylistWriteEventCount,
+      recentPlaylistWriteTrackCount: audioPerfTelemetry.recentPlaylistWriteTrackCount,
+      recentPlaylistWritePayloadBytesTotal: audioPerfTelemetry.recentPlaylistWritePayloadBytesTotal,
+      recentPlaylistWritePayloadBytesLast: audioPerfTelemetry.recentPlaylistWritePayloadBytesLast,
+      coverResolveRequestCount: audioPerfTelemetry.coverResolveRequestCount,
+      coverResolveCacheHitCount: audioPerfTelemetry.coverResolveCacheHitCount,
+      coverResolveCacheMissCount: audioPerfTelemetry.coverResolveCacheMissCount,
+      coverResolveHitRate: audioPerfTelemetry.coverResolveHitRate,
+      coverBlobReleaseCount: audioPerfTelemetry.coverBlobReleaseCount,
       protectionReason:
         protectionActive
           ? this.protectionWindowReason ?? this.sharedStressReason
@@ -5258,6 +5364,8 @@ export class NativeAudioService implements IAudioService {
     this.diagnosticTimelineIgnoreBeforeMs = 0;
 
     this.stop();
+    this.clearRecentSmartPlaylistWriteTimer();
+    this.flushRecentSmartPlaylistWriteBufferBestEffort();
     this.clearPendingVolume();
     this.stopFallbackTicker();
     this.clearProtectionWindowTimer();

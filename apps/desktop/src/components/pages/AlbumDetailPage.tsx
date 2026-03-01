@@ -93,6 +93,7 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
     items: ContextMenuItem[];
   } | null>(null);
   const tracksListRef = useRef<HTMLDivElement | null>(null);
+  const albumCoverBlobUrlRef = useRef<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +151,28 @@ export const AlbumDetailPage: React.FC<AlbumDetailPageProps> = ({
       cancelled = true;
     };
   }, [albumName, artist]);
+
+  useEffect(() => {
+    const nextCoverUrl = typeof albumCover === 'string' ? albumCover.trim() : '';
+    const nextBlobUrl = nextCoverUrl.startsWith('blob:') ? nextCoverUrl : '';
+    const previousBlobUrl = albumCoverBlobUrlRef.current;
+
+    if (previousBlobUrl && previousBlobUrl !== nextBlobUrl) {
+      musicLibraryService.releaseCoverUrls([previousBlobUrl]);
+    }
+
+    albumCoverBlobUrlRef.current = nextBlobUrl;
+  }, [albumCover]);
+
+  useEffect(() => {
+    return () => {
+      const previousBlobUrl = albumCoverBlobUrlRef.current;
+      albumCoverBlobUrlRef.current = '';
+      if (previousBlobUrl) {
+        musicLibraryService.releaseCoverUrls([previousBlobUrl]);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setRenderedTrackLimit((prev) => {

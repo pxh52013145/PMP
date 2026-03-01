@@ -79,6 +79,12 @@ import {
 } from '../../modules/music-library/baseQuery';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
+  recordCoverBlobUrlsReleased,
+  recordCoverResolveCacheHit,
+  recordCoverResolveCacheMiss,
+  recordCoverResolveLookupRequest,
+} from './audioPerformanceTelemetry';
+import {
   getCloudPlaybackFallbackAdapter,
   type CloudPlaybackFallbackDispatchResult,
   type CloudPlaybackFallbackRequest,
@@ -1946,6 +1952,19 @@ export class MusicLibraryService {
       bypassRuntimePolicy?: boolean;
     }
   ): Promise<string | undefined> {
+    recordCoverResolveLookupRequest();
+    let coverLookupResolved = false;
+    const markCoverLookupHit = () => {
+      if (coverLookupResolved) return;
+      coverLookupResolved = true;
+      recordCoverResolveCacheHit();
+    };
+    const markCoverLookupMiss = () => {
+      if (coverLookupResolved) return;
+      coverLookupResolved = true;
+      recordCoverResolveCacheMiss();
+    };
+
     const allowAlbumFallback = options?.allowAlbumFallback !== false;
     const coverSizeHint = options?.coverSizeHint;
     const bypassRuntimePolicy = options?.bypassRuntimePolicy === true;
@@ -1970,12 +1989,27 @@ export class MusicLibraryService {
       if (cacheKey && String(existingUrl).startsWith('blob:')) {
         this.touchCoverBlobCache(cacheKey);
       }
+      markCoverLookupHit();
       return existingUrl;
     }
 
-    if (!inTauri) return existingUrl;
+    if (!inTauri) {
+      if (existingUrl) {
+        markCoverLookupHit();
+      } else {
+        markCoverLookupMiss();
+      }
+      return existingUrl;
+    }
 
-    if (!audioPath || !isAbsoluteAudioPath) return existingUrl;
+    if (!audioPath || !isAbsoluteAudioPath) {
+      if (existingUrl) {
+        markCoverLookupHit();
+      } else {
+        markCoverLookupMiss();
+      }
+      return existingUrl;
+    }
 
     const effectiveCacheKey = cacheKey ?? `${this.normalizePathForCompare(audioPath)}|edge=${requestedEdgePx}`;
     const normalizedExistingUrl =
@@ -1993,6 +2027,7 @@ export class MusicLibraryService {
       if (track.coverKey) {
         void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
       }
+      markCoverLookupHit();
       return preferredExistingUrl;
     }
 
@@ -2010,16 +2045,23 @@ export class MusicLibraryService {
           void this.touchCoverCacheEntry(track.coverKey).catch(() => {});
         }
         this.touchCoverBlobCache(effectiveCacheKey);
+        markCoverLookupHit();
         return cached;
       }
     }
 
     const inflight = this.coverUrlInflight.get(effectiveCacheKey);
-    if (inflight) return inflight;
+    if (inflight) {
+      markCoverLookupHit();
+      return inflight;
+    }
 
     if (this.currentCoverRuntimeCachePolicy === 'hidden' && !bypassRuntimePolicy) {
+      markCoverLookupMiss();
       return undefined;
     }
+
+    markCoverLookupMiss();
 
     const promise = (async () => {
       const { invoke } = await import('@tauri-apps/api/tauri');
@@ -2104,7 +2146,9 @@ export class MusicLibraryService {
     const albumCacheKey = `${albumKey}|edge=${requestedEdgePx}`;
 
     const cachedAlbum = this.albumCoverUrlCache.get(albumCacheKey);
-    if (cachedAlbum) return cachedAlbum;
+    if (cachedAlbum) {
+      return cachedAlbum;
+    }
 
     const inflightAlbum = this.albumCoverUrlInflight.get(albumCacheKey);
     if (inflightAlbum) return inflightAlbum;
@@ -2202,14 +2246,21 @@ export class MusicLibraryService {
     if (!Array.isArray(urls) || urls.length === 0) return;
 
     const uniqueUrls = new Set<string>();
+    const blobUrls = new Set<string>();
     for (const url of urls) {
       if (typeof url !== 'string') continue;
       const trimmed = url.trim();
       if (!trimmed) continue;
+      if (trimmed.startsWith('blob:')) {
+        blobUrls.add(trimmed);
+      }
       uniqueUrls.add(trimmed);
     }
 
     if (uniqueUrls.size === 0) return;
+    if (blobUrls.size > 0) {
+      recordCoverBlobUrlsReleased(blobUrls.size);
+    }
 
     for (const url of uniqueUrls) {
       this.evictCoverUrlFromRuntimeCaches(url);

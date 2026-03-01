@@ -220,6 +220,17 @@ export interface AudioRobustnessSnapshot {
     value: number;
     aux: number;
   }>;
+  recentPlaylistWriteScheduledCount?: number;
+  recentPlaylistWriteFlushCount?: number;
+  recentPlaylistWriteEventCount?: number;
+  recentPlaylistWriteTrackCount?: number;
+  recentPlaylistWritePayloadBytesTotal?: number;
+  recentPlaylistWritePayloadBytesLast?: number;
+  coverResolveRequestCount?: number;
+  coverResolveCacheHitCount?: number;
+  coverResolveCacheMissCount?: number;
+  coverResolveHitRate?: number;
+  coverBlobReleaseCount?: number;
 }
 
 export type AudioSpectrumTap = 'pre-dsp' | 'post-dsp';

@@ -12,6 +12,7 @@ import {
   searchNativeBilibiliResourceByBvid,
 } from '../music-library';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { ConnectorScopedLruTtlCache } from './connectorScopedCache';
 
 export interface BilibiliFavoriteFolderItem {
   folderId: string;
@@ -71,6 +72,47 @@ export interface BilibiliPlaybackCacheSettings {
   customRootPath?: string;
   effectiveRootPath: string;
   defaultRootPath: string;
+}
+
+const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili';
+const BILIBILI_RESOURCE_BY_BVID_CACHE =
+  new ConnectorScopedLruTtlCache<BilibiliFavoriteResourceItem>({
+    maxEntriesPerConnector: 160,
+    defaultTtlMs: 3 * 60 * 1000,
+  });
+const BILIBILI_PLAYBACK_QUALITY_CACHE =
+  new ConnectorScopedLruTtlCache<BilibiliPlaybackQualityOption[]>({
+    maxEntriesPerConnector: 240,
+    defaultTtlMs: 90 * 1000,
+  });
+const BILIBILI_COVER_ASSET_CACHE = new ConnectorScopedLruTtlCache<string>({
+  maxEntriesPerConnector: 360,
+  defaultTtlMs: 10 * 60 * 1000,
+});
+
+function cloneResourceItem(item: BilibiliFavoriteResourceItem): BilibiliFavoriteResourceItem {
+  return {
+    resourceId: item.resourceId,
+    title: item.title,
+    ownerName: item.ownerName,
+    durationSeconds: item.durationSeconds,
+    coverUrl: item.coverUrl,
+    sourceLocator: item.sourceLocator,
+    lyricLocator: item.lyricLocator,
+    bvid: item.bvid,
+    cid: item.cid,
+    contentKind: item.contentKind,
+  };
+}
+
+function clonePlaybackQualityOptions(
+  options: BilibiliPlaybackQualityOption[]
+): BilibiliPlaybackQualityOption[] {
+  return options.map((item) => ({
+    key: item.key,
+    label: item.label,
+    available: item.available,
+  }));
 }
 
 export async function pickBilibiliCacheDirectory(): Promise<string | null> {
@@ -212,10 +254,16 @@ export async function searchBilibiliResourceByBvid(
   const normalizedBvid = normalizeString(bvid);
   if (!normalizedBvid) return null;
 
+  const cacheKey = normalizedBvid.toUpperCase();
+  const cachedItem = BILIBILI_RESOURCE_BY_BVID_CACHE.get(BILIBILI_CONNECTOR_ID, cacheKey);
+  if (cachedItem) {
+    return cloneResourceItem(cachedItem);
+  }
+
   const item = await searchNativeBilibiliResourceByBvid(normalizedBvid);
   if (!item) return null;
 
-  return {
+  const mapped: BilibiliFavoriteResourceItem = {
     resourceId: item.resourceId,
     title: item.title,
     ownerName: normalizeString(item.ownerName) || undefined,
@@ -227,6 +275,9 @@ export async function searchBilibiliResourceByBvid(
     cid: normalizeString(item.cid) || undefined,
     contentKind: normalizeString(item.contentKind) || 'unknown',
   };
+
+  BILIBILI_RESOURCE_BY_BVID_CACHE.set(BILIBILI_CONNECTOR_ID, cacheKey, mapped);
+  return cloneResourceItem(mapped);
 }
 
 export async function prepareBilibiliCachedPlayback(
@@ -262,12 +313,27 @@ export async function listBilibiliPlaybackQualities(
   const normalizedSourceLocator = normalizeString(sourceLocator);
   if (!normalizedSourceLocator) return [];
 
+  const cached = BILIBILI_PLAYBACK_QUALITY_CACHE.get(
+    BILIBILI_CONNECTOR_ID,
+    normalizedSourceLocator
+  );
+  if (cached) {
+    return clonePlaybackQualityOptions(cached);
+  }
+
   const rawOptions = await listNativeBilibiliPlaybackQualities(normalizedSourceLocator);
-  return rawOptions.map((item) => ({
+  const normalizedOptions = rawOptions.map((item) => ({
     key: normalizeString(item.key),
     label: normalizeString(item.label),
     available: item.available,
   }));
+
+  BILIBILI_PLAYBACK_QUALITY_CACHE.set(
+    BILIBILI_CONNECTOR_ID,
+    normalizedSourceLocator,
+    normalizedOptions
+  );
+  return clonePlaybackQualityOptions(normalizedOptions);
 }
 
 export async function resolveBilibiliLyricLocator(
@@ -293,19 +359,32 @@ export async function resolveBilibiliCoverAssetUrl(
   const normalizedCoverUrl = normalizeString(coverUrl);
   if (!normalizedCoverUrl) return undefined;
 
-  if (!isTauriRuntime()) return normalizedCoverUrl;
+  const cached = BILIBILI_COVER_ASSET_CACHE.get(BILIBILI_CONNECTOR_ID, normalizedCoverUrl);
+  if (cached) return cached;
+
+  if (!isTauriRuntime()) {
+    BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
+    return normalizedCoverUrl;
+  }
 
   try {
     const cachePath = await prepareNativeBilibiliCoverCache(normalizedCoverUrl);
-    if (!cachePath) return normalizedCoverUrl;
+    if (!cachePath) {
+      BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
+      return normalizedCoverUrl;
+    }
 
     const tauriApi = await import('@tauri-apps/api/tauri');
     if (typeof tauriApi.convertFileSrc === 'function') {
-      return tauriApi.convertFileSrc(cachePath);
+      const converted = tauriApi.convertFileSrc(cachePath);
+      BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, converted);
+      return converted;
     }
 
+    BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
     return normalizedCoverUrl;
   } catch {
+    BILIBILI_COVER_ASSET_CACHE.set(BILIBILI_CONNECTOR_ID, normalizedCoverUrl, normalizedCoverUrl);
     return normalizedCoverUrl;
   }
 }

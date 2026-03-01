@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AudioState, Playlist, Track } from '../../services/audio';
 import { useAudioService } from '../../contexts/AudioEngineContext';
@@ -35,6 +35,9 @@ type PopupMenuState = {
 const makeTrackKey = (track: Track, index: number): string => `${track.id}::${index}`;
 
 const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
+const PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT = 72;
+const PLAYLIST_LIST_VIRTUAL_OVERSCAN_ROWS = 8;
+const PLAYLIST_COVER_RESOLVE_BATCH_SIZE = 8;
 
 const isBilibiliConnectorId = (value: string | null | undefined): boolean => {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -80,10 +83,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [selectedTrackKeys, setSelectedTrackKeys] = useState<string[]>([]);
   const [resolvedPlaylistCoverMap, setResolvedPlaylistCoverMap] = useState<Record<string, string>>({});
   const pendingPlaylistCoverIdsRef = useRef<Set<string>>(new Set());
+  const playlistListRef = useRef<HTMLDivElement | null>(null);
+  const activePlaylistBlobCoverUrlsRef = useRef<Set<string>>(new Set());
   const playlistTrackSearchControlRef = useRef<HTMLDivElement | null>(null);
   const playlistTrackSearchInputRef = useRef<HTMLInputElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const sortMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [playlistListScrollTop, setPlaylistListScrollTop] = useState(0);
+  const [playlistListViewportHeight, setPlaylistListViewportHeight] = useState(0);
 
   const [trackContextMenu, setTrackContextMenu] = useState<PopupMenuState | null>(null);
   const [playlistActionsMenu, setPlaylistActionsMenu] = useState<PopupMenuState | null>(null);
@@ -111,6 +118,98 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     setShowSortMenu(false);
     setShowPlaylistTrackSearch(false);
   }, [selectedPlaylist?.id, selectedPlaylist?.updatedAt]);
+
+  const handlePlaylistListScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    setPlaylistListScrollTop(event.currentTarget.scrollTop);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const listElement = playlistListRef.current;
+    if (!listElement) return;
+
+    const syncViewport = () => {
+      setPlaylistListViewportHeight(listElement.clientHeight);
+      setPlaylistListScrollTop(listElement.scrollTop);
+    };
+
+    syncViewport();
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      syncViewport();
+    });
+    observer.observe(listElement);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setPlaylistListScrollTop(0);
+    if (playlistListRef.current) {
+      playlistListRef.current.scrollTop = 0;
+    }
+  }, [isOpen]);
+
+  const playlistVirtualWindow = useMemo(() => {
+    const total = audioState.playlists.length;
+    if (total <= 0) {
+      return {
+        start: 0,
+        end: 0,
+        topSpacerPx: 0,
+        bottomSpacerPx: 0,
+      };
+    }
+
+    const viewportHeight =
+      playlistListViewportHeight > 0
+        ? playlistListViewportHeight
+        : PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT * 8;
+    const visibleCount = Math.max(1, Math.ceil(viewportHeight / PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT));
+    const rawStart = Math.max(
+      0,
+      Math.floor(playlistListScrollTop / PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT) -
+        PLAYLIST_LIST_VIRTUAL_OVERSCAN_ROWS
+    );
+    const maxStart = Math.max(0, total - visibleCount);
+    const start = Math.min(rawStart, maxStart);
+    const end = Math.min(
+      total,
+      start + visibleCount + PLAYLIST_LIST_VIRTUAL_OVERSCAN_ROWS * 2
+    );
+
+    return {
+      start,
+      end,
+      topSpacerPx: start * PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT,
+      bottomSpacerPx: Math.max(0, (total - end) * PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT),
+    };
+  }, [audioState.playlists.length, playlistListScrollTop, playlistListViewportHeight]);
+
+  const virtualizedSidebarPlaylists = useMemo(
+    () => audioState.playlists.slice(playlistVirtualWindow.start, playlistVirtualWindow.end),
+    [audioState.playlists, playlistVirtualWindow.end, playlistVirtualWindow.start]
+  );
+
+  const playlistById = useMemo(
+    () => new Map(audioState.playlists.map((playlist) => [playlist.id, playlist])),
+    [audioState.playlists]
+  );
+
+  const playlistCoverResolveTargetIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const playlist of virtualizedSidebarPlaylists) {
+      ids.add(playlist.id);
+    }
+    if (selectedPlaylist?.id) {
+      ids.add(selectedPlaylist.id);
+    }
+    return Array.from(ids);
+  }, [selectedPlaylist?.id, virtualizedSidebarPlaylists]);
 
   useEffect(() => {
     if (!showPlaylistTrackSearch) return;
@@ -189,7 +288,16 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     };
 
     const resolvePlaylistCovers = async () => {
-      for (const playlist of audioState.playlists) {
+      let resolvedBatchCount = 0;
+
+      for (const targetPlaylistId of playlistCoverResolveTargetIds) {
+        if (resolvedBatchCount >= PLAYLIST_COVER_RESOLVE_BATCH_SIZE) {
+          break;
+        }
+
+        const playlist = playlistById.get(targetPlaylistId);
+        if (!playlist) continue;
+
         const playlistId = String(playlist.id || '').trim();
         if (!playlistId) continue;
         if (pendingPlaylistCoverIdsRef.current.has(playlistId)) continue;
@@ -227,6 +335,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
           continue;
         }
 
+        resolvedBatchCount += 1;
         pendingPlaylistCoverIdsRef.current.add(playlistId);
         try {
           let resolvedCoverUrl: string | undefined;
@@ -314,7 +423,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return () => {
       cancelled = true;
     };
-  }, [audioState.playlists]);
+  }, [audioState.playlists, playlistById, playlistCoverResolveTargetIds]);
 
   const handleCreatePlaylist = (name: string) => {
     audioService.createPlaylist(name);
@@ -476,39 +585,84 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return <span className={classes}>{badge.label}</span>;
   };
 
-  const getPlaylistCoverUrl = (playlist: Playlist | null): string => {
-    if (!playlist) {
-      return '';
-    }
+  const getPlaylistCoverUrl = useCallback(
+    (playlist: Playlist | null): string => {
+      if (!playlist) {
+        return '';
+      }
 
-    if (playlist.kind === 'smart') {
-      return '';
-    }
+      if (playlist.kind === 'smart') {
+        return '';
+      }
 
-    if (typeof playlist.coverUrl === 'string' && playlist.coverUrl.trim()) {
-      return playlist.coverUrl.trim();
-    }
+      if (typeof playlist.coverUrl === 'string' && playlist.coverUrl.trim()) {
+        return playlist.coverUrl.trim();
+      }
 
-    const resolvedCoverUrl = resolvedPlaylistCoverMap[playlist.id] ?? '';
-    if (resolvedCoverUrl) return resolvedCoverUrl;
+      const resolvedCoverUrl = resolvedPlaylistCoverMap[playlist.id] ?? '';
+      if (resolvedCoverUrl) return resolvedCoverUrl;
 
-    const firstTrack = playlist.tracks[0] ?? null;
-    const fallbackFromFirstTrack = toNonEmptyString(firstTrack?.coverUrl);
-    if (fallbackFromFirstTrack) {
-      return fallbackFromFirstTrack;
-    }
+      const firstTrack = playlist.tracks[0] ?? null;
+      const fallbackFromFirstTrack = toNonEmptyString(firstTrack?.coverUrl);
+      if (fallbackFromFirstTrack) {
+        return fallbackFromFirstTrack;
+      }
 
-    const fallbackFromHeadTracks = playlist.tracks
-      .slice(1, 5)
-      .map((track) => toNonEmptyString(track.coverUrl))
-      .find((value) => value.length > 0);
-    if (!fallbackFromHeadTracks) return '';
+      const fallbackFromHeadTracks = playlist.tracks
+        .slice(1, 5)
+        .map((track) => toNonEmptyString(track.coverUrl))
+        .find((value) => value.length > 0);
+      if (!fallbackFromHeadTracks) return '';
 
-    return fallbackFromHeadTracks;
-  };
+      return fallbackFromHeadTracks;
+    },
+    [resolvedPlaylistCoverMap]
+  );
 
   const selectedPlaylistReadonly = isReadonlyPlaylist(selectedPlaylist);
   const selectedPlaylistCoverUrl = getPlaylistCoverUrl(selectedPlaylist);
+
+  const activePlaylistBlobCoverUrls = useMemo(() => {
+    const urls = new Set<string>();
+    for (const playlist of virtualizedSidebarPlaylists) {
+      const coverUrl = getPlaylistCoverUrl(playlist);
+      if (coverUrl.startsWith('blob:')) {
+        urls.add(coverUrl);
+      }
+    }
+    if (selectedPlaylistCoverUrl.startsWith('blob:')) {
+      urls.add(selectedPlaylistCoverUrl);
+    }
+    return Array.from(urls);
+  }, [getPlaylistCoverUrl, selectedPlaylistCoverUrl, virtualizedSidebarPlaylists]);
+
+  useEffect(() => {
+    const nextUrls = new Set(activePlaylistBlobCoverUrls);
+    const previousUrls = activePlaylistBlobCoverUrlsRef.current;
+    const urlsToRelease: string[] = [];
+
+    for (const url of previousUrls) {
+      if (!nextUrls.has(url)) {
+        urlsToRelease.push(url);
+      }
+    }
+
+    if (urlsToRelease.length > 0) {
+      musicLibraryService.releaseCoverUrls(urlsToRelease);
+    }
+
+    activePlaylistBlobCoverUrlsRef.current = nextUrls;
+  }, [activePlaylistBlobCoverUrls]);
+
+  useEffect(() => {
+    return () => {
+      const urlsToRelease = Array.from(activePlaylistBlobCoverUrlsRef.current);
+      activePlaylistBlobCoverUrlsRef.current.clear();
+      if (urlsToRelease.length > 0) {
+        musicLibraryService.releaseCoverUrls(urlsToRelease);
+      }
+    };
+  }, []);
 
   const filteredPlaylistTrackEntries = useMemo<PlaylistTrackEntry[]>(() => {
     if (!selectedPlaylist) {
@@ -718,7 +872,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             </button>
           </div>
 
-          <div className="playlists-list">
+          <div
+            className="playlists-list"
+            ref={playlistListRef}
+            onScroll={handlePlaylistListScroll}
+          >
             {audioState.playlists.length === 0 ? (
               <div className="playlists-empty">
                 <div className="playlists-empty-icon">♪</div>
@@ -728,17 +886,32 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                 </button>
               </div>
             ) : (
-              audioState.playlists.map((playlist) => {
+              <>
+                {playlistVirtualWindow.topSpacerPx > 0 ? (
+                  <div
+                    className="playlists-list-spacer"
+                    style={{ height: `${playlistVirtualWindow.topSpacerPx}px` }}
+                    aria-hidden="true"
+                  />
+                ) : null}
+                {virtualizedSidebarPlaylists.map((playlist) => {
                 const coverUrl = getPlaylistCoverUrl(playlist);
                 return (
                   <div
                     key={playlist.id}
                     className={`playlists-item ${selectedPlaylist?.id === playlist.id ? 'playlists-item-active' : ''}`}
                     onClick={() => setSelectedPlaylist(playlist)}
+                    style={{ height: `${PLAYLIST_LIST_VIRTUAL_ROW_HEIGHT}px`, marginBottom: 0 }}
                   >
                     <div className="playlists-item-icon">
                       {coverUrl ? (
-                        <img className="playlists-item-cover-image" src={coverUrl} alt={playlist.name} />
+                        <img
+                          className="playlists-item-cover-image"
+                          src={coverUrl}
+                          alt={playlist.name}
+                          loading="lazy"
+                          decoding="async"
+                        />
                       ) : (
                         <span className="playlists-item-cover-fallback">♪</span>
                       )}
@@ -754,7 +927,15 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                     </div>
                   </div>
                 );
-              })
+                })}
+                {playlistVirtualWindow.bottomSpacerPx > 0 ? (
+                  <div
+                    className="playlists-list-spacer"
+                    style={{ height: `${playlistVirtualWindow.bottomSpacerPx}px` }}
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </>
             )}
           </div>
         </div>

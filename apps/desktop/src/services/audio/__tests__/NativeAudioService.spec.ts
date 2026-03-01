@@ -12,10 +12,15 @@ import { NativeAudioService } from '../NativeAudioService';
 import { invoke } from '@tauri-apps/api/tauri';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { listen } from '@tauri-apps/api/event';
+import {
+  getAudioPerformanceTelemetrySnapshot,
+  resetAudioPerformanceTelemetryForTests,
+} from '../audioPerformanceTelemetry';
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  resetAudioPerformanceTelemetryForTests();
 
   const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
   invokeMock.mockResolvedValue(undefined);
@@ -30,7 +35,7 @@ afterEach(() => {
 
 async function flushMicrotasks(rounds: number = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
   }
 }
 
@@ -303,6 +308,8 @@ describe('NativeAudioService', () => {
   });
 
   it('stores compact recent tracks and avoids repeated smart playlist bootstrap queries', async () => {
+    vi.useFakeTimers();
+
     const restoreRuntime = enableMockTauriRuntime();
     const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -347,6 +354,7 @@ describe('NativeAudioService', () => {
     ]);
 
     await service.playTrackAtIndex(0);
+    await vi.advanceTimersByTimeAsync(650);
     await flushMicrotasks(6);
 
     await vi.waitFor(() => {
@@ -370,8 +378,86 @@ describe('NativeAudioService', () => {
     );
     expect(smartBootstrapCalls).toHaveLength(1);
 
+    const telemetry = getAudioPerformanceTelemetrySnapshot();
+    expect(telemetry.recentPlaylistWriteScheduledCount).toBeGreaterThanOrEqual(1);
+    expect(telemetry.recentPlaylistWriteFlushCount).toBeGreaterThanOrEqual(1);
+    expect(telemetry.recentPlaylistWritePayloadBytesLast).toBeGreaterThan(0);
+
     service.destroy();
     restoreRuntime();
+    vi.useRealTimers();
+  });
+
+  it('debounces rapid recent smart playlist writes into one database replace', async () => {
+    vi.useFakeTimers();
+
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        return [];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        return [];
+      }
+      if (cmd === 'music_library_db_replace_playlist_items') {
+        return true;
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      {
+        id: 'local-track-debounce-1',
+        title: 'Debounce Track 1',
+        artist: 'Tester',
+        filePath: 'C:\\\\Music\\\\debounce-track-1.mp3',
+        path: 'C:\\\\Music\\\\debounce-track-1.mp3',
+      },
+      {
+        id: 'local-track-debounce-2',
+        title: 'Debounce Track 2',
+        artist: 'Tester',
+        filePath: 'C:\\\\Music\\\\debounce-track-2.mp3',
+        path: 'C:\\\\Music\\\\debounce-track-2.mp3',
+      },
+    ]);
+
+    await service.playTrackAtIndex(0);
+    await service.playTrackAtIndex(1);
+    await vi.advanceTimersByTimeAsync(650);
+    await flushMicrotasks(8);
+
+    const replaceCalls = invokeMock.mock.calls.filter(
+      ([cmd]) => cmd === 'music_library_db_replace_playlist_items'
+    );
+    expect(replaceCalls).toHaveLength(1);
+
+    const telemetry = getAudioPerformanceTelemetrySnapshot();
+    expect(telemetry.recentPlaylistWriteScheduledCount).toBeGreaterThanOrEqual(2);
+    expect(telemetry.recentPlaylistWriteFlushCount).toBe(1);
+    expect(telemetry.recentPlaylistWriteEventCount).toBeGreaterThanOrEqual(2);
+
+    service.destroy();
+    restoreRuntime();
+    vi.useRealTimers();
   });
 
   it('emits error when receiving native_audio_error event', async () => {

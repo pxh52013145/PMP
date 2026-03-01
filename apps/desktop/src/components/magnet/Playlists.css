@@ -98,6 +98,11 @@
   padding: 8px;
 }
 
+.playlists-list-spacer {
+  width: 100%;
+  pointer-events: none;
+}
+
 .playlists-list::-webkit-scrollbar {
   width: 6px;
 }
