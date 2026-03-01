@@ -87,6 +87,7 @@ import {
   type StableFallbackAuditSnapshot,
 } from '../../modules/music-library/stableLibraryModel';
 import { useCoverUrlForTrack } from '../magnet/shared/useCoverUrlForTrack';
+import { buildAddToPlaylistMenuItem } from '../magnet/trackContextMenu';
 import { useBaseControlPanels } from './useBaseControlPanels';
 import './MusicLibrary.css';
 
@@ -2234,8 +2235,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   };
 
   // 闁告瑯浜濋幐閬嶅绩閹冪濡絾鐗楅悺鏇㈠即?
-  const handlePlaySingleTrack = (track: Track, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handlePlaySingleTrack = (track: Track, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     if (!onPlayNow) {
       console.log('Play single track:', track.title, '(embedded mode - no playback)');
       return;
@@ -2246,8 +2247,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   };
 
   // 闁告瑯浜濋崸濠囧礉閻樻彃绀嬪Λ锝嗙墬閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹?
-  const handleAddSingleTrack = (track: Track, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleAddSingleTrack = (track: Track, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     if (!onAddToQueue) {
       console.log('Add track:', track.title, '(embedded mode - no queue)');
       return;
@@ -2488,24 +2489,33 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     const playTracks = filteredTracks;
     const playStartIndex = playTracks.findIndex((candidate) => candidate.id === track.id);
     const localFilePath = String(track.filePath || track.path || track.originalPath || '').trim();
+    const addToPlaylistMenuItem = buildAddToPlaylistMenuItem({
+      t,
+      track,
+      playlists: audioService.getPlaylists(),
+      onAddToPlaylist: (playlistId, trackToAdd) => {
+        audioService.addTrackToPlaylist(playlistId, trackToAdd);
+      },
+    });
 
     const menuItems: ContextMenuItem[] = [
       {
         label: t('pages.music-library.contextMenu.play'),
         icon: '>',
-        onClick: () => handlePlaySingleTrack(track, e),
+        onClick: () => handlePlaySingleTrack(track),
       },
       {
         label: t('pages.music-library.contextMenu.addToQueue'),
         icon: '+',
-        onClick: () => onAddToQueue?.([track]),
+        onClick: () => handleAddSingleTrack(track),
       },
       {
         label: t('pages.music-library.contextMenu.playAllFromHere'),
         icon: '>>',
         onClick: () => onPlayNow?.(playTracks, playStartIndex >= 0 ? playStartIndex : index),
       },
-      { divider: true } as ContextMenuItem,
+      addToPlaylistMenuItem,
+      { divider: true },
       {
         label: t('pages.music-library.contextMenu.openInFileManager'),
         icon: '📂',
@@ -2519,7 +2529,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         },
         disabled: !localFilePath,
       },
-      { divider: true } as ContextMenuItem,
+      { divider: true },
       {
         label: t('pages.music-library.contextMenu.viewAlbum'),
         icon: 'A',

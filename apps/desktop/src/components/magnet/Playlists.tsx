@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { AudioState, Track, Playlist } from '../../services/audio';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { InputDialog } from './InputDialog';
+import { buildAddToPlaylistMenuItem } from './trackContextMenu';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import './Playlists.css';
@@ -31,6 +33,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [playlistToDelete, setPlaylistToDelete] = useState<string | null>(null);
   const [playlistToRename, setPlaylistToRename] = useState<Playlist | null>(null);
   const [playlistToClear, setPlaylistToClear] = useState<string | null>(null);
+  const [trackContextMenu, setTrackContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
 
   useEffect(() => {
     setAudioState(audioService.getState());
@@ -185,6 +192,55 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       .join(' ');
 
     return <span className={classes}>{badge.label}</span>;
+  };
+
+  const handleTrackContextMenu = (
+    playlist: Playlist,
+    track: Track,
+    trackIndex: number,
+    event: React.MouseEvent
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const playlistReadonly = isReadonlyPlaylist(playlist);
+    const addToPlaylistMenuItem = buildAddToPlaylistMenuItem({
+      t,
+      track,
+      playlists: audioService.getPlaylists(),
+      excludePlaylistId: playlist.id,
+      onAddToPlaylist: (playlistId, trackToAdd) => {
+        audioService.addTrackToPlaylist(playlistId, trackToAdd);
+      },
+    });
+
+    const menuItems: ContextMenuItem[] = [
+      {
+        label: t('common.action.play'),
+        icon: '>',
+        onClick: () => handlePlayTrackFromPlaylist(playlist, trackIndex),
+      },
+      {
+        label: t('common.action.addToQueue'),
+        icon: '+',
+        onClick: () => audioService.addToQueue(track),
+      },
+      addToPlaylistMenuItem,
+      { divider: true },
+      {
+        label: t('pages.playlists.tracks.action.removeFromPlaylist.title'),
+        icon: '×',
+        danger: true,
+        disabled: playlistReadonly,
+        onClick: () => handleRemoveTrackFromPlaylist(playlist.id, trackIndex),
+      },
+    ];
+
+    setTrackContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: menuItems,
+    });
   };
 
   const selectedPlaylistReadonly = isReadonlyPlaylist(selectedPlaylist);
@@ -342,7 +398,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       <div>{t('pages.playlists.tracks.header.actions')}</div>
                     </div>
                     {selectedPlaylist.tracks.map((track, index) => (
-                      <div key={index} className="playlists-track">
+                      <div
+                        key={index}
+                        className="playlists-track"
+                        onContextMenu={(event) =>
+                          handleTrackContextMenu(selectedPlaylist, track, index, event)
+                        }
+                      >
                         <div className="playlists-track-number">
                           {String(index + 1).padStart(2, '0')}
                         </div>
@@ -501,6 +563,15 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
             setPlaylistToClear(null);
           }}
         />
+
+        {trackContextMenu && (
+          <ContextMenu
+            x={trackContextMenu.x}
+            y={trackContextMenu.y}
+            items={trackContextMenu.items}
+            onClose={() => setTrackContextMenu(null)}
+          />
+        )}
       </div>
     </div>,
     document.body

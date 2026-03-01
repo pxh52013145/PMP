@@ -76,6 +76,43 @@
   white-space: nowrap;
 }
 
+.context-menu-item-has-children {
+  position: relative;
+  padding-right: 12px;
+}
+
+.context-menu-submenu-arrow {
+  margin-left: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.context-submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% - 4px);
+  min-width: 180px;
+  background: rgba(30, 30, 40, 0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  padding: 6px 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(4px) scale(0.98);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 10003;
+}
+
+.context-menu-item-has-children:hover > .context-submenu {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
+}
+
 .context-menu-divider {
   height: 1px;
   background: rgba(255, 255, 255, 0.1);

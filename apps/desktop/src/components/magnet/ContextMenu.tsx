@@ -1,18 +1,15 @@
-/**
- * 右键菜单组件
- */
-
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './ContextMenu.css';
 
 export interface ContextMenuItem {
-  label: string;
+  label?: string;
   icon?: string;
-  onClick: () => void;
+  onClick?: () => void;
   disabled?: boolean;
   divider?: boolean;
   danger?: boolean;
+  children?: ContextMenuItem[];
 }
 
 interface ContextMenuProps {
@@ -24,17 +21,17 @@ interface ContextMenuProps {
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = React.useState({ x, y });
+  const [position, setPosition] = useState({ x, y });
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         onClose();
       }
     };
 
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
         onClose();
       }
     };
@@ -48,65 +45,82 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     };
   }, [onClose]);
 
-  // 调整菜单位置，避免超出屏幕
   useEffect(() => {
-    if (menuRef.current) {
-      const menu = menuRef.current;
-      const rect = menu.getBoundingClientRect();
-      const windowWidth = window.innerWidth;
-      const windowHeight = window.innerHeight;
-
-      let adjustedX = x;
-      let adjustedY = y;
-
-      // 估算菜单尺寸（如果还没渲染）
-      const menuWidth = rect.width || 200;
-      const menuHeight = rect.height || items.length * 40;
-
-      const MARGIN = 15; // 边距
-
-      // 水平方向调整
-      // 右侧超出 - 显示在鼠标左侧
-      if (x + menuWidth > windowWidth - MARGIN) {
-        adjustedX = Math.max(MARGIN, x - menuWidth);
-      }
-
-      // 左侧超出
-      if (adjustedX < MARGIN) {
-        adjustedX = MARGIN;
-      }
-
-      // 垂直方向调整（优化）
-      // 底部超出 - 显示在鼠标上方
-      if (y + menuHeight > windowHeight - MARGIN) {
-        // 优先显示在鼠标上方
-        adjustedY = y - menuHeight;
-
-        // 如果上方也放不下，则居中显示
-        if (adjustedY < MARGIN) {
-          adjustedY = Math.max(MARGIN, (windowHeight - menuHeight) / 2);
-        }
-      }
-
-      // 顶部超出
-      if (adjustedY < MARGIN) {
-        adjustedY = MARGIN;
-      }
-
-      // 确保菜单不超出底部
-      if (adjustedY + menuHeight > windowHeight - MARGIN) {
-        adjustedY = windowHeight - menuHeight - MARGIN;
-      }
-
-      setPosition({ x: adjustedX, y: adjustedY });
+    if (!menuRef.current) {
+      return;
     }
+
+    const menu = menuRef.current;
+    const rect = menu.getBoundingClientRect();
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+    const menuWidth = rect.width || 200;
+    const menuHeight = rect.height || items.length * 40;
+    const margin = 15;
+
+    let adjustedX = x;
+    let adjustedY = y;
+
+    if (x + menuWidth > windowWidth - margin) {
+      adjustedX = Math.max(margin, x - menuWidth);
+    }
+    if (adjustedX < margin) {
+      adjustedX = margin;
+    }
+
+    if (y + menuHeight > windowHeight - margin) {
+      adjustedY = y - menuHeight;
+      if (adjustedY < margin) {
+        adjustedY = Math.max(margin, (windowHeight - menuHeight) / 2);
+      }
+    }
+    if (adjustedY < margin) {
+      adjustedY = margin;
+    }
+    if (adjustedY + menuHeight > windowHeight - margin) {
+      adjustedY = windowHeight - menuHeight - margin;
+    }
+
+    setPosition({ x: adjustedX, y: adjustedY });
   }, [x, y, items.length]);
 
   const handleItemClick = (item: ContextMenuItem) => {
-    if (!item.disabled) {
-      item.onClick();
-      onClose();
+    const hasChildren = Array.isArray(item.children) && item.children.length > 0;
+    if (item.disabled || hasChildren) {
+      return;
     }
+    item.onClick?.();
+    onClose();
+  };
+
+  const renderItems = (menuItems: ContextMenuItem[], nested = false): React.ReactNode => {
+    return menuItems.map((item, index) => {
+      if (item.divider) {
+        return <div className="context-menu-divider" key={`${nested ? 'sub' : 'root'}-divider-${index}`} />;
+      }
+
+      const hasChildren = Array.isArray(item.children) && item.children.length > 0;
+
+      return (
+        <div
+          key={`${nested ? 'sub' : 'root'}-item-${index}`}
+          className={[
+            'context-menu-item',
+            item.disabled ? 'disabled' : '',
+            item.danger ? 'danger' : '',
+            hasChildren ? 'context-menu-item-has-children' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          onClick={() => handleItemClick(item)}
+        >
+          {item.icon ? <span className="context-menu-icon">{item.icon}</span> : null}
+          <span className="context-menu-label">{item.label ?? ''}</span>
+          {hasChildren ? <span className="context-menu-submenu-arrow">›</span> : null}
+          {hasChildren ? <div className="context-submenu">{renderItems(item.children ?? [], true)}</div> : null}
+        </div>
+      );
+    });
   };
 
   return createPortal(
@@ -115,25 +129,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
         ref={menuRef}
         className="context-menu"
         style={{ left: position.x, top: position.y }}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
-        {items.map((item, index) => (
-          <React.Fragment key={index}>
-            {item.divider ? (
-              <div className="context-menu-divider" />
-            ) : (
-              <div
-                className={`context-menu-item ${item.disabled ? 'disabled' : ''} ${item.danger ? 'danger' : ''}`}
-                onClick={() => handleItemClick(item)}
-              >
-                {item.icon && <span className="context-menu-icon">{item.icon}</span>}
-                <span className="context-menu-label">{item.label}</span>
-              </div>
-            )}
-          </React.Fragment>
-        ))}
+        {renderItems(items)}
       </div>
     </div>,
     document.body
   );
 };
+
