@@ -160,6 +160,9 @@ fn init_vst_services(app: &tauri::AppHandle) {
 }
 
 fn init_music_library_services(app: &tauri::AppHandle) {
+    if let Err(error) = crate::music_library::cleanup_legacy_cover_cache_dirs(app) {
+        eprintln!("[MusicLibrary] Failed to cleanup legacy cover caches: {error}");
+    }
     if let Err(error) = crate::music_library_db::init(app) {
         eprintln!("[MusicLibrary] Failed to init sqlite store: {error}");
     }

@@ -1017,6 +1017,108 @@ fn cover_cache_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(canonical_a), Ok(canonical_b)) => canonical_a == canonical_b,
+        _ => false,
+    }
+}
+
+fn merge_legacy_cover_cache_dir(source_dir: &Path, active_dir: &Path) -> Result<usize, String> {
+    if !source_dir.exists() {
+        return Ok(0);
+    }
+    if !source_dir.is_dir() {
+        return Ok(0);
+    }
+
+    fs::create_dir_all(active_dir)
+        .map_err(|error| format!("Failed to create active cover cache directory: {error}"))?;
+
+    let mut migrated_files = 0usize;
+    let entries = fs::read_dir(source_dir)
+        .map_err(|error| format!("Failed to read legacy cover cache directory: {error}"))?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "[MusicLibrary] Failed to read legacy cover cache entry '{}': {error}",
+                    source_dir.to_string_lossy()
+                );
+                continue;
+            }
+        };
+
+        let source_path = entry.path();
+        if !source_path.is_file() {
+            continue;
+        }
+
+        let target_path = active_dir.join(entry.file_name());
+        if target_path.exists() {
+            let _ = fs::remove_file(&source_path);
+            continue;
+        }
+
+        if fs::rename(&source_path, &target_path).is_ok() {
+            migrated_files = migrated_files.saturating_add(1);
+            continue;
+        }
+
+        match fs::copy(&source_path, &target_path) {
+            Ok(_) => {
+                migrated_files = migrated_files.saturating_add(1);
+                let _ = fs::remove_file(&source_path);
+            }
+            Err(error) => {
+                eprintln!(
+                    "[MusicLibrary] Failed to migrate legacy cover '{}' -> '{}': {error}",
+                    source_path.to_string_lossy(),
+                    target_path.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    if let Err(error) = fs::remove_dir_all(source_dir) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "[MusicLibrary] Failed to remove legacy cover cache directory '{}': {error}",
+                source_dir.to_string_lossy()
+            );
+        }
+    }
+
+    Ok(migrated_files)
+}
+
+pub fn cleanup_legacy_cover_cache_dirs(app: &AppHandle) -> Result<(), String> {
+    let active_dir = cover_cache_dir(app)?;
+    let resolver = app.path_resolver();
+
+    let mut migrated_total = 0usize;
+    if let Some(cache_root) = resolver.app_cache_dir() {
+        let candidate = cache_root.join("music-covers");
+        if !paths_equivalent(&candidate, &active_dir) {
+            migrated_total = migrated_total
+                .saturating_add(merge_legacy_cover_cache_dir(&candidate, &active_dir)?);
+        }
+    }
+
+    if migrated_total > 0 {
+        eprintln!(
+            "[MusicLibrary] Migrated {migrated_total} cover file(s) from legacy cache path(s)"
+        );
+    }
+
+    Ok(())
+}
+
 fn cover_extension_from_media_type(media_type: &str) -> &'static str {
     let lower = media_type.to_ascii_lowercase();
     if lower.contains("png") {

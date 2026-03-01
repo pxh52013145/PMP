@@ -495,6 +495,56 @@ fn resolve_session_cover_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(root_dir.join("session-covers"))
 }
 
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(canonical_a), Ok(canonical_b)) => canonical_a == canonical_b,
+        _ => false,
+    }
+}
+
+fn cleanup_legacy_playback_cache_dirs(app: &AppHandle) -> Result<(), String> {
+    let resolver = app.path_resolver();
+    let effective_root = resolve_effective_playback_cache_root(app)?;
+    let mut dirs_to_prune: Vec<PathBuf> = Vec::new();
+
+    let active_cover_dir = effective_root.join("session-covers");
+    let legacy_cover_dir = effective_root.join("covers");
+    if !paths_equivalent(&legacy_cover_dir, &active_cover_dir) && legacy_cover_dir.exists() {
+        dirs_to_prune.push(legacy_cover_dir);
+    }
+
+    if let Some(app_data_root) = resolver.app_data_dir() {
+        let legacy_root = app_data_root
+            .join("music-platform")
+            .join("bilibili")
+            .join("playback-cache");
+        if !paths_equivalent(&legacy_root, &effective_root) && legacy_root.exists() {
+            dirs_to_prune.push(legacy_root);
+        }
+    }
+
+    if !dirs_to_prune.is_empty() {
+        std::thread::spawn(move || {
+            for dir in dirs_to_prune {
+                if let Err(error) = fs::remove_dir_all(&dir) {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        eprintln!(
+                            "[music_platform_bilibili] Failed to remove legacy playback cache directory '{}': {error}",
+                            dir.to_string_lossy()
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(())
+}
+
 fn cleanup_session_cover_cache_internal(app: &AppHandle) -> Result<(), String> {
     let session_cover_dir = resolve_session_cover_cache_dir(app)?;
     match fs::remove_dir_all(&session_cover_dir) {
@@ -2931,6 +2981,9 @@ fn build_qr_image_data_url(content: &str) -> Result<String, String> {
 pub fn init(app: &AppHandle) -> Result<(), String> {
     ensure_connector(app)?;
     let _ = cleanup_session_cover_cache_internal(app);
+    if let Err(error) = cleanup_legacy_playback_cache_dirs(app) {
+        eprintln!("[music_platform_bilibili] Failed to cleanup legacy cache directories: {error}");
+    }
 
     if let Some(account) = crate::music_library_db::get_latest_connector_account_by_connector_id(
         app,
