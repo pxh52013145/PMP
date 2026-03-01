@@ -840,6 +840,7 @@ export class NativeAudioService implements IAudioService {
       ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
       name: playlistName,
       description: typeof playlist.description === 'string' ? playlist.description.trim() : undefined,
+      coverUrl: typeof playlist.coverUrl === 'string' ? playlist.coverUrl.trim() : undefined,
       kind,
       sourceConnectorId: playlist.sourceConnectorId,
       sourcePlaylistId: playlist.sourcePlaylistId,
@@ -1063,6 +1064,7 @@ export class NativeAudioService implements IAudioService {
           id: record.id,
           name: record.name,
           description: record.description,
+          coverUrl: record.coverUrl,
           tracks,
           kind: record.kind,
           readonly: record.isReadonly,
@@ -5063,6 +5065,28 @@ export class NativeAudioService implements IAudioService {
     );
     this.updateState({ playlists });
     const updatedPlaylist = playlists.find((pl) => pl.id === playlistId);
+    if (updatedPlaylist) {
+      this.persistPlaylistToLibraryDbBestEffort(updatedPlaylist);
+    }
+  }
+
+  setPlaylistCover(playlistId: string, coverUrl?: string): void {
+    const targetPlaylist = this.getPlaylist(playlistId);
+    if (this.isReadonlyPlaylist(targetPlaylist)) return;
+
+    const normalizedCoverUrl = typeof coverUrl === 'string' ? coverUrl.trim() : '';
+    const playlists = this.state.playlists.map((playlist) =>
+      playlist.id === playlistId
+        ? {
+            ...playlist,
+            coverUrl: normalizedCoverUrl || undefined,
+            updatedAt: Date.now(),
+          }
+        : playlist
+    );
+
+    this.updateState({ playlists });
+    const updatedPlaylist = playlists.find((playlist) => playlist.id === playlistId);
     if (updatedPlaylist) {
       this.persistPlaylistToLibraryDbBestEffort(updatedPlaylist);
     }

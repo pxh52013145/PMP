@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 7;
+const DB_VERSION: i32 = 8;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -294,6 +294,7 @@ pub struct LibraryPlaylistUpsertInput {
     pub owner_uid: String,
     pub name: String,
     pub description: Option<String>,
+    pub cover_url: Option<String>,
     pub kind: Option<String>,
     pub source_connector_id: Option<String>,
     pub source_playlist_id: Option<String>,
@@ -320,6 +321,7 @@ pub struct LibraryPlaylistRecord {
     pub owner_uid: String,
     pub name: String,
     pub description: Option<String>,
+    pub cover_url: Option<String>,
     pub kind: String,
     pub source_connector_id: Option<String>,
     pub source_playlist_id: Option<String>,
@@ -934,6 +936,23 @@ fn ensure_sangreal_v7_playlist_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|error| format!("Failed to ensure music library schema v7 playlist pipeline: {error}"))
 }
 
+fn ensure_sangreal_v8_playlist_cover_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        ALTER TABLE playlists ADD COLUMN cover_url TEXT;
+        "#,
+    )
+    .or_else(|error| {
+        let message = error.to_string();
+        if message.contains("duplicate column name") {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })
+    .map_err(|error| format!("Failed to ensure music library schema v8 playlist cover: {error}"))
+}
+
 fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("Failed to enable foreign keys: {error}"))?;
@@ -1183,6 +1202,13 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.execute_batch("PRAGMA user_version = 7;")
             .map_err(|error| format!("Failed to migrate music library schema to v7: {error}"))?;
         version = 7;
+    }
+
+    if version == 7 {
+        ensure_sangreal_v8_playlist_cover_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 8;")
+            .map_err(|error| format!("Failed to migrate music library schema to v8: {error}"))?;
+        version = 8;
     }
 
     if version != DB_VERSION {
@@ -1464,6 +1490,7 @@ fn playlist_record_by_id(conn: &Connection, playlist_id: &str) -> Result<Library
           owner_uid,
           name,
           description,
+          cover_url,
           kind,
           source_connector_id,
           source_playlist_id,
@@ -1482,14 +1509,15 @@ fn playlist_record_by_id(conn: &Connection, playlist_id: &str) -> Result<Library
                 owner_uid: row.get(1)?,
                 name: row.get(2)?,
                 description: row.get(3)?,
-                kind: row.get(4)?,
-                source_connector_id: row.get(5)?,
-                source_playlist_id: row.get(6)?,
-                smart_rule_json: row.get(7)?,
-                is_readonly: row.get::<_, i64>(8)? != 0,
-                created_at_ms: row.get(9)?,
-                updated_at_ms: row.get(10)?,
-                last_opened_at_ms: row.get(11)?,
+                cover_url: row.get(4)?,
+                kind: row.get(5)?,
+                source_connector_id: row.get(6)?,
+                source_playlist_id: row.get(7)?,
+                smart_rule_json: row.get(8)?,
+                is_readonly: row.get::<_, i64>(9)? != 0,
+                created_at_ms: row.get(10)?,
+                updated_at_ms: row.get(11)?,
+                last_opened_at_ms: row.get(12)?,
             })
         },
     )
@@ -3955,6 +3983,7 @@ pub fn upsert_playlist(
               owner_uid,
               name,
               description,
+              cover_url,
               kind,
               source_connector_id,
               source_playlist_id,
@@ -3964,11 +3993,12 @@ pub fn upsert_playlist(
               updated_at_ms,
               last_opened_at_ms
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ON CONFLICT(id) DO UPDATE SET
               owner_uid = excluded.owner_uid,
               name = excluded.name,
               description = excluded.description,
+              cover_url = excluded.cover_url,
               kind = excluded.kind,
               source_connector_id = excluded.source_connector_id,
               source_playlist_id = excluded.source_playlist_id,
@@ -3982,6 +4012,7 @@ pub fn upsert_playlist(
                 owner_uid,
                 name,
                 normalize_text(input.description.as_deref()),
+                normalize_text(input.cover_url.as_deref()),
                 kind,
                 normalize_text(input.source_connector_id.as_deref()),
                 normalize_text(input.source_playlist_id.as_deref()),
@@ -4032,6 +4063,7 @@ pub fn list_playlists(
                   owner_uid,
                   name,
                   description,
+                  cover_url,
                   kind,
                   source_connector_id,
                   source_playlist_id,
@@ -4069,14 +4101,15 @@ pub fn list_playlists(
                         owner_uid: row.get(1)?,
                         name: row.get(2)?,
                         description: row.get(3)?,
-                        kind: row.get(4)?,
-                        source_connector_id: row.get(5)?,
-                        source_playlist_id: row.get(6)?,
-                        smart_rule_json: row.get(7)?,
-                        is_readonly: row.get::<_, i64>(8)? != 0,
-                        created_at_ms: row.get(9)?,
-                        updated_at_ms: row.get(10)?,
-                        last_opened_at_ms: row.get(11)?,
+                        cover_url: row.get(4)?,
+                        kind: row.get(5)?,
+                        source_connector_id: row.get(6)?,
+                        source_playlist_id: row.get(7)?,
+                        smart_rule_json: row.get(8)?,
+                        is_readonly: row.get::<_, i64>(9)? != 0,
+                        created_at_ms: row.get(10)?,
+                        updated_at_ms: row.get(11)?,
+                        last_opened_at_ms: row.get(12)?,
                     })
                 },
             )
@@ -5487,11 +5520,11 @@ mod tests {
     }
 
     #[test]
-    fn migrate_empty_db_to_v7_schema() {
+    fn migrate_empty_db_to_v8_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 7);
+        assert_eq!(read_user_version(&conn), 8);
         assert!(has_table(&conn, "connectors"));
         assert!(has_table(&conn, "source_sync_state"));
         assert!(has_table(&conn, "source_fingerprint_state"));
@@ -5515,7 +5548,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v4_db_to_v7_schema() {
+    fn migrate_v4_db_to_v8_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-v4");
         conn.execute_batch(
             r#"
@@ -5550,7 +5583,7 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 7);
+        assert_eq!(read_user_version(&conn), 8);
         assert!(has_table(&conn, "connector_accounts"));
         assert!(has_table(&conn, "cover_refs"));
         assert!(has_table(&conn, "lyric_refs"));

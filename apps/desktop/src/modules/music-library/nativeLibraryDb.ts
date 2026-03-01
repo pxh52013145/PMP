@@ -612,6 +612,7 @@ export interface NativeLibraryPlaylistUpsertInput {
   ownerUid: string;
   name: string;
   description?: string;
+  coverUrl?: string;
   kind?: 'manual' | 'smart' | 'platform';
   sourceConnectorId?: string;
   sourcePlaylistId?: string;
@@ -634,6 +635,7 @@ export interface NativeLibraryPlaylistRecord {
   ownerUid: string;
   name: string;
   description?: string;
+  coverUrl?: string;
   kind: 'manual' | 'smart' | 'platform';
   sourceConnectorId?: string;
   sourcePlaylistId?: string;
@@ -1614,6 +1616,7 @@ function ensurePlaylistRecord(value: unknown): NativeLibraryPlaylistRecord | nul
     ownerUid,
     name,
     description: asOptionalString(value.description),
+    coverUrl: asOptionalString(readRecordField(value, 'coverUrl', 'cover_url')),
     kind: normalizePlaylistKind(value.kind),
     sourceConnectorId: asOptionalString(value.sourceConnectorId),
     sourcePlaylistId: asOptionalString(value.sourcePlaylistId),
@@ -2861,6 +2864,7 @@ export async function upsertNativeLibraryPlaylist(
     ownerUid: asTrimmedString(playlist.ownerUid),
     name: asTrimmedString(playlist.name),
     description: asOptionalString(playlist.description),
+    coverUrl: asOptionalString(playlist.coverUrl),
     kind: normalizePlaylistKind(playlist.kind),
     sourceConnectorId: asOptionalString(playlist.sourceConnectorId),
     sourcePlaylistId: asOptionalString(playlist.sourcePlaylistId),

@@ -288,6 +288,17 @@ export class NoopAudioService implements IAudioService {
     this.emitState();
   }
 
+  setPlaylistCover(playlistId: string, coverUrl?: string): void {
+    const playlist = this.playlists.find((p) => p.id === playlistId);
+    if (!playlist) return;
+    if (playlist.readonly || playlist.kind === 'smart') return;
+
+    const normalizedCoverUrl = typeof coverUrl === 'string' ? coverUrl.trim() : '';
+    playlist.coverUrl = normalizedCoverUrl || undefined;
+    playlist.updatedAt = Date.now();
+    this.emitState();
+  }
+
   getPlaylists(): Playlist[] {
     return [...this.playlists];
   }

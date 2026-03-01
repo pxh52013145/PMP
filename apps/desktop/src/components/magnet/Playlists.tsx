@@ -30,38 +30,8 @@ type PlaylistTrackEntry = {
 };
 
 const MAX_TRACKS = 200;
-const PLAYLIST_CUSTOM_COVER_STORAGE_KEY = 'pmp.playlists.customCoverById.v1';
 
 const makeTrackKey = (track: Track, index: number): string => `${track.id}::${index}`;
-
-const safeParseRecord = (raw: string | null): Record<string, string> => {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {};
-    }
-
-    const result: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof key !== 'string' || typeof value !== 'string') {
-        continue;
-      }
-      const normalizedKey = key.trim();
-      const normalizedValue = value.trim();
-      if (!normalizedKey || !normalizedValue) {
-        continue;
-      }
-      result[normalizedKey] = normalizedValue;
-    }
-
-    return result;
-  } catch {
-    return {};
-  }
-};
 
 export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const t = useT();
@@ -90,8 +60,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [playlistBatchMode, setPlaylistBatchMode] = useState(false);
   const [selectedTrackKeys, setSelectedTrackKeys] = useState<string[]>([]);
 
-  const [customCoverById, setCustomCoverById] = useState<Record<string, string>>({});
-
   const [trackContextMenu, setTrackContextMenu] = useState<{
     x: number;
     y: number;
@@ -106,15 +74,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     const unsubscribe = audioService.onStateChange(setAudioState);
     return unsubscribe;
   }, [audioService]);
-
-  useEffect(() => {
-    const parsed = safeParseRecord(window.localStorage.getItem(PLAYLIST_CUSTOM_COVER_STORAGE_KEY));
-    setCustomCoverById(parsed);
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(PLAYLIST_CUSTOM_COVER_STORAGE_KEY, JSON.stringify(customCoverById));
-  }, [customCoverById]);
 
   useEffect(() => {
     if (!showAddTrackModal) return;
@@ -225,22 +184,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       return;
     }
 
-    setCustomCoverById((previous) => ({
-      ...previous,
-      [playlistId]: normalizedCoverUrl,
-    }));
+    audioService.setPlaylistCover(playlistId, normalizedCoverUrl);
   };
 
   const handleResetPlaylistCover = (playlistId: string) => {
-    setCustomCoverById((previous) => {
-      if (!previous[playlistId]) {
-        return previous;
-      }
-
-      const next = { ...previous };
-      delete next[playlistId];
-      return next;
-    });
+    audioService.setPlaylistCover(playlistId, undefined);
   };
 
   const formatDuration = (seconds: number): string => {
@@ -302,11 +250,6 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const getPlaylistCoverUrl = (playlist: Playlist | null): string => {
     if (!playlist) {
       return '';
-    }
-
-    const customCover = typeof customCoverById[playlist.id] === 'string' ? customCoverById[playlist.id] : '';
-    if (customCover.trim()) {
-      return customCover.trim();
     }
 
     if (typeof playlist.coverUrl === 'string' && playlist.coverUrl.trim()) {
@@ -601,7 +544,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                   <button
                     className="playlists-detail-btn"
                     onClick={() => handleResetPlaylistCover(selectedPlaylist.id)}
-                    disabled={selectedPlaylistReadonly || !customCoverById[selectedPlaylist.id]}
+                    disabled={
+                      selectedPlaylistReadonly ||
+                      !(typeof selectedPlaylist.coverUrl === 'string' && selectedPlaylist.coverUrl.trim())
+                    }
                   >
                     {t('pages.playlists.editor.cover.reset')}
                   </button>
