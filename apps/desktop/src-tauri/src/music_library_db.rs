@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::AppHandle;
 
-const DB_VERSION: i32 = 6;
+const DB_VERSION: i32 = 7;
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
@@ -285,6 +285,80 @@ pub struct LibraryUserEntryRecord {
     pub last_played_at_ms: Option<i64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistUpsertInput {
+    pub id: String,
+    pub owner_uid: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub kind: Option<String>,
+    pub source_connector_id: Option<String>,
+    pub source_playlist_id: Option<String>,
+    pub smart_rule_json: Option<String>,
+    pub is_readonly: Option<bool>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
+    pub last_opened_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistQueryInput {
+    pub owner_uid: Option<String>,
+    pub kind: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistRecord {
+    pub id: String,
+    pub owner_uid: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub kind: String,
+    pub source_connector_id: Option<String>,
+    pub source_playlist_id: Option<String>,
+    pub smart_rule_json: Option<String>,
+    pub is_readonly: bool,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub last_opened_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistItemUpsertInput {
+    pub id: Option<String>,
+    pub position: Option<i64>,
+    pub local_track_id: Option<String>,
+    pub entry_id: Option<String>,
+    pub track_payload_json: Option<String>,
+    pub snapshot_title: Option<String>,
+    pub snapshot_artist: Option<String>,
+    pub snapshot_album: Option<String>,
+    pub snapshot_duration_seconds: Option<f64>,
+    pub created_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylistItemRecord {
+    pub id: String,
+    pub playlist_id: String,
+    pub position: i64,
+    pub local_track_id: Option<String>,
+    pub entry_id: Option<String>,
+    pub track_payload_json: Option<String>,
+    pub snapshot_title: Option<String>,
+    pub snapshot_artist: Option<String>,
+    pub snapshot_album: Option<String>,
+    pub snapshot_duration_seconds: Option<f64>,
+    pub created_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -809,6 +883,57 @@ fn ensure_sangreal_v6_lyrics_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|error| format!("Failed to ensure music library schema v6 lyric pipeline: {error}"))
 }
 
+fn ensure_sangreal_v7_playlist_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS playlists (
+          id TEXT PRIMARY KEY NOT NULL,
+          owner_uid TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          kind TEXT NOT NULL DEFAULT 'manual',
+          source_connector_id TEXT,
+          source_playlist_id TEXT,
+          smart_rule_json TEXT,
+          is_readonly INTEGER NOT NULL DEFAULT 0,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          last_opened_at_ms INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS playlists_owner_uid_idx ON playlists(owner_uid);
+        CREATE INDEX IF NOT EXISTS playlists_kind_idx ON playlists(kind);
+        CREATE INDEX IF NOT EXISTS playlists_owner_kind_idx ON playlists(owner_uid, kind);
+        CREATE INDEX IF NOT EXISTS playlists_owner_last_opened_idx
+          ON playlists(owner_uid, last_opened_at_ms DESC);
+
+        CREATE TABLE IF NOT EXISTS playlist_items (
+          id TEXT PRIMARY KEY NOT NULL,
+          playlist_id TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          local_track_id TEXT,
+          entry_id TEXT,
+          track_payload_json TEXT,
+          snapshot_title TEXT,
+          snapshot_artist TEXT,
+          snapshot_album TEXT,
+          snapshot_duration_seconds REAL,
+          created_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+          FOREIGN KEY(local_track_id) REFERENCES local_tracks(id) ON DELETE SET NULL,
+          FOREIGN KEY(entry_id) REFERENCES user_entries(id) ON DELETE SET NULL,
+          CHECK(local_track_id IS NOT NULL OR entry_id IS NOT NULL OR track_payload_json IS NOT NULL),
+          UNIQUE(playlist_id, position)
+        );
+
+        CREATE INDEX IF NOT EXISTS playlist_items_playlist_id_idx ON playlist_items(playlist_id);
+        CREATE INDEX IF NOT EXISTS playlist_items_local_track_id_idx ON playlist_items(local_track_id);
+        CREATE INDEX IF NOT EXISTS playlist_items_entry_id_idx ON playlist_items(entry_id);
+        "#,
+    )
+    .map_err(|error| format!("Failed to ensure music library schema v7 playlist pipeline: {error}"))
+}
+
 fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("Failed to enable foreign keys: {error}"))?;
@@ -1053,6 +1178,13 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         version = 6;
     }
 
+    if version == 6 {
+        ensure_sangreal_v7_playlist_schema(conn)?;
+        conn.execute_batch("PRAGMA user_version = 7;")
+            .map_err(|error| format!("Failed to migrate music library schema to v7: {error}"))?;
+        version = 7;
+    }
+
     if version != DB_VERSION {
         return Err(format!(
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
@@ -1140,6 +1272,19 @@ fn normalize_owner_uid(value: Option<&str>) -> Option<String> {
 
 fn normalize_rating(value: Option<i64>) -> Option<i64> {
     value.map(|score| score.clamp(0, 100))
+}
+
+fn normalize_playlist_kind(value: Option<&str>) -> String {
+    match value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| !item.is_empty())
+        .as_deref()
+    {
+        Some("manual") => "manual".to_string(),
+        Some("smart") => "smart".to_string(),
+        Some("platform") => "platform".to_string(),
+        _ => "manual".to_string(),
+    }
 }
 
 fn normalize_fallback_reason(value: Option<&str>) -> String {
@@ -1309,6 +1454,46 @@ fn user_entry_record_by_id(
         },
     )
     .map_err(|error| format!("Failed to load user entry record: {error}"))
+}
+
+fn playlist_record_by_id(conn: &Connection, playlist_id: &str) -> Result<LibraryPlaylistRecord, String> {
+    conn.query_row(
+        r#"
+        SELECT
+          id,
+          owner_uid,
+          name,
+          description,
+          kind,
+          source_connector_id,
+          source_playlist_id,
+          smart_rule_json,
+          is_readonly,
+          created_at_ms,
+          updated_at_ms,
+          last_opened_at_ms
+        FROM playlists
+        WHERE id = ?1
+        "#,
+        params![playlist_id],
+        |row| {
+            Ok(LibraryPlaylistRecord {
+                id: row.get(0)?,
+                owner_uid: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                kind: row.get(4)?,
+                source_connector_id: row.get(5)?,
+                source_playlist_id: row.get(6)?,
+                smart_rule_json: row.get(7)?,
+                is_readonly: row.get::<_, i64>(8)? != 0,
+                created_at_ms: row.get(9)?,
+                updated_at_ms: row.get(10)?,
+                last_opened_at_ms: row.get(11)?,
+            })
+        },
+    )
+    .map_err(|error| format!("Failed to load playlist record: {error}"))
 }
 
 fn fallback_task_record_by_id(
@@ -3741,6 +3926,363 @@ pub fn mark_user_entry_played(
     })
 }
 
+pub fn upsert_playlist(
+    app: &AppHandle,
+    input: LibraryPlaylistUpsertInput,
+) -> Result<LibraryPlaylistRecord, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let playlist_id = input.id.trim();
+        if playlist_id.is_empty() {
+            return Err("Playlist id is required".to_string());
+        }
+
+        let owner_uid = normalize_owner_uid(Some(input.owner_uid.as_str()))
+            .ok_or_else(|| "Playlist ownerUid is required".to_string())?;
+        let name = normalize_text(Some(input.name.as_str()))
+            .ok_or_else(|| "Playlist name is required".to_string())?;
+        let kind = normalize_playlist_kind(input.kind.as_deref());
+
+        let now = now_ms();
+        let created_at_ms = input.created_at_ms.unwrap_or(now).max(0);
+        let updated_at_ms = input.updated_at_ms.unwrap_or(now).max(created_at_ms);
+        let last_opened_at_ms = input.last_opened_at_ms.map(|value| value.max(0));
+
+        conn.execute(
+            r#"
+            INSERT INTO playlists(
+              id,
+              owner_uid,
+              name,
+              description,
+              kind,
+              source_connector_id,
+              source_playlist_id,
+              smart_rule_json,
+              is_readonly,
+              created_at_ms,
+              updated_at_ms,
+              last_opened_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(id) DO UPDATE SET
+              owner_uid = excluded.owner_uid,
+              name = excluded.name,
+              description = excluded.description,
+              kind = excluded.kind,
+              source_connector_id = excluded.source_connector_id,
+              source_playlist_id = excluded.source_playlist_id,
+              smart_rule_json = excluded.smart_rule_json,
+              is_readonly = excluded.is_readonly,
+              updated_at_ms = excluded.updated_at_ms,
+              last_opened_at_ms = excluded.last_opened_at_ms
+            "#,
+            params![
+                playlist_id,
+                owner_uid,
+                name,
+                normalize_text(input.description.as_deref()),
+                kind,
+                normalize_text(input.source_connector_id.as_deref()),
+                normalize_text(input.source_playlist_id.as_deref()),
+                normalize_text(input.smart_rule_json.as_deref()),
+                normalize_bool_flag(input.is_readonly, false),
+                created_at_ms,
+                updated_at_ms,
+                last_opened_at_ms,
+            ],
+        )
+        .map_err(|error| format!("Failed to upsert playlist: {error}"))?;
+
+        playlist_record_by_id(conn, playlist_id)
+    })
+}
+
+pub fn list_playlists(
+    app: &AppHandle,
+    query: Option<LibraryPlaylistQueryInput>,
+) -> Result<Vec<LibraryPlaylistRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_limit = normalize_limit(query.as_ref().and_then(|item| item.limit));
+        let normalized_offset = normalize_offset(query.as_ref().and_then(|item| item.offset));
+        let normalized_owner_uid = query
+            .as_ref()
+            .and_then(|item| item.owner_uid.as_ref())
+            .and_then(|value| normalize_owner_uid(Some(value.as_str())));
+        let owner_uid_enabled_flag = if normalized_owner_uid.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
+        let owner_uid_exact_value = normalized_owner_uid.unwrap_or_default();
+        let normalized_kind = query
+            .as_ref()
+            .and_then(|item| item.kind.as_ref())
+            .map(|value| normalize_playlist_kind(Some(value.as_str())))
+            .filter(|value| !value.is_empty());
+        let kind_enabled_flag = if normalized_kind.is_some() { 1_i64 } else { 0_i64 };
+        let kind_exact_value = normalized_kind.unwrap_or_default();
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  owner_uid,
+                  name,
+                  description,
+                  kind,
+                  source_connector_id,
+                  source_playlist_id,
+                  smart_rule_json,
+                  is_readonly,
+                  created_at_ms,
+                  updated_at_ms,
+                  last_opened_at_ms
+                FROM playlists
+                WHERE (?1 = 0 OR owner_uid = ?2)
+                  AND (?3 = 0 OR kind = ?4)
+                ORDER BY
+                  COALESCE(last_opened_at_ms, updated_at_ms) DESC,
+                  updated_at_ms DESC,
+                  id ASC
+                LIMIT ?5
+                OFFSET ?6
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare list playlists statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(
+                params![
+                    owner_uid_enabled_flag,
+                    owner_uid_exact_value,
+                    kind_enabled_flag,
+                    kind_exact_value,
+                    normalized_limit,
+                    normalized_offset,
+                ],
+                |row| {
+                    Ok(LibraryPlaylistRecord {
+                        id: row.get(0)?,
+                        owner_uid: row.get(1)?,
+                        name: row.get(2)?,
+                        description: row.get(3)?,
+                        kind: row.get(4)?,
+                        source_connector_id: row.get(5)?,
+                        source_playlist_id: row.get(6)?,
+                        smart_rule_json: row.get(7)?,
+                        is_readonly: row.get::<_, i64>(8)? != 0,
+                        created_at_ms: row.get(9)?,
+                        updated_at_ms: row.get(10)?,
+                        last_opened_at_ms: row.get(11)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("Failed to query playlists: {error}"))?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("Failed to parse playlist row: {error}"))?);
+        }
+        Ok(items)
+    })
+}
+
+pub fn delete_playlist(app: &AppHandle, playlist_id: &str) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Ok(false);
+        }
+        let affected = conn
+            .execute(
+                "DELETE FROM playlists WHERE id = ?1",
+                params![normalized_playlist_id],
+            )
+            .map_err(|error| format!("Failed to delete playlist: {error}"))?;
+        Ok(affected > 0)
+    })
+}
+
+pub fn touch_playlist_opened(
+    app: &AppHandle,
+    playlist_id: &str,
+    opened_at_ms: Option<i64>,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Ok(false);
+        }
+        let opened = opened_at_ms.unwrap_or_else(now_ms).max(0);
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE playlists
+                SET
+                  last_opened_at_ms = ?2,
+                  updated_at_ms = CASE
+                    WHEN updated_at_ms > ?2 THEN updated_at_ms
+                    ELSE ?2
+                  END
+                WHERE id = ?1
+                "#,
+                params![normalized_playlist_id, opened],
+            )
+            .map_err(|error| format!("Failed to touch playlist opened timestamp: {error}"))?;
+
+        Ok(affected > 0)
+    })
+}
+
+pub fn replace_playlist_items(
+    app: &AppHandle,
+    playlist_id: &str,
+    items: Vec<LibraryPlaylistItemUpsertInput>,
+) -> Result<u64, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("Failed to start replace playlist items transaction: {error}"))?;
+
+        tx.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![normalized_playlist_id],
+        )
+        .map_err(|error| format!("Failed to clear previous playlist items: {error}"))?;
+
+        let now = now_ms();
+        let mut inserted: u64 = 0;
+        for (index, raw_item) in items.into_iter().enumerate() {
+            let fallback_position = index as i64;
+            let position = raw_item.position.unwrap_or(fallback_position).max(0);
+            let local_track_id = normalize_text(raw_item.local_track_id.as_deref());
+            let entry_id = normalize_text(raw_item.entry_id.as_deref());
+            let track_payload_json = normalize_text(raw_item.track_payload_json.as_deref());
+
+            if local_track_id.is_none() && entry_id.is_none() && track_payload_json.is_none() {
+                continue;
+            }
+
+            let item_id = normalize_text(raw_item.id.as_deref()).unwrap_or_else(|| {
+                format!("pli::{normalized_playlist_id}::{position}::{index}")
+            });
+            let created_at_ms = raw_item.created_at_ms.unwrap_or(now).max(0);
+            let snapshot_duration_seconds = raw_item
+                .snapshot_duration_seconds
+                .filter(|value| value.is_finite() && *value >= 0.0);
+
+            tx.execute(
+                r#"
+                INSERT INTO playlist_items(
+                  id,
+                  playlist_id,
+                  position,
+                  local_track_id,
+                  entry_id,
+                  track_payload_json,
+                  snapshot_title,
+                  snapshot_artist,
+                  snapshot_album,
+                  snapshot_duration_seconds,
+                  created_at_ms
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                "#,
+                params![
+                    item_id,
+                    normalized_playlist_id,
+                    position,
+                    local_track_id,
+                    entry_id,
+                    track_payload_json,
+                    normalize_text(raw_item.snapshot_title.as_deref()),
+                    normalize_text(raw_item.snapshot_artist.as_deref()),
+                    normalize_text(raw_item.snapshot_album.as_deref()),
+                    snapshot_duration_seconds,
+                    created_at_ms,
+                ],
+            )
+            .map_err(|error| format!("Failed to insert playlist item: {error}"))?;
+            inserted = inserted.saturating_add(1);
+        }
+
+        tx.commit()
+            .map_err(|error| format!("Failed to commit replace playlist items transaction: {error}"))?;
+
+        Ok(inserted)
+    })
+}
+
+pub fn list_playlist_items(
+    app: &AppHandle,
+    playlist_id: &str,
+) -> Result<Vec<LibraryPlaylistItemRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let normalized_playlist_id = playlist_id.trim();
+        if normalized_playlist_id.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT
+                  id,
+                  playlist_id,
+                  position,
+                  local_track_id,
+                  entry_id,
+                  track_payload_json,
+                  snapshot_title,
+                  snapshot_artist,
+                  snapshot_album,
+                  snapshot_duration_seconds,
+                  created_at_ms
+                FROM playlist_items
+                WHERE playlist_id = ?1
+                ORDER BY position ASC, created_at_ms ASC, id ASC
+                "#,
+            )
+            .map_err(|error| format!("Failed to prepare list playlist items statement: {error}"))?;
+
+        let rows = stmt
+            .query_map(params![normalized_playlist_id], |row| {
+                Ok(LibraryPlaylistItemRecord {
+                    id: row.get(0)?,
+                    playlist_id: row.get(1)?,
+                    position: row.get(2)?,
+                    local_track_id: row.get(3)?,
+                    entry_id: row.get(4)?,
+                    track_payload_json: row.get(5)?,
+                    snapshot_title: row.get(6)?,
+                    snapshot_artist: row.get(7)?,
+                    snapshot_album: row.get(8)?,
+                    snapshot_duration_seconds: row.get(9)?,
+                    created_at_ms: row.get(10)?,
+                })
+            })
+            .map_err(|error| format!("Failed to query playlist items: {error}"))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|error| format!("Failed to parse playlist item row: {error}"))?);
+        }
+        Ok(result)
+    })
+}
+
 pub fn upsert_fallback_task(
     app: &AppHandle,
     input: LibraryFallbackTaskUpsertInput,
@@ -4615,6 +5157,7 @@ pub fn query_tracks(
                 "genre" => Some("LOWER(COALESCE(t.genre, ''))"),
                 "durationseconds" => Some("COALESCE(t.duration_seconds, 0)"),
                 "playcount" => Some("COALESCE(t.play_count, 0)"),
+                "lastplayedatms" => Some("COALESCE(t.last_played_at_ms, 0)"),
                 "filesize" => Some("COALESCE(t.file_size, 0)"),
                 "samplerate" => Some("COALESCE(t.sample_rate, 0)"),
                 "bitdepth" => Some("COALESCE(t.bit_depth, 0)"),
@@ -4944,11 +5487,11 @@ mod tests {
     }
 
     #[test]
-    fn migrate_empty_db_to_v6_schema() {
+    fn migrate_empty_db_to_v7_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 6);
+        assert_eq!(read_user_version(&conn), 7);
         assert!(has_table(&conn, "connectors"));
         assert!(has_table(&conn, "source_sync_state"));
         assert!(has_table(&conn, "source_fingerprint_state"));
@@ -4958,17 +5501,21 @@ mod tests {
         assert!(has_table(&conn, "lyric_candidates"));
         assert!(has_table(&conn, "lyric_selection"));
         assert!(has_table(&conn, "lyric_fetch_jobs"));
+        assert!(has_table(&conn, "playlists"));
+        assert!(has_table(&conn, "playlist_items"));
         assert!(has_index(&conn, "source_sync_state_backoff_until_ms_idx"));
         assert!(has_index(&conn, "metadata_refresh_jobs_next_run_at_ms_idx"));
         assert!(has_index(&conn, "lyric_documents_selection_key_idx"));
         assert!(has_index(&conn, "lyric_fetch_jobs_status_idx"));
+        assert!(has_index(&conn, "playlists_owner_uid_idx"));
+        assert!(has_index(&conn, "playlist_items_playlist_id_idx"));
 
         drop(conn);
         cleanup_temp_db(&path);
     }
 
     #[test]
-    fn migrate_v4_db_to_v6_schema() {
+    fn migrate_v4_db_to_v7_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-v4");
         conn.execute_batch(
             r#"
@@ -5003,18 +5550,21 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 6);
+        assert_eq!(read_user_version(&conn), 7);
         assert!(has_table(&conn, "connector_accounts"));
         assert!(has_table(&conn, "cover_refs"));
         assert!(has_table(&conn, "lyric_refs"));
         assert!(has_table(&conn, "lyric_documents"));
         assert!(has_table(&conn, "lyric_selection"));
         assert!(has_table(&conn, "lyric_fetch_jobs"));
+        assert!(has_table(&conn, "playlists"));
+        assert!(has_table(&conn, "playlist_items"));
         assert!(has_index(
             &conn,
             "track_provider_refs_provider_track_id_idx"
         ));
         assert!(has_index(&conn, "lyric_candidates_document_id_idx"));
+        assert!(has_index(&conn, "playlists_owner_last_opened_idx"));
 
         drop(conn);
         cleanup_temp_db(&path);

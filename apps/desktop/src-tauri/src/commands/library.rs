@@ -480,6 +480,76 @@ pub async fn music_library_db_mark_user_entry_played(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_upsert_playlist(
+    app: tauri::AppHandle,
+    playlist: music_library_db::LibraryPlaylistUpsertInput,
+) -> Result<music_library_db::LibraryPlaylistRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::upsert_playlist(&app, playlist))
+        .await
+        .map_err(|e| format!("Music library upsert playlist task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_playlists(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryPlaylistQueryInput>,
+) -> Result<Vec<music_library_db::LibraryPlaylistRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_playlists(&app, query))
+        .await
+        .map_err(|e| format!("Music library list playlists task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_delete_playlist(
+    app: tauri::AppHandle,
+    playlist_id: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::delete_playlist(&app, &playlist_id)
+    })
+    .await
+    .map_err(|e| format!("Music library delete playlist task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_touch_playlist_opened(
+    app: tauri::AppHandle,
+    playlist_id: String,
+    opened_at_ms: Option<i64>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::touch_playlist_opened(&app, &playlist_id, opened_at_ms)
+    })
+    .await
+    .map_err(|e| format!("Music library touch playlist opened task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_replace_playlist_items(
+    app: tauri::AppHandle,
+    playlist_id: String,
+    items: Vec<music_library_db::LibraryPlaylistItemUpsertInput>,
+) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::replace_playlist_items(&app, &playlist_id, items)
+    })
+    .await
+    .map_err(|e| format!("Music library replace playlist items task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_playlist_items(
+    app: tauri::AppHandle,
+    playlist_id: String,
+) -> Result<Vec<music_library_db::LibraryPlaylistItemRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::list_playlist_items(&app, &playlist_id)
+    })
+    .await
+    .map_err(|e| format!("Music library list playlist items task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_upsert_fallback_task(
     app: tauri::AppHandle,
     task: music_library_db::LibraryFallbackTaskUpsertInput,

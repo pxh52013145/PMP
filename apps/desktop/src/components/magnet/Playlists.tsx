@@ -49,6 +49,15 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return () => clearTimeout(handle);
   }, [searchQuery, showAddTrackModal]);
 
+  useEffect(() => {
+    if (!selectedPlaylist?.id) return;
+    const nextSelectedPlaylist =
+      audioState.playlists.find((item) => item.id === selectedPlaylist.id) ?? null;
+    if (nextSelectedPlaylist !== selectedPlaylist) {
+      setSelectedPlaylist(nextSelectedPlaylist);
+    }
+  }, [audioState.playlists, selectedPlaylist]);
+
   const loadAvailableTracks = async (query: string) => {
     try {
       setIsLoadingTracks(true);
@@ -140,6 +149,46 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return availableTracks;
   };
 
+  const isReadonlyPlaylist = (playlist: Playlist | null): boolean => {
+    if (!playlist) return false;
+    if (playlist.readonly) return true;
+    return playlist.kind === 'smart';
+  };
+
+  const getPlaylistSourceBadge = (
+    playlist: Playlist
+  ): { label: string; variant: 'manual' | 'smart' | 'platform' } => {
+    if (playlist.kind === 'smart') {
+      return { label: 'SMART', variant: 'smart' };
+    }
+
+    if (playlist.kind === 'platform') {
+      const connectorId =
+        typeof playlist.sourceConnectorId === 'string' ? playlist.sourceConnectorId.trim() : '';
+      const connectorName = connectorId
+        ? connectorId.replace(/^connector\./i, '').replace(/\./g, ' ').toUpperCase()
+        : 'PLATFORM';
+      return { label: connectorName, variant: 'platform' };
+    }
+
+    return { label: 'PMP', variant: 'manual' };
+  };
+
+  const renderPlaylistSourceBadge = (playlist: Playlist, className?: string) => {
+    const badge = getPlaylistSourceBadge(playlist);
+    const classes = [
+      'playlists-source-badge',
+      `playlists-source-badge-${badge.variant}`,
+      className ?? '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return <span className={classes}>{badge.label}</span>;
+  };
+
+  const selectedPlaylistReadonly = isReadonlyPlaylist(selectedPlaylist);
+
   if (!isOpen) return null;
 
   return createPortal(
@@ -172,7 +221,10 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                 >
                   <div className="playlists-item-icon">♪</div>
                   <div className="playlists-item-info">
-                    <div className="playlists-item-name">{playlist.name}</div>
+                    <div className="playlists-item-name-row">
+                      <div className="playlists-item-name">{playlist.name}</div>
+                      {renderPlaylistSourceBadge(playlist, 'playlists-item-source-badge')}
+                    </div>
                     <div className="playlists-item-count">{t('pages.playlists.trackCount', { count: playlist.trackCount })}</div>
                   </div>
                 </div>
@@ -185,7 +237,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         <div className="playlists-detail">
           <div className="playlists-detail-header">
             <h2 className="playlists-detail-title">
-              {selectedPlaylist ? selectedPlaylist.name : t('pages.playlists.detail.title')}
+              {selectedPlaylist ? (
+                <>
+                  <span>{selectedPlaylist.name}</span>
+                  {renderPlaylistSourceBadge(selectedPlaylist, 'playlists-detail-source-badge')}
+                </>
+              ) : (
+                t('pages.playlists.detail.title')
+              )}
             </h2>
             <button className="playlists-close-btn" onClick={onClose}>
               ✕
@@ -208,7 +267,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                   <button
                     className="playlists-detail-btn"
                     onClick={() => handlePlayPlaylist(selectedPlaylist.id)}
-                    disabled={selectedPlaylist.trackCount === 0}
+                    disabled={selectedPlaylistReadonly || selectedPlaylist.trackCount === 0}
                   >
                     ▶ {t('common.action.play')}
                   </button>
@@ -222,6 +281,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                   <button
                     className="playlists-detail-btn"
                     onClick={() => setShowAddTrackModal(true)}
+                    disabled={selectedPlaylistReadonly}
                   >
                     ➕ {t('pages.playlists.action.addTrack')}
                   </button>
@@ -231,6 +291,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       setPlaylistToRename(selectedPlaylist);
                       setShowRenameDialog(true);
                     }}
+                    disabled={selectedPlaylistReadonly}
                   >
                     ✏️ {t('common.action.rename')}
                   </button>
@@ -250,6 +311,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       setPlaylistToDelete(selectedPlaylist.id);
                       setShowDeleteConfirm(true);
                     }}
+                    disabled={selectedPlaylistReadonly}
                   >
                     × {t('pages.playlists.action.deletePlaylist')}
                   </button>
@@ -264,6 +326,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                     <button
                       className="playlists-tracks-empty-btn"
                       onClick={() => setShowAddTrackModal(true)}
+                      disabled={selectedPlaylistReadonly}
                     >
                       {t('pages.playlists.tracks.empty.action.addTracks')}
                     </button>
@@ -306,6 +369,7 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                               e.stopPropagation();
                               handleRemoveTrackFromPlaylist(selectedPlaylist.id, index);
                             }}
+                            disabled={selectedPlaylistReadonly}
                             title={t('pages.playlists.tracks.action.removeFromPlaylist.title')}
                           >
                             ✕

@@ -12,12 +12,25 @@ export interface Playlist {
   name: string;
   description?: string;
   tracks: Track[];
+  kind?: 'manual' | 'smart' | 'platform';
+  readonly?: boolean;
+  sourceConnectorId?: string;
+  sourcePlaylistId?: string;
+  smartRuleJson?: string;
   coverUrl?: string;
   createdAt: number;
   updatedAt: number;
   trackCount?: number;
   totalDuration?: number;
   favorite?: boolean;
+}
+
+export interface PlaylistCreateOptions {
+  kind?: 'manual' | 'smart' | 'platform';
+  readonly?: boolean;
+  sourceConnectorId?: string;
+  sourcePlaylistId?: string;
+  smartRuleJson?: string;
 }
 
 export interface Track {
@@ -393,7 +406,7 @@ export interface IAudioService {
   /**
    * 创建播放列表
    */
-  createPlaylist(name: string, description?: string): Playlist;
+  createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist;
 
   /**
    * 删除播放列表

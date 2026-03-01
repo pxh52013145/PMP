@@ -301,6 +301,7 @@ export type NativeLibraryTrackSortField =
   | 'genre'
   | 'durationSeconds'
   | 'playCount'
+  | 'lastPlayedAtMs'
   | 'fileSize'
   | 'sampleRate'
   | 'bitDepth'
@@ -355,6 +356,7 @@ const NATIVE_LIBRARY_TRACK_SORT_FIELDS = new Set<NativeLibraryTrackSortField>([
   'genre',
   'durationSeconds',
   'playCount',
+  'lastPlayedAtMs',
   'fileSize',
   'sampleRate',
   'bitDepth',
@@ -603,6 +605,70 @@ export interface NativeLibraryUserEntryRecord {
   lastPlayedAtMs?: number;
   createdAtMs: number;
   updatedAtMs: number;
+}
+
+export interface NativeLibraryPlaylistUpsertInput {
+  id: string;
+  ownerUid: string;
+  name: string;
+  description?: string;
+  kind?: 'manual' | 'smart' | 'platform';
+  sourceConnectorId?: string;
+  sourcePlaylistId?: string;
+  smartRuleJson?: string;
+  isReadonly?: boolean;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+  lastOpenedAtMs?: number;
+}
+
+export interface NativeLibraryPlaylistQuery {
+  ownerUid?: string;
+  kind?: 'manual' | 'smart' | 'platform';
+  limit?: number;
+  offset?: number;
+}
+
+export interface NativeLibraryPlaylistRecord {
+  id: string;
+  ownerUid: string;
+  name: string;
+  description?: string;
+  kind: 'manual' | 'smart' | 'platform';
+  sourceConnectorId?: string;
+  sourcePlaylistId?: string;
+  smartRuleJson?: string;
+  isReadonly: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+  lastOpenedAtMs?: number;
+}
+
+export interface NativeLibraryPlaylistItemUpsertInput {
+  id?: string;
+  position?: number;
+  localTrackId?: string;
+  entryId?: string;
+  trackPayloadJson?: string;
+  snapshotTitle?: string;
+  snapshotArtist?: string;
+  snapshotAlbum?: string;
+  snapshotDurationSeconds?: number;
+  createdAtMs?: number;
+}
+
+export interface NativeLibraryPlaylistItemRecord {
+  id: string;
+  playlistId: string;
+  position: number;
+  localTrackId?: string;
+  entryId?: string;
+  trackPayloadJson?: string;
+  snapshotTitle?: string;
+  snapshotArtist?: string;
+  snapshotAlbum?: string;
+  snapshotDurationSeconds?: number;
+  createdAtMs: number;
 }
 
 export interface NativeLibraryFallbackTaskUpsertInput {
@@ -1513,6 +1579,75 @@ function ensureUserEntryRecord(value: unknown): NativeLibraryUserEntryRecord | n
     lastPlayedAtMs: asNumber(value.lastPlayedAtMs),
     createdAtMs,
     updatedAtMs,
+  };
+}
+
+function normalizePlaylistKind(value: unknown): NativeLibraryPlaylistRecord['kind'] {
+  const raw = asTrimmedString(value).toLowerCase();
+  if (raw === 'smart') return 'smart';
+  if (raw === 'platform') return 'platform';
+  return 'manual';
+}
+
+function ensurePlaylistRecord(value: unknown): NativeLibraryPlaylistRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(value.id);
+  const ownerUid = asTrimmedString(value.ownerUid);
+  const name = asTrimmedString(value.name);
+  const isReadonly = asBool(value.isReadonly);
+  const createdAtMs = asNumber(value.createdAtMs);
+  const updatedAtMs = asNumber(value.updatedAtMs);
+  if (
+    !id ||
+    !ownerUid ||
+    !name ||
+    isReadonly === undefined ||
+    createdAtMs === undefined ||
+    updatedAtMs === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    ownerUid,
+    name,
+    description: asOptionalString(value.description),
+    kind: normalizePlaylistKind(value.kind),
+    sourceConnectorId: asOptionalString(value.sourceConnectorId),
+    sourcePlaylistId: asOptionalString(value.sourcePlaylistId),
+    smartRuleJson: asOptionalString(value.smartRuleJson),
+    isReadonly,
+    createdAtMs,
+    updatedAtMs,
+    lastOpenedAtMs: asNumber(value.lastOpenedAtMs),
+  };
+}
+
+function ensurePlaylistItemRecord(value: unknown): NativeLibraryPlaylistItemRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(value.id);
+  const playlistId = asTrimmedString(value.playlistId);
+  const position = asNumber(value.position);
+  const createdAtMs = asNumber(value.createdAtMs);
+  if (!id || !playlistId || position === undefined || createdAtMs === undefined) {
+    return null;
+  }
+
+  return {
+    id,
+    playlistId,
+    position: Math.max(0, Math.floor(position)),
+    localTrackId: asOptionalString(value.localTrackId),
+    entryId: asOptionalString(value.entryId),
+    trackPayloadJson: asOptionalString(value.trackPayloadJson),
+    snapshotTitle: asOptionalString(value.snapshotTitle),
+    snapshotArtist: asOptionalString(value.snapshotArtist),
+    snapshotAlbum: asOptionalString(value.snapshotAlbum),
+    snapshotDurationSeconds: asNumber(value.snapshotDurationSeconds),
+    createdAtMs,
   };
 }
 
@@ -2713,6 +2848,171 @@ export async function markNativeLibraryUserEntryPlayed(
     playedAtMs,
   }).catch(() => null);
   return raw === true;
+}
+
+export async function upsertNativeLibraryPlaylist(
+  playlist: NativeLibraryPlaylistUpsertInput
+): Promise<NativeLibraryPlaylistRecord | null> {
+  if (!isTauriRuntime()) return null;
+
+  const payload: NativeLibraryPlaylistUpsertInput = {
+    ...playlist,
+    id: asTrimmedString(playlist.id),
+    ownerUid: asTrimmedString(playlist.ownerUid),
+    name: asTrimmedString(playlist.name),
+    description: asOptionalString(playlist.description),
+    kind: normalizePlaylistKind(playlist.kind),
+    sourceConnectorId: asOptionalString(playlist.sourceConnectorId),
+    sourcePlaylistId: asOptionalString(playlist.sourcePlaylistId),
+    smartRuleJson: asOptionalString(playlist.smartRuleJson),
+    isReadonly: playlist.isReadonly === true,
+    createdAtMs:
+      typeof playlist.createdAtMs === 'number' && Number.isFinite(playlist.createdAtMs)
+        ? Math.max(0, Math.floor(playlist.createdAtMs))
+        : undefined,
+    updatedAtMs:
+      typeof playlist.updatedAtMs === 'number' && Number.isFinite(playlist.updatedAtMs)
+        ? Math.max(0, Math.floor(playlist.updatedAtMs))
+        : undefined,
+    lastOpenedAtMs:
+      typeof playlist.lastOpenedAtMs === 'number' && Number.isFinite(playlist.lastOpenedAtMs)
+        ? Math.max(0, Math.floor(playlist.lastOpenedAtMs))
+        : undefined,
+  };
+  if (!payload.id || !payload.ownerUid || !payload.name) return null;
+
+  const raw = await invoke<unknown>('music_library_db_upsert_playlist', {
+    playlist: payload,
+  }).catch(() => null);
+  return ensurePlaylistRecord(raw);
+}
+
+export async function listNativeLibraryPlaylists(
+  query?: NativeLibraryPlaylistQuery
+): Promise<NativeLibraryPlaylistRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload: NativeLibraryPlaylistQuery = {
+    ownerUid:
+      typeof query?.ownerUid === 'string' && query.ownerUid.trim().length > 0
+        ? query.ownerUid.trim()
+        : undefined,
+    kind: query?.kind ? normalizePlaylistKind(query.kind) : undefined,
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(2000, Math.floor(query.limit)))
+        : undefined,
+    offset:
+      typeof query?.offset === 'number' && Number.isFinite(query.offset)
+        ? Math.max(0, Math.floor(query.offset))
+        : undefined,
+  };
+
+  const raw = await invoke<unknown>('music_library_db_list_playlists', {
+    query: payload,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const playlists: NativeLibraryPlaylistRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensurePlaylistRecord(item);
+    if (!parsed) continue;
+    playlists.push(parsed);
+  }
+  return playlists;
+}
+
+export async function deleteNativeLibraryPlaylist(playlistId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return false;
+
+  const raw = await invoke<unknown>('music_library_db_delete_playlist', {
+    playlistId: normalizedPlaylistId,
+  }).catch(() => null);
+  return raw === true;
+}
+
+export async function touchNativeLibraryPlaylistOpened(
+  playlistId: string,
+  options?: { openedAtMs?: number }
+): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return false;
+
+  const openedAtMs =
+    typeof options?.openedAtMs === 'number' && Number.isFinite(options.openedAtMs)
+      ? Math.max(0, Math.floor(options.openedAtMs))
+      : undefined;
+
+  const raw = await invoke<unknown>('music_library_db_touch_playlist_opened', {
+    playlistId: normalizedPlaylistId,
+    openedAtMs,
+  }).catch(() => null);
+  return raw === true;
+}
+
+export async function replaceNativeLibraryPlaylistItems(
+  playlistId: string,
+  items: NativeLibraryPlaylistItemUpsertInput[]
+): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return 0;
+
+  const payload = items.map((item) => ({
+    id: asOptionalString(item.id),
+    position:
+      typeof item.position === 'number' && Number.isFinite(item.position)
+        ? Math.max(0, Math.floor(item.position))
+        : undefined,
+    localTrackId: asOptionalString(item.localTrackId),
+    entryId: asOptionalString(item.entryId),
+    trackPayloadJson: asOptionalString(item.trackPayloadJson),
+    snapshotTitle: asOptionalString(item.snapshotTitle),
+    snapshotArtist: asOptionalString(item.snapshotArtist),
+    snapshotAlbum: asOptionalString(item.snapshotAlbum),
+    snapshotDurationSeconds:
+      typeof item.snapshotDurationSeconds === 'number' && Number.isFinite(item.snapshotDurationSeconds)
+        ? Math.max(0, item.snapshotDurationSeconds)
+        : undefined,
+    createdAtMs:
+      typeof item.createdAtMs === 'number' && Number.isFinite(item.createdAtMs)
+        ? Math.max(0, Math.floor(item.createdAtMs))
+        : undefined,
+  }));
+
+  const raw = await invoke<unknown>('music_library_db_replace_playlist_items', {
+    playlistId: normalizedPlaylistId,
+    items: payload,
+  }).catch(() => null);
+
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw));
+  }
+  return 0;
+}
+
+export async function listNativeLibraryPlaylistItems(
+  playlistId: string
+): Promise<NativeLibraryPlaylistItemRecord[]> {
+  if (!isTauriRuntime()) return [];
+  const normalizedPlaylistId = playlistId.trim();
+  if (!normalizedPlaylistId) return [];
+
+  const raw = await invoke<unknown>('music_library_db_list_playlist_items', {
+    playlistId: normalizedPlaylistId,
+  }).catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const result: NativeLibraryPlaylistItemRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensurePlaylistItemRecord(item);
+    if (!parsed) continue;
+    result.push(parsed);
+  }
+  return result;
 }
 
 export async function upsertNativeLibraryFallbackTask(

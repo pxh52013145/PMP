@@ -1,55 +1,31 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAudioService } from '../../../contexts/AudioEngineContext';
 import { useT } from '../../../i18n';
-import type { AudioState, Track } from '../../../services/audio';
+import type { AudioState } from '../../../services/audio';
 import {
-  listBilibiliPlaybackQualities,
+  listPlatformConnectorDefinitions,
   listPlatformConnectorFacadeItems,
   searchPlatformTracks,
   subscribePlatformConnectorAuthChanged,
-  type BilibiliFavoriteResourceItem,
-  type BilibiliPreparedPlayback,
-  type BilibiliPlaybackQualityOption,
+  type PlatformConnectorDefinition,
   type PlatformConnectorFacadeItem,
 } from '../../../modules/music-platform';
-import { usePersistentSetting } from '../../../modules/storage';
-import { BilibiliWorkspace } from './BilibiliWorkspace';
-import { useBilibiliPlaybackCacheSettings } from './useBilibiliPlaybackCacheSettings';
-import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
-import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
 import {
-  useBilibiliResourceEnhancer,
-  type BilibiliQualityBadge,
-} from './useBilibiliResourceEnhancer';
-import { useBilibiliResourcePlaybackActions } from './useBilibiliResourcePlaybackActions';
+  buildPlatformWorkspaceDescriptors,
+  GENERIC_PLATFORM_WORKSPACE_MODE,
+  getWorkspaceConnectorId,
+  normalizeWorkspaceMode,
+  toConnectorWorkspaceMode,
+  type PlatformWorkspaceMode,
+} from './platformWorkspaceModes';
+import { resolvePlatformWorkspaceAdapter } from './platformWorkspaceAdapterRegistry';
+import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
 import './PlatformMagnet.css';
 
 const DEFAULT_SEARCH_LIMIT = 30;
 const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
-const BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY =
-  'music-platform.bilibili.playback-quality-preference';
-const BILIBILI_UI_THEME_PREFERENCE_KEY = 'music-platform.bilibili.ui-theme-preference';
 
-type PlatformMode = 'bilibili' | 'generic';
 type PlatformTrackSearchItem = Awaited<ReturnType<typeof searchPlatformTracks>>['tracks'][number];
-type BilibiliPlaybackQualityKey = 'auto' | '64k' | '132k' | '192k' | 'dolby' | 'hires';
-type BilibiliThemePreference = 'auto' | 'light' | 'dark';
-
-const BILIBILI_QUALITY_OPTION_ORDER: BilibiliPlaybackQualityKey[] = [
-  'auto',
-  '64k',
-  '132k',
-  '192k',
-  'dolby',
-  'hires',
-];
-
-const DEFAULT_BILIBILI_QUALITY_OPTIONS: BilibiliPlaybackQualityOption[] =
-  BILIBILI_QUALITY_OPTION_ORDER.map((key) => ({
-    key,
-    label: key,
-    available: key === 'auto',
-  }));
 
 function toErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) {
@@ -69,125 +45,13 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function toBilibiliKindLabelKey(kind: string): string {
-  const normalized = kind.trim().toLowerCase();
-  switch (normalized) {
-    case 'video':
-      return 'magnet.platform.bilibili.kind.video';
-    case 'audio':
-      return 'magnet.platform.bilibili.kind.audio';
-    default:
-      return 'magnet.platform.bilibili.kind.unknown';
-  }
-}
-
-function toBilibiliQualityLabelKey(key: string): string {
-  const normalized = key.trim().toLowerCase();
-  switch (normalized) {
-    case 'auto':
-      return 'magnet.platform.bilibili.quality.option.auto';
-    case '64k':
-      return 'magnet.platform.bilibili.quality.option.64k';
-    case '132k':
-      return 'magnet.platform.bilibili.quality.option.132k';
-    case '192k':
-      return 'magnet.platform.bilibili.quality.option.192k';
-    case 'dolby':
-      return 'magnet.platform.bilibili.quality.option.dolby';
-    case 'hires':
-      return 'magnet.platform.bilibili.quality.option.hires';
-    default:
-      return 'magnet.platform.bilibili.quality.option.auto';
-  }
-}
-
-function normalizeBilibiliQualityHint(value: string): BilibiliPlaybackQualityKey {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === '64k') return '64k';
-  if (normalized === '132k') return '132k';
-  if (normalized === '192k') return '192k';
-  if (normalized === 'dolby') return 'dolby';
-  if (normalized === 'hires') return 'hires';
-  return 'auto';
-}
-
-function normalizeBilibiliThemePreference(value: string): BilibiliThemePreference {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'light') return 'light';
-  if (normalized === 'dark') return 'dark';
-  return 'auto';
-}
-
-function toBilibiliQualityBadgeLabelKey(badge: BilibiliQualityBadge): string {
-  switch (badge) {
-    case 'hires':
-      return 'magnet.platform.bilibili.quality.badge.hires';
-    default:
-      return 'magnet.platform.bilibili.quality.badge.dolby';
-  }
-}
-
-function mergePlaybackQualityOptions(
-  options: BilibiliPlaybackQualityOption[]
-): BilibiliPlaybackQualityOption[] {
-  const lookup = new Map(
-    options
-      .map((item) => ({ ...item, key: item.key.trim().toLowerCase() }))
-      .filter((item) => item.key.length > 0)
-      .map((item) => [item.key, item] as const)
-  );
-
-  return BILIBILI_QUALITY_OPTION_ORDER.map((key) => {
-    const matched = lookup.get(key);
-    return {
-      key,
-      label: matched?.label ?? key,
-      available: matched?.available ?? (key === 'auto'),
-    };
-  });
-}
-
-function formatDuration(seconds: number | undefined): string {
-  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return '--:--';
-  const total = Math.floor(seconds);
-  const minutes = Math.floor(total / 60)
-    .toString()
-    .padStart(2, '0');
-  const rest = (total % 60).toString().padStart(2, '0');
-  return `${minutes}:${rest}`;
-}
-
-function toResourceCacheKey(item: BilibiliFavoriteResourceItem): string {
-  return item.resourceId || item.sourceLocator;
-}
-
-function isBilibiliVideoSourceLocator(sourceLocator: string): boolean {
-  const normalized = sourceLocator.trim().toLowerCase();
-  if (!normalized) return false;
-  return (
-    normalized.includes('bilibili://video/') ||
-    normalized.includes('bilibili.com/video/') ||
-    normalized.includes('bvid=')
-  );
-}
-
-function buildTrackFromPreparedPlayback(
-  item: BilibiliFavoriteResourceItem,
-  prepared: BilibiliPreparedPlayback,
-  coverUrl?: string
-): Track {
-  return {
-    id: `bilibili:${item.resourceId}`,
-    title: item.title,
-    artist: item.ownerName ?? 'Bilibili',
-    duration: item.durationSeconds ?? prepared.durationSeconds,
-    filePath: prepared.cachePath,
-    path: prepared.cachePath,
-    originalPath: item.sourceLocator,
-    coverUrl: coverUrl ?? item.coverUrl,
-    genre: 'Bilibili',
-    comment: item.sourceLocator,
-  };
+function isPlatformPlaylist(
+  playlist: AudioState['playlists'][number],
+  connectorId?: string
+): boolean {
+  if (playlist.kind !== 'platform') return false;
+  if (!connectorId) return true;
+  return playlist.sourceConnectorId === connectorId;
 }
 
 export const PlatformMagnet: React.FC = () => {
@@ -201,7 +65,9 @@ export const PlatformMagnet: React.FC = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
-  const [mode, setMode] = useState<PlatformMode>('bilibili');
+  const [mode, setMode] = useState<PlatformWorkspaceMode>(
+    toConnectorWorkspaceMode(BILIBILI_CONNECTOR_ID)
+  );
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<PlatformConnectorFacadeItem[]>([]);
   const [lastUpdatedAtMs, setLastUpdatedAtMs] = useState<number | null>(null);
@@ -212,47 +78,10 @@ export const PlatformMagnet: React.FC = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<PlatformTrackSearchItem[]>([]);
 
-  const [playbackQualityHint, setPlaybackQualityHint] = usePersistentSetting<string>(
-    BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY,
-    'auto',
-    { format: 'string' }
-  );
-  const [bilibiliThemePreference, setBilibiliThemePreference] = usePersistentSetting<string>(
-    BILIBILI_UI_THEME_PREFERENCE_KEY,
-    'auto',
-    { format: 'string' }
-  );
-  const [playbackQualityLoading, setPlaybackQualityLoading] = useState(false);
-  const [playbackQualityProbeLocator, setPlaybackQualityProbeLocator] = useState<string | null>(null);
-  const [playbackQualityOptions, setPlaybackQualityOptions] = useState<BilibiliPlaybackQualityOption[]>(
-    DEFAULT_BILIBILI_QUALITY_OPTIONS
-  );
-  const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false);
-
-  const {
-    playbackCacheSettingsLoading,
-    playbackCacheSettingsSaving,
-    playbackCacheSettingsError,
-    playbackCacheSettingsInfo,
-    playbackCacheSettings,
-    playbackCachePathDraft,
-    setPlaybackCachePathDraft,
-    refreshPlaybackCacheSettings,
-    handleBrowsePlaybackCachePath,
-    handleSavePlaybackCachePath,
-    handleResetPlaybackCachePath,
-  } = useBilibiliPlaybackCacheSettings(t);
-
-  const [folderDrawerOpen, setFolderDrawerOpen] = useState(false);
-  const [playlistDrawerOpen, setPlaylistDrawerOpen] = useState(false);
-
-  const resourceGridRef = useRef<HTMLDivElement>(null);
-  const resourceLoadMoreSentinelRef = useRef<HTMLDivElement>(null);
-
   const [audioState, setAudioState] = useState<AudioState>(() => audioService.getState());
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
-  const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [playlistError, setPlaylistError] = useState<string | null>(null);
+  const [selectedPlaylistIdByScope, setSelectedPlaylistIdByScope] = useState<Record<string, string | null>>({});
+  const [newPlaylistNameByScope, setNewPlaylistNameByScope] = useState<Record<string, string>>({});
+  const [playlistErrorByScope, setPlaylistErrorByScope] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -283,47 +112,65 @@ export const PlatformMagnet: React.FC = () => {
     }
   }, [t]);
 
-  const bilibiliConnector = useMemo(
-    () => items.find((item) => item.connectorId === BILIBILI_CONNECTOR_ID) ?? null,
-    [items]
+  const connectorDefinitions = useMemo<PlatformConnectorDefinition[]>(
+    () => listPlatformConnectorDefinitions(),
+    []
   );
 
-  const bilibiliAuthorized = bilibiliConnector?.authState === 'authorized';
+  const workspaceDescriptors = useMemo(
+    () => buildPlatformWorkspaceDescriptors(connectorDefinitions),
+    [connectorDefinitions]
+  );
 
-  const {
-    folderLoading,
-    folderError,
-    bilibiliFolders,
-    selectedFolderId,
-    setSelectedFolderId,
-    resourceLoading,
-    resourceLoadingMore,
-    resourceError,
-    setResourceError,
-    resourcePage,
-    resourceFilterQuery,
-    setResourceFilterQuery,
-    bvidQuery,
-    setBvidQuery,
-    bvidSearching,
-    bvidSearchError,
-    bvidSearchResult,
-    bilibiliResources,
-    filteredBilibiliResources,
-    refreshBilibiliFolders,
-    refreshBilibiliRecommendedResources,
-    searchBilibiliHomepageResources,
-    refreshBilibiliResources,
-    loadMoreBilibiliResources,
-    handleBvSearch,
-  } = useBilibiliResourceBrowser({
-    bilibiliAuthorized,
-    t,
-  });
+  const activeMode = useMemo(
+    () => normalizeWorkspaceMode(mode, workspaceDescriptors),
+    [mode, workspaceDescriptors]
+  );
 
-  const selectedBilibiliFolder = useMemo(
-    () => bilibiliFolders.find((item) => item.folderId === selectedFolderId) ?? null,
-    [bilibiliFolders, selectedFolderId]
+  const activeWorkspaceConnectorId = useMemo(
+    () => getWorkspaceConnectorId(activeMode),
+    [activeMode]
+  );
+
+  const activeWorkspaceDescriptor = useMemo(
+    () => workspaceDescriptors.find((descriptor) => descriptor.mode === activeMode) ?? null,
+    [activeMode, workspaceDescriptors]
+  );
+
+  const activePlaylistScopeKey = activeWorkspaceConnectorId ?? GENERIC_PLATFORM_WORKSPACE_MODE;
+
+  const selectedPlaylistId = selectedPlaylistIdByScope[activePlaylistScopeKey] ?? null;
+  const newPlaylistName = newPlaylistNameByScope[activePlaylistScopeKey] ?? '';
+  const playlistError = playlistErrorByScope[activePlaylistScopeKey] ?? null;
+
+  const setActiveScopeSelectedPlaylistId = useCallback(
+    (nextPlaylistId: string | null) => {
+      setSelectedPlaylistIdByScope((prev) => ({
+        ...prev,
+        [activePlaylistScopeKey]: nextPlaylistId,
+      }));
+    },
+    [activePlaylistScopeKey]
+  );
+
+  const setActiveScopeNewPlaylistName = useCallback(
+    (nextName: string) => {
+      setNewPlaylistNameByScope((prev) => ({
+        ...prev,
+        [activePlaylistScopeKey]: nextName,
+      }));
+    },
+    [activePlaylistScopeKey]
+  );
+
+  const setActiveScopePlaylistError = useCallback(
+    (nextError: string | null) => {
+      setPlaylistErrorByScope((prev) => ({
+        ...prev,
+        [activePlaylistScopeKey]: nextError,
+      }));
+    },
+    [activePlaylistScopeKey]
   );
 
   const searchableConnectors = useMemo(
@@ -339,91 +186,19 @@ export const PlatformMagnet: React.FC = () => {
     [items]
   );
 
-  const normalizedPlaybackQualityHint = useMemo(
-    () => normalizeBilibiliQualityHint(playbackQualityHint),
-    [playbackQualityHint]
-  );
-
-  const normalizedBilibiliThemePreference = useMemo(
-    () => normalizeBilibiliThemePreference(bilibiliThemePreference),
-    [bilibiliThemePreference]
-  );
-
-  const qualityProbeSourceLocator = useMemo(() => {
-    if (!bilibiliAuthorized) return null;
-    const bvidLocator = bvidSearchResult?.sourceLocator?.trim();
-    if (bvidLocator && isBilibiliVideoSourceLocator(bvidLocator)) {
-      return bvidLocator;
+  const platformPlaylists = useMemo(() => {
+    if (activeWorkspaceConnectorId) {
+      return audioState.playlists.filter((item) =>
+        isPlatformPlaylist(item, activeWorkspaceConnectorId)
+      );
     }
-
-    const candidate = filteredBilibiliResources.find((item) =>
-      isBilibiliVideoSourceLocator(item.sourceLocator)
-    );
-    return candidate?.sourceLocator?.trim() || null;
-  }, [bilibiliAuthorized, bvidSearchResult?.sourceLocator, filteredBilibiliResources]);
-
-  const availablePlaybackQualityLabel = useMemo(() => {
-    const availableKeys = playbackQualityOptions.filter((item) => item.available).map((item) => item.key);
-    if (availableKeys.length === 0) return t('magnet.platform.bilibili.quality.none');
-    return availableKeys.map((key) => t(toBilibiliQualityLabelKey(key))).join(' / ');
-  }, [playbackQualityOptions, t]);
-
-  const preferredPlaybackQualityLabel = useMemo(
-    () => t(toBilibiliQualityLabelKey(normalizedPlaybackQualityHint)),
-    [normalizedPlaybackQualityHint, t]
-  );
+    return audioState.playlists.filter((item) => isPlatformPlaylist(item));
+  }, [activeWorkspaceConnectorId, audioState.playlists]);
 
   const selectedPlaylist = useMemo(
-    () => audioState.playlists.find((item) => item.id === selectedPlaylistId) ?? null,
-    [audioState.playlists, selectedPlaylistId]
+    () => platformPlaylists.find((item) => item.id === selectedPlaylistId) ?? null,
+    [platformPlaylists, selectedPlaylistId]
   );
-
-  const { resourceCoverUrlMap, resourceQualityTagMap } = useBilibiliResourceEnhancer({
-    bilibiliAuthorized,
-    selectedFolderId,
-    bilibiliResources,
-    filteredBilibiliResources,
-    isVideoSourceLocator: isBilibiliVideoSourceLocator,
-    getResourceCacheKey: toResourceCacheKey,
-  });
-
-  const {
-    resourceInfo,
-    preparingResourceId,
-    lyricResolvingId,
-    resolvedLyric,
-    lyricError,
-    handleResolveLyric,
-    handlePlayResource,
-    handleQueueResource,
-    handleAddToPlaylist,
-    handleOpenBilibiliResource,
-  } = useBilibiliResourcePlaybackActions({
-    audioService,
-    normalizedPlaybackQualityHint,
-    preferredQualityLabel: preferredPlaybackQualityLabel,
-    selectedPlaylistId,
-    t,
-    setResourceError,
-    setPlaylistError,
-    buildTrackFromPreparedPlayback,
-  });
-
-  const refreshPlaybackQualityOptions = useCallback(async (sourceLocator: string) => {
-    const normalizedSourceLocator = sourceLocator.trim();
-    if (!normalizedSourceLocator) return;
-
-    setPlaybackQualityLoading(true);
-    try {
-      const options = await listBilibiliPlaybackQualities(normalizedSourceLocator);
-      setPlaybackQualityOptions(mergePlaybackQualityOptions(options));
-      setPlaybackQualityProbeLocator(normalizedSourceLocator);
-    } catch {
-      setPlaybackQualityOptions(DEFAULT_BILIBILI_QUALITY_OPTIONS);
-    } finally {
-      setPlaybackQualityLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     void refreshConnectors();
@@ -440,53 +215,6 @@ export const PlatformMagnet: React.FC = () => {
   }, [items, searchScopeConnectorId]);
 
   useEffect(() => {
-    if (!playbackSettingsOpen || mode !== 'bilibili') return;
-    void refreshPlaybackCacheSettings();
-  }, [mode, playbackSettingsOpen, refreshPlaybackCacheSettings]);
-
-  useEffect(() => {
-    if (!selectedFolderId || !resourcePage?.hasMore) return;
-    const rootElement = resourceGridRef.current;
-    const sentinelElement = resourceLoadMoreSentinelRef.current;
-    if (!rootElement || !sentinelElement) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        void loadMoreBilibiliResources(selectedFolderId);
-      },
-      {
-        root: rootElement,
-        rootMargin: '220px 0px',
-        threshold: 0.01,
-      }
-    );
-
-    observer.observe(sentinelElement);
-    return () => observer.disconnect();
-  }, [
-    filteredBilibiliResources.length,
-    loadMoreBilibiliResources,
-    resourceLoadingMore,
-    resourcePage?.hasMore,
-    selectedFolderId,
-  ]);
-
-  useEffect(() => {
-    if (!qualityProbeSourceLocator) {
-      setPlaybackQualityProbeLocator(null);
-      setPlaybackQualityOptions(DEFAULT_BILIBILI_QUALITY_OPTIONS);
-      return;
-    }
-    if (playbackQualityProbeLocator === qualityProbeSourceLocator) return;
-    void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
-  }, [
-    playbackQualityProbeLocator,
-    qualityProbeSourceLocator,
-    refreshPlaybackQualityOptions,
-  ]);
-
-  useEffect(() => {
     setAudioState(audioService.getState());
     const unsubscribe = audioService.onStateChange((nextState) => {
       setAudioState(nextState);
@@ -495,16 +223,36 @@ export const PlatformMagnet: React.FC = () => {
   }, [audioService]);
 
   useEffect(() => {
-    const playlists = audioState.playlists;
-    if (playlists.length === 0) {
-      setSelectedPlaylistId(null);
-      return;
-    }
-    if (selectedPlaylistId && playlists.some((item) => item.id === selectedPlaylistId)) {
-      return;
-    }
-    setSelectedPlaylistId(playlists[0]?.id ?? null);
-  }, [audioState.playlists, selectedPlaylistId]);
+    const playlists = platformPlaylists;
+    setSelectedPlaylistIdByScope((prev) => {
+      const currentSelectedPlaylistId = prev[activePlaylistScopeKey] ?? null;
+
+      if (playlists.length === 0) {
+        if (currentSelectedPlaylistId === null) return prev;
+        return {
+          ...prev,
+          [activePlaylistScopeKey]: null,
+        };
+      }
+
+      if (
+        currentSelectedPlaylistId &&
+        playlists.some((playlist) => playlist.id === currentSelectedPlaylistId)
+      ) {
+        return prev;
+      }
+
+      const nextSelectedPlaylistId = playlists[0]?.id ?? null;
+      if (nextSelectedPlaylistId === currentSelectedPlaylistId) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [activePlaylistScopeKey]: nextSelectedPlaylistId,
+      };
+    });
+  }, [activePlaylistScopeKey, platformPlaylists]);
 
   const handleSearch = useCallback(async () => {
     const normalizedQuery = searchQuery.trim();
@@ -541,60 +289,80 @@ export const PlatformMagnet: React.FC = () => {
 
   const handleCreatePlaylist = useCallback(() => {
     const normalizedName = newPlaylistName.trim();
-    if (!normalizedName) return;
-    const playlist = audioService.createPlaylist(normalizedName);
-    setSelectedPlaylistId(playlist.id);
-    setNewPlaylistName('');
-    setPlaylistError(null);
-  }, [audioService, newPlaylistName]);
+    if (!normalizedName || !activeWorkspaceConnectorId) return;
+    const playlist = audioService.createPlaylist(normalizedName, undefined, {
+      kind: 'platform',
+      sourceConnectorId: activeWorkspaceConnectorId,
+    });
+    setActiveScopeSelectedPlaylistId(playlist.id);
+    setActiveScopeNewPlaylistName('');
+    setActiveScopePlaylistError(null);
+  }, [
+    activeWorkspaceConnectorId,
+    audioService,
+    newPlaylistName,
+    setActiveScopeNewPlaylistName,
+    setActiveScopePlaylistError,
+    setActiveScopeSelectedPlaylistId,
+  ]);
 
   const {
-    resourceContextMenu,
-    setResourceContextMenu,
-    openResourceContextMenu,
-  } = useBilibiliResourceContextMenu({
+    bilibiliUseDarkMode,
+    bilibiliToolbarProps,
+    bilibiliWorkspaceProps,
+  } = useBilibiliWorkspaceAdapterController({
+    activeWorkspaceConnectorId,
+    prefersDarkMode,
+    items,
+    audioService,
     t,
-    preparingResourceId,
-    normalizedPlaybackQualityHint,
-    lyricResolvingId,
-    onPlay: (item) => {
-      void handlePlayResource(item);
-    },
-    onQueue: (item) => {
-      void handleQueueResource(item);
-    },
-    onAddToPlaylist: (item) => {
-      void handleAddToPlaylist(item);
-    },
-    onOpen: (item) => {
-      handleOpenBilibiliResource(item);
-    },
-    onResolveLyric: (item) => {
-      void handleResolveLyric(item);
-    },
+    platformPlaylists,
+    selectedPlaylist,
+    selectedPlaylistId,
+    newPlaylistName,
+    playlistError,
+    onCreatePlaylist: handleCreatePlaylist,
+    setSelectedPlaylistId: setActiveScopeSelectedPlaylistId,
+    setNewPlaylistName: setActiveScopeNewPlaylistName,
+    setPlaylistError: setActiveScopePlaylistError,
   });
-
-  useEffect(() => {
-    if (mode !== 'bilibili' || !bilibiliAuthorized) {
-      setFolderDrawerOpen(false);
-      setPlaylistDrawerOpen(false);
-      setPlaybackSettingsOpen(false);
-      setResourceContextMenu(null);
-    }
-  }, [bilibiliAuthorized, mode, setResourceContextMenu]);
 
   const authorizedCount = useMemo(
     () => items.filter((item) => item.authState === 'authorized').length,
     [items]
   );
 
-  const useDarkMode =
-    normalizedBilibiliThemePreference === 'dark' ||
-    (normalizedBilibiliThemePreference === 'auto' && prefersDarkMode);
-
-  const rootClassName = useDarkMode
+  const rootClassName = bilibiliUseDarkMode
     ? 'platform-magnet-root platform-magnet-root--dark'
     : 'platform-magnet-root';
+
+  const getWorkspaceModeLabel = useCallback(
+    (workspaceDescriptor: {
+      mode: PlatformWorkspaceMode;
+      connectorId?: string;
+      displayName: string;
+      labelKey?: string;
+    }): string => {
+      if (workspaceDescriptor.mode === GENERIC_PLATFORM_WORKSPACE_MODE) {
+        return t('magnet.platform.mode.generic');
+      }
+
+      if (workspaceDescriptor.labelKey) {
+        return t(workspaceDescriptor.labelKey);
+      }
+
+      return workspaceDescriptor.displayName;
+    },
+    [t]
+  );
+
+  const activeWorkspaceAdapter =
+    activeWorkspaceDescriptor && activeWorkspaceDescriptor.workspaceKind !== 'generic'
+      ? resolvePlatformWorkspaceAdapter({
+          connectorId: activeWorkspaceDescriptor.connectorId,
+          workspaceKind: activeWorkspaceDescriptor.workspaceKind,
+        })
+      : null;
 
   return (
     <div className={rootClassName}>
@@ -602,57 +370,31 @@ export const PlatformMagnet: React.FC = () => {
         <div className="platform-magnet-header-main">
           <div className="platform-magnet-mode-row">
             <div className="platform-magnet-mode-switcher" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mode === 'bilibili'}
-                className={mode === 'bilibili' ? 'platform-magnet-mode-btn active' : 'platform-magnet-mode-btn'}
-                onClick={() => setMode('bilibili')}
-              >
-                Bilibili
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mode === 'generic'}
-                className={mode === 'generic' ? 'platform-magnet-mode-btn active' : 'platform-magnet-mode-btn'}
-                onClick={() => setMode('generic')}
-              >
-                Generic
-              </button>
+              {workspaceDescriptors.map((workspaceDescriptor) => {
+                const active = activeMode === workspaceDescriptor.mode;
+                return (
+                  <button
+                    key={workspaceDescriptor.mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    className={active ? 'platform-magnet-mode-btn active' : 'platform-magnet-mode-btn'}
+                    onClick={() => setMode(workspaceDescriptor.mode)}
+                  >
+                    {getWorkspaceModeLabel(workspaceDescriptor)}
+                  </button>
+                );
+              })}
             </div>
 
-            {mode === 'bilibili' ? (
-              <div className="platform-magnet-bv-top-search">
-                <input
-                  value={bvidQuery}
-                  placeholder={t('magnet.platform.bilibili.resource.bvSearchPlaceholder')}
-                  onChange={(event) => setBvidQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') return;
-                    void handleBvSearch();
-                  }}
-                />
-                <button type="button" className="platform-magnet-mini-btn" onClick={() => void handleBvSearch()}>
-                  {bvidSearching
-                    ? t('magnet.platform.bilibili.resource.bvSearchSearching')
-                    : t('magnet.platform.bilibili.resource.bvSearchAction')}
-                </button>
-                <button
-                  type="button"
-                  className="platform-magnet-mini-btn"
-                  disabled={!bilibiliAuthorized}
-                  onClick={() => setPlaybackSettingsOpen(true)}
-                >
-                  {t('magnet.platform.bilibili.settings.open')}
-                </button>
-              </div>
-            ) : null}
+            {activeWorkspaceAdapter && activeWorkspaceDescriptor?.workspaceKind === 'bilibili'
+              ? activeWorkspaceAdapter.renderToolbar(bilibiliToolbarProps)
+              : null}
           </div>
         </div>
       </div>
 
-      {mode === 'generic' && (
+      {activeMode === GENERIC_PLATFORM_WORKSPACE_MODE && (
         <div className="platform-magnet-summary-row">
           <p>
             {t('magnet.platform.summary.connectors', {
@@ -667,161 +409,18 @@ export const PlatformMagnet: React.FC = () => {
       )}
 
       <div className="platform-magnet-content">
-        {mode === 'bilibili' ? (
-          <BilibiliWorkspace
-            bilibiliAuthorized={bilibiliAuthorized}
-            folderDrawerOpen={folderDrawerOpen}
-            playlistDrawerOpen={playlistDrawerOpen}
-            folderLoading={folderLoading}
-            folderError={folderError}
-            bilibiliFolders={bilibiliFolders}
-            selectedFolderId={selectedFolderId}
-            resourceFilterQuery={resourceFilterQuery}
-            resourceLoading={resourceLoading}
-            resourceLoadingMore={resourceLoadingMore}
-            selectedBilibiliFolder={selectedBilibiliFolder}
-            resourcePage={resourcePage}
-            resourceInfo={resourceInfo}
-            resourceError={resourceError}
-            bvidSearchError={bvidSearchError}
-            bvidSearchResult={bvidSearchResult}
-            filteredBilibiliResources={filteredBilibiliResources}
-            preparingResourceId={preparingResourceId}
-            normalizedPlaybackQualityHint={normalizedPlaybackQualityHint}
-            normalizedBilibiliThemePreference={normalizedBilibiliThemePreference}
-            resourceCoverUrlMap={resourceCoverUrlMap}
-            resourceQualityTagMap={resourceQualityTagMap}
-            resourceGridRef={resourceGridRef}
-            resourceLoadMoreSentinelRef={resourceLoadMoreSentinelRef}
-            selectedPlaylist={selectedPlaylist}
-            selectedPlaylistId={selectedPlaylistId}
-            playlists={audioState.playlists}
-            newPlaylistName={newPlaylistName}
-            playlistError={playlistError}
-            resolvedLyric={resolvedLyric}
-            lyricError={lyricError}
-            playbackSettingsOpen={playbackSettingsOpen}
-            playbackQualityOptions={playbackQualityOptions}
-            playbackQualityLoading={playbackQualityLoading}
-            qualityProbeSourceLocator={qualityProbeSourceLocator}
-            availablePlaybackQualityLabel={availablePlaybackQualityLabel}
-            playbackCacheSettingsLoading={playbackCacheSettingsLoading}
-            playbackCacheSettingsSaving={playbackCacheSettingsSaving}
-            playbackCacheSettingsInfo={playbackCacheSettingsInfo}
-            playbackCacheSettingsError={playbackCacheSettingsError}
-            playbackCacheSettings={playbackCacheSettings}
-            playbackCachePathDraft={playbackCachePathDraft}
-            resourceContextMenu={resourceContextMenu}
-            t={t}
-            formatDuration={formatDuration}
-            getResourceCacheKey={toResourceCacheKey}
-            getKindLabel={(kind) => t(toBilibiliKindLabelKey(kind))}
-            getQualityBadgeLabel={(badge) => t(toBilibiliQualityBadgeLabelKey(badge))}
-            qualityLabelForKey={(qualityKey) =>
-              t(toBilibiliQualityLabelKey(normalizeBilibiliQualityHint(qualityKey)))
-            }
-            onRefreshFolders={() => {
-              void refreshBilibiliFolders();
-            }}
-            onCloseFolderDrawer={() => {
-              setFolderDrawerOpen(false);
-            }}
-            onShowRecommended={() => {
-              setSelectedFolderId(null);
-              setFolderDrawerOpen(false);
-            }}
-            onSelectFolder={(folderId) => {
-              setSelectedFolderId(folderId);
-              setFolderDrawerOpen(false);
-            }}
-            onResourceFilterQueryChange={setResourceFilterQuery}
-            onResourceSearchSubmit={() => {
-              if (!selectedFolderId) {
-                void searchBilibiliHomepageResources(resourceFilterQuery);
-                return;
-              }
-              void refreshBilibiliResources(selectedFolderId);
-            }}
-            onRefreshResources={() => {
-              if (!selectedFolderId) {
-                const keyword = resourceFilterQuery.trim();
-                if (keyword) {
-                  void searchBilibiliHomepageResources(keyword);
-                  return;
-                }
-                void refreshBilibiliRecommendedResources();
-                return;
-              }
-              void refreshBilibiliResources(selectedFolderId);
-            }}
-            onOpenResourceContextMenu={openResourceContextMenu}
-            onLoadMoreResources={() => {
-              if (!selectedFolderId) return;
-              void loadMoreBilibiliResources(selectedFolderId);
-            }}
-            onClosePlaylistDrawer={() => {
-              setPlaylistDrawerOpen(false);
-            }}
-            onNewPlaylistNameChange={setNewPlaylistName}
-            onCreatePlaylist={handleCreatePlaylist}
-            onSelectPlaylist={setSelectedPlaylistId}
-            onPlaySelectedPlaylist={() => {
-              if (!selectedPlaylistId) return;
-              void audioService.playPlaylist(selectedPlaylistId);
-            }}
-            onDeleteSelectedPlaylist={() => {
-              if (!selectedPlaylistId) return;
-              audioService.deletePlaylist(selectedPlaylistId);
-            }}
-            onRemoveTrackFromSelectedPlaylist={(trackIndex) => {
-              if (!selectedPlaylistId) return;
-              audioService.removeTrackFromPlaylist(selectedPlaylistId, trackIndex);
-            }}
-            onCloseDrawers={() => {
-              setFolderDrawerOpen(false);
-              setPlaylistDrawerOpen(false);
-            }}
-            onToggleFolderDrawer={() => {
-              setFolderDrawerOpen((prev) => {
-                const next = !prev;
-                if (next) setPlaylistDrawerOpen(false);
-                return next;
-              });
-            }}
-            onTogglePlaylistDrawer={() => {
-              setPlaylistDrawerOpen((prev) => {
-                const next = !prev;
-                if (next) setFolderDrawerOpen(false);
-                return next;
-              });
-            }}
-            onClosePlaybackSettings={() => {
-              setPlaybackSettingsOpen(false);
-            }}
-            onQualityHintChange={(qualityKey) => {
-              setPlaybackQualityHint(normalizeBilibiliQualityHint(qualityKey));
-            }}
-            onBilibiliThemePreferenceChange={(themePreference) => {
-              setBilibiliThemePreference(normalizeBilibiliThemePreference(themePreference));
-            }}
-            onRefreshQualityOptions={() => {
-              if (!qualityProbeSourceLocator) return;
-              void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
-            }}
-            onPlaybackCachePathDraftChange={setPlaybackCachePathDraft}
-            onBrowsePlaybackCachePath={() => {
-              void handleBrowsePlaybackCachePath();
-            }}
-            onSavePlaybackCachePath={() => {
-              void handleSavePlaybackCachePath();
-            }}
-            onResetPlaybackCachePath={() => {
-              void handleResetPlaybackCachePath();
-            }}
-            onCloseResourceContextMenu={() => {
-              setResourceContextMenu(null);
-            }}
-          />
+        {activeWorkspaceAdapter && activeWorkspaceDescriptor?.workspaceKind === 'bilibili' ? (
+          activeWorkspaceAdapter.renderWorkspace(bilibiliWorkspaceProps)
+        ) : activeMode !== GENERIC_PLATFORM_WORKSPACE_MODE ? (
+          <div className="platform-magnet-generic">
+            <section className="platform-magnet-panel">
+              <div className="platform-magnet-panel-header">
+                <h4>{activeWorkspaceDescriptor?.displayName ?? t('magnet.platform.mode.generic')}</h4>
+                <span className="platform-magnet-panel-tag">{t('magnet.platform-login.status.comingSoon')}</span>
+              </div>
+              <p className="platform-magnet-panel-desc">{t('magnet.platform.panel.search.desc')}</p>
+            </section>
+          </div>
         ) : (
           <div className="platform-magnet-generic">
             <section className="platform-magnet-panel">

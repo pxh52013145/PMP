@@ -191,6 +191,13 @@
   gap: 4px;
 }
 
+.playlists-item-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .playlists-item-name {
   color: rgba(255, 255, 255, 0.85);
   font-size: 14px;
@@ -198,6 +205,44 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.playlists-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  line-height: 1.6;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.playlists-source-badge-manual {
+  color: rgba(199, 228, 255, 0.95);
+  background: rgba(70, 130, 180, 0.18);
+  border-color: rgba(120, 180, 230, 0.38);
+}
+
+.playlists-source-badge-smart {
+  color: rgba(176, 255, 220, 0.95);
+  background: rgba(33, 150, 83, 0.18);
+  border-color: rgba(66, 184, 131, 0.36);
+}
+
+.playlists-source-badge-platform {
+  color: rgba(255, 220, 178, 0.95);
+  background: rgba(181, 117, 24, 0.2);
+  border-color: rgba(255, 179, 102, 0.34);
+}
+
+.playlists-item-source-badge {
+  max-width: 125px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .playlists-item-active .playlists-item-name {
@@ -232,6 +277,14 @@
   font-size: 18px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.playlists-detail-source-badge {
+  font-size: 11px;
+  padding-inline: 8px;
 }
 
 .playlists-close-btn {

@@ -28,6 +28,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function flushMicrotasks(rounds: number = 3): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+function enableMockTauriRuntime(): () => void {
+  const runtimeWindow = window as Window & { __TAURI__?: unknown };
+  const previousValue = runtimeWindow.__TAURI__;
+  runtimeWindow.__TAURI__ = previousValue ?? {};
+  return () => {
+    runtimeWindow.__TAURI__ = previousValue;
+  };
+}
+
 describe('NativeAudioService', () => {
   it('initializes with idle playback state', () => {
     const service = new NativeAudioService();
@@ -84,6 +99,151 @@ describe('NativeAudioService', () => {
     expect(state.currentIndex).toBe(0);
 
     service.destroy();
+  });
+
+  it('resolves bilibili source locator to cached path before loading', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'music_library_bilibili_prepare_cached_playback') {
+        return {
+          sourceLocator: 'bilibili://video/BV1abc123',
+          streamUrl: 'https://example.com/stream.m4a',
+          cachePath: 'C:\\\\Cache\\\\bilibili\\\\BV1abc123.m4a',
+          mimeType: 'audio/mp4',
+          durationSeconds: 128,
+          contentKind: 'video',
+          selectedQualityKey: 'auto',
+          selectedQualityLabel: 'Auto',
+        };
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    await service.loadTrack({
+      id: 'bilibili:resource-1',
+      title: 'Bili Track',
+      originalPath: 'bilibili://video/BV1abc123',
+      comment: 'bilibili://video/BV1abc123',
+    });
+
+    await vi.waitFor(() => {
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'music_library_bilibili_prepare_cached_playback')).toBe(true);
+    });
+
+    expect(invoke).toHaveBeenCalledWith('music_library_bilibili_prepare_cached_playback', {
+      sourceLocator: 'bilibili://video/BV1abc123',
+      qualityHint: undefined,
+    });
+    expect(invoke).toHaveBeenCalledWith('native_audio_load', {
+      path: 'C:\\\\Cache\\\\bilibili\\\\BV1abc123.m4a',
+    });
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('records platform playback into cloud user entry pipeline', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'music_library_db_upsert_user_entry') {
+        return {
+          id: 'entry::platform::connector.platform.bilibili::demo',
+          ownerUid: 'local:default',
+          trackId: null,
+          quickFingerprint: null,
+          cloudContentId: 'bilibili://video/BV1def456',
+          displayTitle: 'Bili Track 2',
+          displayArtist: 'UP 主',
+          rating: null,
+          tagsJson: null,
+          inCloud: true,
+          isMissing: false,
+          playCount: 0,
+          lastPlayedAtMs: null,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+        };
+      }
+      if (cmd === 'music_library_db_mark_user_entry_played') {
+        return true;
+      }
+      if (cmd === 'music_library_db_list_playlists') {
+        return [];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        return [];
+      }
+      if (cmd === 'music_library_db_replace_playlist_items') {
+        return true;
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    service.addMultipleToQueue([
+      {
+        id: 'bilibili:resource-2',
+        title: 'Bili Track 2',
+        artist: 'UP 主',
+        filePath: 'C:\\\\Cache\\\\bilibili\\\\BV1def456.m4a',
+        path: 'C:\\\\Cache\\\\bilibili\\\\BV1def456.m4a',
+        originalPath: 'bilibili://video/BV1def456',
+        comment: 'bilibili://video/BV1def456',
+      },
+    ]);
+
+    await service.playTrackAtIndex(0);
+    await flushMicrotasks(4);
+
+    await vi.waitFor(() => {
+      expect(
+        invokeMock.mock.calls.some(([cmd]) => cmd === 'music_library_db_upsert_user_entry')
+      ).toBe(true);
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_upsert_user_entry',
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          ownerUid: 'local:default',
+          inCloud: true,
+          cloudContentId: 'bilibili://video/BV1def456',
+          displayTitle: 'Bili Track 2',
+        }),
+      })
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_db_mark_user_entry_played',
+      expect.objectContaining({
+        entryId: 'entry::platform::connector.platform.bilibili::demo',
+      })
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      'music_library_db_mark_track_played',
+      expect.anything()
+    );
+
+    service.destroy();
+    restoreRuntime();
   });
 
   it('emits error when receiving native_audio_error event', async () => {

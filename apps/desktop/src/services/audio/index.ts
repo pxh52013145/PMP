@@ -11,6 +11,7 @@ export type {
   PlaybackState,
   PlayMode,
   Playlist,
+  PlaylistCreateOptions,
 } from './types';
 export type { IAudioService } from './types';
 export { NativeAudioService } from './NativeAudioService';

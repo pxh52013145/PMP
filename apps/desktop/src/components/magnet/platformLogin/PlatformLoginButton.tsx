@@ -2,15 +2,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CollisionAwarePopup } from '../../core/CollisionAwarePopup';
 import { useT } from '../../../i18n';
 import {
-  beginBilibiliQrLogin,
-  getBilibiliConnectorAuthSnapshot,
-  logoutBilibiliConnector,
-  pollBilibiliQrLogin,
-  refreshAndEmitBilibiliConnectorAuthSnapshot,
+  beginPlatformQrLogin,
+  getPlatformConnectorAuthSnapshot,
+  listPlatformConnectorAuthSnapshots,
+  listPlatformConnectorDefinitions,
+  logoutPlatformConnector,
+  pollPlatformQrLogin,
+  refreshAndEmitPlatformConnectorAuthSnapshot,
   subscribePlatformConnectorAuthChanged,
-  type BilibiliQrLoginPollResult,
-  type BilibiliQrLoginSession,
   type PlatformConnectorAuthSnapshot,
+  type PlatformConnectorDefinition,
+  type PlatformQrLoginPollResult,
+  type PlatformQrLoginSession,
 } from '../../../modules/music-platform';
 import './PlatformLoginButton.css';
 
@@ -61,10 +64,43 @@ function toAvailabilityLabelKey(availability: string): string {
   }
 }
 
-function isTerminalPollState(result: BilibiliQrLoginPollResult | null): boolean {
+function isTerminalPollState(result: PlatformQrLoginPollResult | null): boolean {
   if (!result) return false;
   const normalized = result.state.trim().toLowerCase();
   return normalized === 'authorized' || normalized === 'expired' || normalized === 'failed';
+}
+
+function getConnectorMonogram(definition: PlatformConnectorDefinition): string {
+  const normalizedId = definition.connectorId.replace(/^connector\.platform\./i, '').trim();
+  if (!normalizedId) return 'P';
+  return normalizedId[0]?.toUpperCase() ?? 'P';
+}
+
+function renderConnectorIcon(definition: PlatformConnectorDefinition): React.ReactNode {
+  if (definition.connectorId === BILIBILI_CONNECTOR_ID || definition.iconKey === 'bilibili') {
+    return <BilibiliBrandIcon />;
+  }
+  return <span className="platform-login-placeholder-icon">{getConnectorMonogram(definition)}</span>;
+}
+
+function buildPlatformSelectorItems(): PlatformSelectorItem[] {
+  return listPlatformConnectorDefinitions().map((definition) => ({
+    id: definition.connectorId,
+    labelKey: definition.labelKey,
+    enabled: definition.enabled && definition.authFlow === 'qr',
+    icon: renderConnectorIcon(definition),
+  }));
+}
+
+function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
+  setter: React.Dispatch<React.SetStateAction<TRecord>>,
+  connectorId: string,
+  value: TRecord[string]
+): void {
+  setter((prev) => ({
+    ...prev,
+    [connectorId]: value,
+  } as TRecord));
 }
 
 export const PlatformLoginButton: React.FC = () => {
@@ -74,64 +110,84 @@ export const PlatformLoginButton: React.FC = () => {
   const [authPopupOpen, setAuthPopupOpen] = useState(false);
   const [selectedPlatformId, setSelectedPlatformId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [authSnapshot, setAuthSnapshot] = useState<PlatformConnectorAuthSnapshot | null>(null);
-  const [qrSession, setQrSession] = useState<BilibiliQrLoginSession | null>(null);
-  const [pollResult, setPollResult] = useState<BilibiliQrLoginPollResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const [authSnapshotsByConnectorId, setAuthSnapshotsByConnectorId] = useState<
+    Record<string, PlatformConnectorAuthSnapshot | null>
+  >({});
+  const [qrSessionsByConnectorId, setQrSessionsByConnectorId] = useState<
+    Record<string, PlatformQrLoginSession | null>
+  >({});
+  const [pollResultsByConnectorId, setPollResultsByConnectorId] = useState<
+    Record<string, PlatformQrLoginPollResult | null>
+  >({});
+  const [errorsByConnectorId, setErrorsByConnectorId] = useState<Record<string, string | null>>({});
+  const [statusMessagesByConnectorId, setStatusMessagesByConnectorId] = useState<
+    Record<string, string | null>
+  >({});
 
   const triggerRef = useRef<HTMLDivElement | null>(null);
   const selectorPopupRef = useRef<HTMLDivElement | null>(null);
   const authPopupRef = useRef<HTMLDivElement | null>(null);
-  const bilibiliIconButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const platformItems = useMemo<PlatformSelectorItem[]>(
-    () => [
-      {
-        id: BILIBILI_CONNECTOR_ID,
-        labelKey: 'magnet.platform-login.platform.bilibili',
-        enabled: true,
-        icon: <BilibiliBrandIcon />,
-      },
-      {
-        id: 'connector.platform.netease',
-        labelKey: 'magnet.platform-login.platform.netease',
-        enabled: false,
-        icon: <span className="platform-login-placeholder-icon">N</span>,
-      },
-      {
-        id: 'connector.platform.qqmusic',
-        labelKey: 'magnet.platform-login.platform.qqmusic',
-        enabled: false,
-        icon: <span className="platform-login-placeholder-icon">Q</span>,
-      },
-    ],
-    []
+  const platformItems = useMemo<PlatformSelectorItem[]>(() => buildPlatformSelectorItems(), []);
+
+  const selectedPlatformItem = useMemo(
+    () =>
+      platformItems.find((item) => item.id === selectedPlatformId) ??
+      platformItems.find((item) => item.id === BILIBILI_CONNECTOR_ID) ??
+      platformItems[0] ??
+      null,
+    [platformItems, selectedPlatformId]
   );
 
-  const bilibiliAuthPopupVisible =
-    selectorOpen && authPopupOpen && selectedPlatformId === BILIBILI_CONNECTOR_ID;
+  const activeConnectorId = selectedPlatformItem?.id ?? null;
+  const activeAuthSnapshot =
+    (activeConnectorId ? authSnapshotsByConnectorId[activeConnectorId] : null) ?? null;
+  const activeQrSession = (activeConnectorId ? qrSessionsByConnectorId[activeConnectorId] : null) ?? null;
+  const activePollResult =
+    (activeConnectorId ? pollResultsByConnectorId[activeConnectorId] : null) ?? null;
+  const activeError = (activeConnectorId ? errorsByConnectorId[activeConnectorId] : null) ?? null;
+  const activeStatusMessage =
+    (activeConnectorId ? statusMessagesByConnectorId[activeConnectorId] : null) ?? null;
 
-  const refreshAuthSnapshot = useCallback(async () => {
-    const snapshot = await getBilibiliConnectorAuthSnapshot();
-    setAuthSnapshot(snapshot);
+  const authPopupVisible = selectorOpen && authPopupOpen && Boolean(selectedPlatformItem?.enabled);
+
+  const refreshAuthSnapshot = useCallback(async (connectorId: string) => {
+    const snapshot = await getPlatformConnectorAuthSnapshot(connectorId);
+    updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
+  }, []);
+
+  const refreshAllAuthSnapshots = useCallback(async () => {
+    const snapshots = await listPlatformConnectorAuthSnapshots();
+    setAuthSnapshotsByConnectorId((prev) => {
+      const next = { ...prev };
+      for (const snapshot of snapshots) {
+        next[snapshot.connectorId] = snapshot;
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
-    void refreshAuthSnapshot();
+    void refreshAllAuthSnapshots();
 
     const unsubscribe = subscribePlatformConnectorAuthChanged((snapshot) => {
-      if (snapshot.connectorId !== BILIBILI_CONNECTOR_ID) return;
-      setAuthSnapshot(snapshot);
+      updateConnectorScopedValue(setAuthSnapshotsByConnectorId, snapshot.connectorId, snapshot);
     });
 
     return () => {
       unsubscribe();
     };
-  }, [refreshAuthSnapshot]);
+  }, [refreshAllAuthSnapshots]);
 
   useEffect(() => {
-    if (!selectorOpen && !bilibiliAuthPopupVisible) return;
+    if (!activeConnectorId) return;
+    if (authSnapshotsByConnectorId[activeConnectorId] !== undefined) return;
+    void refreshAuthSnapshot(activeConnectorId);
+  }, [activeConnectorId, authSnapshotsByConnectorId, refreshAuthSnapshot]);
+
+  useEffect(() => {
+    if (!selectorOpen && !authPopupVisible) return;
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target;
@@ -147,7 +203,7 @@ export const PlatformLoginButton: React.FC = () => {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (bilibiliAuthPopupVisible) {
+      if (authPopupVisible) {
         setAuthPopupOpen(false);
         return;
       }
@@ -161,34 +217,47 @@ export const PlatformLoginButton: React.FC = () => {
       document.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [bilibiliAuthPopupVisible, selectorOpen]);
+  }, [authPopupVisible, selectorOpen]);
 
   const runPoll = useCallback(
-    async (sessionId?: string) => {
-      const targetSessionId = (sessionId ?? qrSession?.sessionId ?? '').trim();
-      if (!targetSessionId || busy) return;
+    async (sessionId?: string, connectorId?: string) => {
+      const targetConnectorId = (connectorId ?? activeConnectorId ?? '').trim();
+      if (!targetConnectorId || busy) return;
+
+      const targetSessionId = (
+        sessionId ?? qrSessionsByConnectorId[targetConnectorId]?.sessionId ?? ''
+      ).trim();
+      if (!targetSessionId) return;
 
       setBusy(true);
       try {
-        const result = await pollBilibiliQrLogin(targetSessionId);
-        setPollResult(result);
-        setError(null);
+        const result = await pollPlatformQrLogin(targetConnectorId, targetSessionId);
+        updateConnectorScopedValue(setPollResultsByConnectorId, targetConnectorId, result);
+        updateConnectorScopedValue(setErrorsByConnectorId, targetConnectorId, null);
 
         if (!result) {
-          setError(t('magnet.platform-login.error.pollFailed'));
+          updateConnectorScopedValue(
+            setErrorsByConnectorId,
+            targetConnectorId,
+            t('magnet.platform-login.error.pollFailed')
+          );
           return;
         }
 
         if (result.authState === 'authorized') {
-          setStatusMessage(
+          updateConnectorScopedValue(
+            setStatusMessagesByConnectorId,
+            targetConnectorId,
             t('magnet.platform-login.status.authorized', {
               accountUid: result.accountUid ?? '-',
             })
           );
-          setQrSession(null);
+          updateConnectorScopedValue(setQrSessionsByConnectorId, targetConnectorId, null);
         } else if (isTerminalPollState(result)) {
-          setQrSession(null);
-          setStatusMessage(
+          updateConnectorScopedValue(setQrSessionsByConnectorId, targetConnectorId, null);
+          updateConnectorScopedValue(
+            setStatusMessagesByConnectorId,
+            targetConnectorId,
             t('magnet.platform-login.status.pollState', {
               state: result.state,
               message: result.stateMessage,
@@ -196,28 +265,33 @@ export const PlatformLoginButton: React.FC = () => {
           );
         }
 
-        await refreshAndEmitBilibiliConnectorAuthSnapshot();
+        await refreshAndEmitPlatformConnectorAuthSnapshot(targetConnectorId);
       } catch (err) {
-        setError(err instanceof Error ? err.message : t('magnet.platform-login.error.pollFailed'));
+        updateConnectorScopedValue(
+          setErrorsByConnectorId,
+          targetConnectorId,
+          err instanceof Error ? err.message : t('magnet.platform-login.error.pollFailed')
+        );
       } finally {
         setBusy(false);
       }
     },
-    [busy, qrSession?.sessionId, t]
+    [activeConnectorId, busy, qrSessionsByConnectorId, t]
   );
 
   useEffect(() => {
-    if (!bilibiliAuthPopupVisible) return;
-    if (!qrSession?.sessionId) return;
+    if (!authPopupVisible) return;
+    if (!activeConnectorId) return;
+    if (!activeQrSession?.sessionId) return;
 
     const timer = window.setInterval(() => {
-      void runPoll(qrSession.sessionId);
+      void runPoll(activeQrSession.sessionId, activeConnectorId);
     }, QR_AUTO_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [bilibiliAuthPopupVisible, qrSession?.sessionId, runPoll]);
+  }, [activeConnectorId, activeQrSession?.sessionId, authPopupVisible, runPoll]);
 
   const handleToggleSelector = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -232,69 +306,96 @@ export const PlatformLoginButton: React.FC = () => {
   };
 
   const handleSelectPlatform = useCallback(
-    (platformId: string, enabled: boolean) => {
-      setSelectedPlatformId(platformId);
-      if (!enabled) {
+    (item: PlatformSelectorItem) => {
+      setSelectedPlatformId(item.id);
+      if (!item.enabled) {
         setAuthPopupOpen(false);
-        setStatusMessage(t('magnet.platform-login.status.comingSoon'));
+        updateConnectorScopedValue(
+          setStatusMessagesByConnectorId,
+          item.id,
+          t('magnet.platform-login.status.comingSoon')
+        );
         return;
       }
 
-      setError(null);
-      setStatusMessage(null);
+      updateConnectorScopedValue(setErrorsByConnectorId, item.id, null);
+      updateConnectorScopedValue(setStatusMessagesByConnectorId, item.id, null);
       setAuthPopupOpen(true);
     },
     [t]
   );
 
   const handleGenerateQr = useCallback(async () => {
-    if (busy) return;
+    const connectorId = (activeConnectorId ?? '').trim();
+    if (!connectorId || busy) return;
     setBusy(true);
 
     try {
-      const session = await beginBilibiliQrLogin();
+      const session = await beginPlatformQrLogin(connectorId);
       if (!session) {
-        setError(t('magnet.platform-login.error.generateFailed'));
+        updateConnectorScopedValue(
+          setErrorsByConnectorId,
+          connectorId,
+          t('magnet.platform-login.error.generateFailed')
+        );
         return;
       }
 
-      setQrSession(session);
-      setPollResult(null);
-      setError(null);
-      setStatusMessage(t('magnet.platform-login.status.generated'));
-      await refreshAuthSnapshot();
+      updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, session);
+      updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
+      updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
+      updateConnectorScopedValue(
+        setStatusMessagesByConnectorId,
+        connectorId,
+        t('magnet.platform-login.status.generated')
+      );
+      await refreshAuthSnapshot(connectorId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('magnet.platform-login.error.generateFailed'));
+      updateConnectorScopedValue(
+        setErrorsByConnectorId,
+        connectorId,
+        err instanceof Error ? err.message : t('magnet.platform-login.error.generateFailed')
+      );
     } finally {
       setBusy(false);
     }
-  }, [busy, refreshAuthSnapshot, t]);
+  }, [activeConnectorId, busy, refreshAuthSnapshot, t]);
 
   const handleLogout = useCallback(async () => {
-    if (busy) return;
+    const connectorId = (activeConnectorId ?? '').trim();
+    if (!connectorId || busy) return;
     setBusy(true);
 
     try {
-      const snapshot = await logoutBilibiliConnector();
-      setAuthSnapshot(snapshot);
-      setQrSession(null);
-      setPollResult(null);
-      setError(null);
-      setStatusMessage(t('magnet.platform-login.status.loggedOut'));
+      const snapshot = await logoutPlatformConnector(connectorId);
+      updateConnectorScopedValue(setAuthSnapshotsByConnectorId, connectorId, snapshot);
+      updateConnectorScopedValue(setQrSessionsByConnectorId, connectorId, null);
+      updateConnectorScopedValue(setPollResultsByConnectorId, connectorId, null);
+      updateConnectorScopedValue(setErrorsByConnectorId, connectorId, null);
+      updateConnectorScopedValue(
+        setStatusMessagesByConnectorId,
+        connectorId,
+        t('magnet.platform-login.status.loggedOut')
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('magnet.platform-login.error.logoutFailed'));
+      updateConnectorScopedValue(
+        setErrorsByConnectorId,
+        connectorId,
+        err instanceof Error ? err.message : t('magnet.platform-login.error.logoutFailed')
+      );
     } finally {
       setBusy(false);
     }
-  }, [busy, t]);
+  }, [activeConnectorId, busy, t]);
 
+  const selectedPlatformLabelKey = selectedPlatformItem?.labelKey ?? 'magnet.platform-login.platform.bilibili';
   const authStateLabel = useMemo(
-    () => t(toAuthLabelKey(authSnapshot?.authState ?? 'unauthorized')),
-    [authSnapshot?.authState, t]
+    () => t(toAuthLabelKey(activeAuthSnapshot?.authState ?? 'unauthorized')),
+    [activeAuthSnapshot?.authState, t]
   );
   const availabilityLabel = useMemo(
-    () => t(toAvailabilityLabelKey(authSnapshot?.availability ?? 'unknown')),
-    [authSnapshot?.availability, t]
+    () => t(toAvailabilityLabelKey(activeAuthSnapshot?.availability ?? 'unknown')),
+    [activeAuthSnapshot?.availability, t]
   );
 
   return (
@@ -329,13 +430,12 @@ export const PlatformLoginButton: React.FC = () => {
           {platformItems.map((item) => (
             <button
               key={item.id}
-              ref={item.id === BILIBILI_CONNECTOR_ID ? bilibiliIconButtonRef : undefined}
               type="button"
               className={`platform-login-platform-item ${
                 selectedPlatformId === item.id ? 'platform-login-platform-item--active' : ''
               }`}
               disabled={!item.enabled}
-              onClick={() => handleSelectPlatform(item.id, item.enabled)}
+              onClick={() => handleSelectPlatform(item)}
             >
               <span className="platform-login-platform-icon" aria-hidden="true">
                 {item.icon}
@@ -345,13 +445,13 @@ export const PlatformLoginButton: React.FC = () => {
           ))}
         </div>
 
-        {statusMessage ? <p className="platform-login-status">{statusMessage}</p> : null}
+        {activeStatusMessage ? <p className="platform-login-status">{activeStatusMessage}</p> : null}
       </CollisionAwarePopup>
 
       <CollisionAwarePopup
         ref={authPopupRef}
-        open={bilibiliAuthPopupVisible}
-        anchorRef={bilibiliIconButtonRef}
+        open={authPopupVisible}
+        anchorRef={triggerRef}
         placement="bottom-start"
         offset={10}
         viewportPadding={10}
@@ -360,20 +460,20 @@ export const PlatformLoginButton: React.FC = () => {
       >
         <div className="platform-login-auth-title">
           {t('magnet.platform-login.popup.title', {
-            platform: t('magnet.platform-login.platform.bilibili'),
+            platform: t(selectedPlatformLabelKey),
           })}
         </div>
 
         <p className="platform-login-auth-line">
           {t('magnet.platform-login.auth.line', {
             state: authStateLabel,
-            accountUid: authSnapshot?.accountUid ?? '-',
+            accountUid: activeAuthSnapshot?.accountUid ?? '-',
           })}
         </p>
         <p className="platform-login-auth-line">
           {t('magnet.platform-login.availability.line', {
             availability: availabilityLabel,
-            message: authSnapshot?.availabilityMessage ?? t('magnet.platform-login.availability.none'),
+            message: activeAuthSnapshot?.availabilityMessage ?? t('magnet.platform-login.availability.none'),
           })}
         </p>
 
@@ -386,7 +486,7 @@ export const PlatformLoginButton: React.FC = () => {
             onClick={() => {
               void runPoll();
             }}
-            disabled={busy || !qrSession}
+            disabled={busy || !activeQrSession}
           >
             {t('magnet.platform-login.action.poll')}
           </button>
@@ -395,17 +495,17 @@ export const PlatformLoginButton: React.FC = () => {
           </button>
         </div>
 
-        {qrSession ? (
+        {activeQrSession ? (
           <div className="platform-login-qr-card">
             <img
-              src={qrSession.qrImageDataUrl}
+              src={activeQrSession.qrImageDataUrl}
               alt={t('magnet.platform-login.qr.alt')}
               className="platform-login-qr-image"
             />
             <p className="platform-login-qr-hint">{t('magnet.platform-login.qr.hint')}</p>
             <p className="platform-login-qr-expire">
               {t('magnet.platform-login.qr.expiresAt', {
-                expiresAt: new Date(qrSession.expiresAtMs).toLocaleString(),
+                expiresAt: new Date(activeQrSession.expiresAtMs).toLocaleString(),
               })}
             </p>
           </div>
@@ -413,16 +513,16 @@ export const PlatformLoginButton: React.FC = () => {
           <p className="platform-login-empty">{t('magnet.platform-login.qr.empty')}</p>
         )}
 
-        {pollResult ? (
+        {activePollResult ? (
           <p className="platform-login-poll-result">
             {t('magnet.platform-login.status.pollState', {
-              state: pollResult.state,
-              message: pollResult.stateMessage,
+              state: activePollResult.state,
+              message: activePollResult.stateMessage,
             })}
           </p>
         ) : null}
 
-        {error ? <p className="platform-login-error">{error}</p> : null}
+        {activeError ? <p className="platform-login-error">{activeError}</p> : null}
       </CollisionAwarePopup>
     </>
   );

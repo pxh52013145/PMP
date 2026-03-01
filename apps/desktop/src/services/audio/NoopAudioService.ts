@@ -1,4 +1,12 @@
-import type { IAudioService, AudioState, PlaybackState, PlayMode, Playlist, Track } from './types';
+import type {
+  IAudioService,
+  AudioState,
+  PlaybackState,
+  PlayMode,
+  Playlist,
+  PlaylistCreateOptions,
+  Track,
+} from './types';
 
 type TimeListener = (time: number) => void;
 type StateListener = (state: AudioState) => void;
@@ -236,12 +244,23 @@ export class NoopAudioService implements IAudioService {
     this.seek(Math.max(0, this.currentTime - clampNonNegative(seconds)));
   }
 
-  createPlaylist(name: string, description?: string): Playlist {
+  createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist {
+    const kind =
+      options?.kind === 'smart'
+        ? 'smart'
+        : options?.kind === 'platform'
+          ? 'platform'
+          : 'manual';
     const playlist: Playlist = {
       id: `playlist-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name,
       description,
       tracks: [],
+      kind,
+      readonly: options?.readonly === true || kind === 'smart',
+      sourceConnectorId: options?.sourceConnectorId,
+      sourcePlaylistId: options?.sourcePlaylistId,
+      smartRuleJson: options?.smartRuleJson,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       trackCount: 0,

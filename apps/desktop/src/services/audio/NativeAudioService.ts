@@ -13,6 +13,7 @@ import {
   IAudioService,
   PlayMode,
   Playlist,
+  PlaylistCreateOptions,
   Track,
   PlaybackState,
 } from './types';
@@ -23,6 +24,20 @@ import {
   TAURI_EVENTS,
 } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import {
+  deleteNativeLibraryPlaylist,
+  markNativeLibraryUserEntryPlayed,
+  queryNativeLibraryTracks,
+  listNativeLibraryPlaylistItems,
+  listNativeLibraryPlaylists,
+  prepareNativeBilibiliCachedPlayback,
+  replaceNativeLibraryPlaylistItems,
+  touchNativeLibraryPlaylistOpened,
+  upsertNativeLibraryUserEntry,
+  upsertNativeLibraryPlaylist,
+  type NativeLibraryPlaylistItemRecord,
+  type NativeLibraryPlaylistItemUpsertInput,
+} from '../../modules/music-library';
 import { readString } from '../../modules/storage';
 
 type StateListener = (state: AudioState) => void;
@@ -238,6 +253,9 @@ export class NativeAudioService implements IAudioService {
   private restoredGainDb = false;
   private visibilityListenerAttached = false;
   private visibilityListenerCleanup: (() => void) | null = null;
+  private smartPlaylistRefreshTimer: number | null = null;
+  private smartPlaylistRefreshInFlight = false;
+  private recentSmartPlaylistWriteQueue: Promise<void> = Promise.resolve();
   private lastNativeErrorSeq = 0;
   private fallbackTicker: number | null = null;
   private fallbackClockStartedAtMs: number | null = null;
@@ -381,6 +399,14 @@ export class NativeAudioService implements IAudioService {
   private static readonly DYNAMIC_SRC_LEARNING_UPDATE_MIN_INTERVAL_MS = 250;
   private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED = 4;
   private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL = 8;
+  private static readonly PLAYLIST_OWNER_UID = 'local:default';
+  private static readonly PLAYLIST_KIND_MANUAL = 'manual' as const;
+  private static readonly PLAYLIST_KIND_SMART = 'smart' as const;
+  private static readonly PLAYLIST_KIND_PLATFORM = 'platform' as const;
+  private static readonly PLAYLIST_QUERY_LIMIT = 200;
+  private static readonly SMART_PLAYLIST_RECENT_ID = 'smart-recently-played';
+  private static readonly SMART_PLAYLIST_RECENT_NAME = 'Recently Played';
+  private static readonly SMART_PLAYLIST_RECENT_LIMIT = 1000;
 
   private dynamicSrcRestoreDebounceMs = NativeAudioService.DYNAMIC_SRC_RESTORE_DEBOUNCE_MS;
   private dynamicSrcMinSwitchIntervalMs = NativeAudioService.DYNAMIC_SRC_MIN_SWITCH_INTERVAL_MS;
@@ -401,13 +427,663 @@ export class NativeAudioService implements IAudioService {
     void this.invokeCommand(cmd, payload).catch(() => {});
   }
 
+  private isBilibiliSourceLocator(value: string | null | undefined): boolean {
+    if (typeof value !== 'string') return false;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return false;
+    return (
+      normalized.startsWith('bilibili://') ||
+      normalized.includes('bilibili.com/video/') ||
+      normalized.includes('bvid=')
+    );
+  }
+
+  private resolveBilibiliSourceLocatorFromTrack(track: Track): string | null {
+    const candidates = [track.originalPath, track.comment, track.path];
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const normalized = candidate.trim();
+      if (!normalized) continue;
+      if (this.isBilibiliSourceLocator(normalized)) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
+  private inferPlatformConnectorIdFromTrack(track: Track, sourceLocator: string | null): string | null {
+    const normalizedTrackId = typeof track.id === 'string' ? track.id.trim().toLowerCase() : '';
+    if (normalizedTrackId.startsWith('bilibili:')) {
+      return 'connector.platform.bilibili';
+    }
+    if (this.isBilibiliSourceLocator(sourceLocator)) {
+      return 'connector.platform.bilibili';
+    }
+    return null;
+  }
+
+  private buildStablePlatformEntryId(connectorId: string, sourceKey: string): string {
+    const seed = `${connectorId.trim().toLowerCase()}|${sourceKey.trim().toLowerCase()}`;
+    let hash = 2166136261;
+    for (let index = 0; index < seed.length; index += 1) {
+      hash ^= seed.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    const safeConnectorId = connectorId.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+    const hashHex = (hash >>> 0).toString(16).padStart(8, '0');
+    return `entry::platform::${safeConnectorId}::${hashHex}`;
+  }
+
+  private markPlatformTrackPlayedBestEffort(track: Track, playedAtMs: number): void {
+    if (!isTauriRuntime()) return;
+
+    const sourceLocator = this.resolveBilibiliSourceLocatorFromTrack(track);
+    const connectorId = this.inferPlatformConnectorIdFromTrack(track, sourceLocator);
+    if (!connectorId) return;
+
+    const sourceKey =
+      sourceLocator ||
+      (typeof track.id === 'string' && track.id.trim().length > 0 ? track.id.trim() : '') ||
+      (typeof track.title === 'string' && track.title.trim().length > 0 ? track.title.trim() : 'unknown');
+    const entryId = this.buildStablePlatformEntryId(connectorId, sourceKey);
+    const title = typeof track.title === 'string' ? track.title.trim() : '';
+    const artist = typeof track.artist === 'string' ? track.artist.trim() : '';
+
+    void upsertNativeLibraryUserEntry({
+      id: entryId,
+      ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
+      quickFingerprint: track.quickFingerprint,
+      cloudContentId: sourceLocator || sourceKey,
+      displayTitle: title || undefined,
+      displayArtist: artist || undefined,
+      inCloud: true,
+      isMissing: false,
+      createdAtMs: playedAtMs,
+      updatedAtMs: playedAtMs,
+    })
+      .then((entry) => {
+        if (!entry) return false;
+        return markNativeLibraryUserEntryPlayed(entry.id, { playedAtMs });
+      })
+      .catch((error) => {
+        console.warn('[NativeAudioService] failed to mark platform entry played:', error);
+      });
+  }
+
+  private async resolveTrackForNativePlayback(track: Track): Promise<Track> {
+    if (!isTauriRuntime()) return track;
+
+    const sourceLocator = this.resolveBilibiliSourceLocatorFromTrack(track);
+    const connectorId = this.inferPlatformConnectorIdFromTrack(track, sourceLocator);
+    if (connectorId !== 'connector.platform.bilibili' || !sourceLocator) return track;
+
+    try {
+      const prepared = await prepareNativeBilibiliCachedPlayback(sourceLocator);
+      const cachePath = typeof prepared?.cachePath === 'string' ? prepared.cachePath.trim() : '';
+      if (!cachePath || !this.isProbablyAbsolutePath(cachePath)) {
+        return track;
+      }
+
+      return {
+        ...track,
+        filePath: cachePath,
+        path: cachePath,
+        originalPath: sourceLocator,
+        duration:
+          typeof track.duration === 'number' && Number.isFinite(track.duration)
+            ? track.duration
+            : prepared?.durationSeconds,
+        comment:
+          typeof track.comment === 'string' && track.comment.trim().length > 0
+            ? track.comment
+            : sourceLocator,
+      };
+    } catch {
+      return track;
+    }
+  }
+
   private markTrackPlayedBestEffort(track: Track): void {
+    const playedAtMs = Date.now();
+    this.enqueueRecentSmartPlaylistTrackBestEffort(track, playedAtMs);
+    this.markPlatformTrackPlayedBestEffort(track, playedAtMs);
+
     const trackId = typeof track?.id === 'string' ? track.id.trim() : '';
-    if (!trackId) return;
-    this.fireAndForgetCommand('music_library_db_mark_track_played', {
+    if (!trackId || trackId.startsWith('bilibili:')) return;
+
+    void this.invokeCommand<boolean>('music_library_db_mark_track_played', {
       trackId,
-      playedAtMs: Date.now(),
+      playedAtMs,
+    })
+      .catch(() => {
+        // Best-effort: track playback must not be blocked by analytics/persistence failures.
+      });
+  }
+
+  private serializeTrackForPlaylist(track: Track): string | undefined {
+    const id = typeof track?.id === 'string' ? track.id.trim() : '';
+    const title = typeof track?.title === 'string' ? track.title.trim() : '';
+    if (!id || !title) return undefined;
+
+    const payload: Partial<Track> = {
+      id,
+      title,
+      artist: track.artist,
+      album: track.album,
+      albumArtist: track.albumArtist,
+      duration: track.duration,
+      path: track.path,
+      filePath: track.filePath,
+      originalPath: track.originalPath,
+      libraryPathId: track.libraryPathId,
+      mtimeMs: track.mtimeMs,
+      quickFingerprint: track.quickFingerprint,
+      coverKey: track.coverKey,
+      coverUrl: track.coverUrl,
+      year: track.year,
+      genre: track.genre,
+      trackNumber: track.trackNumber,
+      discNumber: track.discNumber,
+      composer: track.composer,
+      bitrate: track.bitrate,
+      sampleRate: track.sampleRate,
+      replayGainTrackGainDb: track.replayGainTrackGainDb,
+      replayGainAlbumGainDb: track.replayGainAlbumGainDb,
+      format: track.format,
+      codecName: track.codecName,
+      fileSize: track.fileSize,
+      dateAdded: track.dateAdded,
+      lastPlayed: track.lastPlayed,
+      playCount: track.playCount,
+      rating: track.rating,
+      favorite: track.favorite,
+      tags: track.tags,
+      lyrics: track.lyrics,
+      comment: track.comment,
+      mimeType: track.mimeType,
+    };
+
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private parseTrackFromPlaylistPayload(
+    payloadJson?: string,
+    fallback?: {
+      id?: string;
+      title?: string;
+      artist?: string;
+      album?: string;
+      duration?: number;
+    }
+  ): Track | null {
+    let record: Record<string, unknown> | null = null;
+    if (typeof payloadJson === 'string' && payloadJson.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(payloadJson) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          record = parsed as Record<string, unknown>;
+        }
+      } catch {
+        record = null;
+      }
+    }
+
+    const asString = (value: unknown): string | undefined => {
+      return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+    };
+    const asNumber = (value: unknown): number | undefined => {
+      return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    };
+
+    const id = asString(record?.id) ?? fallback?.id?.trim();
+    const title = asString(record?.title) ?? fallback?.title?.trim();
+    if (!id || !title) return null;
+
+    const track: Track = {
+      id,
+      title,
+      artist: asString(record?.artist) ?? fallback?.artist,
+      album: asString(record?.album) ?? fallback?.album,
+      albumArtist: asString(record?.albumArtist),
+      duration: asNumber(record?.duration) ?? fallback?.duration,
+      path: asString(record?.path),
+      filePath: asString(record?.filePath),
+      originalPath: asString(record?.originalPath),
+      libraryPathId: asString(record?.libraryPathId),
+      mtimeMs: asNumber(record?.mtimeMs),
+      quickFingerprint: asString(record?.quickFingerprint),
+      coverKey: asString(record?.coverKey),
+      coverUrl: asString(record?.coverUrl),
+      year: asNumber(record?.year),
+      genre: asString(record?.genre),
+      trackNumber: asNumber(record?.trackNumber),
+      discNumber: asNumber(record?.discNumber),
+      composer: asString(record?.composer),
+      bitrate: asNumber(record?.bitrate),
+      sampleRate: asNumber(record?.sampleRate),
+      replayGainTrackGainDb: asNumber(record?.replayGainTrackGainDb),
+      replayGainAlbumGainDb: asNumber(record?.replayGainAlbumGainDb),
+      format: asString(record?.format),
+      codecName: asString(record?.codecName),
+      fileSize: asNumber(record?.fileSize),
+      dateAdded: asNumber(record?.dateAdded),
+      lastPlayed: asNumber(record?.lastPlayed),
+      playCount: asNumber(record?.playCount),
+      rating: asNumber(record?.rating),
+      favorite:
+        typeof record?.favorite === 'boolean' ? (record.favorite as boolean) : undefined,
+      tags: Array.isArray(record?.tags)
+        ? (record.tags as unknown[])
+            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            .map((value) => value.trim())
+        : undefined,
+      lyrics: asString(record?.lyrics),
+      comment: asString(record?.comment),
+      mimeType: asString(record?.mimeType),
+    };
+
+    return track;
+  }
+
+  private toPlaylistItemUpserts(playlist: Playlist): NativeLibraryPlaylistItemUpsertInput[] {
+    const items: NativeLibraryPlaylistItemUpsertInput[] = [];
+    for (const track of playlist.tracks) {
+      const trackPayloadJson = this.serializeTrackForPlaylist(track);
+      if (!trackPayloadJson) continue;
+      items.push({
+        position: items.length,
+        trackPayloadJson,
+        snapshotTitle: track.title,
+        snapshotArtist: track.artist,
+        snapshotAlbum: track.album,
+        snapshotDurationSeconds:
+          typeof track.duration === 'number' && Number.isFinite(track.duration)
+            ? Math.max(0, track.duration)
+            : undefined,
+      });
+    }
+    return items;
+  }
+
+  private normalizeRecentTrackKey(track: Track): string {
+    const normalize = (value: string | null | undefined): string =>
+      typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+    const trackId = normalize(track.id);
+    if (trackId) return `id:${trackId}`;
+
+    const originalPath = normalize(track.originalPath);
+    if (originalPath) return `origin:${originalPath}`;
+
+    const filePath = normalize(track.filePath);
+    if (filePath) return `file:${filePath}`;
+
+    const blobPath = normalize(track.path);
+    if (blobPath) return `path:${blobPath}`;
+
+    const title = normalize(track.title);
+    const artist = normalize(track.artist);
+    const album = normalize(track.album);
+    const duration =
+      typeof track.duration === 'number' && Number.isFinite(track.duration)
+        ? String(Math.max(0, Math.floor(track.duration)))
+        : '';
+    return `meta:${title}|${artist}|${album}|${duration}`;
+  }
+
+  private parseTracksFromPlaylistItems(
+    playlistId: string,
+    items: NativeLibraryPlaylistItemRecord[]
+  ): Track[] {
+    const tracks: Track[] = [];
+    for (const item of items) {
+      const fallbackId = item.localTrackId || item.entryId || `${playlistId}::${item.position}`;
+      const track = this.parseTrackFromPlaylistPayload(item.trackPayloadJson, {
+        id: fallbackId,
+        title: item.snapshotTitle,
+        artist: item.snapshotArtist,
+        album: item.snapshotAlbum,
+        duration: item.snapshotDurationSeconds,
+      });
+      if (!track) continue;
+      tracks.push(track);
+    }
+    return tracks;
+  }
+
+  private enqueueRecentSmartPlaylistTrackBestEffort(track: Track, playedAtMs: number): void {
+    if (!isTauriRuntime()) return;
+    if (!track || typeof track !== 'object') return;
+
+    const recentTrack: Track = {
+      ...track,
+      lastPlayed: playedAtMs,
+      playCount:
+        typeof track.playCount === 'number' && Number.isFinite(track.playCount)
+          ? Math.max(1, Math.floor(track.playCount) + 1)
+          : 1,
+    };
+
+    this.recentSmartPlaylistWriteQueue = this.recentSmartPlaylistWriteQueue
+      .then(async () => {
+        await this.ensureBuiltinSmartPlaylistsInLibraryDb();
+
+        const items = await listNativeLibraryPlaylistItems(NativeAudioService.SMART_PLAYLIST_RECENT_ID);
+        const existingTracks = this.parseTracksFromPlaylistItems(
+          NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+          items
+        );
+
+        const normalizedIncomingKey = this.normalizeRecentTrackKey(recentTrack);
+        const mergedTracks = [
+          recentTrack,
+          ...existingTracks.filter(
+            (item) => this.normalizeRecentTrackKey(item) !== normalizedIncomingKey
+          ),
+        ].slice(0, NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT);
+
+        const payloadPlaylist: Playlist = {
+          id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+          name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
+          tracks: mergedTracks,
+          kind: NativeAudioService.PLAYLIST_KIND_SMART,
+          readonly: true,
+          createdAt: playedAtMs,
+          updatedAt: playedAtMs,
+          trackCount: mergedTracks.length,
+          totalDuration: mergedTracks.reduce((sum, item) => sum + (item.duration ?? 0), 0),
+        };
+
+        await replaceNativeLibraryPlaylistItems(
+          NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+          this.toPlaylistItemUpserts(payloadPlaylist)
+        );
+
+        this.scheduleSmartPlaylistRefresh(120);
+      })
+      .catch((error) => {
+        console.warn('[NativeAudioService] failed to update recent smart playlist:', error);
+      });
+  }
+
+  private isReadonlyPlaylist(playlist: Playlist | null | undefined): boolean {
+    if (!playlist) return false;
+    if (playlist.readonly === true) return true;
+    return playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART;
+  }
+
+  private persistPlaylistToLibraryDbBestEffort(playlist: Playlist): void {
+    if (!isTauriRuntime()) return;
+
+    const playlistId = String(playlist.id || '').trim();
+    const playlistName = String(playlist.name || '').trim();
+    if (!playlistId || !playlistName) return;
+
+    const kind =
+      playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART
+        ? NativeAudioService.PLAYLIST_KIND_SMART
+        : playlist.kind === NativeAudioService.PLAYLIST_KIND_PLATFORM
+          ? NativeAudioService.PLAYLIST_KIND_PLATFORM
+          : NativeAudioService.PLAYLIST_KIND_MANUAL;
+
+    if (kind === NativeAudioService.PLAYLIST_KIND_SMART) {
+      return;
+    }
+
+    const now = Date.now();
+    void upsertNativeLibraryPlaylist({
+      id: playlistId,
+      ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
+      name: playlistName,
+      description: typeof playlist.description === 'string' ? playlist.description.trim() : undefined,
+      kind,
+      sourceConnectorId: playlist.sourceConnectorId,
+      sourcePlaylistId: playlist.sourcePlaylistId,
+      smartRuleJson: playlist.smartRuleJson,
+      isReadonly: playlist.readonly === true,
+      createdAtMs:
+        typeof playlist.createdAt === 'number' && Number.isFinite(playlist.createdAt)
+          ? Math.max(0, Math.floor(playlist.createdAt))
+          : now,
+      updatedAtMs:
+        typeof playlist.updatedAt === 'number' && Number.isFinite(playlist.updatedAt)
+          ? Math.max(0, Math.floor(playlist.updatedAt))
+          : now,
+    })
+      .then((saved) => {
+        if (!saved) return;
+        return replaceNativeLibraryPlaylistItems(saved.id, this.toPlaylistItemUpserts(playlist));
+      })
+      .catch((error) => {
+        console.warn('[NativeAudioService] failed to persist playlist:', playlistId, error);
+      });
+  }
+
+  private deletePlaylistFromLibraryDbBestEffort(playlistId: string): void {
+    if (!isTauriRuntime()) return;
+    const normalizedPlaylistId = String(playlistId || '').trim();
+    if (!normalizedPlaylistId) return;
+
+    void deleteNativeLibraryPlaylist(normalizedPlaylistId).catch((error) => {
+      console.warn('[NativeAudioService] failed to delete playlist from library db:', error);
     });
+  }
+
+  private touchPlaylistOpenedBestEffort(playlistId: string): void {
+    if (!isTauriRuntime()) return;
+    const normalizedPlaylistId = String(playlistId || '').trim();
+    if (!normalizedPlaylistId) return;
+
+    void touchNativeLibraryPlaylistOpened(normalizedPlaylistId, {
+      openedAtMs: Date.now(),
+    }).catch((error) => {
+      console.warn('[NativeAudioService] failed to touch playlist opened timestamp:', error);
+    });
+  }
+
+  private scheduleSmartPlaylistRefresh(delayMs: number = 400): void {
+    if (!isTauriRuntime()) return;
+
+    if (this.smartPlaylistRefreshTimer !== null) {
+      clearTimeout(this.smartPlaylistRefreshTimer);
+      this.smartPlaylistRefreshTimer = null;
+    }
+
+    this.smartPlaylistRefreshTimer = window.setTimeout(() => {
+      this.smartPlaylistRefreshTimer = null;
+      if (this.smartPlaylistRefreshInFlight) return;
+      this.smartPlaylistRefreshInFlight = true;
+      void this.restorePlaylistsFromLibraryDb().finally(() => {
+        this.smartPlaylistRefreshInFlight = false;
+      });
+    }, Math.max(0, Math.floor(delayMs)));
+  }
+
+  private resolveRecentSmartPlaylistLimit(ruleJson?: string): number {
+    const defaultLimit = NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT;
+    if (typeof ruleJson !== 'string' || ruleJson.trim().length === 0) return defaultLimit;
+    try {
+      const parsed = JSON.parse(ruleJson) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaultLimit;
+      const record = parsed as Record<string, unknown>;
+      if (record.type !== 'recently_played') return defaultLimit;
+      const limit = record.limit;
+      if (typeof limit !== 'number' || !Number.isFinite(limit)) return defaultLimit;
+      return Math.max(1, Math.min(5000, Math.floor(limit)));
+    } catch {
+      return defaultLimit;
+    }
+  }
+
+  private mapNativeTrackRecordToTrack(record: {
+    id: string;
+    filePath: string;
+    quickFingerprint?: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+    genre?: string;
+    durationSeconds?: number;
+    sampleRate?: number;
+    fileSize?: number;
+    mtimeMs?: number;
+    playCount: number;
+    lastPlayedAtMs?: number;
+  }): Track {
+    const fileName = record.filePath.split(/[/\\]/).pop();
+    const fallbackTitle = (fileName && fileName.trim()) || record.id;
+
+    return {
+      id: record.id,
+      title: (record.title && record.title.trim()) || fallbackTitle,
+      artist: record.artist,
+      album: record.album,
+      duration: record.durationSeconds,
+      filePath: record.filePath,
+      path: record.filePath,
+      quickFingerprint: record.quickFingerprint,
+      genre: record.genre,
+      sampleRate: record.sampleRate,
+      fileSize: record.fileSize,
+      mtimeMs: record.mtimeMs,
+      playCount: record.playCount,
+      lastPlayed: record.lastPlayedAtMs,
+    };
+  }
+
+  private async buildRecentSmartPlaylistTracks(limit: number): Promise<Track[]> {
+    const rows = await queryNativeLibraryTracks({
+      limit: Math.max(1, Math.min(2000, limit * 3)),
+      includeMissing: false,
+      visibleOnly: true,
+      filters: [{ field: 'playCount', operator: 'gte', value: '1' }],
+      sort: [
+        { field: 'lastPlayedAtMs', order: 'desc' },
+        { field: 'updatedAtMs', order: 'desc' },
+      ],
+    });
+
+    const tracks: Track[] = [];
+    const seenTrackIds = new Set<string>();
+    for (const row of rows) {
+      if (!row.id || seenTrackIds.has(row.id)) continue;
+      if (typeof row.lastPlayedAtMs !== 'number' || !Number.isFinite(row.lastPlayedAtMs)) continue;
+      tracks.push(this.mapNativeTrackRecordToTrack(row));
+      seenTrackIds.add(row.id);
+      if (tracks.length >= limit) break;
+    }
+
+    return tracks;
+  }
+
+  private async ensureBuiltinSmartPlaylistsInLibraryDb(): Promise<void> {
+    const records = await listNativeLibraryPlaylists({
+      ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
+      kind: NativeAudioService.PLAYLIST_KIND_SMART,
+      limit: NativeAudioService.PLAYLIST_QUERY_LIMIT,
+    });
+
+    const recentRecord =
+      records.find((item) => item.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID) ?? null;
+    const now = Date.now();
+
+    await upsertNativeLibraryPlaylist({
+      id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+      ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
+      name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
+      kind: NativeAudioService.PLAYLIST_KIND_SMART,
+      smartRuleJson: JSON.stringify({
+        type: 'recently_played',
+        limit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
+      }),
+      isReadonly: true,
+      createdAtMs: recentRecord?.createdAtMs ?? now,
+      updatedAtMs: now,
+      lastOpenedAtMs: recentRecord?.lastOpenedAtMs,
+    });
+  }
+
+  private async restorePlaylistsFromLibraryDb(): Promise<void> {
+    if (!isTauriRuntime()) return;
+
+    try {
+      await this.ensureBuiltinSmartPlaylistsInLibraryDb();
+      const records = await listNativeLibraryPlaylists({
+        ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
+        limit: NativeAudioService.PLAYLIST_QUERY_LIMIT,
+      });
+      if (records.length === 0) return;
+
+      const playlists: Playlist[] = [];
+      for (const record of records) {
+        let tracks: Track[] = [];
+        if (record.kind === NativeAudioService.PLAYLIST_KIND_SMART) {
+          const limit = this.resolveRecentSmartPlaylistLimit(record.smartRuleJson);
+          const items = await listNativeLibraryPlaylistItems(record.id);
+          tracks = this.parseTracksFromPlaylistItems(record.id, items).slice(0, limit);
+          if (tracks.length === 0 && record.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID) {
+            tracks = await this.buildRecentSmartPlaylistTracks(limit);
+            if (tracks.length > 0) {
+              const now = Date.now();
+              const snapshotPlaylist: Playlist = {
+                id: record.id,
+                name: record.name,
+                description: record.description,
+                tracks,
+                kind: NativeAudioService.PLAYLIST_KIND_SMART,
+                readonly: true,
+                smartRuleJson: record.smartRuleJson,
+                createdAt: record.createdAtMs,
+                updatedAt: Math.max(record.updatedAtMs, now),
+                trackCount: tracks.length,
+                totalDuration: tracks.reduce((sum, track) => sum + (track.duration ?? 0), 0),
+              };
+              void replaceNativeLibraryPlaylistItems(
+                record.id,
+                this.toPlaylistItemUpserts(snapshotPlaylist)
+              ).catch((error) => {
+                console.warn(
+                  '[NativeAudioService] failed to backfill recent smart playlist items:',
+                  error
+                );
+              });
+            }
+          }
+        } else {
+          const items = await listNativeLibraryPlaylistItems(record.id);
+          tracks = this.parseTracksFromPlaylistItems(record.id, items);
+        }
+
+        const totalDuration = tracks.reduce((sum, track) => sum + (track.duration ?? 0), 0);
+        playlists.push({
+          id: record.id,
+          name: record.name,
+          description: record.description,
+          tracks,
+          kind: record.kind,
+          readonly: record.isReadonly,
+          sourceConnectorId: record.sourceConnectorId,
+          sourcePlaylistId: record.sourcePlaylistId,
+          smartRuleJson: record.smartRuleJson,
+          createdAt: record.createdAtMs,
+          updatedAt: record.updatedAtMs,
+          trackCount: tracks.length,
+          totalDuration,
+        });
+      }
+
+      const nextCurrentPlaylistId = this.state.currentPlaylist?.id;
+      const currentPlaylist = nextCurrentPlaylistId
+        ? playlists.find((item) => item.id === nextCurrentPlaylistId) ?? null
+        : null;
+      this.updateState({ playlists, currentPlaylist });
+    } catch (error) {
+      console.warn('[NativeAudioService] failed to restore playlists from library db:', error);
+    }
   }
 
   private notifyLatestSeekSequence(seekSeq: number | null): void {
@@ -684,6 +1360,7 @@ export class NativeAudioService implements IAudioService {
     }
 
     await this.restoreGainDbFromStorage();
+    await this.restorePlaylistsFromLibraryDb();
   }
 
   private readStreamingBufferSettings(): {
@@ -2823,6 +3500,39 @@ export class NativeAudioService implements IAudioService {
     });
   }
 
+  private normalizeTrackIdentityForCompare(track: Track | null | undefined): string {
+    if (!track) return '';
+
+    const normalize = (value: string | null | undefined): string =>
+      typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+    const trackId = normalize(track.id);
+    if (trackId) return `id:${trackId}`;
+
+    const originalPath = normalize(track.originalPath);
+    if (originalPath) return `origin:${originalPath}`;
+
+    const filePath = normalize(track.filePath);
+    if (filePath) return `file:${filePath}`;
+
+    const path = normalize(track.path);
+    if (path) return `path:${path}`;
+
+    const title = normalize(track.title);
+    const artist = normalize(track.artist);
+    return title ? `meta:${title}|${artist}` : '';
+  }
+
+  private findQueueIndexByTrackIdentity(queue: Track[], track: Track): number {
+    const normalizedTargetIdentity = this.normalizeTrackIdentityForCompare(track);
+    if (!normalizedTargetIdentity) return -1;
+
+    return queue.findIndex(
+      (candidateTrack) =>
+        this.normalizeTrackIdentityForCompare(candidateTrack) === normalizedTargetIdentity
+    );
+  }
+
   private resolveAbsoluteTrackPathOrEmitError(track: Track): string | null {
     const trackPath = this.getTrackPath(track);
     if (trackPath && this.isProbablyAbsolutePath(trackPath)) {
@@ -2842,8 +3552,15 @@ export class NativeAudioService implements IAudioService {
     let index = this.findQueueIndexByPath(queue, trackPath);
 
     if (index === -1) {
+      index = this.findQueueIndexByTrackIdentity(queue, track);
+    }
+
+    if (index === -1) {
       queue = [...queue, track];
       index = queue.length - 1;
+    } else if (queue[index] !== track) {
+      queue = [...queue];
+      queue[index] = track;
     }
 
     return { queue, index };
@@ -3832,15 +4549,17 @@ export class NativeAudioService implements IAudioService {
     this.clearPendingSeek();
     if (!track) return false;
 
-    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(track);
+    const resolvedTrack = await this.resolveTrackForNativePlayback(track);
+
+    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(resolvedTrack);
     if (!trackPath) return false;
 
-    const { queue, index } = this.ensureTrackInQueue(track, trackPath);
-    this.applyTrackLoadingState(track, queue, index);
+    const { queue, index } = this.ensureTrackInQueue(resolvedTrack, trackPath);
+    this.applyTrackLoadingState(resolvedTrack, queue, index);
 
     try {
       await this.applyRuntimeControlSettingsToBackend();
-      await this.applyReplayGainForTrack(track);
+      await this.applyReplayGainForTrack(resolvedTrack);
       await this.invokeCommand('native_audio_load', { path: trackPath });
     } catch {
       // invokeCommand already emits error; report failure to callers so they can avoid follow-up commands.
@@ -3860,13 +4579,15 @@ export class NativeAudioService implements IAudioService {
     this.clearPendingSeek();
     if (!track) return false;
 
-    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(track);
+    const resolvedTrack = await this.resolveTrackForNativePlayback(track);
+
+    const trackPath = this.resolveAbsoluteTrackPathOrEmitError(resolvedTrack);
     if (!trackPath) return false;
 
-    const { queue, index } = this.ensureTrackInQueue(track, trackPath);
-    this.applyTrackLoadingState(track, queue, index);
+    const { queue, index } = this.ensureTrackInQueue(resolvedTrack, trackPath);
+    this.applyTrackLoadingState(resolvedTrack, queue, index);
 
-    const replayGainDb = this.computeReplayGainDbForTrack(track);
+    const replayGainDb = this.computeReplayGainDbForTrack(resolvedTrack);
 
     try {
       await this.applyRuntimeControlSettingsToBackend();
@@ -3878,7 +4599,7 @@ export class NativeAudioService implements IAudioService {
 
     this.syncQueueToNative(queue, index, { indexOnly: queue === this.state.queue });
 
-    this.markTrackPlayedBestEffort(track);
+    this.markTrackPlayedBestEffort(resolvedTrack);
 
     return true;
   }
@@ -4151,7 +4872,13 @@ export class NativeAudioService implements IAudioService {
       if (index < 0 || index >= this.state.queue.length) return;
       const wasPlaying = this.state.playbackState === 'playing';
       const previousIndex = this.state.currentIndex;
-      const track = this.state.queue[index];
+      const originalTrack = this.state.queue[index];
+      const track = await this.resolveTrackForNativePlayback(originalTrack);
+      if (track !== originalTrack) {
+        const nextQueue = [...this.state.queue];
+        nextQueue[index] = track;
+        this.updateState({ queue: nextQueue });
+      }
       this.resetSharedTimelineStressTracking();
       this.updateState({ currentIndex: index });
       this.syncQueueToNative(this.state.queue, index, { indexOnly: true });
@@ -4285,35 +5012,60 @@ export class NativeAudioService implements IAudioService {
   }
 
   // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇㈡煟鎼淬値娼愭繛鍙夛耿閹虫繈骞戦幇顔荤胺闂傚倷绀侀幉鈥趁哄澶婃濞撴埃鍋撶€规洘鍨块獮妯兼嫚閼碱剦妲版俊鐐€曠换鎰涢弮鍌滅當濠㈣埖鍔栭埛鎴︽煙缁嬫寧鎹ｉ柍钘夘樀閹顫濋悡搴＄睄閻?=====
-  createPlaylist(name: string, description?: string): Playlist {
+  createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist {
+    const kind =
+      options?.kind === NativeAudioService.PLAYLIST_KIND_SMART
+        ? NativeAudioService.PLAYLIST_KIND_SMART
+        : options?.kind === NativeAudioService.PLAYLIST_KIND_PLATFORM
+          ? NativeAudioService.PLAYLIST_KIND_PLATFORM
+          : NativeAudioService.PLAYLIST_KIND_MANUAL;
+
+    const now = Date.now();
     const playlist: Playlist = {
-      id: `playlist-${Date.now()}`,
+      id: `playlist-${now}-${Math.random().toString(36).slice(2, 8)}`,
       name,
       description,
       tracks: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      kind,
+      readonly: options?.readonly === true || kind === NativeAudioService.PLAYLIST_KIND_SMART,
+      sourceConnectorId: options?.sourceConnectorId,
+      sourcePlaylistId: options?.sourcePlaylistId,
+      smartRuleJson: options?.smartRuleJson,
+      createdAt: now,
+      updatedAt: now,
       trackCount: 0,
       totalDuration: 0,
     };
 
     const playlists = [...this.state.playlists, playlist];
     this.updateState({ playlists });
+    this.persistPlaylistToLibraryDbBestEffort(playlist);
     return playlist;
   }
 
   deletePlaylist(playlistId: string): void {
+    const targetPlaylist = this.getPlaylist(playlistId);
+    if (this.isReadonlyPlaylist(targetPlaylist)) return;
+
     const playlists = this.state.playlists.filter((pl) => pl.id !== playlistId);
     const currentPlaylist =
       this.state.currentPlaylist?.id === playlistId ? null : this.state.currentPlaylist;
     this.updateState({ playlists, currentPlaylist });
+    this.deletePlaylistFromLibraryDbBestEffort(playlistId);
   }
 
   renamePlaylist(playlistId: string, newName: string): void {
+    const targetPlaylist = this.getPlaylist(playlistId);
+    if (this.isReadonlyPlaylist(targetPlaylist)) return;
+
     const playlists = this.state.playlists.map((pl) =>
       pl.id === playlistId ? { ...pl, name: newName, updatedAt: Date.now() } : pl
     );
     this.updateState({ playlists });
+    const updatedPlaylist = playlists.find((pl) => pl.id === playlistId);
+    if (updatedPlaylist) {
+      this.persistPlaylistToLibraryDbBestEffort(updatedPlaylist);
+    }
   }
 
   getPlaylists(): Playlist[] {
@@ -4325,6 +5077,9 @@ export class NativeAudioService implements IAudioService {
   }
 
   addTrackToPlaylist(playlistId: string, track: Track): void {
+    const targetPlaylist = this.getPlaylist(playlistId);
+    if (this.isReadonlyPlaylist(targetPlaylist)) return;
+
     const playlists = this.state.playlists.map((pl) => {
       if (pl.id !== playlistId) return pl;
       const tracks = [...pl.tracks, track];
@@ -4337,9 +5092,16 @@ export class NativeAudioService implements IAudioService {
       };
     });
     this.updateState({ playlists });
+    const updatedPlaylist = playlists.find((pl) => pl.id === playlistId);
+    if (updatedPlaylist) {
+      this.persistPlaylistToLibraryDbBestEffort(updatedPlaylist);
+    }
   }
 
   removeTrackFromPlaylist(playlistId: string, trackIndex: number): void {
+    const targetPlaylist = this.getPlaylist(playlistId);
+    if (this.isReadonlyPlaylist(targetPlaylist)) return;
+
     const playlists = this.state.playlists.map((pl) => {
       if (pl.id !== playlistId) return pl;
       const tracks = [...pl.tracks];
@@ -4353,15 +5115,26 @@ export class NativeAudioService implements IAudioService {
       };
     });
     this.updateState({ playlists });
+    const updatedPlaylist = playlists.find((pl) => pl.id === playlistId);
+    if (updatedPlaylist) {
+      this.persistPlaylistToLibraryDbBestEffort(updatedPlaylist);
+    }
   }
 
   clearPlaylist(playlistId: string): void {
+    const targetPlaylist = this.getPlaylist(playlistId);
+    if (this.isReadonlyPlaylist(targetPlaylist)) return;
+
     const playlists = this.state.playlists.map((pl) =>
       pl.id === playlistId
         ? { ...pl, tracks: [], trackCount: 0, totalDuration: 0, updatedAt: Date.now() }
         : pl
     );
     this.updateState({ playlists });
+    const updatedPlaylist = playlists.find((pl) => pl.id === playlistId);
+    if (updatedPlaylist) {
+      this.persistPlaylistToLibraryDbBestEffort(updatedPlaylist);
+    }
   }
 
   async playPlaylist(playlistId: string): Promise<void> {
@@ -4371,6 +5144,7 @@ export class NativeAudioService implements IAudioService {
     this.addMultipleToQueue(playlist.tracks);
     await this.playTrackAtIndex(0);
     this.updateState({ currentPlaylist: playlist });
+    this.touchPlaylistOpenedBestEffort(playlistId);
   }
 
   addPlaylistToQueue(playlistId: string): void {
@@ -4500,6 +5274,10 @@ export class NativeAudioService implements IAudioService {
     if (this.spectrumDisableTimer !== null) {
       window.clearTimeout(this.spectrumDisableTimer);
       this.spectrumDisableTimer = null;
+    }
+    if (this.smartPlaylistRefreshTimer !== null) {
+      window.clearTimeout(this.smartPlaylistRefreshTimer);
+      this.smartPlaylistRefreshTimer = null;
     }
     if (this.spectrumEnabled) {
       void this.setSpectrumEnabled(false);

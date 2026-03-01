@@ -1,0 +1,637 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import type { Playlist, Track } from '../../../services/audio';
+import type { IAudioService } from '../../../services/audio/types';
+import {
+  listBilibiliPlaybackQualities,
+  type BilibiliFavoriteResourceItem,
+  type BilibiliPlaybackQualityOption,
+  type BilibiliPreparedPlayback,
+  type PlatformConnectorFacadeItem,
+} from '../../../modules/music-platform';
+import { usePersistentSetting } from '../../../modules/storage';
+import type { BilibiliWorkspaceProps } from './BilibiliWorkspace';
+import type { BilibiliWorkspaceToolbarProps } from './BilibiliWorkspaceAdapter';
+import { useBilibiliPlaybackCacheSettings } from './useBilibiliPlaybackCacheSettings';
+import { useBilibiliResourceBrowser } from './useBilibiliResourceBrowser';
+import { useBilibiliResourceContextMenu } from './useBilibiliResourceContextMenu';
+import {
+  useBilibiliResourceEnhancer,
+  type BilibiliQualityBadge,
+} from './useBilibiliResourceEnhancer';
+import { useBilibiliResourcePlaybackActions } from './useBilibiliResourcePlaybackActions';
+
+type Translator = (key: string, params?: Record<string, string | number>) => string;
+
+const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
+const BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY =
+  'music-platform.bilibili.playback-quality-preference';
+const BILIBILI_UI_THEME_PREFERENCE_KEY = 'music-platform.bilibili.ui-theme-preference';
+
+type BilibiliPlaybackQualityKey = 'auto' | '64k' | '132k' | '192k' | 'dolby' | 'hires';
+type BilibiliThemePreference = 'auto' | 'light' | 'dark';
+
+const BILIBILI_QUALITY_OPTION_ORDER: BilibiliPlaybackQualityKey[] = [
+  'auto',
+  '64k',
+  '132k',
+  '192k',
+  'dolby',
+  'hires',
+];
+
+const DEFAULT_BILIBILI_QUALITY_OPTIONS: BilibiliPlaybackQualityOption[] =
+  BILIBILI_QUALITY_OPTION_ORDER.map((key) => ({
+    key,
+    label: key,
+    available: key === 'auto',
+  }));
+
+function toBilibiliKindLabelKey(kind: string): string {
+  const normalized = kind.trim().toLowerCase();
+  switch (normalized) {
+    case 'video':
+      return 'magnet.platform.bilibili.kind.video';
+    case 'audio':
+      return 'magnet.platform.bilibili.kind.audio';
+    default:
+      return 'magnet.platform.bilibili.kind.unknown';
+  }
+}
+
+function toBilibiliQualityLabelKey(key: string): string {
+  const normalized = key.trim().toLowerCase();
+  switch (normalized) {
+    case 'auto':
+      return 'magnet.platform.bilibili.quality.option.auto';
+    case '64k':
+      return 'magnet.platform.bilibili.quality.option.64k';
+    case '132k':
+      return 'magnet.platform.bilibili.quality.option.132k';
+    case '192k':
+      return 'magnet.platform.bilibili.quality.option.192k';
+    case 'dolby':
+      return 'magnet.platform.bilibili.quality.option.dolby';
+    case 'hires':
+      return 'magnet.platform.bilibili.quality.option.hires';
+    default:
+      return 'magnet.platform.bilibili.quality.option.auto';
+  }
+}
+
+function normalizeBilibiliQualityHint(value: string): BilibiliPlaybackQualityKey {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === '64k') return '64k';
+  if (normalized === '132k') return '132k';
+  if (normalized === '192k') return '192k';
+  if (normalized === 'dolby') return 'dolby';
+  if (normalized === 'hires') return 'hires';
+  return 'auto';
+}
+
+function normalizeBilibiliThemePreference(value: string): BilibiliThemePreference {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'light') return 'light';
+  if (normalized === 'dark') return 'dark';
+  return 'auto';
+}
+
+function toBilibiliQualityBadgeLabelKey(badge: BilibiliQualityBadge): string {
+  switch (badge) {
+    case 'hires':
+      return 'magnet.platform.bilibili.quality.badge.hires';
+    default:
+      return 'magnet.platform.bilibili.quality.badge.dolby';
+  }
+}
+
+function mergePlaybackQualityOptions(
+  options: BilibiliPlaybackQualityOption[]
+): BilibiliPlaybackQualityOption[] {
+  const lookup = new Map(
+    options
+      .map((item) => ({ ...item, key: item.key.trim().toLowerCase() }))
+      .filter((item) => item.key.length > 0)
+      .map((item) => [item.key, item] as const)
+  );
+
+  return BILIBILI_QUALITY_OPTION_ORDER.map((key) => {
+    const matched = lookup.get(key);
+    return {
+      key,
+      label: matched?.label ?? key,
+      available: matched?.available ?? key === 'auto',
+    };
+  });
+}
+
+function formatDuration(seconds: number | undefined): string {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return '--:--';
+  const total = Math.floor(seconds);
+  const minutes = Math.floor(total / 60)
+    .toString()
+    .padStart(2, '0');
+  const rest = (total % 60).toString().padStart(2, '0');
+  return `${minutes}:${rest}`;
+}
+
+function toResourceCacheKey(item: BilibiliFavoriteResourceItem): string {
+  return item.resourceId || item.sourceLocator;
+}
+
+function isBilibiliVideoSourceLocator(sourceLocator: string): boolean {
+  const normalized = sourceLocator.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('bilibili://video/') ||
+    normalized.includes('bilibili.com/video/') ||
+    normalized.includes('bvid=')
+  );
+}
+
+function buildTrackFromPreparedPlayback(
+  item: BilibiliFavoriteResourceItem,
+  prepared: BilibiliPreparedPlayback,
+  coverUrl?: string
+): Track {
+  return {
+    id: `bilibili:${item.resourceId}`,
+    title: item.title,
+    artist: item.ownerName ?? 'Bilibili',
+    duration: item.durationSeconds ?? prepared.durationSeconds,
+    filePath: prepared.cachePath,
+    path: prepared.cachePath,
+    originalPath: item.sourceLocator,
+    coverUrl: coverUrl ?? item.coverUrl,
+    genre: 'Bilibili',
+    comment: item.sourceLocator,
+  };
+}
+
+export interface UseBilibiliWorkspaceAdapterControllerParams {
+  activeWorkspaceConnectorId: string | null;
+  prefersDarkMode: boolean;
+  items: PlatformConnectorFacadeItem[];
+  audioService: IAudioService;
+  t: Translator;
+  platformPlaylists: Playlist[];
+  selectedPlaylist: Playlist | null;
+  selectedPlaylistId: string | null;
+  newPlaylistName: string;
+  playlistError: string | null;
+  onCreatePlaylist: () => void;
+  setSelectedPlaylistId: (playlistId: string | null) => void;
+  setNewPlaylistName: (value: string) => void;
+  setPlaylistError: (value: string | null) => void;
+}
+
+export interface BilibiliWorkspaceAdapterControllerResult {
+  bilibiliWorkspaceActive: boolean;
+  bilibiliUseDarkMode: boolean;
+  bilibiliToolbarProps: BilibiliWorkspaceToolbarProps;
+  bilibiliWorkspaceProps: BilibiliWorkspaceProps;
+}
+
+export function useBilibiliWorkspaceAdapterController(
+  params: UseBilibiliWorkspaceAdapterControllerParams
+): BilibiliWorkspaceAdapterControllerResult {
+  const {
+    activeWorkspaceConnectorId,
+    prefersDarkMode,
+    items,
+    audioService,
+    t,
+    platformPlaylists,
+    selectedPlaylist,
+    selectedPlaylistId,
+    newPlaylistName,
+    playlistError,
+    onCreatePlaylist,
+    setSelectedPlaylistId,
+    setNewPlaylistName,
+    setPlaylistError,
+  } = params;
+
+  const bilibiliWorkspaceActive = activeWorkspaceConnectorId === BILIBILI_CONNECTOR_ID;
+  const bilibiliConnector = useMemo(
+    () => items.find((item) => item.connectorId === BILIBILI_CONNECTOR_ID) ?? null,
+    [items]
+  );
+  const bilibiliAuthorized = bilibiliConnector?.authState === 'authorized';
+
+  const [playbackQualityHint, setPlaybackQualityHint] = usePersistentSetting<string>(
+    BILIBILI_PLAYBACK_QUALITY_PREFERENCE_KEY,
+    'auto',
+    { format: 'string' }
+  );
+  const [bilibiliThemePreference, setBilibiliThemePreference] = usePersistentSetting<string>(
+    BILIBILI_UI_THEME_PREFERENCE_KEY,
+    'auto',
+    { format: 'string' }
+  );
+  const [playbackQualityLoading, setPlaybackQualityLoading] = useState(false);
+  const [playbackQualityProbeLocator, setPlaybackQualityProbeLocator] = useState<string | null>(null);
+  const [playbackQualityOptions, setPlaybackQualityOptions] = useState<BilibiliPlaybackQualityOption[]>(
+    DEFAULT_BILIBILI_QUALITY_OPTIONS
+  );
+  const [playbackSettingsOpen, setPlaybackSettingsOpen] = useState(false);
+
+  const {
+    playbackCacheSettingsLoading,
+    playbackCacheSettingsSaving,
+    playbackCacheSettingsError,
+    playbackCacheSettingsInfo,
+    playbackCacheSettings,
+    playbackCachePathDraft,
+    setPlaybackCachePathDraft,
+    refreshPlaybackCacheSettings,
+    handleBrowsePlaybackCachePath,
+    handleSavePlaybackCachePath,
+    handleResetPlaybackCachePath,
+  } = useBilibiliPlaybackCacheSettings(t);
+
+  const [folderDrawerOpen, setFolderDrawerOpen] = useState(false);
+  const [playlistDrawerOpen, setPlaylistDrawerOpen] = useState(false);
+
+  const resourceGridRef = useRef<HTMLDivElement>(null);
+  const resourceLoadMoreSentinelRef = useRef<HTMLDivElement>(null);
+
+  const {
+    folderLoading,
+    folderError,
+    bilibiliFolders,
+    selectedFolderId,
+    setSelectedFolderId,
+    resourceLoading,
+    resourceLoadingMore,
+    resourceError,
+    setResourceError,
+    resourcePage,
+    resourceFilterQuery,
+    setResourceFilterQuery,
+    bvidQuery,
+    setBvidQuery,
+    bvidSearching,
+    bvidSearchError,
+    bvidSearchResult,
+    bilibiliResources,
+    filteredBilibiliResources,
+    refreshBilibiliFolders,
+    refreshBilibiliRecommendedResources,
+    searchBilibiliHomepageResources,
+    refreshBilibiliResources,
+    loadMoreBilibiliResources,
+    handleBvSearch,
+  } = useBilibiliResourceBrowser({
+    bilibiliAuthorized,
+    t,
+  });
+
+  const selectedBilibiliFolder = useMemo(
+    () => bilibiliFolders.find((item) => item.folderId === selectedFolderId) ?? null,
+    [bilibiliFolders, selectedFolderId]
+  );
+
+  const normalizedPlaybackQualityHint = useMemo(
+    () => normalizeBilibiliQualityHint(playbackQualityHint),
+    [playbackQualityHint]
+  );
+
+  const normalizedBilibiliThemePreference = useMemo(
+    () => normalizeBilibiliThemePreference(bilibiliThemePreference),
+    [bilibiliThemePreference]
+  );
+
+  const qualityProbeSourceLocator = useMemo(() => {
+    if (!bilibiliAuthorized) return null;
+    const bvidLocator = bvidSearchResult?.sourceLocator?.trim();
+    if (bvidLocator && isBilibiliVideoSourceLocator(bvidLocator)) {
+      return bvidLocator;
+    }
+
+    const candidate = filteredBilibiliResources.find((item) =>
+      isBilibiliVideoSourceLocator(item.sourceLocator)
+    );
+    return candidate?.sourceLocator?.trim() || null;
+  }, [bilibiliAuthorized, bvidSearchResult?.sourceLocator, filteredBilibiliResources]);
+
+  const availablePlaybackQualityLabel = useMemo(() => {
+    const availableKeys = playbackQualityOptions.filter((item) => item.available).map((item) => item.key);
+    if (availableKeys.length === 0) return t('magnet.platform.bilibili.quality.none');
+    return availableKeys.map((key) => t(toBilibiliQualityLabelKey(key))).join(' / ');
+  }, [playbackQualityOptions, t]);
+
+  const preferredPlaybackQualityLabel = useMemo(
+    () => t(toBilibiliQualityLabelKey(normalizedPlaybackQualityHint)),
+    [normalizedPlaybackQualityHint, t]
+  );
+
+  const { resourceCoverUrlMap, resourceQualityTagMap } = useBilibiliResourceEnhancer({
+    bilibiliAuthorized,
+    selectedFolderId,
+    bilibiliResources,
+    filteredBilibiliResources,
+    isVideoSourceLocator: isBilibiliVideoSourceLocator,
+    getResourceCacheKey: toResourceCacheKey,
+  });
+
+  const {
+    resourceInfo,
+    preparingResourceId,
+    lyricResolvingId,
+    resolvedLyric,
+    lyricError,
+    handleResolveLyric,
+    handlePlayResource,
+    handleQueueResource,
+    handleAddToPlaylist,
+    handleOpenBilibiliResource,
+  } = useBilibiliResourcePlaybackActions({
+    audioService,
+    normalizedPlaybackQualityHint,
+    preferredQualityLabel: preferredPlaybackQualityLabel,
+    selectedPlaylistId,
+    t,
+    setResourceError,
+    setPlaylistError,
+    buildTrackFromPreparedPlayback,
+  });
+
+  const refreshPlaybackQualityOptions = useCallback(async (sourceLocator: string) => {
+    const normalizedSourceLocator = sourceLocator.trim();
+    if (!normalizedSourceLocator) return;
+
+    setPlaybackQualityLoading(true);
+    try {
+      const options = await listBilibiliPlaybackQualities(normalizedSourceLocator);
+      setPlaybackQualityOptions(mergePlaybackQualityOptions(options));
+      setPlaybackQualityProbeLocator(normalizedSourceLocator);
+    } catch {
+      setPlaybackQualityOptions(DEFAULT_BILIBILI_QUALITY_OPTIONS);
+    } finally {
+      setPlaybackQualityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!playbackSettingsOpen || !bilibiliWorkspaceActive) return;
+    void refreshPlaybackCacheSettings();
+  }, [bilibiliWorkspaceActive, playbackSettingsOpen, refreshPlaybackCacheSettings]);
+
+  useEffect(() => {
+    if (!selectedFolderId || !resourcePage?.hasMore) return;
+    const rootElement = resourceGridRef.current;
+    const sentinelElement = resourceLoadMoreSentinelRef.current;
+    if (!rootElement || !sentinelElement) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        void loadMoreBilibiliResources(selectedFolderId);
+      },
+      {
+        root: rootElement,
+        rootMargin: '220px 0px',
+        threshold: 0.01,
+      }
+    );
+
+    observer.observe(sentinelElement);
+    return () => observer.disconnect();
+  }, [
+    filteredBilibiliResources.length,
+    loadMoreBilibiliResources,
+    resourceLoadingMore,
+    resourcePage?.hasMore,
+    selectedFolderId,
+  ]);
+
+  useEffect(() => {
+    if (!qualityProbeSourceLocator) {
+      setPlaybackQualityProbeLocator(null);
+      setPlaybackQualityOptions(DEFAULT_BILIBILI_QUALITY_OPTIONS);
+      return;
+    }
+    if (playbackQualityProbeLocator === qualityProbeSourceLocator) return;
+    void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
+  }, [
+    playbackQualityProbeLocator,
+    qualityProbeSourceLocator,
+    refreshPlaybackQualityOptions,
+  ]);
+
+  const {
+    resourceContextMenu,
+    setResourceContextMenu,
+    openResourceContextMenu,
+  } = useBilibiliResourceContextMenu({
+    t,
+    preparingResourceId,
+    normalizedPlaybackQualityHint,
+    lyricResolvingId,
+    onPlay: (item) => {
+      void handlePlayResource(item);
+    },
+    onQueue: (item) => {
+      void handleQueueResource(item);
+    },
+    onAddToPlaylist: (item) => {
+      void handleAddToPlaylist(item);
+    },
+    onOpen: (item) => {
+      handleOpenBilibiliResource(item);
+    },
+    onResolveLyric: (item) => {
+      void handleResolveLyric(item);
+    },
+  });
+
+  useEffect(() => {
+    if (!bilibiliWorkspaceActive || !bilibiliAuthorized) {
+      setFolderDrawerOpen(false);
+      setPlaylistDrawerOpen(false);
+      setPlaybackSettingsOpen(false);
+      setResourceContextMenu(null);
+    }
+  }, [bilibiliAuthorized, bilibiliWorkspaceActive, setResourceContextMenu]);
+
+  const bilibiliUseDarkMode =
+    bilibiliWorkspaceActive &&
+    (normalizedBilibiliThemePreference === 'dark' ||
+      (normalizedBilibiliThemePreference === 'auto' && prefersDarkMode));
+
+  const bilibiliToolbarProps: BilibiliWorkspaceToolbarProps = {
+    bvidQuery,
+    bvidSearching,
+    bilibiliAuthorized,
+    t,
+    onBvidQueryChange: setBvidQuery,
+    onBvSearch: () => {
+      void handleBvSearch();
+    },
+    onOpenPlaybackSettings: () => {
+      setPlaybackSettingsOpen(true);
+    },
+  };
+
+  const bilibiliWorkspaceProps: BilibiliWorkspaceProps = {
+    bilibiliAuthorized,
+    folderDrawerOpen,
+    playlistDrawerOpen,
+    folderLoading,
+    folderError,
+    bilibiliFolders,
+    selectedFolderId,
+    resourceFilterQuery,
+    resourceLoading,
+    resourceLoadingMore,
+    selectedBilibiliFolder,
+    resourcePage,
+    resourceInfo,
+    resourceError,
+    bvidSearchError,
+    bvidSearchResult,
+    filteredBilibiliResources,
+    preparingResourceId,
+    normalizedPlaybackQualityHint,
+    normalizedBilibiliThemePreference,
+    resourceCoverUrlMap,
+    resourceQualityTagMap,
+    resourceGridRef,
+    resourceLoadMoreSentinelRef,
+    selectedPlaylist,
+    selectedPlaylistId,
+    playlists: platformPlaylists,
+    newPlaylistName,
+    playlistError,
+    resolvedLyric,
+    lyricError,
+    playbackSettingsOpen,
+    playbackQualityOptions,
+    playbackQualityLoading,
+    qualityProbeSourceLocator,
+    availablePlaybackQualityLabel,
+    playbackCacheSettingsLoading,
+    playbackCacheSettingsSaving,
+    playbackCacheSettingsInfo,
+    playbackCacheSettingsError,
+    playbackCacheSettings,
+    playbackCachePathDraft,
+    resourceContextMenu,
+    t,
+    formatDuration,
+    getResourceCacheKey: toResourceCacheKey,
+    getKindLabel: (kind) => t(toBilibiliKindLabelKey(kind)),
+    getQualityBadgeLabel: (badge) => t(toBilibiliQualityBadgeLabelKey(badge)),
+    qualityLabelForKey: (qualityKey) => t(toBilibiliQualityLabelKey(normalizeBilibiliQualityHint(qualityKey))),
+    onRefreshFolders: () => {
+      void refreshBilibiliFolders();
+    },
+    onCloseFolderDrawer: () => {
+      setFolderDrawerOpen(false);
+    },
+    onShowRecommended: () => {
+      setSelectedFolderId(null);
+      setFolderDrawerOpen(false);
+    },
+    onSelectFolder: (folderId) => {
+      setSelectedFolderId(folderId);
+      setFolderDrawerOpen(false);
+    },
+    onResourceFilterQueryChange: setResourceFilterQuery,
+    onResourceSearchSubmit: () => {
+      if (!selectedFolderId) {
+        void searchBilibiliHomepageResources(resourceFilterQuery);
+        return;
+      }
+      void refreshBilibiliResources(selectedFolderId);
+    },
+    onRefreshResources: () => {
+      if (!selectedFolderId) {
+        const keyword = resourceFilterQuery.trim();
+        if (keyword) {
+          void searchBilibiliHomepageResources(keyword);
+          return;
+        }
+        void refreshBilibiliRecommendedResources();
+        return;
+      }
+      void refreshBilibiliResources(selectedFolderId);
+    },
+    onOpenResourceContextMenu: openResourceContextMenu,
+    onLoadMoreResources: () => {
+      if (!selectedFolderId) return;
+      void loadMoreBilibiliResources(selectedFolderId);
+    },
+    onClosePlaylistDrawer: () => {
+      setPlaylistDrawerOpen(false);
+    },
+    onNewPlaylistNameChange: setNewPlaylistName,
+    onCreatePlaylist,
+    onSelectPlaylist: setSelectedPlaylistId,
+    onPlaySelectedPlaylist: () => {
+      if (!selectedPlaylistId) return;
+      void audioService.playPlaylist(selectedPlaylistId);
+    },
+    onDeleteSelectedPlaylist: () => {
+      if (!selectedPlaylistId) return;
+      audioService.deletePlaylist(selectedPlaylistId);
+    },
+    onRemoveTrackFromSelectedPlaylist: (trackIndex) => {
+      if (!selectedPlaylistId) return;
+      audioService.removeTrackFromPlaylist(selectedPlaylistId, trackIndex);
+    },
+    onCloseDrawers: () => {
+      setFolderDrawerOpen(false);
+      setPlaylistDrawerOpen(false);
+    },
+    onToggleFolderDrawer: () => {
+      setFolderDrawerOpen((prev) => {
+        const next = !prev;
+        if (next) setPlaylistDrawerOpen(false);
+        return next;
+      });
+    },
+    onTogglePlaylistDrawer: () => {
+      setPlaylistDrawerOpen((prev) => {
+        const next = !prev;
+        if (next) setFolderDrawerOpen(false);
+        return next;
+      });
+    },
+    onClosePlaybackSettings: () => {
+      setPlaybackSettingsOpen(false);
+    },
+    onQualityHintChange: (qualityKey) => {
+      setPlaybackQualityHint(normalizeBilibiliQualityHint(qualityKey));
+    },
+    onBilibiliThemePreferenceChange: (themePreference) => {
+      setBilibiliThemePreference(normalizeBilibiliThemePreference(themePreference));
+    },
+    onRefreshQualityOptions: () => {
+      if (!qualityProbeSourceLocator) return;
+      void refreshPlaybackQualityOptions(qualityProbeSourceLocator);
+    },
+    onPlaybackCachePathDraftChange: setPlaybackCachePathDraft,
+    onBrowsePlaybackCachePath: () => {
+      void handleBrowsePlaybackCachePath();
+    },
+    onSavePlaybackCachePath: () => {
+      void handleSavePlaybackCachePath();
+    },
+    onResetPlaybackCachePath: () => {
+      void handleResetPlaybackCachePath();
+    },
+    onCloseResourceContextMenu: () => {
+      setResourceContextMenu(null);
+    },
+  };
+
+  return {
+    bilibiliWorkspaceActive,
+    bilibiliUseDarkMode,
+    bilibiliToolbarProps,
+    bilibiliWorkspaceProps,
+  };
+}
+

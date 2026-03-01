@@ -19,7 +19,7 @@ import type { BilibiliQualityBadge } from './useBilibiliResourceEnhancer';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
-type BilibiliWorkspaceProps = {
+export type BilibiliWorkspaceProps = {
   bilibiliAuthorized: boolean;
   folderDrawerOpen: boolean;
   playlistDrawerOpen: boolean;
