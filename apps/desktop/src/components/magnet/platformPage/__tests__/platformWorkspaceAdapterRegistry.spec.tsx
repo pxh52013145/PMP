@@ -12,6 +12,17 @@ describe('platformWorkspaceAdapterRegistry', () => {
     expect(adapter?.workspaceKind).toBe('bilibili');
   });
 
+  it('resolves netease and qqmusic dedicated workspace adapters', () => {
+    const neteaseAdapter = getPlatformWorkspaceAdapter('netease');
+    const qqmusicAdapter = getPlatformWorkspaceAdapter('qqmusic');
+
+    expect(neteaseAdapter).not.toBeNull();
+    expect(neteaseAdapter?.workspaceKind).toBe('netease');
+
+    expect(qqmusicAdapter).not.toBeNull();
+    expect(qqmusicAdapter?.workspaceKind).toBe('qqmusic');
+  });
+
   it('returns null for generic workspace kind', () => {
     const adapter = getPlatformWorkspaceAdapter('generic');
     expect(adapter).toBeNull();
@@ -32,5 +43,19 @@ describe('platformWorkspaceAdapterRegistry', () => {
       workspaceKind: 'generic',
     });
     expect(adapter).toBeNull();
+  });
+
+  it('resolves netease/qqmusic adapters by connector id even with generic fallback kind', () => {
+    const neteaseAdapter = resolvePlatformWorkspaceAdapter({
+      connectorId: 'connector.platform.netease',
+      workspaceKind: 'generic',
+    });
+    const qqmusicAdapter = resolvePlatformWorkspaceAdapter({
+      connectorId: 'connector.platform.qqmusic',
+      workspaceKind: 'generic',
+    });
+
+    expect(neteaseAdapter?.workspaceKind).toBe('netease');
+    expect(qqmusicAdapter?.workspaceKind).toBe('qqmusic');
   });
 });

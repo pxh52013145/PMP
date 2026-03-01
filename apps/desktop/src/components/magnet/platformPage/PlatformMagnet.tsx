@@ -19,6 +19,7 @@ import {
 } from './platformWorkspaceModes';
 import { resolvePlatformWorkspaceAdapter } from './platformWorkspaceAdapterRegistry';
 import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
+import { useDedicatedWorkspacePlaceholderController } from './useDedicatedWorkspacePlaceholderController';
 import './PlatformMagnet.css';
 
 const DEFAULT_SEARCH_LIMIT = 30;
@@ -328,6 +329,12 @@ export const PlatformMagnet: React.FC = () => {
     setPlaylistError: setActiveScopePlaylistError,
   });
 
+  const { placeholderToolbarProps, placeholderWorkspaceProps } =
+    useDedicatedWorkspacePlaceholderController({
+      activeWorkspaceDescriptor,
+      t,
+    });
+
   const authorizedCount = useMemo(
     () => items.filter((item) => item.authState === 'authorized').length,
     [items]
@@ -365,6 +372,34 @@ export const PlatformMagnet: React.FC = () => {
         })
       : null;
 
+  const renderDedicatedWorkspaceToolbar = useCallback((): React.ReactNode => {
+    if (!activeWorkspaceAdapter) return null;
+
+    switch (activeWorkspaceAdapter.workspaceKind) {
+      case 'bilibili':
+        return activeWorkspaceAdapter.renderToolbar(bilibiliToolbarProps);
+      case 'netease':
+      case 'qqmusic':
+        return activeWorkspaceAdapter.renderToolbar(placeholderToolbarProps);
+      default:
+        return null;
+    }
+  }, [activeWorkspaceAdapter, bilibiliToolbarProps, placeholderToolbarProps]);
+
+  const renderDedicatedWorkspaceContent = useCallback((): React.ReactNode => {
+    if (!activeWorkspaceAdapter) return null;
+
+    switch (activeWorkspaceAdapter.workspaceKind) {
+      case 'bilibili':
+        return activeWorkspaceAdapter.renderWorkspace(bilibiliWorkspaceProps);
+      case 'netease':
+      case 'qqmusic':
+        return activeWorkspaceAdapter.renderWorkspace(placeholderWorkspaceProps);
+      default:
+        return null;
+    }
+  }, [activeWorkspaceAdapter, bilibiliWorkspaceProps, placeholderWorkspaceProps]);
+
   return (
     <div className={rootClassName}>
       <div className="platform-magnet-header">
@@ -388,9 +423,7 @@ export const PlatformMagnet: React.FC = () => {
               })}
             </div>
 
-            {activeWorkspaceAdapter && activeWorkspaceDescriptor?.workspaceKind === 'bilibili'
-              ? activeWorkspaceAdapter.renderToolbar(bilibiliToolbarProps)
-              : null}
+            {renderDedicatedWorkspaceToolbar()}
           </div>
         </div>
       </div>
@@ -410,8 +443,8 @@ export const PlatformMagnet: React.FC = () => {
       )}
 
       <div className="platform-magnet-content">
-        {activeWorkspaceAdapter && activeWorkspaceDescriptor?.workspaceKind === 'bilibili' ? (
-          activeWorkspaceAdapter.renderWorkspace(bilibiliWorkspaceProps)
+        {activeWorkspaceAdapter ? (
+          renderDedicatedWorkspaceContent()
         ) : activeMode !== GENERIC_PLATFORM_WORKSPACE_MODE ? (
           <div className="platform-magnet-generic">
             <section className="platform-magnet-panel">
