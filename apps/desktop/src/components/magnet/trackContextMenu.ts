@@ -11,6 +11,36 @@ interface BuildAddToPlaylistMenuItemOptions {
   excludePlaylistId?: string;
 }
 
+interface BuildTrackContextMenuBaseOptions {
+  t: TranslateFn;
+  track: Track;
+  playlists: Playlist[];
+  onPlay: () => void;
+  onAddToQueue: () => void;
+  onAddToPlaylist: (playlistId: string, track: Track) => void;
+  excludePlaylistId?: string;
+}
+
+interface BuildPlaylistTrackContextMenuOptions extends BuildTrackContextMenuBaseOptions {
+  removeFromPlaylistLabel: string;
+  removeFromPlaylistDisabled?: boolean;
+  onRemoveFromPlaylist: () => void;
+}
+
+interface BuildLibraryTrackContextMenuOptions extends BuildTrackContextMenuBaseOptions {
+  playAllFromHereLabel: string;
+  onPlayAllFromHere: () => void;
+  openInFileManagerLabel: string;
+  openInFileManagerDisabled?: boolean;
+  onOpenInFileManager: () => void;
+  viewAlbumLabel: string;
+  viewAlbumDisabled?: boolean;
+  onViewAlbum: () => void;
+  viewArtistLabel: string;
+  viewArtistDisabled?: boolean;
+  onViewArtist: () => void;
+}
+
 const isReadonlyPlaylist = (playlist: Playlist): boolean => {
   if (playlist.readonly) {
     return true;
@@ -46,7 +76,7 @@ export const buildAddToPlaylistMenuItem = ({
     targets.length > 0
       ? targets.map((playlist) => ({
           label: playlist.name,
-          icon: playlist.kind === 'platform' ? '☁' : '♪',
+          icon: playlist.kind === 'platform' ? 'C' : 'M',
           onClick: () => onAddToPlaylist(playlist.id, track),
         }))
       : [
@@ -58,8 +88,87 @@ export const buildAddToPlaylistMenuItem = ({
 
   return {
     label: t('common.action.addToPlaylist'),
-    icon: '↳',
+    icon: '>',
     children,
   };
+};
+
+const buildTrackContextMenuBaseItems = ({
+  t,
+  track,
+  playlists,
+  onPlay,
+  onAddToQueue,
+  onAddToPlaylist,
+  excludePlaylistId,
+}: BuildTrackContextMenuBaseOptions): ContextMenuItem[] => {
+  return [
+    {
+      label: t('common.action.play'),
+      icon: 'P',
+      onClick: onPlay,
+    },
+    {
+      label: t('common.action.addToQueue'),
+      icon: 'Q',
+      onClick: onAddToQueue,
+    },
+    buildAddToPlaylistMenuItem({
+      t,
+      track,
+      playlists,
+      onAddToPlaylist,
+      excludePlaylistId,
+    }),
+  ];
+};
+
+export const buildPlaylistTrackContextMenu = (
+  options: BuildPlaylistTrackContextMenuOptions
+): ContextMenuItem[] => {
+  return [
+    ...buildTrackContextMenuBaseItems(options),
+    { divider: true },
+    {
+      label: options.removeFromPlaylistLabel,
+      icon: 'X',
+      danger: true,
+      disabled: options.removeFromPlaylistDisabled,
+      onClick: options.onRemoveFromPlaylist,
+    },
+  ];
+};
+
+export const buildLibraryTrackContextMenu = (
+  options: BuildLibraryTrackContextMenuOptions
+): ContextMenuItem[] => {
+  return [
+    ...buildTrackContextMenuBaseItems(options),
+    {
+      label: options.playAllFromHereLabel,
+      icon: 'A',
+      onClick: options.onPlayAllFromHere,
+    },
+    { divider: true },
+    {
+      label: options.openInFileManagerLabel,
+      icon: 'F',
+      disabled: options.openInFileManagerDisabled,
+      onClick: options.onOpenInFileManager,
+    },
+    { divider: true },
+    {
+      label: options.viewAlbumLabel,
+      icon: 'B',
+      disabled: options.viewAlbumDisabled,
+      onClick: options.onViewAlbum,
+    },
+    {
+      label: options.viewArtistLabel,
+      icon: 'R',
+      disabled: options.viewArtistDisabled,
+      onClick: options.onViewArtist,
+    },
+  ];
 };
 

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Playlist, Track } from '../../../services/audio';
-import { buildAddToPlaylistMenuItem, resolveWritablePlaylistTargets } from '../trackContextMenu';
+import {
+  buildAddToPlaylistMenuItem,
+  buildLibraryTrackContextMenu,
+  buildPlaylistTrackContextMenu,
+  resolveWritablePlaylistTargets,
+} from '../trackContextMenu';
 
 const createPlaylist = (partial: Partial<Playlist>): Playlist => ({
   id: partial.id ?? 'playlist-1',
@@ -78,5 +83,55 @@ describe('trackContextMenu', () => {
     menu.children?.[0].onClick?.();
     expect(onAddToPlaylist).toHaveBeenCalledWith('a', track);
   });
-});
 
+  it('builds playlist track menu with remove action', () => {
+    const remove = vi.fn();
+    const menu = buildPlaylistTrackContextMenu({
+      t: (key) => key,
+      track: createTrack({ id: 'track-playlist' }),
+      playlists: [createPlaylist({ id: 'target', kind: 'manual', name: 'Target' })],
+      onPlay: vi.fn(),
+      onAddToQueue: vi.fn(),
+      onAddToPlaylist: vi.fn(),
+      removeFromPlaylistLabel: 'remove-now',
+      onRemoveFromPlaylist: remove,
+    });
+
+    expect(menu).toHaveLength(5);
+    expect(menu[0].label).toBe('common.action.play');
+    expect(menu[2].label).toBe('common.action.addToPlaylist');
+    expect(menu[4].label).toBe('remove-now');
+
+    menu[4].onClick?.();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds library track menu and keeps file manager action toggleable', () => {
+    const openFileManager = vi.fn();
+    const menu = buildLibraryTrackContextMenu({
+      t: (key) => key,
+      track: createTrack({ id: 'track-library' }),
+      playlists: [],
+      onPlay: vi.fn(),
+      onAddToQueue: vi.fn(),
+      onAddToPlaylist: vi.fn(),
+      playAllFromHereLabel: 'play-all',
+      onPlayAllFromHere: vi.fn(),
+      openInFileManagerLabel: 'open-file',
+      openInFileManagerDisabled: true,
+      onOpenInFileManager: openFileManager,
+      viewAlbumLabel: 'view-album',
+      viewAlbumDisabled: true,
+      onViewAlbum: vi.fn(),
+      viewArtistLabel: 'view-artist',
+      viewArtistDisabled: false,
+      onViewArtist: vi.fn(),
+    });
+
+    const openFileItem = menu.find((item) => item.label === 'open-file');
+    expect(openFileItem).toBeTruthy();
+    expect(openFileItem?.disabled).toBe(true);
+    openFileItem?.onClick?.();
+    expect(openFileManager).toHaveBeenCalledTimes(1);
+  });
+});

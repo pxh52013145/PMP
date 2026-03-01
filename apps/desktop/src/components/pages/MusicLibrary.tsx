@@ -87,7 +87,7 @@ import {
   type StableFallbackAuditSnapshot,
 } from '../../modules/music-library/stableLibraryModel';
 import { useCoverUrlForTrack } from '../magnet/shared/useCoverUrlForTrack';
-import { buildAddToPlaylistMenuItem } from '../magnet/trackContextMenu';
+import { buildLibraryTrackContextMenu } from '../magnet/trackContextMenu';
 import { useBaseControlPanels } from './useBaseControlPanels';
 import './MusicLibrary.css';
 
@@ -2489,66 +2489,40 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     const playTracks = filteredTracks;
     const playStartIndex = playTracks.findIndex((candidate) => candidate.id === track.id);
     const localFilePath = String(track.filePath || track.path || track.originalPath || '').trim();
-    const addToPlaylistMenuItem = buildAddToPlaylistMenuItem({
+    const menuItems: ContextMenuItem[] = buildLibraryTrackContextMenu({
       t,
       track,
       playlists: audioService.getPlaylists(),
+      onPlay: () => handlePlaySingleTrack(track),
+      onAddToQueue: () => handleAddSingleTrack(track),
       onAddToPlaylist: (playlistId, trackToAdd) => {
         audioService.addTrackToPlaylist(playlistId, trackToAdd);
       },
+      playAllFromHereLabel: t('pages.music-library.contextMenu.playAllFromHere'),
+      onPlayAllFromHere: () => onPlayNow?.(playTracks, playStartIndex >= 0 ? playStartIndex : index),
+      openInFileManagerLabel: t('pages.music-library.contextMenu.openInFileManager'),
+      openInFileManagerDisabled: !localFilePath,
+      onOpenInFileManager: () => {
+        if (!localFilePath) return;
+        void musicLibraryService.openInFileManager(localFilePath).then((opened) => {
+          if (!opened) {
+            setErrorMessage(t('pages.music-library.contextMenu.openInFileManagerFailed'));
+          }
+        });
+      },
+      viewAlbumLabel: t('pages.music-library.contextMenu.viewAlbum'),
+      viewAlbumDisabled: !track.album,
+      onViewAlbum: () => {
+        if (!track.album) return;
+        handleApplyQuickBaseFilter('album', track.album);
+      },
+      viewArtistLabel: t('pages.music-library.contextMenu.viewArtist'),
+      viewArtistDisabled: !track.artist,
+      onViewArtist: () => {
+        if (!track.artist) return;
+        handleApplyQuickBaseFilter('artist', track.artist);
+      },
     });
-
-    const menuItems: ContextMenuItem[] = [
-      {
-        label: t('pages.music-library.contextMenu.play'),
-        icon: '>',
-        onClick: () => handlePlaySingleTrack(track),
-      },
-      {
-        label: t('pages.music-library.contextMenu.addToQueue'),
-        icon: '+',
-        onClick: () => handleAddSingleTrack(track),
-      },
-      {
-        label: t('pages.music-library.contextMenu.playAllFromHere'),
-        icon: '>>',
-        onClick: () => onPlayNow?.(playTracks, playStartIndex >= 0 ? playStartIndex : index),
-      },
-      addToPlaylistMenuItem,
-      { divider: true },
-      {
-        label: t('pages.music-library.contextMenu.openInFileManager'),
-        icon: '📂',
-        onClick: () => {
-          if (!localFilePath) return;
-          void musicLibraryService.openInFileManager(localFilePath).then((opened) => {
-            if (!opened) {
-              setErrorMessage(t('pages.music-library.contextMenu.openInFileManagerFailed'));
-            }
-          });
-        },
-        disabled: !localFilePath,
-      },
-      { divider: true },
-      {
-        label: t('pages.music-library.contextMenu.viewAlbum'),
-        icon: 'A',
-        onClick: () => {
-          if (!track.album) return;
-          handleApplyQuickBaseFilter('album', track.album);
-        },
-        disabled: !track.album,
-      },
-      {
-        label: t('pages.music-library.contextMenu.viewArtist'),
-        icon: 'R',
-        onClick: () => {
-          if (!track.artist) return;
-          handleApplyQuickBaseFilter('artist', track.artist);
-        },
-        disabled: !track.artist,
-      },
-    ];
 
     setContextMenu({
       x: e.clientX,
