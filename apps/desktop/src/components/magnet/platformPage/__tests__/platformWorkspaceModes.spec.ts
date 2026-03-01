@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PlatformConnectorDefinition } from '../../../../modules/music-platform';
+import { listPlatformConnectorDefinitions } from '../../../../modules/music-platform';
 import {
   buildPlatformWorkspaceDescriptors,
   GENERIC_PLATFORM_WORKSPACE_MODE,
@@ -65,5 +66,18 @@ describe('platformWorkspaceModes', () => {
     expect(mode).toBe('workspace:connector.platform.bilibili');
     expect(getWorkspaceConnectorId(mode)).toBe('connector.platform.bilibili');
     expect(getWorkspaceConnectorId(GENERIC_PLATFORM_WORKSPACE_MODE)).toBeNull();
+  });
+
+  it('builds dedicated descriptors from builtin connector definitions', () => {
+    const descriptors = buildPlatformWorkspaceDescriptors(listPlatformConnectorDefinitions());
+    const dedicatedConnectorIds = descriptors
+      .filter((item) => item.mode !== GENERIC_PLATFORM_WORKSPACE_MODE)
+      .map((item) => item.connectorId);
+
+    expect(dedicatedConnectorIds).toEqual([
+      'connector.platform.bilibili',
+      'connector.platform.netease',
+      'connector.platform.qqmusic',
+    ]);
   });
 });

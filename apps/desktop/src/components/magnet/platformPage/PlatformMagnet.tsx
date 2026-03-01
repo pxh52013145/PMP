@@ -15,7 +15,6 @@ import {
   GENERIC_PLATFORM_WORKSPACE_MODE,
   getWorkspaceConnectorId,
   normalizeWorkspaceMode,
-  toConnectorWorkspaceMode,
   type PlatformWorkspaceMode,
 } from './platformWorkspaceModes';
 import { resolvePlatformWorkspaceAdapter } from './platformWorkspaceAdapterRegistry';
@@ -23,7 +22,6 @@ import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAda
 import './PlatformMagnet.css';
 
 const DEFAULT_SEARCH_LIMIT = 30;
-const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
 
 type PlatformTrackSearchItem = Awaited<ReturnType<typeof searchPlatformTracks>>['tracks'][number];
 
@@ -54,6 +52,11 @@ function isPlatformPlaylist(
   return playlist.sourceConnectorId === connectorId;
 }
 
+function getDefaultPlatformWorkspaceMode(): PlatformWorkspaceMode {
+  const descriptors = buildPlatformWorkspaceDescriptors(listPlatformConnectorDefinitions());
+  return descriptors[0]?.mode ?? GENERIC_PLATFORM_WORKSPACE_MODE;
+}
+
 export const PlatformMagnet: React.FC = () => {
   const t = useT();
   const audioService = useAudioService();
@@ -65,9 +68,7 @@ export const PlatformMagnet: React.FC = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
-  const [mode, setMode] = useState<PlatformWorkspaceMode>(
-    toConnectorWorkspaceMode(BILIBILI_CONNECTOR_ID)
-  );
+  const [mode, setMode] = useState<PlatformWorkspaceMode>(getDefaultPlatformWorkspaceMode);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<PlatformConnectorFacadeItem[]>([]);
   const [lastUpdatedAtMs, setLastUpdatedAtMs] = useState<number | null>(null);

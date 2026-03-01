@@ -106,8 +106,8 @@ const BUILTIN_CONNECTOR_DEFINITIONS: PlatformConnectorDefinition[] = [
     iconKey: 'netease',
     enabled: false,
     authFlow: 'none',
-    workspaceKind: 'generic',
-    workspaceMode: 'generic-only',
+    workspaceKind: 'netease',
+    workspaceMode: 'dedicated',
     sortOrder: 20,
   },
   {
@@ -117,8 +117,8 @@ const BUILTIN_CONNECTOR_DEFINITIONS: PlatformConnectorDefinition[] = [
     iconKey: 'qqmusic',
     enabled: false,
     authFlow: 'none',
-    workspaceKind: 'generic',
-    workspaceMode: 'generic-only',
+    workspaceKind: 'qqmusic',
+    workspaceMode: 'dedicated',
     sortOrder: 30,
   },
 ];

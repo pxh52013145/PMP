@@ -91,6 +91,16 @@ describe('music-platform connectorAuth adapters', () => {
     expect(definitions.find((item) => item.connectorId === BILIBILI_CONNECTOR_ID)?.enabled).toBe(true);
     expect(definitions.find((item) => item.connectorId === NETEASE_CONNECTOR_ID)?.enabled).toBe(false);
     expect(definitions.find((item) => item.connectorId === QQMUSIC_CONNECTOR_ID)?.enabled).toBe(false);
+
+    expect(definitions.find((item) => item.connectorId === BILIBILI_CONNECTOR_ID)?.workspaceMode).toBe(
+      'dedicated'
+    );
+    expect(definitions.find((item) => item.connectorId === NETEASE_CONNECTOR_ID)?.workspaceMode).toBe(
+      'dedicated'
+    );
+    expect(definitions.find((item) => item.connectorId === QQMUSIC_CONNECTOR_ID)?.workspaceMode).toBe(
+      'dedicated'
+    );
   });
 
   it('returns connector snapshots independently for each connector id', async () => {
