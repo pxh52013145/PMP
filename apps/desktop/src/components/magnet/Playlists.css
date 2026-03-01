@@ -269,6 +269,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
@@ -280,6 +282,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.playlists-detail-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playlists-detail-source-badge {
@@ -311,25 +321,46 @@
   padding: 16px 24px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 16px;
   flex-shrink: 0;
 }
 
 .playlists-detail-info {
   display: flex;
   align-items: center;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1 1 260px;
+  min-width: 0;
 }
 
 .playlists-detail-stat {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.62);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+
+.playlists-detail-stat strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
 }
 
 .playlists-detail-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex: 999 1 520px;
+  min-width: 0;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -343,6 +374,11 @@
   font-size: 13px;
   transition: all 0.2s;
   white-space: nowrap;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
 .playlists-detail-btn:hover:not(:disabled) {
@@ -430,6 +466,11 @@
   font-weight: 500;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(20, 20, 30, 0.92);
+  backdrop-filter: blur(8px);
 }
 
 .playlists-track {
@@ -508,6 +549,69 @@
 .playlists-track-remove:hover {
   color: rgba(236, 65, 65, 0.9);
   background: rgba(236, 65, 65, 0.1);
+}
+
+@media (max-width: 1180px) {
+  .playlists-sidebar {
+    width: 248px;
+  }
+
+  .playlists-detail-header,
+  .playlists-detail-toolbar,
+  .playlists-tracks {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+@media (max-width: 1020px) {
+  .playlists-detail-actions {
+    justify-content: flex-start;
+    flex: 1 1 100%;
+  }
+
+  .playlists-tracks-header,
+  .playlists-track {
+    grid-template-columns: 42px 2fr 1.4fr 80px 80px;
+  }
+
+  .playlists-tracks-header > :nth-child(4),
+  .playlists-track > :nth-child(4) {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .playlists-container {
+    width: calc(100vw - 12px);
+    height: calc(100vh - 12px);
+    border-radius: 10px;
+  }
+
+  .playlists-sidebar {
+    width: 220px;
+  }
+
+  .playlists-detail-title {
+    font-size: 16px;
+  }
+
+  .playlists-detail-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .playlists-tracks-header,
+  .playlists-track {
+    grid-template-columns: 36px 1fr 72px 72px;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .playlists-tracks-header > :nth-child(3),
+  .playlists-track > :nth-child(3) {
+    display: none;
+  }
 }
 
 /* 未选择歌单 */
