@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { IAudioService, Track } from '../../../services/audio';
 import {
@@ -40,6 +40,7 @@ function toBilibiliWebUrl(item: BilibiliFavoriteResourceItem): string | null {
 }
 
 const BILIBILI_BVID_PATTERN = /BV[0-9A-Za-z]{10}/i;
+const PREPARED_TRACK_CACHE_LIMIT = 96;
 
 function extractBvidFromText(value: string | null | undefined): string | null {
   const normalized = typeof value === 'string' ? value.trim() : '';
@@ -78,6 +79,18 @@ function buildStableBilibiliResourceIdentity(item: BilibiliFavoriteResourceItem)
   return `meta:${title || 'unknown'}::${ownerName}::${duration}`;
 }
 
+function setPreparedTrackWithBoundedLru(cache: Map<string, Track>, cacheKey: string, track: Track): void {
+  if (cache.has(cacheKey)) {
+    cache.delete(cacheKey);
+  }
+  cache.set(cacheKey, track);
+  while (cache.size > PREPARED_TRACK_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) break;
+    cache.delete(oldestKey);
+  }
+}
+
 type UseBilibiliResourcePlaybackActionsParams = {
   audioService: IAudioService;
   normalizedPlaybackQualityHint: string;
@@ -112,6 +125,14 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
   const [lyricError, setLyricError] = useState<string | null>(null);
 
   const preparedTrackMapRef = useRef<Map<string, Track>>(new Map());
+
+  useEffect(() => {
+    const preparedTrackCache = preparedTrackMapRef.current;
+    preparedTrackCache.clear();
+    return () => {
+      preparedTrackCache.clear();
+    };
+  }, [normalizedPlaybackQualityHint]);
 
   const handleResolveLyric = useCallback(
     async (item: BilibiliFavoriteResourceItem) => {
@@ -186,7 +207,7 @@ export function useBilibiliResourcePlaybackActions(params: UseBilibiliResourcePl
           prepared,
           resolvedCoverUrl ?? item.coverUrl
         );
-        preparedTrackMapRef.current.set(cacheKey, track);
+        setPreparedTrackWithBoundedLru(preparedTrackMapRef.current, cacheKey, track);
         return track;
       } finally {
         setPreparingResourceId((prev) => (prev === cacheKey ? null : prev));

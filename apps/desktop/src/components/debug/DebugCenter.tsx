@@ -1396,7 +1396,11 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
         return;
       }
 
-      await restartApp();
+      try {
+        await restartApp();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
     [config, isTauri]
   );
