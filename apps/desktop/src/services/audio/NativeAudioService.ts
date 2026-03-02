@@ -2,11 +2,15 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   AudioDynamicSrcAdaptiveProfile,
+  AudioDynamicSrcDegradationLevel,
   AudioDynamicSrcAutoSettingsPatch,
   AudioDynamicSrcAutoSettings,
   AudioEnginePolicyPatch,
   AudioProtectionWindowOptions,
   AudioRobustnessSnapshot,
+  AudioTuningAutoSettings,
+  AudioTuningAutoSettingsPatch,
+  AudioTuningProfileId,
   AudioSpectrumFrame,
   AudioSpectrumTap,
   AudioState,
@@ -31,6 +35,29 @@ import {
   prependTrackWithDedup,
 } from './trackIdentity';
 import {
+  BILIBILI_PLATFORM_CONNECTOR_ID,
+  resolvePlatformPlaybackIdentity,
+} from './platformPlaybackResolver';
+import {
+  resolveDynamicSrcAutoDegradationState,
+  toDynamicSrcAutoDegradationLabel,
+} from './robustnessDegradation';
+import {
+  getDynamicSrcAdaptiveScale,
+  resolveDynamicSrcAdaptiveProfile,
+  resolveDynamicSrcEffectiveTiming,
+} from './dynamicSrcAdaptiveTiming';
+import {
+  isSameStreamingBufferSettings,
+  resolveStreamingBufferPolicyTarget,
+  type StreamingBufferSettings,
+} from './streamingBufferPolicy';
+import {
+  createAudioTuningControllerState,
+  resolveAudioTuningProfilePayload,
+  resolveAudioTuningTransition,
+} from './audioTuningProfiles';
+import {
   deleteNativeLibraryPlaylist,
   markNativeLibraryUserEntryPlayed,
   queryNativeLibraryTracks,
@@ -42,7 +69,6 @@ import {
   upsertNativeLibraryUserEntry,
   upsertNativeLibraryPlaylist,
   type NativeLibraryPlaylistItemRecord,
-  type NativeLibraryPlaylistItemUpsertInput,
 } from '../../modules/music-library';
 import { readString } from '../../modules/storage';
 import {
@@ -50,6 +76,13 @@ import {
   recordRecentPlaylistWriteFlushed,
   recordRecentPlaylistWriteScheduled,
 } from './audioPerformanceTelemetry';
+import {
+  applyRecentSmartPlaylistSnapshotToState,
+  compactTrackForRecentPlaylist,
+  mergeRecentSmartPlaylistTracks,
+  toPlaylistItemUpserts,
+  type RecentSmartPlaylistWriteEntry,
+} from './recentSmartPlaylist';
 
 type StateListener = (state: AudioState) => void;
 
@@ -168,11 +201,6 @@ type ReplayGainSettings = {
   preampDb: number;
 };
 
-type RecentSmartPlaylistWriteEntry = {
-  track: Track;
-  playedAtMs: number;
-};
-
 type RuntimeControlSettings = {
   dynamicGainEnabled: boolean;
   volumeDebounceEnabled: boolean;
@@ -211,13 +239,6 @@ type CrossfadeSettings = {
   durationMs: number;
 };
 
-type StreamingBufferSettings = {
-  startOrSeekSeconds: number | null;
-  crossfadeSeconds: number | null;
-  decodeMode: 'streaming' | 'full-track';
-  interactiveProfile: 'fast' | 'balanced' | 'stable';
-};
-
 type DynamicSrcLearningRecord = {
   stressIndex: number;
   updatedAtMs: number;
@@ -248,6 +269,8 @@ export class NativeAudioService implements IAudioService {
   private errorListener?: UnlistenFn;
   private dynamicSrcSettingsListenerCleanup: (() => void) | null = null;
   private dynamicSrcSettingsListenerInitPromise: Promise<void> | null = null;
+  private tuningAutoSettingsListenerCleanup: (() => void) | null = null;
+  private tuningAutoSettingsListenerInitPromise: Promise<void> | null = null;
   private spectrumData: Uint8Array | null = null;
   private spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>> = {};
   private spectrumEnabled = false;
@@ -333,6 +356,9 @@ export class NativeAudioService implements IAudioService {
   private outputQuantizationMode: 'round' | 'tpdf' = 'round';
   private dynamicSrcAutoEnabled = true;
   private dynamicSrcProfile: 'quality' | 'latency' = 'quality';
+  private dynamicSrcAutoDegradationLevel: AudioDynamicSrcDegradationLevel = 0;
+  private dynamicSrcAutoDegradationReason: string | null = null;
+  private dynamicSrcAutoDegradationLastChangedAtMs: number | null = null;
   private dynamicSrcLastSwitchAtMs: number | null = null;
   private dynamicSrcLastSwitchReason: string | null = null;
   private dynamicSrcHoldUntilMs = 0;
@@ -417,6 +443,15 @@ export class NativeAudioService implements IAudioService {
   private static readonly DYNAMIC_SRC_LEARNING_UPDATE_MIN_INTERVAL_MS = 250;
   private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED = 4;
   private static readonly DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL = 8;
+  private static readonly DYNAMIC_SRC_DEGRADATION_L2_HOLD_FLOOR_MS = 4_000;
+  private static readonly TUNING_AUTO_ENABLED_DEFAULT = false;
+  private static readonly TUNING_AUTO_TICK_INTERVAL_MS = 1_500;
+  private static readonly TUNING_AUTO_STABLE_WINDOW_MS = 30_000;
+  private static readonly TUNING_AUTO_MIN_SWITCH_INTERVAL_MS = 10_000;
+  private static readonly TUNING_AUTO_POST_SWITCH_OBSERVE_WINDOW_MS = 15_000;
+  private static readonly TUNING_AUTO_ELEVATED_STRESS_SCORE = 4;
+  private static readonly TUNING_AUTO_CRITICAL_STRESS_SCORE = 8;
+  private static readonly TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW = 2;
   private static readonly PLAYLIST_OWNER_UID = 'local:default';
   private static readonly PLAYLIST_KIND_MANUAL = 'manual' as const;
   private static readonly PLAYLIST_KIND_SMART = 'smart' as const;
@@ -442,70 +477,39 @@ export class NativeAudioService implements IAudioService {
   private dynamicSrcLearningLastPersistAtMs = 0;
   private dynamicSrcLearningLastPersistedSignature: string | null = null;
   private dynamicSrcLearningLastUpdateAtMs = 0;
+  private tuningAutoEnabled = NativeAudioService.TUNING_AUTO_ENABLED_DEFAULT;
+  private tuningAutoTickIntervalMs = NativeAudioService.TUNING_AUTO_TICK_INTERVAL_MS;
+  private tuningAutoStableWindowMs = NativeAudioService.TUNING_AUTO_STABLE_WINDOW_MS;
+  private tuningAutoMinSwitchIntervalMs = NativeAudioService.TUNING_AUTO_MIN_SWITCH_INTERVAL_MS;
+  private tuningAutoPostSwitchObserveWindowMs =
+    NativeAudioService.TUNING_AUTO_POST_SWITCH_OBSERVE_WINDOW_MS;
+  private tuningAutoElevatedStressScore = NativeAudioService.TUNING_AUTO_ELEVATED_STRESS_SCORE;
+  private tuningAutoCriticalStressScore = NativeAudioService.TUNING_AUTO_CRITICAL_STRESS_SCORE;
+  private tuningAutoCriticalUnderrunEventsWindow =
+    NativeAudioService.TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW;
+  private tuningAutoControllerState = createAudioTuningControllerState('ll-guarded');
+  private tuningAutoTimer: ReturnType<typeof setInterval> | null = null;
+  private tuningAutoApplyInFlight = false;
+  private tuningAutoLastReason: string | null = null;
+  private tuningAutoLastAppliedAtMs: number | null = null;
+
+  private logBestEffortError(context: string, error: unknown): void {
+    console.warn(`[NativeAudio] ${context} failed:`, error);
+  }
 
   private fireAndForgetCommand(cmd: string, payload?: Record<string, unknown>): void {
-    void this.invokeCommand(cmd, payload).catch(() => {});
-  }
-
-  private isBilibiliSourceLocator(value: string | null | undefined): boolean {
-    if (typeof value !== 'string') return false;
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return false;
-    return (
-      normalized.startsWith('bilibili://') ||
-      normalized.includes('bilibili.com/video/') ||
-      normalized.includes('bvid=')
-    );
-  }
-
-  private resolveBilibiliSourceLocatorFromTrack(track: Track): string | null {
-    const candidates = [track.originalPath, track.comment, track.path];
-    for (const candidate of candidates) {
-      if (typeof candidate !== 'string') continue;
-      const normalized = candidate.trim();
-      if (!normalized) continue;
-      if (this.isBilibiliSourceLocator(normalized)) {
-        return normalized;
-      }
-    }
-    return null;
-  }
-
-  private inferPlatformConnectorIdFromTrack(track: Track, sourceLocator: string | null): string | null {
-    const normalizedTrackId = typeof track.id === 'string' ? track.id.trim().toLowerCase() : '';
-    if (normalizedTrackId.startsWith('bilibili:')) {
-      return 'connector.platform.bilibili';
-    }
-    if (this.isBilibiliSourceLocator(sourceLocator)) {
-      return 'connector.platform.bilibili';
-    }
-    return null;
-  }
-
-  private buildStablePlatformEntryId(connectorId: string, sourceKey: string): string {
-    const seed = `${connectorId.trim().toLowerCase()}|${sourceKey.trim().toLowerCase()}`;
-    let hash = 2166136261;
-    for (let index = 0; index < seed.length; index += 1) {
-      hash ^= seed.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    const safeConnectorId = connectorId.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
-    const hashHex = (hash >>> 0).toString(16).padStart(8, '0');
-    return `entry::platform::${safeConnectorId}::${hashHex}`;
+    void this.invokeCommand(cmd, payload).catch((error) => {
+      this.logBestEffortError(`best-effort command ${cmd}`, error);
+    });
   }
 
   private markPlatformTrackPlayedBestEffort(track: Track, playedAtMs: number): void {
     if (!isTauriRuntime()) return;
 
-    const sourceLocator = this.resolveBilibiliSourceLocatorFromTrack(track);
-    const connectorId = this.inferPlatformConnectorIdFromTrack(track, sourceLocator);
-    if (!connectorId) return;
+    const identity = resolvePlatformPlaybackIdentity(track);
+    if (!identity) return;
 
-    const sourceKey =
-      sourceLocator ||
-      (typeof track.id === 'string' && track.id.trim().length > 0 ? track.id.trim() : '') ||
-      (typeof track.title === 'string' && track.title.trim().length > 0 ? track.title.trim() : 'unknown');
-    const entryId = this.buildStablePlatformEntryId(connectorId, sourceKey);
+    const { sourceLocator, sourceKey, entryId } = identity;
     const title = typeof track.title === 'string' ? track.title.trim() : '';
     const artist = typeof track.artist === 'string' ? track.artist.trim() : '';
 
@@ -533,9 +537,12 @@ export class NativeAudioService implements IAudioService {
   private async resolveTrackForNativePlayback(track: Track): Promise<Track> {
     if (!isTauriRuntime()) return track;
 
-    const sourceLocator = this.resolveBilibiliSourceLocatorFromTrack(track);
-    const connectorId = this.inferPlatformConnectorIdFromTrack(track, sourceLocator);
-    if (connectorId !== 'connector.platform.bilibili' || !sourceLocator) return track;
+    const identity = resolvePlatformPlaybackIdentity(track);
+    if (!identity || identity.connectorId !== BILIBILI_PLATFORM_CONNECTOR_ID || !identity.sourceLocator) {
+      return track;
+    }
+
+    const sourceLocator = identity.sourceLocator;
 
     try {
       const prepared = await prepareNativeBilibiliCachedPlayback(sourceLocator);
@@ -578,56 +585,6 @@ export class NativeAudioService implements IAudioService {
       .catch(() => {
         // Best-effort: track playback must not be blocked by analytics/persistence failures.
       });
-  }
-
-  private serializeTrackForPlaylist(track: Track): string | undefined {
-    const id = typeof track?.id === 'string' ? track.id.trim() : '';
-    const title = typeof track?.title === 'string' ? track.title.trim() : '';
-    if (!id || !title) return undefined;
-
-    const payload: Partial<Track> = {
-      id,
-      title,
-      artist: track.artist,
-      album: track.album,
-      albumArtist: track.albumArtist,
-      duration: track.duration,
-      path: track.path,
-      filePath: track.filePath,
-      originalPath: track.originalPath,
-      libraryPathId: track.libraryPathId,
-      mtimeMs: track.mtimeMs,
-      quickFingerprint: track.quickFingerprint,
-      coverKey: track.coverKey,
-      coverUrl: track.coverUrl,
-      year: track.year,
-      genre: track.genre,
-      trackNumber: track.trackNumber,
-      discNumber: track.discNumber,
-      composer: track.composer,
-      bitrate: track.bitrate,
-      sampleRate: track.sampleRate,
-      replayGainTrackGainDb: track.replayGainTrackGainDb,
-      replayGainAlbumGainDb: track.replayGainAlbumGainDb,
-      format: track.format,
-      codecName: track.codecName,
-      fileSize: track.fileSize,
-      dateAdded: track.dateAdded,
-      lastPlayed: track.lastPlayed,
-      playCount: track.playCount,
-      rating: track.rating,
-      favorite: track.favorite,
-      tags: track.tags,
-      lyrics: track.lyrics,
-      comment: track.comment,
-      mimeType: track.mimeType,
-    };
-
-    try {
-      return JSON.stringify(payload);
-    } catch {
-      return undefined;
-    }
   }
 
   private parseTrackFromPlaylistPayload(
@@ -709,55 +666,6 @@ export class NativeAudioService implements IAudioService {
     return track;
   }
 
-  private toPlaylistItemUpserts(playlist: Playlist): NativeLibraryPlaylistItemUpsertInput[] {
-    const items: NativeLibraryPlaylistItemUpsertInput[] = [];
-    for (const track of playlist.tracks) {
-      const trackPayloadJson = this.serializeTrackForPlaylist(track);
-      if (!trackPayloadJson) continue;
-      items.push({
-        position: items.length,
-        trackPayloadJson,
-        snapshotTitle: track.title,
-        snapshotArtist: track.artist,
-        snapshotAlbum: track.album,
-        snapshotDurationSeconds:
-          typeof track.duration === 'number' && Number.isFinite(track.duration)
-            ? Math.max(0, track.duration)
-            : undefined,
-      });
-    }
-    return items;
-  }
-
-  private compactTrackForRecentPlaylist(track: Track): Track {
-    return {
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      album: track.album,
-      albumArtist: track.albumArtist,
-      duration: track.duration,
-      path: track.path,
-      filePath: track.filePath,
-      originalPath: track.originalPath,
-      quickFingerprint: track.quickFingerprint,
-      coverKey: track.coverKey,
-      coverUrl: track.coverUrl,
-      genre: track.genre,
-      sampleRate: track.sampleRate,
-      fileSize: track.fileSize,
-      mtimeMs: track.mtimeMs,
-      comment: track.comment,
-      mimeType: track.mimeType,
-      lastPlayed: track.lastPlayed,
-      playCount: track.playCount,
-      replayGainTrackGainDb: track.replayGainTrackGainDb,
-      replayGainAlbumGainDb: track.replayGainAlbumGainDb,
-      codecName: track.codecName,
-      format: track.format,
-    };
-  }
-
   private parseTracksFromPlaylistItems(
     playlistId: string,
     items: NativeLibraryPlaylistItemRecord[]
@@ -776,62 +684,6 @@ export class NativeAudioService implements IAudioService {
       tracks.push(track);
     }
     return tracks;
-  }
-
-  private applyRecentSmartPlaylistSnapshot(tracks: Track[], updatedAtMs: number): void {
-    const totalDuration = tracks.reduce((sum, item) => sum + (item.duration ?? 0), 0);
-    const existingPlaylists = this.state.playlists;
-    let hasRecentPlaylist = false;
-
-    const nextPlaylists = existingPlaylists.map((playlist) => {
-      if (playlist.id !== NativeAudioService.SMART_PLAYLIST_RECENT_ID) {
-        return playlist;
-      }
-
-      hasRecentPlaylist = true;
-      return {
-        ...playlist,
-        name: playlist.name || NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
-        tracks,
-        kind: NativeAudioService.PLAYLIST_KIND_SMART,
-        readonly: true,
-        smartRuleJson:
-          playlist.smartRuleJson ||
-          JSON.stringify({
-            type: 'recently_played',
-            limit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
-          }),
-        updatedAt: Math.max(updatedAtMs, playlist.updatedAt || 0),
-        trackCount: tracks.length,
-        totalDuration,
-      };
-    });
-
-    if (!hasRecentPlaylist) {
-      nextPlaylists.push({
-        id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
-        name: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
-        tracks,
-        kind: NativeAudioService.PLAYLIST_KIND_SMART,
-        readonly: true,
-        smartRuleJson: JSON.stringify({
-          type: 'recently_played',
-          limit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
-        }),
-        createdAt: updatedAtMs,
-        updatedAt: updatedAtMs,
-        trackCount: tracks.length,
-        totalDuration,
-      });
-    }
-
-    const currentPlaylist =
-      this.state.currentPlaylist?.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID
-        ? (nextPlaylists.find((item) => item.id === NativeAudioService.SMART_PLAYLIST_RECENT_ID) ??
-          null)
-        : this.state.currentPlaylist;
-
-    this.updateState({ playlists: nextPlaylists, currentPlaylist });
   }
 
   private clearRecentSmartPlaylistWriteTimer(): void {
@@ -900,20 +752,23 @@ export class NativeAudioService implements IAudioService {
             await listNativeLibraryPlaylistItems(NativeAudioService.SMART_PLAYLIST_RECENT_ID)
           );
 
-    let mergedTracks = existingTracks.map((item) => this.compactTrackForRecentPlaylist(item));
-    let latestPlayedAtMs = 0;
-
-    const orderedEntries = [...bufferedEntries].sort((left, right) => left.playedAtMs - right.playedAtMs);
-    for (const entry of orderedEntries) {
-      latestPlayedAtMs = Math.max(latestPlayedAtMs, entry.playedAtMs);
-      mergedTracks = prependTrackWithDedup(mergedTracks, entry.track).slice(
-        0,
-        NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT
-      );
-    }
+    const { tracks: mergedTracks, latestPlayedAtMs } = mergeRecentSmartPlaylistTracks({
+      existingTracks,
+      bufferedEntries,
+      limit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
+    });
 
     const updatedAtMs = latestPlayedAtMs > 0 ? latestPlayedAtMs : Date.now();
-    this.applyRecentSmartPlaylistSnapshot(mergedTracks, updatedAtMs);
+    const nextRecentSnapshot = applyRecentSmartPlaylistSnapshotToState({
+      playlists: this.state.playlists,
+      currentPlaylist: this.state.currentPlaylist,
+      tracks: mergedTracks,
+      updatedAtMs,
+      recentPlaylistId: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
+      recentPlaylistName: NativeAudioService.SMART_PLAYLIST_RECENT_NAME,
+      recentPlaylistLimit: NativeAudioService.SMART_PLAYLIST_RECENT_LIMIT,
+    });
+    this.updateState(nextRecentSnapshot);
 
     const payloadPlaylist: Playlist = {
       id: NativeAudioService.SMART_PLAYLIST_RECENT_ID,
@@ -927,7 +782,7 @@ export class NativeAudioService implements IAudioService {
       totalDuration: mergedTracks.reduce((sum, item) => sum + (item.duration ?? 0), 0),
     };
 
-    const playlistItems = this.toPlaylistItemUpserts(payloadPlaylist);
+    const playlistItems = toPlaylistItemUpserts(payloadPlaylist);
     await replaceNativeLibraryPlaylistItems(
       NativeAudioService.SMART_PLAYLIST_RECENT_ID,
       playlistItems
@@ -948,7 +803,7 @@ export class NativeAudioService implements IAudioService {
     if (!isTauriRuntime()) return;
     if (!track || typeof track !== 'object') return;
 
-    const recentTrack = this.compactTrackForRecentPlaylist({
+    const recentTrack = compactTrackForRecentPlaylist({
       ...track,
       lastPlayed: playedAtMs,
       playCount:
@@ -1022,7 +877,7 @@ export class NativeAudioService implements IAudioService {
     })
       .then((saved) => {
         if (!saved) return;
-        return replaceNativeLibraryPlaylistItems(saved.id, this.toPlaylistItemUpserts(playlist));
+        return replaceNativeLibraryPlaylistItems(saved.id, toPlaylistItemUpserts(playlist));
       })
       .catch((error) => {
         console.warn('[NativeAudioService] failed to persist playlist:', playlistId, error);
@@ -1208,7 +1063,7 @@ export class NativeAudioService implements IAudioService {
               };
               void replaceNativeLibraryPlaylistItems(
                 record.id,
-                this.toPlaylistItemUpserts(snapshotPlaylist)
+                toPlaylistItemUpserts(snapshotPlaylist)
               ).catch((error) => {
                 console.warn(
                   '[NativeAudioService] failed to backfill recent smart playlist items:',
@@ -1502,7 +1357,9 @@ export class NativeAudioService implements IAudioService {
 
     this.setupNativeListeners();
     void this.restoreFromStorage()
-      .catch(() => {})
+      .catch((error) => {
+        this.logBestEffortError('restoreFromStorage', error);
+      })
       .finally(() => {
         void this.refreshOutputBackendInventory().finally(() => {
           this.emitRobustnessSnapshot(true);
@@ -1517,6 +1374,7 @@ export class NativeAudioService implements IAudioService {
     await this.restoreStreamingBufferSettingsFromStorage();
     await this.restoreEnginePolicyFromStorage();
     await this.restoreDynamicSrcAutoSettingsFromStorage();
+    await this.restoreTuningAutoSettingsFromStorage();
     await this.restoreVstEnabledFromStorage();
 
     const restoredGraph = await this.restoreDspGraphFromBackend();
@@ -1754,8 +1612,8 @@ export class NativeAudioService implements IAudioService {
 
     try {
       await this.setEnginePolicyInternal(persisted);
-    } catch {
-      // ignore
+    } catch (error) {
+      this.logBestEffortError('restore engine policy', error);
     }
   }
 
@@ -1767,9 +1625,11 @@ export class NativeAudioService implements IAudioService {
       const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_VST_ENABLED);
       const enabled = raw ? (JSON.parse(raw) as unknown) : false;
       const resolved = typeof enabled === 'boolean' ? enabled : false;
-      await invoke('native_audio_vst_set_enabled', { enabled: resolved }).catch(() => {});
-    } catch {
-      // ignore
+      await invoke('native_audio_vst_set_enabled', { enabled: resolved }).catch((error) => {
+        this.logBestEffortError('restore vst enabled', error);
+      });
+    } catch (error) {
+      this.logBestEffortError('parse vst enabled from storage', error);
     }
   }
 
@@ -1778,7 +1638,10 @@ export class NativeAudioService implements IAudioService {
     this.restoredDspGraph = true;
 
     try {
-      const graph = await invoke<unknown>('native_audio_get_dsp_graph').catch(() => null);
+      const graph = await invoke<unknown>('native_audio_get_dsp_graph').catch((error) => {
+        this.logBestEffortError('restore dsp graph from backend', error);
+        return null;
+      });
       if (!graph || typeof graph !== 'object') return false;
       const record = graph as Record<string, unknown>;
       const nodes = record.nodes;
@@ -1787,7 +1650,8 @@ export class NativeAudioService implements IAudioService {
       await invoke('native_audio_set_dsp_graph', { graph: record });
       this.restoredDspChainApplied = true;
       return true;
-    } catch {
+    } catch (error) {
+      this.logBestEffortError('apply restored dsp graph from backend', error);
       return false;
     }
   }
@@ -2259,27 +2123,61 @@ export class NativeAudioService implements IAudioService {
     return 1 + Math.min(0.5, stressIndex / 30);
   }
 
-  private resolveDynamicSrcAdaptiveProfile(
-    nowMs: number = Date.now()
-  ): AudioDynamicSrcAdaptiveProfile {
-    if (!this.dynamicSrcAdaptiveEnabled) {
-      return 'baseline';
+  private evaluateDynamicSrcAutoDegradation(options?: {
+    nowMs?: number;
+    triggerActions?: boolean;
+    stressScore?: number;
+  }): void {
+    const nowMs = options?.nowMs ?? Date.now();
+    const stressScore = options?.stressScore ?? this.getDynamicSrcStressScore(nowMs);
+    const nextState = resolveDynamicSrcAutoDegradationState({
+      autoEnabled: this.dynamicSrcAutoEnabled,
+      manualLockActive: this.dynamicSrcManualLockActive,
+      playbackState: this.state.playbackState,
+      stressScore,
+      nowMs,
+      underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
+      protectionWindowActive: this.hasActiveProtectionWindow(nowMs),
+      sharedStressWindowActive: this.hasActiveSharedStressWindow(nowMs),
+      lastUnderrunFrames: this.lastUnderrunFrames,
+      severeUnderrunFramesThreshold: NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER,
+      elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
+      criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
+    });
+    const levelChanged = this.dynamicSrcAutoDegradationLevel !== nextState.level;
+    const reasonChanged = this.dynamicSrcAutoDegradationReason !== nextState.reason;
+    if (!levelChanged && !reasonChanged) {
+      return;
     }
 
-    const score = this.getDynamicSrcStressScore(nowMs);
-    if (score >= NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL) {
-      return 'critical';
-    }
-    if (score >= NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED) {
-      return 'elevated';
-    }
-    return 'baseline';
-  }
+    const previousLevel = this.dynamicSrcAutoDegradationLevel;
+    this.dynamicSrcAutoDegradationLevel = nextState.level;
+    this.dynamicSrcAutoDegradationReason = nextState.reason;
+    this.dynamicSrcAutoDegradationLastChangedAtMs = nowMs;
 
-  private getDynamicSrcAdaptiveScale(profile: AudioDynamicSrcAdaptiveProfile): number {
-    if (profile === 'critical') return 1.8;
-    if (profile === 'elevated') return 1.35;
-    return 1;
+    if (!options?.triggerActions) {
+      return;
+    }
+
+    if (nextState.level === 1 && previousLevel < 1) {
+      void this.ensureLatencySrcPolicy(`auto-degradation:l1:${nextState.reason ?? 'stress'}`);
+      return;
+    }
+
+    if (nextState.level === 2 && previousLevel < 2) {
+      const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+      const holdMs = Math.max(
+        NativeAudioService.DYNAMIC_SRC_DEGRADATION_L2_HOLD_FLOOR_MS,
+        effective.underrunHoldMs,
+        effective.sharedStressHoldMs
+      );
+      this.withDynamicSrcHold(`auto-degradation:l2:${nextState.reason ?? 'stress'}`, holdMs);
+      return;
+    }
+
+    if (nextState.level === 0 && previousLevel > 0) {
+      this.scheduleDynamicSrcRestoreEvaluation();
+    }
   }
 
   private getEffectiveDynamicSrcTiming(nowMs: number = Date.now()): {
@@ -2292,31 +2190,22 @@ export class NativeAudioService implements IAudioService {
     sharedStressHoldMs: number;
     outputErrorHoldMs: number;
   } {
-    const profile = this.resolveDynamicSrcAdaptiveProfile(nowMs);
     const stressScore = this.getDynamicSrcStressScore(nowMs);
-    const scale = this.getDynamicSrcAdaptiveScale(profile) * this.getDynamicSrcLearningScale();
-    const scaleMs = (
-      value: number,
-      options: { min: number; max: number; inverse?: boolean }
-    ): number => {
-      const raw = options.inverse ? value / scale : value * scale;
-      return Math.max(options.min, Math.min(options.max, Math.floor(raw)));
-    };
-
-    return {
-      profile,
+    return resolveDynamicSrcEffectiveTiming({
+      adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
       stressScore,
-      restoreDebounceMs: scaleMs(this.dynamicSrcRestoreDebounceMs, { min: 500, max: 30_000 }),
-      minSwitchIntervalMs: scaleMs(this.dynamicSrcMinSwitchIntervalMs, {
-        min: 100,
-        max: 10_000,
-        inverse: true,
-      }),
-      seekHoldMs: scaleMs(this.dynamicSrcSeekHoldMs, { min: 500, max: 20_000 }),
-      underrunHoldMs: scaleMs(this.dynamicSrcUnderrunHoldMs, { min: 2_000, max: 120_000 }),
-      sharedStressHoldMs: scaleMs(this.dynamicSrcSharedStressHoldMs, { min: 1_000, max: 90_000 }),
-      outputErrorHoldMs: scaleMs(this.dynamicSrcOutputErrorHoldMs, { min: 1_000, max: 120_000 }),
-    };
+      learningScale: this.getDynamicSrcLearningScale(),
+      elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
+      criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
+      base: {
+        restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
+        minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
+        seekHoldMs: this.dynamicSrcSeekHoldMs,
+        underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
+        sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
+        outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+      },
+    });
   }
 
   private isSameSrcPolicy(left: NativeAudioSrcPolicy, right: NativeAudioSrcPolicy): boolean {
@@ -2350,7 +2239,10 @@ export class NativeAudioService implements IAudioService {
     const nowMs = Date.now();
     const effective = this.getEffectiveDynamicSrcTiming(nowMs);
     const safeHoldMs = Math.max(1000, Math.floor(holdMs));
-    const adaptiveHoldMs = Math.max(1000, Math.floor(safeHoldMs * this.getDynamicSrcAdaptiveScale(effective.profile)));
+    const adaptiveHoldMs = Math.max(
+      1000,
+      Math.floor(safeHoldMs * getDynamicSrcAdaptiveScale(effective.profile))
+    );
     this.dynamicSrcHoldUntilMs = Math.max(this.dynamicSrcHoldUntilMs, nowMs + safeHoldMs);
     this.dynamicSrcHoldUntilMs = Math.max(this.dynamicSrcHoldUntilMs, nowMs + adaptiveHoldMs);
     this.dynamicSrcLastSwitchReason = reason;
@@ -2574,7 +2466,13 @@ export class NativeAudioService implements IAudioService {
     this.dynamicSrcUnderrunHoldMs = persisted.underrunHoldMs;
     this.dynamicSrcSharedStressHoldMs = persisted.sharedStressHoldMs;
     this.dynamicSrcOutputErrorHoldMs = persisted.outputErrorHoldMs;
-    this.dynamicSrcAdaptiveProfile = this.resolveDynamicSrcAdaptiveProfile();
+    this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
+      adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+      stressScore: this.getDynamicSrcStressScore(),
+      elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
+      criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
+    });
+    this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
     this.emitRobustnessSnapshot(true);
 
     if (this.dynamicSrcSettingsListenerCleanup) return;
@@ -2607,9 +2505,15 @@ export class NativeAudioService implements IAudioService {
         this.dynamicSrcHoldUntilMs = 0;
         this.clearDynamicSrcRestoreTimer();
       } else {
-        this.dynamicSrcAdaptiveProfile = this.resolveDynamicSrcAdaptiveProfile();
+        this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
+          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+          stressScore: this.getDynamicSrcStressScore(),
+          elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
+          criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
+        });
         this.scheduleDynamicSrcRestoreEvaluation();
       }
+      this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
       if (changed) {
         this.emitRobustnessSnapshot(true);
       }
@@ -2651,6 +2555,256 @@ export class NativeAudioService implements IAudioService {
     });
 
     await this.dynamicSrcSettingsListenerInitPromise;
+  }
+
+  private readTuningAutoSettings(): AudioTuningAutoSettings {
+    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(value)));
+    };
+    const clampCount = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(value)));
+    };
+
+    const defaults: AudioTuningAutoSettings = {
+      enabled: this.tuningAutoEnabled,
+      tickIntervalMs: this.tuningAutoTickIntervalMs,
+      stableWindowMs: this.tuningAutoStableWindowMs,
+      minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
+      postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
+      elevatedStressScore: this.tuningAutoElevatedStressScore,
+      criticalStressScore: this.tuningAutoCriticalStressScore,
+      criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+    };
+
+    try {
+      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS);
+      if (!raw) return defaults;
+
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return defaults;
+
+      const record = parsed as Record<string, unknown>;
+      const elevatedStressScore = clampCount(
+        record.elevatedStressScore,
+        defaults.elevatedStressScore,
+        1,
+        20
+      );
+      const criticalStressScore = clampCount(
+        record.criticalStressScore,
+        defaults.criticalStressScore,
+        elevatedStressScore,
+        30
+      );
+
+      return {
+        enabled: typeof record.enabled === 'boolean' ? record.enabled : defaults.enabled,
+        tickIntervalMs: clampMs(record.tickIntervalMs, defaults.tickIntervalMs, 500, 10_000),
+        stableWindowMs: clampMs(record.stableWindowMs, defaults.stableWindowMs, 5_000, 120_000),
+        minSwitchIntervalMs: clampMs(
+          record.minSwitchIntervalMs,
+          defaults.minSwitchIntervalMs,
+          1_000,
+          120_000
+        ),
+        postSwitchObserveWindowMs: clampMs(
+          record.postSwitchObserveWindowMs,
+          defaults.postSwitchObserveWindowMs,
+          1_000,
+          120_000
+        ),
+        elevatedStressScore,
+        criticalStressScore,
+        criticalUnderrunEventsWindow: clampCount(
+          record.criticalUnderrunEventsWindow,
+          defaults.criticalUnderrunEventsWindow,
+          1,
+          12
+        ),
+      };
+    } catch {
+      return defaults;
+    }
+  }
+
+  private applyTuningAutoSettingsState(settings: AudioTuningAutoSettings): void {
+    this.tuningAutoEnabled = settings.enabled;
+    this.tuningAutoTickIntervalMs = settings.tickIntervalMs;
+    this.tuningAutoStableWindowMs = settings.stableWindowMs;
+    this.tuningAutoMinSwitchIntervalMs = settings.minSwitchIntervalMs;
+    this.tuningAutoPostSwitchObserveWindowMs = settings.postSwitchObserveWindowMs;
+    this.tuningAutoElevatedStressScore = settings.elevatedStressScore;
+    this.tuningAutoCriticalStressScore = Math.max(
+      this.tuningAutoElevatedStressScore,
+      settings.criticalStressScore
+    );
+    this.tuningAutoCriticalUnderrunEventsWindow = settings.criticalUnderrunEventsWindow;
+    this.restartTuningAutoLoop();
+  }
+
+  private clearTuningAutoLoop(): void {
+    if (this.tuningAutoTimer === null) return;
+    clearInterval(this.tuningAutoTimer);
+    this.tuningAutoTimer = null;
+  }
+
+  private restartTuningAutoLoop(): void {
+    this.clearTuningAutoLoop();
+    if (!this.tuningAutoEnabled || this.disposed) return;
+
+    this.tuningAutoTimer = setInterval(() => {
+      void this.tickTuningAutoController();
+    }, this.tuningAutoTickIntervalMs);
+  }
+
+  private async tickTuningAutoController(): Promise<void> {
+    if (!this.tuningAutoEnabled || this.disposed) return;
+    if (this.tuningAutoApplyInFlight) return;
+
+    const nowMs = Date.now();
+    const snapshot = this.buildRobustnessSnapshot(nowMs);
+    const decision = resolveAudioTuningTransition({
+      nowMs,
+      snapshot,
+      state: this.tuningAutoControllerState,
+      thresholds: {
+        elevatedStressScore: this.tuningAutoElevatedStressScore,
+        criticalStressScore: this.tuningAutoCriticalStressScore,
+        criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+        stableWindowMs: this.tuningAutoStableWindowMs,
+        minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
+        postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
+      },
+    });
+
+    this.tuningAutoControllerState = decision.state;
+    this.tuningAutoLastReason = decision.reason;
+    if (!decision.changed) return;
+
+    this.tuningAutoApplyInFlight = true;
+    try {
+      await this.applyTuningProfile(decision.nextProfile);
+      this.tuningAutoLastReason = `auto:${decision.reason}`;
+      this.tuningAutoLastAppliedAtMs = Date.now();
+    } catch (error) {
+      console.warn('[NativeAudioService] auto tuning profile apply failed:', error);
+    } finally {
+      this.tuningAutoApplyInFlight = false;
+      this.emitRobustnessSnapshot(true);
+    }
+  }
+
+  getAudioTuningAutoSettings(): AudioTuningAutoSettings {
+    return {
+      enabled: this.tuningAutoEnabled,
+      tickIntervalMs: this.tuningAutoTickIntervalMs,
+      stableWindowMs: this.tuningAutoStableWindowMs,
+      minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
+      postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
+      elevatedStressScore: this.tuningAutoElevatedStressScore,
+      criticalStressScore: this.tuningAutoCriticalStressScore,
+      criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+    };
+  }
+
+  async setAudioTuningAutoSettings(settingsPatch: AudioTuningAutoSettingsPatch): Promise<void> {
+    const current = this.getAudioTuningAutoSettings();
+
+    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(value)));
+    };
+    const clampCount = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(value)));
+    };
+
+    const nextElevatedStressScore = clampCount(
+      settingsPatch.elevatedStressScore,
+      current.elevatedStressScore,
+      1,
+      20
+    );
+
+    const nextSettings: AudioTuningAutoSettings = {
+      enabled: typeof settingsPatch.enabled === 'boolean' ? settingsPatch.enabled : current.enabled,
+      tickIntervalMs: clampMs(settingsPatch.tickIntervalMs, current.tickIntervalMs, 500, 10_000),
+      stableWindowMs: clampMs(settingsPatch.stableWindowMs, current.stableWindowMs, 5_000, 120_000),
+      minSwitchIntervalMs: clampMs(
+        settingsPatch.minSwitchIntervalMs,
+        current.minSwitchIntervalMs,
+        1_000,
+        120_000
+      ),
+      postSwitchObserveWindowMs: clampMs(
+        settingsPatch.postSwitchObserveWindowMs,
+        current.postSwitchObserveWindowMs,
+        1_000,
+        120_000
+      ),
+      elevatedStressScore: nextElevatedStressScore,
+      criticalStressScore: clampCount(
+        settingsPatch.criticalStressScore,
+        current.criticalStressScore,
+        nextElevatedStressScore,
+        30
+      ),
+      criticalUnderrunEventsWindow: clampCount(
+        settingsPatch.criticalUnderrunEventsWindow,
+        current.criticalUnderrunEventsWindow,
+        1,
+        12
+      ),
+    };
+
+    await broadcastDataUpdate(
+      STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS,
+      nextSettings,
+      TAURI_EVENTS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS_UPDATED
+    );
+
+    this.applyTuningAutoSettingsState(nextSettings);
+    this.emitRobustnessSnapshot(true);
+  }
+
+  private async restoreTuningAutoSettingsFromStorage(): Promise<void> {
+    const persisted = this.readTuningAutoSettings();
+    this.applyTuningAutoSettingsState(persisted);
+
+    if (this.tuningAutoSettingsListenerCleanup) {
+      this.emitRobustnessSnapshot(true);
+      return;
+    }
+    if (this.tuningAutoSettingsListenerInitPromise) {
+      await this.tuningAutoSettingsListenerInitPromise;
+      this.emitRobustnessSnapshot(true);
+      return;
+    }
+
+    const applyPersistedSettings = () => {
+      const nextSettings = this.readTuningAutoSettings();
+      this.applyTuningAutoSettingsState(nextSettings);
+      this.emitRobustnessSnapshot(true);
+    };
+
+    this.tuningAutoSettingsListenerInitPromise = (async () => {
+      if (this.tuningAutoSettingsListenerCleanup) return;
+
+      const cleanup = await setupDualListener(
+        [STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS],
+        [TAURI_EVENTS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS_UPDATED],
+        applyPersistedSettings
+      );
+
+      this.tuningAutoSettingsListenerCleanup = cleanup;
+    })().finally(() => {
+      this.tuningAutoSettingsListenerInitPromise = null;
+    });
+
+    await this.tuningAutoSettingsListenerInitPromise;
+    this.emitRobustnessSnapshot(true);
   }
 
   private applyEnginePolicyPayload(payload: unknown): void {
@@ -2874,6 +3028,7 @@ export class NativeAudioService implements IAudioService {
       this.dynamicSrcAdaptiveProfile = 'baseline';
       this.dynamicSrcHoldUntilMs = 0;
       this.clearDynamicSrcRestoreTimer();
+      this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
       this.emitRobustnessSnapshot(true);
       return;
     }
@@ -2881,9 +3036,46 @@ export class NativeAudioService implements IAudioService {
     this.dynamicSrcManualLockActive = false;
     this.captureCurrentQualitySrcPolicy();
     this.dynamicSrcProfile = 'quality';
-    this.dynamicSrcAdaptiveProfile = this.resolveDynamicSrcAdaptiveProfile();
+    this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
+      adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+      stressScore: this.getDynamicSrcStressScore(),
+      elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
+      criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
+    });
     this.dynamicSrcLastSwitchReason = 'dynamic-src-enabled';
     this.scheduleDynamicSrcRestoreEvaluation();
+    this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
+    this.emitRobustnessSnapshot(true);
+  }
+
+  async applyTuningProfile(profileId: AudioTuningProfileId): Promise<void> {
+    const nowMs = Date.now();
+    const payload = resolveAudioTuningProfilePayload({
+      profileId,
+      outputBackendId: this.currentOutputBackendId,
+    });
+
+    await this.setEnginePolicyInternal(payload.enginePolicy, { fromDynamicAuto: true });
+    await this.persistEnginePolicyToStorage();
+    await this.setDynamicSrcAutoSettings(payload.dynamicSrcSettings);
+
+    this.storedStreamingBufferSettings = payload.streamingBuffer;
+    this.applyStreamingBufferPolicy(true);
+
+    await broadcastDataUpdate(
+      STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS,
+      payload.streamingBufferStoragePayload,
+      TAURI_EVENTS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS_UPDATED
+    );
+
+    this.tuningAutoControllerState = {
+      ...this.tuningAutoControllerState,
+      activeProfile: profileId,
+      lastSwitchAtMs: nowMs,
+    };
+    this.tuningAutoLastReason = `manual:${profileId}`;
+    this.tuningAutoLastAppliedAtMs = nowMs;
+
     this.emitRobustnessSnapshot(true);
   }
 
@@ -3070,60 +3262,6 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  private normalizeStreamingBufferSettings(settings: StreamingBufferSettings): StreamingBufferSettings {
-    const normalize = (value: number | null, min: number, max: number): number | null => {
-      if (typeof value !== 'number' || !isFinite(value)) return null;
-      return Math.max(min, Math.min(max, value));
-    };
-
-    return {
-      startOrSeekSeconds: normalize(settings.startOrSeekSeconds, 0, 4),
-      crossfadeSeconds: normalize(settings.crossfadeSeconds, 0, 3),
-      decodeMode: settings.decodeMode === 'full-track' ? 'full-track' : 'streaming',
-      interactiveProfile:
-        settings.interactiveProfile === 'fast' ||
-        settings.interactiveProfile === 'stable' ||
-        settings.interactiveProfile === 'balanced'
-          ? settings.interactiveProfile
-          : 'balanced',
-    };
-  }
-
-  private buildBackgroundStreamingBufferSettings(base: StreamingBufferSettings): StreamingBufferSettings {
-    return {
-      startOrSeekSeconds:
-        typeof base.startOrSeekSeconds === 'number'
-          ? Math.min(3.2, Math.max(1.2, base.startOrSeekSeconds))
-          : 2.4,
-      crossfadeSeconds:
-        typeof base.crossfadeSeconds === 'number'
-          ? Math.min(1.8, Math.max(0.4, base.crossfadeSeconds))
-          : 1.0,
-      decodeMode: base.decodeMode,
-      interactiveProfile: base.interactiveProfile,
-    };
-  }
-
-  private buildRecoveryStreamingBufferSettings(base: StreamingBufferSettings): StreamingBufferSettings {
-    const background = this.buildBackgroundStreamingBufferSettings(base);
-    return {
-      startOrSeekSeconds: Math.min(4, Math.max(background.startOrSeekSeconds ?? 2.4, 3.2)),
-      crossfadeSeconds: Math.min(3, Math.max(background.crossfadeSeconds ?? 1.0, 1.4)),
-      decodeMode: background.decodeMode,
-      interactiveProfile: background.interactiveProfile,
-    };
-  }
-
-  private buildProtectionStreamingBufferSettings(base: StreamingBufferSettings): StreamingBufferSettings {
-    const recovery = this.buildRecoveryStreamingBufferSettings(base);
-    return {
-      startOrSeekSeconds: Math.min(4, Math.max(recovery.startOrSeekSeconds ?? 3.2, 3.8)),
-      crossfadeSeconds: Math.min(3, Math.max(recovery.crossfadeSeconds ?? 1.4, 1.8)),
-      decodeMode: recovery.decodeMode,
-      interactiveProfile: recovery.interactiveProfile,
-    };
-  }
-
   private hasActiveProtectionWindow(nowMs: number = Date.now()): boolean {
     if (this.protectionWindowRefCount > 0) return true;
     return this.protectionWindowUntilMs > nowMs;
@@ -3216,46 +3354,11 @@ export class NativeAudioService implements IAudioService {
       this.sharedStressReason,
       effective.sharedStressHoldMs
     );
-  }
-
-  private getStreamingBufferPolicyTarget(nowMs: number = Date.now()): StreamingBufferSettings {
-    let target = this.normalizeStreamingBufferSettings(this.storedStreamingBufferSettings);
-
-    if (typeof document !== 'undefined' && document.hidden) {
-      target = this.buildBackgroundStreamingBufferSettings(target);
-    }
-
-    if (this.underrunRecoveryUntilMs > nowMs) {
-      target = this.buildRecoveryStreamingBufferSettings(target);
-    }
-
-    if (this.hasActiveProtectionWindow(nowMs)) {
-      target = this.buildProtectionStreamingBufferSettings(target);
-    }
-
-    if (this.hasActiveSharedStressWindow(nowMs)) {
-      target = {
-        startOrSeekSeconds: Math.min(4, Math.max(target.startOrSeekSeconds ?? 2.4, 3.6)),
-        crossfadeSeconds: Math.min(3, Math.max(target.crossfadeSeconds ?? 1.0, 1.9)),
-        decodeMode: target.decodeMode,
-        interactiveProfile: target.interactiveProfile,
-      };
-    }
-
-    return this.normalizeStreamingBufferSettings(target);
-  }
-
-  private isSameStreamingBufferSettings(
-    left: StreamingBufferSettings | null,
-    right: StreamingBufferSettings | null
-  ): boolean {
-    if (!left || !right) return false;
-    return (
-      left.startOrSeekSeconds === right.startOrSeekSeconds &&
-      left.crossfadeSeconds === right.crossfadeSeconds &&
-      left.decodeMode === right.decodeMode &&
-      left.interactiveProfile === right.interactiveProfile
-    );
+    this.evaluateDynamicSrcAutoDegradation({
+      nowMs,
+      stressScore: effective.stressScore,
+      triggerActions: true,
+    });
   }
 
   private applyStreamingBufferPolicy(force: boolean = false): void {
@@ -3272,13 +3375,21 @@ export class NativeAudioService implements IAudioService {
       this.sharedStressEscalationCount = 0;
     }
 
-    const target = this.getStreamingBufferPolicyTarget(nowMs);
-    if (!force && this.isSameStreamingBufferSettings(this.lastAppliedStreamingBufferSettings, target)) {
+    const target = resolveStreamingBufferPolicyTarget({
+      storedSettings: this.storedStreamingBufferSettings,
+      documentHidden: typeof document !== 'undefined' && document.hidden,
+      underrunRecoveryActive: this.underrunRecoveryUntilMs > nowMs,
+      protectionWindowActive: this.hasActiveProtectionWindow(nowMs),
+      sharedStressWindowActive: this.hasActiveSharedStressWindow(nowMs),
+    });
+    if (!force && isSameStreamingBufferSettings(this.lastAppliedStreamingBufferSettings, target)) {
       return;
     }
 
     this.lastAppliedStreamingBufferSettings = target;
-    void invoke('native_audio_set_streaming_buffer_settings', target).catch(() => {});
+    void invoke('native_audio_set_streaming_buffer_settings', target).catch((error) => {
+      this.logBestEffortError('apply streaming buffer policy', error);
+    });
   }
 
   private recordBufferedAheadSample(value: number): void {
@@ -3322,6 +3433,11 @@ export class NativeAudioService implements IAudioService {
     const effective = this.getEffectiveDynamicSrcTiming(nowMs);
     this.withDynamicSrcHold('underrun-spike', effective.underrunHoldMs);
     this.maybeAutoSwitchOutputBackend('underrun-spike');
+    this.evaluateDynamicSrcAutoDegradation({
+      nowMs,
+      stressScore: effective.stressScore,
+      triggerActions: true,
+    });
   }
 
   private resetSharedTimelineStressTracking(nowMs: number = Date.now()): void {
@@ -3363,6 +3479,7 @@ export class NativeAudioService implements IAudioService {
     }
 
     this.scheduleDynamicSrcRestoreEvaluation();
+    this.evaluateDynamicSrcAutoDegradation({ nowMs, triggerActions: true });
   }
 
   private clearProtectionWindowTimer(): void {
@@ -3399,6 +3516,11 @@ export class NativeAudioService implements IAudioService {
     this.pruneUnderrunSpikeWindow(nowMs);
     const effectiveDynamicSrc = this.getEffectiveDynamicSrcTiming(nowMs);
     this.dynamicSrcAdaptiveProfile = effectiveDynamicSrc.profile;
+    this.evaluateDynamicSrcAutoDegradation({
+      nowMs,
+      stressScore: effectiveDynamicSrc.stressScore,
+      triggerActions: false,
+    });
     const learningDeviceKey = this.buildDynamicSrcLearningDeviceKey();
     const learningStressIndex = this.dynamicSrcLearningProfile[learningDeviceKey]?.stressIndex ?? 0;
     const learningScale = this.getDynamicSrcLearningScale();
@@ -3444,6 +3566,12 @@ export class NativeAudioService implements IAudioService {
       dynamicSrcAdaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
       dynamicSrcAdaptiveProfile: this.dynamicSrcAdaptiveProfile,
       dynamicSrcStressScore: effectiveDynamicSrc.stressScore,
+      dynamicSrcAutoDegradationLevel: this.dynamicSrcAutoDegradationLevel,
+      dynamicSrcAutoDegradationLabel: toDynamicSrcAutoDegradationLabel(
+        this.dynamicSrcAutoDegradationLevel
+      ),
+      dynamicSrcAutoDegradationReason: this.dynamicSrcAutoDegradationReason,
+      dynamicSrcAutoDegradationLastChangedAtMs: this.dynamicSrcAutoDegradationLastChangedAtMs,
       dynamicSrcLearningEnabled: this.dynamicSrcLearningEnabled,
       dynamicSrcLearningDeviceKey: learningDeviceKey,
       dynamicSrcLearningStressIndex: Number(learningStressIndex.toFixed(4)),
@@ -3454,6 +3582,19 @@ export class NativeAudioService implements IAudioService {
       dynamicSrcUnderrunHoldMs: this.dynamicSrcUnderrunHoldMs,
       dynamicSrcSharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
       dynamicSrcOutputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
+      tuningAutoEnabled: this.tuningAutoEnabled,
+      tuningAutoTickIntervalMs: this.tuningAutoTickIntervalMs,
+      tuningAutoStableWindowMs: this.tuningAutoStableWindowMs,
+      tuningAutoMinSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
+      tuningAutoPostSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
+      tuningAutoElevatedStressScore: this.tuningAutoElevatedStressScore,
+      tuningAutoCriticalStressScore: this.tuningAutoCriticalStressScore,
+      tuningAutoCriticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+      tuningAutoActiveProfile: this.tuningAutoControllerState.activeProfile,
+      tuningAutoLastReason: this.tuningAutoLastReason,
+      tuningAutoLastAppliedAtMs: this.tuningAutoLastAppliedAtMs,
+      tuningAutoStableSinceMs: this.tuningAutoControllerState.stableSinceMs,
+      tuningAutoLastSwitchAtMs: this.tuningAutoControllerState.lastSwitchAtMs,
       dynamicSrcEffectiveRestoreDebounceMs: effectiveDynamicSrc.restoreDebounceMs,
       dynamicSrcEffectiveMinSwitchIntervalMs: effectiveDynamicSrc.minSwitchIntervalMs,
       dynamicSrcEffectiveSeekHoldMs: effectiveDynamicSrc.seekHoldMs,
@@ -3855,6 +3996,10 @@ export class NativeAudioService implements IAudioService {
         `output-error:${code}`,
         effective.outputErrorHoldMs
       );
+      this.evaluateDynamicSrcAutoDegradation({
+        triggerActions: true,
+        stressScore: effective.stressScore,
+      });
     }
 
     this.emitRobustnessSnapshot(true);
@@ -4341,6 +4486,7 @@ export class NativeAudioService implements IAudioService {
         }
 
         this.maybeReleaseUnderrunRecovery(merged.playbackState);
+        this.evaluateDynamicSrcAutoDegradation({ triggerActions: true });
         this.emitRobustnessSnapshot();
       });
 
@@ -4458,9 +4604,11 @@ export class NativeAudioService implements IAudioService {
       this.currentOutputBackendId = backendId;
       return this.selectOutputBackendInternal(backendId, { persist: false, clearDevice: false })
         .then(() => {})
-        .catch(() => {});
-    } catch {
-      // ignore
+        .catch((error) => {
+          this.logBestEffortError('restore output backend', error);
+        });
+    } catch (error) {
+      this.logBestEffortError('parse output backend from storage', error);
     }
   }
 
@@ -4480,7 +4628,9 @@ export class NativeAudioService implements IAudioService {
         if (deviceId || deviceName) {
           return invoke('native_audio_select_device', { deviceId, deviceName })
             .then(() => {})
-            .catch(() => {});
+            .catch((error) => {
+              this.logBestEffortError('restore output device', error);
+            });
         }
         return;
       }
@@ -4489,9 +4639,11 @@ export class NativeAudioService implements IAudioService {
       if (!deviceName) return;
       return invoke('native_audio_select_device', { deviceId: null, deviceName })
         .then(() => {})
-        .catch(() => {});
-    } catch {
-      // ignore
+        .catch((error) => {
+          this.logBestEffortError('restore output device by name', error);
+        });
+    } catch (error) {
+      this.logBestEffortError('parse output device from storage', error);
     }
   }
 
@@ -4508,9 +4660,11 @@ export class NativeAudioService implements IAudioService {
 
       return invoke('native_audio_select_audio_input', { inputId })
         .then(() => {})
-        .catch(() => {});
-    } catch {
-      // ignore
+        .catch((error) => {
+          this.logBestEffortError('restore audio input', error);
+        });
+    } catch (error) {
+      this.logBestEffortError('parse audio input from storage', error);
     }
   }
 
@@ -4527,9 +4681,11 @@ export class NativeAudioService implements IAudioService {
       if (db === null) return;
       return invoke('native_audio_set_gain', { db })
         .then(() => {})
-        .catch(() => {});
-    } catch {
-      // ignore
+        .catch((error) => {
+          this.logBestEffortError('restore gain db', error);
+        });
+    } catch (error) {
+      this.logBestEffortError('parse gain db from storage', error);
     }
   }
 
@@ -4546,9 +4702,11 @@ export class NativeAudioService implements IAudioService {
         .then(() => {
           this.restoredDspChainApplied = true;
         })
-        .catch(() => {});
-    } catch {
-      // ignore
+        .catch((error) => {
+          this.logBestEffortError('restore dsp chain', error);
+        });
+    } catch (error) {
+      this.logBestEffortError('parse dsp chain from storage', error);
     }
   }
 
@@ -5375,9 +5533,16 @@ export class NativeAudioService implements IAudioService {
     this.protectionWindowRefCount = 0;
     this.protectionWindowReason = null;
     this.dynamicSrcHoldUntilMs = 0;
+    this.dynamicSrcAutoDegradationLevel = 0;
+    this.dynamicSrcAutoDegradationReason = null;
+    this.dynamicSrcAutoDegradationLastChangedAtMs = null;
     this.dynamicSrcSettingsListenerCleanup?.();
     this.dynamicSrcSettingsListenerCleanup = null;
     this.dynamicSrcSettingsListenerInitPromise = null;
+    this.tuningAutoSettingsListenerCleanup?.();
+    this.tuningAutoSettingsListenerCleanup = null;
+    this.tuningAutoSettingsListenerInitPromise = null;
+    this.clearTuningAutoLoop();
     this.timeUpdateCallbacks.clear();
     this.endedCallbacks.clear();
     this.stateChangeCallbacks.clear();

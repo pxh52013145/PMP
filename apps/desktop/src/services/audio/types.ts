@@ -135,6 +135,37 @@ export interface AudioDynamicSrcAutoSettingsPatch {
 
 export type AudioDynamicSrcAdaptiveProfile = 'baseline' | 'elevated' | 'critical';
 
+export type AudioDynamicSrcDegradationLevel = 0 | 1 | 2;
+
+export type AudioTuningProfileId = 'extreme-ll' | 'll-guarded' | 'robust-shield';
+
+export interface AudioTuningAutoSettings {
+  enabled: boolean;
+  tickIntervalMs: number;
+  stableWindowMs: number;
+  minSwitchIntervalMs: number;
+  postSwitchObserveWindowMs: number;
+  elevatedStressScore: number;
+  criticalStressScore: number;
+  criticalUnderrunEventsWindow: number;
+}
+
+export interface AudioTuningAutoSettingsPatch {
+  enabled?: boolean;
+  tickIntervalMs?: number;
+  stableWindowMs?: number;
+  minSwitchIntervalMs?: number;
+  postSwitchObserveWindowMs?: number;
+  elevatedStressScore?: number;
+  criticalStressScore?: number;
+  criticalUnderrunEventsWindow?: number;
+}
+
+export type AudioDynamicSrcDegradationLabel =
+  | 'l0-fidelity'
+  | 'l1-balanced'
+  | 'l2-protection';
+
 export interface AudioRobustnessSnapshot {
   outputBackendId: string | null;
   outputBackends: string[];
@@ -154,6 +185,10 @@ export interface AudioRobustnessSnapshot {
   dynamicSrcAdaptiveEnabled?: boolean;
   dynamicSrcAdaptiveProfile?: AudioDynamicSrcAdaptiveProfile;
   dynamicSrcStressScore?: number;
+  dynamicSrcAutoDegradationLevel?: AudioDynamicSrcDegradationLevel;
+  dynamicSrcAutoDegradationLabel?: AudioDynamicSrcDegradationLabel;
+  dynamicSrcAutoDegradationReason?: string | null;
+  dynamicSrcAutoDegradationLastChangedAtMs?: number | null;
   dynamicSrcLearningEnabled?: boolean;
   dynamicSrcLearningDeviceKey?: string;
   dynamicSrcLearningStressIndex?: number;
@@ -164,6 +199,19 @@ export interface AudioRobustnessSnapshot {
   dynamicSrcUnderrunHoldMs?: number;
   dynamicSrcSharedStressHoldMs?: number;
   dynamicSrcOutputErrorHoldMs?: number;
+  tuningAutoEnabled?: boolean;
+  tuningAutoTickIntervalMs?: number;
+  tuningAutoStableWindowMs?: number;
+  tuningAutoMinSwitchIntervalMs?: number;
+  tuningAutoPostSwitchObserveWindowMs?: number;
+  tuningAutoElevatedStressScore?: number;
+  tuningAutoCriticalStressScore?: number;
+  tuningAutoCriticalUnderrunEventsWindow?: number;
+  tuningAutoActiveProfile?: AudioTuningProfileId;
+  tuningAutoLastReason?: string | null;
+  tuningAutoLastAppliedAtMs?: number | null;
+  tuningAutoStableSinceMs?: number | null;
+  tuningAutoLastSwitchAtMs?: number | null;
   dynamicSrcEffectiveRestoreDebounceMs?: number;
   dynamicSrcEffectiveMinSwitchIntervalMs?: number;
   dynamicSrcEffectiveSeekHoldMs?: number;
@@ -341,6 +389,12 @@ export interface IAudioService {
   getDynamicSrcAutoSettings?(): AudioDynamicSrcAutoSettings;
 
   setDynamicSrcAutoSettings?(settings: AudioDynamicSrcAutoSettingsPatch): Promise<void>;
+
+  applyTuningProfile?(profileId: AudioTuningProfileId): Promise<void>;
+
+  getAudioTuningAutoSettings?(): AudioTuningAutoSettings;
+
+  setAudioTuningAutoSettings?(settings: AudioTuningAutoSettingsPatch): Promise<void>;
 
   getRobustnessSnapshot?(): AudioRobustnessSnapshot;
 

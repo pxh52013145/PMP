@@ -51,15 +51,6 @@ export type PmpmManifest = {
   };
   entryPoint: string;
   contributions?: {
-    workbenches?: Array<{
-      id: string;
-      title: string;
-      description?: string;
-      group?: string;
-      order?: number;
-      tags?: string[];
-      metadata?: Record<string, unknown>;
-    }>;
     pages?: Array<{
       id: string;
       title: string;
@@ -142,7 +133,6 @@ export type InstalledPmpmPlugin = {
 };
 
 export type PmpmPluginCrashSurface =
-  | 'workbench'
   | 'magnet'
   | 'settings'
   | 'page'
@@ -411,71 +401,7 @@ export function validatePmpmManifest(manifest: unknown): asserts manifest is Pmp
 
     const workbenches = c.workbenches;
     if (typeof workbenches !== 'undefined') {
-      if (!Array.isArray(workbenches)) {
-        throw new Error('manifest.contributions.workbenches must be an array');
-      }
-
-      const ids = new Set<string>();
-      for (const item of workbenches) {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) {
-          throw new Error('manifest.contributions.workbenches entries must be objects');
-        }
-        const workbench = item as Record<string, unknown>;
-        const workbenchId = workbench.id;
-        if (typeof workbenchId !== 'string' || workbenchId.length < 1) {
-          throw new Error('manifest.contributions.workbenches[].id is required');
-        }
-        if (!/^[a-z0-9-]{1,48}$/.test(workbenchId)) {
-          throw new Error('manifest.contributions.workbenches[].id must match /^[a-z0-9-]{1,48}$/');
-        }
-        if (ids.has(workbenchId)) {
-          throw new Error(`manifest.contributions.workbenches[].id duplicated: "${workbenchId}"`);
-        }
-        ids.add(workbenchId);
-
-        const title = workbench.title;
-        if (typeof title !== 'string' || title.length < 1) {
-          throw new Error(`manifest.contributions.workbenches["${workbenchId}"].title is required`);
-        }
-
-        const description = workbench.description;
-        if (typeof description !== 'undefined' && typeof description !== 'string') {
-          throw new Error(
-            `manifest.contributions.workbenches["${workbenchId}"].description must be a string`
-          );
-        }
-
-        const group = workbench.group;
-        if (typeof group !== 'undefined' && typeof group !== 'string') {
-          throw new Error(`manifest.contributions.workbenches["${workbenchId}"].group must be a string`);
-        }
-
-        const order = workbench.order;
-        if (typeof order !== 'undefined' && (typeof order !== 'number' || !Number.isFinite(order))) {
-          throw new Error(`manifest.contributions.workbenches["${workbenchId}"].order must be a number`);
-        }
-
-        const tags = workbench.tags;
-        if (typeof tags !== 'undefined') {
-          if (!Array.isArray(tags)) {
-            throw new Error(`manifest.contributions.workbenches["${workbenchId}"].tags must be an array`);
-          }
-          for (const tag of tags) {
-            if (typeof tag !== 'string' || tag.length < 1) {
-              throw new Error(
-                `manifest.contributions.workbenches["${workbenchId}"].tags must be an array of strings`
-              );
-            }
-          }
-        }
-
-        const metadata = workbench.metadata;
-        if (typeof metadata !== 'undefined') {
-          if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-            throw new Error(`manifest.contributions.workbenches["${workbenchId}"].metadata must be an object`);
-          }
-        }
-      }
+      throw new Error('manifest.contributions.workbenches is no longer supported');
     }
 
     const pages = c.pages;

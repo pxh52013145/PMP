@@ -21,7 +21,6 @@ import { buildPmpmSandboxSrcDoc } from './pmpmSandboxSrcDoc';
 import { usePmpmRuntimeRestartToken } from './usePmpmRuntimeRestartToken';
 
 type SandboxSurface =
-  | { kind: 'workbench'; workbenchId: string }
   | { kind: 'magnet' }
   | { kind: 'settings'; panelId?: string }
   | { kind: 'page'; pageId: string }
@@ -56,8 +55,6 @@ type FrameMessage =
 
 function resolveCrashSurface(surface: SandboxSurface['kind']): PmpmPluginCrashSurface {
   switch (surface) {
-    case 'workbench':
-      return 'workbench';
     case 'magnet':
       return 'magnet';
     case 'settings':
@@ -151,9 +148,7 @@ export function PmpmSandboxHost({
   }, [audioService, hostLabel, navigation, permissions, pluginId]);
 
   const surfaceId =
-    surface.kind === 'workbench'
-      ? surface.workbenchId
-      : surface.kind === 'page'
+    surface.kind === 'page'
       ? surface.pageId
       : surface.kind === 'visualizer'
         ? surface.visualizerId

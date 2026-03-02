@@ -87,67 +87,10 @@ export type KeybindingContribution = {
   metadata?: Record<string, unknown>;
 };
 
-export type WorkbenchContribution = {
-  kind: 'workbench';
-  id: string;
-  title: string;
-  render: () => unknown;
-  source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-};
-
-export type WorkbenchLayoutSlots = {
-  navigation: unknown;
-  content: unknown;
-};
-
-export type WorkbenchLayoutContribution = {
-  kind: 'workbench-layout';
-  id: string;
-  title: string;
-  render: (slots: WorkbenchLayoutSlots) => unknown;
-  source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-};
-
-export type WorkbenchNavigationContribution = {
-  kind: 'workbench-navigation';
-  id: string;
-  title: string;
-  render: () => unknown;
-  source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-};
-
-export type WorkbenchPageContainerContribution = {
-  kind: 'workbench-page-container';
-  id: string;
-  title: string;
-  render: () => unknown;
-  source?: ContributionSource;
-  order?: number;
-  group?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-};
-
 export type DesktopContribution =
   | PageContribution
   | WindowContribution
   | SettingsPanelContribution
   | VisualizerContribution
   | CommandContribution
-  | KeybindingContribution
-  | WorkbenchContribution
-  | WorkbenchLayoutContribution
-  | WorkbenchNavigationContribution
-  | WorkbenchPageContainerContribution;
+  | KeybindingContribution;

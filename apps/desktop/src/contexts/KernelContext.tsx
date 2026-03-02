@@ -79,11 +79,6 @@ async function loadBuiltinContributionsModule(): Promise<KernelModule<AppEvents>
   return mod.createBuiltinContributionsModule();
 }
 
-async function loadBuiltinWorkbenchesModule(): Promise<KernelModule<AppEvents>> {
-  const mod = await import('../builtin-modules/builtinWorkbenchesModule');
-  return mod.createBuiltinWorkbenchesModule();
-}
-
 function createRuntime(): KernelRuntime {
   const kernel = createKernel<AppEvents>();
   const loader = new ModuleLoader<AppEvents>(kernel.services, kernel.events, kernel.contributions);
@@ -100,8 +95,6 @@ function createRuntime(): KernelRuntime {
   let pluginActivationPromise: Promise<void> | null = null;
   let builtinContributionsActivated = false;
   let builtinContributionsActivationPromise: Promise<void> | null = null;
-  let builtinWorkbenchesActivated = false;
-  let builtinWorkbenchesActivationPromise: Promise<void> | null = null;
 
   const activatePluginModules = async (): Promise<void> => {
     if (!canUsePluginModules) return;
@@ -142,25 +135,6 @@ function createRuntime(): KernelRuntime {
     await builtinContributionsActivationPromise;
   };
 
-  const activateBuiltinWorkbenches = async (): Promise<void> => {
-    if (runtimeDisposed || builtinWorkbenchesActivated) return;
-    if (builtinWorkbenchesActivationPromise) {
-      await builtinWorkbenchesActivationPromise;
-      return;
-    }
-
-    builtinWorkbenchesActivationPromise = (async () => {
-      const module = await loadBuiltinWorkbenchesModule();
-      if (runtimeDisposed || builtinWorkbenchesActivated) return;
-      loader.activate([module]);
-      builtinWorkbenchesActivated = true;
-    })().finally(() => {
-      builtinWorkbenchesActivationPromise = null;
-    });
-
-    await builtinWorkbenchesActivationPromise;
-  };
-
   const shouldActivatePluginModules = (): boolean => {
     if (!canUsePluginModules) return false;
     if (runtimeDisposed || pluginModulesActivated || pluginActivationPromise) return false;
@@ -193,7 +167,6 @@ function createRuntime(): KernelRuntime {
 
   if (!isAuxWindow) {
     window.requestAnimationFrame(() => {
-      void activateBuiltinWorkbenches();
       window.setTimeout(() => {
         void activateBuiltinContributions();
       }, 600);

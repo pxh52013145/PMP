@@ -2249,6 +2249,151 @@ describe('NativeAudioService', () => {
     service.destroy();
   });
 
+  it('applies tuning profile by syncing engine, dynamic SRC and streaming settings', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_set_engine_policy') {
+        return Promise.resolve({
+          transportMode: payload?.transportMode,
+          srcMode: payload?.srcMode,
+          srcBackend: payload?.srcBackend,
+          srcTargetSampleRate: payload?.srcTargetSampleRate ?? null,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await service.applyTuningProfile?.('robust-shield');
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_set_engine_policy', {
+      transportMode: 'robust',
+      srcMode: 'match-output',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: null,
+    });
+
+    const dynamicRaw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS);
+    expect(dynamicRaw).toBeTruthy();
+    const dynamicSettings = JSON.parse(dynamicRaw as string) as Record<string, unknown>;
+    expect(dynamicSettings.restoreDebounceMs).toBe(6500);
+    expect(dynamicSettings.minSwitchIntervalMs).toBe(900);
+    expect(dynamicSettings.underrunHoldMs).toBe(22000);
+
+    const bufferRaw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
+    expect(bufferRaw).toBeTruthy();
+    const streamingSettings = JSON.parse(bufferRaw as string) as Record<string, unknown>;
+    expect(streamingSettings.startOrSeekSeconds).toBe(1.2);
+    expect(streamingSettings.crossfadeSeconds).toBe(1.95);
+    expect(streamingSettings.decodeMode).toBe('streaming');
+    expect(streamingSettings.interactiveProfile).toBe('stable');
+
+    service.destroy();
+  });
+
+  it('persists and clamps auto tuning controller settings', async () => {
+    const service = new NativeAudioService();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await service.setAudioTuningAutoSettings?.({
+      enabled: true,
+      tickIntervalMs: 120,
+      stableWindowMs: 999_999,
+      minSwitchIntervalMs: 500,
+      postSwitchObserveWindowMs: 200_000,
+      elevatedStressScore: 6,
+      criticalStressScore: 4,
+      criticalUnderrunEventsWindow: 99,
+    });
+
+    const settings = service.getAudioTuningAutoSettings?.();
+    expect(settings).toEqual({
+      enabled: true,
+      tickIntervalMs: 500,
+      stableWindowMs: 120_000,
+      minSwitchIntervalMs: 1_000,
+      postSwitchObserveWindowMs: 120_000,
+      elevatedStressScore: 6,
+      criticalStressScore: 6,
+      criticalUnderrunEventsWindow: 12,
+    });
+
+    const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS);
+    expect(raw).toBeTruthy();
+    const persisted = JSON.parse(raw as string) as Record<string, unknown>;
+    expect(persisted.enabled).toBe(true);
+    expect(persisted.tickIntervalMs).toBe(500);
+    expect(persisted.criticalStressScore).toBe(6);
+
+    service.destroy();
+  });
+
+  it('auto tuning controller escalates to robust-shield under critical scheduler pressure', async () => {
+    vi.useFakeTimers();
+
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_set_engine_policy') {
+        return Promise.resolve({
+          transportMode: payload?.transportMode,
+          srcMode: payload?.srcMode,
+          srcBackend: payload?.srcBackend,
+          srcTargetSampleRate: payload?.srcTargetSampleRate ?? null,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await service.setAudioTuningAutoSettings?.({
+      enabled: true,
+      tickIntervalMs: 500,
+      stableWindowMs: 5000,
+      minSwitchIntervalMs: 1000,
+      postSwitchObserveWindowMs: 1000,
+      elevatedStressScore: 4,
+      criticalStressScore: 8,
+      criticalUnderrunEventsWindow: 2,
+    });
+
+    invokeMock.mockClear();
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        schedulerProfile: 'critical',
+        currentTime: 1,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(650);
+
+    expect(invokeMock).toHaveBeenCalledWith('native_audio_set_engine_policy', {
+      transportMode: 'robust',
+      srcMode: 'match-output',
+      srcBackend: 'linear-simd',
+      srcTargetSampleRate: null,
+    });
+
+    const snapshot = service.getRobustnessSnapshot?.();
+    expect(snapshot?.tuningAutoEnabled).toBe(true);
+    expect(snapshot?.tuningAutoActiveProfile).toBe('robust-shield');
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
   it('persists per-device dynamic SRC learning profile and increases effective timing scale', async () => {
     vi.useFakeTimers();
 
@@ -2423,6 +2568,111 @@ describe('NativeAudioService', () => {
     expect(recovered?.dynamicSrcStressScore).toBe(0);
     expect(recovered?.dynamicSrcEffectiveRestoreDebounceMs).toBe(recovered?.dynamicSrcRestoreDebounceMs);
     expect(recovered?.dynamicSrcEffectiveMinSwitchIntervalMs).toBe(recovered?.dynamicSrcMinSwitchIntervalMs);
+
+    service.destroy();
+    vi.useRealTimers();
+  });
+
+  it('tracks explicit L0/L1/L2 auto degradation and recovers back to L0', async () => {
+    vi.useFakeTimers();
+
+    const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
+    const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
+    listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
+      handlers[eventName] = handler;
+      return () => {};
+    });
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'native_audio_list_output_backends') {
+        return Promise.resolve(['wasapi']);
+      }
+      if (cmd === 'native_audio_get_audio_components_state') {
+        return Promise.resolve({ outputBackendId: 'wasapi' });
+      }
+      if (cmd === 'native_audio_get_engine_policy') {
+        return Promise.resolve({
+          srcMode: 'target-rate',
+          srcBackend: 'rubato',
+          srcTargetSampleRate: 96000,
+        });
+      }
+      if (cmd === 'native_audio_set_engine_policy') {
+        return Promise.resolve({
+          srcMode: payload?.srcMode,
+          srcBackend: payload?.srcBackend,
+          srcTargetSampleRate: payload?.srcTargetSampleRate ?? null,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await service.setDynamicSrcAutoSettings?.({
+      enabled: true,
+      adaptiveEnabled: true,
+      learningEnabled: false,
+      restoreDebounceMs: 2000,
+      minSwitchIntervalMs: 100,
+      seekHoldMs: 1000,
+      underrunHoldMs: 3000,
+      sharedStressHoldMs: 3000,
+      outputErrorHoldMs: 3000,
+    });
+
+    invokeMock.mockClear();
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        outputCallbackMetricsValid: true,
+        outputWaitTimeoutCount: 3,
+        outputRenderUnderrunEvents: 2,
+        outputCallbackIntervalOverrunCount: 0,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(80);
+
+    const l1 = service.getRobustnessSnapshot?.();
+    expect(l1?.dynamicSrcAutoDegradationLevel).toBe(1);
+    expect(l1?.dynamicSrcAutoDegradationLabel).toBe('l1-balanced');
+    expect(l1?.dynamicSrcAutoDegradationReason).toBe('stress-score-elevated');
+    expect(typeof l1?.dynamicSrcAutoDegradationLastChangedAtMs).toBe('number');
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        outputCallbackMetricsValid: true,
+        outputWaitTimeoutCount: 3,
+        outputRenderUnderrunEvents: 3,
+        outputCallbackIntervalOverrunCount: 2,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(80);
+
+    const l2 = service.getRobustnessSnapshot?.();
+    expect(l2?.dynamicSrcAutoDegradationLevel).toBe(2);
+    expect(l2?.dynamicSrcAutoDegradationLabel).toBe('l2-protection');
+    expect(l2?.dynamicSrcAutoDegradationReason).toBe('stress-score-critical');
+
+    handlers.native_audio_state?.({
+      payload: {
+        playbackState: 'playing',
+        outputCallbackMetricsValid: true,
+        outputWaitTimeoutCount: 0,
+        outputRenderUnderrunEvents: 0,
+        outputCallbackIntervalOverrunCount: 0,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(80);
+
+    const l0 = service.getRobustnessSnapshot?.();
+    expect(l0?.dynamicSrcAutoDegradationLevel).toBe(0);
+    expect(l0?.dynamicSrcAutoDegradationLabel).toBe('l0-fidelity');
+    expect(l0?.dynamicSrcAutoDegradationReason).toBeNull();
 
     service.destroy();
     vi.useRealTimers();

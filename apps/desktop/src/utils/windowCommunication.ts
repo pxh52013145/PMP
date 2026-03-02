@@ -116,11 +116,6 @@ export const STORAGE_KEYS = {
   CONFIG: 'pixel-matrix-player-config', // 主配置文件（包含 magnet、grid、styleOverride）
   LOCALE: 'pixel-matrix-locale', // UI locale（i18n）
   KEYBINDINGS_USER_V1: 'pixel-matrix-keybindings-user-v1', // 用户自定义快捷键（array, VSCode-like rules）
-  WORKBENCH_ID: 'pixel-matrix-workbench-id', // 当前 Workbench id（R4）
-  WORKBENCH_LAYOUT_ID: 'pixel-matrix-workbench-layout-id', // Workbench layout contribution id（R4）
-  WORKBENCH_NAVIGATION_ID: 'pixel-matrix-workbench-navigation-id', // Workbench navigation contribution id（R4）
-  WORKBENCH_PAGE_CONTAINER_ID: 'pixel-matrix-workbench-page-container-id', // Workbench page container contribution id（R4）
-
   // === 运行时数据（辅助/缓存） ===
   MAGNET_SPACES: 'pixel-matrix-magnet-spaces-v1', // Magnet spaces（active space + list）
   MAGNET_SPACE_LAYOUT: 'pixel-matrix-magnet-space-layout-v1', // Per-space magnet layout (active ids + anchors)
@@ -178,6 +173,8 @@ export const STORAGE_KEYS = {
   NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS: 'pixel-matrix-native-audio-dynamic-src-settings', // Dynamic SRC auto settings（object）
   NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE:
     'pixel-matrix-native-audio-dynamic-src-learning-profile', // Dynamic SRC learned stress profile（object）
+  NATIVE_AUDIO_TUNING_AUTO_SETTINGS:
+    'pixel-matrix-native-audio-tuning-auto-settings', // Auto tuning controller settings（object）
 
   // === VST3 ===
   VST_SCAN_SETTINGS: 'pixel-matrix-vst3-scan-settings-v1', // VST3 扫描设置（object，含 scan paths）
@@ -321,6 +318,7 @@ export const TAURI_EVENTS = {
   NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS_UPDATED: 'native-audio-dynamic-src-settings-updated',
   NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE_UPDATED:
     'native-audio-dynamic-src-learning-profile-updated',
+  NATIVE_AUDIO_TUNING_AUTO_SETTINGS_UPDATED: 'native-audio-tuning-auto-settings-updated',
   DESKTOP_LYRICS_LAYOUT_CHANGED: 'desktop-lyrics-layout-changed',
   DESKTOP_LYRICS_CONTROLS_CHANGED: 'desktop-lyrics-controls-changed',
   DSP_RACK_LOCATE_NODE: 'dsp-rack-locate-node',

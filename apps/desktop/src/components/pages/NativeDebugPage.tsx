@@ -5,6 +5,7 @@ import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useLocale, useT } from '../../i18n';
 import { AudioRobustnessSnapshot, Track } from '../../services/audio';
+import type { AudioTuningProfileId } from '../../services/audio/types';
 import { NativeDebugQueuePanel } from './native-debug/NativeDebugQueuePanel';
 import { NativeDebugPlaybackDspPanel } from './native-debug/NativeDebugPlaybackDspPanel';
 import { NativeDebugEnginePanel } from './native-debug/NativeDebugEnginePanel';
@@ -206,6 +207,7 @@ export const NativeDebugPage: React.FC = () => {
   const [srcBackend, setSrcBackend] = useState<NativeAudioSrcBackend>('rubato');
   const [srcTargetRate, setSrcTargetRate] = useState<string>('96000');
   const [srcPresetId, setSrcPresetId] = useState<NativeAudioSrcPresetId>('balanced');
+  const [tuningProfileId, setTuningProfileId] = useState<AudioTuningProfileId>('ll-guarded');
   const [dynamicSrcSettings, setDynamicSrcSettings] = useState<NativeAudioDynamicSrcSettings>({
     enabled: true,
     adaptiveEnabled: true,
@@ -652,6 +654,35 @@ export const NativeDebugPage: React.FC = () => {
       }
     },
     [appendLog, applySrcPolicyState, t]
+  );
+
+  const handleApplyTuningProfile = useCallback(
+    async (profileId: AudioTuningProfileId) => {
+      const applier = audioService.applyTuningProfile;
+      if (!applier) {
+        appendLog(t('pages.native-debug.log.tuningProfileUnsupported'));
+        return;
+      }
+
+      const previous = tuningProfileId;
+      setTuningProfileId(profileId);
+
+      try {
+        await applier.call(audioService, profileId);
+        setDynamicSrcSettings(readDynamicSrcAutoSettings());
+        await fetchEnginePolicy();
+        appendLog(
+          t('pages.native-debug.log.tuningProfileApplied', {
+            profile: t(`pages.native-debug.tuning.profile.${profileId}`),
+          })
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setTuningProfileId(previous);
+        appendLog(t('pages.native-debug.log.tuningProfileApplyFailed', { message }));
+      }
+    },
+    [appendLog, audioService, fetchEnginePolicy, readDynamicSrcAutoSettings, t, tuningProfileId]
   );
 
   const handleRefreshAudioComponents = useCallback(async () => {
@@ -1352,6 +1383,7 @@ export const NativeDebugPage: React.FC = () => {
             selectedInput={selectedInput}
             audioInputs={audioInputs}
             srcPresetId={srcPresetId}
+            tuningProfileId={tuningProfileId}
             srcMode={srcMode}
             srcBackend={srcBackend}
             srcTargetRate={srcTargetRate}
@@ -1372,6 +1404,7 @@ export const NativeDebugPage: React.FC = () => {
             handleApplyOutputBackend={handleApplyOutputBackend}
             handleApplyAudioInput={handleApplyAudioInput}
             handleApplySrcPreset={handleApplySrcPreset}
+            handleApplyTuningProfile={handleApplyTuningProfile}
             handleApplySrcPolicy={handleApplySrcPolicy}
             applyDynamicSrcAutoSettings={applyDynamicSrcAutoSettings}
             handleRefreshDevices={handleRefreshDevices}

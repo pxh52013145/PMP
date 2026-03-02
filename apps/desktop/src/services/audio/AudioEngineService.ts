@@ -218,7 +218,9 @@ export class DefaultAudioEngineService implements AudioEngineService {
                 { title: 'Audio Engine', type: 'warning' }
               )
             )
-            .catch(() => {});
+            .catch((dialogError) => {
+              console.warn('[AudioEngine] Failed to show native audio track warning dialog:', dialogError);
+            });
           return;
         }
 
@@ -230,7 +232,9 @@ export class DefaultAudioEngineService implements AudioEngineService {
               type: 'warning',
             })
           )
-          .catch(() => {});
+          .catch((dialogError) => {
+            console.warn('[AudioEngine] Failed to show native audio warning dialog:', dialogError);
+          });
       });
     }
 

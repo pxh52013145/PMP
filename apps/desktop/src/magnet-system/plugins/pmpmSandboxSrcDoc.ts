@@ -420,14 +420,6 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
         }
 
         let mount = null;
-        if (surface === 'workbench') {
-          mount = runtime.mountWorkbench;
-          if (typeof mount !== 'function') {
-            throw new Error('Plugin entry must export "mountWorkbench(container, api, workbenchId)"');
-          }
-          cleanup = mount(ROOT, api, surfaceId);
-          return;
-        }
 
         if (surface === 'magnet') {
           mount = runtime.mount;
@@ -508,8 +500,6 @@ export function buildPmpmSandboxSrcDoc(frameId: string): string {
               runtime = {
                 mount: pickExport(mod, 'mount'),
                 unmount: pickExport(mod, 'unmount'),
-                mountWorkbench: pickExport(mod, 'mountWorkbench'),
-                unmountWorkbench: pickExport(mod, 'unmountWorkbench'),
                 mountSettings: pickExport(mod, 'mountSettings'),
                 unmountSettings: pickExport(mod, 'unmountSettings'),
                 mountPage: pickExport(mod, 'mountPage'),

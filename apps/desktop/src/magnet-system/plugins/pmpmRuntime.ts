@@ -6,8 +6,6 @@ import { isPmpmSigningKeyTrusted } from './pmpmTrust';
 export type PmpmPluginRuntime = {
   mount: (container: HTMLElement, api: unknown, context?: unknown) => void | (() => void);
   unmount?: (container: HTMLElement) => void;
-  mountWorkbench?: (container: HTMLElement, api: unknown, workbenchId: string) => void | (() => void);
-  unmountWorkbench?: (container: HTMLElement, workbenchId: string) => void;
   mountSettings?: (container: HTMLElement, api: unknown, panelId?: string) => void | (() => void);
   unmountSettings?: (container: HTMLElement, panelId?: string) => void;
   mountPage?: (container: HTMLElement, api: unknown, pageId: string) => void | (() => void);
@@ -137,12 +135,6 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
     const unmount =
       (mod.unmount as PmpmPluginRuntime['unmount'] | undefined) ??
       (defaultExport?.unmount as PmpmPluginRuntime['unmount'] | undefined);
-    const mountWorkbench =
-      (mod.mountWorkbench as PmpmPluginRuntime['mountWorkbench'] | undefined) ??
-      (defaultExport?.mountWorkbench as PmpmPluginRuntime['mountWorkbench'] | undefined);
-    const unmountWorkbench =
-      (mod.unmountWorkbench as PmpmPluginRuntime['unmountWorkbench'] | undefined) ??
-      (defaultExport?.unmountWorkbench as PmpmPluginRuntime['unmountWorkbench'] | undefined);
     const mountSettings =
       (mod.mountSettings as PmpmPluginRuntime['mountSettings'] | undefined) ??
       (defaultExport?.mountSettings as PmpmPluginRuntime['mountSettings'] | undefined);
@@ -178,8 +170,6 @@ async function loadPluginRuntime(pluginId: string): Promise<PmpmPluginRuntime> {
     return {
       mount,
       unmount,
-      mountWorkbench,
-      unmountWorkbench,
       mountSettings,
       unmountSettings,
       mountPage,

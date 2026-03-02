@@ -4,6 +4,7 @@ import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineConte
 import { useT } from '../../i18n';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { resolveAudioTuningProfilePayload } from '../../services/audio/audioTuningProfiles';
 
 type ReplayGainMode = 'track' | 'album';
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
@@ -11,6 +12,18 @@ type NativeAudioSrcBackend = 'rubato' | 'linear-simd';
 type NativeAudioOutputQuantizationMode = 'round' | 'tpdf';
 type AudioPolicyPresetId = 'reference' | 'hifi' | 'balanced' | 'stable' | 'low-power';
 type DynamicSrcPresetId = 'responsive' | 'balanced' | 'resilient' | 'extreme';
+type AudioTuningProfileId = 'extreme-ll' | 'll-guarded' | 'robust-shield';
+
+type AudioTuningAutoSettings = {
+  enabled: boolean;
+  tickIntervalMs: number;
+  stableWindowMs: number;
+  minSwitchIntervalMs: number;
+  postSwitchObserveWindowMs: number;
+  elevatedStressScore: number;
+  criticalStressScore: number;
+  criticalUnderrunEventsWindow: number;
+};
 
 type ReplayGainSettings = {
   enabled: boolean;
@@ -76,6 +89,17 @@ const DEFAULT_DYNAMIC_SRC: DynamicSrcSettings = {
   outputErrorHoldMs: 10000,
 };
 
+const DEFAULT_TUNING_AUTO_SETTINGS: AudioTuningAutoSettings = {
+  enabled: false,
+  tickIntervalMs: 1500,
+  stableWindowMs: 30_000,
+  minSwitchIntervalMs: 10_000,
+  postSwitchObserveWindowMs: 15_000,
+  elevatedStressScore: 4,
+  criticalStressScore: 8,
+  criticalUnderrunEventsWindow: 2,
+};
+
 const DYNAMIC_SRC_PRESETS: Record<DynamicSrcPresetId, DynamicSrcSettings> = {
   responsive: {
     enabled: true,
@@ -112,6 +136,12 @@ const DYNAMIC_SRC_PRESETS: Record<DynamicSrcPresetId, DynamicSrcSettings> = {
     outputErrorHoldMs: 26000,
   },
 };
+
+const AUDIO_TUNING_PROFILE_IDS: AudioTuningProfileId[] = [
+  'extreme-ll',
+  'll-guarded',
+  'robust-shield',
+];
 
 const DEFAULT_ENGINE_POLICY: EnginePolicyState = {
   transportMode: 'robust',
@@ -277,6 +307,64 @@ function parseDynamicSrcSettings(raw: unknown): DynamicSrcSettings {
   };
 }
 
+function parseAudioTuningAutoSettings(raw: unknown): AudioTuningAutoSettings {
+  const record = toRecord(raw);
+
+  const clampInt = (value: unknown, fallback: number, min: number, max: number): number => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.floor(clampNumber(value, min, max));
+  };
+
+  const elevatedStressScore = clampInt(
+    record?.elevatedStressScore,
+    DEFAULT_TUNING_AUTO_SETTINGS.elevatedStressScore,
+    1,
+    20
+  );
+
+  return {
+    enabled:
+      typeof record?.enabled === 'boolean' ? record.enabled : DEFAULT_TUNING_AUTO_SETTINGS.enabled,
+    tickIntervalMs: clampInt(
+      record?.tickIntervalMs,
+      DEFAULT_TUNING_AUTO_SETTINGS.tickIntervalMs,
+      500,
+      10_000
+    ),
+    stableWindowMs: clampInt(
+      record?.stableWindowMs,
+      DEFAULT_TUNING_AUTO_SETTINGS.stableWindowMs,
+      5_000,
+      120_000
+    ),
+    minSwitchIntervalMs: clampInt(
+      record?.minSwitchIntervalMs,
+      DEFAULT_TUNING_AUTO_SETTINGS.minSwitchIntervalMs,
+      1_000,
+      120_000
+    ),
+    postSwitchObserveWindowMs: clampInt(
+      record?.postSwitchObserveWindowMs,
+      DEFAULT_TUNING_AUTO_SETTINGS.postSwitchObserveWindowMs,
+      1_000,
+      120_000
+    ),
+    elevatedStressScore,
+    criticalStressScore: clampInt(
+      record?.criticalStressScore,
+      DEFAULT_TUNING_AUTO_SETTINGS.criticalStressScore,
+      elevatedStressScore,
+      30
+    ),
+    criticalUnderrunEventsWindow: clampInt(
+      record?.criticalUnderrunEventsWindow,
+      DEFAULT_TUNING_AUTO_SETTINGS.criticalUnderrunEventsWindow,
+      1,
+      12
+    ),
+  };
+}
+
 function parseEnginePolicy(raw: unknown): EnginePolicyState {
   const record = toRecord(raw);
 
@@ -357,6 +445,47 @@ function resolveDynamicSrcPresetId(settings: DynamicSrcSettings): DynamicSrcPres
       return key;
     }
   }
+  return 'custom';
+}
+
+function resolveAudioTuningProfileId(
+  policy: EnginePolicyState,
+  dynamicSrc: DynamicSrcSettings
+): AudioTuningProfileId | 'custom' {
+  for (const profileId of AUDIO_TUNING_PROFILE_IDS) {
+    const profile = resolveAudioTuningProfilePayload({
+      profileId,
+      outputBackendId: null,
+    });
+
+    const enginePolicyMatches =
+      (typeof profile.enginePolicy.transportMode === 'undefined' ||
+        profile.enginePolicy.transportMode === policy.transportMode) &&
+      (typeof profile.enginePolicy.srcMode === 'undefined' ||
+        profile.enginePolicy.srcMode === policy.srcMode) &&
+      (typeof profile.enginePolicy.srcBackend === 'undefined' ||
+        profile.enginePolicy.srcBackend === policy.srcBackend) &&
+      (typeof profile.enginePolicy.srcTargetSampleRate === 'undefined' ||
+        (profile.enginePolicy.srcTargetSampleRate ?? null) === policy.srcTargetSampleRate) &&
+      (typeof profile.enginePolicy.outputQuantizationMode === 'undefined' ||
+        profile.enginePolicy.outputQuantizationMode === policy.outputQuantizationMode);
+
+    const dynamicSrcMatches =
+      profile.dynamicSrcSettings.enabled === dynamicSrc.enabled &&
+      profile.dynamicSrcSettings.adaptiveEnabled === dynamicSrc.adaptiveEnabled &&
+      profile.dynamicSrcSettings.learningEnabled === dynamicSrc.learningEnabled &&
+      profile.dynamicSrcSettings.restoreDebounceMs === dynamicSrc.restoreDebounceMs &&
+      profile.dynamicSrcSettings.minSwitchIntervalMs === dynamicSrc.minSwitchIntervalMs &&
+      profile.dynamicSrcSettings.seekHoldMs === dynamicSrc.seekHoldMs &&
+      profile.dynamicSrcSettings.underrunHoldMs === dynamicSrc.underrunHoldMs &&
+      profile.dynamicSrcSettings.sharedStressHoldMs === dynamicSrc.sharedStressHoldMs &&
+      profile.dynamicSrcSettings.outputErrorHoldMs === dynamicSrc.outputErrorHoldMs;
+
+    if (enginePolicyMatches && dynamicSrcMatches) {
+      return profileId;
+    }
+  }
+
   return 'custom';
 }
 
@@ -514,6 +643,9 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [policyPreset, setPolicyPreset] = useState<AudioPolicyPresetId | 'custom'>('custom');
   const [dynamicSrc, setDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
   const [dynamicSrcPreset, setDynamicSrcPreset] = useState<DynamicSrcPresetId | 'custom'>('custom');
+  const [tuningProfile, setTuningProfile] = useState<AudioTuningProfileId | 'custom'>('custom');
+  const [tuningAutoSettings, setTuningAutoSettings] =
+    useState<AudioTuningAutoSettings>(DEFAULT_TUNING_AUTO_SETTINGS);
   const [outputBackendId, setOutputBackendId] = useState<string | null>(null);
 
   const sourceRateChoices = useMemo(() => [44100, 48000, 88200, 96000, 176400, 192000], []);
@@ -552,12 +684,24 @@ export function AudioEngineAdvancedSettingsPanel() {
         const parsedDynamicSrc = parseDynamicSrcSettings(settings);
         setDynamicSrc(parsedDynamicSrc);
         setDynamicSrcPreset(resolveDynamicSrcPresetId(parsedDynamicSrc));
+        setTuningProfile(resolveAudioTuningProfileId(parsedPolicy, parsedDynamicSrc));
       } else {
         const parsedDynamicSrc = parseDynamicSrcSettings(
           readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS)
         );
         setDynamicSrc(parsedDynamicSrc);
         setDynamicSrcPreset(resolveDynamicSrcPresetId(parsedDynamicSrc));
+        setTuningProfile(resolveAudioTuningProfileId(parsedPolicy, parsedDynamicSrc));
+      }
+
+      const tuningAutoGetter = audioService.getAudioTuningAutoSettings;
+      if (typeof tuningAutoGetter === 'function') {
+        const parsedTuningAuto = parseAudioTuningAutoSettings(tuningAutoGetter.call(audioService));
+        setTuningAutoSettings(parsedTuningAuto);
+      } else {
+        setTuningAutoSettings(
+          parseAudioTuningAutoSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS))
+        );
       }
 
       setReplayGain(parseReplayGainSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)));
@@ -583,6 +727,10 @@ export function AudioEngineAdvancedSettingsPanel() {
   useEffect(() => {
     setDynamicSrcPreset(resolveDynamicSrcPresetId(dynamicSrc));
   }, [dynamicSrc]);
+
+  useEffect(() => {
+    setTuningProfile(resolveAudioTuningProfileId(enginePolicy, dynamicSrc));
+  }, [dynamicSrc, enginePolicy]);
 
   useEffect(() => {
     if (
@@ -723,6 +871,45 @@ export function AudioEngineAdvancedSettingsPanel() {
       setBusy(false);
     }
   }, [audioService, canUse, dynamicSrc, refresh]);
+
+  const applyTuningAutoSettings = useCallback(async () => {
+    if (!canUse || typeof audioService.setAudioTuningAutoSettings !== 'function') return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await audioService.setAudioTuningAutoSettings(tuningAutoSettings);
+      await refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(t('settings.audioAdvanced.tuning.applyFailed', { message }));
+    } finally {
+      setBusy(false);
+    }
+  }, [audioService, canUse, refresh, t, tuningAutoSettings]);
+
+  const applyTuningProfile = useCallback(
+    async (profileId: AudioTuningProfileId) => {
+      if (!canUse) return;
+      if (typeof audioService.applyTuningProfile !== 'function') {
+        setError(t('settings.audioAdvanced.tuning.unsupported'));
+        return;
+      }
+
+      setBusy(true);
+      setError(null);
+      try {
+        await audioService.applyTuningProfile(profileId);
+        await refresh();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(t('settings.audioAdvanced.tuning.applyFailed', { message }));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [audioService, canUse, refresh, t]
+  );
 
   return (
     <div className="settings-audio-panel settings-audio-panel--advanced">
@@ -1041,6 +1228,285 @@ export function AudioEngineAdvancedSettingsPanel() {
 
         {canUse ? (
           <>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.label')}
+                  help={t('settings.audioAdvanced.tuning.help')}
+                />
+                <p className="settings-inline-row-note">
+                  {t('settings.audioAdvanced.tuning.current', {
+                    profile: t(
+                      `settings.audioAdvanced.tuning.profile.${
+                        tuningProfile === 'custom' ? 'custom' : tuningProfile
+                      }`
+                    ),
+                  })}
+                </p>
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={tuningProfile === 'extreme-ll'}
+                  onClick={() => void applyTuningProfile('extreme-ll')}
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.tuning.profile.extreme-ll')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={tuningProfile === 'll-guarded'}
+                  onClick={() => void applyTuningProfile('ll-guarded')}
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.tuning.profile.ll-guarded')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={tuningProfile === 'robust-shield'}
+                  onClick={() => void applyTuningProfile('robust-shield')}
+                  disabled={busy}
+                >
+                  {t('settings.audioAdvanced.tuning.profile.robust-shield')}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.enabled')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.enabled')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={tuningAutoSettings.enabled}
+                  onClick={() => setTuningAutoSettings((prev) => ({ ...prev, enabled: true }))}
+                  disabled={busy}
+                >
+                  {t('common.state.on')}
+                </button>
+                <button
+                  type="button"
+                  className="settings-choice-btn"
+                  data-active={!tuningAutoSettings.enabled}
+                  onClick={() => setTuningAutoSettings((prev) => ({ ...prev, enabled: false }))}
+                  disabled={busy}
+                >
+                  {t('common.state.off')}
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.tickIntervalMs')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.tickIntervalMs')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={500}
+                  max={10000}
+                  step={100}
+                  value={tuningAutoSettings.tickIntervalMs}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      tickIntervalMs: Math.floor(clampNumber(Number(e.target.value), 500, 10000)),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.stableWindowMs')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.stableWindowMs')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={5000}
+                  max={120000}
+                  step={500}
+                  value={tuningAutoSettings.stableWindowMs}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      stableWindowMs: Math.floor(clampNumber(Number(e.target.value), 5000, 120000)),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.minSwitchIntervalMs')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.minSwitchIntervalMs')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={1000}
+                  max={120000}
+                  step={500}
+                  value={tuningAutoSettings.minSwitchIntervalMs}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      minSwitchIntervalMs: Math.floor(clampNumber(Number(e.target.value), 1000, 120000)),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.postSwitchObserveWindowMs')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.postSwitchObserveWindowMs')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={1000}
+                  max={120000}
+                  step={500}
+                  value={tuningAutoSettings.postSwitchObserveWindowMs}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      postSwitchObserveWindowMs: Math.floor(
+                        clampNumber(Number(e.target.value), 1000, 120000)
+                      ),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.elevatedStressScore')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.elevatedStressScore')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={tuningAutoSettings.elevatedStressScore}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      elevatedStressScore: Math.floor(clampNumber(Number(e.target.value), 1, 20)),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.criticalStressScore')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.criticalStressScore')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={tuningAutoSettings.elevatedStressScore}
+                  max={30}
+                  step={1}
+                  value={tuningAutoSettings.criticalStressScore}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      criticalStressScore: Math.floor(
+                        clampNumber(
+                          Number(e.target.value),
+                          prev.elevatedStressScore,
+                          30
+                        )
+                      ),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.criticalUnderrunEventsWindow')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.criticalUnderrunEventsWindow')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={1}
+                  max={12}
+                  step={1}
+                  value={tuningAutoSettings.criticalUnderrunEventsWindow}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      criticalUnderrunEventsWindow: Math.floor(
+                        clampNumber(Number(e.target.value), 1, 12)
+                      ),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="settings-section-controls">
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applyTuningAutoSettings()}
+                disabled={busy}
+              >
+                {t('common.action.apply')}
+              </button>
+            </div>
+
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
                 <SettingHelpLabel

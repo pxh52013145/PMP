@@ -6,7 +6,6 @@ import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
 import { QualityProvider } from './contexts/QualityContext';
 import { CommandPalette } from './components/commands/CommandPalette';
-import { WorkbenchHost } from './components/workbench/WorkbenchHost';
 import { EditorProvider } from './contexts/EditorContext';
 import { NavigationProvider, useNavigation } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
@@ -29,6 +28,7 @@ import {
   shouldRunPmpsDurableMigration,
 } from './modules/startup/durableMigrationGuards';
 import { usePerformanceControlSettings } from './contexts/usePerformanceControlSettings';
+import { MatrixWorkbench } from './workbenches/matrix/MatrixWorkbench';
 import './App.css';
 
 let coverDecodeReporter: ((src: string, width: number, height: number) => void) | null = null;
@@ -362,7 +362,7 @@ function AppContent() {
     <WindowActivityProvider value={{ isVisible: isMainWindowVisible, isActive: isWindowActive, renderMode }}>
       <QualityProvider>
         <div className="app-container">
-          <WorkbenchHost />
+          <MatrixWorkbench showEditorOverlay showEditorPanel showWindowBorder />
         </div>
 
         <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />

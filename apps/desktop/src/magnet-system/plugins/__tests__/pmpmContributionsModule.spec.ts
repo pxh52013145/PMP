@@ -2,11 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ContributionRegistry, EventBus, ServiceRegistry } from '../../../kernel';
 import type { AppEvents } from '../../../contracts/events';
 import type { NavigationPageData } from '../../../contracts/navigation';
-import type { PageContribution, WindowContribution, WorkbenchContribution } from '../../../contracts/contributions';
+import type { PageContribution, WindowContribution } from '../../../contracts/contributions';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { createPmpmContributionsModule } from '../pmpmContributionsModule';
 import { PluginPageHost } from '../PluginPageHost';
-import { PluginWorkbenchHost } from '../PluginWorkbenchHost';
 
 beforeEach(() => {
   localStorage.clear();
@@ -84,42 +83,5 @@ describe('pmpmContributionsModule', () => {
 
     deactivate?.();
     expect(contributions.list<WindowContribution>('window')).toHaveLength(0);
-  });
-
-  it('registers plugin workbenches as workbench contributions', () => {
-    localStorage.setItem(
-      STORAGE_KEYS.PMPM_PLUGINS,
-      JSON.stringify([
-        {
-          manifest: {
-            formatVersion: '1.0',
-            type: 'magnet-plugin',
-            metadata: { id: 'magnet-demo', name: 'Demo', version: '0.1.0' },
-            entryPoint: 'dist/plugin.js',
-            contributions: {
-              workbenches: [{ id: 'alt', title: 'Alternate' }],
-            },
-          },
-          entryCode: 'export function mount() {}',
-          installedAt: Date.now(),
-        },
-      ])
-    );
-
-    const contributions = new ContributionRegistry();
-    const services = new ServiceRegistry();
-    const events = new EventBus<AppEvents>().withSource('test');
-
-    const module = createPmpmContributionsModule();
-    const deactivate = module.activate({ contributions, services, events });
-
-    const workbench = contributions.get<WorkbenchContribution>('workbench', 'pmpm:magnet-demo:workbench:alt');
-    expect(workbench).not.toBeNull();
-
-    const element = workbench?.render();
-    expect((element as { type?: unknown } | null)?.type).toBe(PluginWorkbenchHost);
-
-    deactivate?.();
-    expect(contributions.list<WorkbenchContribution>('workbench')).toHaveLength(0);
   });
 });

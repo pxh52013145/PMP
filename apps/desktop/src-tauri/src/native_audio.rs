@@ -89,6 +89,7 @@ struct SeekExecutor {
     wake_lock: Mutex<u64>,
     wake_cv: Condvar,
     started: AtomicBool,
+    stop_requested: AtomicBool,
     seek_seq_fallback: AtomicU64,
     app_handle: Mutex<Option<AppHandle>>,
 }
@@ -101,12 +102,15 @@ impl SeekExecutor {
             wake_lock: Mutex::new(0),
             wake_cv: Condvar::new(),
             started: AtomicBool::new(false),
+            stop_requested: AtomicBool::new(false),
             seek_seq_fallback: AtomicU64::new(1),
             app_handle: Mutex::new(None),
         }
     }
 
     fn ensure_started(&self, app_handle: &AppHandle) {
+        self.stop_requested.store(false, Ordering::Release);
+
         {
             let mut guard = match self.app_handle.lock() {
                 Ok(guard) => guard,
@@ -129,6 +133,10 @@ impl SeekExecutor {
     }
 
     fn request_seek(&self, app_handle: &AppHandle, time: f64, seek_seq: Option<u64>) {
+        if self.stop_requested.load(Ordering::Acquire) {
+            return;
+        }
+
         self.ensure_started(app_handle);
 
         let seq = seek_seq.unwrap_or_else(|| {
@@ -150,16 +158,20 @@ impl SeekExecutor {
         self.wake_cv.notify_all();
     }
 
-    fn wait_for_next(&self, last_seq: u64) {
+    fn wait_for_next(&self, last_seq: u64) -> bool {
         let mut guard = match self.wake_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
 
         loop {
+            if self.stop_requested.load(Ordering::Acquire) {
+                return false;
+            }
+
             let seq = self.pending_seq.load(Ordering::Acquire);
             if seq != 0 && seq != last_seq {
-                return;
+                return true;
             }
 
             guard = match self.wake_cv.wait(guard) {
@@ -167,6 +179,18 @@ impl SeekExecutor {
                 Err(poisoned) => poisoned.into_inner(),
             };
         }
+    }
+
+    fn request_shutdown(&self) {
+        self.stop_requested.store(true, Ordering::Release);
+        self.pending_seq.store(0, Ordering::Release);
+
+        let mut guard = match self.wake_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = guard.saturating_add(1);
+        self.wake_cv.notify_all();
     }
 
     fn snapshot_request(&self) -> (u64, f64) {
@@ -187,7 +211,10 @@ fn seek_worker_loop() {
     let mut last_processed_seq = 0u64;
 
     loop {
-        SEEK_EXECUTOR.wait_for_next(last_processed_seq);
+        if !SEEK_EXECUTOR.wait_for_next(last_processed_seq) {
+            break;
+        }
+
         let Some(app_handle) = SEEK_EXECUTOR.app_handle() else {
             continue;
         };
@@ -228,6 +255,10 @@ fn seek_worker_loop() {
             }
         }
     }
+}
+
+pub fn shutdown() {
+    SEEK_EXECUTOR.request_shutdown();
 }
 
 #[derive(Serialize, Clone, Debug)]

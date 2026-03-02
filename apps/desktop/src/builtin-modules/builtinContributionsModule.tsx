@@ -48,9 +48,6 @@ const AudioDspSettingsPanelLazy = React.lazy(async () => ({
 const LanguageSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/LanguageSettingsPanel')).LanguageSettingsPanel,
 }));
-const WorkbenchSettingsPanelLazy = React.lazy(async () => ({
-  default: (await import('../components/settings-panels/WorkbenchSettingsPanel')).WorkbenchSettingsPanel,
-}));
 const WindowCloseSettingsPanelLazy = React.lazy(async () => ({
   default: (await import('../components/settings-panels/WindowCloseSettingsPanel')).WindowCloseSettingsPanel,
 }));
@@ -149,17 +146,6 @@ export function createBuiltinContributionsModule(): KernelModule<AppEvents> {
           render: () => renderWithLazyBoundary(<LanguageSettingsPanelLazy />),
           source: 'builtin',
           order: 1,
-          group: 'core',
-          metadata: { settingsSection: 'system' },
-        });
-
-        register<SettingsPanelContribution>({
-          kind: 'settings-panel',
-          id: 'workbench',
-          title: t('settings.panels.workbench.title'),
-          render: () => renderWithLazyBoundary(<WorkbenchSettingsPanelLazy />),
-          source: 'builtin',
-          order: 5,
           group: 'core',
           metadata: { settingsSection: 'system' },
         });

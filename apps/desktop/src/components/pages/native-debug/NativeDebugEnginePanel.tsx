@@ -18,6 +18,7 @@ type NativeAudioOutputDevice = {
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
 type NativeAudioSrcBackend = 'rubato' | 'linear-simd';
 type NativeAudioSrcPresetId = 'balanced' | 'hi-end' | 'low-latency';
+type NativeAudioTuningProfileId = 'extreme-ll' | 'll-guarded' | 'robust-shield';
 
 type NativeAudioDynamicSrcSettings = {
   enabled: boolean;
@@ -47,6 +48,7 @@ type NativeDebugEnginePanelProps = {
   selectedInput: string;
   audioInputs: string[];
   srcPresetId: NativeAudioSrcPresetId;
+  tuningProfileId: NativeAudioTuningProfileId;
   srcMode: NativeAudioSrcMode;
   srcBackend: NativeAudioSrcBackend;
   srcTargetRate: string;
@@ -67,6 +69,7 @@ type NativeDebugEnginePanelProps = {
   handleApplyOutputBackend: () => void | Promise<void>;
   handleApplyAudioInput: () => void | Promise<void>;
   handleApplySrcPreset: (presetId: NativeAudioSrcPresetId) => void | Promise<void>;
+  handleApplyTuningProfile: (profileId: NativeAudioTuningProfileId) => void | Promise<void>;
   handleApplySrcPolicy: () => void | Promise<void>;
   applyDynamicSrcAutoSettings: (patch: Partial<NativeAudioDynamicSrcSettings>) => void | Promise<void>;
   handleRefreshDevices: () => void | Promise<void>;
@@ -81,6 +84,7 @@ export function NativeDebugEnginePanel({
   selectedInput,
   audioInputs,
   srcPresetId,
+  tuningProfileId,
   srcMode,
   srcBackend,
   srcTargetRate,
@@ -101,6 +105,7 @@ export function NativeDebugEnginePanel({
   handleApplyOutputBackend,
   handleApplyAudioInput,
   handleApplySrcPreset,
+  handleApplyTuningProfile,
   handleApplySrcPolicy,
   applyDynamicSrcAutoSettings,
   handleRefreshDevices,
@@ -192,6 +197,37 @@ export function NativeDebugEnginePanel({
         </button>
         <button type="button" onClick={() => void handleApplySrcPreset('low-latency')}>
           {t('pages.native-debug.src.preset.low-latency')}
+        </button>
+      </div>
+    </div>
+
+    <div className="device-row">
+      <div className="device-meta">
+        <p className="device-label">{t('pages.native-debug.tuning.title')}</p>
+        <p className="device-value">{t(`pages.native-debug.tuning.profile.${tuningProfileId}`)}</p>
+        <p className="device-hint">{t('pages.native-debug.tuning.desc')}</p>
+      </div>
+      <div className="device-controls src-preset-controls">
+        <button
+          type="button"
+          className={tuningProfileId === 'extreme-ll' ? 'is-active-toggle' : ''}
+          onClick={() => void handleApplyTuningProfile('extreme-ll')}
+        >
+          {t('pages.native-debug.tuning.profile.extreme-ll')}
+        </button>
+        <button
+          type="button"
+          className={tuningProfileId === 'll-guarded' ? 'is-active-toggle' : ''}
+          onClick={() => void handleApplyTuningProfile('ll-guarded')}
+        >
+          {t('pages.native-debug.tuning.profile.ll-guarded')}
+        </button>
+        <button
+          type="button"
+          className={tuningProfileId === 'robust-shield' ? 'is-active-toggle' : ''}
+          onClick={() => void handleApplyTuningProfile('robust-shield')}
+        >
+          {t('pages.native-debug.tuning.profile.robust-shield')}
         </button>
       </div>
     </div>

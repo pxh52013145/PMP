@@ -6,6 +6,9 @@
 export type {
   AudioProtectionWindowOptions,
   AudioRobustnessSnapshot,
+  AudioTuningAutoSettings,
+  AudioTuningAutoSettingsPatch,
+  AudioTuningProfileId,
   Track,
   AudioState,
   PlaybackState,
