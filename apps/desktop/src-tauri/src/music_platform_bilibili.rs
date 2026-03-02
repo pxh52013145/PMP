@@ -776,6 +776,9 @@ fn spawn_or_get_playback_download_job(
     cookie_header: String,
     referer: String,
 ) -> Result<Arc<BilibiliPlaybackDownloadJob>, String> {
+    remove_file_if_exists(&marker_path);
+    remove_file_if_exists(&cache_path);
+
     {
         let mut jobs = lock_playback_download_jobs()?;
         if let Some(existing) = jobs.get(cache_key) {
@@ -784,10 +787,7 @@ fn spawn_or_get_playback_download_job(
 
         let job = Arc::new(BilibiliPlaybackDownloadJob {
             state: Mutex::new(BilibiliPlaybackDownloadState {
-                bytes_written: fs::metadata(&cache_path)
-                    .ok()
-                    .map(|meta| meta.len())
-                    .unwrap_or(0),
+                bytes_written: 0,
                 completed: false,
                 last_error: None,
             }),
@@ -817,9 +817,6 @@ fn spawn_or_get_playback_download_job(
     std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            remove_file_if_exists(&marker_path);
-            remove_file_if_exists(&cache_path);
-
             let result = (|| -> Result<u64, String> {
                 let client = build_http_client()?;
                 let cookie_value = HeaderValue::from_str(&cookie_header).map_err(|error| {
@@ -4095,9 +4092,13 @@ pub fn resolve_lyric_locator(
 mod tests {
     use super::{
         build_stream_candidates, build_wbi_mixin_key, parse_bvid_from_text,
-        sanitize_wbi_query_value, QUALITY_KEY_DOLBY, QUALITY_KEY_HIRES,
+        sanitize_wbi_query_value, spawn_or_get_playback_download_job, QUALITY_KEY_DOLBY,
+        QUALITY_KEY_HIRES,
     };
     use serde_json::json;
+    use std::env;
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parse_plain_bvid_text() {
@@ -4207,5 +4208,46 @@ mod tests {
     fn sanitize_wbi_query_value_removes_filtered_symbols() {
         let sanitized = sanitize_wbi_query_value("a!b'c(d)e*f");
         assert_eq!(sanitized, "abcdef");
+    }
+
+    #[test]
+    fn spawn_download_job_resets_stale_partial_state() {
+        let unique = format!(
+            "pmp-bili-cache-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::from_secs(0))
+                .as_nanos()
+        );
+        let root = env::temp_dir().join(unique);
+        fs::create_dir_all(&root).expect("create temp dir");
+
+        let cache_path = root.join("video.m4a");
+        let marker_path = root.join("video.complete");
+        fs::write(&cache_path, vec![0u8; 32 * 1024]).expect("write stale cache bytes");
+
+        let cache_key = format!(
+            "test-cache-key-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::from_secs(0))
+                .as_nanos()
+        );
+
+        let job = spawn_or_get_playback_download_job(
+            &cache_key,
+            cache_path.clone(),
+            marker_path,
+            "not-a-valid-url".to_string(),
+            "SESSDATA=test".to_string(),
+            "https://www.bilibili.com/video/BV1xx411c7mD".to_string(),
+        )
+        .expect("spawn_or_get should create job");
+
+        let state = job.state.lock().expect("job state lock").clone();
+        assert_eq!(state.bytes_written, 0);
+        assert!(!cache_path.exists());
+
+        let _ = fs::remove_dir_all(root);
     }
 }
