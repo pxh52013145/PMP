@@ -29,7 +29,7 @@ use crate::audio::output::ASIO_BACKEND_ID;
 use crate::audio::output::WASAPI_EXCLUSIVE_BACKEND_ID;
 use crate::audio::output::{
     default_backend, shared_render_ahead_ready_snapshot, wait_for_shared_render_ahead_ready,
-    AudioOutputBackend, AudioSink, OutputStreamInfo,
+    AudioOutputBackend, AudioOutputError, AudioSink, OutputStreamInfo,
 };
 use crate::audio::pipeline::{boxed_with_dsp, DspNodeConfig, DspRuntime, SpectrumTap};
 use crate::audio::policy::{
@@ -102,6 +102,23 @@ fn should_wrap_source_for_shared_backend(backend_id: &str) -> bool {
     // Wrapping sources again with a generic render-ahead layer increases latency and can make
     // play/pause/seek feel sluggish.
     backend_id == "wasapi" || backend_id == "rodio-cpal"
+}
+
+fn output_error_looks_like_device_disconnect(err: &AudioOutputError) -> bool {
+    let code_upper = err.code.to_ascii_uppercase();
+    if code_upper.contains("DEVICE_NOT_FOUND")
+        || code_upper.contains("DEVICE_INVALIDATED")
+        || code_upper.contains("NO_DEVICE_SELECTED")
+    {
+        return true;
+    }
+
+    let message = err.message.to_ascii_lowercase();
+    message.contains("no longer available")
+        || message.contains("unplugged")
+        || message.contains("device invalidated")
+        || message.contains("audclnt_e_device_invalidated")
+        || message.contains("device not found")
 }
 
 fn clamp_min_start_samples_to_reachable(
@@ -1496,6 +1513,32 @@ impl NativeAudioEngine {
         }
     }
 
+    fn try_recover_output_after_device_disconnect(
+        &mut self,
+        err: &AudioOutputError,
+    ) -> Result<bool, String> {
+        if !output_error_looks_like_device_disconnect(err) {
+            return Ok(false);
+        }
+
+        let output_info = self.output_backend.select_device(None)?;
+        self.sync_clock();
+        self.output_sample_rate = output_info.output_sample_rate;
+        self.device_id = output_info
+            .device_id
+            .or_else(|| output_info.device_name.clone())
+            .or_else(|| self.device_id.clone());
+        self.device_name = output_info
+            .device_name
+            .or_else(|| self.device_name.clone())
+            .or_else(|| self.output_backend.default_device_name());
+
+        self.rebuild_sink_on_new_device()?;
+        self.reset_recovery_tracking();
+        self.clear_error();
+        Ok(true)
+    }
+
     pub(crate) fn clear_error(&mut self) {
         self.last_error_code = None;
         self.last_error_message = None;
@@ -2544,10 +2587,32 @@ impl NativeAudioEngine {
             self.buffering_started_at = None;
             self.buffering_last_progress_at = None;
             self.buffering_last_samples = 0;
-            self.set_error(
-                "NATIVE_AUDIO_OUTPUT_ERROR",
-                format!("[{}] {}", err.code, err.message),
-            );
+            self.buffering_resume_samples = 0;
+
+            match self.try_recover_output_after_device_disconnect(&err) {
+                Ok(true) => {
+                    info_log(format!(
+                        "[NativeAudio] Recovered output after device disconnect: [{}] {}",
+                        err.code, err.message
+                    ));
+                    return true;
+                }
+                Ok(false) => {
+                    self.set_error(
+                        "NATIVE_AUDIO_OUTPUT_ERROR",
+                        format!("[{}] {}", err.code, err.message),
+                    );
+                }
+                Err(recovery_err) => {
+                    self.set_error(
+                        "NATIVE_AUDIO_OUTPUT_ERROR",
+                        format!(
+                            "[{}] {}; auto-recovery failed: {}",
+                            err.code, err.message, recovery_err
+                        ),
+                    );
+                }
+            }
             return true;
         }
 
@@ -3995,6 +4060,142 @@ mod tests {
         fn set_transport_mode(&self, _mode: NativeAudioTransportMode) {
             self.transport_mode_calls.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    struct RecoveringOutputBackend {
+        output_error: Mutex<Option<AudioOutputError>>,
+        select_device_calls: AtomicUsize,
+        create_sink_calls: AtomicUsize,
+        last_created_sink: Mutex<Option<Arc<CallSink>>>,
+    }
+
+    impl RecoveringOutputBackend {
+        fn new(output_error: AudioOutputError) -> Self {
+            Self {
+                output_error: Mutex::new(Some(output_error)),
+                select_device_calls: AtomicUsize::new(0),
+                create_sink_calls: AtomicUsize::new(0),
+                last_created_sink: Mutex::new(None),
+            }
+        }
+    }
+
+    impl AudioOutputBackend for RecoveringOutputBackend {
+        fn id(&self) -> &'static str {
+            "wasapi-exclusive"
+        }
+
+        fn list_devices(&self) -> Result<Vec<String>, String> {
+            Ok(vec!["Recovered Device".to_string()])
+        }
+
+        fn default_device_name(&self) -> Option<String> {
+            Some("Recovered Device".to_string())
+        }
+
+        fn current_info(&self) -> OutputStreamInfo {
+            OutputStreamInfo {
+                device_id: Some("recovered-device-id".to_string()),
+                device_name: Some("Recovered Device".to_string()),
+                output_sample_rate: Some(48_000),
+            }
+        }
+
+        fn is_stream_open(&self) -> bool {
+            true
+        }
+
+        fn select_device(&self, _device_name: Option<String>) -> Result<OutputStreamInfo, String> {
+            self.select_device_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.current_info())
+        }
+
+        fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
+            self.create_sink_calls.fetch_add(1, Ordering::Relaxed);
+            let sink = Arc::new(CallSink::default());
+            if let Ok(mut guard) = self.last_created_sink.lock() {
+                *guard = Some(sink.clone());
+            }
+            Ok((sink, self.current_info()))
+        }
+
+        fn take_error(&self) -> Option<AudioOutputError> {
+            self.output_error.lock().ok()?.take()
+        }
+    }
+
+    #[test]
+    fn tick_recovers_from_device_disconnect_output_error() {
+        let backend_impl = Arc::new(RecoveringOutputBackend::new(AudioOutputError {
+            code: "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_RENDER_FAILED",
+            message:
+                "The requested device is no longer available. For example, it has been unplugged."
+                    .to_string(),
+        }));
+        let backend: Arc<dyn AudioOutputBackend> = backend_impl.clone();
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.current_track = Some(PathBuf::from("dummy.wav"));
+        engine.decoded_samples = Some(Arc::new(vec![0.0f32; 96_000]));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 120.0;
+        engine.current_position = 12.5;
+        engine.base_position = 12.5;
+        engine.playback_state = PlaybackState::Playing;
+        engine.desired_playback_state = PlaybackState::Playing;
+        engine.playback_started_at = Some(Instant::now() - Duration::from_millis(120));
+        engine.sink = Some(Arc::new(CallSink::default()));
+
+        let ticked = engine.tick();
+        assert!(ticked);
+        assert_eq!(
+            backend_impl.select_device_calls.load(Ordering::Relaxed),
+            1,
+            "tick should reselect default output device after disconnect"
+        );
+        assert!(
+            backend_impl.create_sink_calls.load(Ordering::Relaxed) >= 1,
+            "tick should rebuild sink after recovery"
+        );
+        assert!(matches!(engine.playback_state, PlaybackState::Playing));
+        assert!(
+            engine.last_error_code.is_none(),
+            "successful recovery should clear output error"
+        );
+        assert_eq!(engine.device_name.as_deref(), Some("Recovered Device"));
+
+        let recovered_sink = backend_impl
+            .last_created_sink
+            .lock()
+            .expect("sink lock")
+            .clone()
+            .expect("recovered sink");
+        assert!(
+            recovered_sink.play_calls.load(Ordering::Relaxed) > 0,
+            "recovered sink should resume playback"
+        );
+    }
+
+    #[test]
+    fn tick_keeps_error_for_non_disconnect_output_failure() {
+        let backend_impl = Arc::new(RecoveringOutputBackend::new(AudioOutputError {
+            code: "AUDIO_OUTPUT_WASAPI_EXCLUSIVE_UNSUPPORTED_FORMAT",
+            message: "Unsupported format".to_string(),
+        }));
+        let backend: Arc<dyn AudioOutputBackend> = backend_impl.clone();
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.sink = Some(Arc::new(CallSink::default()));
+
+        let ticked = engine.tick();
+        assert!(ticked);
+        assert_eq!(backend_impl.select_device_calls.load(Ordering::Relaxed), 0);
+        assert!(matches!(engine.playback_state, PlaybackState::Error));
+        assert_eq!(
+            engine.last_error_code.as_deref(),
+            Some("NATIVE_AUDIO_OUTPUT_ERROR")
+        );
     }
 
     fn make_finished_streaming_playback(
