@@ -2306,6 +2306,7 @@ describe('NativeAudioService', () => {
       elevatedStressScore: 6,
       criticalStressScore: 4,
       criticalUnderrunEventsWindow: 99,
+      criticalOverflowGrowthTicks: 99,
     });
 
     const settings = service.getAudioTuningAutoSettings?.();
@@ -2318,6 +2319,7 @@ describe('NativeAudioService', () => {
       elevatedStressScore: 6,
       criticalStressScore: 6,
       criticalUnderrunEventsWindow: 12,
+      criticalOverflowGrowthTicks: 8,
     });
 
     const raw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS);
@@ -2365,6 +2367,7 @@ describe('NativeAudioService', () => {
       elevatedStressScore: 4,
       criticalStressScore: 8,
       criticalUnderrunEventsWindow: 2,
+      criticalOverflowGrowthTicks: 2,
     });
 
     invokeMock.mockClear();

@@ -132,8 +132,12 @@ type NativeAudioStatePayload = {
   sharedRenderLowHitCount?: number;
   sharedRenderLowWatermarkSamples?: number;
   controlQueueLockFree?: boolean;
+  controlQueueMode?: string;
   controlQueueCapacity?: number;
   controlQueueOverwriteEvents?: number;
+  controlQueueDropNewestEvents?: number;
+  controlQueueCoalescedOverflowEvents?: number;
+  controlQueueCriticalOverflowEvents?: number;
   retirePendingTasks?: number;
   retireEnqueuedTotal?: number;
   retireExecutedTotal?: number;
@@ -398,6 +402,13 @@ export class NativeAudioService implements IAudioService {
   private sharedRenderUnderrunFrames = 0;
   private sharedRenderLowHitCount = 0;
   private sharedRenderLowWatermarkSamples = 0;
+  private controlQueueLockFree = false;
+  private controlQueueMode = 'unknown';
+  private controlQueueCapacity = 0;
+  private controlQueueOverwriteEvents = 0;
+  private controlQueueDropNewestEvents = 0;
+  private controlQueueCoalescedOverflowEvents = 0;
+  private controlQueueCriticalOverflowEvents = 0;
   private diagnosticTimelineDroppedEvents = 0;
   private diagnosticTimeline: Array<{
     seq: number;
@@ -452,6 +463,7 @@ export class NativeAudioService implements IAudioService {
   private static readonly TUNING_AUTO_ELEVATED_STRESS_SCORE = 4;
   private static readonly TUNING_AUTO_CRITICAL_STRESS_SCORE = 8;
   private static readonly TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW = 2;
+  private static readonly TUNING_AUTO_CRITICAL_OVERFLOW_GROWTH_TICKS = 2;
   private static readonly PLAYLIST_OWNER_UID = 'local:default';
   private static readonly PLAYLIST_KIND_MANUAL = 'manual' as const;
   private static readonly PLAYLIST_KIND_SMART = 'smart' as const;
@@ -487,6 +499,8 @@ export class NativeAudioService implements IAudioService {
   private tuningAutoCriticalStressScore = NativeAudioService.TUNING_AUTO_CRITICAL_STRESS_SCORE;
   private tuningAutoCriticalUnderrunEventsWindow =
     NativeAudioService.TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW;
+  private tuningAutoCriticalOverflowGrowthTicks =
+    NativeAudioService.TUNING_AUTO_CRITICAL_OVERFLOW_GROWTH_TICKS;
   private tuningAutoControllerState = createAudioTuningControllerState('ll-guarded');
   private tuningAutoTimer: ReturnType<typeof setInterval> | null = null;
   private tuningAutoApplyInFlight = false;
@@ -2576,6 +2590,7 @@ export class NativeAudioService implements IAudioService {
       elevatedStressScore: this.tuningAutoElevatedStressScore,
       criticalStressScore: this.tuningAutoCriticalStressScore,
       criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+      criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
     };
 
     try {
@@ -2623,6 +2638,12 @@ export class NativeAudioService implements IAudioService {
           1,
           12
         ),
+        criticalOverflowGrowthTicks: clampCount(
+          record.criticalOverflowGrowthTicks,
+          defaults.criticalOverflowGrowthTicks,
+          1,
+          8
+        ),
       };
     } catch {
       return defaults;
@@ -2641,6 +2662,7 @@ export class NativeAudioService implements IAudioService {
       settings.criticalStressScore
     );
     this.tuningAutoCriticalUnderrunEventsWindow = settings.criticalUnderrunEventsWindow;
+    this.tuningAutoCriticalOverflowGrowthTicks = settings.criticalOverflowGrowthTicks;
     this.restartTuningAutoLoop();
   }
 
@@ -2673,6 +2695,7 @@ export class NativeAudioService implements IAudioService {
         elevatedStressScore: this.tuningAutoElevatedStressScore,
         criticalStressScore: this.tuningAutoCriticalStressScore,
         criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+        criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
         stableWindowMs: this.tuningAutoStableWindowMs,
         minSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
         postSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
@@ -2706,6 +2729,7 @@ export class NativeAudioService implements IAudioService {
       elevatedStressScore: this.tuningAutoElevatedStressScore,
       criticalStressScore: this.tuningAutoCriticalStressScore,
       criticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+      criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
     };
   }
 
@@ -2756,6 +2780,12 @@ export class NativeAudioService implements IAudioService {
         current.criticalUnderrunEventsWindow,
         1,
         12
+      ),
+      criticalOverflowGrowthTicks: clampCount(
+        settingsPatch.criticalOverflowGrowthTicks,
+        current.criticalOverflowGrowthTicks,
+        1,
+        8
       ),
     };
 
@@ -3590,6 +3620,9 @@ export class NativeAudioService implements IAudioService {
       tuningAutoElevatedStressScore: this.tuningAutoElevatedStressScore,
       tuningAutoCriticalStressScore: this.tuningAutoCriticalStressScore,
       tuningAutoCriticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
+      tuningAutoCriticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
+      tuningAutoCriticalOverflowGrowthStreak:
+        this.tuningAutoControllerState.criticalOverflowGrowthStreak,
       tuningAutoActiveProfile: this.tuningAutoControllerState.activeProfile,
       tuningAutoLastReason: this.tuningAutoLastReason,
       tuningAutoLastAppliedAtMs: this.tuningAutoLastAppliedAtMs,
@@ -3642,6 +3675,13 @@ export class NativeAudioService implements IAudioService {
       sharedRenderUnderrunFrames: this.sharedRenderUnderrunFrames,
       sharedRenderLowHitCount: this.sharedRenderLowHitCount,
       sharedRenderLowWatermarkSamples: this.sharedRenderLowWatermarkSamples,
+      controlQueueLockFree: this.controlQueueLockFree,
+      controlQueueMode: this.controlQueueMode,
+      controlQueueCapacity: this.controlQueueCapacity,
+      controlQueueOverwriteEvents: this.controlQueueOverwriteEvents,
+      controlQueueDropNewestEvents: this.controlQueueDropNewestEvents,
+      controlQueueCoalescedOverflowEvents: this.controlQueueCoalescedOverflowEvents,
+      controlQueueCriticalOverflowEvents: this.controlQueueCriticalOverflowEvents,
       diagnosticTimelineDroppedEvents: this.diagnosticTimelineDroppedEvents,
       diagnosticTimeline: [...this.diagnosticTimeline],
       recentPlaylistWriteScheduledCount: audioPerfTelemetry.recentPlaylistWriteScheduledCount,
@@ -4311,6 +4351,58 @@ export class NativeAudioService implements IAudioService {
           this.sharedRenderLowWatermarkSamples = Math.max(
             0,
             Math.floor(next.sharedRenderLowWatermarkSamples)
+          );
+        }
+
+        if (typeof next.controlQueueLockFree === 'boolean') {
+          this.controlQueueLockFree = next.controlQueueLockFree;
+        }
+
+        if (typeof next.controlQueueMode === 'string' && next.controlQueueMode.trim().length > 0) {
+          this.controlQueueMode = next.controlQueueMode.trim();
+        }
+
+        if (
+          typeof next.controlQueueCapacity === 'number' &&
+          Number.isFinite(next.controlQueueCapacity)
+        ) {
+          this.controlQueueCapacity = Math.max(0, Math.floor(next.controlQueueCapacity));
+        }
+
+        if (
+          typeof next.controlQueueOverwriteEvents === 'number' &&
+          Number.isFinite(next.controlQueueOverwriteEvents)
+        ) {
+          this.controlQueueOverwriteEvents = Math.max(0, Math.floor(next.controlQueueOverwriteEvents));
+        }
+
+        if (
+          typeof next.controlQueueDropNewestEvents === 'number' &&
+          Number.isFinite(next.controlQueueDropNewestEvents)
+        ) {
+          this.controlQueueDropNewestEvents = Math.max(
+            0,
+            Math.floor(next.controlQueueDropNewestEvents)
+          );
+        }
+
+        if (
+          typeof next.controlQueueCoalescedOverflowEvents === 'number' &&
+          Number.isFinite(next.controlQueueCoalescedOverflowEvents)
+        ) {
+          this.controlQueueCoalescedOverflowEvents = Math.max(
+            0,
+            Math.floor(next.controlQueueCoalescedOverflowEvents)
+          );
+        }
+
+        if (
+          typeof next.controlQueueCriticalOverflowEvents === 'number' &&
+          Number.isFinite(next.controlQueueCriticalOverflowEvents)
+        ) {
+          this.controlQueueCriticalOverflowEvents = Math.max(
+            0,
+            Math.floor(next.controlQueueCriticalOverflowEvents)
           );
         }
 

@@ -15,6 +15,10 @@ type AudioTuningTransitionSnapshot = Pick<
   | 'underrunEventsWindow'
   | 'outputWaitTimeoutCount'
   | 'outputRenderUnderrunEvents'
+  | 'controlQueueOverwriteEvents'
+  | 'controlQueueDropNewestEvents'
+  | 'controlQueueCoalescedOverflowEvents'
+  | 'controlQueueCriticalOverflowEvents'
 >;
 
 export type AudioTuningProfilePayload = {
@@ -39,12 +43,16 @@ export type AudioTuningControllerState = {
   stableSinceMs: number | null;
   lastOutputWaitTimeoutCount: number;
   lastOutputRenderUnderrunEvents: number;
+  lastControlQueueOverflowEvents: number;
+  lastControlQueueCriticalOverflowEvents: number;
+  criticalOverflowGrowthStreak: number;
 };
 
 export type AudioTuningTransitionThresholds = {
   elevatedStressScore: number;
   criticalStressScore: number;
   criticalUnderrunEventsWindow: number;
+  criticalOverflowGrowthTicks: number;
   stableWindowMs: number;
   minSwitchIntervalMs: number;
   postSwitchObserveWindowMs: number;
@@ -63,7 +71,9 @@ export type AudioTuningTransitionDecision = {
   reason:
     | 'hold-current'
     | 'critical-pressure'
+    | 'critical-overflow-growth'
     | 'guarded-pressure'
+    | 'queue-overflow-pressure'
     | 'post-critical-recovery'
     | 'stable-window'
     | 'cooldown-hold'
@@ -93,6 +103,7 @@ const DEFAULT_THRESHOLDS: AudioTuningTransitionThresholds = {
   elevatedStressScore: 4,
   criticalStressScore: 8,
   criticalUnderrunEventsWindow: 2,
+  criticalOverflowGrowthTicks: 2,
   stableWindowMs: 30_000,
   minSwitchIntervalMs: 10_000,
   postSwitchObserveWindowMs: 15_000,
@@ -300,6 +311,9 @@ export function createAudioTuningControllerState(
     stableSinceMs: null,
     lastOutputWaitTimeoutCount: 0,
     lastOutputRenderUnderrunEvents: 0,
+    lastControlQueueOverflowEvents: 0,
+    lastControlQueueCriticalOverflowEvents: 0,
+    criticalOverflowGrowthStreak: 0,
   };
 }
 
@@ -332,24 +346,54 @@ export function resolveAudioTuningTransition(
     outputRenderUnderrunEvents - input.state.lastOutputRenderUnderrunEvents
   );
 
+  const controlQueueOverwriteEvents = clampCount(input.snapshot.controlQueueOverwriteEvents);
+  const controlQueueDropNewestEvents = clampCount(input.snapshot.controlQueueDropNewestEvents);
+  const controlQueueCoalescedOverflowEvents = clampCount(
+    input.snapshot.controlQueueCoalescedOverflowEvents
+  );
+  const controlQueueCriticalOverflowEvents = clampCount(
+    input.snapshot.controlQueueCriticalOverflowEvents ??
+      input.state.lastControlQueueCriticalOverflowEvents
+  );
+  const controlQueueOverflowEvents =
+    controlQueueOverwriteEvents +
+    controlQueueDropNewestEvents +
+    controlQueueCoalescedOverflowEvents +
+    controlQueueCriticalOverflowEvents;
+  const controlQueueOverflowDelta = Math.max(
+    0,
+    controlQueueOverflowEvents - input.state.lastControlQueueOverflowEvents
+  );
+  const controlQueueCriticalOverflowDelta = Math.max(
+    0,
+    controlQueueCriticalOverflowEvents - input.state.lastControlQueueCriticalOverflowEvents
+  );
+  const criticalOverflowGrowthStreak =
+    controlQueueCriticalOverflowDelta > 0 ? input.state.criticalOverflowGrowthStreak + 1 : 0;
+  const criticalOverflowPressure =
+    criticalOverflowGrowthStreak >= Math.max(1, thresholds.criticalOverflowGrowthTicks);
+
   const isCritical =
     schedulerProfile === 'critical' ||
     stressScore >= thresholds.criticalStressScore ||
-    underrunEventsWindow >= thresholds.criticalUnderrunEventsWindow;
+    underrunEventsWindow >= thresholds.criticalUnderrunEventsWindow ||
+    criticalOverflowPressure;
 
   const isGuarded =
     !isCritical &&
     (schedulerProfile === 'guarded' ||
       stressScore >= thresholds.elevatedStressScore ||
       outputWaitTimeoutDelta > 0 ||
-      outputRenderUnderrunDelta > 0);
+      outputRenderUnderrunDelta > 0 ||
+      controlQueueOverflowDelta > 0);
 
   const isStable =
     schedulerProfile === 'normal' &&
     stressScore < thresholds.elevatedStressScore &&
     underrunEventsWindow === 0 &&
     outputWaitTimeoutDelta === 0 &&
-    outputRenderUnderrunDelta === 0;
+    outputRenderUnderrunDelta === 0 &&
+    controlQueueOverflowDelta === 0;
 
   const stableSinceMs = isStable ? (input.state.stableSinceMs ?? nowMs) : null;
   const stableDurationMs = stableSinceMs === null ? 0 : Math.max(0, nowMs - stableSinceMs);
@@ -359,10 +403,10 @@ export function resolveAudioTuningTransition(
 
   if (isCritical) {
     desiredProfile = 'robust-shield';
-    reason = 'critical-pressure';
+    reason = criticalOverflowPressure ? 'critical-overflow-growth' : 'critical-pressure';
   } else if (isGuarded) {
     desiredProfile = 'll-guarded';
-    reason = 'guarded-pressure';
+    reason = controlQueueOverflowDelta > 0 ? 'queue-overflow-pressure' : 'guarded-pressure';
   } else if (input.state.activeProfile === 'robust-shield') {
     desiredProfile = 'll-guarded';
     reason = 'post-critical-recovery';
@@ -407,6 +451,9 @@ export function resolveAudioTuningTransition(
       stableSinceMs,
       lastOutputWaitTimeoutCount: outputWaitTimeoutCount,
       lastOutputRenderUnderrunEvents: outputRenderUnderrunEvents,
+      lastControlQueueOverflowEvents: controlQueueOverflowEvents,
+      lastControlQueueCriticalOverflowEvents: controlQueueCriticalOverflowEvents,
+      criticalOverflowGrowthStreak,
     },
   };
 }

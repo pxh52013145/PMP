@@ -3187,8 +3187,16 @@ impl NativeAudioEngine {
             memory_pool_f32_growth_bytes: Some(memory_pool_stats.f32_growth_bytes),
             memory_pool_f32_prewarm_hits: Some(memory_pool_stats.f32_prewarm_hits),
             control_queue_lock_free: Some(control_plane_stats.mode_lock_free),
+            control_queue_mode: Some(control_plane_stats.mode_name.to_string()),
             control_queue_capacity: Some(control_plane_stats.queue_capacity),
             control_queue_overwrite_events: Some(control_plane_stats.overwrite_events),
+            control_queue_drop_newest_events: Some(control_plane_stats.drop_newest_events),
+            control_queue_coalesced_overflow_events: Some(
+                control_plane_stats.coalesced_overflow_events,
+            ),
+            control_queue_critical_overflow_events: Some(
+                control_plane_stats.critical_overflow_events,
+            ),
             retire_pending_tasks: Some(retire_plane_stats.pending_tasks),
             retire_enqueued_total: Some(retire_plane_stats.enqueued_total),
             retire_executed_total: Some(retire_plane_stats.executed_total),
@@ -3266,8 +3274,12 @@ impl NativeAudioEngine {
         payload.memory_pool_f32_growth_bytes = None;
         payload.memory_pool_f32_prewarm_hits = None;
         payload.control_queue_lock_free = None;
+        payload.control_queue_mode = None;
         payload.control_queue_capacity = None;
         payload.control_queue_overwrite_events = None;
+        payload.control_queue_drop_newest_events = None;
+        payload.control_queue_coalesced_overflow_events = None;
+        payload.control_queue_critical_overflow_events = None;
         payload.retire_pending_tasks = None;
         payload.retire_enqueued_total = None;
         payload.retire_executed_total = None;

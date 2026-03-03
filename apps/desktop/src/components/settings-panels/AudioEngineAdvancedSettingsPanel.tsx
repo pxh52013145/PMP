@@ -10,8 +10,6 @@ type ReplayGainMode = 'track' | 'album';
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
 type NativeAudioSrcBackend = 'rubato' | 'linear-simd';
 type NativeAudioOutputQuantizationMode = 'round' | 'tpdf';
-type AudioPolicyPresetId = 'reference' | 'hifi' | 'balanced' | 'stable' | 'low-power';
-type DynamicSrcPresetId = 'responsive' | 'balanced' | 'resilient' | 'extreme';
 type AudioTuningProfileId = 'extreme-ll' | 'll-guarded' | 'robust-shield';
 
 type AudioTuningAutoSettings = {
@@ -23,6 +21,7 @@ type AudioTuningAutoSettings = {
   elevatedStressScore: number;
   criticalStressScore: number;
   criticalUnderrunEventsWindow: number;
+  criticalOverflowGrowthTicks: number;
 };
 
 type ReplayGainSettings = {
@@ -98,43 +97,7 @@ const DEFAULT_TUNING_AUTO_SETTINGS: AudioTuningAutoSettings = {
   elevatedStressScore: 4,
   criticalStressScore: 8,
   criticalUnderrunEventsWindow: 2,
-};
-
-const DYNAMIC_SRC_PRESETS: Record<DynamicSrcPresetId, DynamicSrcSettings> = {
-  responsive: {
-    enabled: true,
-    adaptiveEnabled: true,
-    learningEnabled: true,
-    restoreDebounceMs: 2500,
-    minSwitchIntervalMs: 500,
-    seekHoldMs: 1400,
-    underrunHoldMs: 9000,
-    sharedStressHoldMs: 6000,
-    outputErrorHoldMs: 8000,
-  },
-  balanced: { ...DEFAULT_DYNAMIC_SRC },
-  resilient: {
-    enabled: true,
-    adaptiveEnabled: true,
-    learningEnabled: true,
-    restoreDebounceMs: 6000,
-    minSwitchIntervalMs: 700,
-    seekHoldMs: 2600,
-    underrunHoldMs: 18000,
-    sharedStressHoldMs: 12000,
-    outputErrorHoldMs: 15000,
-  },
-  extreme: {
-    enabled: true,
-    adaptiveEnabled: true,
-    learningEnabled: true,
-    restoreDebounceMs: 9000,
-    minSwitchIntervalMs: 900,
-    seekHoldMs: 3600,
-    underrunHoldMs: 30000,
-    sharedStressHoldMs: 20000,
-    outputErrorHoldMs: 26000,
-  },
+  criticalOverflowGrowthTicks: 2,
 };
 
 const AUDIO_TUNING_PROFILE_IDS: AudioTuningProfileId[] = [
@@ -149,44 +112,6 @@ const DEFAULT_ENGINE_POLICY: EnginePolicyState = {
   srcBackend: 'rubato',
   srcTargetSampleRate: 96000,
   outputQuantizationMode: 'round',
-};
-
-const AUDIO_POLICY_PRESETS: Record<AudioPolicyPresetId, EnginePolicyState> = {
-  reference: {
-    transportMode: 'transport-exact',
-    srcMode: 'source-native',
-    srcBackend: 'rubato',
-    srcTargetSampleRate: null,
-    outputQuantizationMode: 'round',
-  },
-  hifi: {
-    transportMode: 'robust',
-    srcMode: 'target-rate',
-    srcBackend: 'rubato',
-    srcTargetSampleRate: 192000,
-    outputQuantizationMode: 'tpdf',
-  },
-  balanced: {
-    transportMode: 'robust',
-    srcMode: 'match-output',
-    srcBackend: 'rubato',
-    srcTargetSampleRate: null,
-    outputQuantizationMode: 'tpdf',
-  },
-  stable: {
-    transportMode: 'robust',
-    srcMode: 'match-output',
-    srcBackend: 'linear-simd',
-    srcTargetSampleRate: null,
-    outputQuantizationMode: 'round',
-  },
-  'low-power': {
-    transportMode: 'robust',
-    srcMode: 'target-rate',
-    srcBackend: 'linear-simd',
-    srcTargetSampleRate: 48000,
-    outputQuantizationMode: 'round',
-  },
 };
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -362,6 +287,12 @@ function parseAudioTuningAutoSettings(raw: unknown): AudioTuningAutoSettings {
       1,
       12
     ),
+    criticalOverflowGrowthTicks: clampInt(
+      record?.criticalOverflowGrowthTicks,
+      DEFAULT_TUNING_AUTO_SETTINGS.criticalOverflowGrowthTicks,
+      1,
+      8
+    ),
   };
 }
 
@@ -410,42 +341,57 @@ function parseOutputBackendId(raw: unknown): string | null {
   return backendId.length > 0 ? backendId : null;
 }
 
-function resolvePolicyPresetId(policy: EnginePolicyState): AudioPolicyPresetId | 'custom' {
-  const keys = Object.keys(AUDIO_POLICY_PRESETS) as AudioPolicyPresetId[];
-  for (const key of keys) {
-    const preset = AUDIO_POLICY_PRESETS[key];
-    if (
-      preset.transportMode === policy.transportMode &&
-      preset.srcMode === policy.srcMode &&
-      preset.srcBackend === policy.srcBackend &&
-      preset.srcTargetSampleRate === policy.srcTargetSampleRate &&
-      preset.outputQuantizationMode === policy.outputQuantizationMode
-    ) {
-      return key;
-    }
-  }
-  return 'custom';
+function isSameReplayGainSettings(a: ReplayGainSettings, b: ReplayGainSettings): boolean {
+  return a.enabled === b.enabled && a.mode === b.mode && Math.abs(a.preampDb - b.preampDb) < 1e-6;
 }
 
-function resolveDynamicSrcPresetId(settings: DynamicSrcSettings): DynamicSrcPresetId | 'custom' {
-  const keys = Object.keys(DYNAMIC_SRC_PRESETS) as DynamicSrcPresetId[];
-  for (const key of keys) {
-    const preset = DYNAMIC_SRC_PRESETS[key];
-    if (
-      preset.enabled === settings.enabled &&
-      preset.adaptiveEnabled === settings.adaptiveEnabled &&
-      preset.learningEnabled === settings.learningEnabled &&
-      preset.restoreDebounceMs === settings.restoreDebounceMs &&
-      preset.minSwitchIntervalMs === settings.minSwitchIntervalMs &&
-      preset.seekHoldMs === settings.seekHoldMs &&
-      preset.underrunHoldMs === settings.underrunHoldMs &&
-      preset.sharedStressHoldMs === settings.sharedStressHoldMs &&
-      preset.outputErrorHoldMs === settings.outputErrorHoldMs
-    ) {
-      return key;
-    }
-  }
-  return 'custom';
+function isSameRuntimeControlSettings(a: RuntimeControlSettings, b: RuntimeControlSettings): boolean {
+  return (
+    a.dynamicGainEnabled === b.dynamicGainEnabled &&
+    a.volumeDebounceEnabled === b.volumeDebounceEnabled
+  );
+}
+
+function isSameCrossfadeSettings(a: CrossfadeSettings, b: CrossfadeSettings): boolean {
+  return a.enabled === b.enabled && a.durationMs === b.durationMs;
+}
+
+function isSameEnginePolicyState(a: EnginePolicyState, b: EnginePolicyState): boolean {
+  return (
+    a.transportMode === b.transportMode &&
+    a.srcMode === b.srcMode &&
+    a.srcBackend === b.srcBackend &&
+    a.srcTargetSampleRate === b.srcTargetSampleRate &&
+    a.outputQuantizationMode === b.outputQuantizationMode
+  );
+}
+
+function isSameDynamicSrcSettings(a: DynamicSrcSettings, b: DynamicSrcSettings): boolean {
+  return (
+    a.enabled === b.enabled &&
+    a.adaptiveEnabled === b.adaptiveEnabled &&
+    a.learningEnabled === b.learningEnabled &&
+    a.restoreDebounceMs === b.restoreDebounceMs &&
+    a.minSwitchIntervalMs === b.minSwitchIntervalMs &&
+    a.seekHoldMs === b.seekHoldMs &&
+    a.underrunHoldMs === b.underrunHoldMs &&
+    a.sharedStressHoldMs === b.sharedStressHoldMs &&
+    a.outputErrorHoldMs === b.outputErrorHoldMs
+  );
+}
+
+function isSameTuningAutoSettings(a: AudioTuningAutoSettings, b: AudioTuningAutoSettings): boolean {
+  return (
+    a.enabled === b.enabled &&
+    a.tickIntervalMs === b.tickIntervalMs &&
+    a.stableWindowMs === b.stableWindowMs &&
+    a.minSwitchIntervalMs === b.minSwitchIntervalMs &&
+    a.postSwitchObserveWindowMs === b.postSwitchObserveWindowMs &&
+    a.elevatedStressScore === b.elevatedStressScore &&
+    a.criticalStressScore === b.criticalStressScore &&
+    a.criticalUnderrunEventsWindow === b.criticalUnderrunEventsWindow &&
+    a.criticalOverflowGrowthTicks === b.criticalOverflowGrowthTicks
+  );
 }
 
 function resolveAudioTuningProfileId(
@@ -581,6 +527,7 @@ type AdvancedParamHeadProps = {
   title: string;
   subtitle: string;
   costPercent: number;
+  pendingApply?: boolean;
 };
 
 function SettingHelpLabel({ title, help }: SettingHelpLabelProps) {
@@ -599,7 +546,14 @@ function SettingHelpLabel({ title, help }: SettingHelpLabelProps) {
   );
 }
 
-function AdvancedParamHead({ eyebrow, title, subtitle, costPercent }: AdvancedParamHeadProps) {
+function AdvancedParamHead({
+  eyebrow,
+  title,
+  subtitle,
+  costPercent,
+  pendingApply = false,
+}: AdvancedParamHeadProps) {
+  const t = useT();
   const percent = clampPercent(costPercent);
 
   return (
@@ -607,7 +561,10 @@ function AdvancedParamHead({ eyebrow, title, subtitle, costPercent }: AdvancedPa
       <div className="settings-param-head-copy">
         <p className="settings-param-eyebrow">{eyebrow}</p>
         <h3 className="settings-param-title">{title}</h3>
-        <p className="settings-param-subtitle">{subtitle}</p>
+        <p className="settings-param-subtitle">
+          {subtitle}
+          {pendingApply ? t('settings.audioAdvanced.pendingApplySuffix') : ''}
+        </p>
       </div>
       <div className="settings-param-head-meter" role="presentation" aria-hidden="true">
         <span className="settings-param-head-meter-track">
@@ -632,19 +589,28 @@ export function AudioEngineAdvancedSettingsPanel() {
   const [replayGain, setReplayGain] = useState<ReplayGainSettings>(() =>
     parseReplayGainSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS))
   );
+  const [appliedReplayGain, setAppliedReplayGain] = useState<ReplayGainSettings>(replayGain);
   const [runtimeControl, setRuntimeControl] = useState<RuntimeControlSettings>(() =>
     parseRuntimeControlSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS))
   );
+  const [appliedRuntimeControl, setAppliedRuntimeControl] =
+    useState<RuntimeControlSettings>(runtimeControl);
   const [crossfade, setCrossfade] = useState<CrossfadeSettings>(() =>
     parseCrossfadeSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS))
   );
+  const [appliedCrossfade, setAppliedCrossfade] = useState<CrossfadeSettings>(crossfade);
 
   const [enginePolicy, setEnginePolicy] = useState<EnginePolicyState>(DEFAULT_ENGINE_POLICY);
-  const [policyPreset, setPolicyPreset] = useState<AudioPolicyPresetId | 'custom'>('custom');
+  const [appliedEnginePolicy, setAppliedEnginePolicy] =
+    useState<EnginePolicyState>(DEFAULT_ENGINE_POLICY);
   const [dynamicSrc, setDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
-  const [dynamicSrcPreset, setDynamicSrcPreset] = useState<DynamicSrcPresetId | 'custom'>('custom');
+  const [appliedDynamicSrc, setAppliedDynamicSrc] = useState<DynamicSrcSettings>(DEFAULT_DYNAMIC_SRC);
   const [tuningProfile, setTuningProfile] = useState<AudioTuningProfileId | 'custom'>('custom');
+  const [appliedTuningProfile, setAppliedTuningProfile] =
+    useState<AudioTuningProfileId | 'custom'>('custom');
   const [tuningAutoSettings, setTuningAutoSettings] =
+    useState<AudioTuningAutoSettings>(DEFAULT_TUNING_AUTO_SETTINGS);
+  const [appliedTuningAutoSettings, setAppliedTuningAutoSettings] =
     useState<AudioTuningAutoSettings>(DEFAULT_TUNING_AUTO_SETTINGS);
   const [outputBackendId, setOutputBackendId] = useState<string | null>(null);
 
@@ -664,6 +630,14 @@ export function AudioEngineAdvancedSettingsPanel() {
     );
   }, [outputBackendId]);
 
+  const replayGainDirty = !isSameReplayGainSettings(replayGain, appliedReplayGain);
+  const runtimeControlDirty = !isSameRuntimeControlSettings(runtimeControl, appliedRuntimeControl);
+  const crossfadeDirty = !isSameCrossfadeSettings(crossfade, appliedCrossfade);
+  const tuningProfileDirty = tuningProfile !== appliedTuningProfile;
+  const tuningAutoDirty = !isSameTuningAutoSettings(tuningAutoSettings, appliedTuningAutoSettings);
+  const enginePolicyDirty = !isSameEnginePolicyState(enginePolicy, appliedEnginePolicy);
+  const dynamicSrcDirty = !isSameDynamicSrcSettings(dynamicSrc, appliedDynamicSrc);
+
   const refresh = useCallback(async () => {
     if (!canUse) return;
 
@@ -676,39 +650,56 @@ export function AudioEngineAdvancedSettingsPanel() {
       const policyPayload = await invoke<unknown>('native_audio_get_engine_policy');
       const parsedPolicy = parseEnginePolicy(policyPayload);
       setEnginePolicy(parsedPolicy);
-      setPolicyPreset(resolvePolicyPresetId(parsedPolicy));
+      setAppliedEnginePolicy(parsedPolicy);
+
+      let parsedDynamicSrc = DEFAULT_DYNAMIC_SRC;
 
       const getter = audioService.getDynamicSrcAutoSettings;
       if (typeof getter === 'function') {
         const settings = getter.call(audioService);
-        const parsedDynamicSrc = parseDynamicSrcSettings(settings);
-        setDynamicSrc(parsedDynamicSrc);
-        setDynamicSrcPreset(resolveDynamicSrcPresetId(parsedDynamicSrc));
-        setTuningProfile(resolveAudioTuningProfileId(parsedPolicy, parsedDynamicSrc));
+        parsedDynamicSrc = parseDynamicSrcSettings(settings);
       } else {
-        const parsedDynamicSrc = parseDynamicSrcSettings(
+        parsedDynamicSrc = parseDynamicSrcSettings(
           readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS)
         );
-        setDynamicSrc(parsedDynamicSrc);
-        setDynamicSrcPreset(resolveDynamicSrcPresetId(parsedDynamicSrc));
-        setTuningProfile(resolveAudioTuningProfileId(parsedPolicy, parsedDynamicSrc));
       }
+      setDynamicSrc(parsedDynamicSrc);
+      setAppliedDynamicSrc(parsedDynamicSrc);
+
+      const resolvedTuningProfile = resolveAudioTuningProfileId(parsedPolicy, parsedDynamicSrc);
+      setTuningProfile(resolvedTuningProfile);
+      setAppliedTuningProfile(resolvedTuningProfile);
 
       const tuningAutoGetter = audioService.getAudioTuningAutoSettings;
       if (typeof tuningAutoGetter === 'function') {
         const parsedTuningAuto = parseAudioTuningAutoSettings(tuningAutoGetter.call(audioService));
         setTuningAutoSettings(parsedTuningAuto);
+        setAppliedTuningAutoSettings(parsedTuningAuto);
       } else {
-        setTuningAutoSettings(
-          parseAudioTuningAutoSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS))
+        const parsedTuningAuto = parseAudioTuningAutoSettings(
+          readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS)
         );
+        setTuningAutoSettings(parsedTuningAuto);
+        setAppliedTuningAutoSettings(parsedTuningAuto);
       }
 
-      setReplayGain(parseReplayGainSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)));
-      setRuntimeControl(
-        parseRuntimeControlSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS))
+      const parsedReplayGain = parseReplayGainSettings(
+        readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_REPLAYGAIN_SETTINGS)
       );
-      setCrossfade(parseCrossfadeSettings(readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS)));
+      setReplayGain(parsedReplayGain);
+      setAppliedReplayGain(parsedReplayGain);
+
+      const parsedRuntimeControl = parseRuntimeControlSettings(
+        readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_RUNTIME_CONTROL_SETTINGS)
+      );
+      setRuntimeControl(parsedRuntimeControl);
+      setAppliedRuntimeControl(parsedRuntimeControl);
+
+      const parsedCrossfade = parseCrossfadeSettings(
+        readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_CROSSFADE_SETTINGS)
+      );
+      setCrossfade(parsedCrossfade);
+      setAppliedCrossfade(parsedCrossfade);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -719,14 +710,6 @@ export function AudioEngineAdvancedSettingsPanel() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    setPolicyPreset(resolvePolicyPresetId(enginePolicy));
-  }, [enginePolicy]);
-
-  useEffect(() => {
-    setDynamicSrcPreset(resolveDynamicSrcPresetId(dynamicSrc));
-  }, [dynamicSrc]);
 
   useEffect(() => {
     setTuningProfile(resolveAudioTuningProfileId(enginePolicy, dynamicSrc));
@@ -767,6 +750,7 @@ export function AudioEngineAdvancedSettingsPanel() {
       await invoke('native_audio_set_replay_gain', {
         db: clampNumber(effectiveDb, -30, 30),
       });
+      setAppliedReplayGain(replayGain);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -797,6 +781,7 @@ export function AudioEngineAdvancedSettingsPanel() {
       await invoke('native_audio_set_replay_gain', {
         db: clampNumber(effectiveDb, -30, 30),
       });
+      setAppliedRuntimeControl(runtimeControl);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -815,6 +800,7 @@ export function AudioEngineAdvancedSettingsPanel() {
         crossfade,
         TAURI_EVENTS.NATIVE_AUDIO_CROSSFADE_SETTINGS_UPDATED
       );
+      setAppliedCrossfade(crossfade);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -835,7 +821,6 @@ export function AudioEngineAdvancedSettingsPanel() {
         srcTargetSampleRate: enginePolicy.srcMode === 'target-rate' ? enginePolicy.srcTargetSampleRate : null,
         outputQuantizationMode: enginePolicy.outputQuantizationMode,
       });
-      setPolicyPreset(resolvePolicyPresetId(enginePolicy));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -843,19 +828,6 @@ export function AudioEngineAdvancedSettingsPanel() {
       setBusy(false);
     }
   }, [audioService, canUse, enginePolicy, refresh]);
-
-  const applyPolicyPreset = useCallback(
-    (presetId: AudioPolicyPresetId) => {
-      setPolicyPreset(presetId);
-      setEnginePolicy(AUDIO_POLICY_PRESETS[presetId]);
-    },
-    []
-  );
-
-  const applyDynamicSrcPreset = useCallback((presetId: DynamicSrcPresetId) => {
-    setDynamicSrcPreset(presetId);
-    setDynamicSrc(DYNAMIC_SRC_PRESETS[presetId]);
-  }, []);
 
   const applyDynamicSrc = useCallback(async () => {
     if (!canUse || typeof audioService.setDynamicSrcAutoSettings !== 'function') return;
@@ -911,50 +883,27 @@ export function AudioEngineAdvancedSettingsPanel() {
     [audioService, canUse, refresh, t]
   );
 
+  const applySelectedTuningProfile = useCallback(async () => {
+    if (tuningProfile === 'custom') {
+      return;
+    }
+    await applyTuningProfile(tuningProfile);
+  }, [applyTuningProfile, tuningProfile]);
+
   return (
     <div className="settings-audio-panel settings-audio-panel--advanced">
       <div className="settings-audio-block" style={buildInlineMeterStyle(replayGainCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
         <AdvancedParamHead
-          eyebrow="PLAYBACK GAIN"
+          eyebrow={t('settings.audioAdvanced.replayGain.eyebrow')}
           title={t('settings.audioAdvanced.replayGain.title')}
-          subtitle="ReplayGain & Loudness Calibration"
+          subtitle={t('settings.audioAdvanced.replayGain.subtitle')}
           costPercent={replayGainCost}
+          pendingApply={replayGainDirty}
         />
 
         {canUse ? (
           <>
-            <div className="settings-inline-row">
-              <div className="settings-inline-row-copy">
-                <SettingHelpLabel
-                  title={t('settings.audioAdvanced.dynamicSrc.presets.label')}
-                  help={t('settings.audioAdvanced.dynamicSrc.help.presets')}
-                />
-              </div>
-              <div className="settings-inline-row-controls settings-section-controls--stretch">
-                <select
-                  className="settings-select"
-                  value={dynamicSrcPreset}
-                  onChange={(e) => {
-                    const nextPreset = e.target.value as DynamicSrcPresetId | 'custom';
-                    if (nextPreset === 'custom') {
-                      setDynamicSrcPreset('custom');
-                      return;
-                    }
-                    applyDynamicSrcPreset(nextPreset);
-                  }}
-                  aria-label={t('settings.audioAdvanced.dynamicSrc.presets.label')}
-                  disabled={busy}
-                >
-                  <option value="responsive">{t('settings.audioAdvanced.dynamicSrc.presets.responsive')}</option>
-                  <option value="balanced">{t('settings.audioAdvanced.dynamicSrc.presets.balanced')}</option>
-                  <option value="resilient">{t('settings.audioAdvanced.dynamicSrc.presets.resilient')}</option>
-                  <option value="extreme">{t('settings.audioAdvanced.dynamicSrc.presets.extreme')}</option>
-                  <option value="custom">{t('settings.audioAdvanced.dynamicSrc.presets.custom')}</option>
-                </select>
-              </div>
-            </div>
-
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
                 <p className="settings-inline-row-title">{t('common.state.label')}</p>
@@ -1031,7 +980,12 @@ export function AudioEngineAdvancedSettingsPanel() {
             </div>
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void applyReplayGain()} disabled={busy}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applyReplayGain()}
+                disabled={busy || !replayGainDirty}
+              >
                 {t('common.action.apply')}
               </button>
             </div>
@@ -1044,10 +998,11 @@ export function AudioEngineAdvancedSettingsPanel() {
       <div className="settings-audio-block" style={buildInlineMeterStyle(runtimeControlCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
         <AdvancedParamHead
-          eyebrow="RUNTIME CONTROL"
+          eyebrow={t('settings.audioAdvanced.runtimeControl.eyebrow')}
           title={t('settings.audioAdvanced.runtimeControl.title')}
           subtitle={t('settings.audioAdvanced.runtimeControl.subtitle')}
           costPercent={runtimeControlCost}
+          pendingApply={runtimeControlDirty}
         />
 
         {canUse ? (
@@ -1135,7 +1090,7 @@ export function AudioEngineAdvancedSettingsPanel() {
                 type="button"
                 className="settings-action-btn"
                 onClick={() => void applyRuntimeControl()}
-                disabled={busy}
+                disabled={busy || !runtimeControlDirty}
               >
                 {t('common.action.apply')}
               </button>
@@ -1149,10 +1104,11 @@ export function AudioEngineAdvancedSettingsPanel() {
       <div className="settings-audio-block" style={buildInlineMeterStyle(crossfadeCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
         <AdvancedParamHead
-          eyebrow="TRANSITION"
+          eyebrow={t('settings.audioAdvanced.crossfade.eyebrow')}
           title={t('settings.audioAdvanced.crossfade.title')}
           subtitle={t('settings.audioAdvanced.crossfade.subtitle')}
           costPercent={crossfadeCost}
+          pendingApply={crossfadeDirty}
         />
 
         {canUse ? (
@@ -1207,7 +1163,12 @@ export function AudioEngineAdvancedSettingsPanel() {
             </div>
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void applyCrossfade()} disabled={busy}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applyCrossfade()}
+                disabled={busy || !crossfadeDirty}
+              >
                 {t('common.action.apply')}
               </button>
             </div>
@@ -1220,14 +1181,22 @@ export function AudioEngineAdvancedSettingsPanel() {
       <div className="settings-audio-block" style={buildInlineMeterStyle(srcPolicyCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
         <AdvancedParamHead
-          eyebrow="SRC POLICY"
-          title={t('settings.audioAdvanced.enginePolicy.title')}
-          subtitle="Transport & Sample Rate Conversion"
+          eyebrow={t('settings.audioAdvanced.tuningPipeline.eyebrow')}
+          title={t('settings.audioAdvanced.tuningPipeline.title')}
+          subtitle={t('settings.audioAdvanced.tuningPipeline.subtitle')}
           costPercent={srcPolicyCost}
+          pendingApply={tuningProfileDirty || tuningAutoDirty || enginePolicyDirty}
         />
 
         {canUse ? (
           <>
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <p className="settings-inline-row-title">{t('settings.audioAdvanced.tuning.auto.enabled')}</p>
+                <p className="settings-inline-row-note">{t('settings.audioAdvanced.tuning.auto.note')}</p>
+              </div>
+            </div>
+
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
                 <SettingHelpLabel
@@ -1249,7 +1218,7 @@ export function AudioEngineAdvancedSettingsPanel() {
                   type="button"
                   className="settings-choice-btn"
                   data-active={tuningProfile === 'extreme-ll'}
-                  onClick={() => void applyTuningProfile('extreme-ll')}
+                  onClick={() => setTuningProfile('extreme-ll')}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.tuning.profile.extreme-ll')}
@@ -1258,7 +1227,7 @@ export function AudioEngineAdvancedSettingsPanel() {
                   type="button"
                   className="settings-choice-btn"
                   data-active={tuningProfile === 'll-guarded'}
-                  onClick={() => void applyTuningProfile('ll-guarded')}
+                  onClick={() => setTuningProfile('ll-guarded')}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.tuning.profile.ll-guarded')}
@@ -1267,12 +1236,23 @@ export function AudioEngineAdvancedSettingsPanel() {
                   type="button"
                   className="settings-choice-btn"
                   data-active={tuningProfile === 'robust-shield'}
-                  onClick={() => void applyTuningProfile('robust-shield')}
+                  onClick={() => setTuningProfile('robust-shield')}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.tuning.profile.robust-shield')}
                 </button>
               </div>
+            </div>
+
+            <div className="settings-section-controls">
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applySelectedTuningProfile()}
+                disabled={busy || tuningProfile === 'custom' || !tuningProfileDirty}
+              >
+                {t('common.action.apply')}
+              </button>
             </div>
 
             <div className="settings-inline-row">
@@ -1303,6 +1283,11 @@ export function AudioEngineAdvancedSettingsPanel() {
                 </button>
               </div>
             </div>
+
+            <details className="settings-inline-details">
+              <summary className="settings-inline-details-summary">
+                {t('settings.audioAdvanced.tuning.auto.advancedSummary')}
+              </summary>
 
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
@@ -1496,12 +1481,40 @@ export function AudioEngineAdvancedSettingsPanel() {
               </div>
             </div>
 
+            <div className="settings-inline-row">
+              <div className="settings-inline-row-copy">
+                <SettingHelpLabel
+                  title={t('settings.audioAdvanced.tuning.auto.criticalOverflowGrowthTicks')}
+                  help={t('settings.audioAdvanced.tuning.auto.help.criticalOverflowGrowthTicks')}
+                />
+              </div>
+              <div className="settings-inline-row-controls">
+                <input
+                  className="settings-number-input"
+                  type="number"
+                  min={1}
+                  max={8}
+                  step={1}
+                  value={tuningAutoSettings.criticalOverflowGrowthTicks}
+                  onChange={(e) =>
+                    setTuningAutoSettings((prev) => ({
+                      ...prev,
+                      criticalOverflowGrowthTicks: Math.floor(clampNumber(Number(e.target.value), 1, 8)),
+                    }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            </details>
+
             <div className="settings-section-controls">
               <button
                 type="button"
                 className="settings-action-btn"
                 onClick={() => void applyTuningAutoSettings()}
-                disabled={busy}
+                disabled={busy || !tuningAutoDirty}
               >
                 {t('common.action.apply')}
               </button>
@@ -1509,37 +1522,8 @@ export function AudioEngineAdvancedSettingsPanel() {
 
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
-                <SettingHelpLabel
-                  title={t('settings.audioAdvanced.enginePolicy.presets.label')}
-                  help={t('settings.audioAdvanced.enginePolicy.help.presets')}
-                />
-              </div>
-              <div className="settings-inline-row-controls settings-section-controls--stretch">
-                <select
-                  className="settings-select"
-                  value={policyPreset}
-                  onChange={(e) => {
-                    const nextPreset = e.target.value as AudioPolicyPresetId | 'custom';
-                    if (nextPreset === 'custom') {
-                      setPolicyPreset('custom');
-                      return;
-                    }
-                    applyPolicyPreset(nextPreset);
-                  }}
-                  aria-label={t('settings.audioAdvanced.enginePolicy.presets.label')}
-                  disabled={busy}
-                >
-                  <option value="hifi" disabled={isSharedOutputBackend}>
-                    {t('settings.audioAdvanced.enginePolicy.presets.hifi')}
-                  </option>
-                  <option value="balanced">{t('settings.audioAdvanced.enginePolicy.presets.balanced')}</option>
-                  <option value="reference">{t('settings.audioAdvanced.enginePolicy.presets.reference')}</option>
-                  <option value="stable">{t('settings.audioAdvanced.enginePolicy.presets.stable')}</option>
-                  <option value="low-power" disabled={isSharedOutputBackend}>
-                    {t('settings.audioAdvanced.enginePolicy.presets.lowPower')}
-                  </option>
-                  <option value="custom">{t('settings.audioAdvanced.enginePolicy.presets.custom')}</option>
-                </select>
+                <p className="settings-inline-row-title">{t('settings.audioAdvanced.enginePolicy.section.title')}</p>
+                <p className="settings-inline-row-note">{t('settings.audioAdvanced.enginePolicy.section.note')}</p>
               </div>
             </div>
 
@@ -1616,38 +1600,6 @@ export function AudioEngineAdvancedSettingsPanel() {
               </div>
             </div>
 
-            {enginePolicy.srcMode === 'target-rate' && (
-              <div className="settings-inline-row">
-                <div className="settings-inline-row-copy">
-                  <SettingHelpLabel
-                    title={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
-                    help={t('settings.audioAdvanced.enginePolicy.help.srcTargetRate')}
-                  />
-                </div>
-                <div className="settings-inline-row-controls settings-section-controls--stretch">
-                  <select
-                    className="settings-select"
-                    value={String(enginePolicy.srcTargetSampleRate ?? targetRateFallback)}
-                    onChange={(e) => {
-                      const nextRate = Number(e.target.value);
-                      setEnginePolicy((prev) => ({
-                        ...prev,
-                        srcTargetSampleRate: Number.isFinite(nextRate) ? Math.floor(nextRate) : targetRateFallback,
-                      }));
-                    }}
-                    aria-label={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
-                    disabled={busy}
-                  >
-                    {sourceRateChoices.map((rate) => (
-                      <option key={rate} value={rate}>
-                        {rate / 1000}k
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
                 <SettingHelpLabel
@@ -1677,41 +1629,102 @@ export function AudioEngineAdvancedSettingsPanel() {
               </div>
             </div>
 
-            <div className="settings-inline-row">
-              <div className="settings-inline-row-copy">
-                <SettingHelpLabel
-                  title={t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.label')}
-                  help={t('settings.audioAdvanced.enginePolicy.help.outputQuantizationMode')}
-                />
+            <details className="settings-inline-details">
+              <summary className="settings-inline-details-summary">
+                {t('settings.audioAdvanced.enginePolicy.advancedSummary')}
+              </summary>
+
+              <div className="settings-inline-row">
+                <div className="settings-inline-row-copy">
+                  <p className="settings-inline-row-note">
+                    {t('settings.audioAdvanced.enginePolicy.advancedNote')}
+                  </p>
+                </div>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.outputQuantizationMode === 'round'}
-                  onClick={() =>
-                    setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'round' }))
-                  }
-                  disabled={busy || enginePolicy.transportMode === 'transport-exact'}
-                >
-                  {t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.round')}
-                </button>
-                <button
-                  type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.outputQuantizationMode === 'tpdf'}
-                  onClick={() =>
-                    setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'tpdf' }))
-                  }
-                  disabled={busy || enginePolicy.transportMode === 'transport-exact'}
-                >
-                  {t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.tpdf')}
-                </button>
+
+              {enginePolicy.srcMode === 'target-rate' ? (
+                <div className="settings-inline-row">
+                  <div className="settings-inline-row-copy">
+                    <SettingHelpLabel
+                      title={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
+                      help={t('settings.audioAdvanced.enginePolicy.help.srcTargetRate')}
+                    />
+                  </div>
+                  <div className="settings-inline-row-controls settings-section-controls--stretch">
+                    <select
+                      className="settings-select"
+                      value={String(enginePolicy.srcTargetSampleRate ?? targetRateFallback)}
+                      onChange={(e) => {
+                        const nextRate = Number(e.target.value);
+                        setEnginePolicy((prev) => ({
+                          ...prev,
+                          srcTargetSampleRate: Number.isFinite(nextRate)
+                            ? Math.floor(nextRate)
+                            : targetRateFallback,
+                        }));
+                      }}
+                      aria-label={t('settings.audioAdvanced.enginePolicy.srcTargetRate.label')}
+                      disabled={busy}
+                    >
+                      {sourceRateChoices.map((rate) => (
+                        <option key={rate} value={rate}>
+                          {rate / 1000}k
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <div className="settings-inline-row">
+                  <div className="settings-inline-row-copy">
+                    <p className="settings-inline-row-note">
+                      {t('settings.audioAdvanced.enginePolicy.targetRateHint')}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="settings-inline-row">
+                <div className="settings-inline-row-copy">
+                  <SettingHelpLabel
+                    title={t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.label')}
+                    help={t('settings.audioAdvanced.enginePolicy.help.outputQuantizationMode')}
+                  />
+                </div>
+                <div className="settings-inline-row-controls">
+                  <button
+                    type="button"
+                    className="settings-choice-btn"
+                    data-active={enginePolicy.outputQuantizationMode === 'round'}
+                    onClick={() =>
+                      setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'round' }))
+                    }
+                    disabled={busy || enginePolicy.transportMode === 'transport-exact'}
+                  >
+                    {t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.round')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-choice-btn"
+                    data-active={enginePolicy.outputQuantizationMode === 'tpdf'}
+                    onClick={() =>
+                      setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'tpdf' }))
+                    }
+                    disabled={busy || enginePolicy.transportMode === 'transport-exact'}
+                  >
+                    {t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.tpdf')}
+                  </button>
+                </div>
               </div>
-            </div>
+            </details>
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void applyEnginePolicy()} disabled={busy}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applyEnginePolicy()}
+                disabled={busy || !enginePolicyDirty}
+              >
                 {t('common.action.apply')}
               </button>
             </div>
@@ -1724,10 +1737,11 @@ export function AudioEngineAdvancedSettingsPanel() {
       <div className="settings-audio-block" style={buildInlineMeterStyle(dynamicSrcCost)}>
         <div className="settings-param-divider settings-param-divider--compact" />
         <AdvancedParamHead
-          eyebrow="DYNAMIC SRC"
+          eyebrow={t('settings.audioAdvanced.dynamicSrc.eyebrow')}
           title={t('settings.audioAdvanced.dynamicSrc.title')}
-          subtitle="Adaptive Stability Strategy"
+          subtitle={t('settings.audioAdvanced.dynamicSrc.subtitle')}
           costPercent={dynamicSrcCost}
+          pendingApply={dynamicSrcDirty}
         />
 
         {canUse ? (
@@ -1815,6 +1829,11 @@ export function AudioEngineAdvancedSettingsPanel() {
                 </button>
               </div>
             </div>
+
+            <details className="settings-inline-details">
+              <summary className="settings-inline-details-summary">
+                {t('settings.audioAdvanced.dynamicSrc.advancedTimingSummary')}
+              </summary>
 
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
@@ -1972,8 +1991,15 @@ export function AudioEngineAdvancedSettingsPanel() {
               </div>
             </div>
 
+            </details>
+
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void applyDynamicSrc()} disabled={busy}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void applyDynamicSrc()}
+                disabled={busy || !dynamicSrcDirty}
+              >
                 {t('common.action.apply')}
               </button>
               <button type="button" className="settings-action-btn" onClick={() => void refresh()} disabled={busy}>

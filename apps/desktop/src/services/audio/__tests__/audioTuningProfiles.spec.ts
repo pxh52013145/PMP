@@ -65,6 +65,9 @@ describe('audioTuningProfiles', () => {
         stableSinceMs: null,
         lastOutputWaitTimeoutCount: 0,
         lastOutputRenderUnderrunEvents: 0,
+        lastControlQueueOverflowEvents: 0,
+        lastControlQueueCriticalOverflowEvents: 0,
+        criticalOverflowGrowthStreak: 0,
       },
     });
 
@@ -90,6 +93,9 @@ describe('audioTuningProfiles', () => {
         stableSinceMs: null,
         lastOutputWaitTimeoutCount: 0,
         lastOutputRenderUnderrunEvents: 0,
+        lastControlQueueOverflowEvents: 0,
+        lastControlQueueCriticalOverflowEvents: 0,
+        criticalOverflowGrowthStreak: 0,
       },
     });
 
@@ -114,8 +120,13 @@ describe('audioTuningProfiles', () => {
         stableSinceMs: 9000,
         lastOutputWaitTimeoutCount: 0,
         lastOutputRenderUnderrunEvents: 0,
+        lastControlQueueOverflowEvents: 0,
+        lastControlQueueCriticalOverflowEvents: 0,
+        criticalOverflowGrowthStreak: 0,
       },
     });
+
+    expect(first.state.criticalOverflowGrowthStreak).toBe(0);
 
     expect(first.changed).toBe(false);
     expect(first.nextProfile).toBe('robust-shield');
@@ -177,5 +188,58 @@ describe('audioTuningProfiles', () => {
     expect(second.changed).toBe(true);
     expect(second.nextProfile).toBe('extreme-ll');
     expect(second.reason).toBe('stable-window');
+  });
+
+  it('escalates to robust-shield when critical overflow grows consecutively', () => {
+    const first = resolveAudioTuningTransition({
+      nowMs: 12_000,
+      snapshot: {
+        schedulerProfile: 'normal',
+        dynamicSrcStressScore: 0,
+        underrunEventsWindow: 0,
+        outputWaitTimeoutCount: 0,
+        outputRenderUnderrunEvents: 0,
+        controlQueueCriticalOverflowEvents: 1,
+      },
+      state: {
+        activeProfile: 'extreme-ll',
+        lastSwitchAtMs: 10_000,
+        stableSinceMs: null,
+        lastOutputWaitTimeoutCount: 0,
+        lastOutputRenderUnderrunEvents: 0,
+        lastControlQueueOverflowEvents: 0,
+        lastControlQueueCriticalOverflowEvents: 0,
+        criticalOverflowGrowthStreak: 0,
+      },
+      thresholds: {
+        criticalOverflowGrowthTicks: 2,
+      },
+    });
+
+    expect(first.changed).toBe(true);
+    expect(first.nextProfile).toBe('ll-guarded');
+    expect(first.reason).toBe('queue-overflow-pressure');
+    expect(first.state.criticalOverflowGrowthStreak).toBe(1);
+
+    const second = resolveAudioTuningTransition({
+      nowMs: 12_500,
+      snapshot: {
+        schedulerProfile: 'normal',
+        dynamicSrcStressScore: 0,
+        underrunEventsWindow: 0,
+        outputWaitTimeoutCount: 0,
+        outputRenderUnderrunEvents: 0,
+        controlQueueCriticalOverflowEvents: 2,
+      },
+      state: first.state,
+      thresholds: {
+        criticalOverflowGrowthTicks: 2,
+      },
+    });
+
+    expect(second.changed).toBe(true);
+    expect(second.nextProfile).toBe('robust-shield');
+    expect(second.reason).toBe('critical-overflow-growth');
+    expect(second.state.criticalOverflowGrowthStreak).toBe(2);
   });
 });

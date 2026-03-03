@@ -28,6 +28,12 @@ export type NativeDebugRobustnessMetricsView = {
   transferLowWatermark: string;
   transferRenderLowHits: string;
   transferDecodeLowHits: string;
+  controlQueueMode: string;
+  controlQueueCapacity: string;
+  controlQueueOverwriteEvents: string;
+  controlQueueDropNewestEvents: string;
+  controlQueueCoalescedOverflowEvents: string;
+  controlQueueCriticalOverflowEvents: string;
 };
 
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
@@ -204,6 +210,34 @@ export function NativeDebugRobustnessPanel({
           <div className="native-debug-metrics-row">
             <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.transfer.decodeLowHits')}</span>
             <span className="native-debug-metrics-value">{robustnessMetricsView.transferDecodeLowHits}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.mode')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.controlQueueMode}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.capacity')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.controlQueueCapacity}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.overwrite')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.controlQueueOverwriteEvents}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.dropNewest')}</span>
+            <span className="native-debug-metrics-value">{robustnessMetricsView.controlQueueDropNewestEvents}</span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.coalescedOverflow')}</span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.controlQueueCoalescedOverflowEvents}
+            </span>
+          </div>
+          <div className="native-debug-metrics-row">
+            <span className="native-debug-metrics-label">{t('pages.native-debug.robustness.control.criticalOverflow')}</span>
+            <span className="native-debug-metrics-value">
+              {robustnessMetricsView.controlQueueCriticalOverflowEvents}
+            </span>
           </div>
         </section>
       </div>
@@ -635,6 +669,54 @@ export function NativeDebugRobustnessPanel({
               ? robustness.renderQueuePageLocked
                 ? t('common.state.on')
                 : t('common.state.off')
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.control.mode')}</p>
+          <p className="device-value">
+            {typeof robustness.controlQueueMode === 'string' && robustness.controlQueueMode.length > 0
+              ? robustness.controlQueueMode
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.control.capacity')}</p>
+          <p className="device-value">
+            {typeof robustness.controlQueueCapacity === 'number'
+              ? robustness.controlQueueCapacity
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.control.overwrite')}</p>
+          <p className="device-value">
+            {typeof robustness.controlQueueOverwriteEvents === 'number'
+              ? robustness.controlQueueOverwriteEvents
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.control.dropNewest')}</p>
+          <p className="device-value">
+            {typeof robustness.controlQueueDropNewestEvents === 'number'
+              ? robustness.controlQueueDropNewestEvents
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.control.coalescedOverflow')}</p>
+          <p className="device-value">
+            {typeof robustness.controlQueueCoalescedOverflowEvents === 'number'
+              ? robustness.controlQueueCoalescedOverflowEvents
+              : t('common.state.unknown')}
+          </p>
+        </div>
+        <div className="robustness-item">
+          <p className="device-label">{t('pages.native-debug.robustness.control.criticalOverflow')}</p>
+          <p className="device-value">
+            {typeof robustness.controlQueueCriticalOverflowEvents === 'number'
+              ? robustness.controlQueueCriticalOverflowEvents
               : t('common.state.unknown')}
           </p>
         </div>

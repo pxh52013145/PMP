@@ -1254,6 +1254,10 @@ export const NativeDebugPage: React.FC = () => {
       typeof robustness.outputSampleRate === 'number' && Number.isFinite(robustness.outputSampleRate)
         ? `${Math.floor(robustness.outputSampleRate)} Hz`
         : unknown;
+    const controlQueueMode =
+      typeof robustness.controlQueueMode === 'string' && robustness.controlQueueMode.length > 0
+        ? robustness.controlQueueMode
+        : unknown;
 
     return {
       backend: robustness.outputBackendId ?? unknown,
@@ -1283,6 +1287,14 @@ export const NativeDebugPage: React.FC = () => {
       transferLowWatermark: formatCount(robustness.transferLowWatermarkSamples),
       transferRenderLowHits: formatCount(robustness.transferRenderLowHitCount),
       transferDecodeLowHits: formatCount(robustness.transferDecodeLowHitCount),
+      controlQueueMode,
+      controlQueueCapacity: formatCount(robustness.controlQueueCapacity),
+      controlQueueOverwriteEvents: formatCount(robustness.controlQueueOverwriteEvents),
+      controlQueueDropNewestEvents: formatCount(robustness.controlQueueDropNewestEvents),
+      controlQueueCoalescedOverflowEvents: formatCount(
+        robustness.controlQueueCoalescedOverflowEvents
+      ),
+      controlQueueCriticalOverflowEvents: formatCount(robustness.controlQueueCriticalOverflowEvents),
     };
   }, [
     outputMetricsUnavailableLabel,

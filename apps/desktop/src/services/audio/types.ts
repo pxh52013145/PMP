@@ -148,6 +148,7 @@ export interface AudioTuningAutoSettings {
   elevatedStressScore: number;
   criticalStressScore: number;
   criticalUnderrunEventsWindow: number;
+  criticalOverflowGrowthTicks: number;
 }
 
 export interface AudioTuningAutoSettingsPatch {
@@ -159,6 +160,7 @@ export interface AudioTuningAutoSettingsPatch {
   elevatedStressScore?: number;
   criticalStressScore?: number;
   criticalUnderrunEventsWindow?: number;
+  criticalOverflowGrowthTicks?: number;
 }
 
 export type AudioDynamicSrcDegradationLabel =
@@ -207,6 +209,8 @@ export interface AudioRobustnessSnapshot {
   tuningAutoElevatedStressScore?: number;
   tuningAutoCriticalStressScore?: number;
   tuningAutoCriticalUnderrunEventsWindow?: number;
+  tuningAutoCriticalOverflowGrowthTicks?: number;
+  tuningAutoCriticalOverflowGrowthStreak?: number;
   tuningAutoActiveProfile?: AudioTuningProfileId;
   tuningAutoLastReason?: string | null;
   tuningAutoLastAppliedAtMs?: number | null;
@@ -260,6 +264,13 @@ export interface AudioRobustnessSnapshot {
   sharedRenderUnderrunFrames?: number;
   sharedRenderLowHitCount?: number;
   sharedRenderLowWatermarkSamples?: number;
+  controlQueueLockFree?: boolean;
+  controlQueueMode?: string;
+  controlQueueCapacity?: number;
+  controlQueueOverwriteEvents?: number;
+  controlQueueDropNewestEvents?: number;
+  controlQueueCoalescedOverflowEvents?: number;
+  controlQueueCriticalOverflowEvents?: number;
   diagnosticTimelineDroppedEvents?: number;
   diagnosticTimeline?: Array<{
     seq: number;

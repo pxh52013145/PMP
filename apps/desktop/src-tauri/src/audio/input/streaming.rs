@@ -10,7 +10,9 @@ use rodio::Source;
 use crate::audio::buffer::AudioRingBuffer;
 use crate::audio::buffer_policy;
 use crate::audio::bulk_source::BulkSource;
-use crate::audio::control_plane::{CommandRx, CommandTryRecvError, CommandTx};
+use crate::audio::control_plane::{
+    CommandRx, CommandTryRecvError, CommandTx, ControlCommand, ControlCommandPriority,
+};
 use crate::audio::diagnostics;
 use crate::audio::memory_pool;
 use crate::audio::realtime_scheduler::RealtimePressureProfile;
@@ -479,8 +481,25 @@ pub(crate) enum DecoderCommand {
     Shutdown,
 }
 
+impl ControlCommand for DecoderCommand {
+    fn priority(&self) -> ControlCommandPriority {
+        match self {
+            Self::Shutdown => ControlCommandPriority::Critical,
+            Self::Seek(_) => ControlCommandPriority::Coalescable,
+        }
+    }
+}
+
 pub(crate) enum TransferCommand {
     Shutdown,
+}
+
+impl ControlCommand for TransferCommand {
+    fn priority(&self) -> ControlCommandPriority {
+        match self {
+            Self::Shutdown => ControlCommandPriority::Critical,
+        }
+    }
 }
 
 #[inline]
@@ -567,6 +586,7 @@ fn streaming_pop_retry_spins(profile: RealtimePressureProfile) -> u32 {
     }
 }
 
+#[cfg(test)]
 fn predictive_concealment_sample(
     last: f32,
     previous: f32,
@@ -606,6 +626,7 @@ pub(crate) struct StreamingSamplesSource {
     channels: u16,
     sample_rate: u32,
     duration: f64,
+    observed_render_epoch: u64,
     local: Vec<f32>,
     local_index: usize,
     channel_cursor: usize,
@@ -614,6 +635,8 @@ pub(crate) struct StreamingSamplesSource {
     needs_fade_in: bool,
     pending_fade_in_frames: usize,
     underrun_streak: u32,
+    local_is_concealment: bool,
+    has_recent_real_audio: bool,
 }
 
 impl StreamingSamplesSource {
@@ -626,11 +649,13 @@ impl StreamingSamplesSource {
         duration: f64,
     ) -> Self {
         let channels = channels.max(1);
+        let observed_render_epoch = render_queue.clear_epoch();
         Self {
             render_queue,
             channels,
             sample_rate: sample_rate.max(1),
             duration,
+            observed_render_epoch,
             local: Vec::with_capacity(Self::CHUNK_SAMPLES),
             local_index: 0,
             channel_cursor: 0,
@@ -639,7 +664,22 @@ impl StreamingSamplesSource {
             needs_fade_in: false,
             pending_fade_in_frames: 0,
             underrun_streak: 0,
+            local_is_concealment: false,
+            has_recent_real_audio: false,
         }
+    }
+
+    fn reset_after_discontinuity(&mut self) {
+        self.local.clear();
+        self.local_index = 0;
+        self.channel_cursor = 0;
+        self.previous_samples.fill(0.0);
+        self.last_samples.fill(0.0);
+        self.needs_fade_in = false;
+        self.pending_fade_in_frames = 0;
+        self.underrun_streak = 0;
+        self.local_is_concealment = false;
+        self.has_recent_real_audio = false;
     }
 
     fn track_sample_history(&mut self, sample: f32) {
@@ -663,6 +703,12 @@ impl Iterator for StreamingSamplesSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let current_epoch = self.render_queue.clear_epoch();
+        if current_epoch != self.observed_render_epoch {
+            self.observed_render_epoch = current_epoch;
+            self.reset_after_discontinuity();
+        }
+
         if self.local_index >= self.local.len() {
             let channels = self.channels.max(1) as usize;
             let profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
@@ -717,19 +763,16 @@ impl Iterator for StreamingSamplesSource {
                 let silence_samples = (silence_frames * channels).max(1);
                 self.local.resize(silence_samples, 0.0);
 
-                for frame in 0..silence_frames {
-                    let gain = equal_power_fade_out_gain(frame, silence_frames);
-                    let base = frame * channels;
-                    for channel in 0..channels {
-                        let predicted = predictive_concealment_sample(
-                            self.last_samples[channel],
-                            self.previous_samples[channel],
-                            frame,
-                            silence_frames,
-                        );
-                        self.local[base + channel] = predicted * gain;
+                if self.underrun_streak == 1 && self.has_recent_real_audio {
+                    for frame in 0..silence_frames {
+                        let gain = equal_power_fade_out_gain(frame, silence_frames);
+                        let base = frame * channels;
+                        for channel in 0..channels {
+                            self.local[base + channel] = self.last_samples[channel] * gain;
+                        }
                     }
                 }
+                self.local_is_concealment = true;
             } else if self.needs_fade_in {
                 self.underrun_streak = 0;
                 let fade_frames =
@@ -745,15 +788,21 @@ impl Iterator for StreamingSamplesSource {
                 }
                 self.needs_fade_in = false;
                 self.pending_fade_in_frames = 0;
+                self.local_is_concealment = false;
+                self.has_recent_real_audio = true;
             } else {
                 self.underrun_streak = 0;
+                self.local_is_concealment = false;
+                self.has_recent_real_audio = true;
             }
         }
 
         let sample_index = self.local_index;
         let sample = self.local[sample_index];
         self.local_index += 1;
-        self.track_sample_history(sample);
+        if !self.local_is_concealment {
+            self.track_sample_history(sample);
+        }
         Some(sample)
     }
 }
@@ -778,8 +827,10 @@ impl BulkSource for StreamingSamplesSource {
             buf[written..written + to_copy].copy_from_slice(&self.local[start..end]);
             self.local_index = end;
 
-            for &sample in &buf[written..written + to_copy] {
-                self.track_sample_history(sample);
+            if !self.local_is_concealment {
+                for &sample in &buf[written..written + to_copy] {
+                    self.track_sample_history(sample);
+                }
             }
 
             written += to_copy;
@@ -971,6 +1022,33 @@ mod tests {
         assert!(
             finished,
             "expected stream to finish after buffer is drained"
+        );
+    }
+
+    #[test]
+    fn streaming_samples_source_resets_history_after_render_queue_clear() {
+        let render_queue = AudioRingBuffer::new(512);
+        let seed = vec![0.8f32; 256];
+        let pushed = render_queue.push_interleaved(&seed, 2);
+        assert!(pushed > 0);
+
+        let mut source = StreamingSamplesSource::new(render_queue.clone(), 2, 48_000, 0.0);
+        let mut saw_real = false;
+        for _ in 0..64 {
+            if let Some(sample) = source.next() {
+                if sample.abs() > 1e-3 {
+                    saw_real = true;
+                }
+            }
+        }
+        assert!(saw_real, "expected to consume seeded real samples");
+
+        render_queue.clear();
+
+        let first_after_clear = source.next().unwrap_or(0.0);
+        assert!(
+            first_after_clear.abs() <= 1e-6,
+            "after queue clear, concealment should restart from silence instead of stale history"
         );
     }
 

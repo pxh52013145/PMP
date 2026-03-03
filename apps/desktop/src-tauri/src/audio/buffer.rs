@@ -18,6 +18,7 @@ struct AudioRingBufferInner {
     page_locked: AtomicBool,
     read_pos: AtomicU64,
     write_pos: AtomicU64,
+    clear_epoch: AtomicU64,
     finished: AtomicBool,
     wait_lock: Mutex<()>,
     available: Condvar,
@@ -64,6 +65,7 @@ impl AudioRingBuffer {
                 page_locked: AtomicBool::new(false),
                 read_pos: AtomicU64::new(0),
                 write_pos: AtomicU64::new(0),
+                clear_epoch: AtomicU64::new(1),
                 finished: AtomicBool::new(false),
                 wait_lock: Mutex::new(()),
                 available: Condvar::new(),
@@ -128,7 +130,12 @@ impl AudioRingBuffer {
         let write = self.inner.write_pos.load(Ordering::Acquire);
         self.inner.read_pos.store(write, Ordering::Release);
         self.inner.finished.store(false, Ordering::Release);
+        self.inner.clear_epoch.fetch_add(1, Ordering::AcqRel);
         self.inner.space.notify_all();
+    }
+
+    pub fn clear_epoch(&self) -> u64 {
+        self.inner.clear_epoch.load(Ordering::Acquire)
     }
 
     pub fn mark_finished(&self) {
@@ -325,5 +332,18 @@ mod tests {
         assert_eq!(result.popped, 0);
         assert!(result.finished);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn clear_increments_epoch_and_resets_finished_flag() {
+        let buffer = AudioRingBuffer::new(32);
+        let epoch_before = buffer.clear_epoch();
+        buffer.mark_finished();
+        assert!(buffer.is_finished());
+
+        buffer.clear();
+
+        assert!(buffer.clear_epoch() > epoch_before);
+        assert!(!buffer.is_finished());
     }
 }
