@@ -11,6 +11,7 @@
     "audio:score:gate": "node ../../scripts/audio-score-gate.mjs",
     "audio:score:gate:v95": "node ../../scripts/audio-score-gate.mjs --profile v95",
     "audio:score:gate:smoke": "node ../../scripts/audio-score-gate.mjs --with-smoke",
+    "audio:score:gate:smoke:strict": "node ../../scripts/audio-score-gate.mjs --require-smoke",
     "build:vite": "vite build",
     "build": "tauri build",
     "build:asio": "node ../../scripts/require-env.mjs CPAL_ASIO_DIR && tauri build --features asio-sdk",

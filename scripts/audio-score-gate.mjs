@@ -16,6 +16,7 @@ function parseArgs(argv) {
     withSmoke: false,
     requireSmoke: false,
     smokeTrack: null,
+    cargoTargetDir: null,
     skipQuality: false,
     skipPerformance: false,
     dryRun: false,
@@ -44,6 +45,10 @@ function parseArgs(argv) {
       }
       case '--smoke-track': {
         options.smokeTrack = resolveArgValue(arg, argv[++index]);
+        break;
+      }
+      case '--cargo-target-dir': {
+        options.cargoTargetDir = resolveArgValue(arg, argv[++index]);
         break;
       }
       case '--skip-quality': {
@@ -95,11 +100,61 @@ function printHelp() {
     '  --with-smoke            Run hardware smoke and parse runtime metrics',
     '  --require-smoke         Fail when smoke cannot run',
     '  --smoke-track <path>    Track path for smoke mode',
+    '  --cargo-target-dir <p>  Cargo target dir override for gate commands',
     '  --skip-quality          Skip quality command suite',
     '  --skip-performance      Skip performance command suite',
     '  --dry-run               Print commands without executing them',
     '  --json                  Print report JSON after summary',
   ].join('\n'));
+}
+
+function resolveSpawnEnv(extraEnv) {
+  if (!extraEnv || typeof extraEnv !== 'object') {
+    return process.env;
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(extraEnv)) {
+    if (typeof value === 'undefined' || value === null) continue;
+    normalized[key] = String(value);
+  }
+
+  return {
+    ...process.env,
+    ...normalized,
+  };
+}
+
+function resolveCargoTargetDir(options, config) {
+  const optionValue = options.cargoTargetDir;
+  if (typeof optionValue === 'string' && optionValue.trim().length > 0) {
+    return path.resolve(repoRoot, optionValue);
+  }
+
+  const configValue = config?.execution?.cargoTargetDir;
+  if (typeof configValue === 'string' && configValue.trim().length > 0) {
+    return path.resolve(repoRoot, configValue);
+  }
+
+  return null;
+}
+
+function attachCargoTargetEnvToShellCommand(command, cargoTargetDir) {
+  if (!cargoTargetDir) return command;
+  if (typeof command?.command !== 'string') return command;
+
+  const raw = command.command.trim();
+  if (!raw.startsWith('cargo ')) {
+    return command;
+  }
+
+  return {
+    ...command,
+    env: {
+      ...(command.env ?? {}),
+      CARGO_TARGET_DIR: cargoTargetDir,
+    },
+  };
 }
 
 function readConfig(configPathInput) {
@@ -139,7 +194,7 @@ function runShellCommand(spec, options) {
   const result = spawnSync(spec.command, {
     cwd,
     shell: true,
-    env: process.env,
+    env: resolveSpawnEnv(spec.env),
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
@@ -198,7 +253,7 @@ function runExecCommand(spec, options) {
 
   const result = spawnSync(spec.exec, spec.args ?? [], {
     cwd,
-    env: process.env,
+    env: resolveSpawnEnv(spec.env),
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
@@ -340,16 +395,17 @@ function evaluateDecoupling(decouplingConfig) {
   };
 }
 
-function runCommandSuite(commands, options) {
+function runCommandSuite(commands, options, execution) {
   const results = [];
   for (const command of commands ?? []) {
-    results.push(runShellCommand(command, options));
+    const prepared = attachCargoTargetEnvToShellCommand(command, execution.cargoTargetDir);
+    results.push(runShellCommand(prepared, options));
   }
   return results;
 }
 
-function evaluateCommandDimension(config, options) {
-  const results = runCommandSuite(config.commands ?? [], options);
+function evaluateCommandDimension(config, options, execution) {
+  const results = runCommandSuite(config.commands ?? [], options, execution);
   const failedCount = results.filter((item) => !item.ok).length;
   const score = clampScore(
     (config.baseScore ?? 10) - failedCount * (config.failedCommandPenalty ?? 1.5),
@@ -434,7 +490,7 @@ function resolveSmokeTrackPath(smokeTrack) {
   return fs.existsSync(defaultTrack) ? defaultTrack : null;
 }
 
-function runSmoke(config, options) {
+function runSmoke(config, options, execution) {
   const smokeConfig = config.smoke ?? {};
   const trackPath = resolveSmokeTrackPath(options.smokeTrack);
   if (!trackPath || !fs.existsSync(trackPath)) {
@@ -497,6 +553,9 @@ function runSmoke(config, options) {
       args,
       cwd: '.',
       timeoutMs: smokeConfig.timeoutMs ?? 12 * 60 * 1000,
+      env: execution.cargoTargetDir
+        ? { CARGO_TARGET_DIR: execution.cargoTargetDir }
+        : undefined,
     },
     options,
   );
@@ -515,8 +574,8 @@ function runSmoke(config, options) {
   };
 }
 
-function evaluatePerformance(perfConfig, options) {
-  const commandDimension = evaluateCommandDimension(perfConfig, options);
+function evaluatePerformance(perfConfig, options, execution) {
+  const commandDimension = evaluateCommandDimension(perfConfig, options, execution);
   let smoke = {
     skipped: true,
     reason: 'smoke-disabled',
@@ -527,7 +586,7 @@ function evaluatePerformance(perfConfig, options) {
   };
 
   if (options.withSmoke) {
-    smoke = runSmoke(perfConfig, options);
+    smoke = runSmoke(perfConfig, options, execution);
   }
 
   if (options.withSmoke && options.requireSmoke && smoke.skipped) {
@@ -637,10 +696,17 @@ function run() {
   console.log(`- withSmoke: ${options.withSmoke}`);
   console.log(`- requireSmoke: ${options.requireSmoke}`);
 
+  const execution = {
+    cargoTargetDir: resolveCargoTargetDir(options, config),
+  };
+  if (execution.cargoTargetDir) {
+    console.log(`- cargoTargetDir: ${path.relative(repoRoot, execution.cargoTargetDir)}`);
+  }
+
   const decoupling = evaluateDecoupling(config.decoupling ?? {});
   const quality = options.skipQuality
     ? { score: 10, commands: [], failedCount: 0, skipped: true }
-    : evaluateCommandDimension(config.quality ?? {}, options);
+    : evaluateCommandDimension(config.quality ?? {}, options, execution);
   const performance = options.skipPerformance
     ? {
         score: 10,
@@ -656,7 +722,7 @@ function run() {
           stateMetrics: null,
         },
       }
-    : evaluatePerformance(config.performance ?? {}, options);
+    : evaluatePerformance(config.performance ?? {}, options, execution);
 
   const weights = config.weights ?? { decoupling: 0.35, quality: 0.35, performance: 0.3 };
   const overall = roundScore(
@@ -719,6 +785,7 @@ function run() {
       profile: options.profile,
       withSmoke: options.withSmoke,
       requireSmoke: options.requireSmoke,
+      cargoTargetDir: options.cargoTargetDir,
       skipQuality: options.skipQuality,
       skipPerformance: options.skipPerformance,
       dryRun: options.dryRun,

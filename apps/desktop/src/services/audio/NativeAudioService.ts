@@ -95,8 +95,8 @@ import {
   recordRecentPlaylistWriteScheduled,
 } from './audioPerformanceTelemetry';
 import { buildNativeAudioRobustnessSnapshot } from './nativeAudioRobustnessSnapshot';
+import { NativeAudioRobustnessController } from './nativeAudioRobustnessController';
 import { createNativeAudioRobustnessSnapshotSource } from './nativeAudioRobustnessSnapshotAdapter';
-import { RobustnessEmissionGate } from './nativeAudioRobustnessEmissionGate';
 import {
   applyRecentSmartPlaylistSnapshotToState,
   compactTrackForRecentPlaylist,
@@ -118,7 +118,6 @@ import {
   type NativeAudioStatePayload,
   type ReplayGainMode,
   type ReplayGainSettings,
-  type RobustnessListener,
   type RuntimeControlSettings,
   type StateListener,
 } from './nativeAudioServiceTypes';
@@ -138,7 +137,15 @@ export class NativeAudioService implements IAudioService {
   private stateChangeCallbacks: Set<StateListener> = new Set();
   private loadProgressCallbacks: Set<(progress: number) => void> = new Set();
   private errorCallbacks: Set<(error: Error) => void> = new Set();
-  private robustnessCallbacks: Set<RobustnessListener> = new Set();
+  private readonly robustnessController = new NativeAudioRobustnessController({
+    minIntervalMs: NativeAudioService.ROBUSTNESS_EMISSION_MIN_INTERVAL_MS,
+    forceBurstWindowMs: NativeAudioService.ROBUSTNESS_FORCE_BURST_WINDOW_MS,
+    forceBurstLimit: NativeAudioService.ROBUSTNESS_FORCE_BURST_LIMIT,
+    buildSnapshot: () => this.buildRobustnessSnapshot(),
+    onListenerError: (error) => {
+      console.warn('[NativeAudio] Robustness listener callback failed:', error);
+    },
+  });
   private stateListener?: UnlistenFn;
   private spectrumListener?: UnlistenFn;
   private errorListener?: UnlistenFn;
@@ -219,16 +226,6 @@ export class NativeAudioService implements IAudioService {
   private autoBackendSwitchCount = 0;
   private lastAutoBackendSwitchAtMs: number | null = null;
   private lastAutoBackendSwitchReason: string | null = null;
-  private lastEmittedRobustnessSignature: string | null = null;
-  private robustnessEmissionInProgress = false;
-  private robustnessEmissionPendingForce = false;
-  private robustnessEmissionScheduledTimer: ReturnType<typeof setTimeout> | null = null;
-  private robustnessEmissionScheduledForce = false;
-  private readonly robustnessEmissionGate = new RobustnessEmissionGate({
-    minIntervalMs: NativeAudioService.ROBUSTNESS_EMISSION_MIN_INTERVAL_MS,
-    forceBurstWindowMs: NativeAudioService.ROBUSTNESS_FORCE_BURST_WINDOW_MS,
-    forceBurstLimit: NativeAudioService.ROBUSTNESS_FORCE_BURST_LIMIT,
-  });
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
@@ -2965,78 +2962,8 @@ export class NativeAudioService implements IAudioService {
     return buildNativeAudioRobustnessSnapshot(source, nowMs);
   }
 
-  private clearRobustnessEmissionTimer(): void {
-    if (this.robustnessEmissionScheduledTimer === null) return;
-    clearTimeout(this.robustnessEmissionScheduledTimer);
-    this.robustnessEmissionScheduledTimer = null;
-    this.robustnessEmissionScheduledForce = false;
-  }
-
-  private scheduleDeferredRobustnessEmission(delayMs: number, force: boolean = false): void {
-    if (this.robustnessEmissionScheduledTimer !== null) {
-      this.robustnessEmissionScheduledForce = this.robustnessEmissionScheduledForce || force;
-      return;
-    }
-    this.robustnessEmissionScheduledForce = force;
-    this.robustnessEmissionScheduledTimer = setTimeout(() => {
-      this.robustnessEmissionScheduledTimer = null;
-      const scheduledForce = this.robustnessEmissionScheduledForce;
-      this.robustnessEmissionScheduledForce = false;
-      this.emitRobustnessSnapshot(scheduledForce);
-    }, Math.max(1, Math.floor(delayMs)));
-  }
-
   private emitRobustnessSnapshot(force: boolean = false): void {
-    if (this.robustnessCallbacks.size === 0) return;
-
-    const plan = this.robustnessEmissionGate.plan(force);
-    if (plan.action === 'defer') {
-      this.robustnessEmissionPendingForce = this.robustnessEmissionPendingForce || plan.force;
-      this.scheduleDeferredRobustnessEmission(plan.delayMs, plan.force);
-      return;
-    }
-
-    const effectiveForce = plan.force;
-    if (effectiveForce) {
-      this.clearRobustnessEmissionTimer();
-    }
-
-    if (this.robustnessEmissionInProgress) {
-      this.robustnessEmissionPendingForce = this.robustnessEmissionPendingForce || effectiveForce;
-      return;
-    }
-
-    this.robustnessEmissionInProgress = true;
-
-    const snapshot = this.buildRobustnessSnapshot();
-    const signature = JSON.stringify(snapshot);
-    try {
-      if (!effectiveForce && signature === this.lastEmittedRobustnessSignature) {
-        this.robustnessEmissionGate.markEmitted();
-        return;
-      }
-      this.lastEmittedRobustnessSignature = signature;
-      this.robustnessEmissionGate.markEmitted();
-      this.robustnessCallbacks.forEach((callback) => {
-        try {
-          callback(snapshot);
-        } catch (error) {
-          console.warn('[NativeAudio] Robustness listener callback failed:', error);
-        }
-      });
-    } finally {
-      this.robustnessEmissionInProgress = false;
-    }
-
-    if (this.robustnessEmissionPendingForce) {
-      const nextForce = this.robustnessEmissionPendingForce;
-      this.robustnessEmissionPendingForce = false;
-      if (typeof queueMicrotask === 'function') {
-        queueMicrotask(() => this.emitRobustnessSnapshot(nextForce));
-      } else {
-        void Promise.resolve().then(() => this.emitRobustnessSnapshot(nextForce));
-      }
-    }
+    this.robustnessController.emit(force);
   }
 
   // ===== Helpers =====
@@ -3453,15 +3380,11 @@ export class NativeAudioService implements IAudioService {
   }
 
   getRobustnessSnapshot(): AudioRobustnessSnapshot {
-    return this.buildRobustnessSnapshot();
+    return this.robustnessController.getSnapshot();
   }
 
   onRobustnessSnapshot(callback: (snapshot: AudioRobustnessSnapshot) => void): () => void {
-    this.robustnessCallbacks.add(callback);
-    callback(this.buildRobustnessSnapshot());
-    return () => {
-      this.robustnessCallbacks.delete(callback);
-    };
+    return this.robustnessController.subscribe(callback);
   }
 
   private resolveTrackFromPath(trackPath: string): { track: Track; index: number } | null {
@@ -4256,14 +4179,8 @@ export class NativeAudioService implements IAudioService {
     this.stateChangeCallbacks.clear();
     this.loadProgressCallbacks.clear();
     this.errorCallbacks.clear();
-    this.robustnessCallbacks.clear();
-    this.robustnessEmissionPendingForce = false;
-    this.robustnessEmissionInProgress = false;
-    this.clearRobustnessEmissionTimer();
-    this.robustnessEmissionScheduledForce = false;
-    this.robustnessEmissionGate.reset();
+    this.robustnessController.destroy();
     this.dynamicSrcPolicyExecutor.reset();
-    this.lastEmittedRobustnessSignature = null;
     this.visibilityListenerCleanup?.();
     this.visibilityListenerCleanup = null;
     this.visibilityListenerAttached = false;

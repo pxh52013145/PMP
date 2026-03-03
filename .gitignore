@@ -18,6 +18,9 @@ out/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/target-test/
 apps/desktop/src-tauri/target-codex/
+apps/desktop/src-tauri/target_gate/
+apps/desktop/src-tauri/target_eval/
+apps/desktop/src-tauri/target_eval_gate/
 
 # Misc
 .DS_Store
