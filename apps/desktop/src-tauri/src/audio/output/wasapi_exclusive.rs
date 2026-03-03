@@ -159,6 +159,8 @@ impl UnderrunDeclickPolicy {
 
 static UNDERRUN_DECLICK_POLICY: Lazy<UnderrunDeclickPolicy> =
     Lazy::new(UnderrunDeclickPolicy::from_env);
+static CALLBACK_POP_RT_SPIN_WAIT: Lazy<bool> =
+    Lazy::new(|| parse_env_bool_wasapi("PMP_AUDIO_CALLBACK_POP_RT_SPIN_WAIT", true));
 
 fn ms_to_frames(sample_rate: u32, milliseconds: u32) -> usize {
     let rate = sample_rate.max(8_000) as f64;
@@ -3527,9 +3529,19 @@ fn render_frames(
             }
 
             popped = if popped_samples == 0 {
+                if *CALLBACK_POP_RT_SPIN_WAIT {
+                    inner
+                        .render_queue
+                        .pop_chunk_into_realtime(scratch, total_samples, retry_wait)
+                } else {
+                    inner
+                        .render_queue
+                        .pop_chunk_into(scratch, total_samples, retry_wait)
+                }
+            } else if *CALLBACK_POP_RT_SPIN_WAIT {
                 inner
                     .render_queue
-                    .pop_chunk_into(scratch, total_samples, retry_wait)
+                    .pop_chunk_append_into_realtime(scratch, missing, retry_wait)
             } else {
                 inner
                     .render_queue
@@ -3742,9 +3754,19 @@ fn render_frames_shared_raw(
             }
 
             popped = if popped_samples == 0 {
+                if *CALLBACK_POP_RT_SPIN_WAIT {
+                    inner
+                        .render_queue
+                        .pop_chunk_into_realtime(scratch, total_samples, retry_wait)
+                } else {
+                    inner
+                        .render_queue
+                        .pop_chunk_into(scratch, total_samples, retry_wait)
+                }
+            } else if *CALLBACK_POP_RT_SPIN_WAIT {
                 inner
                     .render_queue
-                    .pop_chunk_into(scratch, total_samples, retry_wait)
+                    .pop_chunk_append_into_realtime(scratch, missing, retry_wait)
             } else {
                 inner
                     .render_queue

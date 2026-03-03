@@ -3,7 +3,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub(crate) struct AudioRingBuffer {
@@ -185,7 +185,7 @@ impl AudioRingBuffer {
         max_samples: usize,
         wait_timeout: Duration,
     ) -> PopChunkResult {
-        self.pop_chunk_into_internal(out, max_samples, wait_timeout, false)
+        self.pop_chunk_into_internal(out, max_samples, wait_timeout, false, false)
     }
 
     pub(crate) fn pop_chunk_append_into(
@@ -194,7 +194,25 @@ impl AudioRingBuffer {
         max_samples: usize,
         wait_timeout: Duration,
     ) -> PopChunkResult {
-        self.pop_chunk_into_internal(out, max_samples, wait_timeout, true)
+        self.pop_chunk_into_internal(out, max_samples, wait_timeout, true, false)
+    }
+
+    pub(crate) fn pop_chunk_into_realtime(
+        &self,
+        out: &mut Vec<f32>,
+        max_samples: usize,
+        wait_timeout: Duration,
+    ) -> PopChunkResult {
+        self.pop_chunk_into_internal(out, max_samples, wait_timeout, false, true)
+    }
+
+    pub(crate) fn pop_chunk_append_into_realtime(
+        &self,
+        out: &mut Vec<f32>,
+        max_samples: usize,
+        wait_timeout: Duration,
+    ) -> PopChunkResult {
+        self.pop_chunk_into_internal(out, max_samples, wait_timeout, true, true)
     }
 
     fn pop_chunk_into_internal(
@@ -203,6 +221,7 @@ impl AudioRingBuffer {
         max_samples: usize,
         wait_timeout: Duration,
         append: bool,
+        realtime_wait: bool,
     ) -> PopChunkResult {
         if !append {
             out.clear();
@@ -220,12 +239,22 @@ impl AudioRingBuffer {
             && self.len_samples() == 0
             && !self.inner.finished.load(Ordering::Acquire)
         {
-            let guard = self
-                .inner
-                .wait_lock
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = self.inner.available.wait_timeout(guard, wait_timeout);
+            if realtime_wait {
+                let deadline = Instant::now() + wait_timeout;
+                while self.len_samples() == 0 && !self.inner.finished.load(Ordering::Acquire) {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    std::hint::spin_loop();
+                }
+            } else {
+                let guard = self
+                    .inner
+                    .wait_lock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let _ = self.inner.available.wait_timeout(guard, wait_timeout);
+            }
         }
 
         let read = self.inner.read_pos.load(Ordering::Acquire);

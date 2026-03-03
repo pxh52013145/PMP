@@ -242,4 +242,66 @@ describe('audioTuningProfiles', () => {
     expect(second.reason).toBe('critical-overflow-growth');
     expect(second.state.criticalOverflowGrowthStreak).toBe(2);
   });
+
+  it('steps up to ll-guarded on callback overrun pressure', () => {
+    const decision = resolveAudioTuningTransition({
+      nowMs: 12_000,
+      snapshot: {
+        schedulerProfile: 'normal',
+        dynamicSrcStressScore: 0,
+        underrunEventsWindow: 0,
+        outputWaitTimeoutCount: 0,
+        outputRenderUnderrunEvents: 0,
+        outputCallbackIntervalOverrunCount: 1,
+      },
+      state: {
+        activeProfile: 'extreme-ll',
+        lastSwitchAtMs: 10_000,
+        stableSinceMs: null,
+        lastOutputWaitTimeoutCount: 0,
+        lastOutputRenderUnderrunEvents: 0,
+        lastOutputCallbackIntervalOverrunCount: 0,
+        lastTransferLowHitCount: 0,
+        lastSharedRenderLowHitCount: 0,
+        lastControlQueueOverflowEvents: 0,
+        lastControlQueueCriticalOverflowEvents: 0,
+        criticalOverflowGrowthStreak: 0,
+      },
+    });
+
+    expect(decision.changed).toBe(true);
+    expect(decision.nextProfile).toBe('ll-guarded');
+    expect(decision.reason).toBe('callback-overrun-pressure');
+  });
+
+  it('escalates to robust-shield when callback overrun and underrun grow together', () => {
+    const decision = resolveAudioTuningTransition({
+      nowMs: 14_000,
+      snapshot: {
+        schedulerProfile: 'normal',
+        dynamicSrcStressScore: 0,
+        underrunEventsWindow: 0,
+        outputWaitTimeoutCount: 0,
+        outputRenderUnderrunEvents: 1,
+        outputCallbackIntervalOverrunCount: 1,
+      },
+      state: {
+        activeProfile: 'extreme-ll',
+        lastSwitchAtMs: 10_000,
+        stableSinceMs: null,
+        lastOutputWaitTimeoutCount: 0,
+        lastOutputRenderUnderrunEvents: 0,
+        lastOutputCallbackIntervalOverrunCount: 0,
+        lastTransferLowHitCount: 0,
+        lastSharedRenderLowHitCount: 0,
+        lastControlQueueOverflowEvents: 0,
+        lastControlQueueCriticalOverflowEvents: 0,
+        criticalOverflowGrowthStreak: 0,
+      },
+    });
+
+    expect(decision.changed).toBe(true);
+    expect(decision.nextProfile).toBe('robust-shield');
+    expect(decision.reason).toBe('critical-pressure');
+  });
 });

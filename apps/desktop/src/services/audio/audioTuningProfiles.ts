@@ -15,6 +15,10 @@ type AudioTuningTransitionSnapshot = Pick<
   | 'underrunEventsWindow'
   | 'outputWaitTimeoutCount'
   | 'outputRenderUnderrunEvents'
+  | 'outputCallbackIntervalOverrunCount'
+  | 'transferRenderLowHitCount'
+  | 'transferDecodeLowHitCount'
+  | 'sharedRenderLowHitCount'
   | 'controlQueueOverwriteEvents'
   | 'controlQueueDropNewestEvents'
   | 'controlQueueCoalescedOverflowEvents'
@@ -43,6 +47,9 @@ export type AudioTuningControllerState = {
   stableSinceMs: number | null;
   lastOutputWaitTimeoutCount: number;
   lastOutputRenderUnderrunEvents: number;
+  lastOutputCallbackIntervalOverrunCount?: number;
+  lastTransferLowHitCount?: number;
+  lastSharedRenderLowHitCount?: number;
   lastControlQueueOverflowEvents: number;
   lastControlQueueCriticalOverflowEvents: number;
   criticalOverflowGrowthStreak: number;
@@ -73,6 +80,8 @@ export type AudioTuningTransitionDecision = {
     | 'critical-pressure'
     | 'critical-overflow-growth'
     | 'guarded-pressure'
+    | 'callback-overrun-pressure'
+    | 'render-low-watermark-pressure'
     | 'queue-overflow-pressure'
     | 'post-critical-recovery'
     | 'stable-window'
@@ -314,6 +323,9 @@ export function createAudioTuningControllerState(
     stableSinceMs: null,
     lastOutputWaitTimeoutCount: 0,
     lastOutputRenderUnderrunEvents: 0,
+    lastOutputCallbackIntervalOverrunCount: 0,
+    lastTransferLowHitCount: 0,
+    lastSharedRenderLowHitCount: 0,
     lastControlQueueOverflowEvents: 0,
     lastControlQueueCriticalOverflowEvents: 0,
     criticalOverflowGrowthStreak: 0,
@@ -339,6 +351,15 @@ export function resolveAudioTuningTransition(
   const outputRenderUnderrunEvents = clampCount(
     input.snapshot.outputRenderUnderrunEvents ?? input.state.lastOutputRenderUnderrunEvents
   );
+  const outputCallbackIntervalOverrunCount = clampCount(
+    input.snapshot.outputCallbackIntervalOverrunCount ??
+      input.state.lastOutputCallbackIntervalOverrunCount ??
+      0
+  );
+  const transferRenderLowHitCount = clampCount(input.snapshot.transferRenderLowHitCount ?? 0);
+  const transferDecodeLowHitCount = clampCount(input.snapshot.transferDecodeLowHitCount ?? 0);
+  const transferLowHitCount = Math.max(transferRenderLowHitCount, transferDecodeLowHitCount);
+  const sharedRenderLowHitCount = clampCount(input.snapshot.sharedRenderLowHitCount ?? 0);
 
   const outputWaitTimeoutDelta = Math.max(
     0,
@@ -347,6 +368,18 @@ export function resolveAudioTuningTransition(
   const outputRenderUnderrunDelta = Math.max(
     0,
     outputRenderUnderrunEvents - input.state.lastOutputRenderUnderrunEvents
+  );
+  const outputCallbackIntervalOverrunDelta = Math.max(
+    0,
+    outputCallbackIntervalOverrunCount - (input.state.lastOutputCallbackIntervalOverrunCount ?? 0)
+  );
+  const transferLowHitDelta = Math.max(
+    0,
+    transferLowHitCount - (input.state.lastTransferLowHitCount ?? 0)
+  );
+  const sharedRenderLowHitDelta = Math.max(
+    0,
+    sharedRenderLowHitCount - (input.state.lastSharedRenderLowHitCount ?? 0)
   );
 
   const controlQueueOverwriteEvents = clampCount(input.snapshot.controlQueueOverwriteEvents);
@@ -375,12 +408,17 @@ export function resolveAudioTuningTransition(
     controlQueueCriticalOverflowDelta > 0 ? input.state.criticalOverflowGrowthStreak + 1 : 0;
   const criticalOverflowPressure =
     criticalOverflowGrowthStreak >= Math.max(1, thresholds.criticalOverflowGrowthTicks);
+  const callbackOverrunPressure = outputCallbackIntervalOverrunDelta > 0;
+  const lowWatermarkPressure = transferLowHitDelta > 0 || sharedRenderLowHitDelta > 0;
+  const criticalCallbackOverrun =
+    outputCallbackIntervalOverrunDelta > 0 && outputRenderUnderrunDelta > 0;
 
   const isCritical =
     schedulerProfile === 'critical' ||
     stressScore >= thresholds.criticalStressScore ||
     underrunEventsWindow >= thresholds.criticalUnderrunEventsWindow ||
-    criticalOverflowPressure;
+    criticalOverflowPressure ||
+    criticalCallbackOverrun;
 
   const isGuarded =
     !isCritical &&
@@ -388,6 +426,8 @@ export function resolveAudioTuningTransition(
       stressScore >= thresholds.elevatedStressScore ||
       outputWaitTimeoutDelta > 0 ||
       outputRenderUnderrunDelta > 0 ||
+      callbackOverrunPressure ||
+      lowWatermarkPressure ||
       controlQueueOverflowDelta > 0);
 
   const isStable =
@@ -409,7 +449,14 @@ export function resolveAudioTuningTransition(
     reason = criticalOverflowPressure ? 'critical-overflow-growth' : 'critical-pressure';
   } else if (isGuarded) {
     desiredProfile = 'll-guarded';
-    reason = controlQueueOverflowDelta > 0 ? 'queue-overflow-pressure' : 'guarded-pressure';
+    reason =
+      controlQueueOverflowDelta > 0
+        ? 'queue-overflow-pressure'
+        : callbackOverrunPressure
+          ? 'callback-overrun-pressure'
+          : lowWatermarkPressure
+            ? 'render-low-watermark-pressure'
+            : 'guarded-pressure';
   } else if (input.state.activeProfile === 'robust-shield') {
     desiredProfile = 'll-guarded';
     reason = 'post-critical-recovery';
@@ -454,6 +501,9 @@ export function resolveAudioTuningTransition(
       stableSinceMs,
       lastOutputWaitTimeoutCount: outputWaitTimeoutCount,
       lastOutputRenderUnderrunEvents: outputRenderUnderrunEvents,
+      lastOutputCallbackIntervalOverrunCount: outputCallbackIntervalOverrunCount,
+      lastTransferLowHitCount: transferLowHitCount,
+      lastSharedRenderLowHitCount: sharedRenderLowHitCount,
       lastControlQueueOverflowEvents: controlQueueOverflowEvents,
       lastControlQueueCriticalOverflowEvents: controlQueueCriticalOverflowEvents,
       criticalOverflowGrowthStreak,

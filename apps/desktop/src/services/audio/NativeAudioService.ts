@@ -40,9 +40,22 @@ import {
   resolvePlatformPlaybackIdentity,
 } from './platformPlaybackResolver';
 import {
-  resolveDynamicSrcAutoDegradationState,
-  toDynamicSrcAutoDegradationLabel,
-} from './robustnessDegradation';
+  computeDynamicSrcStressScore,
+  resolveDynamicSrcDegradationTransition,
+} from './audioStabilityController';
+import {
+  evaluateAutoOutputSwitch,
+  isSharedOutputBackendId,
+  pruneUnderrunSpikeTimestamps,
+  resolveAutoOutputBackendChain,
+  resolveNextAutoOutputBackend,
+} from './audioOutputFailoverController';
+import {
+  SeekCommandCoalescer,
+  VolumeCommandCoalescer,
+} from './audioCommandCoalescers';
+import { DynamicSrcPolicyExecutor } from './dynamicSrcPolicyExecutor';
+import { NativeAudioQueueSyncController } from './nativeAudioQueueSyncController';
 import {
   getDynamicSrcAdaptiveScale,
   resolveDynamicSrcAdaptiveProfile,
@@ -78,10 +91,12 @@ import {
 } from '../../modules/music-library';
 import { readString } from '../../modules/storage';
 import {
-  getAudioPerformanceTelemetrySnapshot,
   recordRecentPlaylistWriteFlushed,
   recordRecentPlaylistWriteScheduled,
 } from './audioPerformanceTelemetry';
+import { buildNativeAudioRobustnessSnapshot } from './nativeAudioRobustnessSnapshot';
+import { createNativeAudioRobustnessSnapshotSource } from './nativeAudioRobustnessSnapshotAdapter';
+import { RobustnessEmissionGate } from './nativeAudioRobustnessEmissionGate';
 import {
   applyRecentSmartPlaylistSnapshotToState,
   compactTrackForRecentPlaylist,
@@ -166,18 +181,18 @@ export class NativeAudioService implements IAudioService {
   private lastUnderrunFrames: number = 0;
   private underrunRecoveryUntilMs: number = 0;
   private underrunSpikeTimestampsMs: number[] = [];
-  private pendingSeekTime: number | null = null;
-  private pendingSeekSeq: number | null = null;
-  private pendingSeekTimer: number | null = null;
-  private pendingVolume: number | null = null;
-  private pendingVolumeTimer: number | null = null;
-  private lastVolumeDispatchAtMs = 0;
-  private pendingSeekTarget: number | null = null;
-  private pendingSeekDirection: 'forward' | 'backward' | null = null;
-  private pendingSeekSettleUntilMs = 0;
-  private activeSeekInvokeCount = 0;
+  private readonly seekCommandCoalescer = new SeekCommandCoalescer({
+    coalesceMs: NativeAudioService.SEEK_COALESCE_MS,
+    minDispatchIntervalMs: NativeAudioService.SEEK_DISPATCH_MIN_INTERVAL_MS,
+    maxParallelInvocations: NativeAudioService.SEEK_MAX_PARALLEL_INVOCATIONS,
+    staleGuardWindowMs: NativeAudioService.SEEK_STALE_GUARD_WINDOW_MS,
+    staleGuardToleranceSeconds: NativeAudioService.SEEK_STALE_GUARD_TOLERANCE_SECONDS,
+  });
+  private readonly volumeCommandCoalescer = new VolumeCommandCoalescer({
+    coalesceMs: NativeAudioService.VOLUME_COALESCE_MS,
+    minDispatchIntervalMs: NativeAudioService.VOLUME_DISPATCH_MIN_INTERVAL_MS,
+  });
   private seekCommandSeqCounter = Math.max(1, Date.now());
-  private lastSeekDispatchAtMs = 0;
   private desiredPlayIndex: number | null = null;
   private playIndexQueue: Promise<void> = Promise.resolve();
   private bufferedAheadRollingWindow: number[] = [];
@@ -207,6 +222,13 @@ export class NativeAudioService implements IAudioService {
   private lastEmittedRobustnessSignature: string | null = null;
   private robustnessEmissionInProgress = false;
   private robustnessEmissionPendingForce = false;
+  private robustnessEmissionScheduledTimer: ReturnType<typeof setTimeout> | null = null;
+  private robustnessEmissionScheduledForce = false;
+  private readonly robustnessEmissionGate = new RobustnessEmissionGate({
+    minIntervalMs: NativeAudioService.ROBUSTNESS_EMISSION_MIN_INTERVAL_MS,
+    forceBurstWindowMs: NativeAudioService.ROBUSTNESS_FORCE_BURST_WINDOW_MS,
+    forceBurstLimit: NativeAudioService.ROBUSTNESS_FORCE_BURST_LIMIT,
+  });
   private lastSchedulerProfile: 'normal' | 'guarded' | 'critical' = 'normal';
   private transportMode: 'robust' | 'transport-exact' = 'robust';
   private hqSrcPhaseMode: 'linear' | 'minimum' | 'intermediate' = 'linear';
@@ -223,14 +245,13 @@ export class NativeAudioService implements IAudioService {
   private dynamicSrcLastSwitchReason: string | null = null;
   private dynamicSrcHoldUntilMs = 0;
   private dynamicSrcRestoreTimer: ReturnType<typeof setTimeout> | null = null;
-  private dynamicSrcLastApplyAtMs: number | null = null;
+  private readonly dynamicSrcPolicyExecutor = new DynamicSrcPolicyExecutor();
   private dynamicSrcManualLockActive = false;
   private dynamicSrcQualityPolicy: NativeAudioSrcPolicy = {
     srcMode: 'match-output',
     srcBackend: 'rubato',
     srcTargetSampleRate: null,
   };
-  private dynamicSrcPendingPolicy: NativeAudioSrcPolicy | null = null;
   private dynamicSrcDeferredLatencyReason: string | null = null;
   private hqSrcStopbandDb: number = 140;
   private hqSrcActive = false;
@@ -320,6 +341,9 @@ export class NativeAudioService implements IAudioService {
   private static readonly TUNING_AUTO_CRITICAL_STRESS_SCORE = 8;
   private static readonly TUNING_AUTO_CRITICAL_UNDERRUN_EVENTS_WINDOW = 2;
   private static readonly TUNING_AUTO_CRITICAL_OVERFLOW_GROWTH_TICKS = 2;
+  private static readonly ROBUSTNESS_EMISSION_MIN_INTERVAL_MS = 120;
+  private static readonly ROBUSTNESS_FORCE_BURST_WINDOW_MS = 300;
+  private static readonly ROBUSTNESS_FORCE_BURST_LIMIT = 3;
   private static readonly PLAYLIST_OWNER_UID = 'local:default';
   private static readonly PLAYLIST_KIND_MANUAL = 'manual' as const;
   private static readonly PLAYLIST_KIND_SMART = 'smart' as const;
@@ -986,11 +1010,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private isSharedOutputBackend(backendId: string | null | undefined): backendId is string {
-    return (
-      backendId === 'wasapi' ||
-      backendId === 'wasapi-shared-raw' ||
-      backendId === 'rodio-cpal'
-    );
+    return isSharedOutputBackendId(backendId);
   }
 
   private hasPinnedOutputBackendChoice(): boolean {
@@ -1006,102 +1026,40 @@ export class NativeAudioService implements IAudioService {
   }
 
   private clearPendingSeek(): void {
-    this.pendingSeekTime = null;
-    this.pendingSeekSeq = null;
+    const clearTimer = (timerId: number) => {
+      if (typeof window === 'undefined') return;
+      window.clearTimeout(timerId);
+    };
+    this.seekCommandCoalescer.clearPendingAndGuard({ clearTimer });
     this.dynamicSrcDeferredLatencyReason = null;
-    if (this.pendingSeekTimer !== null && typeof window !== 'undefined') {
-      window.clearTimeout(this.pendingSeekTimer);
-    }
-    this.pendingSeekTimer = null;
-    this.clearPendingSeekGuard();
   }
 
   private hasPendingSeekWork(): boolean {
-    return this.activeSeekInvokeCount > 0 || typeof this.pendingSeekTime === 'number';
+    return this.seekCommandCoalescer.hasPendingWork();
   }
 
   private markPendingSeekGuard(target: number): void {
     if (!isFinite(target)) return;
-    this.pendingSeekDirection = target >= this.state.currentTime ? 'forward' : 'backward';
-    this.pendingSeekTarget = target;
-    this.pendingSeekSettleUntilMs = Date.now() + NativeAudioService.SEEK_STALE_GUARD_WINDOW_MS;
+    this.seekCommandCoalescer.markGuard(target, this.state.currentTime, Date.now());
   }
 
   private clearPendingSeekGuard(): void {
-    this.pendingSeekTarget = null;
-    this.pendingSeekDirection = null;
-    this.pendingSeekSettleUntilMs = 0;
+    this.seekCommandCoalescer.clearGuard();
   }
 
   private shouldIgnoreBackendCurrentTime(nextTime: number): boolean {
-    if (!isFinite(nextTime)) return false;
-    if (typeof this.pendingSeekTarget !== 'number') return false;
-
-    const target = this.pendingSeekTarget;
-    const tolerance = NativeAudioService.SEEK_STALE_GUARD_TOLERANCE_SECONDS;
-    const direction = this.pendingSeekDirection;
-    const waitingForSeekCommit =
-      this.activeSeekInvokeCount > 0 || typeof this.pendingSeekTime === 'number';
-
-    if (Math.abs(nextTime - target) <= tolerance) {
-      this.clearPendingSeekGuard();
-      return false;
-    }
-
-    if (direction === 'forward' && nextTime > target + tolerance) {
-      this.clearPendingSeekGuard();
-      return false;
-    }
-
-    if (direction === 'backward' && nextTime < target - tolerance) {
-      this.clearPendingSeekGuard();
-      return false;
-    }
-
-    if (waitingForSeekCommit) {
-      return true;
-    }
-
-    if (Date.now() <= this.pendingSeekSettleUntilMs) {
-      if (direction === 'forward') {
-        return nextTime < target - tolerance;
-      }
-      if (direction === 'backward') {
-        return nextTime > target + tolerance;
-      }
-    }
-
-    this.clearPendingSeekGuard();
-    return false;
+    return this.seekCommandCoalescer.shouldIgnoreBackendCurrentTime(nextTime, Date.now());
   }
 
   private flushPendingSeekCommand(): void {
-    const target = this.pendingSeekTime;
-    const seekSeq = this.pendingSeekSeq;
-    if (typeof target !== 'number' || !isFinite(target)) return;
-
-    if (
-      this.activeSeekInvokeCount >=
-      NativeAudioService.SEEK_MAX_PARALLEL_INVOCATIONS
-    ) {
-      this.scheduleSeekFlush(8);
+    const decision = this.seekCommandCoalescer.takeFlushDecision(Date.now());
+    if (decision.action === 'noop') return;
+    if (decision.action === 'reschedule') {
+      this.scheduleSeekFlush(decision.delayMs);
       return;
     }
 
-    const nowMs = Date.now();
-    const elapsedSinceLastDispatch = nowMs - this.lastSeekDispatchAtMs;
-    const remainingThrottleMs =
-      NativeAudioService.SEEK_DISPATCH_MIN_INTERVAL_MS - elapsedSinceLastDispatch;
-    if (remainingThrottleMs > 0) {
-      this.scheduleSeekFlush(remainingThrottleMs);
-      return;
-    }
-
-    this.pendingSeekTime = null;
-    this.pendingSeekSeq = null;
-    this.lastSeekDispatchAtMs = nowMs;
-
-    this.activeSeekInvokeCount += 1;
+    const { target, seekSeq } = decision;
     const payload: Record<string, unknown> = { time: target };
     if (typeof seekSeq === 'number' && Number.isFinite(seekSeq)) {
       payload.seekSeq = Math.max(1, Math.floor(seekSeq));
@@ -1109,19 +1067,16 @@ export class NativeAudioService implements IAudioService {
 
     void this.invokeCommand('native_audio_seek', payload)
       .catch(() => {
-        const hasQueuedSeek = typeof this.pendingSeekTime === 'number';
-        const isSameGuardTarget =
-          typeof this.pendingSeekTarget === 'number' &&
-          Math.abs(this.pendingSeekTarget - target) <=
-            NativeAudioService.SEEK_STALE_GUARD_TOLERANCE_SECONDS;
+        const hasQueuedSeek = this.seekCommandCoalescer.hasQueuedSeek();
+        const isSameGuardTarget = this.seekCommandCoalescer.isSameGuardTarget(target);
         if (!hasQueuedSeek && isSameGuardTarget) {
-          this.clearPendingSeekGuard();
+          this.seekCommandCoalescer.clearGuard();
         }
         // invokeCommand already emits structured error.
       })
       .finally(() => {
-        this.activeSeekInvokeCount = Math.max(0, this.activeSeekInvokeCount - 1);
-        if (typeof this.pendingSeekTime === 'number') {
+        this.seekCommandCoalescer.finishDispatch();
+        if (this.seekCommandCoalescer.hasQueuedSeek()) {
           this.scheduleSeekFlush(0);
           return;
         }
@@ -1136,46 +1091,33 @@ export class NativeAudioService implements IAudioService {
       return;
     }
 
-    if (this.pendingSeekTimer !== null) {
-      window.clearTimeout(this.pendingSeekTimer);
-    }
-
-    const safeDelayMs = Number.isFinite(delayMs)
-      ? Math.max(0, Math.floor(delayMs))
-      : NativeAudioService.SEEK_COALESCE_MS;
-
-    this.pendingSeekTimer = window.setTimeout(() => {
-      this.pendingSeekTimer = null;
-      this.flushPendingSeekCommand();
-    }, safeDelayMs);
+    this.seekCommandCoalescer.scheduleFlush(
+      delayMs,
+      {
+        scheduleTimer: (safeDelayMs, callback) => window.setTimeout(callback, safeDelayMs),
+        clearTimer: (timerId) => window.clearTimeout(timerId),
+      },
+      () => this.flushPendingSeekCommand()
+    );
   }
 
   private clearPendingVolume(): void {
-    this.pendingVolume = null;
-    if (this.pendingVolumeTimer !== null && typeof window !== 'undefined') {
-      window.clearTimeout(this.pendingVolumeTimer);
-    }
-    this.pendingVolumeTimer = null;
+    const clearTimer = (timerId: number) => {
+      if (typeof window === 'undefined') return;
+      window.clearTimeout(timerId);
+    };
+    this.volumeCommandCoalescer.clearPending({ clearTimer });
   }
 
   private flushPendingVolumeCommand(): void {
-    const volume = this.pendingVolume;
-    if (typeof volume !== 'number' || !Number.isFinite(volume)) {
+    const decision = this.volumeCommandCoalescer.takeFlushDecision(Date.now());
+    if (decision.action === 'noop') return;
+    if (decision.action === 'reschedule') {
+      this.scheduleVolumeFlush(decision.delayMs);
       return;
     }
 
-    const nowMs = Date.now();
-    const elapsedSinceLastDispatch = nowMs - this.lastVolumeDispatchAtMs;
-    const remainingThrottleMs =
-      NativeAudioService.VOLUME_DISPATCH_MIN_INTERVAL_MS - elapsedSinceLastDispatch;
-    if (remainingThrottleMs > 0) {
-      this.scheduleVolumeFlush(remainingThrottleMs);
-      return;
-    }
-
-    this.pendingVolume = null;
-    this.lastVolumeDispatchAtMs = nowMs;
-    this.fireAndForgetCommand('native_audio_set_volume', { volume });
+    this.fireAndForgetCommand('native_audio_set_volume', { volume: decision.volume });
   }
 
   private scheduleVolumeFlush(delayMs: number = NativeAudioService.VOLUME_COALESCE_MS): void {
@@ -1184,18 +1126,14 @@ export class NativeAudioService implements IAudioService {
       return;
     }
 
-    if (this.pendingVolumeTimer !== null) {
-      window.clearTimeout(this.pendingVolumeTimer);
-    }
-
-    const safeDelayMs = Number.isFinite(delayMs)
-      ? Math.max(0, Math.floor(delayMs))
-      : NativeAudioService.VOLUME_COALESCE_MS;
-
-    this.pendingVolumeTimer = window.setTimeout(() => {
-      this.pendingVolumeTimer = null;
-      this.flushPendingVolumeCommand();
-    }, safeDelayMs);
+    this.volumeCommandCoalescer.scheduleFlush(
+      delayMs,
+      {
+        scheduleTimer: (safeDelayMs, callback) => window.setTimeout(callback, safeDelayMs),
+        clearTimer: (timerId) => window.clearTimeout(timerId),
+      },
+      () => this.flushPendingVolumeCommand()
+    );
   }
 
   private isProbablyAbsolutePath(value: string): boolean {
@@ -1232,7 +1170,7 @@ export class NativeAudioService implements IAudioService {
       })
       .finally(() => {
         void this.refreshOutputBackendInventory().finally(() => {
-          this.emitRobustnessSnapshot(true);
+          this.emitRobustnessSnapshot();
         });
       });
   }
@@ -1687,64 +1625,30 @@ export class NativeAudioService implements IAudioService {
     };
   }
 
+  private buildDynamicSrcStabilityMetrics(nowMs: number = Date.now()) {
+    return {
+      playbackState: this.state.playbackState,
+      underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
+      nowMs,
+      protectionWindowActive: this.hasActiveProtectionWindow(nowMs),
+      sharedStressWindowActive: this.hasActiveSharedStressWindow(nowMs),
+      outputCallbackMetricsValid: this.outputCallbackMetricsValid,
+      outputWaitTimeoutCount: this.outputWaitTimeoutCount,
+      outputRenderUnderrunEvents: this.outputRenderUnderrunEvents,
+      outputCallbackIntervalOverrunCount: this.outputCallbackIntervalOverrunCount,
+      outputCallbackIntervalJitterP99Us: this.outputCallbackIntervalJitterP99Us,
+      transferMetricsValid: this.transferMetricsValid,
+      transferRenderLowHitCount: this.transferRenderLowHitCount,
+      transferDecodeLowHitCount: this.transferDecodeLowHitCount,
+      renderQueuePageLocked: this.renderQueuePageLocked,
+      sharedRenderAheadEnabled: this.sharedRenderAheadEnabled,
+      sharedRenderUnderrunEvents: this.sharedRenderUnderrunEvents,
+      sharedRenderLowHitCount: this.sharedRenderLowHitCount,
+    };
+  }
+
   private getDynamicSrcStressScore(nowMs: number = Date.now()): number {
-    let score = 0;
-
-    if (this.state.playbackState === 'buffering') {
-      score += 3;
-    } else if (this.state.playbackState === 'loading') {
-      score += 2;
-    }
-
-    if (this.underrunRecoveryUntilMs > nowMs) {
-      score += 4;
-    }
-
-    if (this.hasActiveProtectionWindow(nowMs)) {
-      score += 3;
-    }
-
-    if (this.hasActiveSharedStressWindow(nowMs)) {
-      score += 4;
-    }
-
-    if (this.outputCallbackMetricsValid) {
-      if (this.outputWaitTimeoutCount > 0) {
-        score += Math.min(3, this.outputWaitTimeoutCount);
-      }
-      if (this.outputRenderUnderrunEvents > 0) {
-        score += Math.min(3, this.outputRenderUnderrunEvents);
-      }
-      if (this.outputCallbackIntervalOverrunCount > 0) {
-        score += Math.min(2, this.outputCallbackIntervalOverrunCount);
-      }
-      if (this.outputCallbackIntervalJitterP99Us >= 2500) {
-        score += 1;
-      }
-    }
-
-    if (this.transferMetricsValid) {
-      if (this.transferRenderLowHitCount > 0) {
-        score += 1;
-      }
-      if (this.transferDecodeLowHitCount > 0) {
-        score += 1;
-      }
-      if (this.renderQueuePageLocked) {
-        score += 1;
-      }
-    }
-
-    if (this.sharedRenderAheadEnabled) {
-      if (this.sharedRenderUnderrunEvents > 0) {
-        score += Math.min(3, this.sharedRenderUnderrunEvents);
-      }
-      if (this.sharedRenderLowHitCount > 0) {
-        score += 1;
-      }
-    }
-
-    return Math.max(0, Math.floor(score));
+    return computeDynamicSrcStressScore(this.buildDynamicSrcStabilityMetrics(nowMs));
   }
 
   private buildDynamicSrcLearningDeviceKey(): string {
@@ -1912,21 +1816,23 @@ export class NativeAudioService implements IAudioService {
     stressScore?: number;
   }): void {
     const nowMs = options?.nowMs ?? Date.now();
-    const stressScore = options?.stressScore ?? this.getDynamicSrcStressScore(nowMs);
-    const nextState = resolveDynamicSrcAutoDegradationState({
+    const transition = resolveDynamicSrcDegradationTransition({
+      previousState: {
+        level: this.dynamicSrcAutoDegradationLevel,
+        reason: this.dynamicSrcAutoDegradationReason,
+      },
       autoEnabled: this.dynamicSrcAutoEnabled,
       manualLockActive: this.dynamicSrcManualLockActive,
-      playbackState: this.state.playbackState,
-      stressScore,
-      nowMs,
-      underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
-      protectionWindowActive: this.hasActiveProtectionWindow(nowMs),
-      sharedStressWindowActive: this.hasActiveSharedStressWindow(nowMs),
+      stressScoreOverride: options?.stressScore,
       lastUnderrunFrames: this.lastUnderrunFrames,
       severeUnderrunFramesThreshold: NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER,
       elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
       criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
+      metrics: this.buildDynamicSrcStabilityMetrics(nowMs),
     });
+
+    const nextState = transition.nextState;
+
     const levelChanged = this.dynamicSrcAutoDegradationLevel !== nextState.level;
     const reasonChanged = this.dynamicSrcAutoDegradationReason !== nextState.reason;
     if (!levelChanged && !reasonChanged) {
@@ -1991,26 +1897,19 @@ export class NativeAudioService implements IAudioService {
     });
   }
 
-  private isSameSrcPolicy(left: NativeAudioSrcPolicy, right: NativeAudioSrcPolicy): boolean {
-    return (
-      left.srcMode === right.srcMode &&
-      left.srcBackend === right.srcBackend &&
-      left.srcTargetSampleRate === right.srcTargetSampleRate
-    );
-  }
-
   private clearDynamicSrcRestoreTimer(): void {
     if (this.dynamicSrcRestoreTimer === null) return;
     clearTimeout(this.dynamicSrcRestoreTimer);
     this.dynamicSrcRestoreTimer = null;
   }
 
-  private scheduleDynamicSrcRestoreEvaluation(): void {
+  private scheduleDynamicSrcRestoreEvaluation(minDelayMs: number = 0): void {
     this.clearDynamicSrcRestoreTimer();
     const nowMs = Date.now();
     const effective = this.getEffectiveDynamicSrcTiming(nowMs);
     const holdRemaining = Math.max(0, this.dynamicSrcHoldUntilMs - nowMs);
-    const delayMs = Math.max(effective.restoreDebounceMs, holdRemaining);
+    const sanitizedMinDelayMs = Math.max(0, Math.floor(minDelayMs));
+    const delayMs = Math.max(effective.restoreDebounceMs, holdRemaining, sanitizedMinDelayMs);
 
     this.dynamicSrcRestoreTimer = setTimeout(() => {
       this.dynamicSrcRestoreTimer = null;
@@ -2048,15 +1947,6 @@ export class NativeAudioService implements IAudioService {
     void this.ensureLatencySrcPolicy(`${deferredReason}:${trigger}`);
   }
 
-  private canApplyDynamicSrcNow(nowMs: number): boolean {
-    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
-    if (this.dynamicSrcLastApplyAtMs === null) return true;
-    return (
-      nowMs - this.dynamicSrcLastApplyAtMs >=
-      effective.minSwitchIntervalMs
-    );
-  }
-
   private async applySrcPolicyIfNeeded(
     target: NativeAudioSrcPolicy,
     reason: string,
@@ -2068,44 +1958,39 @@ export class NativeAudioService implements IAudioService {
       srcTargetSampleRate: this.srcMode === 'target-rate' ? this.srcTargetSampleRate : null,
     };
 
-    if (this.isSameSrcPolicy(current, target)) {
-      this.dynamicSrcProfile = profile;
-      return false;
-    }
-
-    if (
-      this.dynamicSrcPendingPolicy &&
-      this.isSameSrcPolicy(this.dynamicSrcPendingPolicy, target)
-    ) {
-      this.dynamicSrcProfile = profile;
-      return false;
-    }
-
     const nowMs = Date.now();
-    if (!this.canApplyDynamicSrcNow(nowMs)) {
-      this.scheduleDynamicSrcRestoreEvaluation();
+    const effective = this.getEffectiveDynamicSrcTiming(nowMs);
+    const plan = this.dynamicSrcPolicyExecutor.plan({
+      currentPolicy: current,
+      targetPolicy: target,
+      nowMs,
+      minSwitchIntervalMs: effective.minSwitchIntervalMs,
+    });
+
+    if (plan.action === 'skip-current' || plan.action === 'skip-pending') {
+      this.dynamicSrcProfile = profile;
       return false;
     }
 
-    this.dynamicSrcPendingPolicy = { ...target };
-    this.dynamicSrcLastApplyAtMs = nowMs;
+    if (plan.action === 'defer') {
+      this.scheduleDynamicSrcRestoreEvaluation(plan.delayMs);
+      return false;
+    }
+
+    const applyNowMs = plan.nowMs;
+    this.dynamicSrcPolicyExecutor.beginApply(target, applyNowMs);
 
     try {
       await this.setEnginePolicyInternal(target, { fromDynamicAuto: true });
       this.dynamicSrcProfile = profile;
-      this.dynamicSrcLastSwitchAtMs = nowMs;
+      this.dynamicSrcLastSwitchAtMs = applyNowMs;
       this.dynamicSrcLastSwitchReason = reason;
       this.emitRobustnessSnapshot(true);
       return true;
     } catch {
       return false;
     } finally {
-      if (
-        this.dynamicSrcPendingPolicy &&
-        this.isSameSrcPolicy(this.dynamicSrcPendingPolicy, target)
-      ) {
-        this.dynamicSrcPendingPolicy = null;
-      }
+      this.dynamicSrcPolicyExecutor.finishApply(target);
     }
   }
 
@@ -2336,7 +2221,7 @@ export class NativeAudioService implements IAudioService {
     );
 
     this.applyTuningAutoSettingsState(nextSettings);
-    this.emitRobustnessSnapshot(true);
+    this.emitRobustnessSnapshot();
   }
 
   private async restoreTuningAutoSettingsFromStorage(): Promise<void> {
@@ -2344,19 +2229,19 @@ export class NativeAudioService implements IAudioService {
     this.applyTuningAutoSettingsState(persisted);
 
     if (this.tuningAutoSettingsListenerCleanup) {
-      this.emitRobustnessSnapshot(true);
+      this.emitRobustnessSnapshot();
       return;
     }
     if (this.tuningAutoSettingsListenerInitPromise) {
       await this.tuningAutoSettingsListenerInitPromise;
-      this.emitRobustnessSnapshot(true);
+      this.emitRobustnessSnapshot();
       return;
     }
 
     const applyPersistedSettings = () => {
       const nextSettings = this.readTuningAutoSettings();
       this.applyTuningAutoSettingsState(nextSettings);
-      this.emitRobustnessSnapshot(true);
+      this.emitRobustnessSnapshot();
     };
 
     this.tuningAutoSettingsListenerInitPromise = (async () => {
@@ -2374,7 +2259,7 @@ export class NativeAudioService implements IAudioService {
     });
 
     await this.tuningAutoSettingsListenerInitPromise;
-    this.emitRobustnessSnapshot(true);
+    this.emitRobustnessSnapshot();
   }
 
   private applyEnginePolicyPayload(payload: unknown): void {
@@ -2500,7 +2385,7 @@ export class NativeAudioService implements IAudioService {
       normalized as Record<string, unknown>
     );
     this.applyEnginePolicyPayload(response);
-    this.emitRobustnessSnapshot(true);
+    this.emitRobustnessSnapshot();
   }
 
   async setEnginePolicy(patch: NativeAudioEnginePolicyPatch): Promise<void> {
@@ -2599,7 +2484,7 @@ export class NativeAudioService implements IAudioService {
       this.dynamicSrcHoldUntilMs = 0;
       this.clearDynamicSrcRestoreTimer();
       this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-      this.emitRobustnessSnapshot(true);
+      this.emitRobustnessSnapshot();
       return;
     }
 
@@ -2615,7 +2500,7 @@ export class NativeAudioService implements IAudioService {
     this.dynamicSrcLastSwitchReason = 'dynamic-src-enabled';
     this.scheduleDynamicSrcRestoreEvaluation();
     this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-    this.emitRobustnessSnapshot(true);
+    this.emitRobustnessSnapshot();
   }
 
   async applyTuningProfile(profileId: AudioTuningProfileId): Promise<void> {
@@ -2646,68 +2531,48 @@ export class NativeAudioService implements IAudioService {
     this.tuningAutoLastReason = `manual:${profileId}`;
     this.tuningAutoLastAppliedAtMs = nowMs;
 
-    this.emitRobustnessSnapshot(true);
+    this.emitRobustnessSnapshot();
   }
 
   private getAutoBackendChain(): string[] {
-    const backends = [...this.availableOutputBackends];
-    if (
-      this.isSharedOutputBackend(this.currentOutputBackendId) &&
-      !backends.includes(this.currentOutputBackendId)
-    ) {
-      backends.unshift(this.currentOutputBackendId);
-    }
+    return resolveAutoOutputBackendChain({
+      availableBackends: this.availableOutputBackends,
+      currentBackendId: this.currentOutputBackendId,
+      isWindows: this.isWindowsOutputPlatform(),
+    });
+  }
 
-    const unique = Array.from(
-      new Set(backends.filter((value) => value.length > 0 && this.isSharedOutputBackend(value)))
-    );
-    if (unique.length <= 1) return unique;
-
-    const platform =
-      typeof navigator !== 'undefined'
-        ? `${(navigator as Navigator & { platform?: string }).platform ?? ''} ${navigator.userAgent ?? ''}`
-        : '';
-    const isWindows = /win/i.test(platform);
-    if (!isWindows) return unique;
-
-    const preferredOrder = ['wasapi-shared-raw', 'wasapi', 'rodio-cpal'];
-    const ordered: string[] = [];
-    for (const preferred of preferredOrder) {
-      if (unique.includes(preferred)) ordered.push(preferred);
-    }
-    for (const backend of unique) {
-      if (!ordered.includes(backend)) ordered.push(backend);
-    }
-    return ordered;
+  private isWindowsOutputPlatform(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    const platform = `${(navigator as Navigator & { platform?: string }).platform ?? ''} ${navigator.userAgent ?? ''}`;
+    return /win/i.test(platform);
   }
 
   private pruneUnderrunSpikeWindow(nowMs: number): void {
-    this.underrunSpikeTimestampsMs = this.underrunSpikeTimestampsMs.filter(
-      (timestamp) => nowMs - timestamp <= NativeAudioService.AUTO_BACKEND_UNDERRUN_WINDOW_MS
+    this.underrunSpikeTimestampsMs = pruneUnderrunSpikeTimestamps(
+      this.underrunSpikeTimestampsMs,
+      nowMs,
+      NativeAudioService.AUTO_BACKEND_UNDERRUN_WINDOW_MS
     );
   }
 
   private shouldAutoSwitchNow(reason: string, nowMs: number): boolean {
-    if (this.backendSwitchInFlight) return false;
-
-    if (
-      this.lastAutoBackendSwitchAtMs !== null &&
-      nowMs - this.lastAutoBackendSwitchAtMs < NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS
-    ) {
-      return false;
-    }
-
-    if (reason.startsWith('underrun')) {
-      if (this.lastUnderrunFrames >= NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER) {
-        return true;
-      }
-      this.pruneUnderrunSpikeWindow(nowMs);
-      return (
-        this.underrunSpikeTimestampsMs.length >= NativeAudioService.AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT
-      );
-    }
-
-    return true;
+    const decision = evaluateAutoOutputSwitch({
+      reason,
+      nowMs,
+      backendSwitchInFlight: this.backendSwitchInFlight,
+      lastAutoSwitchAtMs: this.lastAutoBackendSwitchAtMs,
+      lastUnderrunFrames: this.lastUnderrunFrames,
+      underrunSpikeTimestampsMs: this.underrunSpikeTimestampsMs,
+      config: {
+        underrunWindowMs: NativeAudioService.AUTO_BACKEND_UNDERRUN_WINDOW_MS,
+        underrunTriggerCount: NativeAudioService.AUTO_BACKEND_UNDERRUN_TRIGGER_COUNT,
+        underrunFrameSpikeTrigger: NativeAudioService.AUTO_BACKEND_UNDERRUN_FRAME_SPIKE_TRIGGER,
+        switchCooldownMs: NativeAudioService.AUTO_BACKEND_SWITCH_COOLDOWN_MS,
+      },
+    });
+    this.underrunSpikeTimestampsMs = decision.prunedUnderrunSpikeTimestampsMs;
+    return decision.shouldSwitch;
   }
 
   private handleOutputBackendSwitchFailure(reason: string): void {
@@ -2756,9 +2621,7 @@ export class NativeAudioService implements IAudioService {
 
       const current = this.currentOutputBackendId;
       if (!this.isSharedOutputBackend(current)) return;
-      const currentIndex = current ? chain.indexOf(current) : -1;
-      const targetBackend =
-        currentIndex >= 0 ? chain[(currentIndex + 1) % chain.length] ?? null : chain[0] ?? null;
+      const targetBackend = resolveNextAutoOutputBackend(chain, current);
       if (!targetBackend) return;
       if (targetBackend === current) return;
 
@@ -3067,7 +2930,7 @@ export class NativeAudioService implements IAudioService {
       this.protectionWindowUntilMs = 0;
       this.protectionWindowReason = null;
       this.applyStreamingBufferPolicy(true);
-      this.emitRobustnessSnapshot(true);
+      this.emitRobustnessSnapshot();
       return;
     }
 
@@ -3078,177 +2941,68 @@ export class NativeAudioService implements IAudioService {
       this.protectionWindowUntilMs = 0;
       this.protectionWindowReason = null;
       this.applyStreamingBufferPolicy(true);
-      this.emitRobustnessSnapshot(true);
+      this.emitRobustnessSnapshot();
     }, delayMs);
   }
 
   private buildRobustnessSnapshot(nowMs: number = Date.now()): AudioRobustnessSnapshot {
-    this.pruneUnderrunSpikeWindow(nowMs);
-    const effectiveDynamicSrc = this.getEffectiveDynamicSrcTiming(nowMs);
-    this.dynamicSrcAdaptiveProfile = effectiveDynamicSrc.profile;
-    this.evaluateDynamicSrcAutoDegradation({
-      nowMs,
-      stressScore: effectiveDynamicSrc.stressScore,
-      triggerActions: false,
-    });
-    const learningDeviceKey = this.buildDynamicSrcLearningDeviceKey();
-    const learningStressIndex = this.dynamicSrcLearningProfile[learningDeviceKey]?.stressIndex ?? 0;
-    const learningScale = this.getDynamicSrcLearningScale();
-    const audioPerfTelemetry = getAudioPerformanceTelemetrySnapshot();
-
-    const bufferedAheadNow =
-      typeof this.state.bufferedAhead === 'number' && Number.isFinite(this.state.bufferedAhead)
-        ? Math.max(0, this.state.bufferedAhead)
-        : 0;
-    const decodeBufferedAheadNow =
-      typeof this.state.decodeBufferedAhead === 'number' &&
-      Number.isFinite(this.state.decodeBufferedAhead)
-        ? Math.max(0, this.state.decodeBufferedAhead)
-        : 0;
-    const outputBufferedAheadNow =
-      typeof this.state.outputBufferedAhead === 'number' &&
-      Number.isFinite(this.state.outputBufferedAhead)
-        ? Math.max(0, this.state.outputBufferedAhead)
-        : 0;
-    const bufferedAheadAvg =
-      this.bufferedAheadRollingWindow.length > 0
-        ? this.bufferedAheadRollingSum / this.bufferedAheadRollingWindow.length
-        : null;
-    const recoveryActive = this.underrunRecoveryUntilMs > nowMs;
-    const protectionActive = this.hasActiveProtectionWindow(nowMs);
-
-    return {
-      outputBackendId: this.currentOutputBackendId,
-      outputBackends: [...this.availableOutputBackends],
-      schedulerProfile: this.lastSchedulerProfile,
-      transportMode: this.transportMode,
-      hqSrcPhaseMode: this.hqSrcPhaseMode,
-      srcMode: this.srcMode,
-      srcBackend: this.srcBackend,
-      srcTargetSampleRate: this.srcTargetSampleRate,
-      outputQuantizationMode: this.outputQuantizationMode,
-      dynamicSrcAutoEnabled: this.dynamicSrcAutoEnabled,
-      dynamicSrcProfile: this.dynamicSrcProfile,
-      dynamicSrcLastSwitchAtMs: this.dynamicSrcLastSwitchAtMs,
-      dynamicSrcLastSwitchReason: this.dynamicSrcLastSwitchReason,
-      dynamicSrcHoldUntilMs: Math.max(0, this.dynamicSrcHoldUntilMs - nowMs),
-      dynamicSrcManualLockActive: this.dynamicSrcManualLockActive,
-      dynamicSrcAdaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
+    const source = createNativeAudioRobustnessSnapshotSource({
+      record: this as unknown as Record<string, unknown>,
+      state: this.state,
+      bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
+      bufferedAheadRollingSum: this.bufferedAheadRollingSum,
+      underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
       dynamicSrcAdaptiveProfile: this.dynamicSrcAdaptiveProfile,
-      dynamicSrcStressScore: effectiveDynamicSrc.stressScore,
-      dynamicSrcAutoDegradationLevel: this.dynamicSrcAutoDegradationLevel,
-      dynamicSrcAutoDegradationLabel: toDynamicSrcAutoDegradationLabel(
-        this.dynamicSrcAutoDegradationLevel
-      ),
-      dynamicSrcAutoDegradationReason: this.dynamicSrcAutoDegradationReason,
-      dynamicSrcAutoDegradationLastChangedAtMs: this.dynamicSrcAutoDegradationLastChangedAtMs,
-      dynamicSrcLearningEnabled: this.dynamicSrcLearningEnabled,
-      dynamicSrcLearningDeviceKey: learningDeviceKey,
-      dynamicSrcLearningStressIndex: Number(learningStressIndex.toFixed(4)),
-      dynamicSrcLearningScale: Number(learningScale.toFixed(4)),
-      dynamicSrcRestoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
-      dynamicSrcMinSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
-      dynamicSrcSeekHoldMs: this.dynamicSrcSeekHoldMs,
-      dynamicSrcUnderrunHoldMs: this.dynamicSrcUnderrunHoldMs,
-      dynamicSrcSharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
-      dynamicSrcOutputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
-      tuningAutoEnabled: this.tuningAutoEnabled,
-      tuningAutoTickIntervalMs: this.tuningAutoTickIntervalMs,
-      tuningAutoStableWindowMs: this.tuningAutoStableWindowMs,
-      tuningAutoMinSwitchIntervalMs: this.tuningAutoMinSwitchIntervalMs,
-      tuningAutoPostSwitchObserveWindowMs: this.tuningAutoPostSwitchObserveWindowMs,
-      tuningAutoElevatedStressScore: this.tuningAutoElevatedStressScore,
-      tuningAutoCriticalStressScore: this.tuningAutoCriticalStressScore,
-      tuningAutoCriticalUnderrunEventsWindow: this.tuningAutoCriticalUnderrunEventsWindow,
-      tuningAutoCriticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
-      tuningAutoCriticalOverflowGrowthStreak:
-        this.tuningAutoControllerState.criticalOverflowGrowthStreak,
-      tuningAutoActiveProfile: this.tuningAutoControllerState.activeProfile,
-      tuningAutoLastReason: this.tuningAutoLastReason,
-      tuningAutoLastAppliedAtMs: this.tuningAutoLastAppliedAtMs,
-      tuningAutoStableSinceMs: this.tuningAutoControllerState.stableSinceMs,
-      tuningAutoLastSwitchAtMs: this.tuningAutoControllerState.lastSwitchAtMs,
-      dynamicSrcEffectiveRestoreDebounceMs: effectiveDynamicSrc.restoreDebounceMs,
-      dynamicSrcEffectiveMinSwitchIntervalMs: effectiveDynamicSrc.minSwitchIntervalMs,
-      dynamicSrcEffectiveSeekHoldMs: effectiveDynamicSrc.seekHoldMs,
-      dynamicSrcEffectiveUnderrunHoldMs: effectiveDynamicSrc.underrunHoldMs,
-      dynamicSrcEffectiveSharedStressHoldMs: effectiveDynamicSrc.sharedStressHoldMs,
-      dynamicSrcEffectiveOutputErrorHoldMs: effectiveDynamicSrc.outputErrorHoldMs,
-      hqSrcStopbandDb: this.hqSrcStopbandDb,
-      hqSrcActive: this.hqSrcActive,
-      hqSrcRatio: this.hqSrcRatio,
-      sourceSampleRate: this.sourceSampleRate,
-      outputSampleRate: this.outputSampleRate,
-      transportExactInt32Container: this.transportExactInt32Container,
-      outputCallbackMetricsValid: this.outputCallbackMetricsValid,
-      underrunEvents: this.lastUnderrunEvents,
-      underrunFrames: this.lastUnderrunFrames,
-      underrunEventsWindow: this.underrunSpikeTimestampsMs.length,
-      underrunRecoveryActive: recoveryActive,
-      protectionWindowActive: protectionActive,
-      protectionRefCount: this.protectionWindowRefCount,
-      autoSwitchCount: this.autoBackendSwitchCount,
-      lastAutoSwitchAtMs: this.lastAutoBackendSwitchAtMs,
-      lastAutoSwitchReason: this.lastAutoBackendSwitchReason,
-      bufferedAheadSeconds: bufferedAheadNow,
-      decodeBufferedAheadSeconds: decodeBufferedAheadNow,
-      outputBufferedAheadSeconds: outputBufferedAheadNow,
-      bufferedAheadMinSeconds: this.bufferedAheadMinSeconds,
-      bufferedAheadAvgSeconds: bufferedAheadAvg,
-      rebufferCount: this.rebufferCount,
-      outputCallbackP99Us: this.outputCallbackP99Us,
-      outputWaitTimeoutCount: this.outputWaitTimeoutCount,
-      outputRenderUnderrunEvents: this.outputRenderUnderrunEvents,
-      outputRenderUnderrunFrames: this.outputRenderUnderrunFrames,
-      outputCallbackIntervalJitterP99Us: this.outputCallbackIntervalJitterP99Us,
-      outputCallbackIntervalOverrunCount: this.outputCallbackIntervalOverrunCount,
-      outputCallbackExpectedIntervalUs: this.outputCallbackExpectedIntervalUs,
-      transferLowWatermarkSamples: this.transferLowWatermarkSamples,
-      transferRenderLowHitCount: this.transferRenderLowHitCount,
-      transferDecodeLowHitCount: this.transferDecodeLowHitCount,
-      transferAdaptationLevel: this.transferAdaptationLevel,
-      transferOscillationStreak: this.transferOscillationStreak,
-      renderQueuePageLocked: this.renderQueuePageLocked,
-      transferMetricsValid: this.transferMetricsValid,
-      sharedRenderAheadEnabled: this.sharedRenderAheadEnabled,
-      sharedRenderUnderrunEvents: this.sharedRenderUnderrunEvents,
-      sharedRenderUnderrunFrames: this.sharedRenderUnderrunFrames,
-      sharedRenderLowHitCount: this.sharedRenderLowHitCount,
-      sharedRenderLowWatermarkSamples: this.sharedRenderLowWatermarkSamples,
-      controlQueueLockFree: this.controlQueueLockFree,
-      controlQueueMode: this.controlQueueMode,
-      controlQueueCapacity: this.controlQueueCapacity,
-      controlQueueOverwriteEvents: this.controlQueueOverwriteEvents,
-      controlQueueDropNewestEvents: this.controlQueueDropNewestEvents,
-      controlQueueCoalescedOverflowEvents: this.controlQueueCoalescedOverflowEvents,
-      controlQueueCriticalOverflowEvents: this.controlQueueCriticalOverflowEvents,
-      diagnosticTimelineDroppedEvents: this.diagnosticTimelineDroppedEvents,
-      diagnosticTimeline: [...this.diagnosticTimeline],
-      recentPlaylistWriteScheduledCount: audioPerfTelemetry.recentPlaylistWriteScheduledCount,
-      recentPlaylistWriteFlushCount: audioPerfTelemetry.recentPlaylistWriteFlushCount,
-      recentPlaylistWriteEventCount: audioPerfTelemetry.recentPlaylistWriteEventCount,
-      recentPlaylistWriteTrackCount: audioPerfTelemetry.recentPlaylistWriteTrackCount,
-      recentPlaylistWritePayloadBytesTotal: audioPerfTelemetry.recentPlaylistWritePayloadBytesTotal,
-      recentPlaylistWritePayloadBytesLast: audioPerfTelemetry.recentPlaylistWritePayloadBytesLast,
-      coverResolveRequestCount: audioPerfTelemetry.coverResolveRequestCount,
-      coverResolveCacheHitCount: audioPerfTelemetry.coverResolveCacheHitCount,
-      coverResolveCacheMissCount: audioPerfTelemetry.coverResolveCacheMissCount,
-      coverResolveHitRate: audioPerfTelemetry.coverResolveHitRate,
-      coverBlobReleaseCount: audioPerfTelemetry.coverBlobReleaseCount,
-      protectionReason:
-        protectionActive
-          ? this.protectionWindowReason ?? this.sharedStressReason
-          : this.hasActiveSharedStressWindow(nowMs)
-            ? this.sharedStressReason
-            : null,
-    };
+      dynamicSrcLearningProfile: this.dynamicSrcLearningProfile,
+      pruneUnderrunSpikeWindow: (timestampMs) => this.pruneUnderrunSpikeWindow(timestampMs),
+      getEffectiveDynamicSrcTiming: (timestampMs) => this.getEffectiveDynamicSrcTiming(timestampMs),
+      evaluateDynamicSrcAutoDegradation: (options) => this.evaluateDynamicSrcAutoDegradation(options),
+      buildDynamicSrcLearningDeviceKey: () => this.buildDynamicSrcLearningDeviceKey(),
+      getDynamicSrcLearningScale: () => this.getDynamicSrcLearningScale(),
+      hasActiveProtectionWindow: (timestampMs) => this.hasActiveProtectionWindow(timestampMs),
+      hasActiveSharedStressWindow: (timestampMs) => this.hasActiveSharedStressWindow(timestampMs),
+    });
+    return buildNativeAudioRobustnessSnapshot(source, nowMs);
+  }
+
+  private clearRobustnessEmissionTimer(): void {
+    if (this.robustnessEmissionScheduledTimer === null) return;
+    clearTimeout(this.robustnessEmissionScheduledTimer);
+    this.robustnessEmissionScheduledTimer = null;
+    this.robustnessEmissionScheduledForce = false;
+  }
+
+  private scheduleDeferredRobustnessEmission(delayMs: number, force: boolean = false): void {
+    if (this.robustnessEmissionScheduledTimer !== null) {
+      this.robustnessEmissionScheduledForce = this.robustnessEmissionScheduledForce || force;
+      return;
+    }
+    this.robustnessEmissionScheduledForce = force;
+    this.robustnessEmissionScheduledTimer = setTimeout(() => {
+      this.robustnessEmissionScheduledTimer = null;
+      const scheduledForce = this.robustnessEmissionScheduledForce;
+      this.robustnessEmissionScheduledForce = false;
+      this.emitRobustnessSnapshot(scheduledForce);
+    }, Math.max(1, Math.floor(delayMs)));
   }
 
   private emitRobustnessSnapshot(force: boolean = false): void {
     if (this.robustnessCallbacks.size === 0) return;
 
+    const plan = this.robustnessEmissionGate.plan(force);
+    if (plan.action === 'defer') {
+      this.robustnessEmissionPendingForce = this.robustnessEmissionPendingForce || plan.force;
+      this.scheduleDeferredRobustnessEmission(plan.delayMs, plan.force);
+      return;
+    }
+
+    const effectiveForce = plan.force;
+    if (effectiveForce) {
+      this.clearRobustnessEmissionTimer();
+    }
+
     if (this.robustnessEmissionInProgress) {
-      this.robustnessEmissionPendingForce = this.robustnessEmissionPendingForce || force;
+      this.robustnessEmissionPendingForce = this.robustnessEmissionPendingForce || effectiveForce;
       return;
     }
 
@@ -3257,10 +3011,12 @@ export class NativeAudioService implements IAudioService {
     const snapshot = this.buildRobustnessSnapshot();
     const signature = JSON.stringify(snapshot);
     try {
-      if (!force && signature === this.lastEmittedRobustnessSignature) {
+      if (!effectiveForce && signature === this.lastEmittedRobustnessSignature) {
+        this.robustnessEmissionGate.markEmitted();
         return;
       }
       this.lastEmittedRobustnessSignature = signature;
+      this.robustnessEmissionGate.markEmitted();
       this.robustnessCallbacks.forEach((callback) => {
         try {
           callback(snapshot);
@@ -3437,75 +3193,27 @@ export class NativeAudioService implements IAudioService {
   }
 
   private disposed = false;
-  private pendingQueueSync: { queue: Track[]; currentIndex: number; indexOnly: boolean } | null =
-    null;
-  private queueSyncScheduled = false;
-  private lastSyncedQueueRef: Track[] | null = null;
-  private lastSyncedQueueIndex = -1;
+  private readonly queueSyncController = new NativeAudioQueueSyncController<Track>();
 
   private scheduleQueueSyncFlush(): void {
-    if (this.disposed) {
-      this.pendingQueueSync = null;
-      return;
-    }
-    if (this.queueSyncScheduled) return;
-    this.queueSyncScheduled = true;
-
-    const flush = () => {
-      this.queueSyncScheduled = false;
-      if (this.disposed) {
-        this.pendingQueueSync = null;
-        return;
-      }
-      const pending = this.pendingQueueSync;
-      this.pendingQueueSync = null;
-      if (!pending) return;
-
-      const canUseIndexOnlySync =
-        pending.indexOnly &&
-        this.lastSyncedQueueRef === pending.queue &&
-        pending.currentIndex !== this.lastSyncedQueueIndex;
-
-      if (
-        pending.indexOnly &&
-        this.lastSyncedQueueRef === pending.queue &&
-        pending.currentIndex === this.lastSyncedQueueIndex
-      ) {
-        return;
-      }
-
-      if (canUseIndexOnlySync) {
-        void invoke('native_audio_sync_queue_index', {
-          currentIndex: pending.currentIndex,
-        })
-          .then(() => {
-            this.lastSyncedQueueIndex = pending.currentIndex;
-          })
-          .catch((error) => {
-            console.warn('[NativeAudio] Failed to sync queue index state:', error);
-          });
-        return;
-      }
-
-      void invoke('native_audio_sync_queue', {
-        queue: this.buildQueuePaths(pending.queue),
-        currentIndex: pending.currentIndex,
-      })
-        .then(() => {
-          this.lastSyncedQueueRef = pending.queue;
-          this.lastSyncedQueueIndex = pending.currentIndex;
-        })
-        .catch((error) => {
-          console.warn('[NativeAudio] Failed to sync queue state:', error);
+    this.queueSyncController.scheduleFlush({
+      isDisposed: () => this.disposed,
+      syncIndex: async (currentIndex) => {
+        await invoke('native_audio_sync_queue_index', { currentIndex });
+      },
+      syncQueue: async (queue, currentIndex) => {
+        await invoke('native_audio_sync_queue', {
+          queue: this.buildQueuePaths(queue),
+          currentIndex,
         });
-    };
-
-    if (typeof queueMicrotask === 'function') {
-      queueMicrotask(flush);
-      return;
-    }
-
-    void Promise.resolve().then(flush);
+      },
+      onIndexSyncError: (error) => {
+        console.warn('[NativeAudio] Failed to sync queue index state:', error);
+      },
+      onQueueSyncError: (error) => {
+        console.warn('[NativeAudio] Failed to sync queue state:', error);
+      },
+    });
   }
 
   private syncQueueToNative(
@@ -3514,10 +3222,7 @@ export class NativeAudioService implements IAudioService {
     options?: { indexOnly?: boolean }
   ): void {
     if (this.disposed) return;
-    const requestIndexOnly = options?.indexOnly === true;
-    const previousPending = this.pendingQueueSync;
-    const mergedIndexOnly = requestIndexOnly && !(previousPending && !previousPending.indexOnly);
-    this.pendingQueueSync = { queue, currentIndex, indexOnly: mergedIndexOnly };
+    this.queueSyncController.enqueue(queue, currentIndex, options);
     this.scheduleQueueSyncFlush();
   }
 
@@ -3939,10 +3644,10 @@ export class NativeAudioService implements IAudioService {
     const duration = this.state.duration || time;
     const clamped = Math.max(0, Math.min(time, duration));
     this.markPendingSeekGuard(clamped);
-    this.pendingSeekTime = clamped;
     this.seekCommandSeqCounter = this.seekCommandSeqCounter + 1;
-    this.pendingSeekSeq = this.seekCommandSeqCounter;
-    this.notifyLatestSeekSequence(this.pendingSeekSeq);
+    const seekSeq = this.seekCommandSeqCounter;
+    this.seekCommandCoalescer.queueSeek(clamped, seekSeq);
+    this.notifyLatestSeekSequence(seekSeq);
     const effective = this.getEffectiveDynamicSrcTiming();
     this.withDynamicSrcHold('seek', effective.seekHoldMs);
     this.scheduleSeekFlush();
@@ -3960,11 +3665,11 @@ export class NativeAudioService implements IAudioService {
     const clamped = Math.max(0, Math.min(1, volume));
     const runtimeControlSettings = this.readRuntimeControlSettings();
     if (runtimeControlSettings.volumeDebounceEnabled) {
-      this.pendingVolume = clamped;
+      this.volumeCommandCoalescer.queueVolume(clamped);
       this.scheduleVolumeFlush();
     } else {
       this.clearPendingVolume();
-      this.lastVolumeDispatchAtMs = Date.now();
+      this.volumeCommandCoalescer.markImmediateDispatch(Date.now());
       this.fireAndForgetCommand('native_audio_set_volume', { volume: clamped });
     }
     this.updateState({ volume: clamped, muted: clamped === 0 ? true : this.state.muted });
@@ -4514,16 +4219,20 @@ export class NativeAudioService implements IAudioService {
   // ===== 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓缂佺姳鍗抽弻鐔兼⒒鐎靛壊妲紓浣哄Х婵炩偓闁哄瞼鍠栭幃褔宕奸悢鍝勫殥缂?=====
   destroy(): void {
     this.disposed = true;
-    this.pendingQueueSync = null;
-    this.queueSyncScheduled = false;
-    this.lastSyncedQueueRef = null;
-    this.lastSyncedQueueIndex = -1;
+    this.queueSyncController.reset();
     this.diagnosticTimelineIgnoreBeforeMs = 0;
 
     this.stop();
     this.clearRecentSmartPlaylistWriteTimer();
     this.flushRecentSmartPlaylistWriteBufferBestEffort();
     this.clearPendingVolume();
+    if (typeof window !== 'undefined') {
+      this.seekCommandCoalescer.clearAll({ clearTimer: (timerId) => window.clearTimeout(timerId) });
+      this.volumeCommandCoalescer.clearAll({ clearTimer: (timerId) => window.clearTimeout(timerId) });
+    } else {
+      this.seekCommandCoalescer.clearAll();
+      this.volumeCommandCoalescer.clearAll();
+    }
     this.stopFallbackTicker();
     this.clearProtectionWindowTimer();
     this.clearDynamicSrcRestoreTimer();
@@ -4550,6 +4259,11 @@ export class NativeAudioService implements IAudioService {
     this.robustnessCallbacks.clear();
     this.robustnessEmissionPendingForce = false;
     this.robustnessEmissionInProgress = false;
+    this.clearRobustnessEmissionTimer();
+    this.robustnessEmissionScheduledForce = false;
+    this.robustnessEmissionGate.reset();
+    this.dynamicSrcPolicyExecutor.reset();
+    this.lastEmittedRobustnessSignature = null;
     this.visibilityListenerCleanup?.();
     this.visibilityListenerCleanup = null;
     this.visibilityListenerAttached = false;

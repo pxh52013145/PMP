@@ -3,7 +3,7 @@ import type { DynamicSrcEffectiveTiming } from './dynamicSrcAdaptiveTiming';
 import { toDynamicSrcAutoDegradationLabel } from './robustnessDegradation';
 import type { AudioRobustnessSnapshot, AudioState } from './types';
 
-type NativeAudioRobustnessSnapshotSource = {
+export type NativeAudioRobustnessSnapshotSource = {
   pruneUnderrunSpikeWindow(nowMs: number): void;
   getEffectiveDynamicSrcTiming(nowMs: number): DynamicSrcEffectiveTiming;
   evaluateDynamicSrcAutoDegradation(options: {
@@ -189,4 +189,3 @@ export function buildNativeAudioRobustnessSnapshot(
         : null,
   };
 }
-
