@@ -32,6 +32,9 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
     let mut stress_cpu_threads: u32 = 0;
     let mut max_underrun_events: Option<u64> = None;
     let mut max_underrun_frames: Option<u64> = None;
+    let mut max_output_wait_timeout_count: Option<u64> = None;
+    let mut max_output_callback_jitter_p99_us: Option<u32> = None;
+    let mut max_control_queue_critical_overflow_events: Option<u64> = None;
     let mut switch_backends: Vec<String> = Vec::new();
     let mut switch_interval_ms: u64 = 250;
     let mut switch_tracks: Vec<PathBuf> = Vec::new();
@@ -111,6 +114,36 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
                         .parse::<u64>()
                         .map_err(|_| format!("Invalid --max-underrun-frames value: {value}"))?,
                 );
+                index += 1;
+            }
+            "--max-output-wait-timeout-count" => {
+                let value = args.get(index + 1).ok_or_else(|| {
+                    "Missing value for --max-output-wait-timeout-count".to_string()
+                })?;
+                max_output_wait_timeout_count = Some(value.parse::<u64>().map_err(|_| {
+                    format!("Invalid --max-output-wait-timeout-count value: {value}")
+                })?);
+                index += 1;
+            }
+            "--max-output-callback-jitter-p99-us" => {
+                let value = args.get(index + 1).ok_or_else(|| {
+                    "Missing value for --max-output-callback-jitter-p99-us".to_string()
+                })?;
+                max_output_callback_jitter_p99_us = Some(value.parse::<u32>().map_err(|_| {
+                    format!("Invalid --max-output-callback-jitter-p99-us value: {value}")
+                })?);
+                index += 1;
+            }
+            "--max-control-queue-critical-overflow-events" => {
+                let value = args.get(index + 1).ok_or_else(|| {
+                    "Missing value for --max-control-queue-critical-overflow-events".to_string()
+                })?;
+                max_control_queue_critical_overflow_events =
+                    Some(value.parse::<u64>().map_err(|_| {
+                        format!(
+                            "Invalid --max-control-queue-critical-overflow-events value: {value}"
+                        )
+                    })?);
                 index += 1;
             }
             "--switch-backends" => {
@@ -219,5 +252,55 @@ fn parse_args(args: &[String]) -> Result<AudioSmokeOptions, String> {
         stress_cpu_threads,
         max_underrun_events,
         max_underrun_frames,
+        max_output_wait_timeout_count,
+        max_output_callback_jitter_p99_us,
+        max_control_queue_critical_overflow_events,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    #[test]
+    fn parse_args_supports_extended_threshold_options() {
+        let args = vec![
+            "pmp".to_string(),
+            "--audio-smoke".to_string(),
+            "--path".to_string(),
+            "demo.wav".to_string(),
+            "--max-underrun-events".to_string(),
+            "3".to_string(),
+            "--max-underrun-frames".to_string(),
+            "2048".to_string(),
+            "--max-output-wait-timeout-count".to_string(),
+            "2".to_string(),
+            "--max-output-callback-jitter-p99-us".to_string(),
+            "5000".to_string(),
+            "--max-control-queue-critical-overflow-events".to_string(),
+            "1".to_string(),
+        ];
+
+        let options = parse_args(&args).expect("expected args to parse");
+        assert_eq!(options.max_underrun_events, Some(3));
+        assert_eq!(options.max_underrun_frames, Some(2048));
+        assert_eq!(options.max_output_wait_timeout_count, Some(2));
+        assert_eq!(options.max_output_callback_jitter_p99_us, Some(5000));
+        assert_eq!(options.max_control_queue_critical_overflow_events, Some(1));
+    }
+
+    #[test]
+    fn parse_args_rejects_invalid_extended_threshold_value() {
+        let args = vec![
+            "pmp".to_string(),
+            "--audio-smoke".to_string(),
+            "--path".to_string(),
+            "demo.wav".to_string(),
+            "--max-output-callback-jitter-p99-us".to_string(),
+            "oops".to_string(),
+        ];
+
+        let error = parse_args(&args).expect_err("expected parse to fail");
+        assert!(error.contains("Invalid --max-output-callback-jitter-p99-us value"));
+    }
 }

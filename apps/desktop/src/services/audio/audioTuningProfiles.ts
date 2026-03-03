@@ -136,8 +136,9 @@ const PROFILE_DEFINITIONS: Record<AudioTuningProfileId, ProfileDefinition> = {
     enginePolicy: {
       transportMode: 'robust',
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
+      outputQuantizationMode: 'round',
     },
     dynamicSrcSettings: {
       enabled: true,
@@ -179,6 +180,7 @@ const PROFILE_DEFINITIONS: Record<AudioTuningProfileId, ProfileDefinition> = {
       srcMode: 'match-output',
       srcBackend: 'rubato',
       srcTargetSampleRate: null,
+      outputQuantizationMode: 'round',
     },
     dynamicSrcSettings: {
       enabled: true,
@@ -218,8 +220,9 @@ const PROFILE_DEFINITIONS: Record<AudioTuningProfileId, ProfileDefinition> = {
     enginePolicy: {
       transportMode: 'robust',
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
+      outputQuantizationMode: 'round',
     },
     dynamicSrcSettings: {
       enabled: true,

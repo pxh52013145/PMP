@@ -1,11 +1,12 @@
-import { invoke } from '@tauri-apps/api/tauri';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+﻿import { invoke } from '@tauri-apps/api/tauri';
+import { type UnlistenFn } from '@tauri-apps/api/event';
+import { setupNativeListenersImpl } from './nativeAudioNativeListeners';
+import { restoreDynamicSrcAutoSettingsFromStorageImpl } from './nativeAudioDynamicSrcAutoSettings';
 import {
   AudioDynamicSrcAdaptiveProfile,
   AudioDynamicSrcDegradationLevel,
   AudioDynamicSrcAutoSettingsPatch,
   AudioDynamicSrcAutoSettings,
-  AudioEnginePolicyPatch,
   AudioProtectionWindowOptions,
   AudioRobustnessSnapshot,
   AudioTuningAutoSettings,
@@ -49,6 +50,7 @@ import {
 } from './dynamicSrcAdaptiveTiming';
 import {
   isSameStreamingBufferSettings,
+  resolveStoredStreamingBufferSettings,
   resolveStreamingBufferPolicyTarget,
   type StreamingBufferSettings,
 } from './streamingBufferPolicy';
@@ -57,6 +59,10 @@ import {
   resolveAudioTuningProfilePayload,
   resolveAudioTuningTransition,
 } from './audioTuningProfiles';
+import {
+  resolveStoredDynamicSrcAutoSettings,
+  resolveStoredTuningAutoSettings,
+} from './nativeAudioAutoSettingsStorage';
 import {
   deleteNativeLibraryPlaylist,
   markNativeLibraryUserEntryPlayed,
@@ -83,174 +89,24 @@ import {
   toPlaylistItemUpserts,
   type RecentSmartPlaylistWriteEntry,
 } from './recentSmartPlaylist';
-
-type StateListener = (state: AudioState) => void;
-
-type NativeAudioStatePayload = {
-  playbackState?: PlaybackState;
-  volume?: number;
-  muted?: boolean;
-  trackPath?: string | null;
-  currentTime?: number;
-  duration?: number;
-  bufferedTime?: number;
-  bufferedAhead?: number;
-  decodeBufferedAhead?: number;
-  outputBufferedAhead?: number;
-  sampleRate?: number;
-  sourceSampleRate?: number;
-  underrunEvents?: number;
-  underrunFrames?: number;
-  schedulerProfile?: 'normal' | 'guarded' | 'critical';
-  transportMode?: 'robust' | 'transport-exact';
-  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
-  srcMode?: 'source-native' | 'match-output' | 'target-rate';
-  srcBackend?: 'rubato' | 'linear-simd';
-  srcTargetSampleRate?: number | null;
-  outputQuantizationMode?: 'round' | 'tpdf';
-  hqSrcStopbandDb?: number;
-  hqSrcActive?: boolean;
-  hqSrcRatio?: number;
-  transportExactInt32Container?: boolean;
-  outputCallbackMetricsValid?: boolean;
-  outputCallbackP99Us?: number;
-  outputWaitTimeoutCount?: number;
-  outputRenderUnderrunEvents?: number;
-  outputRenderUnderrunFrames?: number;
-  outputCallbackIntervalJitterP99Us?: number;
-  outputCallbackIntervalOverrunCount?: number;
-  outputCallbackExpectedIntervalUs?: number;
-  transferLowWatermarkSamples?: number;
-  transferRenderLowHitCount?: number;
-  transferDecodeLowHitCount?: number;
-  transferAdaptationLevel?: number;
-  transferOscillationStreak?: number;
-  renderQueuePageLocked?: boolean;
-  sharedRenderAheadEnabled?: boolean;
-  sharedRenderUnderrunEvents?: number;
-  sharedRenderUnderrunFrames?: number;
-  sharedRenderLowHitCount?: number;
-  sharedRenderLowWatermarkSamples?: number;
-  controlQueueLockFree?: boolean;
-  controlQueueMode?: string;
-  controlQueueCapacity?: number;
-  controlQueueOverwriteEvents?: number;
-  controlQueueDropNewestEvents?: number;
-  controlQueueCoalescedOverflowEvents?: number;
-  controlQueueCriticalOverflowEvents?: number;
-  retirePendingTasks?: number;
-  retireEnqueuedTotal?: number;
-  retireExecutedTotal?: number;
-  retireInlineFallbackTotal?: number;
-  retirePanicTotal?: number;
-  diagnosticTimelineDroppedEvents?: number;
-  diagnosticTimeline?: Array<{
-    seq?: number;
-    timestampMs?: number;
-    kind?: string;
-    value?: number;
-    aux?: number;
-  }>;
-  queue?: string[];
-  currentIndex?: number;
-  ended?: boolean;
-};
-
-type NativeAudioEnginePolicyPayload = {
-  transportMode?: 'robust' | 'transport-exact';
-  hqSrcEnabled?: boolean;
-  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
-  srcMode?: 'source-native' | 'match-output' | 'target-rate';
-  srcBackend?: 'rubato' | 'linear-simd';
-  srcTargetSampleRate?: number | null;
-  outputQuantizationMode?: 'round' | 'tpdf';
-  hqSrcStopbandDb?: number;
-  transportExactInt32Container?: boolean;
-};
-
-type NativeAudioEnginePolicyPatch = AudioEnginePolicyPatch;
-
-type NativeAudioSrcPolicy = {
-  srcMode: 'source-native' | 'match-output' | 'target-rate';
-  srcBackend: 'rubato' | 'linear-simd';
-  srcTargetSampleRate: number | null;
-};
-
-type NativeAudioSpectrumPayload = {
-  bins: number[];
-  frameId?: number;
-  timestampMs?: number;
-  tap?: 'pre-dsp' | 'post-dsp';
-  tapId?: 'pre-dsp' | 'post-dsp';
-  sampleRate?: number;
-};
-
-type NativeAudioErrorPayload = {
-  seq?: number;
-  code?: string;
-  message?: string;
-};
-
-type NativeAudioComponentsStatePayload = {
-  outputBackendId?: string | null;
-  preferredInputId?: string | null;
-  activeInputId?: string | null;
-};
-
-type ReplayGainMode = 'track' | 'album';
-
-type ReplayGainSettings = {
-  enabled: boolean;
-  mode: ReplayGainMode;
-  preampDb: number;
-};
-
-type RuntimeControlSettings = {
-  dynamicGainEnabled: boolean;
-  volumeDebounceEnabled: boolean;
-};
-
-function parseLegacyRuntimeControlFromReplayGain(raw: string | null): RuntimeControlSettings | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object') return null;
-    const record = parsed as Record<string, unknown>;
-    const hasDynamicGain =
-      typeof record.dynamicGainEnabled === 'boolean' ||
-      typeof record.dynamicFallbackEnabled === 'boolean';
-    const hasDebounce = typeof record.volumeDebounceEnabled === 'boolean';
-    if (!hasDynamicGain && !hasDebounce) return null;
-
-    const dynamicGainEnabled =
-      typeof record.dynamicGainEnabled === 'boolean'
-        ? record.dynamicGainEnabled
-        : typeof record.dynamicFallbackEnabled === 'boolean'
-          ? record.dynamicFallbackEnabled
-          : false;
-
-    return {
-      dynamicGainEnabled,
-      volumeDebounceEnabled: hasDebounce ? (record.volumeDebounceEnabled as boolean) : true,
-    };
-  } catch {
-    return null;
-  }
-}
-
-type CrossfadeSettings = {
-  enabled: boolean;
-  durationMs: number;
-};
-
-type DynamicSrcLearningRecord = {
-  stressIndex: number;
-  updatedAtMs: number;
-};
-
-type DynamicSrcLearningMap = Record<string, DynamicSrcLearningRecord>;
-
-type RobustnessListener = (snapshot: AudioRobustnessSnapshot) => void;
+import {
+  parseLegacyRuntimeControlFromReplayGain,
+  type CrossfadeSettings,
+  type DynamicSrcLearningMap,
+  type DynamicSrcLearningRecord,
+  type NativeAudioComponentsStatePayload,
+  type NativeAudioEnginePolicyPatch,
+  type NativeAudioEnginePolicyPayload,
+  type NativeAudioErrorPayload,
+  type NativeAudioSpectrumPayload,
+  type NativeAudioSrcPolicy,
+  type NativeAudioStatePayload,
+  type ReplayGainMode,
+  type ReplayGainSettings,
+  type RobustnessListener,
+  type RuntimeControlSettings,
+  type StateListener,
+} from './nativeAudioServiceTypes';
 
 /**
  * NativeAudioService
@@ -1404,96 +1260,9 @@ export class NativeAudioService implements IAudioService {
     settings: StreamingBufferSettings;
     migratedLegacyFullTrack: boolean;
   } {
-    try {
-      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS);
-      if (!raw) {
-        return {
-          settings: {
-            startOrSeekSeconds: null,
-            crossfadeSeconds: null,
-            decodeMode: 'streaming',
-            interactiveProfile: 'balanced',
-          },
-          migratedLegacyFullTrack: false,
-        };
-      }
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== 'object') {
-        return {
-          settings: {
-            startOrSeekSeconds: null,
-            crossfadeSeconds: null,
-            decodeMode: 'streaming',
-            interactiveProfile: 'balanced',
-          },
-          migratedLegacyFullTrack: false,
-        };
-      }
-      const record = parsed as Record<string, unknown>;
-
-      const startRaw = record.startOrSeekSeconds;
-      const crossfadeRaw = record.crossfadeSeconds;
-      const decodeModeRaw = record.decodeMode;
-      const interactiveProfileRaw = record.interactiveProfile;
-      const userSetDecodeMode = record.userSetDecodeMode === true;
-
-      const start =
-        startRaw === null
-          ? null
-          : typeof startRaw === 'number' && isFinite(startRaw)
-            ? Math.max(0, Math.min(4, startRaw))
-            : null;
-      const crossfade =
-        crossfadeRaw === null
-          ? null
-          : typeof crossfadeRaw === 'number' && isFinite(crossfadeRaw)
-            ? Math.max(0, Math.min(3, crossfadeRaw))
-            : null;
-
-      const isDecodeMode = (
-        value: unknown
-      ): value is StreamingBufferSettings['decodeMode'] =>
-        value === 'full-track' || value === 'streaming';
-
-      const isInteractiveProfile = (
-        value: unknown
-      ): value is StreamingBufferSettings['interactiveProfile'] =>
-        value === 'fast' || value === 'balanced' || value === 'stable';
-
-      let decodeMode: StreamingBufferSettings['decodeMode'] = isDecodeMode(decodeModeRaw)
-        ? decodeModeRaw
-        : 'streaming';
-      const interactiveProfile: StreamingBufferSettings['interactiveProfile'] =
-        isInteractiveProfile(interactiveProfileRaw) ? interactiveProfileRaw : 'balanced';
-
-      let migratedLegacyFullTrack = false;
-      if (decodeMode === 'full-track' && !userSetDecodeMode) {
-        // Older builds defaulted to full-track. Migrate to streaming for instant click-to-play and
-        // much lower memory usage unless the user explicitly opted into full-track.
-        decodeMode = 'streaming';
-        migratedLegacyFullTrack = true;
-      }
-
-      return {
-        settings: {
-          startOrSeekSeconds: start,
-          crossfadeSeconds: crossfade,
-          decodeMode,
-          interactiveProfile,
-        },
-        migratedLegacyFullTrack,
-      };
-    } catch {
-      return {
-        settings: {
-          startOrSeekSeconds: null,
-          crossfadeSeconds: null,
-          decodeMode: 'streaming',
-          interactiveProfile: 'balanced',
-        },
-        migratedLegacyFullTrack: false,
-      };
-    }
+    return resolveStoredStreamingBufferSettings(
+      readString(STORAGE_KEYS.NATIVE_AUDIO_STREAMING_BUFFER_SETTINGS)
+    );
   }
 
   private async restoreStreamingBufferSettingsFromStorage(): Promise<void> {
@@ -1913,7 +1682,7 @@ export class NativeAudioService implements IAudioService {
   private getLatencySrcPolicy(): NativeAudioSrcPolicy {
     return {
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
     };
   }
@@ -2379,75 +2148,9 @@ export class NativeAudioService implements IAudioService {
   }
 
   private readDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings {
-    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-      return Math.max(min, Math.min(max, Math.floor(value)));
-    };
-
-    try {
-      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS);
-      if (!raw) {
-        return {
-          enabled: true,
-          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
-          learningEnabled: this.dynamicSrcLearningEnabled,
-          restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
-          minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
-          seekHoldMs: this.dynamicSrcSeekHoldMs,
-          underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
-          sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
-          outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
-        };
-      }
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== 'object') {
-        return {
-          enabled: true,
-          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
-          learningEnabled: this.dynamicSrcLearningEnabled,
-          restoreDebounceMs: this.dynamicSrcRestoreDebounceMs,
-          minSwitchIntervalMs: this.dynamicSrcMinSwitchIntervalMs,
-          seekHoldMs: this.dynamicSrcSeekHoldMs,
-          underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
-          sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
-          outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
-        };
-      }
-      const record = parsed as Record<string, unknown>;
-      return {
-        enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
-        adaptiveEnabled:
-          typeof record.adaptiveEnabled === 'boolean'
-            ? record.adaptiveEnabled
-            : this.dynamicSrcAdaptiveEnabled,
-        learningEnabled:
-          typeof record.learningEnabled === 'boolean'
-            ? record.learningEnabled
-            : this.dynamicSrcLearningEnabled,
-        restoreDebounceMs: clampMs(record.restoreDebounceMs, this.dynamicSrcRestoreDebounceMs, 500, 30_000),
-        minSwitchIntervalMs: clampMs(
-          record.minSwitchIntervalMs,
-          this.dynamicSrcMinSwitchIntervalMs,
-          100,
-          10_000
-        ),
-        seekHoldMs: clampMs(record.seekHoldMs, this.dynamicSrcSeekHoldMs, 500, 20_000),
-        underrunHoldMs: clampMs(record.underrunHoldMs, this.dynamicSrcUnderrunHoldMs, 2_000, 120_000),
-        sharedStressHoldMs: clampMs(
-          record.sharedStressHoldMs,
-          this.dynamicSrcSharedStressHoldMs,
-          1_000,
-          90_000
-        ),
-        outputErrorHoldMs: clampMs(
-          record.outputErrorHoldMs,
-          this.dynamicSrcOutputErrorHoldMs,
-          1_000,
-          120_000
-        ),
-      };
-    } catch {
-      return {
+    return resolveStoredDynamicSrcAutoSettings({
+      raw: readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS),
+      defaults: {
         enabled: true,
         adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
         learningEnabled: this.dynamicSrcLearningEnabled,
@@ -2457,130 +2160,18 @@ export class NativeAudioService implements IAudioService {
         underrunHoldMs: this.dynamicSrcUnderrunHoldMs,
         sharedStressHoldMs: this.dynamicSrcSharedStressHoldMs,
         outputErrorHoldMs: this.dynamicSrcOutputErrorHoldMs,
-      };
-    }
+      },
+    });
   }
 
   private async restoreDynamicSrcAutoSettingsFromStorage(): Promise<void> {
-    this.dynamicSrcLearningProfile = this.parseDynamicSrcLearningProfile(
-      readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
-    );
-    this.dynamicSrcLearningLastPersistedSignature = JSON.stringify(
-      this.normalizeDynamicSrcLearningProfileForPersistence()
-    );
-    this.dynamicSrcLearningLastPersistAtMs = 0;
-
-    const persisted = this.readDynamicSrcAutoSettings();
-    this.dynamicSrcAutoEnabled = persisted.enabled;
-    this.dynamicSrcAdaptiveEnabled = persisted.adaptiveEnabled;
-    this.dynamicSrcLearningEnabled = persisted.learningEnabled;
-    this.dynamicSrcRestoreDebounceMs = persisted.restoreDebounceMs;
-    this.dynamicSrcMinSwitchIntervalMs = persisted.minSwitchIntervalMs;
-    this.dynamicSrcSeekHoldMs = persisted.seekHoldMs;
-    this.dynamicSrcUnderrunHoldMs = persisted.underrunHoldMs;
-    this.dynamicSrcSharedStressHoldMs = persisted.sharedStressHoldMs;
-    this.dynamicSrcOutputErrorHoldMs = persisted.outputErrorHoldMs;
-    this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
-      adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
-      stressScore: this.getDynamicSrcStressScore(),
+    return restoreDynamicSrcAutoSettingsFromStorageImpl.call(this, {
       elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
       criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
     });
-    this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-    this.emitRobustnessSnapshot(true);
-
-    if (this.dynamicSrcSettingsListenerCleanup) return;
-    if (this.dynamicSrcSettingsListenerInitPromise) {
-      await this.dynamicSrcSettingsListenerInitPromise;
-      return;
-    }
-
-    const applyPersistedDynamicSrcSettings = () => {
-      const next = this.readDynamicSrcAutoSettings();
-      const changed =
-        next.enabled !== this.dynamicSrcAutoEnabled ||
-        next.adaptiveEnabled !== this.dynamicSrcAdaptiveEnabled ||
-        next.learningEnabled !== this.dynamicSrcLearningEnabled;
-      this.dynamicSrcAutoEnabled = next.enabled;
-      this.dynamicSrcAdaptiveEnabled = next.adaptiveEnabled;
-      this.dynamicSrcLearningEnabled = next.learningEnabled;
-      if (!this.dynamicSrcLearningEnabled) {
-        this.clearDynamicSrcLearningPersistTimer();
-      }
-      this.dynamicSrcRestoreDebounceMs = next.restoreDebounceMs;
-      this.dynamicSrcMinSwitchIntervalMs = next.minSwitchIntervalMs;
-      this.dynamicSrcSeekHoldMs = next.seekHoldMs;
-      this.dynamicSrcUnderrunHoldMs = next.underrunHoldMs;
-      this.dynamicSrcSharedStressHoldMs = next.sharedStressHoldMs;
-      this.dynamicSrcOutputErrorHoldMs = next.outputErrorHoldMs;
-      if (!this.dynamicSrcAutoEnabled) {
-        this.dynamicSrcProfile = 'quality';
-        this.dynamicSrcAdaptiveProfile = 'baseline';
-        this.dynamicSrcHoldUntilMs = 0;
-        this.clearDynamicSrcRestoreTimer();
-      } else {
-        this.dynamicSrcAdaptiveProfile = resolveDynamicSrcAdaptiveProfile({
-          adaptiveEnabled: this.dynamicSrcAdaptiveEnabled,
-          stressScore: this.getDynamicSrcStressScore(),
-          elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
-          criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
-        });
-        this.scheduleDynamicSrcRestoreEvaluation();
-      }
-      this.evaluateDynamicSrcAutoDegradation({ triggerActions: false });
-      if (changed) {
-        this.emitRobustnessSnapshot(true);
-      }
-    };
-
-    this.dynamicSrcSettingsListenerInitPromise = (async () => {
-      if (this.dynamicSrcSettingsListenerCleanup) return;
-
-      const settingsCleanup = await setupDualListener(
-        [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS],
-        [],
-        applyPersistedDynamicSrcSettings
-      );
-
-      const learningCleanup = await setupDualListener(
-        [STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE],
-        [],
-        () => {
-          const nextProfile = this.parseDynamicSrcLearningProfile(
-            readString(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_LEARNING_PROFILE)
-          );
-          const nextSignature = JSON.stringify(nextProfile);
-          if (nextSignature === this.dynamicSrcLearningLastPersistedSignature) {
-            return;
-          }
-          this.dynamicSrcLearningProfile = nextProfile;
-          this.dynamicSrcLearningLastPersistedSignature = nextSignature;
-          this.dynamicSrcLearningLastPersistAtMs = Date.now();
-          this.emitRobustnessSnapshot(true);
-        }
-      );
-
-      this.dynamicSrcSettingsListenerCleanup = () => {
-        settingsCleanup();
-        learningCleanup();
-      };
-    })().finally(() => {
-      this.dynamicSrcSettingsListenerInitPromise = null;
-    });
-
-    await this.dynamicSrcSettingsListenerInitPromise;
   }
 
   private readTuningAutoSettings(): AudioTuningAutoSettings {
-    const clampMs = (value: unknown, fallback: number, min: number, max: number): number => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-      return Math.max(min, Math.min(max, Math.floor(value)));
-    };
-    const clampCount = (value: unknown, fallback: number, min: number, max: number): number => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-      return Math.max(min, Math.min(max, Math.floor(value)));
-    };
-
     const defaults: AudioTuningAutoSettings = {
       enabled: this.tuningAutoEnabled,
       tickIntervalMs: this.tuningAutoTickIntervalMs,
@@ -2593,61 +2184,10 @@ export class NativeAudioService implements IAudioService {
       criticalOverflowGrowthTicks: this.tuningAutoCriticalOverflowGrowthTicks,
     };
 
-    try {
-      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS);
-      if (!raw) return defaults;
-
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== 'object') return defaults;
-
-      const record = parsed as Record<string, unknown>;
-      const elevatedStressScore = clampCount(
-        record.elevatedStressScore,
-        defaults.elevatedStressScore,
-        1,
-        20
-      );
-      const criticalStressScore = clampCount(
-        record.criticalStressScore,
-        defaults.criticalStressScore,
-        elevatedStressScore,
-        30
-      );
-
-      return {
-        enabled: typeof record.enabled === 'boolean' ? record.enabled : defaults.enabled,
-        tickIntervalMs: clampMs(record.tickIntervalMs, defaults.tickIntervalMs, 500, 10_000),
-        stableWindowMs: clampMs(record.stableWindowMs, defaults.stableWindowMs, 5_000, 120_000),
-        minSwitchIntervalMs: clampMs(
-          record.minSwitchIntervalMs,
-          defaults.minSwitchIntervalMs,
-          1_000,
-          120_000
-        ),
-        postSwitchObserveWindowMs: clampMs(
-          record.postSwitchObserveWindowMs,
-          defaults.postSwitchObserveWindowMs,
-          1_000,
-          120_000
-        ),
-        elevatedStressScore,
-        criticalStressScore,
-        criticalUnderrunEventsWindow: clampCount(
-          record.criticalUnderrunEventsWindow,
-          defaults.criticalUnderrunEventsWindow,
-          1,
-          12
-        ),
-        criticalOverflowGrowthTicks: clampCount(
-          record.criticalOverflowGrowthTicks,
-          defaults.criticalOverflowGrowthTicks,
-          1,
-          8
-        ),
-      };
-    } catch {
-      return defaults;
-    }
+    return resolveStoredTuningAutoSettings({
+      raw: readString(STORAGE_KEYS.NATIVE_AUDIO_TUNING_AUTO_SETTINGS),
+      defaults,
+    });
   }
 
   private applyTuningAutoSettingsState(settings: AudioTuningAutoSettings): void {
@@ -4046,640 +3586,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async setupNativeListeners() {
-    try {
-      this.stateListener = await listen('native_audio_state', (event) => {
-        const payload = event.payload as NativeAudioStatePayload | { state?: NativeAudioStatePayload };
-        const next =
-          payload && 'state' in payload ? (payload.state as NativeAudioStatePayload) : (payload as NativeAudioStatePayload);
-        if (!next) return;
-
-        const hasCurrentTime =
-          typeof next.currentTime === 'number' && Number.isFinite(next.currentTime);
-        const nextCurrentTime = hasCurrentTime ? next.currentTime : null;
-        const shouldApplyCurrentTime =
-          typeof nextCurrentTime === 'number' &&
-          !this.shouldIgnoreBackendCurrentTime(nextCurrentTime);
-
-        const update: Partial<AudioState> = {};
-        if (typeof next.playbackState !== 'undefined') update.playbackState = next.playbackState;
-        if (typeof next.volume !== 'undefined') update.volume = next.volume;
-        if (typeof next.muted !== 'undefined') update.muted = next.muted;
-        if (shouldApplyCurrentTime && typeof nextCurrentTime === 'number') {
-          update.currentTime = nextCurrentTime;
-        }
-        if (typeof next.duration !== 'undefined') {
-          const reportedDuration =
-            typeof next.duration === 'number' && Number.isFinite(next.duration) ? next.duration : 0;
-          const trackDuration = this.state.currentTrack?.duration;
-          const hasTrackDuration =
-            typeof trackDuration === 'number' && Number.isFinite(trackDuration) && trackDuration > 0;
-
-          if (reportedDuration > 0) {
-            update.duration = reportedDuration;
-          } else if (hasTrackDuration) {
-            update.duration = trackDuration;
-          } else {
-            update.duration = reportedDuration;
-          }
-        } else {
-          const trackDuration = this.state.currentTrack?.duration;
-          const hasTrackDuration =
-            typeof trackDuration === 'number' && Number.isFinite(trackDuration) && trackDuration > 0;
-          if ((this.state.duration ?? 0) <= 0 && hasTrackDuration) {
-            update.duration = trackDuration;
-          }
-        }
-        if (typeof next.bufferedTime !== 'undefined') update.bufferedTime = next.bufferedTime;
-        if (typeof next.bufferedAhead !== 'undefined') update.bufferedAhead = next.bufferedAhead;
-        if (typeof next.decodeBufferedAhead !== 'undefined') {
-          update.decodeBufferedAhead = next.decodeBufferedAhead;
-        }
-        if (typeof next.outputBufferedAhead !== 'undefined') {
-          update.outputBufferedAhead = next.outputBufferedAhead;
-        }
-
-        if (typeof next.sampleRate === 'number' && Number.isFinite(next.sampleRate)) {
-          this.outputSampleRate = Math.max(0, Math.floor(next.sampleRate));
-        }
-        if (
-          typeof next.sourceSampleRate === 'number' &&
-          Number.isFinite(next.sourceSampleRate)
-        ) {
-          this.sourceSampleRate = Math.max(0, Math.floor(next.sourceSampleRate));
-        }
-
-        if (typeof next.underrunEvents === 'number' && Number.isFinite(next.underrunEvents)) {
-          const normalizedUnderrunEvents = Math.max(0, Math.floor(next.underrunEvents));
-          if (normalizedUnderrunEvents < this.lastUnderrunEvents) {
-            this.lastUnderrunEvents = normalizedUnderrunEvents;
-          } else if (normalizedUnderrunEvents > this.lastUnderrunEvents) {
-            this.handleUnderrunSpike(normalizedUnderrunEvents, next.underrunFrames);
-          }
-        }
-
-        if (typeof next.underrunFrames === 'number' && Number.isFinite(next.underrunFrames)) {
-          this.lastUnderrunFrames = Math.max(0, Math.floor(next.underrunFrames));
-        }
-
-        if (
-          next.schedulerProfile === 'normal' ||
-          next.schedulerProfile === 'guarded' ||
-          next.schedulerProfile === 'critical'
-        ) {
-          this.lastSchedulerProfile = next.schedulerProfile;
-        }
-
-        if (next.transportMode === 'robust' || next.transportMode === 'transport-exact') {
-          this.transportMode = next.transportMode;
-        }
-
-        if (
-          next.hqSrcPhaseMode === 'linear' ||
-          next.hqSrcPhaseMode === 'minimum' ||
-          next.hqSrcPhaseMode === 'intermediate'
-        ) {
-          this.hqSrcPhaseMode = next.hqSrcPhaseMode;
-        }
-
-        if (
-          next.srcMode === 'source-native' ||
-          next.srcMode === 'match-output' ||
-          next.srcMode === 'target-rate'
-        ) {
-          this.srcMode = next.srcMode;
-        }
-
-        if (next.srcBackend === 'rubato' || next.srcBackend === 'linear-simd') {
-          this.srcBackend = next.srcBackend;
-        }
-
-        if (
-          typeof next.srcTargetSampleRate === 'number' &&
-          Number.isFinite(next.srcTargetSampleRate) &&
-          next.srcTargetSampleRate > 0
-        ) {
-          this.srcTargetSampleRate = Math.max(8000, Math.min(768000, Math.floor(next.srcTargetSampleRate)));
-        } else if (next.srcTargetSampleRate == null) {
-          this.srcTargetSampleRate = null;
-        }
-
-        if (next.outputQuantizationMode === 'round' || next.outputQuantizationMode === 'tpdf') {
-          this.outputQuantizationMode = next.outputQuantizationMode;
-        }
-
-        if (typeof next.hqSrcStopbandDb === 'number' && Number.isFinite(next.hqSrcStopbandDb)) {
-          this.hqSrcStopbandDb = Math.max(0, Math.min(200, Math.floor(next.hqSrcStopbandDb)));
-        }
-
-        if (typeof next.hqSrcActive === 'boolean') {
-          this.hqSrcActive = next.hqSrcActive;
-        }
-
-        if (typeof next.hqSrcRatio === 'number' && Number.isFinite(next.hqSrcRatio)) {
-          this.hqSrcRatio = next.hqSrcRatio;
-        }
-
-        if (typeof next.transportExactInt32Container === 'boolean') {
-          this.transportExactInt32Container = next.transportExactInt32Container;
-        }
-
-        if (typeof next.outputCallbackMetricsValid === 'boolean') {
-          this.outputCallbackMetricsValid = next.outputCallbackMetricsValid;
-          if (!this.outputCallbackMetricsValid) {
-            this.outputCallbackP99Us = 0;
-            this.outputWaitTimeoutCount = 0;
-            this.outputRenderUnderrunEvents = 0;
-            this.outputRenderUnderrunFrames = 0;
-            this.outputCallbackIntervalJitterP99Us = 0;
-            this.outputCallbackIntervalOverrunCount = 0;
-            this.outputCallbackExpectedIntervalUs = 0;
-          }
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackP99Us === 'number' &&
-          Number.isFinite(next.outputCallbackP99Us)
-        ) {
-          this.outputCallbackP99Us = Math.max(0, Math.floor(next.outputCallbackP99Us));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputWaitTimeoutCount === 'number' &&
-          Number.isFinite(next.outputWaitTimeoutCount)
-        ) {
-          this.outputWaitTimeoutCount = Math.max(0, Math.floor(next.outputWaitTimeoutCount));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputRenderUnderrunEvents === 'number' &&
-          Number.isFinite(next.outputRenderUnderrunEvents)
-        ) {
-          this.outputRenderUnderrunEvents = Math.max(0, Math.floor(next.outputRenderUnderrunEvents));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputRenderUnderrunFrames === 'number' &&
-          Number.isFinite(next.outputRenderUnderrunFrames)
-        ) {
-          this.outputRenderUnderrunFrames = Math.max(0, Math.floor(next.outputRenderUnderrunFrames));
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackIntervalJitterP99Us === 'number' &&
-          Number.isFinite(next.outputCallbackIntervalJitterP99Us)
-        ) {
-          this.outputCallbackIntervalJitterP99Us = Math.max(
-            0,
-            Math.floor(next.outputCallbackIntervalJitterP99Us)
-          );
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackIntervalOverrunCount === 'number' &&
-          Number.isFinite(next.outputCallbackIntervalOverrunCount)
-        ) {
-          this.outputCallbackIntervalOverrunCount = Math.max(
-            0,
-            Math.floor(next.outputCallbackIntervalOverrunCount)
-          );
-        }
-
-        if (
-          this.outputCallbackMetricsValid &&
-          typeof next.outputCallbackExpectedIntervalUs === 'number' &&
-          Number.isFinite(next.outputCallbackExpectedIntervalUs)
-        ) {
-          this.outputCallbackExpectedIntervalUs = Math.max(
-            0,
-            Math.floor(next.outputCallbackExpectedIntervalUs)
-          );
-        }
-
-        if (
-          typeof next.transferLowWatermarkSamples === 'number' &&
-          Number.isFinite(next.transferLowWatermarkSamples)
-        ) {
-          this.transferMetricsValid = true;
-          this.transferLowWatermarkSamples = Math.max(0, Math.floor(next.transferLowWatermarkSamples));
-        } else {
-          this.transferMetricsValid = false;
-          this.transferLowWatermarkSamples = 0;
-          this.transferRenderLowHitCount = 0;
-          this.transferDecodeLowHitCount = 0;
-          this.transferAdaptationLevel = 0;
-          this.transferOscillationStreak = 0;
-          this.renderQueuePageLocked = false;
-        }
-
-        if (
-          typeof next.transferRenderLowHitCount === 'number' &&
-          Number.isFinite(next.transferRenderLowHitCount)
-        ) {
-          this.transferRenderLowHitCount = Math.max(0, Math.floor(next.transferRenderLowHitCount));
-        }
-
-        if (
-          typeof next.transferDecodeLowHitCount === 'number' &&
-          Number.isFinite(next.transferDecodeLowHitCount)
-        ) {
-          this.transferDecodeLowHitCount = Math.max(0, Math.floor(next.transferDecodeLowHitCount));
-        }
-
-        if (
-          typeof next.transferAdaptationLevel === 'number' &&
-          Number.isFinite(next.transferAdaptationLevel)
-        ) {
-          this.transferAdaptationLevel = Math.max(0, Math.floor(next.transferAdaptationLevel));
-        }
-
-        if (
-          typeof next.transferOscillationStreak === 'number' &&
-          Number.isFinite(next.transferOscillationStreak)
-        ) {
-          this.transferOscillationStreak = Math.max(0, Math.floor(next.transferOscillationStreak));
-        }
-
-        if (typeof next.renderQueuePageLocked === 'boolean') {
-          this.renderQueuePageLocked = next.renderQueuePageLocked;
-        }
-
-        if (typeof next.sharedRenderAheadEnabled === 'boolean') {
-          this.sharedRenderAheadEnabled = next.sharedRenderAheadEnabled;
-          if (!this.sharedRenderAheadEnabled) {
-            this.sharedRenderUnderrunEvents = 0;
-            this.sharedRenderUnderrunFrames = 0;
-            this.sharedRenderLowHitCount = 0;
-            this.sharedRenderLowWatermarkSamples = 0;
-          }
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderUnderrunEvents === 'number' &&
-          Number.isFinite(next.sharedRenderUnderrunEvents)
-        ) {
-          this.sharedRenderUnderrunEvents = Math.max(0, Math.floor(next.sharedRenderUnderrunEvents));
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderUnderrunFrames === 'number' &&
-          Number.isFinite(next.sharedRenderUnderrunFrames)
-        ) {
-          this.sharedRenderUnderrunFrames = Math.max(0, Math.floor(next.sharedRenderUnderrunFrames));
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderLowHitCount === 'number' &&
-          Number.isFinite(next.sharedRenderLowHitCount)
-        ) {
-          this.sharedRenderLowHitCount = Math.max(0, Math.floor(next.sharedRenderLowHitCount));
-        }
-
-        if (
-          this.sharedRenderAheadEnabled &&
-          typeof next.sharedRenderLowWatermarkSamples === 'number' &&
-          Number.isFinite(next.sharedRenderLowWatermarkSamples)
-        ) {
-          this.sharedRenderLowWatermarkSamples = Math.max(
-            0,
-            Math.floor(next.sharedRenderLowWatermarkSamples)
-          );
-        }
-
-        if (typeof next.controlQueueLockFree === 'boolean') {
-          this.controlQueueLockFree = next.controlQueueLockFree;
-        }
-
-        if (typeof next.controlQueueMode === 'string' && next.controlQueueMode.trim().length > 0) {
-          this.controlQueueMode = next.controlQueueMode.trim();
-        }
-
-        if (
-          typeof next.controlQueueCapacity === 'number' &&
-          Number.isFinite(next.controlQueueCapacity)
-        ) {
-          this.controlQueueCapacity = Math.max(0, Math.floor(next.controlQueueCapacity));
-        }
-
-        if (
-          typeof next.controlQueueOverwriteEvents === 'number' &&
-          Number.isFinite(next.controlQueueOverwriteEvents)
-        ) {
-          this.controlQueueOverwriteEvents = Math.max(0, Math.floor(next.controlQueueOverwriteEvents));
-        }
-
-        if (
-          typeof next.controlQueueDropNewestEvents === 'number' &&
-          Number.isFinite(next.controlQueueDropNewestEvents)
-        ) {
-          this.controlQueueDropNewestEvents = Math.max(
-            0,
-            Math.floor(next.controlQueueDropNewestEvents)
-          );
-        }
-
-        if (
-          typeof next.controlQueueCoalescedOverflowEvents === 'number' &&
-          Number.isFinite(next.controlQueueCoalescedOverflowEvents)
-        ) {
-          this.controlQueueCoalescedOverflowEvents = Math.max(
-            0,
-            Math.floor(next.controlQueueCoalescedOverflowEvents)
-          );
-        }
-
-        if (
-          typeof next.controlQueueCriticalOverflowEvents === 'number' &&
-          Number.isFinite(next.controlQueueCriticalOverflowEvents)
-        ) {
-          this.controlQueueCriticalOverflowEvents = Math.max(
-            0,
-            Math.floor(next.controlQueueCriticalOverflowEvents)
-          );
-        }
-
-        if (
-          typeof next.diagnosticTimelineDroppedEvents === 'number' &&
-          Number.isFinite(next.diagnosticTimelineDroppedEvents)
-        ) {
-          this.diagnosticTimelineDroppedEvents = Math.max(
-            0,
-            Math.floor(next.diagnosticTimelineDroppedEvents)
-          );
-        }
-
-        if (Array.isArray(next.diagnosticTimeline)) {
-          const normalized = next.diagnosticTimeline
-            .map((entry) => {
-              const seq =
-                typeof entry?.seq === 'number' && Number.isFinite(entry.seq)
-                  ? Math.max(0, Math.floor(entry.seq))
-                  : null;
-              const timestampMs =
-                typeof entry?.timestampMs === 'number' && Number.isFinite(entry.timestampMs)
-                  ? Math.max(0, Math.floor(entry.timestampMs))
-                  : null;
-              const kind = typeof entry?.kind === 'string' ? entry.kind.trim() : '';
-              const value =
-                typeof entry?.value === 'number' && Number.isFinite(entry.value)
-                  ? Math.max(0, Math.floor(entry.value))
-                  : 0;
-              const aux =
-                typeof entry?.aux === 'number' && Number.isFinite(entry.aux)
-                  ? Math.max(0, Math.floor(entry.aux))
-                  : 0;
-
-              if (seq === null || timestampMs === null || !kind) {
-                return null;
-              }
-
-              return {
-                seq,
-                timestampMs,
-                kind,
-                value,
-                aux,
-              };
-            })
-            .filter(
-              (
-                value
-              ): value is {
-                seq: number;
-                timestampMs: number;
-                kind: string;
-                value: number;
-                aux: number;
-              } => value !== null
-            );
-
-          this.diagnosticTimeline = normalized.slice(-24);
-          this.applySharedTimelineStressIfNeeded(this.diagnosticTimeline);
-        }
-
-        if (typeof next.bufferedAhead === 'number' && Number.isFinite(next.bufferedAhead)) {
-          this.recordBufferedAheadSample(next.bufferedAhead);
-        }
-
-        if (Array.isArray(next.queue) && !this.isSameQueuePaths(next.queue)) {
-          update.queue = this.resolveQueueFromPaths(next.queue);
-        }
-        if (typeof next.currentIndex === 'number') {
-          update.currentIndex = next.currentIndex;
-        }
-
-        if (typeof next.trackPath !== 'undefined') {
-          const currentTrackPath = this.state.currentTrack
-            ? this.getTrackPath(this.state.currentTrack)
-            : null;
-          const normalizedCurrentTrackPath =
-            this.normalizeTrackPathForCompare(currentTrackPath);
-          const normalizedPlaybackState =
-            typeof next.playbackState === 'string' ? next.playbackState : null;
-          const queueClearedByPayload = Array.isArray(next.queue) && next.queue.length === 0;
-          const indexClearedByPayload =
-            typeof next.currentIndex === 'number' && next.currentIndex < 0;
-          const localQueueEmpty =
-            (Array.isArray(update.queue) ? update.queue.length === 0 : this.state.queue.length === 0) ||
-            queueClearedByPayload;
-          const playbackNotActive =
-            normalizedPlaybackState !== 'playing' &&
-            normalizedPlaybackState !== 'buffering' &&
-            normalizedPlaybackState !== 'loading';
-
-          if (typeof next.trackPath === 'string') {
-            const nextTrackPath = next.trackPath.trim();
-            if (nextTrackPath.length > 0) {
-              const shouldIgnoreStaleTrackPath = localQueueEmpty && playbackNotActive;
-              if (shouldIgnoreStaleTrackPath) {
-                update.currentTrack = null;
-                update.currentIndex = -1;
-              } else {
-                const normalizedNextTrackPath = this.normalizeTrackPathForCompare(nextTrackPath);
-                if (normalizedNextTrackPath !== normalizedCurrentTrackPath) {
-                  const resolved = this.resolveTrackFromPath(nextTrackPath);
-                  if (resolved) {
-                    update.currentTrack = resolved.track;
-                  update.currentIndex = resolved.index;
-                } else {
-                  update.currentTrack = {
-                    id: `native-${nextTrackPath}`,
-                    title: this.deriveTitleFromPath(nextTrackPath),
-                    filePath: nextTrackPath,
-                    path: nextTrackPath,
-                      originalPath: nextTrackPath,
-                    };
-                  }
-                }
-              }
-            }
-          } else if (next.trackPath === null && currentTrackPath) {
-            const shouldClearCurrentTrack =
-              next.ended === true ||
-              normalizedPlaybackState === 'stopped' ||
-              normalizedPlaybackState === 'idle' ||
-              queueClearedByPayload ||
-              indexClearedByPayload ||
-              this.state.queue.length === 0;
-            if (shouldClearCurrentTrack) {
-              update.currentTrack = null;
-              if (indexClearedByPayload) {
-                update.currentIndex = -1;
-              }
-            }
-          }
-        }
-
-        const transientOnlyStateUpdate =
-          Object.keys(update).length > 0 &&
-          Object.keys(update).every(
-            (key) =>
-              key === 'currentTime' ||
-              key === 'bufferedTime' ||
-              key === 'bufferedAhead' ||
-              key === 'decodeBufferedAhead' ||
-              key === 'outputBufferedAhead'
-          );
-
-        const merged = this.updateState(update, { emitStateChange: !transientOnlyStateUpdate });
-        if (typeof next.playbackState !== 'undefined') {
-          this.trackPlaybackStateForMetrics(merged.playbackState);
-          this.applyPlaybackStateSideEffects(merged.playbackState);
-        }
-        if (shouldApplyCurrentTime && typeof nextCurrentTime === 'number') {
-          this.lastBackendTimeUpdateAtMs = performance.now();
-          if (merged.playbackState === 'playing') {
-            this.fallbackClockBaseTimeSec = nextCurrentTime;
-            this.fallbackClockStartedAtMs = this.lastBackendTimeUpdateAtMs;
-            this.ensureFallbackTicker();
-          } else {
-            this.fallbackClockBaseTimeSec = nextCurrentTime;
-            this.fallbackClockStartedAtMs = null;
-          }
-          this.timeUpdateCallbacks.forEach((cb) => cb(nextCurrentTime));
-        }
-        if (next.ended) {
-          this.endedCallbacks.forEach((cb) => cb());
-          void this.handleTrackEnded();
-        }
-
-        if (merged.playbackState === 'playing' || merged.playbackState === 'buffering') {
-          const nowMs = Date.now();
-          const stressScore = this.getEffectiveDynamicSrcTiming(nowMs).stressScore;
-          this.updateDynamicSrcLearningFromStress(stressScore, nowMs);
-        }
-
-        this.maybeReleaseUnderrunRecovery(merged.playbackState);
-        this.evaluateDynamicSrcAutoDegradation({ triggerActions: true });
-        this.emitRobustnessSnapshot();
-      });
-
-      this.spectrumListener = await listen('native_audio_spectrum', (event) => {
-        const payload = event.payload as NativeAudioSpectrumPayload;
-        if (!payload?.bins || !Array.isArray(payload.bins)) return;
-        const bins = payload.bins;
-
-        const isByteEncodedBins = (() => {
-          const probeCount = Math.min(8, bins.length);
-          for (let index = 0; index < probeCount; index += 1) {
-            const value = bins[index];
-            if (typeof value === 'number' && Number.isFinite(value) && value > 1.001) {
-              return true;
-            }
-          }
-          return false;
-        })();
-
-        const tap =
-          payload.tapId === 'pre-dsp' || payload.tap === 'pre-dsp'
-            ? 'pre-dsp'
-            : payload.tapId === 'post-dsp' || payload.tap === 'post-dsp'
-              ? 'post-dsp'
-              : null;
-
-        const ensureBuffer = (current: Uint8Array | null | undefined): Uint8Array => {
-          if (current && current.length === bins.length) return current;
-          return new Uint8Array(bins.length);
-        };
-
-        const copyBinsToTarget = (target: Uint8Array) => {
-          for (let i = 0; i < bins.length; i += 1) {
-            const value = typeof bins[i] === 'number' && Number.isFinite(bins[i]) ? bins[i] : 0;
-            if (isByteEncodedBins) {
-              target[i] = Math.max(0, Math.min(255, Math.round(value)));
-              continue;
-            }
-
-            const clamped = Math.max(0, Math.min(1, value));
-            target[i] = Math.round(clamped * 255);
-          }
-        };
-
-        if (!tap) {
-          const target = ensureBuffer(this.spectrumData);
-          copyBinsToTarget(target);
-          this.spectrumData = target;
-          return;
-        }
-
-        const frameId =
-          typeof payload.frameId === 'number' && Number.isFinite(payload.frameId)
-            ? payload.frameId
-            : 0;
-        const timestampMs =
-          typeof payload.timestampMs === 'number' && Number.isFinite(payload.timestampMs)
-            ? payload.timestampMs
-            : Date.now();
-        const sampleRate =
-          typeof payload.sampleRate === 'number' && Number.isFinite(payload.sampleRate)
-            ? payload.sampleRate
-            : this.outputSampleRate || this.sourceSampleRate || 0;
-
-        const existingBins = this.spectrumFrames[tap]?.bins;
-        const target = ensureBuffer(existingBins);
-        copyBinsToTarget(target);
-
-        this.spectrumFrames[tap] = {
-          frameId,
-          timestampMs,
-          tap,
-          sampleRate,
-          bins: target,
-        };
-
-        // Default frequency data drives most visualizers: prefer post-dsp when available.
-        if (tap === 'post-dsp' || !this.spectrumData) {
-          this.spectrumData = target;
-        }
-      });
-
-      this.errorListener = await listen('native_audio_error', (event) => {
-        const payload = event.payload as NativeAudioErrorPayload;
-        const seq = typeof payload?.seq === 'number' ? payload.seq : 0;
-        if (seq > 0 && seq <= this.lastNativeErrorSeq) return;
-        if (seq > 0) this.lastNativeErrorSeq = seq;
-
-        const code = typeof payload?.code === 'string' && payload.code.length > 0 ? payload.code : 'NATIVE_AUDIO_ERROR';
-        const message =
-          typeof payload?.message === 'string' && payload.message.length > 0
-            ? payload.message
-            : 'Native audio error';
-
-        const error = new Error(message) as Error & { code?: string };
-        error.code = code;
-        this.emitError(error);
-      });
-    } catch (error) {
-      console.warn('[NativeAudio] Failed to register state listener:', error);
-    }
+    return setupNativeListenersImpl.call(this);
   }
 
   private restoreOutputBackendFromStorage() {
@@ -4922,7 +3829,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇熶繆閵堝洤啸闁稿鍋熼弫顕€鎮㈡俊鎾虫喘瀵濡烽敂鎯у箞?=====
+  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴鐔剁箚闁靛牆娲ゅ暩闂佺顑囬崑鐔煎极椤曗偓閹垺淇婇幘铏枠鐎殿喖顭锋俊鐑芥晜閹冪疄?=====
   private async loadTrackInternal(track: Track): Promise<boolean> {
     this.clearPendingSeek();
     if (!track) return false;
@@ -5048,7 +3955,7 @@ export class NativeAudioService implements IAudioService {
     this.timeUpdateCallbacks.forEach((cb) => cb(clamped));
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸劍閺呮繈鏌曟径娑橆洭缂佺姵鍎抽埞鎴︽偐閸欏鎮欓梻鍌氬亞閸ㄨ京鎹㈠☉姗嗗晠妞ゆ棁宕甸惄搴ｇ磽娴ｅ搫孝缁剧虎鍙冮獮澶岀矙濞嗘儳鎮戞繝銏ｆ硾閿曘儱危?=====
+  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵稿妽闁哄懏绻堥弻鏇熷緞濞戞﹩娲紓浣哄У閸庢娊鍩為幋锔藉亹闁告瑥顦伴幃娆撴⒒閸屾艾浜為柛銊ㄤ含閹广垹鈽夊鍡楁櫊濡炪倖妫佸畷鐢告儎鎼达絿纾藉ù锝呮惈瀛濈紒鍓ц檸閸欏啴鐛径宀€鐭欐繛鍡樺劤閹垶绻濋姀锝嗙【闁挎洏鍎卞嵄?=====
   setVolume(volume: number): void {
     const clamped = Math.max(0, Math.min(1, volume));
     const runtimeControlSettings = this.readRuntimeControlSettings();
@@ -5073,7 +3980,7 @@ export class NativeAudioService implements IAudioService {
     this.updateState({ muted });
   }
 
-  // ===== 闂傚倸鍊搁崐鐑芥嚄閸撲礁鍨濇い鏍亹閳ь剨绠撳畷濂稿Ψ閵夛附袣闂備礁鎼粙渚€宕㈡總鍛婂€块柛顭戝亖娴滄粓鏌熸潏鍓хɑ缁绢厼鐖奸弻娑㈠棘鐠恒剱褔鏌″畝瀣М妤犵偞鐟╁畷鐔碱敇閻欏懐鍚归梻?=====
+  // ===== 闂傚倸鍊搁崐鎼佸磹閻戣姤鍤勯柛鎾茬閸ㄦ繃銇勯弽顐汗闁逞屽墾缁犳挸鐣锋總绋课ㄩ柕澶涢檮琚ｉ梻鍌欑閹碱偆绮欐笟鈧畷銏＄附閸涘﹤鈧潡鏌涢…鎴濅簴濞存粍绮撻弻鐔告綇閸撗吷戠紒缁㈠幖閻栧ジ寮诲☉銏犳閻犳亽鍓辫閺屸€崇暆鐎ｎ剛袦濡ょ姷鍋為悷鈺佺暦閻旂⒈鏁囬柣娆忔噽閸氬綊姊?=====
   getCurrentTime(): number {
     return this.state.currentTime;
   }
@@ -5086,7 +3993,7 @@ export class NativeAudioService implements IAudioService {
     return this.state;
   }
 
-  // ===== 婵犵數濮烽弫鎼佸磻濞戙垺鍋ら柕濞у啫鐏婇悗鍏夊亾闁告洖鐏氶弲鐐烘⒑閸涘﹥澶勯柛瀣у亾闂佸搫顑呴柊锝夊蓟閺囷紕鐤€閻庯綆浜栭崑鎾诲冀椤撶偟锛熼柟鍏肩暘閸斿秹鎮″▎鎾村€垫繛鎴炵懐閻掔晫绱掗悩宕囧⒌闁?=====
+  // ===== 濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴欏灪閸嬨倝鏌曟繛褍鍟悘濠囨倵閸忓浜鹃梺鍛婃礀閻忔岸寮查悙鐑樷拺闁告稑锕ユ径鍕煕鐎Ｑ冧壕闂備礁鎼鍛存煀閿濆钃熼柡鍥风磿閻も偓闁诲函缍嗘禍鏍磻閹捐鍐€妞ゆ挾鍋熼敍鐔兼煙閸忚偐鏆橀柛鏂跨Ч閹€斥枎閹炬潙鈧灚绻涢幋鐐垫噽闁绘帞鏅槐鎺楁偐瀹曞洤鈷岄梺?=====
   onTimeUpdate(callback: (time: number) => void): () => void {
     this.timeUpdateCallbacks.add(callback);
     return () => this.timeUpdateCallbacks.delete(callback);
@@ -5113,7 +4020,7 @@ export class NativeAudioService implements IAudioService {
     return () => this.errorCallbacks.delete(callback);
   }
 
-  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇熺節濞堝灝鏋涢柨鏇樺€濇俊鍫曞箹娴ｅ摜鐣洪梺闈涚箳婵兘寮崇€ｎ喗鐓欐繛鍫濈仢閺嬫瑧绱?=====
+  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴鐔虹瘈婵炲牆鐏濋弸娑㈡煥閺囨ê鈧繃淇婇崼鏇炵濞达絽鎽滈悾娲⒑闂堟稓绠冲┑顔惧厴瀵磭鈧綆鍠楅悡娆愮箾閸繄浠㈤柡瀣懅缁?=====
   addToQueue(track: Track): void {
     if (!track) return;
     const queue = [...this.state.queue, track];
@@ -5370,7 +4277,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪婀侀梺鎸庣箓閻楀棝鍩€椤戣法鐭欓柟顔哄灲閹剝鎯旈敐鍕闂佽姘﹂～澶娒洪弽顬℃椽濡搁埞搴撳亾?=====
+  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜﹢渚€姊洪幐搴ｇ畵闁绘妫濋崺鈧い鎴ｆ硶閻瑩鏌熼鍝勭伈闁诡喒鍓濋幆鏃堟晲閸曨厾顦梻浣筋嚙濮橈箓锝炴径濞掓椽寮介‖鈩冩そ婵℃悂鍩炴惔鎾充壕?=====
   setPlayMode(mode: PlayMode): void {
     this.updateState({ playMode: mode });
   }
@@ -5389,7 +4296,7 @@ export class NativeAudioService implements IAudioService {
     this.seek(nextTime);
   }
 
-  // ===== 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉甸幆鐐哄箹濞ｎ剙濡奸柛灞诲妼闇夐柣妯烘▕閸庡繑淇婇锛ｎ亪濡撮幒鎴僵闁挎繂鎳嶆竟鏇㈡煟鎼淬値娼愭繛鍙夛耿閹虫繈骞戦幇顔荤胺闂傚倷绀侀幉鈥趁哄澶婃濞撴埃鍋撶€规洘鍨块獮妯兼嫚閼碱剦妲版俊鐐€曠换鎰涢弮鍌滅當濠㈣埖鍔栭埛鎴︽煙缁嬫寧鎹ｉ柍钘夘樀閹顫濋悡搴＄睄閻?=====
+  // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴銏＄厽閹兼番鍊ゅ鎰箾閸欏鑰块柟铏箞楠炴垿骞囬鑽よ兒闂傚倸鍊风粈渚€骞夐垾瓒佸搫顓兼径濠冾棟婵炴挻鍩冮崑鎾垛偓瑙勬礃閸ㄥ潡鐛Ο鍏煎珰闁肩⒈鍓﹀Σ鐗堜繆閻愵亜鈧洜鎹㈤幇顑╂盯寮崒婊呯暥婵犮垼鍩栭崝鏍煕閹达附鐓欑紒瀣閹癸綁鏌嶉挊澶樻█闁诡喗顨呴～婵嬫偂鎼达紕鐫勯柣?=====
   createPlaylist(name: string, description?: string, options?: PlaylistCreateOptions): Playlist {
     const kind =
       options?.kind === NativeAudioService.PLAYLIST_KIND_SMART
@@ -5593,7 +4500,7 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸劍閺呮繈鏌曟径娑橆洭缂佺姵鍎抽埞鎴︽偐閸欏鍋嶉梺閫炲苯澧柛濠傜仢閻ｉ攱绺界粙鍨祮闂佺粯鍔楅弫鎼佸储椤掍椒绻嗛柣鎰典簻閳ь剚鐗犻幃褍螖閸愨晛搴婇悗骞垮劚閹峰鎮炴禒瀣厵闁绘垶锕╁▓鏇㈡煟?(placeholder) =====
+  // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵稿妽闁哄懏绻堥弻鏇熷緞濞戞﹩娲紓浣哄У閸庢娊鍩為幋锔藉亹闁告瑥顦崑宥夋⒑闁偛鑻晶顕€鏌涙繝鍌滀虎闁伙綁鏀辩缓鐣岀矙閸喖绁梻浣虹帛閸旀寮幖浣稿偍妞ゆ帊妞掔换鍡涙煟閹板吀绨婚柍褜鍓氶悧鐘诲箖瑜嶈灃闁告劏鏅涙惔濠囨倵楠炲灝鍔氶柟宄邦儔閹偞绂掔€ｎ偆鍘甸梺缁樺灦閿曗晛鈻撻弴銏＄厽?(placeholder) =====
   getFrequencyData(): Uint8Array | null {
     this.touchSpectrumUsage();
     return this.spectrumData;
@@ -5604,7 +4511,7 @@ export class NativeAudioService implements IAudioService {
     return this.spectrumFrames[tap] ?? null;
   }
 
-  // ===== 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈缁犱即鏌熼梻瀵割槮缂佺姷濞€閺岀喖鎮ч崼鐔哄嚒缂?=====
+  // ===== 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓缂佺姳鍗抽弻鐔兼⒒鐎靛壊妲紓浣哄Х婵炩偓闁哄瞼鍠栭幃褔宕奸悢鍝勫殥缂?=====
   destroy(): void {
     this.disposed = true;
     this.pendingQueueSync = null;

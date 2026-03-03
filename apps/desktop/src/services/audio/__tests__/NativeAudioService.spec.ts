@@ -1975,7 +1975,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_set_engine_policy', {
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
     });
 
@@ -2051,7 +2051,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_set_engine_policy', {
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
     });
 
@@ -2164,7 +2164,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_set_engine_policy', {
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
     });
 
@@ -2271,8 +2271,9 @@ describe('NativeAudioService', () => {
     expect(invokeMock).toHaveBeenCalledWith('native_audio_set_engine_policy', {
       transportMode: 'robust',
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
+      outputQuantizationMode: 'round',
     });
 
     const dynamicRaw = localStorage.getItem(STORAGE_KEYS.NATIVE_AUDIO_DYNAMIC_SRC_SETTINGS);
@@ -2385,8 +2386,9 @@ describe('NativeAudioService', () => {
     expect(invokeMock).toHaveBeenCalledWith('native_audio_set_engine_policy', {
       transportMode: 'robust',
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
+      outputQuantizationMode: 'round',
     });
 
     const snapshot = service.getRobustnessSnapshot?.();
@@ -2543,7 +2545,7 @@ describe('NativeAudioService', () => {
 
     expect(invoke).toHaveBeenCalledWith('native_audio_set_engine_policy', {
       srcMode: 'match-output',
-      srcBackend: 'linear-simd',
+      srcBackend: 'rubato',
       srcTargetSampleRate: null,
     });
 

@@ -283,6 +283,7 @@ pub(crate) fn spawn_render_transfer_worker(
             let burst_policy = BurstFillPolicy::from_env();
             let mut burst_loops_remaining = 0u32;
             let mut starvation_hits = 0u32;
+            let mut observed_render_clear_epoch = render_queue.clear_epoch();
 
             loop {
                 if transfer_should_shutdown(&command_rx) {
@@ -290,6 +291,13 @@ pub(crate) fn spawn_render_transfer_worker(
                     TRANSFER_ADAPTATION_LEVEL.store(0, Ordering::Relaxed);
                     TRANSFER_OSCILLATION_STREAK.store(0, Ordering::Relaxed);
                     break;
+                }
+
+                let current_render_clear_epoch = render_queue.clear_epoch();
+                if current_render_clear_epoch != observed_render_clear_epoch {
+                    observed_render_clear_epoch = current_render_clear_epoch;
+                    transfer_block.clear();
+                    adaptive_state = buffer_policy::TransferAdaptiveState::default();
                 }
 
                 let render_len = render_queue.len_samples();
@@ -432,17 +440,27 @@ pub(crate) fn spawn_render_transfer_worker(
                     if frames > 0 {
                         let samples_to_push = frames * channels;
                         let mut start = 0usize;
+                        let mut discarded_by_clear = false;
                         while start < samples_to_push {
                             if transfer_should_shutdown(&command_rx) {
                                 render_queue.mark_finished();
                                 return;
                             }
 
-                            let pushed_frames = render_queue.push_interleaved(
+                            let push_result = render_queue.push_interleaved_guarded(
                                 &transfer_block[start..samples_to_push],
                                 channels,
+                                observed_render_clear_epoch,
                             );
-                            if pushed_frames == 0 {
+                            if push_result.cleared {
+                                observed_render_clear_epoch = render_queue.clear_epoch();
+                                transfer_block.clear();
+                                adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                                discarded_by_clear = true;
+                                break;
+                            }
+
+                            if push_result.pushed_frames == 0 {
                                 if backoff.is_zero() {
                                     thread::yield_now();
                                 } else {
@@ -450,7 +468,11 @@ pub(crate) fn spawn_render_transfer_worker(
                                 }
                                 continue;
                             }
-                            start = start.saturating_add(pushed_frames * channels);
+                            start = start.saturating_add(push_result.pushed_frames * channels);
+                        }
+
+                        if discarded_by_clear {
+                            continue;
                         }
                     }
                 }
@@ -564,6 +586,11 @@ fn adaptive_underrun_silence_frames(
     ms_to_frames(sample_rate, mask_ms)
 }
 
+fn seek_discontinuity_fade_frames(sample_rate: u32) -> usize {
+    let fade_ms = env_u32("PMP_AUDIO_STREAM_SEEK_FADE_IN_MS", 6, 1, 60);
+    ms_to_frames(sample_rate, fade_ms)
+}
+
 fn streaming_pop_retry_attempts(profile: RealtimePressureProfile, underrun_streak: u32) -> u32 {
     let policy = *STREAMING_POP_RETRY_POLICY;
     let base_attempts = match profile {
@@ -675,8 +702,8 @@ impl StreamingSamplesSource {
         self.channel_cursor = 0;
         self.previous_samples.fill(0.0);
         self.last_samples.fill(0.0);
-        self.needs_fade_in = false;
-        self.pending_fade_in_frames = 0;
+        self.needs_fade_in = true;
+        self.pending_fade_in_frames = seek_discontinuity_fade_frames(self.sample_rate);
         self.underrun_streak = 0;
         self.local_is_concealment = false;
         self.has_recent_real_audio = false;

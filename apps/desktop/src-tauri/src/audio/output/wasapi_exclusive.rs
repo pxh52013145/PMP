@@ -52,6 +52,40 @@ fn parse_env_bool_wasapi(key: &str, default_value: bool) -> bool {
         .unwrap_or(default_value)
 }
 
+#[inline]
+fn quantization_mode_to_bits(mode: NativeAudioOutputQuantizationMode) -> u32 {
+    match mode {
+        NativeAudioOutputQuantizationMode::Round => 0,
+        NativeAudioOutputQuantizationMode::Tpdf => 1,
+    }
+}
+
+#[inline]
+fn quantization_mode_from_bits(bits: u32) -> NativeAudioOutputQuantizationMode {
+    match bits {
+        1 => NativeAudioOutputQuantizationMode::Tpdf,
+        _ => NativeAudioOutputQuantizationMode::Round,
+    }
+}
+
+#[inline]
+fn callback_pop_retry_attempts(profile: RealtimePressureProfile) -> u32 {
+    match profile {
+        RealtimePressureProfile::Normal => 2,
+        RealtimePressureProfile::Guarded => 3,
+        RealtimePressureProfile::Critical => 4,
+    }
+}
+
+#[inline]
+fn callback_pop_retry_spins(profile: RealtimePressureProfile) -> u32 {
+    match profile {
+        RealtimePressureProfile::Normal => 24,
+        RealtimePressureProfile::Guarded => 48,
+        RealtimePressureProfile::Critical => 96,
+    }
+}
+
 fn shared_raw_low_latency_prefill_floor_samples(
     sample_rate: u32,
     channels: u16,
@@ -678,12 +712,18 @@ struct BackendState {
 
 pub struct WasapiExclusiveBackend {
     state: Arc<Mutex<BackendState>>,
+    output_quantization_mode_bits: Arc<AtomicU32>,
 }
 
 impl WasapiExclusiveBackend {
     pub fn new() -> Self {
+        let output_quantization_mode_bits =
+            Arc::new(AtomicU32::new(quantization_mode_to_bits(
+                NativeAudioOutputQuantizationMode::Round,
+            )));
         Self {
             state: Arc::new(Mutex::new(BackendState::default())),
+            output_quantization_mode_bits,
         }
     }
 
@@ -769,12 +809,18 @@ pub fn wasapi_exclusive_backend() -> Arc<dyn AudioOutputBackend> {
 
 pub struct WasapiSharedRawBackend {
     state: Arc<Mutex<BackendState>>,
+    output_quantization_mode_bits: Arc<AtomicU32>,
 }
 
 impl WasapiSharedRawBackend {
     pub fn new() -> Self {
+        let output_quantization_mode_bits =
+            Arc::new(AtomicU32::new(quantization_mode_to_bits(
+                NativeAudioOutputQuantizationMode::Round,
+            )));
         Self {
             state: Arc::new(Mutex::new(BackendState::default())),
+            output_quantization_mode_bits,
         }
     }
 
@@ -980,7 +1026,10 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
 
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
         self.ensure_device_selected()?;
-        let sink = WasapiExclusiveSink::new(self.state.clone());
+        let sink = WasapiExclusiveSink::new(
+            self.state.clone(),
+            self.output_quantization_mode_bits.clone(),
+        );
         let info = self.current_info();
         Ok((Arc::new(sink), info))
     }
@@ -997,6 +1046,8 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
     }
 
     fn set_output_quantization_mode(&self, mode: NativeAudioOutputQuantizationMode) {
+        self.output_quantization_mode_bits
+            .store(quantization_mode_to_bits(mode), Ordering::Release);
         if let Ok(mut guard) = self.state.lock() {
             guard.output_quantization_mode = mode;
         }
@@ -1106,7 +1157,10 @@ impl AudioOutputBackend for WasapiSharedRawBackend {
 
     fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
         self.ensure_device_selected()?;
-        let sink = WasapiSharedRawSink::new(self.state.clone());
+        let sink = WasapiSharedRawSink::new(
+            self.state.clone(),
+            self.output_quantization_mode_bits.clone(),
+        );
         let info = self.current_info();
         Ok((Arc::new(sink), info))
     }
@@ -1123,6 +1177,8 @@ impl AudioOutputBackend for WasapiSharedRawBackend {
     }
 
     fn set_output_quantization_mode(&self, mode: NativeAudioOutputQuantizationMode) {
+        self.output_quantization_mode_bits
+            .store(quantization_mode_to_bits(mode), Ordering::Release);
         if let Ok(mut guard) = self.state.lock() {
             guard.output_quantization_mode = mode;
         }
@@ -1996,6 +2052,7 @@ impl Drop for WasapiStream {
 
 struct SinkInner {
     backend_state: Arc<Mutex<BackendState>>,
+    output_quantization_mode_bits: Arc<AtomicU32>,
     device_id: Option<String>,
     queue: Mutex<VecDeque<BoxedSource>>,
     render_queue: AudioRingBuffer,
@@ -2016,6 +2073,7 @@ pub struct WasapiExclusiveSink {
 
 struct SharedRawSinkInner {
     backend_state: Arc<Mutex<BackendState>>,
+    output_quantization_mode_bits: Arc<AtomicU32>,
     device_id: Option<String>,
     queue: Mutex<VecDeque<BoxedSource>>,
     render_queue: AudioRingBuffer,
@@ -2072,7 +2130,10 @@ impl Drop for MmcssRegistration {
 }
 
 impl WasapiExclusiveSink {
-    fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
+    fn new(
+        backend_state: Arc<Mutex<BackendState>>,
+        output_quantization_mode_bits: Arc<AtomicU32>,
+    ) -> Self {
         let device_id = backend_state
             .lock()
             .ok()
@@ -2083,6 +2144,7 @@ impl WasapiExclusiveSink {
         Self {
             inner: Arc::new(SinkInner {
                 backend_state,
+                output_quantization_mode_bits,
                 device_id,
                 queue: Mutex::new(VecDeque::new()),
                 render_queue,
@@ -2162,6 +2224,7 @@ impl WasapiExclusiveSink {
             let channels = source.channels().max(1) as usize;
             let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
             let mut observed_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
+            let mut observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
 
             while !inner_clone.stopped.load(Ordering::Acquire) {
                 if stop_rx.try_recv().is_ok() {
@@ -2171,6 +2234,14 @@ impl WasapiExclusiveSink {
                 let current_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
                 if current_flush_epoch != observed_flush_epoch {
                     observed_flush_epoch = current_flush_epoch;
+                    observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
+                    local.clear();
+                    adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                }
+
+                let current_render_clear_epoch = inner_clone.render_queue.clear_epoch();
+                if current_render_clear_epoch != observed_render_clear_epoch {
+                    observed_render_clear_epoch = current_render_clear_epoch;
                     local.clear();
                     adaptive_state = buffer_policy::TransferAdaptiveState::default();
                 }
@@ -2223,11 +2294,24 @@ impl WasapiExclusiveSink {
                 }
 
                 let mut start = 0usize;
+                let mut discarded_by_clear = false;
                 while start < local.len() {
-                    let pushed_frames = inner_clone
+                    let push_result = inner_clone
                         .render_queue
-                        .push_interleaved(&local[start..], channels);
-                    if pushed_frames == 0 {
+                        .push_interleaved_guarded(
+                            &local[start..],
+                            channels,
+                            observed_render_clear_epoch,
+                        );
+                    if push_result.cleared {
+                        observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
+                        local.clear();
+                        adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                        discarded_by_clear = true;
+                        break;
+                    }
+
+                    if push_result.pushed_frames == 0 {
                         if backoff.is_zero() {
                             thread::yield_now();
                         } else {
@@ -2238,7 +2322,11 @@ impl WasapiExclusiveSink {
                         }
                         continue;
                     }
-                    start = start.saturating_add(pushed_frames * channels);
+                    start = start.saturating_add(push_result.pushed_frames * channels);
+                }
+
+                if discarded_by_clear {
+                    continue;
                 }
             }
         });
@@ -2335,9 +2423,8 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 );
             }
         }
-        crate::audio::threading::apply_audio_output_pressure_profile(
-            crate::audio::realtime_scheduler::SCHEDULER.profile(),
-        );
+        let mut applied_pressure_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+        crate::audio::threading::apply_audio_output_pressure_profile(applied_pressure_profile);
 
         let device_id = match inner.device_id.as_deref() {
             Some(value) => value,
@@ -2432,6 +2519,10 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 }
 
                 WasapiExclusiveSink::start_producer_for_source(&inner, source);
+                if let Some(active_stream) = stream.as_mut() {
+                    active_stream.stop();
+                    callback_timing.clear_last_wake();
+                }
             }
 
             if stream.is_none() {
@@ -2451,6 +2542,7 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
             let current_flush_epoch = inner.flush_epoch.load(Ordering::Acquire);
             if current_flush_epoch != observed_flush_epoch {
                 observed_flush_epoch = current_flush_epoch;
+                stream.stop();
                 callback_timing.clear_last_wake();
                 inner.render_queue.clear();
             }
@@ -2493,9 +2585,11 @@ fn run_sink_thread(inner: Arc<SinkInner>) {
                 return;
             }
 
-            crate::audio::threading::apply_audio_output_pressure_profile(
-                crate::audio::realtime_scheduler::SCHEDULER.profile(),
-            );
+            let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+            if current_profile != applied_pressure_profile {
+                crate::audio::threading::apply_audio_output_pressure_profile(current_profile);
+                applied_pressure_profile = current_profile;
+            }
 
             if inner.render_queue.is_finished_and_empty()
                 && inner
@@ -2534,9 +2628,8 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 );
             }
         }
-        crate::audio::threading::apply_audio_output_pressure_profile(
-            crate::audio::realtime_scheduler::SCHEDULER.profile(),
-        );
+        let mut applied_pressure_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+        crate::audio::threading::apply_audio_output_pressure_profile(applied_pressure_profile);
 
         let device_id = match inner.device_id.as_deref() {
             Some(value) => value,
@@ -2659,6 +2752,10 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
                 }
 
                 WasapiSharedRawSink::start_producer_for_source(&inner, source);
+                if let Some(active_stream) = stream.as_mut() {
+                    active_stream.stop();
+                    callback_timing.clear_last_wake();
+                }
             }
 
             if retry_open_stream
@@ -2815,9 +2912,11 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
 
             render_retry_count = 0;
 
-            crate::audio::threading::apply_audio_output_pressure_profile(
-                crate::audio::realtime_scheduler::SCHEDULER.profile(),
-            );
+            let current_profile = crate::audio::realtime_scheduler::SCHEDULER.profile();
+            if current_profile != applied_pressure_profile {
+                crate::audio::threading::apply_audio_output_pressure_profile(current_profile);
+                applied_pressure_profile = current_profile;
+            }
 
             if inner.render_queue.is_finished_and_empty()
                 && inner
@@ -2833,7 +2932,10 @@ fn run_shared_raw_sink_thread(inner: Arc<SharedRawSinkInner>) {
 }
 
 impl WasapiSharedRawSink {
-    fn new(backend_state: Arc<Mutex<BackendState>>) -> Self {
+    fn new(
+        backend_state: Arc<Mutex<BackendState>>,
+        output_quantization_mode_bits: Arc<AtomicU32>,
+    ) -> Self {
         let device_id = backend_state
             .lock()
             .ok()
@@ -2847,6 +2949,7 @@ impl WasapiSharedRawSink {
         Self {
             inner: Arc::new(SharedRawSinkInner {
                 backend_state,
+                output_quantization_mode_bits,
                 device_id,
                 queue: Mutex::new(VecDeque::new()),
                 render_queue,
@@ -2928,6 +3031,7 @@ impl WasapiSharedRawSink {
             let channels = source.channels().max(1) as usize;
             let mut adaptive_state = buffer_policy::TransferAdaptiveState::default();
             let mut observed_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
+            let mut observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
 
             while !inner_clone.stopped.load(Ordering::Acquire) {
                 if stop_rx.try_recv().is_ok() {
@@ -2937,6 +3041,14 @@ impl WasapiSharedRawSink {
                 let current_flush_epoch = inner_clone.flush_epoch.load(Ordering::Acquire);
                 if current_flush_epoch != observed_flush_epoch {
                     observed_flush_epoch = current_flush_epoch;
+                    observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
+                    local.clear();
+                    adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                }
+
+                let current_render_clear_epoch = inner_clone.render_queue.clear_epoch();
+                if current_render_clear_epoch != observed_render_clear_epoch {
+                    observed_render_clear_epoch = current_render_clear_epoch;
                     local.clear();
                     adaptive_state = buffer_policy::TransferAdaptiveState::default();
                 }
@@ -2989,11 +3101,24 @@ impl WasapiSharedRawSink {
                 }
 
                 let mut start = 0usize;
+                let mut discarded_by_clear = false;
                 while start < local.len() {
-                    let pushed_frames = inner_clone
+                    let push_result = inner_clone
                         .render_queue
-                        .push_interleaved(&local[start..], channels);
-                    if pushed_frames == 0 {
+                        .push_interleaved_guarded(
+                            &local[start..],
+                            channels,
+                            observed_render_clear_epoch,
+                        );
+                    if push_result.cleared {
+                        observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
+                        local.clear();
+                        adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                        discarded_by_clear = true;
+                        break;
+                    }
+
+                    if push_result.pushed_frames == 0 {
                         if backoff.is_zero() {
                             thread::yield_now();
                         } else {
@@ -3004,7 +3129,11 @@ impl WasapiSharedRawSink {
                         }
                         continue;
                     }
-                    start = start.saturating_add(pushed_frames * channels);
+                    start = start.saturating_add(push_result.pushed_frames * channels);
+                }
+
+                if discarded_by_clear {
+                    continue;
                 }
             }
         });
@@ -3213,12 +3342,11 @@ fn render_once(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    let output_quantization_mode = inner
-        .backend_state
-        .lock()
-        .ok()
-        .map(|state| state.output_quantization_mode)
-        .unwrap_or(NativeAudioOutputQuantizationMode::Round);
+    let output_quantization_mode = quantization_mode_from_bits(
+        inner
+            .output_quantization_mode_bits
+            .load(Ordering::Acquire),
+    );
     let frames = stream.buffer_frame_count;
 
     if !playing || inner.render_queue.is_finished_and_empty() {
@@ -3293,12 +3421,11 @@ fn render_once_shared_raw(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    let output_quantization_mode = inner
-        .backend_state
-        .lock()
-        .ok()
-        .map(|state| state.output_quantization_mode)
-        .unwrap_or(NativeAudioOutputQuantizationMode::Round);
+    let output_quantization_mode = quantization_mode_from_bits(
+        inner
+            .output_quantization_mode_bits
+            .load(Ordering::Acquire),
+    );
 
     let padding = unsafe {
         stream
@@ -3377,18 +3504,52 @@ fn render_frames(
     let mut available_samples = 0usize;
     let mut underrun = false;
     if consume {
-        let pop_wait =
-            exclusive_render_pop_wait_timeout(stream.sample_rate, stream.buffer_frame_count);
-        let popped = inner
+        let profile = SCHEDULER.profile();
+        let retry_attempts = callback_pop_retry_attempts(profile).max(1);
+        let retry_spins = callback_pop_retry_spins(profile);
+        let retry_wait = exclusive_render_pop_wait_timeout(stream.sample_rate, stream.buffer_frame_count);
+        let mut popped = inner
             .render_queue
-            .pop_chunk_into(scratch, total_samples, pop_wait);
-        available_samples = popped.popped;
-        if popped.popped == 0 && popped.finished {
+            .pop_chunk_into(scratch, total_samples, Duration::ZERO);
+        let mut popped_samples = popped.popped;
+        let mut popped_finished = popped.finished;
+        for _ in 1..retry_attempts {
+            if popped_samples >= total_samples || popped_finished {
+                break;
+            }
+            for _ in 0..retry_spins {
+                std::hint::spin_loop();
+            }
+
+            let missing = total_samples.saturating_sub(popped_samples);
+            if missing == 0 {
+                break;
+            }
+
+            popped = if popped_samples == 0 {
+                inner
+                    .render_queue
+                    .pop_chunk_into(scratch, total_samples, retry_wait)
+            } else {
+                inner
+                    .render_queue
+                    .pop_chunk_append_into(scratch, missing, retry_wait)
+            };
+
+            if popped_samples == 0 {
+                popped_samples = popped.popped;
+            } else {
+                popped_samples = popped_samples.saturating_add(popped.popped);
+            }
+            popped_finished = popped_finished || popped.finished;
+        }
+        available_samples = popped_samples;
+        if popped_samples == 0 && popped_finished {
             return Ok(());
         }
-        if popped.popped < total_samples {
+        if popped_samples < total_samples {
             underrun = true;
-            let missing_samples = total_samples.saturating_sub(popped.popped);
+            let missing_samples = total_samples.saturating_sub(popped_samples);
             let missing_frames = (missing_samples / channels.max(1)).max(1) as u64;
             CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
             CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.fetch_add(missing_frames, Ordering::Relaxed);
@@ -3557,20 +3718,53 @@ fn render_frames_shared_raw(
     let mut available_samples = 0usize;
     let mut underrun = false;
     if consume {
-        let pop_wait = shared_raw_render_pop_wait_timeout(
-            stream.sample_rate,
-            stream.low_latency_period_frames,
-        );
-        let popped = inner
+        let profile = SCHEDULER.profile();
+        let retry_attempts = callback_pop_retry_attempts(profile).max(1);
+        let retry_spins = callback_pop_retry_spins(profile);
+        let retry_wait =
+            shared_raw_render_pop_wait_timeout(stream.sample_rate, stream.low_latency_period_frames);
+        let mut popped = inner
             .render_queue
-            .pop_chunk_into(scratch, total_samples, pop_wait);
-        available_samples = popped.popped;
-        if popped.popped == 0 && popped.finished {
+            .pop_chunk_into(scratch, total_samples, Duration::ZERO);
+        let mut popped_samples = popped.popped;
+        let mut popped_finished = popped.finished;
+        for _ in 1..retry_attempts {
+            if popped_samples >= total_samples || popped_finished {
+                break;
+            }
+            for _ in 0..retry_spins {
+                std::hint::spin_loop();
+            }
+
+            let missing = total_samples.saturating_sub(popped_samples);
+            if missing == 0 {
+                break;
+            }
+
+            popped = if popped_samples == 0 {
+                inner
+                    .render_queue
+                    .pop_chunk_into(scratch, total_samples, retry_wait)
+            } else {
+                inner
+                    .render_queue
+                    .pop_chunk_append_into(scratch, missing, retry_wait)
+            };
+
+            if popped_samples == 0 {
+                popped_samples = popped.popped;
+            } else {
+                popped_samples = popped_samples.saturating_add(popped.popped);
+            }
+            popped_finished = popped_finished || popped.finished;
+        }
+        available_samples = popped_samples;
+        if popped_samples == 0 && popped_finished {
             return Ok(());
         }
-        if popped.popped < total_samples {
+        if popped_samples < total_samples {
             underrun = true;
-            let missing_samples = total_samples.saturating_sub(popped.popped);
+            let missing_samples = total_samples.saturating_sub(popped_samples);
             let missing_frames = (missing_samples / channels.max(1)).max(1) as u64;
             CALLBACK_RENDER_QUEUE_UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
             CALLBACK_RENDER_QUEUE_UNDERRUN_FRAMES.fetch_add(missing_frames, Ordering::Relaxed);

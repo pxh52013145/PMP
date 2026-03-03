@@ -1,0 +1,157 @@
+{
+  "weights": {
+    "decoupling": 0.35,
+    "quality": 0.35,
+    "performance": 0.3
+  },
+  "baselineScores": {
+    "decoupling": 8.7,
+    "quality": 9.6,
+    "performance": 9.3,
+    "overall": 9.2
+  },
+  "profiles": {
+    "baseline": {
+      "description": "Phase gate: block regressions while refactor is ongoing",
+      "regressionTolerance": 0.2,
+      "floors": {
+        "decoupling": 8.4,
+        "quality": 9.0,
+        "performance": 8.9,
+        "overall": 9.0
+      }
+    },
+    "v95": {
+      "description": "Master-plan strict gate",
+      "regressionTolerance": 0.0,
+      "floors": {
+        "decoupling": 9.4,
+        "quality": 9.5,
+        "performance": 9.5,
+        "overall": 9.5
+      }
+    }
+  },
+  "decoupling": {
+    "sizeBudgets": [
+      {
+        "path": "apps/desktop/src/services/audio/NativeAudioService.ts",
+        "targetLines": 4600,
+        "maxLines": 7200,
+        "minimumScore": 5.0,
+        "weight": 0.4
+      },
+      {
+        "path": "apps/desktop/src-tauri/src/audio/engine.rs",
+        "targetLines": 4400,
+        "maxLines": 7000,
+        "minimumScore": 5.0,
+        "weight": 0.4
+      }
+    ],
+    "moduleBudget": {
+      "dir": "apps/desktop/src/services/audio",
+      "includePattern": "\\.ts$",
+      "exclude": [
+        "index.ts",
+        "types.ts"
+      ],
+      "targetCount": 14,
+      "minCount": 8,
+      "minimumScore": 5.0,
+      "weight": 0.2
+    }
+  },
+  "quality": {
+    "baseScore": 10.0,
+    "failedCommandPenalty": 1.8,
+    "commands": [
+      {
+        "id": "ts-audio-service-tests",
+        "cwd": ".",
+        "command": "pnpm --dir apps/desktop exec vitest run src/services/audio/__tests__/audioTuningProfiles.spec.ts src/services/audio/__tests__/NativeAudioService.spec.ts"
+      },
+      {
+        "id": "rust-lock-free-channel-test",
+        "cwd": ".",
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml lock_free_channel_overwrites_oldest_when_full"
+      },
+      {
+        "id": "rust-seek-history-reset-test",
+        "cwd": ".",
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml streaming_samples_source_resets_history_after_render_queue_clear"
+      }
+    ]
+  },
+  "performance": {
+    "baseScore": 10.0,
+    "failedCommandPenalty": 1.5,
+    "commandScoreWeight": 0.7,
+    "stateScoreWeight": 0.3,
+    "commands": [
+      {
+        "id": "rust-interactive-prebuffer-seek-test",
+        "cwd": ".",
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml interactive_prebuffer_wait_caps_start_seek_to_sub_second_target"
+      },
+      {
+        "id": "rust-interactive-prebuffer-crossfade-test",
+        "cwd": ".",
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml interactive_prebuffer_wait_caps_crossfade_to_short_timeout"
+      },
+      {
+        "id": "rust-buffer-resume-test",
+        "cwd": ".",
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml buffering_finished_stream_resumes_instead_of_timeout"
+      }
+    ],
+    "smoke": {
+      "playMs": 1400,
+      "seekCount": 2,
+      "seekSeconds": 6,
+      "maxUnderrunEvents": 2,
+      "maxUnderrunFrames": 4096,
+      "maxOutputWaitTimeoutCount": 2,
+      "maxOutputCallbackJitterP99Us": 6000,
+      "maxControlQueueCriticalOverflowEvents": 0,
+      "timeoutMs": 720000
+    },
+    "stateMetrics": [
+      {
+        "field": "underrunEvents",
+        "targetMax": 0,
+        "hardMax": 8,
+        "minimumScore": 5.0,
+        "weight": 0.3
+      },
+      {
+        "field": "outputWaitTimeoutCount",
+        "targetMax": 0,
+        "hardMax": 6,
+        "minimumScore": 5.0,
+        "weight": 0.2
+      },
+      {
+        "field": "outputRenderUnderrunEvents",
+        "targetMax": 0,
+        "hardMax": 6,
+        "minimumScore": 5.0,
+        "weight": 0.2
+      },
+      {
+        "field": "outputCallbackIntervalJitterP99Us",
+        "targetMax": 1500,
+        "hardMax": 9000,
+        "minimumScore": 5.0,
+        "weight": 0.15
+      },
+      {
+        "field": "controlQueueCriticalOverflowEvents",
+        "targetMax": 0,
+        "hardMax": 2,
+        "minimumScore": 5.0,
+        "weight": 0.15
+      }
+    ]
+  }
+}

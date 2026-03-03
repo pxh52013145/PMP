@@ -57,8 +57,14 @@ community/*
 # New source-first phase: archive and local package experiments
 legacy/
 design/
+!design/
+design/*
+!design/audio-score-gate-baseline.json
 packages/
 scripts/
+!scripts/
+scripts/*
+!scripts/audio-score-gate.mjs
 snapshots/
 
 # Local scratch

@@ -29,7 +29,7 @@ describe('audioTuningProfiles', () => {
     expect(payload.streamingBuffer.interactiveProfile).toBe('fast');
     expect(payload.enginePolicy.transportMode).toBe('robust');
     expect(payload.enginePolicy.srcMode).toBe('match-output');
-    expect(payload.enginePolicy.srcBackend).toBe('linear-simd');
+    expect(payload.enginePolicy.srcBackend).toBe('rubato');
     expect(payload.dynamicSrcSettings.restoreDebounceMs).toBe(2800);
     expect(payload.dynamicSrcSettings.minSwitchIntervalMs).toBe(400);
     expect(payload.streamingBufferStoragePayload.userSetDecodeMode).toBe(true);
@@ -45,7 +45,7 @@ describe('audioTuningProfiles', () => {
     expect(payload.streamingBuffer.startOrSeekSeconds).toBe(1.2);
     expect(payload.streamingBuffer.crossfadeSeconds).toBe(1.95);
     expect(payload.streamingBuffer.interactiveProfile).toBe('stable');
-    expect(payload.enginePolicy.srcBackend).toBe('linear-simd');
+    expect(payload.enginePolicy.srcBackend).toBe('rubato');
     expect(payload.dynamicSrcSettings.underrunHoldMs).toBe(22000);
   });
 

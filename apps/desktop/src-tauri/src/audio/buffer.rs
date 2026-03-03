@@ -22,7 +22,6 @@ struct AudioRingBufferInner {
     finished: AtomicBool,
     wait_lock: Mutex<()>,
     available: Condvar,
-    space: Condvar,
 }
 
 unsafe impl Send for AudioRingBufferInner {}
@@ -50,6 +49,12 @@ pub(crate) struct PopChunkResult {
     pub finished: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PushInterleavedResult {
+    pub pushed_frames: usize,
+    pub cleared: bool,
+}
+
 impl AudioRingBuffer {
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
@@ -69,7 +74,6 @@ impl AudioRingBuffer {
                 finished: AtomicBool::new(false),
                 wait_lock: Mutex::new(()),
                 available: Condvar::new(),
-                space: Condvar::new(),
             }),
         }
     }
@@ -131,7 +135,6 @@ impl AudioRingBuffer {
         self.inner.read_pos.store(write, Ordering::Release);
         self.inner.finished.store(false, Ordering::Release);
         self.inner.clear_epoch.fetch_add(1, Ordering::AcqRel);
-        self.inner.space.notify_all();
     }
 
     pub fn clear_epoch(&self) -> u64 {
@@ -182,7 +185,29 @@ impl AudioRingBuffer {
         max_samples: usize,
         wait_timeout: Duration,
     ) -> PopChunkResult {
-        out.clear();
+        self.pop_chunk_into_internal(out, max_samples, wait_timeout, false)
+    }
+
+    pub(crate) fn pop_chunk_append_into(
+        &self,
+        out: &mut Vec<f32>,
+        max_samples: usize,
+        wait_timeout: Duration,
+    ) -> PopChunkResult {
+        self.pop_chunk_into_internal(out, max_samples, wait_timeout, true)
+    }
+
+    fn pop_chunk_into_internal(
+        &self,
+        out: &mut Vec<f32>,
+        max_samples: usize,
+        wait_timeout: Duration,
+        append: bool,
+    ) -> PopChunkResult {
+        if !append {
+            out.clear();
+        }
+        let base_len = out.len();
 
         if max_samples == 0 {
             return PopChunkResult {
@@ -214,17 +239,17 @@ impl AudioRingBuffer {
         }
 
         let count = available.min(max_samples).min(self.inner.capacity);
-        if out.capacity() < count {
+        if out.capacity() < base_len.saturating_add(count) {
             crate::audio::memory_pool::reserve_f32_capacity(
                 out,
-                count,
+                base_len.saturating_add(count),
                 "memory_pool.buffer.pop_chunk_growth",
             );
         }
 
         unsafe {
-            out.set_len(count);
-            let dst = out.as_mut_ptr();
+            out.set_len(base_len.saturating_add(count));
+            let dst = out.as_mut_ptr().add(base_len);
             let start = (read as usize) % self.inner.capacity;
             let first = (self.inner.capacity - start).min(count);
             ptr::copy_nonoverlapping(self.inner.data_ptr.add(start), dst, first);
@@ -235,7 +260,6 @@ impl AudioRingBuffer {
 
         let new_read = read.saturating_add(count as u64);
         self.inner.read_pos.store(new_read, Ordering::Release);
-        self.inner.space.notify_all();
 
         let finished = self.inner.finished.load(Ordering::Acquire)
             && self.inner.write_pos.load(Ordering::Acquire) == new_read;
@@ -255,12 +279,35 @@ impl AudioRingBuffer {
     }
 
     pub fn push_interleaved(&self, samples: &[f32], channels: usize) -> usize {
+        self.push_interleaved_guarded(samples, channels, self.clear_epoch())
+            .pushed_frames
+    }
+
+    pub fn push_interleaved_guarded(
+        &self,
+        samples: &[f32],
+        channels: usize,
+        expected_clear_epoch: u64,
+    ) -> PushInterleavedResult {
+        if self.clear_epoch() != expected_clear_epoch {
+            return PushInterleavedResult {
+                pushed_frames: 0,
+                cleared: true,
+            };
+        }
+
         if channels == 0 {
-            return 0;
+            return PushInterleavedResult {
+                pushed_frames: 0,
+                cleared: false,
+            };
         }
         let total_frames = samples.len() / channels;
         if total_frames == 0 {
-            return 0;
+            return PushInterleavedResult {
+                pushed_frames: 0,
+                cleared: false,
+            };
         }
 
         let read = self.inner.read_pos.load(Ordering::Acquire);
@@ -269,13 +316,19 @@ impl AudioRingBuffer {
         let free_samples = self.inner.capacity.saturating_sub(used);
         let free_frames = free_samples / channels;
         if free_frames == 0 {
-            return 0;
+            return PushInterleavedResult {
+                pushed_frames: 0,
+                cleared: false,
+            };
         }
 
         let frames_to_push = free_frames.min(total_frames);
         let samples_to_push = frames_to_push * channels;
         if samples_to_push == 0 {
-            return 0;
+            return PushInterleavedResult {
+                pushed_frames: 0,
+                cleared: false,
+            };
         }
 
         unsafe {
@@ -291,12 +344,22 @@ impl AudioRingBuffer {
             }
         }
 
+        if self.clear_epoch() != expected_clear_epoch {
+            return PushInterleavedResult {
+                pushed_frames: 0,
+                cleared: true,
+            };
+        }
+
         self.inner.write_pos.store(
             write.saturating_add(samples_to_push as u64),
             Ordering::Release,
         );
-        self.inner.available.notify_all();
-        frames_to_push
+        self.inner.available.notify_one();
+        PushInterleavedResult {
+            pushed_frames: frames_to_push,
+            cleared: false,
+        }
     }
 }
 
@@ -345,5 +408,35 @@ mod tests {
 
         assert!(buffer.clear_epoch() > epoch_before);
         assert!(!buffer.is_finished());
+    }
+
+    #[test]
+    fn guarded_push_rejects_stale_epoch_without_publishing_samples() {
+        let buffer = AudioRingBuffer::new(32);
+        let stale_epoch = buffer.clear_epoch();
+        buffer.clear();
+
+        let result = buffer.push_interleaved_guarded(&[0.1, 0.2, 0.3, 0.4], 2, stale_epoch);
+
+        assert!(result.cleared);
+        assert_eq!(result.pushed_frames, 0);
+        assert_eq!(buffer.len_samples(), 0);
+    }
+
+    #[test]
+    fn pop_chunk_append_into_preserves_existing_samples_and_appends() {
+        let buffer = AudioRingBuffer::new(32);
+        let input = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let pushed = buffer.push_interleaved(&input, 1);
+        assert_eq!(pushed, 6);
+
+        let mut out = vec![9.0f32, 8.0];
+        let first = buffer.pop_chunk_append_into(&mut out, 3, Duration::ZERO);
+        assert_eq!(first.popped, 3);
+        assert_eq!(out, vec![9.0, 8.0, 1.0, 2.0, 3.0]);
+
+        let second = buffer.pop_chunk_append_into(&mut out, 3, Duration::ZERO);
+        assert_eq!(second.popped, 3);
+        assert_eq!(out, vec![9.0, 8.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 }

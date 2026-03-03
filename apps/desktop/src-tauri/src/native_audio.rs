@@ -2472,6 +2472,9 @@ pub(crate) struct AudioSmokeOptions {
     pub stress_cpu_threads: u32,
     pub max_underrun_events: Option<u64>,
     pub max_underrun_frames: Option<u64>,
+    pub max_output_wait_timeout_count: Option<u64>,
+    pub max_output_callback_jitter_p99_us: Option<u32>,
+    pub max_control_queue_critical_overflow_events: Option<u64>,
 }
 
 fn audio_smoke_error_from_state(
@@ -2957,6 +2960,46 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
             return Err(format!(
                 "Streaming underrun_frames exceeded threshold: {} > {}",
                 final_payload.underrun_frames, max_frames
+            ));
+        }
+    }
+
+    if let Some(max_wait_timeout_count) = options.max_output_wait_timeout_count {
+        let observed = final_payload
+            .output_wait_timeout_count
+            .ok_or_else(|| "output_wait_timeout_count unavailable in final payload".to_string())?;
+        if observed > max_wait_timeout_count {
+            return Err(format!(
+                "Output wait timeout count exceeded threshold: {} > {}",
+                observed, max_wait_timeout_count
+            ));
+        }
+    }
+
+    if let Some(max_jitter_p99_us) = options.max_output_callback_jitter_p99_us {
+        let observed = final_payload
+            .output_callback_interval_jitter_p99_us
+            .ok_or_else(|| {
+                "output_callback_interval_jitter_p99_us unavailable in final payload".to_string()
+            })?;
+        if observed > max_jitter_p99_us {
+            return Err(format!(
+                "Output callback jitter p99 exceeded threshold: {} > {}",
+                observed, max_jitter_p99_us
+            ));
+        }
+    }
+
+    if let Some(max_critical_overflow) = options.max_control_queue_critical_overflow_events {
+        let observed = final_payload
+            .control_queue_critical_overflow_events
+            .ok_or_else(|| {
+                "control_queue_critical_overflow_events unavailable in final payload".to_string()
+            })?;
+        if observed > max_critical_overflow {
+            return Err(format!(
+                "Control queue critical overflow events exceeded threshold: {} > {}",
+                observed, max_critical_overflow
             ));
         }
     }

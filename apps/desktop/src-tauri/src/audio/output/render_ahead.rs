@@ -352,6 +352,11 @@ fn adaptive_underrun_silence_frames(
     ms_to_frames(sample_rate, mask_ms)
 }
 
+fn seek_discontinuity_fade_frames(sample_rate: u32) -> usize {
+    let fade_ms = parse_env_u32("PMP_AUDIO_RENDER_AHEAD_SEEK_FADE_IN_MS", 6, 1, 60);
+    ms_to_frames(sample_rate, fade_ms)
+}
+
 fn render_pop_retry_attempts(profile: RealtimePressureProfile, underrun_streak: u32) -> u32 {
     let policy = *RENDER_POP_RETRY_POLICY;
     let base_attempts = match profile {
@@ -569,6 +574,7 @@ fn spawn_producer_thread(
                 RealtimePressureProfile::Critical,
             ));
             let mut observed_seek_epoch = seek_epoch.load(Ordering::Acquire);
+            let mut observed_queue_clear_epoch = queue.clear_epoch();
             invalidate_shared_render_ready_state(wrapper_id, observed_seek_epoch);
 
             loop {
@@ -580,9 +586,18 @@ fn spawn_producer_thread(
                 if current_epoch != observed_seek_epoch {
                     observed_seek_epoch = current_epoch;
                     queue.clear();
+                    observed_queue_clear_epoch = queue.clear_epoch();
                     block.clear();
                     adaptive_state = buffer_policy::TransferAdaptiveState::default();
                     invalidate_shared_render_ready_state(wrapper_id, current_epoch);
+                }
+
+                let current_clear_epoch = queue.clear_epoch();
+                if current_clear_epoch != observed_queue_clear_epoch {
+                    observed_queue_clear_epoch = current_clear_epoch;
+                    block.clear();
+                    adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                    invalidate_shared_render_ready_state(wrapper_id, observed_seek_epoch);
                 }
 
                 let render_len = queue.len_samples();
@@ -642,6 +657,7 @@ fn spawn_producer_thread(
                         if current_epoch != observed_seek_epoch {
                             observed_seek_epoch = current_epoch;
                             queue.clear();
+                            observed_queue_clear_epoch = queue.clear_epoch();
                             block.clear();
                             adaptive_state = buffer_policy::TransferAdaptiveState::default();
                             invalidate_shared_render_ready_state(wrapper_id, current_epoch);
@@ -676,12 +692,25 @@ fn spawn_producer_thread(
                     if current_epoch != observed_seek_epoch {
                         observed_seek_epoch = current_epoch;
                         queue.clear();
+                        observed_queue_clear_epoch = queue.clear_epoch();
                         invalidate_shared_render_ready_state(wrapper_id, current_epoch);
                         break;
                     }
 
-                    let pushed_frames = queue.push_interleaved(&block[start..], channels);
-                    if pushed_frames == 0 {
+                    let push_result = queue.push_interleaved_guarded(
+                        &block[start..],
+                        channels,
+                        observed_queue_clear_epoch,
+                    );
+                    if push_result.cleared {
+                        observed_queue_clear_epoch = queue.clear_epoch();
+                        block.clear();
+                        adaptive_state = buffer_policy::TransferAdaptiveState::default();
+                        invalidate_shared_render_ready_state(wrapper_id, observed_seek_epoch);
+                        break;
+                    }
+
+                    if push_result.pushed_frames == 0 {
                         if backoff.is_zero() {
                             thread::yield_now();
                         } else {
@@ -695,7 +724,7 @@ fn spawn_producer_thread(
                         queue.len_samples(),
                         low_watermark,
                     );
-                    start = start.saturating_add(pushed_frames * channels);
+                    start = start.saturating_add(push_result.pushed_frames * channels);
                 }
             }
 
@@ -782,7 +811,7 @@ impl RenderAheadSource {
                 *sample = 0.0;
             }
             self.needs_fade_in = true;
-            self.pending_fade_in_frames = 0;
+            self.pending_fade_in_frames = seek_discontinuity_fade_frames(self.sample_rate);
             self.underrun_streak = 0;
         }
 

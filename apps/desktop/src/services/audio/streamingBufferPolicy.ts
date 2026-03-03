@@ -1,4 +1,4 @@
-export type StreamingBufferSettings = {
+﻿export type StreamingBufferSettings = {
   startOrSeekSeconds: number | null;
   crossfadeSeconds: number | null;
   decodeMode: 'streaming' | 'full-track';
@@ -12,6 +12,88 @@ export type ResolveStreamingBufferPolicyTargetInput = {
   protectionWindowActive: boolean;
   sharedStressWindowActive: boolean;
 };
+
+export type StoredStreamingBufferSettingsResult = {
+  settings: StreamingBufferSettings;
+  migratedLegacyFullTrack: boolean;
+};
+
+export function resolveStoredStreamingBufferSettings(
+  raw: string | null,
+): StoredStreamingBufferSettingsResult {
+  const defaults: StoredStreamingBufferSettingsResult = {
+    settings: {
+      startOrSeekSeconds: null,
+      crossfadeSeconds: null,
+      decodeMode: 'streaming',
+      interactiveProfile: 'balanced',
+    },
+    migratedLegacyFullTrack: false,
+  };
+
+  if (!raw) {
+    return defaults;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') {
+      return defaults;
+    }
+    const record = parsed as Record<string, unknown>;
+
+    const startRaw = record.startOrSeekSeconds;
+    const crossfadeRaw = record.crossfadeSeconds;
+    const decodeModeRaw = record.decodeMode;
+    const interactiveProfileRaw = record.interactiveProfile;
+    const userSetDecodeMode = record.userSetDecodeMode === true;
+
+    const start =
+      startRaw === null
+        ? null
+        : typeof startRaw === 'number' && isFinite(startRaw)
+          ? Math.max(0, Math.min(4, startRaw))
+          : null;
+    const crossfade =
+      crossfadeRaw === null
+        ? null
+        : typeof crossfadeRaw === 'number' && isFinite(crossfadeRaw)
+          ? Math.max(0, Math.min(3, crossfadeRaw))
+          : null;
+
+    const isDecodeMode = (value: unknown): value is StreamingBufferSettings['decodeMode'] =>
+      value === 'full-track' || value === 'streaming';
+
+    const isInteractiveProfile = (
+      value: unknown,
+    ): value is StreamingBufferSettings['interactiveProfile'] =>
+      value === 'fast' || value === 'balanced' || value === 'stable';
+
+    let decodeMode: StreamingBufferSettings['decodeMode'] = isDecodeMode(decodeModeRaw)
+      ? decodeModeRaw
+      : 'streaming';
+    const interactiveProfile: StreamingBufferSettings['interactiveProfile'] =
+      isInteractiveProfile(interactiveProfileRaw) ? interactiveProfileRaw : 'balanced';
+
+    let migratedLegacyFullTrack = false;
+    if (decodeMode === 'full-track' && !userSetDecodeMode) {
+      decodeMode = 'streaming';
+      migratedLegacyFullTrack = true;
+    }
+
+    return {
+      settings: {
+        startOrSeekSeconds: start,
+        crossfadeSeconds: crossfade,
+        decodeMode,
+        interactiveProfile,
+      },
+      migratedLegacyFullTrack,
+    };
+  } catch {
+    return defaults;
+  }
+}
 
 export function normalizeStreamingBufferSettings(
   settings: StreamingBufferSettings
