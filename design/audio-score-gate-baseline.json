@@ -1,6 +1,7 @@
 {
   "execution": {
-    "cargoTargetDir": "apps/desktop/src-tauri/target_gate"
+    "cargoTargetDir": "apps/desktop/src-tauri/target_gate",
+    "requireSmokeInCi": true
   },
   "weights": {
     "decoupling": 0.35,

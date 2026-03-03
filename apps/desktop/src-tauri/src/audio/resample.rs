@@ -569,7 +569,7 @@ impl StreamingResampler {
                         continue;
                     }
 
-                    while state.src_pos + 1.0 <= max_frame as f64 {
+                    while state.src_pos < max_frame as f64 {
                         let i0 = state.src_pos.floor() as usize;
                         let i1 = (i0 + 1).min(max_frame);
                         let frac = (state.src_pos - i0 as f64) as f32;
@@ -827,5 +827,81 @@ mod tests {
         assert!(!out.is_empty());
         assert!(out.iter().all(|sample| sample.is_finite()));
         assert_eq!(out.len() % channels, 0);
+    }
+
+    #[test]
+    fn streaming_linear_simd_matches_offline_without_boundary_glitch() {
+        let channels = 2usize;
+        let in_sr = 44_100u32;
+        let out_sr = 48_000u32;
+        let chunk_frames = 256usize;
+        let total_frames = chunk_frames * 24;
+
+        let mut input = vec![0.0f32; total_frames * channels];
+        for frame in 0..total_frames {
+            let t = frame as f32 / in_sr as f32;
+            let sample = (2.0 * std::f32::consts::PI * 997.0 * t).sin() * 0.7;
+            input[frame * channels] = sample;
+            input[frame * channels + 1] = sample;
+        }
+
+        let offline = resample_interleaved_f32_with_policy(
+            &input,
+            in_sr,
+            out_sr,
+            channels,
+            false,
+            NativeAudioHqSrcPhaseMode::Linear,
+            NativeAudioSrcBackend::LinearSimd,
+        )
+        .expect("offline linear-simd");
+
+        let mut streaming = StreamingResampler::new_with_policy(
+            in_sr,
+            out_sr,
+            channels,
+            chunk_frames,
+            false,
+            NativeAudioHqSrcPhaseMode::Linear,
+            NativeAudioSrcBackend::LinearSimd,
+        )
+        .expect("streaming linear-simd init");
+
+        let mut streamed = Vec::new();
+        for chunk in input.chunks(chunk_frames * channels) {
+            streamed.extend_from_slice(&streaming.process_interleaved(chunk));
+        }
+
+        let aligned = streamed.len().min(offline.len());
+        assert!(aligned > channels * 128, "aligned={aligned}");
+
+        let mut max_abs_err = 0.0f32;
+        let mut sum_abs_err = 0.0f64;
+        let mut compared = 0usize;
+        for index in (channels * 8)..aligned {
+            let err = (streamed[index] - offline[index]).abs();
+            max_abs_err = max_abs_err.max(err);
+            sum_abs_err += err as f64;
+            compared += 1;
+        }
+
+        let mean_abs_err = if compared > 0 {
+            sum_abs_err / compared as f64
+        } else {
+            0.0
+        };
+
+        assert!(
+            max_abs_err < 0.03,
+            "max_abs_err={max_abs_err} streamed_len={} offline_len={}",
+            streamed.len(),
+            offline.len()
+        );
+        assert!(
+            mean_abs_err < 0.006,
+            "mean_abs_err={mean_abs_err} streamed_len={} offline_len={}",
+            streamed.len(),
+            offline.len()
+        );
     }
 }

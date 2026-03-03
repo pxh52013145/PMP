@@ -100,6 +100,7 @@ function printHelp() {
     '  --with-smoke            Run hardware smoke and parse runtime metrics',
     '  --require-smoke         Fail when smoke cannot run',
     '  --smoke-track <path>    Track path for smoke mode',
+    '  env PMP_AUDIO_SMOKE_TRACK Preferred smoke track when flag is omitted',
     '  --cargo-target-dir <p>  Cargo target dir override for gate commands',
     '  --skip-quality          Skip quality command suite',
     '  --skip-performance      Skip performance command suite',
@@ -482,17 +483,107 @@ function evaluateStateMetrics(state, metricsConfig) {
   };
 }
 
-function resolveSmokeTrackPath(smokeTrack) {
-  if (smokeTrack) {
-    return path.isAbsolute(smokeTrack) ? smokeTrack : path.resolve(repoRoot, smokeTrack);
+function resolveSmokeTrackCandidate(trackInput) {
+  if (typeof trackInput !== 'string') return null;
+  const trimmed = trackInput.trim();
+  if (!trimmed) return null;
+  return path.isAbsolute(trimmed) ? trimmed : path.resolve(repoRoot, trimmed);
+}
+
+function writeDeterministicSmokeWav(filePath) {
+  const sampleRate = 48_000;
+  const channels = 2;
+  const bitsPerSample = 16;
+  const durationMs = 2_000;
+  const frameCount = Math.max(1, Math.floor((sampleRate * durationMs) / 1_000));
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = frameCount * blockAlign;
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
+
+  const buffer = Buffer.alloc(totalSize);
+  let offset = 0;
+
+  buffer.write('RIFF', offset);
+  offset += 4;
+  buffer.writeUInt32LE(totalSize - 8, offset);
+  offset += 4;
+  buffer.write('WAVE', offset);
+  offset += 4;
+
+  buffer.write('fmt ', offset);
+  offset += 4;
+  buffer.writeUInt32LE(16, offset);
+  offset += 4;
+  buffer.writeUInt16LE(1, offset);
+  offset += 2;
+  buffer.writeUInt16LE(channels, offset);
+  offset += 2;
+  buffer.writeUInt32LE(sampleRate, offset);
+  offset += 4;
+  buffer.writeUInt32LE(byteRate, offset);
+  offset += 4;
+  buffer.writeUInt16LE(blockAlign, offset);
+  offset += 2;
+  buffer.writeUInt16LE(bitsPerSample, offset);
+  offset += 2;
+
+  buffer.write('data', offset);
+  offset += 4;
+  buffer.writeUInt32LE(dataSize, offset);
+  offset += 4;
+
+  const amplitude = 0.35;
+  const invSampleRate = 1 / sampleRate;
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const t = frame * invSampleRate;
+    const env = Math.min(1, frame / (sampleRate * 0.04));
+    const base =
+      amplitude * env * (Math.sin(2 * Math.PI * 440 * t) * 0.75 + Math.sin(2 * Math.PI * 660 * t) * 0.25);
+    const left = Math.max(-1, Math.min(1, base));
+    const right = Math.max(-1, Math.min(1, base * 0.92));
+    buffer.writeInt16LE(Math.round(left * 32767), offset);
+    offset += 2;
+    buffer.writeInt16LE(Math.round(right * 32767), offset);
+    offset += 2;
   }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, buffer);
+}
+
+function ensureDeterministicSmokeTrack() {
+  const generatedPath = path.resolve(repoRoot, 'tmp', 'audio-smoke-reference.wav');
+  try {
+    if (!fs.existsSync(generatedPath)) {
+      writeDeterministicSmokeWav(generatedPath);
+    }
+    return generatedPath;
+  } catch {
+    return null;
+  }
+}
+
+function resolveSmokeTrackPath(smokeTrack, smokeConfig = {}) {
+  const cliCandidate = resolveSmokeTrackCandidate(smokeTrack);
+  if (cliCandidate && fs.existsSync(cliCandidate)) return cliCandidate;
+
+  const envCandidate = resolveSmokeTrackCandidate(process.env.PMP_AUDIO_SMOKE_TRACK ?? null);
+  if (envCandidate && fs.existsSync(envCandidate)) return envCandidate;
+
+  const configCandidate = resolveSmokeTrackCandidate(smokeConfig.track ?? null);
+  if (configCandidate && fs.existsSync(configCandidate)) return configCandidate;
+
   const defaultTrack = path.resolve(repoRoot, 'Eagles_Hotel_California.flac');
-  return fs.existsSync(defaultTrack) ? defaultTrack : null;
+  if (fs.existsSync(defaultTrack)) return defaultTrack;
+
+  return ensureDeterministicSmokeTrack();
 }
 
 function runSmoke(config, options, execution) {
   const smokeConfig = config.smoke ?? {};
-  const trackPath = resolveSmokeTrackPath(options.smokeTrack);
+  const trackPath = resolveSmokeTrackPath(options.smokeTrack, smokeConfig);
   if (!trackPath || !fs.existsSync(trackPath)) {
     return {
       skipped: true,
@@ -688,6 +779,12 @@ function run() {
   const profile = config.profiles?.[options.profile];
   if (!profile) {
     throw new Error(`Unknown profile '${options.profile}' in ${configPath}`);
+  }
+
+  const requireSmokeInCi = config?.execution?.requireSmokeInCi === true;
+  if (process.env.CI && requireSmokeInCi) {
+    options.withSmoke = true;
+    options.requireSmoke = true;
   }
 
   console.log(`Audio Score Gate`);

@@ -98,6 +98,21 @@ import { buildNativeAudioRobustnessSnapshot } from './nativeAudioRobustnessSnaps
 import { NativeAudioRobustnessController } from './nativeAudioRobustnessController';
 import { createNativeAudioRobustnessSnapshotSource } from './nativeAudioRobustnessSnapshotAdapter';
 import {
+  clearPendingSeekGuardImpl,
+  clearPendingSeekImpl,
+  clearPendingVolumeImpl,
+  flushPendingSeekCommandImpl,
+  flushPendingVolumeCommandImpl,
+  hasPendingSeekWorkImpl,
+  markPendingSeekGuardImpl,
+  scheduleSeekFlushImpl,
+  scheduleVolumeFlushImpl,
+  seekImpl,
+  setVolumeImpl,
+  shouldIgnoreBackendCurrentTimeImpl,
+  type NativeAudioTransportFacadeContext,
+} from './nativeAudioTransportFacade';
+import {
   applyRecentSmartPlaylistSnapshotToState,
   compactTrackForRecentPlaylist,
   mergeRecentSmartPlaylistTracks,
@@ -199,6 +214,8 @@ export class NativeAudioService implements IAudioService {
     coalesceMs: NativeAudioService.VOLUME_COALESCE_MS,
     minDispatchIntervalMs: NativeAudioService.VOLUME_DISPATCH_MIN_INTERVAL_MS,
   });
+  private readonly transportFacadeContext: NativeAudioTransportFacadeContext =
+    this.createTransportFacadeContext();
   private seekCommandSeqCounter = Math.max(1, Date.now());
   private desiredPlayIndex: number | null = null;
   private playIndexQueue: Promise<void> = Promise.resolve();
@@ -1022,115 +1039,92 @@ export class NativeAudioService implements IAudioService {
     }
   }
 
-  private clearPendingSeek(): void {
-    const clearTimer = (timerId: number) => {
-      if (typeof window === 'undefined') return;
-      window.clearTimeout(timerId);
+  private createTransportFacadeContext(): NativeAudioTransportFacadeContext {
+    const service = this;
+
+    return {
+      seekCoalesceMs: NativeAudioService.SEEK_COALESCE_MS,
+      volumeCoalesceMs: NativeAudioService.VOLUME_COALESCE_MS,
+      get seekCommandSeqCounter() {
+        return service.seekCommandSeqCounter;
+      },
+      set seekCommandSeqCounter(value: number) {
+        service.seekCommandSeqCounter = value;
+      },
+      get dynamicSrcDeferredLatencyReason() {
+        return service.dynamicSrcDeferredLatencyReason;
+      },
+      set dynamicSrcDeferredLatencyReason(value: string | null) {
+        service.dynamicSrcDeferredLatencyReason = value;
+      },
+      get state() {
+        return service.state;
+      },
+      get fallbackClockBaseTimeSec() {
+        return service.fallbackClockBaseTimeSec;
+      },
+      set fallbackClockBaseTimeSec(value: number) {
+        service.fallbackClockBaseTimeSec = value;
+      },
+      get fallbackClockStartedAtMs() {
+        return service.fallbackClockStartedAtMs;
+      },
+      set fallbackClockStartedAtMs(value: number | null) {
+        service.fallbackClockStartedAtMs = value;
+      },
+      timeUpdateCallbacks: service.timeUpdateCallbacks,
+      seekCommandCoalescer: service.seekCommandCoalescer,
+      volumeCommandCoalescer: service.volumeCommandCoalescer,
+      invokeCommand: (command, payload) => service.invokeCommand(command, payload),
+      fireAndForgetCommand: (command, payload) => service.fireAndForgetCommand(command, payload),
+      flushDeferredLatencySrcPolicy: (trigger) => service.flushDeferredLatencySrcPolicy(trigger),
+      getEffectiveDynamicSrcTiming: (nowMs) => service.getEffectiveDynamicSrcTiming(nowMs),
+      withDynamicSrcHold: (reason, holdMs) => service.withDynamicSrcHold(reason, holdMs),
+      updateState: (partial) => service.updateState(partial),
+      ensureFallbackTicker: () => service.ensureFallbackTicker(),
+      readRuntimeControlSettings: () => service.readRuntimeControlSettings(),
+      notifyLatestSeekSequence: (seekSeq) => service.notifyLatestSeekSequence(seekSeq),
     };
-    this.seekCommandCoalescer.clearPendingAndGuard({ clearTimer });
-    this.dynamicSrcDeferredLatencyReason = null;
+  }
+
+  private clearPendingSeek(): void {
+    clearPendingSeekImpl(this.transportFacadeContext);
   }
 
   private hasPendingSeekWork(): boolean {
-    return this.seekCommandCoalescer.hasPendingWork();
+    return hasPendingSeekWorkImpl(this.transportFacadeContext);
   }
 
   private markPendingSeekGuard(target: number): void {
-    if (!isFinite(target)) return;
-    this.seekCommandCoalescer.markGuard(target, this.state.currentTime, Date.now());
+    markPendingSeekGuardImpl(this.transportFacadeContext, target);
   }
 
   private clearPendingSeekGuard(): void {
-    this.seekCommandCoalescer.clearGuard();
+    clearPendingSeekGuardImpl(this.transportFacadeContext);
   }
 
   private shouldIgnoreBackendCurrentTime(nextTime: number): boolean {
-    return this.seekCommandCoalescer.shouldIgnoreBackendCurrentTime(nextTime, Date.now());
+    return shouldIgnoreBackendCurrentTimeImpl(this.transportFacadeContext, nextTime);
   }
 
   private flushPendingSeekCommand(): void {
-    const decision = this.seekCommandCoalescer.takeFlushDecision(Date.now());
-    if (decision.action === 'noop') return;
-    if (decision.action === 'reschedule') {
-      this.scheduleSeekFlush(decision.delayMs);
-      return;
-    }
-
-    const { target, seekSeq } = decision;
-    const payload: Record<string, unknown> = { time: target };
-    if (typeof seekSeq === 'number' && Number.isFinite(seekSeq)) {
-      payload.seekSeq = Math.max(1, Math.floor(seekSeq));
-    }
-
-    void this.invokeCommand('native_audio_seek', payload)
-      .catch(() => {
-        const hasQueuedSeek = this.seekCommandCoalescer.hasQueuedSeek();
-        const isSameGuardTarget = this.seekCommandCoalescer.isSameGuardTarget(target);
-        if (!hasQueuedSeek && isSameGuardTarget) {
-          this.seekCommandCoalescer.clearGuard();
-        }
-        // invokeCommand already emits structured error.
-      })
-      .finally(() => {
-        this.seekCommandCoalescer.finishDispatch();
-        if (this.seekCommandCoalescer.hasQueuedSeek()) {
-          this.scheduleSeekFlush(0);
-          return;
-        }
-
-        this.flushDeferredLatencySrcPolicy('seek-settled');
-      });
+    flushPendingSeekCommandImpl(this.transportFacadeContext);
   }
 
   private scheduleSeekFlush(delayMs: number = NativeAudioService.SEEK_COALESCE_MS): void {
-    if (typeof window === 'undefined') {
-      this.flushPendingSeekCommand();
-      return;
-    }
-
-    this.seekCommandCoalescer.scheduleFlush(
-      delayMs,
-      {
-        scheduleTimer: (safeDelayMs, callback) => window.setTimeout(callback, safeDelayMs),
-        clearTimer: (timerId) => window.clearTimeout(timerId),
-      },
-      () => this.flushPendingSeekCommand()
-    );
+    scheduleSeekFlushImpl(this.transportFacadeContext, delayMs);
   }
 
   private clearPendingVolume(): void {
-    const clearTimer = (timerId: number) => {
-      if (typeof window === 'undefined') return;
-      window.clearTimeout(timerId);
-    };
-    this.volumeCommandCoalescer.clearPending({ clearTimer });
+    clearPendingVolumeImpl(this.transportFacadeContext);
   }
 
   private flushPendingVolumeCommand(): void {
-    const decision = this.volumeCommandCoalescer.takeFlushDecision(Date.now());
-    if (decision.action === 'noop') return;
-    if (decision.action === 'reschedule') {
-      this.scheduleVolumeFlush(decision.delayMs);
-      return;
-    }
-
-    this.fireAndForgetCommand('native_audio_set_volume', { volume: decision.volume });
+    flushPendingVolumeCommandImpl(this.transportFacadeContext);
   }
 
   private scheduleVolumeFlush(delayMs: number = NativeAudioService.VOLUME_COALESCE_MS): void {
-    if (typeof window === 'undefined') {
-      this.flushPendingVolumeCommand();
-      return;
-    }
-
-    this.volumeCommandCoalescer.scheduleFlush(
-      delayMs,
-      {
-        scheduleTimer: (safeDelayMs, callback) => window.setTimeout(callback, safeDelayMs),
-        clearTimer: (timerId) => window.clearTimeout(timerId),
-      },
-      () => this.flushPendingVolumeCommand()
-    );
+    scheduleVolumeFlushImpl(this.transportFacadeContext, delayMs);
   }
 
   private isProbablyAbsolutePath(value: string): boolean {
@@ -3564,38 +3558,12 @@ export class NativeAudioService implements IAudioService {
   }
 
   seek(time: number): void {
-    const duration = this.state.duration || time;
-    const clamped = Math.max(0, Math.min(time, duration));
-    this.markPendingSeekGuard(clamped);
-    this.seekCommandSeqCounter = this.seekCommandSeqCounter + 1;
-    const seekSeq = this.seekCommandSeqCounter;
-    this.seekCommandCoalescer.queueSeek(clamped, seekSeq);
-    this.notifyLatestSeekSequence(seekSeq);
-    const effective = this.getEffectiveDynamicSrcTiming();
-    this.withDynamicSrcHold('seek', effective.seekHoldMs);
-    this.scheduleSeekFlush();
-    const nextState = this.updateState({ currentTime: clamped });
-    this.fallbackClockBaseTimeSec = clamped;
-    this.fallbackClockStartedAtMs = nextState.playbackState === 'playing' ? performance.now() : null;
-    if (nextState.playbackState === 'playing') {
-      this.ensureFallbackTicker();
-    }
-    this.timeUpdateCallbacks.forEach((cb) => cb(clamped));
+    seekImpl(this.transportFacadeContext, time);
   }
 
   // ===== 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵稿妽闁哄懏绻堥弻鏇熷緞濞戞﹩娲紓浣哄У閸庢娊鍩為幋锔藉亹闁告瑥顦伴幃娆撴⒒閸屾艾浜為柛銊ㄤ含閹广垹鈽夊鍡楁櫊濡炪倖妫佸畷鐢告儎鎼达絿纾藉ù锝呮惈瀛濈紒鍓ц檸閸欏啴鐛径宀€鐭欐繛鍡樺劤閹垶绻濋姀锝嗙【闁挎洏鍎卞嵄?=====
   setVolume(volume: number): void {
-    const clamped = Math.max(0, Math.min(1, volume));
-    const runtimeControlSettings = this.readRuntimeControlSettings();
-    if (runtimeControlSettings.volumeDebounceEnabled) {
-      this.volumeCommandCoalescer.queueVolume(clamped);
-      this.scheduleVolumeFlush();
-    } else {
-      this.clearPendingVolume();
-      this.volumeCommandCoalescer.markImmediateDispatch(Date.now());
-      this.fireAndForgetCommand('native_audio_set_volume', { volume: clamped });
-    }
-    this.updateState({ volume: clamped, muted: clamped === 0 ? true : this.state.muted });
+    setVolumeImpl(this.transportFacadeContext, volume);
   }
 
   getVolume(): number {
