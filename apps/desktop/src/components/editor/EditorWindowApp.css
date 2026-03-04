@@ -128,6 +128,30 @@
   animation-play-state: paused !important;
 }
 
+.editor-window-app.editor-window-app--control.editor-window-app--motion-paused
+  .switch-container
+  .cyber-switch-btn,
+.editor-window-app.editor-window-app--control.editor-window-app--motion-paused
+  .switch-container
+  .cyber-switch-btn::before,
+.editor-window-app.editor-window-app--control.editor-window-app--motion-paused
+  .switch-container
+  .cyber-switch-btn::after,
+.editor-window-app.editor-window-app--control.editor-window-app--motion-paused
+  .switch-container
+  .cyber-switch-btn
+  .switch-indicator,
+.editor-window-app.editor-window-app--control.editor-window-app--motion-paused
+  .switch-container
+  .cyber-switch-btn
+  .switch-indicator::before,
+.editor-window-app.editor-window-app--control.editor-window-app--motion-paused
+  .switch-container
+  .cyber-switch-btn
+  .switch-indicator::after {
+  animation-play-state: running !important;
+}
+
 /* 通用编辑器窗口样式 - 半透明玻璃效果 */
 .editor-statistics,
 .editor-magnet-library,

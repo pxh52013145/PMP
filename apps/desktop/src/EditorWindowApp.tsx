@@ -55,6 +55,7 @@ import {
   setupTauriListenerWithPayload,
 } from './utils/windowCommunication';
 import { readJson, readString, removeKey, writeJson } from './modules/storage';
+import { readWindowPinState, writeWindowPinState } from './utils/windowPinState';
 import {
   resolveEditorSkinVariant,
   shouldMinimizeEditorSkinEffects,
@@ -75,6 +76,8 @@ interface EditorControlPanelProps {
   onExitEditMode: () => void;
 }
 
+type ControlPanelToggleType = 'statistics' | 'library' | 'style' | 'theme' | 'background';
+
 function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const t = useT();
   const [statisticsOpen, setStatisticsOpen] = useState(false);
@@ -82,9 +85,65 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   const [styleOpen, setStyleOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
   const [backgroundOpen, setBackgroundOpen] = useState(false);
-  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true); // 默认置顶
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   const [pixelHintsVisible, setPixelHintsVisible] = useState(() =>
     readJson<boolean>(STORAGE_KEYS.EDITOR_OVERLAY_PIXEL_HINTS_VISIBLE, true)
+  );
+  const toggleInFlightRef = useRef<Record<ControlPanelToggleType, boolean>>({
+    statistics: false,
+    library: false,
+    style: false,
+    theme: false,
+    background: false,
+  });
+
+  const applyEditorWindowsAlwaysOnTop = useCallback(async (value: boolean) => {
+    const { appWindow, getAll } = await import('@tauri-apps/api/window');
+
+    // Keep current control window strongly consistent with the toggle state.
+    await appWindow.setAlwaysOnTop(value);
+
+    const allWindows = getAll();
+
+    for (const window of allWindows) {
+      if (!window.label.startsWith('editor-') || window.label === appWindow.label) {
+        continue;
+      }
+
+      try {
+        await window.setAlwaysOnTop(value);
+      } catch (error) {
+        // Best-effort for auxiliary windows; the current control window state is authoritative.
+        console.warn(`[Editor] Failed to sync always-on-top for ${window.label}:`, error);
+      }
+    }
+  }, []);
+
+  const runWindowToggle = useCallback(
+    async (type: ControlPanelToggleType, isOpen: boolean, setOpen: (open: boolean) => void) => {
+      if (toggleInFlightRef.current[type]) return;
+
+      const nextOpen = !isOpen;
+      toggleInFlightRef.current[type] = true;
+      setOpen(nextOpen);
+
+      try {
+        const { openEditorWindow, calculateWindowPosition, closeEditorWindow } = await import('./utils/editorWindows');
+
+        if (nextOpen) {
+          const position = await calculateWindowPosition(type);
+          await openEditorWindow({ type, ...position });
+        } else {
+          await closeEditorWindow(type);
+        }
+      } catch (error) {
+        setOpen(isOpen);
+        console.error(`Failed to toggle ${type} window:`, error);
+      } finally {
+        toggleInFlightRef.current[type] = false;
+      }
+    },
+    []
   );
 
   const setOpenStateForType = useCallback((type: string, open: boolean) => {
@@ -247,110 +306,63 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     };
   }, [syncWindowStates]);
 
-  const handleToggleStatistics = async () => {
-    const newState = !statisticsOpen;
-    setStatisticsOpen(newState);
+  useEffect(() => {
+    let disposed = false;
 
-    try {
-      if (newState) {
-        // 打开窗口
-        const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('statistics');
-        await openEditorWindow({ type: 'statistics', ...position });
-      } else {
-        // 关闭窗口
-        const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('statistics');
-      }
-    } catch (error) {
-      console.error('Failed to toggle statistics window:', error);
-    }
-  };
+    const syncAndApplyPinnedPreference = async () => {
+      if (!isTauriRuntime()) return;
 
-  const handleToggleLibrary = async () => {
-    const newState = !libraryOpen;
-    setLibraryOpen(newState);
-
-    try {
-      if (newState) {
-        // 打开窗口
-        const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('library');
-        await openEditorWindow({ type: 'library', ...position });
-      } else {
-        // 关闭窗口
-        const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('library');
-      }
-    } catch (error) {
-      console.error('Failed to toggle library window:', error);
-    }
-  };
-
-  const handleToggleStyle = async () => {
-    const newState = !styleOpen;
-    setStyleOpen(newState);
-
-    try {
-      if (newState) {
-        // 打开窗口
-        const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('style');
-        await openEditorWindow({ type: 'style', ...position });
-      } else {
-        // 关闭窗口
-        const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('style');
-      }
-    } catch (error) {
-      console.error('Failed to toggle style window:', error);
-    }
-  };
-
-  const handleToggleTheme = async () => {
-    const newState = !themeOpen;
-    setThemeOpen(newState);
-
-    try {
-      if (newState) {
-        // 打开窗口
-        const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('theme');
-        await openEditorWindow({ type: 'theme', ...position });
-      } else {
-        // 关闭窗口
-        const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('theme');
-      }
-    } catch (error) {
-      console.error('Failed to toggle theme window:', error);
-    }
-  };
-
-  const handleToggleBackground = async () => {
-    const newState = !backgroundOpen;
-    setBackgroundOpen(newState);
-
-    try {
-      if (newState) {
-        // 打开窗口
-        const { openEditorWindow, calculateWindowPosition } = await import('./utils/editorWindows');
-        const position = await calculateWindowPosition('background');
-        await openEditorWindow({ type: 'background', ...position });
-      } else {
-        // 关闭窗口及其子窗口
-        const { closeEditorWindow } = await import('./utils/editorWindows');
-        await closeEditorWindow('background');
-        // 同时关闭自定义背景编辑器窗口
-        try {
-          await closeEditorWindow('custom-background');
-        } catch (error) {
-          // 自定义背景窗口可能没打开，忽略错误
+      const preferredPinned = readWindowPinState();
+      if (typeof preferredPinned === 'boolean') {
+        if (!disposed) {
+          setIsAlwaysOnTop(preferredPinned);
         }
+
+        try {
+          await applyEditorWindowsAlwaysOnTop(preferredPinned);
+        } catch (error) {
+          console.warn('[Editor] Failed to apply persisted always-on-top preference:', error);
+        }
+        return;
       }
-    } catch (error) {
-      console.error('Failed to toggle background window:', error);
-    }
+
+      try {
+        const { appWindow } = await import('@tauri-apps/api/window');
+        const resolvedPinned = await appWindow.isAlwaysOnTop().catch(() => false);
+        if (!disposed) {
+          setIsAlwaysOnTop(Boolean(resolvedPinned));
+        }
+        writeWindowPinState(Boolean(resolvedPinned));
+      } catch {
+        // best-effort: pin state sync is non-critical
+      }
+    };
+
+    void syncAndApplyPinnedPreference();
+
+    return () => {
+      disposed = true;
+    };
+  }, [applyEditorWindowsAlwaysOnTop]);
+
+  const handleToggleStatistics = () => {
+    void runWindowToggle('statistics', statisticsOpen, setStatisticsOpen);
+  };
+
+  const handleToggleLibrary = () => {
+    void runWindowToggle('library', libraryOpen, setLibraryOpen);
+  };
+
+  const handleToggleStyle = () => {
+    void runWindowToggle('style', styleOpen, setStyleOpen);
+  };
+
+  const handleToggleTheme = () => {
+    void runWindowToggle('theme', themeOpen, setThemeOpen);
+  };
+
+  const handleToggleBackground = () => {
+    void runWindowToggle('background', backgroundOpen, setBackgroundOpen);
   };
 
   // 切换所有编辑器窗口的置顶状态
@@ -377,6 +389,7 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
   };
 
   const handleToggleAlwaysOnTop = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const previousState = isAlwaysOnTop;
     const newState = !isAlwaysOnTop;
     setIsAlwaysOnTop(newState);
 
@@ -384,16 +397,11 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
     e.currentTarget.blur();
 
     try {
-      const { getAll } = await import('@tauri-apps/api/window');
-      const allWindows = getAll();
+      await applyEditorWindowsAlwaysOnTop(newState);
 
-      // 切换所有编辑器窗口的置顶状态
-      for (const window of allWindows) {
-        if (window.label.startsWith('editor-')) {
-          await window.setAlwaysOnTop(newState);
-        }
-      }
+      writeWindowPinState(newState);
     } catch (error) {
+      setIsAlwaysOnTop(previousState);
       console.error('Failed to toggle always on top:', error);
     }
   };

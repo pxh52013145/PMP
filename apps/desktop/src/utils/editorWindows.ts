@@ -1,5 +1,6 @@
 ﻿import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from './tauriRuntime';
+import { readWindowPinState } from './windowPinState';
 
 export type EditorWindowType =
   | 'control'
@@ -39,12 +40,14 @@ export async function openEditorWindow(config: EditorWindowConfig): Promise<void
     throw new Error('Editor windows require the Tauri runtime (use `pnpm dev:tauri`).');
   }
   try {
+    const alwaysOnTop = readWindowPinState();
     await invoke('open_editor_window', {
       windowType: config.type,
       x: config.x,
       y: config.y,
       width: config.width,
       height: config.height,
+      alwaysOnTop,
     });
   } catch (error) {
     console.error(`Failed to open editor window (${config.type}):`, error);

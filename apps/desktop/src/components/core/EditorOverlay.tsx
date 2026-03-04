@@ -146,6 +146,7 @@ export function EditorOverlay({
   const lastHoverKeyRef = useRef<string | null>(null);
   const lastDragKeyRef = useRef<string | null>(null);
   const lastMagnetDeltaRef = useRef<{ dx: number; dy: number } | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
   const drawRafRef = useRef<number | null>(null);
   const pendingDrawRef = useRef(false);
   const renderModeRef = useRef(renderMode);
@@ -266,8 +267,71 @@ export function EditorOverlay({
   );
 
   // 处理鼠标按下
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const capturePointer = useCallback((pointerId: number) => {
+    activePointerIdRef.current = pointerId;
+    const overlayEl = overlayRef.current;
+    if (!overlayEl) return;
+    try {
+      overlayEl.setPointerCapture(pointerId);
+    } catch {
+      // best effort
+    }
+  }, []);
+
+  const releasePointer = useCallback((pointerId?: number) => {
+    const resolvedPointerId = pointerId ?? activePointerIdRef.current;
+    const overlayEl = overlayRef.current;
+
+    if (overlayEl && resolvedPointerId !== null) {
+      try {
+        if (overlayEl.hasPointerCapture(resolvedPointerId)) {
+          overlayEl.releasePointerCapture(resolvedPointerId);
+        }
+      } catch {
+        // best effort
+      }
+    }
+
+    activePointerIdRef.current = null;
+  }, []);
+
+  const finishDragInteraction = useCallback(
+    (commitMagnetMove: boolean) => {
+      if (moveRafRef.current !== null) {
+        window.cancelAnimationFrame(moveRafRef.current);
+        moveRafRef.current = null;
+      }
+      pendingMoveRef.current = null;
+      lastDragKeyRef.current = null;
+
+      const draggingState = draggingMagnetRef.current;
+      if (draggingState) {
+        if (commitMagnetMove && !draggingState.hasCollision) {
+          const originalAnchors = draggingState.magnet.anchors;
+          const newAnchors = draggingState.previewAnchors;
+          const hasChanged = originalAnchors.some(
+            (anchor, index) =>
+              anchor.gridX !== newAnchors[index].gridX || anchor.gridY !== newAnchors[index].gridY
+          );
+
+          if (hasChanged) {
+            onMagnetMove(draggingState.magnet.id, draggingState.previewAnchors);
+          }
+        }
+
+        setDraggingMagnet(null);
+        return;
+      }
+
+      if (editorStateRef.current.isDragging) {
+        endDrag();
+      }
+    },
+    [endDrag, onMagnetMove]
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (!editorState.isEditing) return;
 
       const rect = overlayRef.current?.getBoundingClientRect();
@@ -321,6 +385,7 @@ export function EditorOverlay({
         const anchorPos = pixelPositions.get(`${firstAnchor.gridX},${firstAnchor.gridY}`);
         if (!anchorPos) return;
 
+        capturePointer(e.pointerId);
         setDraggingMagnet({
           magnet: clickedMagnet,
           startAnchor: { x: firstAnchor.gridX, y: firstAnchor.gridY },
@@ -337,6 +402,7 @@ export function EditorOverlay({
       // 否则进入 Pixel 选择模式
       const pixel = getPixelAtPosition(mouseX, mouseY);
       if (pixel) {
+        capturePointer(e.pointerId);
         startDrag(pixel.x, pixel.y);
       }
     },
@@ -347,6 +413,7 @@ export function EditorOverlay({
       onMagnetCtrlClick,
       onPlacementConfirm,
       pixelPositions,
+      capturePointer,
       startDrag,
       selectMagnet,
     ]
@@ -431,10 +498,25 @@ export function EditorOverlay({
   }, [getPixelAtPosition, setHoverPixel, updateDrag]);
 
   // 处理鼠标移动
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (!editorState.isEditing) return;
       if (renderModeRef.current === 'pause') return;
+
+      const activePointerId = activePointerIdRef.current;
+      if (activePointerId !== null && e.pointerId !== activePointerId) {
+        return;
+      }
+
+      if (
+        activePointerId !== null &&
+        (draggingMagnetRef.current || editorStateRef.current.isDragging) &&
+        e.buttons === 0
+      ) {
+        releasePointer(e.pointerId);
+        finishDragInteraction(true);
+        return;
+      }
 
       const rect = overlayRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -446,56 +528,74 @@ export function EditorOverlay({
       if (moveRafRef.current !== null) return;
       moveRafRef.current = window.requestAnimationFrame(flushMouseMove);
     },
-    [editorState.isEditing, flushMouseMove]
+    [editorState.isEditing, finishDragInteraction, flushMouseMove, releasePointer]
   );
 
   // 处理鼠标释放
-  const handleMouseUp = useCallback(() => {
-    if (placementMagnetRef.current) return;
-    // 如果正在拖动 Magnet
-    if (draggingMagnet && !draggingMagnet.hasCollision) {
-      // 检查锚点是否真的改变了
-      const originalAnchors = draggingMagnet.magnet.anchors;
-      const newAnchors = draggingMagnet.previewAnchors;
-      const hasChanged = originalAnchors.some(
-        (anchor, index) =>
-          anchor.gridX !== newAnchors[index].gridX || anchor.gridY !== newAnchors[index].gridY
-      );
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const activePointerId = activePointerIdRef.current;
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
 
-      if (hasChanged) {
-        // 应用移动
-        onMagnetMove(draggingMagnet.magnet.id, draggingMagnet.previewAnchors);
-      }
-      setDraggingMagnet(null);
-      return;
-    }
-
-    // 否则结束 Pixel 拖拽
-    if (draggingMagnet) {
-      setDraggingMagnet(null);
-      return;
-    }
-
-    if (editorState.isDragging) {
-      endDrag();
-    }
-  }, [draggingMagnet, editorState.isDragging, onMagnetMove, endDrag]);
+    releasePointer(e.pointerId);
+    finishDragInteraction(true);
+  }, [finishDragInteraction, releasePointer]);
 
   // 处理鼠标离开
-  const handleMouseLeave = useCallback(() => {
-    if (moveRafRef.current !== null) {
-      window.cancelAnimationFrame(moveRafRef.current);
-      moveRafRef.current = null;
-    }
-    pendingMoveRef.current = null;
+  const handlePointerLeave = useCallback(() => {
     lastHoverKeyRef.current = null;
-    lastDragKeyRef.current = null;
     setHoverPixel(null, null);
-    setDraggingMagnet(null);
-    if (editorState.isDragging) {
-      endDrag();
-    }
-  }, [setHoverPixel, editorState.isDragging, endDrag]);
+  }, [setHoverPixel]);
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const activePointerId = activePointerIdRef.current;
+      if (activePointerId !== null && e.pointerId !== activePointerId) return;
+
+      releasePointer(e.pointerId);
+      finishDragInteraction(false);
+    },
+    [finishDragInteraction, releasePointer]
+  );
+
+  const handleLostPointerCapture = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== e.pointerId) return;
+      activePointerIdRef.current = null;
+
+      if (e.buttons === 0) {
+        finishDragInteraction(true);
+      }
+    },
+    [finishDragInteraction]
+  );
+
+  const handlePointerEnter = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        activePointerIdRef.current !== null &&
+        activePointerIdRef.current === e.pointerId &&
+        (draggingMagnetRef.current || editorStateRef.current.isDragging) &&
+        e.buttons === 0
+      ) {
+        releasePointer(e.pointerId);
+        finishDragInteraction(true);
+      }
+    },
+    [finishDragInteraction, releasePointer]
+  );
+
+  useEffect(() => {
+    const handleWindowBlur = () => {
+      if (!draggingMagnetRef.current && !editorStateRef.current.isDragging) return;
+      releasePointer();
+      finishDragInteraction(false);
+    };
+
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [finishDragInteraction, releasePointer]);
 
   const drawOverlay = useCallback(() => {
     drawRafRef.current = null;
@@ -761,10 +861,13 @@ export function EditorOverlay({
       <div
         ref={overlayRef}
         className={`editor-overlay ${placementMagnet ? 'editor-overlay--placing' : ''}`}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={handleLostPointerCapture}
+        onPointerLeave={handlePointerLeave}
+        onPointerEnter={handlePointerEnter}
       >
       <canvas
         ref={canvasRef}

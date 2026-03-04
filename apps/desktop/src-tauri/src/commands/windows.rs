@@ -10,6 +10,7 @@ pub async fn open_editor_window(
     y: f64,
     width: f64,
     height: f64,
+    always_on_top: Option<bool>,
     exit: tauri::State<'_, app_runtime::ExitFlag>,
     effects: tauri::State<'_, app_runtime::EditorEffectsState>,
 ) -> Result<(), String> {
@@ -25,6 +26,7 @@ pub async fn open_editor_window(
             width,
             height,
         },
+        always_on_top,
         exit.0.clone(),
         effects.blur_enabled.clone(),
     )

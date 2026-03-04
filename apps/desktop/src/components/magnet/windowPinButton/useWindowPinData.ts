@@ -5,18 +5,16 @@
 
 import { useState, useEffect } from 'react';
 import { WindowPinData } from './WindowPinTypes';
-import { readString, writeString } from '../../../modules/storage';
-import { STORAGE_KEYS } from '../../../utils/windowCommunication';
+import { readWindowPinState, writeWindowPinState } from '../../../utils/windowPinState';
 
 function readStoredPinState(): boolean {
   if (typeof window === 'undefined') return false;
-  const stored = readString(STORAGE_KEYS.WINDOW_PIN_STATE);
-  return stored === 'true';
+  return readWindowPinState() ?? false;
 }
 
 function persistPinState(value: boolean) {
   if (typeof window === 'undefined') return;
-  writeString(STORAGE_KEYS.WINDOW_PIN_STATE, value ? 'true' : 'false');
+  writeWindowPinState(value);
 }
 
 export function useWindowPinData(): WindowPinData {

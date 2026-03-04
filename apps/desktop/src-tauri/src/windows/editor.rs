@@ -339,6 +339,12 @@ fn apply_geometry(window: &tauri::Window, geometry: &EditorWindowGeometry) {
     }
 }
 
+fn apply_always_on_top_preference(window: &tauri::Window, always_on_top: Option<bool>) {
+    if let Some(value) = always_on_top {
+        let _ = window.set_always_on_top(value);
+    }
+}
+
 fn evict_previous_cached_window(app: &AppHandle, new_cached: EditorWindowType) {
     let previous = {
         let mut cache = match HIDDEN_WINDOW_LRU.lock() {
@@ -495,6 +501,7 @@ pub fn open_editor_window(
     app: &AppHandle,
     window_type: EditorWindowType,
     geometry: EditorWindowGeometry,
+    always_on_top: Option<bool>,
     exit_flag: Arc<AtomicBool>,
     blur_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
@@ -528,6 +535,7 @@ pub fn open_editor_window(
                 let _ = main_window.set_focus();
             }
         }
+        apply_always_on_top_preference(&existing_window, always_on_top);
         // Successful (re)open should cancel pending delayed destroys scheduled by "Done".
         EDITOR_WINDOWS_REVISION.fetch_add(1, Ordering::SeqCst);
         // Cancel pending delayed destroy scheduled when the window was hidden.
@@ -540,6 +548,8 @@ pub fn open_editor_window(
 
     let url = format!("/#/editor/{}", window_type.as_str());
 
+    let initial_always_on_top = always_on_top.unwrap_or(!cfg!(target_os = "windows"));
+
     let window = WindowBuilder::new(app, window_label, WindowUrl::App(url.into()))
         .title(title(window_type))
         .inner_size(geometry.width, geometry.height)
@@ -548,7 +558,7 @@ pub fn open_editor_window(
         .maximizable(false)
         .decorations(false)
         .transparent(true)
-        .always_on_top(!cfg!(target_os = "windows"))
+        .always_on_top(initial_always_on_top)
         .focused(false)
         .visible(false)
         .build()
@@ -572,6 +582,8 @@ pub fn open_editor_window(
             let _ = main_window.set_focus();
         }
     }
+
+    apply_always_on_top_preference(&window, always_on_top);
 
     // Successful open should cancel pending delayed destroys scheduled by "Done".
     EDITOR_WINDOWS_REVISION.fetch_add(1, Ordering::SeqCst);
