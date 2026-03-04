@@ -2032,6 +2032,7 @@
   "editor.custom-background-editor.action.saveAndApply": "保存并应用",
   "editor.custom-background-editor.fileFilter.image": "图片文件",
   "editor.custom-background-editor.fileFilter.video": "视频文件",
+  "editor.custom-background-editor.warning.largeImport": "已导入文件大小 {sizeMb}MB（软警告阈值 {limitMb}MB），可能增加内存占用。",
   "editor.custom-background-editor.error.fileImportFailed": "文件导入失败\n\n[错误详情]\n{details}\n\n[建议操作]\n> 确认文件格式与大小限制（图片≤5MB，视频≤20MB）\n> 尝试复制文件到本地磁盘后重试",
   "editor.custom-background-editor.error.fileSelectFailed": "文件选择失败\n\n[错误详情]\n{details}",
   "editor.custom-background-editor.errorModal.title": "系统错误",

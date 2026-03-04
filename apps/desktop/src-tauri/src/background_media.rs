@@ -3,13 +3,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
 use tauri::AppHandle;
 
 static IMPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundImportResult {
+    pub dest_path: String,
+    pub source_bytes: u64,
+}
+
 struct KindConfig {
     label: &'static str,
-    max_bytes: u64,
     allowed_exts: &'static [&'static str],
     default_ext: &'static str,
 }
@@ -18,22 +25,16 @@ fn kind_config(kind: &str) -> Option<KindConfig> {
     match kind {
         "image" => Some(KindConfig {
             label: "image",
-            max_bytes: 5 * 1024 * 1024,
             allowed_exts: &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"],
             default_ext: "png",
         }),
         "video" => Some(KindConfig {
             label: "video",
-            max_bytes: 20 * 1024 * 1024,
             allowed_exts: &["mp4", "webm", "ogg", "mov"],
             default_ext: "mp4",
         }),
         _ => None,
     }
-}
-
-fn format_bytes_as_mb(bytes: u64) -> String {
-    format!("{:.2}MB", bytes as f64 / 1024.0 / 1024.0)
 }
 
 fn min_gif_delay_cs_for_max_fps(max_fps: u16) -> Result<u16, String> {
@@ -92,7 +93,7 @@ pub fn import_background_media(
     source_path: String,
     kind: String,
     gif_max_fps: Option<u16>,
-) -> Result<String, String> {
+) -> Result<BackgroundImportResult, String> {
     let config = kind_config(kind.as_str())
         .ok_or_else(|| format!("Unsupported background media kind: {}", kind))?;
 
@@ -101,15 +102,6 @@ pub fn import_background_media(
         .map_err(|e| format!("Unable to access source {}: {}", config.label, e))?;
     if !metadata.is_file() {
         return Err(format!("Selected path is not a file ({})", config.label));
-    }
-
-    if metadata.len() > config.max_bytes {
-        return Err(format!(
-            "File too large ({}): {} > {}",
-            config.label,
-            format_bytes_as_mb(metadata.len()),
-            format_bytes_as_mb(config.max_bytes)
-        ));
     }
 
     let ext = source
@@ -148,7 +140,10 @@ pub fn import_background_media(
             if max_fps > 0 {
                 let min_delay_cs = min_gif_delay_cs_for_max_fps(max_fps)?;
                 rewrite_gif_with_min_delay(&source, &dest_path, min_delay_cs)?;
-                return Ok(dest_path.to_string_lossy().to_string());
+                return Ok(BackgroundImportResult {
+                    dest_path: dest_path.to_string_lossy().to_string(),
+                    source_bytes: metadata.len(),
+                });
             }
         }
     }
@@ -156,7 +151,10 @@ pub fn import_background_media(
     std::fs::copy(&source, &dest_path)
         .map_err(|e| format!("Failed to copy {} into AppData: {}", config.label, e))?;
 
-    Ok(dest_path.to_string_lossy().to_string())
+    Ok(BackgroundImportResult {
+        dest_path: dest_path.to_string_lossy().to_string(),
+        source_bytes: metadata.len(),
+    })
 }
 
 #[cfg(test)]

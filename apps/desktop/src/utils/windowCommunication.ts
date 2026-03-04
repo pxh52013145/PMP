@@ -242,6 +242,8 @@ export const STORAGE_KEYS = {
 
   // === Background GIF Optimization ===
   BACKGROUND_GIF_IMPORT_MAX_FPS: 'pixel-matrix-background-gif-import-max-fps',
+  BACKGROUND_IMPORT_SOFT_LIMIT_IMAGE_MB: 'pixel-matrix-background-import-soft-limit-image-mb', // 0 => disable warning
+  BACKGROUND_IMPORT_SOFT_LIMIT_VIDEO_MB: 'pixel-matrix-background-import-soft-limit-video-mb', // 0 => disable warning
 
   // === Background Migration Flags ===
   BACKGROUND_MEDIA_MIGRATION_V1: 'pixel-matrix-background-media-migration-v1',

@@ -1,6 +1,12 @@
-import { useState, useCallback, memo, useEffect } from 'react';
-import { BackgroundConfig } from '../../types/background';
+import { useState, useCallback, memo, useEffect, useMemo, useRef } from 'react';
+import { BackgroundConfig, BackgroundCropRect } from '../../types/background';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
+import {
+  computeContainMediaBox,
+  computeMediaCropLayout,
+  convertViewportCropToMediaCrop,
+  type GeometrySize,
+} from '../../modules/background/cropGeometry';
 import { readJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useT } from '../../i18n';
@@ -12,8 +18,29 @@ interface CustomBackgroundEditorProps {
 }
 
 type CustomType = 'image' | 'video' | 'html';
-type ImageFitMode = 'cover' | 'contain' | 'fill';
-type VideoFitMode = 'cover' | 'contain';
+const DEFAULT_CROP_RECT: BackgroundCropRect = { x: 0, y: 0, width: 100, height: 100, space: 'media' };
+const DEFAULT_IMAGE_IMPORT_SOFT_LIMIT_MB = 100;
+const DEFAULT_VIDEO_IMPORT_SOFT_LIMIT_MB = 300;
+
+type BackgroundImportInvokeResult =
+  | string
+  | {
+      destPath: string;
+      sourceBytes?: number;
+    };
+
+function toPositiveNumberOrZero(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}
+
+function mbToBytes(mb: number): number {
+  return mb * 1024 * 1024;
+}
+
+function formatBytesToMbText(bytes: number): string {
+  return (bytes / 1024 / 1024).toFixed(1);
+}
 
 export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   initialConfig,
@@ -31,20 +58,8 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   );
   const [imageUrl, setImageUrl] = useState(initialConfig?.image?.url || '');
   const [imagePreviewUrl, setImagePreviewUrl] = useState(initialConfig?.image?.url || '');
-  const [imageFit, setImageFit] = useState<ImageFitMode>(
-    initialConfig?.image?.fit === 'cover' ||
-      initialConfig?.image?.fit === 'contain' ||
-      initialConfig?.image?.fit === 'fill'
-      ? initialConfig.image.fit
-      : 'contain'
-  );
   const [videoUrl, setVideoUrl] = useState(initialConfig?.video?.url || '');
   const [videoPreviewUrl, setVideoPreviewUrl] = useState(initialConfig?.video?.url || '');
-  const [videoFit, setVideoFit] = useState<VideoFitMode>(
-    initialConfig?.video?.fit === 'cover' || initialConfig?.video?.fit === 'contain'
-      ? initialConfig.video.fit
-      : 'contain'
-  );
 
   // HTML 默认模板
   const defaultHtmlTemplate = `<style>
@@ -62,20 +77,15 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   );
 
   // 裁剪区域状态
-  const [cropEnabled, setCropEnabled] = useState(() => {
-    const hasCrop =
-      (customType === 'image' && initialConfig?.image?.crop) ||
-      (customType === 'video' && initialConfig?.video?.crop);
-    return !!hasCrop;
-  });
-  const [cropRect, setCropRect] = useState(() => {
+  const cropEnabled = customType !== 'html';
+  const [cropRect, setCropRect] = useState<BackgroundCropRect>(() => {
     const crop =
       customType === 'image'
         ? initialConfig?.image?.crop
         : customType === 'video'
           ? initialConfig?.video?.crop
           : null;
-    return crop || { x: 10, y: 10, width: 80, height: 80 };
+    return crop || DEFAULT_CROP_RECT;
   });
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState<string | null>(null);
@@ -88,6 +98,28 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
   // 错误弹窗状态
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [importWarningMessage, setImportWarningMessage] = useState<string | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const cropCanvasRef = useRef<HTMLDivElement>(null);
+  const [previewSize, setPreviewSize] = useState<GeometrySize>({ width: 0, height: 0 });
+  const [imageNaturalSize, setImageNaturalSize] = useState<GeometrySize | null>(null);
+  const [videoNaturalSize, setVideoNaturalSize] = useState<GeometrySize | null>(null);
+  const [confirmedMediaCrop, setConfirmedMediaCrop] = useState<BackgroundCropRect | null>(() => {
+    const crop =
+      customType === 'image'
+        ? initialConfig?.image?.crop
+        : customType === 'video'
+          ? initialConfig?.video?.crop
+          : null;
+    return crop?.space === 'media' ? crop : null;
+  });
+  const imageDisplayUrl = imagePreviewUrl || imageUrl;
+  const videoDisplayUrl = videoPreviewUrl || videoUrl;
+
+  const clearAppliedSelection = useCallback(() => {
+    setSelectionApplied(false);
+    setConfirmedMediaCrop(null);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -105,6 +137,101 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     };
   }, [videoPreviewUrl]);
 
+  useEffect(() => {
+    setImageNaturalSize(null);
+  }, [imageDisplayUrl]);
+
+  useEffect(() => {
+    setVideoNaturalSize(null);
+  }, [videoDisplayUrl]);
+
+  useEffect(() => {
+    if (!imageDisplayUrl) return;
+    let disposed = false;
+    const image = new Image();
+    image.onload = () => {
+      if (disposed) return;
+      setImageNaturalSize({ width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.onerror = () => {
+      if (disposed) return;
+      setImageNaturalSize(null);
+    };
+    image.src = imageDisplayUrl;
+    return () => {
+      disposed = true;
+    };
+  }, [imageDisplayUrl]);
+
+  useEffect(() => {
+    if (!videoDisplayUrl) return;
+    let disposed = false;
+    const video = document.createElement('video');
+
+    const handleLoadedMetadata = () => {
+      if (disposed) return;
+      setVideoNaturalSize({ width: video.videoWidth, height: video.videoHeight });
+    };
+
+    const handleError = () => {
+      if (disposed) return;
+      setVideoNaturalSize(null);
+    };
+
+    video.preload = 'metadata';
+    video.src = videoDisplayUrl;
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('error', handleError);
+
+    return () => {
+      disposed = true;
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('error', handleError);
+      video.removeAttribute('src');
+      video.load();
+    };
+  }, [videoDisplayUrl]);
+
+  useEffect(() => {
+    const container = previewContainerRef.current;
+    if (!container) return;
+
+    const updateSize = () => {
+      setPreviewSize({ width: container.clientWidth, height: container.clientHeight });
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!cropEnabled) return;
+    if (cropRect.space === 'media') return;
+
+    const mediaSize = customType === 'image' ? imageNaturalSize : videoNaturalSize;
+    if (!mediaSize) return;
+
+    const convertedCrop = convertViewportCropToMediaCrop(cropRect, previewSize, mediaSize);
+    if (convertedCrop) {
+      setCropRect(convertedCrop);
+      if (selectionApplied && !confirmedMediaCrop) {
+        setConfirmedMediaCrop(convertedCrop);
+      }
+    }
+  }, [
+    cropEnabled,
+    cropRect,
+    customType,
+    confirmedMediaCrop,
+    imageNaturalSize,
+    previewSize,
+    selectionApplied,
+    videoNaturalSize,
+  ]);
+
   // 窗口打开时自动聚焦
   useEffect(() => {
     const focusWindow = async () => {
@@ -120,19 +247,26 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
   // 切换类型时更新选取状态
   useEffect(() => {
-    if (customType === 'image' && initialConfig?.image?.crop) {
-      setCropRect(initialConfig.image.crop);
-      setCropEnabled(true);
-      setSelectionApplied(true);
-    } else if (customType === 'video' && initialConfig?.video?.crop) {
-      setCropRect(initialConfig.video.crop);
-      setCropEnabled(true);
-      setSelectionApplied(true);
+    if (customType === 'image') {
+      setCropRect(initialConfig?.image?.crop || DEFAULT_CROP_RECT);
+      setSelectionApplied(false);
+      setConfirmedMediaCrop(null);
+    } else if (customType === 'video') {
+      setCropRect(initialConfig?.video?.crop || DEFAULT_CROP_RECT);
+      setSelectionApplied(false);
+      setConfirmedMediaCrop(null);
     } else if (customType === 'html') {
-      setCropEnabled(false);
+      setSelectionApplied(false);
+      setCropRect(DEFAULT_CROP_RECT);
+      setConfirmedMediaCrop(null);
+    } else {
+      setSelectionApplied(false);
+      setCropRect(DEFAULT_CROP_RECT);
+      setConfirmedMediaCrop(null);
     }
     setSelectionHistory([]);
     setHistoryIndex(-1);
+    setImportWarningMessage(null);
   }, [customType, initialConfig]);
 
   // 切换选取模式时重置应用状态
@@ -141,6 +275,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       setSelectionApplied(false);
       setSelectionHistory([]);
       setHistoryIndex(-1);
+      setConfirmedMediaCrop(null);
     }
   }, [cropEnabled]);
 
@@ -151,7 +286,8 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       e.preventDefault();
       e.stopPropagation();
 
-      const rect = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
+      const rect = cropCanvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
       const startX = ((e.clientX - rect.left) / rect.width) * 100;
       const startY = ((e.clientY - rect.top) / rect.height) * 100;
 
@@ -162,9 +298,9 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         setIsResizing(type);
       }
       // 开始拖动时取消应用状态，显示选取框
-      setSelectionApplied(false);
+      clearAppliedSelection();
     },
-    [cropEnabled]
+    [clearAppliedSelection, cropEnabled]
   );
 
   // 处理鼠标移动
@@ -184,7 +320,7 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging && !isResizing) return;
 
-      const previewElement = document.querySelector('.preview-container');
+      const previewElement = cropCanvasRef.current ?? previewContainerRef.current;
       if (!previewElement) return;
 
       const rect = previewElement.getBoundingClientRect();
@@ -281,43 +417,47 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     if (historyIndex > 0) {
       setHistoryIndex((prev) => prev - 1);
       setCropRect(selectionHistory[historyIndex - 1]);
-      setSelectionApplied(false);
+      clearAppliedSelection();
     }
-  }, [historyIndex, selectionHistory]);
+  }, [clearAppliedSelection, historyIndex, selectionHistory]);
 
   // 恢复
   const handleRedo = useCallback(() => {
     if (historyIndex < selectionHistory.length - 1) {
       setHistoryIndex((prev) => prev + 1);
       setCropRect(selectionHistory[historyIndex + 1]);
-      setSelectionApplied(false);
+      clearAppliedSelection();
     }
-  }, [historyIndex, selectionHistory]);
+  }, [clearAppliedSelection, historyIndex, selectionHistory]);
 
   // 重置
   const handleReset = useCallback(() => {
-    const defaultRect = { x: 10, y: 10, width: 80, height: 80 };
-    setCropRect(defaultRect);
-    saveToHistory(defaultRect);
-    setSelectionApplied(false);
-  }, [saveToHistory]);
+    setCropRect(DEFAULT_CROP_RECT);
+    saveToHistory(DEFAULT_CROP_RECT);
+    clearAppliedSelection();
+  }, [clearAppliedSelection, saveToHistory]);
 
   // 确认选取
   const handleConfirmSelection = useCallback(() => {
-    console.log('=== 确认选取 ===');
-    console.log('选取区域:', cropRect);
-    console.log('Transform values:', {
-      top: `${(-cropRect.y * 100) / cropRect.height}%`,
-      left: `${(-cropRect.x * 100) / cropRect.width}%`,
-      width: `${10000 / cropRect.width}%`,
-      height: `${10000 / cropRect.height}%`,
-    });
+    const mediaSize = customType === 'image' ? imageNaturalSize : videoNaturalSize;
+    const normalizedCrop =
+      cropRect.space === 'media'
+        ? { ...cropRect, space: 'media' as const }
+        : mediaSize
+          ? convertViewportCropToMediaCrop(cropRect, previewSize, mediaSize)
+          : { ...cropRect, space: 'media' as const };
+
+    if (normalizedCrop) {
+      setCropRect(normalizedCrop);
+      setConfirmedMediaCrop(normalizedCrop);
+    }
     setSelectionApplied(true);
-  }, [cropRect]);
+  }, [cropRect, customType, imageNaturalSize, previewSize, videoNaturalSize]);
 
   // 处理文件选择
   const handleFileSelect = useCallback(async (type: 'image' | 'video') => {
     try {
+      setImportWarningMessage(null);
       const dialog = await import('@tauri-apps/api/dialog');
       const tauri = await import('@tauri-apps/api/tauri');
 
@@ -347,24 +487,71 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             typeof gifMaxFpsRaw === 'number' && Number.isFinite(gifMaxFpsRaw)
               ? Math.max(0, Math.min(60, Math.round(gifMaxFpsRaw)))
               : 30;
-          const destPath = await tauri.invoke<string>('background_import_media', {
+          const importResult = await tauri.invoke<BackgroundImportInvokeResult>('background_import_media', {
             sourcePath: selected,
             kind: type,
             gifMaxFps: type === 'image' ? gifMaxFps : undefined,
           });
+          const destPath =
+            typeof importResult === 'string' ? importResult : importResult?.destPath || '';
+          const sourceBytes =
+            typeof importResult === 'string'
+              ? undefined
+              : typeof importResult?.sourceBytes === 'number'
+                ? importResult.sourceBytes
+                : undefined;
+          if (!destPath) {
+            throw new Error('background_import_media returned empty destination path');
+          }
           const persistedUrl = tauri.convertFileSrc(destPath);
+
+          const softLimitMbRaw =
+            type === 'image'
+              ? readJson<number>(
+                  STORAGE_KEYS.BACKGROUND_IMPORT_SOFT_LIMIT_IMAGE_MB,
+                  DEFAULT_IMAGE_IMPORT_SOFT_LIMIT_MB
+                )
+              : readJson<number>(
+                  STORAGE_KEYS.BACKGROUND_IMPORT_SOFT_LIMIT_VIDEO_MB,
+                  DEFAULT_VIDEO_IMPORT_SOFT_LIMIT_MB
+                );
+          const softLimitMb = toPositiveNumberOrZero(softLimitMbRaw);
+          const softLimitBytes = mbToBytes(softLimitMb);
+          if (
+            typeof sourceBytes === 'number' &&
+            Number.isFinite(sourceBytes) &&
+            sourceBytes > 0 &&
+            softLimitBytes > 0 &&
+            sourceBytes > softLimitBytes
+          ) {
+            setImportWarningMessage(
+              t('editor.custom-background-editor.warning.largeImport', {
+                sizeMb: formatBytesToMbText(sourceBytes),
+                limitMb: String(softLimitMb),
+              })
+            );
+          } else {
+            setImportWarningMessage(null);
+          }
 
           if (type === 'image') {
             setImageUrl(persistedUrl);
             setImagePreviewUrl(persistedUrl);
-            setSelectionApplied(false);
+            setCropRect(DEFAULT_CROP_RECT);
+            setSelectionHistory([]);
+            setHistoryIndex(-1);
+            clearAppliedSelection();
           } else {
             setVideoUrl(persistedUrl);
             setVideoPreviewUrl(persistedUrl);
-            setSelectionApplied(false);
+            setCropRect(DEFAULT_CROP_RECT);
+            setSelectionHistory([]);
+            setHistoryIndex(-1);
+            clearAppliedSelection();
           }
         } catch (readError) {
           console.error('[CustomBackgroundEditor] File import failed:', readError);
+          setImportWarningMessage(null);
           const details = readError instanceof Error ? readError.message : String(readError);
           setErrorMessage(
             `<FILE_IMPORT_ERROR>\n` +
@@ -376,13 +563,14 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
     } catch (error) {
       console.error('文件选择错误详情:', error);
       console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+      setImportWarningMessage(null);
       const details = error instanceof Error ? error.message : String(error);
       setErrorMessage(
         `<FILE_SELECT_ERROR>\n` +
           t('editor.custom-background-editor.error.fileSelectFailed', { details })
       );
     }
-  }, [t]);
+  }, [clearAppliedSelection, t]);
 
   // 取消并关闭窗口
   const handleCancel = useCallback(async () => {
@@ -425,6 +613,22 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
   // 保存配置
   const handleSave = useCallback(() => {
     let config: BackgroundConfig;
+    const currentMediaSize =
+      customType === 'image'
+        ? imageNaturalSize
+        : customType === 'video'
+          ? videoNaturalSize
+          : null;
+    const normalizedDraftCrop =
+      cropRect.space === 'media'
+        ? ({ ...cropRect, space: 'media' } as BackgroundCropRect)
+        : currentMediaSize
+          ? convertViewportCropToMediaCrop(cropRect, previewSize, currentMediaSize)
+          : DEFAULT_CROP_RECT;
+    const savedCrop =
+      customType === 'image' || customType === 'video'
+        ? (confirmedMediaCrop ?? normalizedDraftCrop)
+        : undefined;
 
     switch (customType) {
       case 'image':
@@ -432,11 +636,10 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           type: 'image',
           image: {
             url: imageUrl,
-            fit: imageFit,
+            fit: 'cover',
             position: 'center center',
             repeat: 'no-repeat',
-            // 保存容器坐标，不进行转换
-            ...(cropEnabled && selectionApplied && { crop: cropRect }),
+            ...(savedCrop && { crop: savedCrop }),
           },
         };
         break;
@@ -445,11 +648,10 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
           type: 'video',
           video: {
             url: videoUrl,
-            fit: videoFit as 'cover' | 'contain',
+            fit: 'cover',
             loop: true,
             muted: true,
-            // 保存容器坐标，不进行转换
-            ...(cropEnabled && selectionApplied && { crop: cropRect }),
+            ...(savedCrop && { crop: savedCrop }),
           },
         };
         break;
@@ -463,24 +665,22 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
         break;
     }
 
-    console.log('Saving config:', config);
     onSave(config);
   }, [
     customType,
     imageUrl,
-    imageFit,
+    imageNaturalSize,
     videoUrl,
-    videoFit,
+    videoNaturalSize,
     htmlContent,
     onSave,
-    cropEnabled,
-    selectionApplied,
+    confirmedMediaCrop,
     cropRect,
+    previewSize,
   ]);
 
   // 获取预览样式
   const getPreviewStyle = useCallback((): React.CSSProperties => {
-    const imageDisplayUrl = imagePreviewUrl || imageUrl;
     const style = (() => {
       switch (customType) {
         case 'image': {
@@ -493,16 +693,19 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
 
           // 选取模式未应用：使用contain模式显示完整图片方便选取
           if (cropEnabled) {
-            return {
-              backgroundImage: `url(${imageDisplayUrl})`,
-              backgroundSize: 'contain',
-              backgroundPosition: 'center center',
-              backgroundRepeat: 'no-repeat',
-            };
+            if (!imageNaturalSize) {
+              return {
+                backgroundImage: `url(${imageDisplayUrl})`,
+                backgroundSize: 'contain',
+                backgroundPosition: 'center center',
+                backgroundRepeat: 'no-repeat',
+              };
+            }
+            return {};
           }
 
           // 普通模式
-          const backgroundSize = imageFit === 'fill' ? '100% 100%' : imageFit;
+          const backgroundSize = 'contain';
           return {
             backgroundImage: `url(${imageDisplayUrl})`,
             backgroundSize,
@@ -519,12 +722,12 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       }
     })();
     return style;
-  }, [customType, imagePreviewUrl, imageUrl, imageFit, cropEnabled, selectionApplied]);
+  }, [customType, imageNaturalSize, imageDisplayUrl, cropEnabled, selectionApplied]);
 
   // 获取视频样式
   const getVideoStyle = useCallback((): React.CSSProperties => {
     if (!cropEnabled || !selectionApplied) {
-      return { objectFit: cropEnabled ? 'contain' : videoFit };
+      return { objectFit: 'contain' };
     }
 
     // 选取模式 - 使用clip-path裁剪
@@ -533,7 +736,56 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
       height: '100%',
       objectFit: 'cover',
     };
-  }, [cropEnabled, videoFit, selectionApplied]);
+  }, [cropEnabled, selectionApplied]);
+
+  const imageAppliedLayout = useMemo(() => {
+    if (!cropEnabled || !selectionApplied) return null;
+    if (confirmedMediaCrop?.space !== 'media' || !imageNaturalSize || !imageDisplayUrl) return null;
+    return computeMediaCropLayout(confirmedMediaCrop, previewSize, imageNaturalSize);
+  }, [
+    cropEnabled,
+    selectionApplied,
+    confirmedMediaCrop,
+    imageNaturalSize,
+    imageDisplayUrl,
+    previewSize,
+  ]);
+
+  const videoAppliedLayout = useMemo(() => {
+    if (!cropEnabled || !selectionApplied) return null;
+    if (confirmedMediaCrop?.space !== 'media' || !videoNaturalSize || !videoDisplayUrl) return null;
+    return computeMediaCropLayout(confirmedMediaCrop, previewSize, videoNaturalSize);
+  }, [
+    cropEnabled,
+    selectionApplied,
+    confirmedMediaCrop,
+    videoNaturalSize,
+    videoDisplayUrl,
+    previewSize,
+  ]);
+
+  const cropCanvasLayout = useMemo(() => {
+    if (!cropEnabled || selectionApplied) return null;
+
+    if (customType === 'image' && imageDisplayUrl && imageNaturalSize) {
+      return computeContainMediaBox(previewSize, imageNaturalSize);
+    }
+
+    if (customType === 'video' && videoDisplayUrl && videoNaturalSize) {
+      return computeContainMediaBox(previewSize, videoNaturalSize);
+    }
+
+    return null;
+  }, [
+    cropEnabled,
+    customType,
+    imageDisplayUrl,
+    imageNaturalSize,
+    previewSize,
+    selectionApplied,
+    videoDisplayUrl,
+    videoNaturalSize,
+  ]);
 
   return (
     <div className="editor-custom-background">
@@ -565,12 +817,149 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                 </span>
               )}
             </div>
-          <div className="preview-container" style={getPreviewStyle()}>
+          <div ref={previewContainerRef} className="preview-container" style={getPreviewStyle()}>
+            {cropEnabled &&
+              !selectionApplied &&
+              cropCanvasLayout &&
+              customType === 'image' &&
+              imageDisplayUrl && (
+              <div
+                ref={cropCanvasRef}
+                className="preview-selection-wrapper crop-canvas-wrapper"
+                style={{
+                  left: cropCanvasLayout.x,
+                  top: cropCanvasLayout.y,
+                  width: cropCanvasLayout.width,
+                  height: cropCanvasLayout.height,
+                }}
+              >
+                <img
+                  src={imageDisplayUrl}
+                  className="preview-selection-image"
+                  alt=""
+                  draggable={false}
+                  onLoad={(event) => {
+                    setImageNaturalSize({
+                      width: event.currentTarget.naturalWidth,
+                      height: event.currentTarget.naturalHeight,
+                    });
+                  }}
+                  style={{ left: 0, top: 0, width: '100%', height: '100%' }}
+                />
+                <div className="crop-overlay" />
+                <div
+                  className="crop-selector"
+                  style={{
+                    left: `${cropRect.x}%`,
+                    top: `${cropRect.y}%`,
+                    width: `${cropRect.width}%`,
+                    height: `${cropRect.height}%`,
+                  }}
+                  onMouseDown={(e) => handleCropMouseDown(e, 'move')}
+                >
+                  <div className="crop-handle nw" onMouseDown={(e) => handleCropMouseDown(e, 'nw')} />
+                  <div className="crop-handle ne" onMouseDown={(e) => handleCropMouseDown(e, 'ne')} />
+                  <div className="crop-handle sw" onMouseDown={(e) => handleCropMouseDown(e, 'sw')} />
+                  <div className="crop-handle se" onMouseDown={(e) => handleCropMouseDown(e, 'se')} />
+                  <div className="crop-handle n" onMouseDown={(e) => handleCropMouseDown(e, 'n')} />
+                  <div className="crop-handle s" onMouseDown={(e) => handleCropMouseDown(e, 's')} />
+                  <div className="crop-handle w" onMouseDown={(e) => handleCropMouseDown(e, 'w')} />
+                  <div className="crop-handle e" onMouseDown={(e) => handleCropMouseDown(e, 'e')} />
+                </div>
+              </div>
+            )}
+
+            {cropEnabled &&
+              !selectionApplied &&
+              cropCanvasLayout &&
+              customType === 'video' &&
+              videoDisplayUrl && (
+              <div
+                ref={cropCanvasRef}
+                className="preview-selection-wrapper crop-canvas-wrapper"
+                style={{
+                  left: cropCanvasLayout.x,
+                  top: cropCanvasLayout.y,
+                  width: cropCanvasLayout.width,
+                  height: cropCanvasLayout.height,
+                }}
+              >
+                <video
+                  src={videoDisplayUrl}
+                  className="preview-video"
+                  autoPlay
+                  loop
+                  muted
+                  onLoadedMetadata={(event) => {
+                    setVideoNaturalSize({
+                      width: event.currentTarget.videoWidth,
+                      height: event.currentTarget.videoHeight,
+                    });
+                  }}
+                  style={{ left: 0, top: 0, width: '100%', height: '100%', objectFit: 'fill' }}
+                />
+                <div className="crop-overlay" />
+                <div
+                  className="crop-selector"
+                  style={{
+                    left: `${cropRect.x}%`,
+                    top: `${cropRect.y}%`,
+                    width: `${cropRect.width}%`,
+                    height: `${cropRect.height}%`,
+                  }}
+                  onMouseDown={(e) => handleCropMouseDown(e, 'move')}
+                >
+                  <div className="crop-handle nw" onMouseDown={(e) => handleCropMouseDown(e, 'nw')} />
+                  <div className="crop-handle ne" onMouseDown={(e) => handleCropMouseDown(e, 'ne')} />
+                  <div className="crop-handle sw" onMouseDown={(e) => handleCropMouseDown(e, 'sw')} />
+                  <div className="crop-handle se" onMouseDown={(e) => handleCropMouseDown(e, 'se')} />
+                  <div className="crop-handle n" onMouseDown={(e) => handleCropMouseDown(e, 'n')} />
+                  <div className="crop-handle s" onMouseDown={(e) => handleCropMouseDown(e, 's')} />
+                  <div className="crop-handle w" onMouseDown={(e) => handleCropMouseDown(e, 'w')} />
+                  <div className="crop-handle e" onMouseDown={(e) => handleCropMouseDown(e, 'e')} />
+                </div>
+              </div>
+            )}
+
+            {cropEnabled && !selectionApplied && cropCanvasLayout && (
+              <div className="crop-info">
+                X:{cropRect.x.toFixed(0)}% Y:{cropRect.y.toFixed(0)}% | W:{cropRect.width.toFixed(0)}% H:
+                {cropRect.height.toFixed(0)}%
+              </div>
+            )}
             {/* 图片选取预览 - 精确复制选取区域 */}
             {customType === 'image' &&
-              (imagePreviewUrl || imageUrl) &&
+              imageDisplayUrl &&
               cropEnabled &&
-              selectionApplied && (
+              selectionApplied &&
+              imageAppliedLayout && (
+              <div className="preview-selection-wrapper">
+                <img
+                  src={imageDisplayUrl}
+                  className="preview-selection-image"
+                  alt=""
+                  draggable={false}
+                  onLoad={(event) => {
+                    setImageNaturalSize({
+                      width: event.currentTarget.naturalWidth,
+                      height: event.currentTarget.naturalHeight,
+                    });
+                  }}
+                  style={{
+                    left: imageAppliedLayout.left,
+                    top: imageAppliedLayout.top,
+                    width: imageAppliedLayout.width,
+                    height: imageAppliedLayout.height,
+                  }}
+                />
+              </div>
+            )}
+
+            {customType === 'image' &&
+              imageDisplayUrl &&
+              cropEnabled &&
+              selectionApplied &&
+              !imageAppliedLayout && (
               <div
                 style={{
                   position: 'absolute',
@@ -585,11 +974,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                 <div
                   style={{
                     position: 'absolute',
-                    top: `${(-cropRect.y * 100) / cropRect.height}%`,
-                    left: `${(-cropRect.x * 100) / cropRect.width}%`,
-                    width: `${10000 / cropRect.width}%`,
-                    height: `${10000 / cropRect.height}%`,
-                    backgroundImage: `url(${imagePreviewUrl || imageUrl})`,
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    backgroundImage: `url(${imageDisplayUrl})`,
                     backgroundSize: 'contain',
                     backgroundPosition: 'center center',
                     backgroundRepeat: 'no-repeat',
@@ -600,7 +989,40 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             )}
 
             {/* 视频预览 */}
-            {customType === 'video' && (videoPreviewUrl || videoUrl) && (
+            {customType === 'video' &&
+              videoDisplayUrl &&
+              cropEnabled &&
+              selectionApplied &&
+              videoAppliedLayout && (
+              <div className="preview-selection-wrapper">
+                <video
+                  src={videoDisplayUrl}
+                  className="preview-video"
+                  autoPlay
+                  loop
+                  muted
+                  onLoadedMetadata={(event) => {
+                    setVideoNaturalSize({
+                      width: event.currentTarget.videoWidth,
+                      height: event.currentTarget.videoHeight,
+                    });
+                  }}
+                  style={{
+                    left: videoAppliedLayout.left,
+                    top: videoAppliedLayout.top,
+                    width: videoAppliedLayout.width,
+                    height: videoAppliedLayout.height,
+                    objectFit: 'fill',
+                  }}
+                />
+              </div>
+            )}
+
+            {customType === 'video' &&
+              videoDisplayUrl &&
+              (!cropEnabled ||
+                (selectionApplied && !videoAppliedLayout) ||
+                (!selectionApplied && !cropCanvasLayout)) && (
               <>
                 {cropEnabled && selectionApplied ? (
                   <div
@@ -616,10 +1038,10 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                     <div
                       style={{
                         position: 'absolute',
-                        top: `${(-cropRect.y * 100) / cropRect.height}%`,
-                        left: `${(-cropRect.x * 100) / cropRect.width}%`,
-                        width: `${10000 / cropRect.width}%`,
-                        height: `${10000 / cropRect.height}%`,
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -627,11 +1049,17 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                       }}
                     >
                       <video
-                        src={videoPreviewUrl || videoUrl}
+                        src={videoDisplayUrl}
                         className="preview-video"
                         autoPlay
                         loop
                         muted
+                        onLoadedMetadata={(event) => {
+                          setVideoNaturalSize({
+                            width: event.currentTarget.videoWidth,
+                            height: event.currentTarget.videoHeight,
+                          });
+                        }}
                         style={{
                           maxWidth: '100%',
                           maxHeight: '100%',
@@ -642,11 +1070,17 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                   </div>
                 ) : (
                   <video
-                    src={videoPreviewUrl || videoUrl}
+                    src={videoDisplayUrl}
                     className="preview-video"
                     autoPlay
                     loop
                     muted
+                    onLoadedMetadata={(event) => {
+                      setVideoNaturalSize({
+                        width: event.currentTarget.videoWidth,
+                        height: event.currentTarget.videoHeight,
+                      });
+                    }}
                     style={getVideoStyle()}
                   />
                 )}
@@ -667,68 +1101,13 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             )}
 
             {/* 选取框 */}
-            {cropEnabled &&
-              !selectionApplied &&
-              (customType === 'image' || customType === 'video') &&
-              (imagePreviewUrl || imageUrl || videoPreviewUrl || videoUrl) && (
-                <>
-                  <div className="crop-overlay" />
-                  <div
-                    className="crop-selector"
-                    style={{
-                      left: `${cropRect.x}%`,
-                      top: `${cropRect.y}%`,
-                      width: `${cropRect.width}%`,
-                      height: `${cropRect.height}%`,
-                    }}
-                    onMouseDown={(e) => handleCropMouseDown(e, 'move')}
-                  >
-                    <div
-                      className="crop-handle nw"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'nw')}
-                    />
-                    <div
-                      className="crop-handle ne"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'ne')}
-                    />
-                    <div
-                      className="crop-handle sw"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'sw')}
-                    />
-                    <div
-                      className="crop-handle se"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'se')}
-                    />
-                    <div
-                      className="crop-handle n"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'n')}
-                    />
-                    <div
-                      className="crop-handle s"
-                      onMouseDown={(e) => handleCropMouseDown(e, 's')}
-                    />
-                    <div
-                      className="crop-handle w"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'w')}
-                    />
-                    <div
-                      className="crop-handle e"
-                      onMouseDown={(e) => handleCropMouseDown(e, 'e')}
-                    />
-                  </div>
-                  <div className="crop-info">
-                    X:{cropRect.x.toFixed(0)}% Y:{cropRect.y.toFixed(0)}% | W:
-                    {cropRect.width.toFixed(0)}% H:
-                    {cropRect.height.toFixed(0)}%
-                  </div>
-                </>
-              )}
           </div>
 
           {/* 选取控制按钮 - 集成在预览区域内 */}
           {cropEnabled &&
             (customType === 'image' || customType === 'video') &&
-            (imagePreviewUrl || imageUrl || videoPreviewUrl || videoUrl) && (
+            (selectionApplied || cropCanvasLayout) &&
+            (imageDisplayUrl || videoDisplayUrl) && (
               <>
                 <div className="preview-selection-controls">
                   <button
@@ -771,119 +1150,13 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
                 </div>
               </>
             )}
+          {importWarningMessage && (
+            <div className="background-import-warning">⚠ {importWarningMessage}</div>
+          )}
         </div>
 
         {/* 显示模式 */}
-        {(customType === 'image' || customType === 'video') && (imageUrl || videoUrl) && (
-          <div className="config-section">
-            <div className="section-title">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>{t('editor.custom-background-editor.section.displayMode')}</span>
-                <span
-                  style={{
-                    fontSize: '10px',
-                    color: 'rgba(255, 255, 255, 0.4)',
-                    fontWeight: 'normal',
-                  }}
-                >
-                  {customType === 'image' &&
-                    !cropEnabled &&
-                    imageFit === 'contain' &&
-                    t('editor.custom-background-editor.displayMode.containHint')}
-                  {customType === 'image' &&
-                    !cropEnabled &&
-                    imageFit === 'cover' &&
-                    t('editor.custom-background-editor.displayMode.coverHint')}
-                  {customType === 'image' &&
-                    !cropEnabled &&
-                    imageFit === 'fill' &&
-                    t('editor.custom-background-editor.displayMode.fillHint')}
-                  {customType === 'video' &&
-                    !cropEnabled &&
-                    videoFit === 'contain' &&
-                    t('editor.custom-background-editor.displayMode.containHint')}
-                  {customType === 'video' &&
-                    !cropEnabled &&
-                    videoFit === 'cover' &&
-                    t('editor.custom-background-editor.displayMode.coverHint')}
-                  {cropEnabled && t('editor.custom-background-editor.displayMode.cropHint')}
-                </span>
-              </div>
-            </div>
-            {customType === 'image' && (
-              <div className="fit-buttons">
-                <button
-                  className={`fit-btn ${!cropEnabled && imageFit === 'contain' ? 'active' : ''}`}
-                  onClick={() => {
-                    setImageFit('contain');
-                    setCropEnabled(false);
-                  }}
-                  title={t('editor.custom-background-editor.fit.title.image.contain')}
-                >
-                  {t('editor.custom-background-editor.fit.option.contain')}
-                </button>
-                <button
-                  className={`fit-btn ${!cropEnabled && imageFit === 'cover' ? 'active' : ''}`}
-                  onClick={() => {
-                    setImageFit('cover');
-                    setCropEnabled(false);
-                  }}
-                  title={t('editor.custom-background-editor.fit.title.image.cover')}
-                >
-                  {t('editor.custom-background-editor.fit.option.cover')}
-                </button>
-                <button
-                  className={`fit-btn ${!cropEnabled && imageFit === 'fill' ? 'active' : ''}`}
-                  onClick={() => {
-                    setImageFit('fill');
-                    setCropEnabled(false);
-                  }}
-                  title={t('editor.custom-background-editor.fit.title.image.fill')}
-                >
-                  {t('editor.custom-background-editor.fit.option.fill')}
-                </button>
-                <button
-                  className={`fit-btn ${cropEnabled ? 'active' : ''}`}
-                  onClick={() => setCropEnabled(true)}
-                  title={t('editor.custom-background-editor.fit.title.image.crop')}
-                >
-                  {t('editor.custom-background-editor.fit.option.crop')}
-                </button>
-              </div>
-            )}
-            {customType === 'video' && (
-              <div className="fit-buttons video-fit-buttons">
-                <button
-                  className={`fit-btn ${!cropEnabled && videoFit === 'contain' ? 'active' : ''}`}
-                  onClick={() => {
-                    setVideoFit('contain');
-                    setCropEnabled(false);
-                  }}
-                  title={t('editor.custom-background-editor.fit.title.video.contain')}
-                >
-                  {t('editor.custom-background-editor.fit.option.contain')}
-                </button>
-                <button
-                  className={`fit-btn ${!cropEnabled && videoFit === 'cover' ? 'active' : ''}`}
-                  onClick={() => {
-                    setVideoFit('cover');
-                    setCropEnabled(false);
-                  }}
-                  title={t('editor.custom-background-editor.fit.title.video.cover')}
-                >
-                  {t('editor.custom-background-editor.fit.option.cover')}
-                </button>
-                <button
-                  className={`fit-btn ${cropEnabled ? 'active' : ''}`}
-                  onClick={() => setCropEnabled(true)}
-                  title={t('editor.custom-background-editor.fit.title.video.crop')}
-                >
-                  {t('editor.custom-background-editor.fit.option.crop')}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+
 
         {/* 类型选择 */}
         <div className="config-section">
@@ -916,9 +1189,6 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             <div className="section-title">{t('editor.custom-background-editor.section.imageConfig')}</div>
             <button className="file-select-btn" onClick={() => handleFileSelect('image')}>
               {t('editor.custom-background-editor.action.selectImageFile')}
-              <span className="file-size-limit">
-                {t('editor.custom-background-editor.fileSizeLimit.image')}
-              </span>
             </button>
             <input
               type="text"
@@ -928,7 +1198,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
               onChange={(e) => {
                 setImageUrl(e.target.value);
                 setImagePreviewUrl(e.target.value);
-                setSelectionApplied(false);
+                setCropRect(DEFAULT_CROP_RECT);
+                setSelectionHistory([]);
+                setHistoryIndex(-1);
+                clearAppliedSelection();
+                setImportWarningMessage(null);
               }}
             />
           </div>
@@ -940,9 +1214,6 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
             <div className="section-title">{t('editor.custom-background-editor.section.videoConfig')}</div>
             <button className="file-select-btn" onClick={() => handleFileSelect('video')}>
               {t('editor.custom-background-editor.action.selectVideoFile')}
-              <span className="file-size-limit">
-                {t('editor.custom-background-editor.fileSizeLimit.video')}
-              </span>
             </button>
             <input
               type="text"
@@ -952,7 +1223,11 @@ export const CustomBackgroundEditor = memo(function CustomBackgroundEditor({
               onChange={(e) => {
                 setVideoUrl(e.target.value);
                 setVideoPreviewUrl(e.target.value);
-                setSelectionApplied(false);
+                setCropRect(DEFAULT_CROP_RECT);
+                setSelectionHistory([]);
+                setHistoryIndex(-1);
+                clearAppliedSelection();
+                setImportWarningMessage(null);
               }}
             />
           </div>

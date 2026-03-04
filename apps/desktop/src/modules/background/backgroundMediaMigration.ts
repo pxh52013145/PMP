@@ -9,6 +9,13 @@ type BackgroundHistoryItem = {
   timestamp: number;
 };
 
+type BackgroundImportInvokeResult =
+  | string
+  | {
+      destPath: string;
+      sourceBytes?: number;
+    };
+
 function safeParseJson<T>(value: string | null): T | null {
   if (!value) return null;
   try {
@@ -50,7 +57,13 @@ async function importFileToManagedBackgroundMedia(
 ): Promise<string | null> {
   try {
     const tauri = await import('@tauri-apps/api/tauri');
-    const destPath = await tauri.invoke<string>('background_import_media', { sourcePath, kind });
+    const importResult = await tauri.invoke<BackgroundImportInvokeResult>('background_import_media', {
+      sourcePath,
+      kind,
+    });
+    const destPath =
+      typeof importResult === 'string' ? importResult : importResult?.destPath || '';
+    if (!destPath) return null;
     return tauri.convertFileSrc(destPath);
   } catch (error) {
     console.warn('[background] Failed to import external background media:', error);

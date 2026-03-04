@@ -4,6 +4,16 @@
 
 export type BackgroundType = 'color' | 'image' | 'video' | 'gradient' | 'html';
 
+export type BackgroundCropSpace = 'viewport' | 'media';
+
+export interface BackgroundCropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  space?: BackgroundCropSpace;
+}
+
 export interface BackgroundConfig {
   type: BackgroundType;
   // 纯色背景
@@ -22,12 +32,7 @@ export interface BackgroundConfig {
     repeat: 'no-repeat' | 'repeat' | 'repeat-x' | 'repeat-y';
     opacity?: number;
     // 裁剪区域（相对于原图的百分比，与fit模式互斥）
-    crop?: {
-      x: number; // 0-100
-      y: number; // 0-100
-      width: number; // 0-100
-      height: number; // 0-100
-    };
+    crop?: BackgroundCropRect;
   };
   // 视频背景（动态背景）
   video?: {
@@ -37,12 +42,7 @@ export interface BackgroundConfig {
     muted: boolean;
     opacity?: number;
     // 裁剪区域（相对于原视频的百分比，与fit模式互斥）
-    crop?: {
-      x: number; // 0-100
-      y: number; // 0-100
-      width: number; // 0-100
-      height: number; // 0-100
-    };
+    crop?: BackgroundCropRect;
   };
   // HTML 背景（自定义 HTML 内容）
   html?: {
