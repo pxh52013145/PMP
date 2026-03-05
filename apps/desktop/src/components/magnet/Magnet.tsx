@@ -12,6 +12,44 @@ interface MagnetProps {
   chromeOverrideMode?: MagnetChromeOverrideMode;
 }
 
+function normalizeOpacity(value: string | number | undefined): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.min(1, parsed));
+    }
+  }
+
+  return undefined;
+}
+
+function toOpaqueColor(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return value;
+  const normalized = value.trim();
+  if (!normalized) return value;
+
+  const hexMatch = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (hexMatch) {
+    const hex = hexMatch[1];
+    if (hex.length === 4) return `#${hex.slice(0, 3)}`;
+    if (hex.length === 8) return `#${hex.slice(0, 6)}`;
+    return normalized;
+  }
+
+  const rgbaMatch = normalized.match(/^rgba?\((.+)\)$/i);
+  if (!rgbaMatch) return value;
+  const channels = rgbaMatch[1]
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (channels.length < 3) return value;
+  return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
+}
+
 /**
  * Magnet 组件
  * 通过锚点吸附到 Pixel 上，实现响应式定位
@@ -236,6 +274,8 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
     return magnet.animation?.transition || 'var(--magnet-transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1))';
   }, [lowRenderMode, disableTransition, magnet.animation?.transition]);
 
+  const chromeBaseOpacity = normalizeOpacity(currentStyle.opacity) ?? 1;
+
   // Shell is layout + hit-testing only (position/size/drag/click). Visual styles live in the optional "chrome" element.
   const shellStyle = useMemo(() => {
     if (!bounds) return null;
@@ -257,6 +297,12 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
     const next: Record<string, string | number | undefined> = { ...currentStyle };
     delete next.width;
     delete next.height;
+    delete next.opacity;
+    delete next.backgroundColor;
+    delete next.border;
+    delete next.boxShadow;
+    delete next.backdropFilter;
+    delete next.filter;
 
     return {
       width: '100%',
@@ -265,6 +311,44 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
       ...next,
     };
   }, [currentStyle, transitionValue]);
+
+  const chromeBaseStyle = useMemo(() => {
+    return {
+      position: 'absolute' as const,
+      inset: 0,
+      pointerEvents: 'none' as const,
+      transition: transitionValue,
+      opacity: chromeBaseOpacity,
+      backgroundColor: toOpaqueColor(currentStyle.backgroundColor),
+      border: currentStyle.border,
+      boxShadow: currentStyle.boxShadow,
+      backdropFilter: currentStyle.backdropFilter,
+      WebkitBackdropFilter: currentStyle.backdropFilter,
+      filter: currentStyle.filter,
+      borderRadius:
+        typeof currentStyle.borderRadius === 'string' || typeof currentStyle.borderRadius === 'number'
+          ? currentStyle.borderRadius
+          : 'inherit',
+    };
+  }, [
+    chromeBaseOpacity,
+    currentStyle.backgroundColor,
+    currentStyle.border,
+    currentStyle.boxShadow,
+    currentStyle.backdropFilter,
+    currentStyle.filter,
+    currentStyle.borderRadius,
+    transitionValue,
+  ]);
+
+  const rendererStyle = useMemo(
+    () => ({
+      width: '100%',
+      height: '100%',
+      transition: transitionValue,
+    }),
+    [transitionValue]
+  );
 
   // 渲染自定义组件内容
   const renderContent = () => {
@@ -307,10 +391,15 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
           className={`magnet magnet-${magnet.type} magnet-state-${magnet.state}`}
           style={chromeStyle}
         >
-          {renderContent()}
+          <div className="magnet-base-layer" style={chromeBaseStyle} />
+          <div className="magnet-content-layer" style={rendererStyle}>
+            {renderContent()}
+          </div>
         </div>
       ) : (
-        renderContent()
+        <div className="magnet-renderer" style={rendererStyle}>
+          {renderContent()}
+        </div>
       )}
     </div>
   );

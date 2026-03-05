@@ -28,6 +28,31 @@
 }
 
 /* Avoid default browser focus rings inside magnets (can cause white outlines / jank in WebView2). */
+.magnet-base-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.magnet-content-layer {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.magnet-renderer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .magnet-shell button:focus,
 .magnet-shell button:focus-visible,
 .magnet button:focus,

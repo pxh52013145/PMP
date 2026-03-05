@@ -2117,6 +2117,8 @@
   "editor.magnet-library.empty.inactive": "No unused magnets",
   "editor.magnet-library.empty.hint": "Try switching to “All”",
   "editor.magnet-library.magnet.pixels": "{count} pixels",
+  "editor.magnet-library.magnet.opacity.label": "Base div opacity",
+  "editor.magnet-library.magnet.opacity.value": "{percent}%",
   "editor.magnet-library.badge.required": "Required",
   "editor.magnet-library.badge.builtin": "Builtin",
   "editor.magnet-library.magnet.tooltip.creatorWindowOpen": "Creator window is already open",

@@ -241,7 +241,9 @@ export const PROGRESS_BAR: Magnet = {
   animation: {
     transition: 'all 0.2s ease',
     hoverStyle: {
-      backgroundColor: 'rgba(255, 255, 255, 0.15)',
+      backgroundColor: 'rgba(18, 22, 30, 0.92)',
+      border: '1px solid rgba(0, 212, 255, 0.22)',
+      boxShadow: '0 0 12px rgba(0, 212, 255, 0.12)',
     },
   },
   state: 'idle',

@@ -103,6 +103,42 @@ function estimateMagnetPixelCount(magnet: Magnet): number {
   }
 }
 
+const MAGNET_RENDERER_OPACITY_MIN = 0;
+const MAGNET_RENDERER_OPACITY_MAX = 1;
+const MAGNET_RENDERER_OPACITY_STEP = 0.05;
+
+function clampMagnetRendererOpacity(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(MAGNET_RENDERER_OPACITY_MIN, Math.min(MAGNET_RENDERER_OPACITY_MAX, value));
+}
+
+function getMagnetRendererOpacity(magnet: Magnet): number {
+  return clampMagnetRendererOpacity(magnet.style.opacity ?? 1);
+}
+
+function toOpaquePreviewColor(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return value;
+  const normalized = value.trim();
+  if (!normalized) return value;
+
+  const hexMatch = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (hexMatch) {
+    const hex = hexMatch[1];
+    if (hex.length === 4) return `#${hex.slice(0, 3)}`;
+    if (hex.length === 8) return `#${hex.slice(0, 6)}`;
+    return normalized;
+  }
+
+  const rgbaMatch = normalized.match(/^rgba?\((.+)\)$/i);
+  if (!rgbaMatch) return value;
+  const channels = rgbaMatch[1]
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (channels.length < 3) return value;
+  return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
+}
+
 export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   magnetLibrary,
   activeMagnetIds,
@@ -145,6 +181,10 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
   const [showPlugins, setShowPlugins] = useState(false);
   const [pluginError, setPluginError] = useState('');
   const [pluginBusy, setPluginBusy] = useState(false);
+  const [magnetRendererOpacityDrafts, setMagnetRendererOpacityDrafts] = useState<Record<string, number>>(
+    {}
+  );
+  const opacityCommitInFlightRef = useRef<Set<string>>(new Set());
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   // 初始化时清理可能残留的窗口状态
@@ -157,6 +197,22 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     }
     setCreatorWindowOpen(false);
   }, []);
+
+  useEffect(() => {
+    const knownIds = new Set(magnetLibrary.map((magnet) => magnet.id));
+    setMagnetRendererOpacityDrafts((prev) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [magnetId, draftOpacity] of Object.entries(prev)) {
+        if (!knownIds.has(magnetId)) {
+          changed = true;
+          continue;
+        }
+        next[magnetId] = draftOpacity;
+      }
+      return changed ? next : prev;
+    });
+  }, [magnetLibrary]);
 
   // 分类 Magnet
   const categorizedMagnets = useMemo(() => {
@@ -555,6 +611,58 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
     [activeMagnetIds, confirm, magnetLibrary, onMagnetDeleteFromLibrary, pluginBusy, reloadPlugins, t]
   );
 
+  const handleRendererOpacityDraftChange = useCallback((magnetId: string, rawValue: string) => {
+    const nextOpacity = clampMagnetRendererOpacity(Number.parseFloat(rawValue));
+    setMagnetRendererOpacityDrafts((prev) => {
+      if (Math.abs((prev[magnetId] ?? -1) - nextOpacity) < 0.001) return prev;
+      return {
+        ...prev,
+        [magnetId]: nextOpacity,
+      };
+    });
+  }, []);
+
+  const commitRendererOpacity = useCallback(
+    async (magnet: Magnet) => {
+      if (opacityCommitInFlightRef.current.has(magnet.id)) {
+        return;
+      }
+
+      const draftOpacity = magnetRendererOpacityDrafts[magnet.id];
+      if (typeof draftOpacity !== 'number') {
+        return;
+      }
+
+      const nextOpacity = clampMagnetRendererOpacity(draftOpacity);
+      const currentOpacity = getMagnetRendererOpacity(magnet);
+
+      setMagnetRendererOpacityDrafts((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, magnet.id)) return prev;
+        const next = { ...prev };
+        delete next[magnet.id];
+        return next;
+      });
+
+      if (Math.abs(nextOpacity - currentOpacity) < 0.001) {
+        return;
+      }
+
+      opacityCommitInFlightRef.current.add(magnet.id);
+      try {
+        await onMagnetUpdate({
+          ...magnet,
+          style: {
+            ...magnet.style,
+            opacity: nextOpacity,
+          },
+        });
+      } finally {
+        opacityCommitInFlightRef.current.delete(magnet.id);
+      }
+    },
+    [magnetRendererOpacityDrafts, onMagnetUpdate]
+  );
+
   return (
     <div className="editor-magnet-library">
       {/* 拖动标题栏 */}
@@ -762,6 +870,9 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
               const isRequired = REQUIRED_MAGNET_IDS.has(magnet.id);
               const pixelCount = estimateMagnetPixelCount(magnet);
               const chromeEnabled = magnet.chrome?.enabled !== false;
+              const magnetRendererOpacity =
+                magnetRendererOpacityDrafts[magnet.id] ?? getMagnetRendererOpacity(magnet);
+              const magnetRendererOpacityPercent = Math.round(magnetRendererOpacity * 100);
 
               const rendererId = magnet.renderer ?? magnet.id;
               const renderer =
@@ -794,15 +905,26 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                   <div
                     className="magnet-preview"
                     style={{
-                      backgroundColor: chromeEnabled ? magnet.style.backgroundColor : 'transparent',
                       color: chromeEnabled ? magnet.style.color : undefined,
                       borderRadius: magnet.style.borderRadius,
-                      border: chromeEnabled ? magnet.style.border : '1px dashed rgba(255,255,255,0.18)',
                     }}
                   >
-                    {previewContent}
+                    <div
+                      className="magnet-preview-underlay"
+                      style={{
+                        backgroundColor: chromeEnabled
+                          ? toOpaquePreviewColor(magnet.style.backgroundColor)
+                          : 'transparent',
+                        border: chromeEnabled
+                          ? magnet.style.border
+                          : '1px dashed rgba(255,255,255,0.18)',
+                        opacity: magnetRendererOpacity,
+                      }}
+                    />
+                    <div className="magnet-preview-content">{previewContent}</div>
                   </div>
-                  <div className="magnet-info">
+                  <div className="magnet-body">
+                    <div className="magnet-info">
                     <div className="magnet-name">{magnet.name || magnet.id}</div>
                     <div className="magnet-id">{magnet.id}</div>
                     {rendererDescription && (
@@ -902,6 +1024,50 @@ export const EditorMagnetLibrary = memo(function EditorMagnetLibrary({
                         ╳
                       </button>
                     )}
+                  </div>
+                  <div className="magnet-opacity-control">
+                    <div className="magnet-opacity-label">
+                      {t('editor.magnet-library.magnet.opacity.label')}
+                    </div>
+                    <div className="magnet-opacity-slider-row">
+                      <div className="magnet-opacity-slider-shell">
+                        <div className="magnet-opacity-slider-track">
+                          <div className="magnet-opacity-slider-grid" />
+                          <div
+                            className="magnet-opacity-slider-fill"
+                            style={{ width: `${magnetRendererOpacityPercent}%` }}
+                          />
+                        </div>
+                        <input
+                          className="magnet-opacity-slider"
+                          type="range"
+                          min={MAGNET_RENDERER_OPACITY_MIN}
+                          max={MAGNET_RENDERER_OPACITY_MAX}
+                          step={MAGNET_RENDERER_OPACITY_STEP}
+                          value={magnetRendererOpacity}
+                          onChange={(event) => {
+                            handleRendererOpacityDraftChange(magnet.id, event.target.value);
+                          }}
+                          onPointerUp={() => {
+                            void commitRendererOpacity(magnet);
+                          }}
+                          onBlur={() => {
+                            void commitRendererOpacity(magnet);
+                          }}
+                          onKeyUp={(event) => {
+                            if (event.key === 'Enter') {
+                              void commitRendererOpacity(magnet);
+                            }
+                          }}
+                        />
+                      </div>
+                      <span className="magnet-opacity-value">
+                        {t('editor.magnet-library.magnet.opacity.value', {
+                          percent: magnetRendererOpacityPercent,
+                        })}
+                      </span>
+                    </div>
+                  </div>
                   </div>
                 </div>
               );
