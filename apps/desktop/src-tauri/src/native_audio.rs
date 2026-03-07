@@ -2393,7 +2393,15 @@ pub fn select_output_device(
                 .as_deref()
                 .is_some_and(|current| current == requested_name),
             (None, None) => {
-                output_backend.current_info().device_name == output_backend.default_device_name()
+                let current_info = output_backend.current_info();
+                let default_info = output_backend.default_device_info();
+                match (
+                    default_info.device_id.as_deref(),
+                    current_info.device_id.as_deref(),
+                ) {
+                    (Some(default_id), Some(current_id)) => current_id == default_id,
+                    _ => current_info.device_name == default_info.device_name,
+                }
             }
         };
 
@@ -2662,8 +2670,15 @@ pub(crate) fn run_audio_smoke(options: AudioSmokeOptions) -> Result<(), String> 
                     .as_deref()
                     .is_some_and(|current| current == requested),
                 None => {
-                    output_backend.current_info().device_name
-                        == output_backend.default_device_name()
+                    let current_info = output_backend.current_info();
+                    let default_info = output_backend.default_device_info();
+                    match (
+                        default_info.device_id.as_deref(),
+                        current_info.device_id.as_deref(),
+                    ) {
+                        (Some(default_id), Some(current_id)) => current_id == default_id,
+                        _ => current_info.device_name == default_info.device_name,
+                    }
                 }
             };
 

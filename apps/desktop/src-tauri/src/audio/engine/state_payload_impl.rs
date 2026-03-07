@@ -76,13 +76,25 @@ impl NativeAudioEngine {
     }
 
     pub(crate) fn build_components_payload(&self) -> NativeAudioComponentsStatePayload {
+        let current_output_info = self.output_backend.current_info();
+        let default_output_info = self.output_backend.default_device_info();
         let output_sample_rate = self
             .output_sample_rate
-            .or_else(|| self.output_backend.current_info().output_sample_rate);
+            .or(current_output_info.output_sample_rate);
         NativeAudioComponentsStatePayload {
             output_backend_id: self.output_backend.id().to_string(),
-            output_device_id: self.device_id.clone(),
-            output_device: self.device_name.clone(),
+            output_device_id: self
+                .device_id
+                .clone()
+                .or_else(|| current_output_info.device_id.clone())
+                .or_else(|| current_output_info.device_name.clone())
+                .or_else(|| default_output_info.device_id.clone())
+                .or_else(|| default_output_info.device_name.clone()),
+            output_device: self
+                .device_name
+                .clone()
+                .or_else(|| current_output_info.device_name.clone())
+                .or_else(|| default_output_info.device_name.clone()),
             output_sample_rate,
             preferred_input_id: self.preferred_input_id.clone(),
             active_input_id: self.active_input_id.clone(),
@@ -112,6 +124,27 @@ pub(super) fn build_state_payload_with_options_impl(
     #[cfg(not(target_os = "windows"))]
     let output_metrics = crate::audio::output::OutputCallbackMetricsSnapshot::default();
 
+    let output_route_info = {
+        let current_output_info = engine.output_backend.current_info();
+        let default_output_info = engine.output_backend.default_device_info();
+        OutputStreamInfo {
+            device_id: engine
+                .device_id
+                .clone()
+                .or_else(|| current_output_info.device_id.clone())
+                .or_else(|| current_output_info.device_name.clone())
+                .or_else(|| default_output_info.device_id.clone())
+                .or_else(|| default_output_info.device_name.clone()),
+            device_name: engine
+                .device_name
+                .clone()
+                .or_else(|| current_output_info.device_name.clone())
+                .or_else(|| default_output_info.device_name.clone()),
+            output_sample_rate: engine
+                .output_sample_rate
+                .or(current_output_info.output_sample_rate),
+        }
+    };
     let output_callback_metrics_valid = engine.output_backend.id() == "wasapi-exclusive"
         || engine.output_backend.id() == "wasapi-shared-raw";
     let shared_render_backend = is_shared_output_backend(engine.output_backend.id());
@@ -188,7 +221,7 @@ pub(super) fn build_state_payload_with_options_impl(
             None
         },
         bit_depth: engine.decoded_bit_depth,
-        device: engine.device_name.clone(),
+        device: output_route_info.device_name.clone(),
         queue: if include_queue && engine.queue_initialized {
             Some(
                 engine

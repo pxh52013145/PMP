@@ -5,14 +5,10 @@ type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
 
 type NativeAudioComponentsState = {
   outputBackendId: string | null;
+  outputDeviceId: string | null;
+  outputDevice: string | null;
   preferredInputId: string | null;
   activeInputId: string | null;
-};
-
-type NativeAudioOutputDevice = {
-  id: string;
-  name: string;
-  isDefault: boolean;
 };
 
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
@@ -54,8 +50,6 @@ type NativeDebugEnginePanelProps = {
   srcTargetRate: string;
   dynamicSrcSettings: NativeAudioDynamicSrcSettings;
   nativeMeta: NativeAudioMeta;
-  selectedDeviceId: string;
-  outputDevices: NativeAudioOutputDevice[];
   isPlaying: boolean;
   getFrequencyData: () => Uint8Array | null;
   setSelectedBackend: Dispatch<SetStateAction<string>>;
@@ -64,7 +58,6 @@ type NativeDebugEnginePanelProps = {
   setSrcBackend: Dispatch<SetStateAction<NativeAudioSrcBackend>>;
   setSrcTargetRate: Dispatch<SetStateAction<string>>;
   setDynamicSrcSettings: Dispatch<SetStateAction<NativeAudioDynamicSrcSettings>>;
-  setSelectedDeviceId: Dispatch<SetStateAction<string>>;
   handleRefreshAudioComponents: () => void | Promise<void>;
   handleApplyOutputBackend: () => void | Promise<void>;
   handleApplyAudioInput: () => void | Promise<void>;
@@ -72,8 +65,7 @@ type NativeDebugEnginePanelProps = {
   handleApplyTuningProfile: (profileId: NativeAudioTuningProfileId) => void | Promise<void>;
   handleApplySrcPolicy: () => void | Promise<void>;
   applyDynamicSrcAutoSettings: (patch: Partial<NativeAudioDynamicSrcSettings>) => void | Promise<void>;
-  handleRefreshDevices: () => void | Promise<void>;
-  handleApplyDevice: () => void | Promise<void>;
+  handleRefreshOutputRoute: () => void | Promise<void>;
 };
 
 export function NativeDebugEnginePanel({
@@ -90,8 +82,6 @@ export function NativeDebugEnginePanel({
   srcTargetRate,
   dynamicSrcSettings,
   nativeMeta,
-  selectedDeviceId,
-  outputDevices,
   isPlaying,
   getFrequencyData,
   setSelectedBackend,
@@ -100,7 +90,6 @@ export function NativeDebugEnginePanel({
   setSrcBackend,
   setSrcTargetRate,
   setDynamicSrcSettings,
-  setSelectedDeviceId,
   handleRefreshAudioComponents,
   handleApplyOutputBackend,
   handleApplyAudioInput,
@@ -108,8 +97,7 @@ export function NativeDebugEnginePanel({
   handleApplyTuningProfile,
   handleApplySrcPolicy,
   applyDynamicSrcAutoSettings,
-  handleRefreshDevices,
-  handleApplyDevice,
+  handleRefreshOutputRoute,
 }: NativeDebugEnginePanelProps) {
   return (
     <div className="native-debug-panel-group native-debug-panel-group--engine">
@@ -486,23 +474,8 @@ export function NativeDebugEnginePanel({
         </p>
       </div>
       <div className="device-controls">
-        <select
-          value={selectedDeviceId}
-          onChange={(e) => setSelectedDeviceId(e.target.value)}
-          aria-label={t('pages.native-debug.outputDevice.select.ariaLabel')}
-        >
-          <option value="">{t('pages.native-debug.outputDevice.default')}</option>
-          {outputDevices.map((device) => (
-            <option key={device.id} value={device.id}>
-              {device.name}
-            </option>
-          ))}
-        </select>
-        <button type="button" onClick={() => void handleRefreshDevices()}>
+        <button type="button" onClick={() => void handleRefreshOutputRoute()}>
           {t('common.action.refresh')}
-        </button>
-        <button type="button" onClick={() => void handleApplyDevice()}>
-          {t('common.action.apply')}
         </button>
       </div>
     </div>

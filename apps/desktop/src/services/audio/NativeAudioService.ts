@@ -1,5 +1,5 @@
 ﻿import { invoke } from '@tauri-apps/api/tauri';
-import { type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { setupNativeListenersImpl } from './nativeAudioNativeListeners';
 import { restoreDynamicSrcAutoSettingsFromStorageImpl } from './nativeAudioDynamicSrcAutoSettings';
 import {
@@ -89,7 +89,7 @@ import {
   upsertNativeLibraryPlaylist,
   type NativeLibraryPlaylistItemRecord,
 } from '../../modules/music-library';
-import { readString } from '../../modules/storage';
+import { readString, removeKey } from '../../modules/storage';
 import {
   recordRecentPlaylistWriteFlushed,
   recordRecentPlaylistWriteScheduled,
@@ -146,6 +146,9 @@ import {
  * UI responsive.
  */
 export class NativeAudioService implements IAudioService {
+  private static readonly LEGACY_OUTPUT_DEVICE_STORAGE_KEY =
+    'pixel-matrix-native-audio-output-device';
+
   private state: AudioState;
   private timeUpdateCallbacks: Set<(time: number) => void> = new Set();
   private endedCallbacks: Set<() => void> = new Set();
@@ -164,6 +167,7 @@ export class NativeAudioService implements IAudioService {
   private stateListener?: UnlistenFn;
   private spectrumListener?: UnlistenFn;
   private errorListener?: UnlistenFn;
+  private runtimeComponentsListeners: UnlistenFn[] = [];
   private dynamicSrcSettingsListenerCleanup: (() => void) | null = null;
   private dynamicSrcSettingsListenerInitPromise: Promise<void> | null = null;
   private tuningAutoSettingsListenerCleanup: (() => void) | null = null;
@@ -178,7 +182,6 @@ export class NativeAudioService implements IAudioService {
   private readonly spectrumIdleTimeoutMs = 2500;
   private readonly spectrumPlaybackGraceMs = 4000;
   private restoredOutputBackend = false;
-  private restoredOutputDevice = false;
   private restoredInputId = false;
   private restoredStreamingBufferSettings = false;
   private restoredEnginePolicy = false;
@@ -239,6 +242,8 @@ export class NativeAudioService implements IAudioService {
   private protectionWindowTimer: ReturnType<typeof setTimeout> | null = null;
   private availableOutputBackends: string[] = [];
   private currentOutputBackendId: string | null = null;
+  private currentOutputDeviceId: string | null = null;
+  private currentOutputDeviceName: string | null = null;
   private backendSwitchInFlight = false;
   private autoBackendSwitchCount = 0;
   private lastAutoBackendSwitchAtMs: number | null = null;
@@ -1155,6 +1160,7 @@ export class NativeAudioService implements IAudioService {
     };
 
     this.setupNativeListeners();
+    void this.setupRuntimeAudioComponentsListeners();
     void this.restoreFromStorage()
       .catch((error) => {
         this.logBestEffortError('restoreFromStorage', error);
@@ -1167,8 +1173,8 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async restoreFromStorage(): Promise<void> {
+    this.clearLegacyOutputDevicePersistence();
     await this.restoreOutputBackendFromStorage();
-    await this.restoreOutputDeviceFromStorage();
     await this.restoreAudioInputFromStorage();
     await this.restoreStreamingBufferSettingsFromStorage();
     await this.restoreEnginePolicyFromStorage();
@@ -1486,20 +1492,42 @@ export class NativeAudioService implements IAudioService {
     });
   }
 
-  private sanitizeBackendId(value: unknown): string | null {
+  private clearLegacyOutputDevicePersistence(): void {
+    removeKey(NativeAudioService.LEGACY_OUTPUT_DEVICE_STORAGE_KEY);
+  }
+
+  private sanitizeNonEmptyString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  private sanitizeBackendId(value: unknown): string | null {
+    return this.sanitizeNonEmptyString(value);
+  }
+
+  private applyRuntimeAudioComponentsState(components: NativeAudioComponentsStatePayload): void {
+    this.currentOutputBackendId = this.sanitizeBackendId(components.outputBackendId);
+    this.currentOutputDeviceId = this.sanitizeNonEmptyString(components.outputDeviceId);
+    this.currentOutputDeviceName = this.sanitizeNonEmptyString(components.outputDevice);
+  }
+
   private parseComponentsStatePayload(payload: unknown): NativeAudioComponentsStatePayload {
     if (!payload || typeof payload !== 'object') {
-      return { outputBackendId: null, preferredInputId: null, activeInputId: null };
+      return {
+        outputBackendId: null,
+        outputDeviceId: null,
+        outputDevice: null,
+        preferredInputId: null,
+        activeInputId: null,
+      };
     }
 
     const record = payload as Record<string, unknown>;
     return {
       outputBackendId: this.sanitizeBackendId(record.outputBackendId),
+      outputDeviceId: this.sanitizeNonEmptyString(record.outputDeviceId),
+      outputDevice: this.sanitizeNonEmptyString(record.outputDevice),
       preferredInputId: this.sanitizeBackendId(record.preferredInputId),
       activeInputId: this.sanitizeBackendId(record.activeInputId),
     };
@@ -1530,9 +1558,9 @@ export class NativeAudioService implements IAudioService {
     try {
       const componentsPayload = await invoke<unknown>('native_audio_get_audio_components_state');
       const components = this.parseComponentsStatePayload(componentsPayload);
+      this.applyRuntimeAudioComponentsState(components);
       const backendId = this.sanitizeBackendId(components.outputBackendId);
       if (backendId) {
-        this.currentOutputBackendId = backendId;
         if (!this.availableOutputBackends.includes(backendId)) {
           this.availableOutputBackends = [...this.availableOutputBackends, backendId];
         }
@@ -1644,30 +1672,8 @@ export class NativeAudioService implements IAudioService {
 
   private buildDynamicSrcLearningDeviceKey(): string {
     const backend = this.currentOutputBackendId ?? 'unknown-backend';
-    const persistedOutputDevice = (() => {
-      try {
-        const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
-        if (!raw) return '';
-        const parsed = JSON.parse(raw) as unknown;
-        if (parsed && typeof parsed === 'object') {
-          const record = parsed as Record<string, unknown>;
-          if (typeof record.id === 'string' && record.id.trim().length > 0) {
-            return record.id.trim();
-          }
-          if (typeof record.name === 'string' && record.name.trim().length > 0) {
-            return record.name.trim();
-          }
-        }
-        if (typeof parsed === 'string' && parsed.trim().length > 0) {
-          return parsed.trim();
-        }
-      } catch {
-        // ignore
-      }
-      return '';
-    })();
-
-    return `${backend}::${persistedOutputDevice || 'default-device'}`;
+    const device = this.currentOutputDeviceId ?? this.currentOutputDeviceName ?? 'default-device';
+    return `${backend}::${device}`;
   }
 
   private parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap {
@@ -2618,7 +2624,6 @@ export class NativeAudioService implements IAudioService {
 
       const switched = await this.selectOutputBackendInternal(targetBackend, {
         persist: true,
-        clearDevice: true,
       });
       if (!switched) {
         this.handleOutputBackendSwitchFailure(reason);
@@ -2636,7 +2641,7 @@ export class NativeAudioService implements IAudioService {
 
   private async selectOutputBackendInternal(
     backendId: string | null,
-    options?: { persist?: boolean; clearDevice?: boolean }
+    options?: { persist?: boolean }
   ): Promise<boolean> {
     try {
       const previousBackendId = this.currentOutputBackendId;
@@ -2649,6 +2654,7 @@ export class NativeAudioService implements IAudioService {
         this.handleOutputBackendSwitchFailure('resolved-backend-empty');
         return false;
       }
+      this.applyRuntimeAudioComponentsState(parsed);
       this.currentOutputBackendId = resolvedBackendId;
       if (resolvedBackendId !== previousBackendId) {
         this.resetUnderrunTracking();
@@ -2668,14 +2674,6 @@ export class NativeAudioService implements IAudioService {
           resolvedBackendId,
           TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED
         );
-
-        if (options?.clearDevice !== false) {
-          await broadcastDataUpdate(
-            STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-            null,
-            TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
-          );
-        }
       }
 
       return true;
@@ -3215,6 +3213,37 @@ export class NativeAudioService implements IAudioService {
     return setupNativeListenersImpl.call(this);
   }
 
+  private async setupRuntimeAudioComponentsListeners(): Promise<void> {
+    if (!isTauriRuntime()) return;
+
+    const syncRuntimeAudioComponents = async () => {
+      try {
+        const payload = await invoke<unknown>('native_audio_get_audio_components_state');
+        const parsed = this.parseComponentsStatePayload(payload);
+        this.applyRuntimeAudioComponentsState(parsed);
+      } catch (error) {
+        this.logBestEffortError('sync runtime audio components', error);
+      }
+    };
+
+    const eventNames = [
+      TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_BACKEND_UPDATED,
+      TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED,
+      TAURI_EVENTS.NATIVE_AUDIO_INPUT_ID_UPDATED,
+    ] as const;
+
+    for (const eventName of eventNames) {
+      try {
+        const unlisten = await listen(eventName, () => {
+          void syncRuntimeAudioComponents();
+        });
+        this.runtimeComponentsListeners.push(unlisten);
+      } catch (error) {
+        this.logBestEffortError(`listen ${eventName}`, error);
+      }
+    }
+  }
+
   private restoreOutputBackendFromStorage() {
     if (this.restoredOutputBackend) return;
     this.restoredOutputBackend = true;
@@ -3227,48 +3256,13 @@ export class NativeAudioService implements IAudioService {
       if (!backendId) return;
 
       this.currentOutputBackendId = backendId;
-      return this.selectOutputBackendInternal(backendId, { persist: false, clearDevice: false })
+      return this.selectOutputBackendInternal(backendId, { persist: false })
         .then(() => {})
         .catch((error) => {
           this.logBestEffortError('restore output backend', error);
         });
     } catch (error) {
       this.logBestEffortError('parse output backend from storage', error);
-    }
-  }
-
-  private restoreOutputDeviceFromStorage() {
-    if (this.restoredOutputDevice) return;
-    this.restoredOutputDevice = true;
-
-    try {
-      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-
-      if (parsed && typeof parsed === 'object') {
-        const record = parsed as Record<string, unknown>;
-        const deviceId = typeof record.id === 'string' && record.id.length > 0 ? record.id : null;
-        const deviceName = typeof record.name === 'string' && record.name.length > 0 ? record.name : null;
-        if (deviceId || deviceName) {
-          return invoke('native_audio_select_device', { deviceId, deviceName })
-            .then(() => {})
-            .catch((error) => {
-              this.logBestEffortError('restore output device', error);
-            });
-        }
-        return;
-      }
-
-      const deviceName = typeof parsed === 'string' ? parsed : null;
-      if (!deviceName) return;
-      return invoke('native_audio_select_device', { deviceId: null, deviceName })
-        .then(() => {})
-        .catch((error) => {
-          this.logBestEffortError('restore output device by name', error);
-        });
-    } catch (error) {
-      this.logBestEffortError('parse output device from storage', error);
     }
   }
 
@@ -4164,6 +4158,8 @@ export class NativeAudioService implements IAudioService {
       this.errorListener();
       this.errorListener = undefined;
     }
+    this.runtimeComponentsListeners.forEach((unlisten) => unlisten());
+    this.runtimeComponentsListeners = [];
     if (this.spectrumDisableTimer !== null) {
       window.clearTimeout(this.spectrumDisableTimer);
       this.spectrumDisableTimer = null;

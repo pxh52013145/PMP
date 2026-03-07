@@ -34,16 +34,7 @@ pub(super) fn rebuild_sink_on_new_device_impl(
         engine.stop_and_retire_sink(old_sink);
     }
 
-    engine.output_sample_rate = output_info.output_sample_rate;
-    engine.device_id = output_info
-        .device_id
-        .or_else(|| output_info.device_name.clone())
-        .or_else(|| engine.device_id.clone());
-    engine.device_name = output_info
-        .device_name
-        .clone()
-        .or_else(|| engine.device_name.clone())
-        .or_else(|| engine.output_backend.default_device_name());
+    engine.apply_output_stream_info(output_info);
 
     engine.spectrum_pre_tap.clear();
     engine.spectrum_post_tap.clear();

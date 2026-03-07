@@ -11,7 +11,13 @@ import { NativeDebugPlaybackDspPanel } from './native-debug/NativeDebugPlaybackD
 import { NativeDebugEnginePanel } from './native-debug/NativeDebugEnginePanel';
 import { NativeDebugRobustnessPanel, type NativeDebugRobustnessMetricsView } from './native-debug/NativeDebugRobustnessPanel';
 import { NativeDebugStatePanel } from './native-debug/NativeDebugStatePanel';
-import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
+import {
+  broadcastDataUpdate,
+  broadcastSignal,
+  readData,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+} from '../../utils/windowCommunication';
 
 function getFileName(filePath: string, fallback: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -37,6 +43,8 @@ type NativeAudioMeta = {
 
 type NativeAudioComponentsState = {
   outputBackendId: string | null;
+  outputDeviceId: string | null;
+  outputDevice: string | null;
   preferredInputId: string | null;
   activeInputId: string | null;
 };
@@ -44,38 +52,11 @@ type NativeAudioComponentsState = {
 function parseNativeAudioComponentsState(payload: unknown): NativeAudioComponentsState {
   const record = asRecord(payload);
   const outputBackendId = typeof record?.outputBackendId === 'string' ? record.outputBackendId : null;
+  const outputDeviceId = typeof record?.outputDeviceId === 'string' ? record.outputDeviceId : null;
+  const outputDevice = typeof record?.outputDevice === 'string' ? record.outputDevice : null;
   const preferredInputId = typeof record?.preferredInputId === 'string' ? record.preferredInputId : null;
   const activeInputId = typeof record?.activeInputId === 'string' ? record.activeInputId : null;
-  return { outputBackendId, preferredInputId, activeInputId };
-}
-
-type NativeAudioOutputDevice = {
-  id: string;
-  name: string;
-  isDefault: boolean;
-};
-
-function parseNativeAudioOutputDevices(payload: unknown): NativeAudioOutputDevice[] {
-  if (!Array.isArray(payload)) return [];
-
-  const devices: NativeAudioOutputDevice[] = [];
-  const seen = new Set<string>();
-  for (const entry of payload) {
-    const record = asRecord(entry);
-    const id = typeof record?.id === 'string' ? record.id.trim() : '';
-    const name = typeof record?.name === 'string' ? record.name.trim() : '';
-    if (!id || !name) continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    devices.push({
-      id,
-      name,
-      isDefault: typeof record?.isDefault === 'boolean' ? record.isDefault : false,
-    });
-  }
-
-  devices.sort((a, b) => a.name.localeCompare(b.name));
-  return devices;
+  return { outputBackendId, outputDeviceId, outputDevice, preferredInputId, activeInputId };
 }
 
 type NativeDspEqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
@@ -177,6 +158,8 @@ export const NativeDebugPage: React.FC = () => {
   });
   const [componentsState, setComponentsState] = useState<NativeAudioComponentsState>({
     outputBackendId: null,
+    outputDeviceId: null,
+    outputDevice: null,
     preferredInputId: null,
     activeInputId: null,
   });
@@ -188,8 +171,6 @@ export const NativeDebugPage: React.FC = () => {
   const [eqBands, setEqBands] = useState<NativeDspEqBand[]>(DEFAULT_EQ_BANDS);
   const [limiterEnabled, setLimiterEnabled] = useState(false);
   const [limiterThresholdDb, setLimiterThresholdDb] = useState(-1);
-  const [outputDevices, setOutputDevices] = useState<NativeAudioOutputDevice[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [replayGainSettings, setReplayGainSettings] = useState<ReplayGainSettings>({
     enabled: true,
     mode: 'track',
@@ -251,26 +232,6 @@ export const NativeDebugPage: React.FC = () => {
   }, [audioService, appendLog, t]);
 
   const isNativeEngine = isNativeAvailable;
-
-  useEffect(() => {
-    if (!isNativeEngine) return;
-    const persisted = readData<unknown>(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
-    if (typeof persisted === 'string') {
-      setSelectedDeviceId(persisted);
-      return;
-    }
-
-    const record = asRecord(persisted);
-    const id = typeof record?.id === 'string' ? record.id : '';
-    if (id) {
-      setSelectedDeviceId(id);
-      return;
-    }
-
-    if (persisted === null) {
-      setSelectedDeviceId('');
-    }
-  }, [isNativeEngine]);
 
   useEffect(() => {
     if (!isNativeEngine) return;
@@ -409,7 +370,6 @@ export const NativeDebugPage: React.FC = () => {
       if (gainDb !== null) {
         setDspGainDb(gainDb);
       }
-      setSelectedDeviceId((previous) => previous || device || '');
     })
       .then((fn) => {
         unlisten = fn;
@@ -723,24 +683,6 @@ export const NativeDebugPage: React.FC = () => {
     void handleRefreshAudioComponents();
   }, [handleRefreshAudioComponents, isNativeEngine]);
 
-  const handleRefreshDevices = useCallback(async () => {
-    try {
-      const payload = await invoke<unknown>('native_audio_list_devices_v2');
-      const devices = parseNativeAudioOutputDevices(payload);
-      setOutputDevices(devices);
-      setSelectedDeviceId((previous) => {
-        if (!previous) return previous;
-        if (devices.some((device) => device.id === previous)) return previous;
-        const matchByName = devices.find((device) => device.name === previous);
-        return matchByName ? matchByName.id : previous;
-      });
-      appendLog(t('pages.native-debug.log.outputDevicesFetched', { count: devices.length }));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      appendLog(t('pages.native-debug.log.outputDevicesFetchFailed', { message }));
-    }
-  }, [appendLog, t]);
-
   const handleApplyOutputBackend = useCallback(async () => {
     const backendId = selectedBackend.length > 0 ? selectedBackend : null;
 
@@ -765,16 +707,8 @@ export const NativeDebugPage: React.FC = () => {
       );
 
       if (componentsState.outputBackendId && componentsState.outputBackendId !== parsed.outputBackendId) {
-        setSelectedDeviceId('');
-        setOutputDevices([]);
-        await broadcastDataUpdate(
-          STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-          null,
-          TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
-        );
+        await broadcastSignal(TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED);
       }
-
-      await handleRefreshDevices();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.outputBackendSwitchFailed', { message }));
@@ -782,7 +716,6 @@ export const NativeDebugPage: React.FC = () => {
   }, [
     appendLog,
     componentsState.outputBackendId,
-    handleRefreshDevices,
     selectedBackend,
     t,
   ]);
@@ -815,31 +748,24 @@ export const NativeDebugPage: React.FC = () => {
     }
   }, [appendLog, selectedInput, t]);
 
-  const handleApplyDevice = useCallback(async () => {
-    const selected = selectedDeviceId.length > 0 ? outputDevices.find((device) => device.id === selectedDeviceId) ?? null : null;
-    const deviceId = selected?.id ?? null;
-    const deviceName = selected ? selected.name : selectedDeviceId.length > 0 ? selectedDeviceId : null;
-
+  const handleRefreshOutputRoute = useCallback(async () => {
     try {
-      await broadcastDataUpdate(
-        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-        deviceId && deviceName ? { id: deviceId, name: deviceName } : null,
-        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
-      );
       await invoke('native_audio_select_device', {
-        deviceId,
-        deviceName,
+        deviceId: null,
+        deviceName: null,
       });
+      await broadcastSignal(TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED);
+      await handleRefreshAudioComponents();
       appendLog(
         t('pages.native-debug.log.outputDeviceSwitched', {
-          device: deviceName || t('pages.native-debug.outputDevice.default'),
+          device: t('pages.native-debug.outputDevice.default'),
         })
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendLog(t('pages.native-debug.log.outputDeviceSwitchFailed', { message }));
     }
-  }, [appendLog, outputDevices, selectedDeviceId, t]);
+  }, [appendLog, handleRefreshAudioComponents, t]);
 
   const applyDspChain = useCallback(
     async (
@@ -1401,8 +1327,6 @@ export const NativeDebugPage: React.FC = () => {
             srcTargetRate={srcTargetRate}
             dynamicSrcSettings={dynamicSrcSettings}
             nativeMeta={nativeMeta}
-            selectedDeviceId={selectedDeviceId}
-            outputDevices={outputDevices}
             isPlaying={state.playbackState === 'playing'}
             getFrequencyData={getFrequencyData}
             setSelectedBackend={setSelectedBackend}
@@ -1411,7 +1335,6 @@ export const NativeDebugPage: React.FC = () => {
             setSrcBackend={setSrcBackend}
             setSrcTargetRate={setSrcTargetRate}
             setDynamicSrcSettings={setDynamicSrcSettings}
-            setSelectedDeviceId={setSelectedDeviceId}
             handleRefreshAudioComponents={handleRefreshAudioComponents}
             handleApplyOutputBackend={handleApplyOutputBackend}
             handleApplyAudioInput={handleApplyAudioInput}
@@ -1419,8 +1342,7 @@ export const NativeDebugPage: React.FC = () => {
             handleApplyTuningProfile={handleApplyTuningProfile}
             handleApplySrcPolicy={handleApplySrcPolicy}
             applyDynamicSrcAutoSettings={applyDynamicSrcAutoSettings}
-            handleRefreshDevices={handleRefreshDevices}
-            handleApplyDevice={handleApplyDevice}
+            handleRefreshOutputRoute={handleRefreshOutputRoute}
           />
           <NativeDebugRobustnessPanel
             t={t}

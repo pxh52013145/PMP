@@ -156,7 +156,6 @@ export const STORAGE_KEYS = {
 
   // === Native Audio ===
   NATIVE_AUDIO_OUTPUT_BACKEND: 'pixel-matrix-native-audio-output-backend', // 输出后端 ID（string | null）
-  NATIVE_AUDIO_OUTPUT_DEVICE: 'pixel-matrix-native-audio-output-device', // 输出设备名称（string | null）
   NATIVE_AUDIO_INPUT_ID: 'pixel-matrix-native-audio-input-id', // 输入/解码组件 ID（string | null）
   NATIVE_AUDIO_GAIN_DB: 'pixel-matrix-native-audio-gain-db', // Gain（number，dB）
   NATIVE_AUDIO_DSP_CHAIN: 'pixel-matrix-native-audio-dsp-chain', // DSP chain（array）

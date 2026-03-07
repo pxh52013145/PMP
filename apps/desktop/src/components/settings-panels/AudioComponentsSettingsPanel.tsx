@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
-import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
+import {
+  broadcastDataUpdate,
+  broadcastSignal,
+  STORAGE_KEYS,
+  TAURI_EVENTS,
+} from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -17,12 +22,6 @@ type NativeAudioComponentsState = {
   outputSampleRate: number | null;
   preferredInputId: string | null;
   activeInputId: string | null;
-};
-
-type NativeAudioOutputDevice = {
-  id: string;
-  name: string;
-  isDefault: boolean;
 };
 
 type OutputBackendOption = {
@@ -45,30 +44,6 @@ function parseNativeAudioComponentsState(payload: unknown): NativeAudioComponent
   return { outputBackendId, outputDeviceId, outputDevice, outputSampleRate, preferredInputId, activeInputId };
 }
 
-function parseNativeAudioOutputDevices(payload: unknown): NativeAudioOutputDevice[] {
-  if (!Array.isArray(payload)) return [];
-
-  const parsed: NativeAudioOutputDevice[] = [];
-  const seen = new Set<string>();
-  for (const item of payload) {
-    const record = asRecord(item);
-    const id = typeof record?.id === 'string' ? record.id.trim() : '';
-    const name = typeof record?.name === 'string' ? record.name.trim() : '';
-    if (!id || !name) continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-
-    parsed.push({
-      id,
-      name,
-      isDefault: typeof record?.isDefault === 'boolean' ? record.isDefault : false,
-    });
-  }
-
-  parsed.sort((a, b) => a.name.localeCompare(b.name));
-  return parsed;
-}
-
 export function AudioComponentsSettingsPanel() {
   const t = useT();
   const { isNativeAvailable } = useAudioEngine();
@@ -89,8 +64,6 @@ export function AudioComponentsSettingsPanel() {
   });
   const [outputBackends, setOutputBackends] = useState<string[]>([]);
   const [selectedBackend, setSelectedBackend] = useState('');
-  const [outputDevices, setOutputDevices] = useState<NativeAudioOutputDevice[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [audioInputs, setAudioInputs] = useState<string[]>([]);
   const [selectedInput, setSelectedInput] = useState('');
 
@@ -211,7 +184,6 @@ export function AudioComponentsSettingsPanel() {
       setComponentsState(parsed);
       setSelectedBackend(parsed.outputBackendId ?? '');
       setSelectedInput(parsed.preferredInputId ?? '');
-      setSelectedDeviceId(parsed.outputDeviceId ?? '');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -234,33 +206,10 @@ export function AudioComponentsSettingsPanel() {
     }
   }, [canUseBackend]);
 
-  const refreshDevices = useCallback(async () => {
-    if (!canUseBackend) return;
-    if (busyRef.current) return;
-
-    busyRef.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      const payload = await invoke<unknown>('native_audio_list_devices_v2');
-      const parsed = parseNativeAudioOutputDevices(payload);
-      setOutputDevices(parsed);
-      if (selectedDeviceId.length === 0 && componentsState.outputDevice) {
-        const current = parsed.find((device) => device.name === componentsState.outputDevice);
-        if (current) setSelectedDeviceId(current.id);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }, [canUseBackend, componentsState.outputDevice, selectedDeviceId]);
-
   useEffect(() => {
     if (!canUseBackend) return;
-    void refreshComponents().then(() => refreshDevices());
-  }, [canUseBackend, refreshComponents, refreshDevices]);
+    void refreshComponents();
+  }, [canUseBackend, refreshComponents]);
 
   const badge = useMemo(() => {
     if (!canUseBackend) return t('settings.audioComponents.badge.unavailable');
@@ -281,7 +230,6 @@ export function AudioComponentsSettingsPanel() {
     setBusy(true);
     setError(null);
 
-    let needsRefreshDevices = false;
     try {
       const payload = await invoke<unknown>('native_audio_select_output_backend', { backendId });
       const parsed = parseNativeAudioComponentsState(payload);
@@ -296,16 +244,8 @@ export function AudioComponentsSettingsPanel() {
       );
 
       if (prevBackend && prevBackend !== parsed.outputBackendId) {
-        setSelectedDeviceId('');
-        setOutputDevices([]);
-        await broadcastDataUpdate(
-          STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-          null,
-          TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
-        );
+        await broadcastSignal(TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED);
       }
-
-      needsRefreshDevices = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSelectedBackend(componentsState.outputBackendId ?? '');
@@ -313,51 +253,34 @@ export function AudioComponentsSettingsPanel() {
       busyRef.current = false;
       setBusy(false);
     }
+    void refreshComponents();
+  }, [canUseBackend, componentsState.outputBackendId, refreshComponents, selectedBackend]);
 
-    if (needsRefreshDevices) {
-      void refreshDevices();
-    }
-  }, [canUseBackend, componentsState.outputBackendId, refreshDevices, selectedBackend]);
-
-  const handleApplyDevice = useCallback(async () => {
+  const handleRefreshOutputRoute = useCallback(async () => {
     if (!canUseBackend) return;
     if (busyRef.current) return;
-
-    const deviceId = selectedDeviceId.length > 0 ? selectedDeviceId : null;
-    const selected = deviceId ? outputDevices.find((device) => device.id === deviceId) ?? null : null;
-    const deviceName = deviceId ? selected?.name ?? null : null;
 
     busyRef.current = true;
     setBusy(true);
     setError(null);
 
-    let needsRefreshComponents = false;
     try {
-      await invoke('native_audio_select_device', { deviceId, deviceName });
-      await broadcastDataUpdate(
-        STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-        deviceId && selected ? { id: deviceId, name: selected.name } : null,
-        TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED
-      );
-      needsRefreshComponents = true;
+      await invoke('native_audio_select_device', { deviceId: null, deviceName: null });
+      await broadcastSignal(TAURI_EVENTS.NATIVE_AUDIO_OUTPUT_DEVICE_UPDATED);
+      await refreshComponents();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-
-    if (needsRefreshComponents) {
-      void refreshComponents();
-    }
-  }, [canUseBackend, outputDevices, refreshComponents, selectedDeviceId]);
+  }, [canUseBackend, refreshComponents]);
 
   const handleOpenAsioControlPanel = useCallback(async () => {
     if (!canUseBackend) return;
     if (busyRef.current) return;
 
-    const selected = selectedDeviceId.length > 0 ? outputDevices.find((device) => device.id === selectedDeviceId) ?? null : null;
-    const deviceName = componentsState.outputDevice ?? selected?.name ?? null;
+    const deviceName = componentsState.outputDevice ?? null;
 
     busyRef.current = true;
     setBusy(true);
@@ -371,7 +294,7 @@ export function AudioComponentsSettingsPanel() {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [canUseBackend, componentsState.outputDevice, outputDevices, selectedDeviceId]);
+  }, [canUseBackend, componentsState.outputDevice]);
 
   const handleApplyAudioInput = useCallback(async () => {
     if (!canUseBackend) return;
@@ -466,48 +389,29 @@ export function AudioComponentsSettingsPanel() {
         <div className="settings-param-head">
           <p className="settings-param-eyebrow">OUTPUT DEVICE</p>
           <h3 className="settings-param-title">{t('settings.audioComponents.outputDevice.title')}</h3>
-          <p className="settings-param-subtitle">Target Device & Hardware Route</p>
+          <p className="settings-param-subtitle">System Output Route</p>
         </div>
 
         {!canUseBackend ? (
           <p className="settings-card-note">{t('settings.audioComponents.note.requireNative')}</p>
         ) : (
           <>
-            <div className="settings-inline-row">
-              <div className="settings-inline-row-copy">
-                <p className="settings-inline-row-title">{t('settings.audioComponents.outputDevice.select.ariaLabel')}</p>
-              </div>
-              <div className="settings-inline-row-controls settings-section-controls--stretch">
-                <select
-                  className="settings-select"
-                  value={selectedDeviceId}
-                  onChange={(e) => setSelectedDeviceId(e.target.value)}
-                  aria-label={t('settings.audioComponents.outputDevice.select.ariaLabel')}
-                  disabled={busy}
-                >
-                  <option value="">{t('settings.audioComponents.outputDevice.default')}</option>
-                  {outputDevices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
             <p className="settings-card-note">
               {t('settings.audioComponents.outputDevice.current', {
                 device: componentsState.outputDevice ?? t('settings.audioComponents.outputDevice.default'),
                 sampleRate: componentsState.outputSampleRate ? `${componentsState.outputSampleRate} Hz` : '\u2014',
               })}
             </p>
+            <p className="settings-card-note">{t('settings.audioComponents.outputDevice.desc')}</p>
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void refreshDevices()} disabled={busy}>
+              <button
+                type="button"
+                className="settings-action-btn"
+                onClick={() => void handleRefreshOutputRoute()}
+                disabled={busy}
+              >
                 {t('common.action.refresh')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={() => void handleApplyDevice()} disabled={busy}>
-                {t('common.action.apply')}
               </button>
               {hasAsioFeature && (selectedBackend === 'asio' || componentsState.outputBackendId === 'asio') && (
                 <button

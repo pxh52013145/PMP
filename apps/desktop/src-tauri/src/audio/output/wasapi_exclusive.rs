@@ -719,10 +719,9 @@ pub struct WasapiExclusiveBackend {
 
 impl WasapiExclusiveBackend {
     pub fn new() -> Self {
-        let output_quantization_mode_bits =
-            Arc::new(AtomicU32::new(quantization_mode_to_bits(
-                NativeAudioOutputQuantizationMode::Round,
-            )));
+        let output_quantization_mode_bits = Arc::new(AtomicU32::new(quantization_mode_to_bits(
+            NativeAudioOutputQuantizationMode::Round,
+        )));
         Self {
             state: Arc::new(Mutex::new(BackendState::default())),
             output_quantization_mode_bits,
@@ -816,10 +815,9 @@ pub struct WasapiSharedRawBackend {
 
 impl WasapiSharedRawBackend {
     pub fn new() -> Self {
-        let output_quantization_mode_bits =
-            Arc::new(AtomicU32::new(quantization_mode_to_bits(
-                NativeAudioOutputQuantizationMode::Round,
-            )));
+        let output_quantization_mode_bits = Arc::new(AtomicU32::new(quantization_mode_to_bits(
+            NativeAudioOutputQuantizationMode::Round,
+        )));
         Self {
             state: Arc::new(Mutex::new(BackendState::default())),
             output_quantization_mode_bits,
@@ -962,6 +960,17 @@ impl AudioOutputBackend for WasapiExclusiveBackend {
             .map(|device| device.name)
     }
 
+    fn default_device_info(&self) -> OutputStreamInfo {
+        resolve_default_render_device()
+            .ok()
+            .map(|device| OutputStreamInfo {
+                device_id: Some(device.id),
+                device_name: Some(device.name),
+                output_sample_rate: None,
+            })
+            .unwrap_or_default()
+    }
+
     fn current_info(&self) -> OutputStreamInfo {
         let guard = self.state.lock();
         let Ok(guard) = guard else {
@@ -1091,6 +1100,17 @@ impl AudioOutputBackend for WasapiSharedRawBackend {
         resolve_default_render_device()
             .ok()
             .map(|device| device.name)
+    }
+
+    fn default_device_info(&self) -> OutputStreamInfo {
+        resolve_default_render_device()
+            .ok()
+            .map(|device| OutputStreamInfo {
+                device_id: Some(device.id),
+                device_name: Some(device.name),
+                output_sample_rate: None,
+            })
+            .unwrap_or_default()
     }
 
     fn current_info(&self) -> OutputStreamInfo {
@@ -2298,13 +2318,11 @@ impl WasapiExclusiveSink {
                 let mut start = 0usize;
                 let mut discarded_by_clear = false;
                 while start < local.len() {
-                    let push_result = inner_clone
-                        .render_queue
-                        .push_interleaved_guarded(
-                            &local[start..],
-                            channels,
-                            observed_render_clear_epoch,
-                        );
+                    let push_result = inner_clone.render_queue.push_interleaved_guarded(
+                        &local[start..],
+                        channels,
+                        observed_render_clear_epoch,
+                    );
                     if push_result.cleared {
                         observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
                         local.clear();
@@ -3105,13 +3123,11 @@ impl WasapiSharedRawSink {
                 let mut start = 0usize;
                 let mut discarded_by_clear = false;
                 while start < local.len() {
-                    let push_result = inner_clone
-                        .render_queue
-                        .push_interleaved_guarded(
-                            &local[start..],
-                            channels,
-                            observed_render_clear_epoch,
-                        );
+                    let push_result = inner_clone.render_queue.push_interleaved_guarded(
+                        &local[start..],
+                        channels,
+                        observed_render_clear_epoch,
+                    );
                     if push_result.cleared {
                         observed_render_clear_epoch = inner_clone.render_queue.clear_epoch();
                         local.clear();
@@ -3344,11 +3360,8 @@ fn render_once(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    let output_quantization_mode = quantization_mode_from_bits(
-        inner
-            .output_quantization_mode_bits
-            .load(Ordering::Acquire),
-    );
+    let output_quantization_mode =
+        quantization_mode_from_bits(inner.output_quantization_mode_bits.load(Ordering::Acquire));
     let frames = stream.buffer_frame_count;
 
     if !playing || inner.render_queue.is_finished_and_empty() {
@@ -3423,11 +3436,8 @@ fn render_once_shared_raw(
 
     let playing = inner.playing.load(Ordering::Acquire);
     let volume = f32::from_bits(inner.volume_bits.load(Ordering::Acquire));
-    let output_quantization_mode = quantization_mode_from_bits(
-        inner
-            .output_quantization_mode_bits
-            .load(Ordering::Acquire),
-    );
+    let output_quantization_mode =
+        quantization_mode_from_bits(inner.output_quantization_mode_bits.load(Ordering::Acquire));
 
     let padding = unsafe {
         stream
@@ -3509,7 +3519,8 @@ fn render_frames(
         let profile = SCHEDULER.profile();
         let retry_attempts = callback_pop_retry_attempts(profile).max(1);
         let retry_spins = callback_pop_retry_spins(profile);
-        let retry_wait = exclusive_render_pop_wait_timeout(stream.sample_rate, stream.buffer_frame_count);
+        let retry_wait =
+            exclusive_render_pop_wait_timeout(stream.sample_rate, stream.buffer_frame_count);
         let mut popped = inner
             .render_queue
             .pop_chunk_into(scratch, total_samples, Duration::ZERO);
@@ -3733,8 +3744,10 @@ fn render_frames_shared_raw(
         let profile = SCHEDULER.profile();
         let retry_attempts = callback_pop_retry_attempts(profile).max(1);
         let retry_spins = callback_pop_retry_spins(profile);
-        let retry_wait =
-            shared_raw_render_pop_wait_timeout(stream.sample_rate, stream.low_latency_period_frames);
+        let retry_wait = shared_raw_render_pop_wait_timeout(
+            stream.sample_rate,
+            stream.low_latency_period_frames,
+        );
         let mut popped = inner
             .render_queue
             .pop_chunk_into(scratch, total_samples, Duration::ZERO);

@@ -185,21 +185,34 @@ pub trait AudioOutputBackend: Send + Sync {
     fn id(&self) -> &'static str;
     fn list_devices(&self) -> Result<Vec<String>, String>;
     fn list_devices_v2(&self) -> Result<Vec<OutputDeviceInfo>, String> {
-        let default_name = self.default_device_name();
+        let default_info = self.default_device_info();
         self.list_devices().map(|devices| {
             devices
                 .into_iter()
                 .map(|name| OutputDeviceInfo {
                     id: name.clone(),
                     name: name.clone(),
-                    is_default: default_name
+                    is_default: default_info
+                        .device_id
                         .as_deref()
-                        .is_some_and(|default_device| default_device == name),
+                        .is_some_and(|default_device| default_device == name)
+                        || default_info
+                            .device_name
+                            .as_deref()
+                            .is_some_and(|default_device| default_device == name),
                 })
                 .collect()
         })
     }
     fn default_device_name(&self) -> Option<String>;
+    fn default_device_info(&self) -> OutputStreamInfo {
+        let device_name = self.default_device_name();
+        OutputStreamInfo {
+            device_id: device_name.clone(),
+            device_name,
+            output_sample_rate: None,
+        }
+    }
     fn current_info(&self) -> OutputStreamInfo;
     fn is_stream_open(&self) -> bool;
     fn select_device(&self, device_name: Option<String>) -> Result<OutputStreamInfo, String>;

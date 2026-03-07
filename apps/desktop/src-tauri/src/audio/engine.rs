@@ -46,6 +46,7 @@ const SHARED_TIMELINE_STRESS_RESET_GRACE_MS: u64 = 1_500;
 const STOP_RELEASE_BUFFER_THRESHOLD_DEFAULT_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MIN_MIB: usize = 16;
 const STOP_RELEASE_BUFFER_THRESHOLD_MAX_MIB: usize = 4096;
+const DEFAULT_OUTPUT_ROUTE_FOLLOW_INTERVAL: Duration = Duration::from_millis(1_000);
 
 pub(crate) static ENGINE: Lazy<Mutex<NativeAudioEngine>> =
     Lazy::new(|| Mutex::new(NativeAudioEngine::new()));
@@ -123,6 +124,23 @@ fn output_error_looks_like_device_disconnect(err: &AudioOutputError) -> bool {
         || message.contains("device invalidated")
         || message.contains("audclnt_e_device_invalidated")
         || message.contains("device not found")
+}
+
+fn output_route_matches(expected: &OutputStreamInfo, actual: &OutputStreamInfo) -> bool {
+    if let (Some(expected_id), Some(actual_id)) =
+        (expected.device_id.as_deref(), actual.device_id.as_deref())
+    {
+        return expected_id == actual_id;
+    }
+
+    if let (Some(expected_name), Some(actual_name)) = (
+        expected.device_name.as_deref(),
+        actual.device_name.as_deref(),
+    ) {
+        return expected_name == actual_name;
+    }
+
+    false
 }
 
 fn clamp_min_start_samples_to_reachable(
@@ -526,6 +544,7 @@ pub(crate) struct NativeAudioEngine {
     output_sample_rate: Option<u32>,
     device_id: Option<String>,
     device_name: Option<String>,
+    last_default_output_route_check_at: Option<Instant>,
     volume: f32,
     gain_db: f32,
     replay_gain_db: f32,
@@ -734,6 +753,7 @@ impl NativeAudioEngine {
             output_sample_rate: None,
             device_id: None,
             device_name: None,
+            last_default_output_route_check_at: None,
             volume: 0.7,
             gain_db: 0.0,
             replay_gain_db: 0.0,
@@ -1020,18 +1040,7 @@ impl NativeAudioEngine {
             return Ok(false);
         }
 
-        self.output_sample_rate = prepared.output_info.output_sample_rate;
-        self.device_id = prepared
-            .output_info
-            .device_id
-            .or_else(|| prepared.output_info.device_name.clone())
-            .or_else(|| self.device_id.clone());
-        self.device_name = prepared
-            .output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
+        self.apply_output_stream_info(prepared.output_info.clone());
 
         self.duration = prepared.meta.duration;
         self.decoded_channels = prepared.meta.channels;
@@ -1293,13 +1302,7 @@ impl NativeAudioEngine {
         } else {
             match self.output_backend.create_sink() {
                 Ok((_sink, output_info)) => {
-                    self.output_sample_rate = output_info.output_sample_rate;
-                    self.device_id = output_info
-                        .device_id
-                        .or_else(|| output_info.device_name.clone());
-                    self.device_name = output_info
-                        .device_name
-                        .or_else(|| self.output_backend.default_device_name());
+                    self.apply_output_stream_info(output_info);
                 }
                 Err(err) => {
                     self.output_backend = previous_backend.clone();
@@ -1336,17 +1339,88 @@ impl NativeAudioEngine {
         Ok(())
     }
 
-    pub(crate) fn apply_selected_output_device(&mut self, output_info: OutputStreamInfo) {
-        self.sync_clock();
-        self.output_sample_rate = output_info.output_sample_rate;
+    fn current_output_route_state(&self) -> OutputStreamInfo {
+        OutputStreamInfo {
+            device_id: self.device_id.clone(),
+            device_name: self.device_name.clone(),
+            output_sample_rate: self.output_sample_rate,
+        }
+    }
+
+    fn apply_output_stream_info(&mut self, output_info: OutputStreamInfo) {
+        let default_info = self.output_backend.default_device_info();
+        let default_device_id = default_info
+            .device_id
+            .clone()
+            .or_else(|| default_info.device_name.clone());
+        let default_device_name = default_info.device_name;
+
+        self.output_sample_rate = output_info.output_sample_rate.or(self.output_sample_rate);
         self.device_id = output_info
             .device_id
             .or_else(|| output_info.device_name.clone())
+            .or(default_device_id)
             .or_else(|| self.device_id.clone());
         self.device_name = output_info
             .device_name
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
+            .clone()
+            .or(default_device_name)
+            .or_else(|| self.device_name.clone());
+    }
+
+    fn maybe_follow_system_default_output_route(&mut self) -> Result<bool, String> {
+        let now = Instant::now();
+        if self
+            .last_default_output_route_check_at
+            .is_some_and(|last| now.duration_since(last) < DEFAULT_OUTPUT_ROUTE_FOLLOW_INTERVAL)
+        {
+            return Ok(false);
+        }
+        self.last_default_output_route_check_at = Some(now);
+
+        let default_info = self.output_backend.default_device_info();
+        let default_has_route =
+            default_info.device_id.is_some() || default_info.device_name.is_some();
+        if !default_has_route {
+            return Ok(false);
+        }
+
+        let backend_current_info = self.output_backend.current_info();
+        let backend_has_route =
+            backend_current_info.device_id.is_some() || backend_current_info.device_name.is_some();
+
+        if backend_has_route && !output_route_matches(&default_info, &backend_current_info) {
+            info_log(format!(
+                "[NativeAudio] Following system default output route on {}: {:?} -> {:?}",
+                self.output_backend.id(),
+                backend_current_info.device_name.as_deref(),
+                default_info.device_name.as_deref()
+            ));
+            let output_info = self.output_backend.select_device(None)?;
+            self.apply_output_stream_info(output_info);
+            self.reset_recovery_tracking();
+            self.clear_error();
+            if self.current_track.is_some() {
+                self.rebuild_sink_on_new_device()?;
+            }
+            return Ok(true);
+        }
+
+        if !output_route_matches(&default_info, &self.current_output_route_state()) {
+            self.apply_output_stream_info(if backend_has_route {
+                backend_current_info
+            } else {
+                default_info
+            });
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub(crate) fn apply_selected_output_device(&mut self, output_info: OutputStreamInfo) {
+        self.sync_clock();
+        self.apply_output_stream_info(output_info);
 
         if let Err(err) = self.rebuild_sink_on_new_device() {
             self.set_error("NATIVE_AUDIO_REBUILD_SINK_FAILED", err);
@@ -1363,15 +1437,7 @@ impl NativeAudioEngine {
 
         let output_info = self.output_backend.select_device(None)?;
         self.sync_clock();
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_id = output_info
-            .device_id
-            .or_else(|| output_info.device_name.clone())
-            .or_else(|| self.device_id.clone());
-        self.device_name = output_info
-            .device_name
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
+        self.apply_output_stream_info(output_info);
 
         self.rebuild_sink_on_new_device()?;
         self.reset_recovery_tracking();
@@ -1424,14 +1490,15 @@ impl NativeAudioEngine {
                 .unwrap_or(48_000)
                 .max(1);
 
-            let (inner_resume_target, inner_resume_timeout) = self.streaming_prebuffer_interactive_wait(
-                sample_rate,
-                channels,
-                streaming.render_queue.capacity_samples(),
-                self.duration,
-                StreamingPrebufferKind::StartOrSeek,
-                self.streaming_prebuffer_start_or_seek_seconds,
-            );
+            let (inner_resume_target, inner_resume_timeout) = self
+                .streaming_prebuffer_interactive_wait(
+                    sample_rate,
+                    channels,
+                    streaming.render_queue.capacity_samples(),
+                    self.duration,
+                    StreamingPrebufferKind::StartOrSeek,
+                    self.streaming_prebuffer_start_or_seek_seconds,
+                );
             if inner_resume_target > 0 && inner_resume_timeout > Duration::ZERO {
                 if streaming.render_queue.len_samples() < inner_resume_target {
                     streaming
@@ -1450,9 +1517,9 @@ impl NativeAudioEngine {
 
                 if guard_state.active_wrapper_id > 0 && guard_timeout > Duration::ZERO {
                     let sample_rate = sample_rate as f64;
-                    let outer_resume_target =
-                        ((sample_rate * channels as f64 * guard_min_seconds).ceil() as usize)
-                            .max(channels.saturating_mul(48));
+                    let outer_resume_target = ((sample_rate * channels as f64 * guard_min_seconds)
+                        .ceil() as usize)
+                        .max(channels.saturating_mul(48));
                     let seek_epoch = self.seek_epoch.load(Ordering::Acquire);
                     let wait_target = outer_resume_target.max(guard_state.low_watermark_samples);
                     let _ =
@@ -1598,12 +1665,7 @@ impl NativeAudioEngine {
         self.shutdown_streaming();
 
         let (sink, output_info) = self.output_backend.create_sink()?;
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
+        self.apply_output_stream_info(output_info);
         sink.pause();
 
         let open_src_policy = self.effective_src_policy_for_open();
@@ -1671,10 +1733,6 @@ impl NativeAudioEngine {
             self.decoded_channels,
             self.decoded_sample_rate,
         ));
-
-        if self.device_name.is_none() {
-            self.device_name = self.output_backend.default_device_name();
-        }
 
         sink.pause();
         sink.set_volume(self.effective_volume());
@@ -2229,12 +2287,11 @@ impl NativeAudioEngine {
                     if let Some(sink) = &seek_sink {
                         sink.flush();
                     }
-                    let (seek_resume_samples, seek_resume_timeout) =
-                        if resume_playing {
-                            self.seek_resume_wait_plan(seek_render_queue.capacity_samples())
-                        } else {
-                            (0, Duration::ZERO)
-                        };
+                    let (seek_resume_samples, seek_resume_timeout) = if resume_playing {
+                        self.seek_resume_wait_plan(seek_render_queue.capacity_samples())
+                    } else {
+                        (0, Duration::ZERO)
+                    };
                     let available_samples = seek_render_queue.len_samples();
                     apply_streaming_seek_state(
                         self,
@@ -2248,7 +2305,8 @@ impl NativeAudioEngine {
                             && seek_resume_samples > 0
                             && seek_resume_timeout > Duration::ZERO
                         {
-                            seek_render_queue.wait_for_samples(seek_resume_samples, seek_resume_timeout);
+                            seek_render_queue
+                                .wait_for_samples(seek_resume_samples, seek_resume_timeout);
                         }
 
                         let available_after_wait = seek_render_queue.len_samples();
@@ -2309,12 +2367,11 @@ impl NativeAudioEngine {
                         if let Some(sink) = &seek_sink {
                             sink.flush();
                         }
-                        let (seek_resume_samples, seek_resume_timeout) =
-                            if resume_playing {
-                                self.seek_resume_wait_plan(seek_render_queue.capacity_samples())
-                            } else {
-                                (0, Duration::ZERO)
-                            };
+                        let (seek_resume_samples, seek_resume_timeout) = if resume_playing {
+                            self.seek_resume_wait_plan(seek_render_queue.capacity_samples())
+                        } else {
+                            (0, Duration::ZERO)
+                        };
                         let available_samples = seek_render_queue.len_samples();
                         apply_streaming_seek_state(
                             self,
@@ -2427,12 +2484,7 @@ impl NativeAudioEngine {
         }
 
         let (sink, output_info) = self.output_backend.create_sink()?;
-        self.output_sample_rate = output_info.output_sample_rate;
-        self.device_name = output_info
-            .device_name
-            .clone()
-            .or_else(|| self.device_name.clone())
-            .or_else(|| self.output_backend.default_device_name());
+        self.apply_output_stream_info(output_info);
         sink.pause();
 
         let (source, channels, sample_rate) = if let (Some(samples), channels, sample_rate) = (
@@ -2559,6 +2611,15 @@ impl NativeAudioEngine {
         }
 
         let robust_recovery_active = underrun_recovery_active || shared_stress_active;
+
+        match self.maybe_follow_system_default_output_route() {
+            Ok(true) => return true,
+            Ok(false) => {}
+            Err(err) => {
+                self.set_error("NATIVE_AUDIO_OUTPUT_ROUTE_SYNC_FAILED", err);
+                return true;
+            }
+        }
 
         if let Some(err) = self.output_backend.take_error() {
             if let Some(sink) = &self.sink {
@@ -3636,6 +3697,92 @@ mod tests {
         }
     }
 
+    struct DefaultFollowingOutputBackend {
+        current_info: Mutex<OutputStreamInfo>,
+        default_info: Mutex<OutputStreamInfo>,
+        select_device_calls: AtomicUsize,
+        create_sink_calls: AtomicUsize,
+        last_created_sink: Mutex<Option<Arc<CallSink>>>,
+    }
+
+    impl DefaultFollowingOutputBackend {
+        fn new(current_info: OutputStreamInfo, default_info: OutputStreamInfo) -> Self {
+            Self {
+                current_info: Mutex::new(current_info),
+                default_info: Mutex::new(default_info),
+                select_device_calls: AtomicUsize::new(0),
+                create_sink_calls: AtomicUsize::new(0),
+                last_created_sink: Mutex::new(None),
+            }
+        }
+
+        fn set_default_info(&self, output_info: OutputStreamInfo) {
+            if let Ok(mut guard) = self.default_info.lock() {
+                *guard = output_info;
+            }
+        }
+    }
+
+    impl AudioOutputBackend for DefaultFollowingOutputBackend {
+        fn id(&self) -> &'static str {
+            "wasapi-shared-raw"
+        }
+
+        fn list_devices(&self) -> Result<Vec<String>, String> {
+            let default_name = self
+                .default_info
+                .lock()
+                .ok()
+                .and_then(|guard| guard.device_name.clone());
+            Ok(default_name.into_iter().collect())
+        }
+
+        fn default_device_name(&self) -> Option<String> {
+            self.default_info
+                .lock()
+                .ok()
+                .and_then(|guard| guard.device_name.clone())
+        }
+
+        fn default_device_info(&self) -> OutputStreamInfo {
+            self.default_info
+                .lock()
+                .ok()
+                .map(|guard| guard.clone())
+                .unwrap_or_default()
+        }
+
+        fn current_info(&self) -> OutputStreamInfo {
+            self.current_info
+                .lock()
+                .ok()
+                .map(|guard| guard.clone())
+                .unwrap_or_default()
+        }
+
+        fn is_stream_open(&self) -> bool {
+            true
+        }
+
+        fn select_device(&self, _device_name: Option<String>) -> Result<OutputStreamInfo, String> {
+            self.select_device_calls.fetch_add(1, Ordering::Relaxed);
+            let output_info = self.default_device_info();
+            if let Ok(mut guard) = self.current_info.lock() {
+                *guard = output_info.clone();
+            }
+            Ok(output_info)
+        }
+
+        fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
+            self.create_sink_calls.fetch_add(1, Ordering::Relaxed);
+            let sink = Arc::new(CallSink::default());
+            if let Ok(mut guard) = self.last_created_sink.lock() {
+                *guard = Some(sink.clone());
+            }
+            Ok((sink, self.current_info()))
+        }
+    }
+
     #[test]
     fn tick_recovers_from_device_disconnect_output_error() {
         let backend_impl = Arc::new(RecoveringOutputBackend::new(AudioOutputError {
@@ -3687,6 +3834,81 @@ mod tests {
             recovered_sink.play_calls.load(Ordering::Relaxed) > 0,
             "recovered sink should resume playback"
         );
+    }
+
+    #[test]
+    fn tick_follows_system_default_output_route_changes_without_disconnect_error() {
+        let backend_impl = Arc::new(DefaultFollowingOutputBackend::new(
+            OutputStreamInfo {
+                device_id: Some("old-device-id".to_string()),
+                device_name: Some("Old Device".to_string()),
+                output_sample_rate: Some(48_000),
+            },
+            OutputStreamInfo {
+                device_id: Some("old-device-id".to_string()),
+                device_name: Some("Old Device".to_string()),
+                output_sample_rate: Some(48_000),
+            },
+        ));
+        let backend: Arc<dyn AudioOutputBackend> = backend_impl.clone();
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        engine.current_track = Some(PathBuf::from("dummy.wav"));
+        engine.decoded_samples = Some(Arc::new(vec![0.0f32; 96_000]));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 120.0;
+        engine.current_position = 8.0;
+        engine.base_position = 8.0;
+        engine.playback_state = PlaybackState::Playing;
+        engine.desired_playback_state = PlaybackState::Playing;
+        engine.playback_started_at = Some(Instant::now() - Duration::from_millis(120));
+        engine.sink = Some(Arc::new(CallSink::default()));
+        engine.device_id = Some("old-device-id".to_string());
+        engine.device_name = Some("Old Device".to_string());
+
+        backend_impl.set_default_info(OutputStreamInfo {
+            device_id: Some("new-device-id".to_string()),
+            device_name: Some("New Device".to_string()),
+            output_sample_rate: Some(96_000),
+        });
+
+        let ticked = engine.tick();
+        assert!(ticked);
+        assert_eq!(backend_impl.select_device_calls.load(Ordering::Relaxed), 1);
+        assert!(backend_impl.create_sink_calls.load(Ordering::Relaxed) >= 1);
+        assert_eq!(engine.device_id.as_deref(), Some("new-device-id"));
+        assert_eq!(engine.device_name.as_deref(), Some("New Device"));
+        assert_eq!(engine.output_sample_rate, Some(96_000));
+        assert!(matches!(engine.playback_state, PlaybackState::Playing));
+
+        let recovered_sink = backend_impl
+            .last_created_sink
+            .lock()
+            .expect("sink lock")
+            .clone()
+            .expect("recovered sink");
+        assert!(recovered_sink.play_calls.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn build_components_payload_falls_back_to_system_default_route_when_idle() {
+        let backend: Arc<dyn AudioOutputBackend> = Arc::new(DefaultFollowingOutputBackend::new(
+            OutputStreamInfo::default(),
+            OutputStreamInfo {
+                device_id: Some("system-default-id".to_string()),
+                device_name: Some("System Default".to_string()),
+                output_sample_rate: None,
+            },
+        ));
+        let engine = NativeAudioEngine::new_with_backend(backend);
+
+        let payload = engine.build_components_payload();
+        assert_eq!(
+            payload.output_device_id.as_deref(),
+            Some("system-default-id")
+        );
+        assert_eq!(payload.output_device.as_deref(), Some("System Default"));
     }
 
     #[test]

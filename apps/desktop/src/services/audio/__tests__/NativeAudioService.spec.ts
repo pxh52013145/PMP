@@ -1607,9 +1607,9 @@ describe('NativeAudioService', () => {
     await (service as unknown as {
       selectOutputBackendInternal: (
         backendId: string | null,
-        options?: { persist?: boolean; clearDevice?: boolean }
+        options?: { persist?: boolean }
       ) => Promise<boolean>;
-    }).selectOutputBackendInternal('wasapi', { persist: false, clearDevice: false });
+    }).selectOutputBackendInternal('wasapi', { persist: false });
 
     snapshot = service.getRobustnessSnapshot?.();
     expect(snapshot?.outputBackendId).toBe('wasapi');
@@ -2402,11 +2402,6 @@ describe('NativeAudioService', () => {
   it('persists per-device dynamic SRC learning profile and increases effective timing scale', async () => {
     vi.useFakeTimers();
 
-    localStorage.setItem(
-      STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE,
-      JSON.stringify({ id: 'device-1', name: 'Device One' })
-    );
-
     const listenMock = listen as unknown as ReturnType<typeof vi.fn>;
     const handlers: Record<string, ((event: { payload?: unknown }) => void) | undefined> = {};
     listenMock.mockImplementation(async (eventName: string, handler: (event: { payload?: unknown }) => void) => {
@@ -2576,6 +2571,41 @@ describe('NativeAudioService', () => {
 
     service.destroy();
     vi.useRealTimers();
+  });
+
+  it('ignores legacy persisted output device preference on startup', async () => {
+    localStorage.setItem(
+      'pixel-matrix-native-audio-output-device',
+      JSON.stringify({ id: 'device-stale', name: 'Old Device' })
+    );
+
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'native_audio_list_output_backends') {
+        return Promise.resolve(['wasapi']);
+      }
+      if (cmd === 'native_audio_get_audio_components_state') {
+        return Promise.resolve({
+          outputBackendId: 'wasapi',
+          outputDeviceId: 'device-1',
+          outputDevice: 'Device One',
+        });
+      }
+      if (cmd === 'native_audio_get_engine_policy') {
+        return Promise.resolve({});
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(10);
+
+    expect(
+      invokeMock.mock.calls.some(([cmd]) => cmd === 'native_audio_select_device')
+    ).toBe(false);
+    expect(localStorage.getItem('pixel-matrix-native-audio-output-device')).toBeNull();
+
+    service.destroy();
   });
 
   it('tracks explicit L0/L1/L2 auto degradation and recovers back to L0', async () => {

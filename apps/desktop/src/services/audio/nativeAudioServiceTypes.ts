@@ -114,6 +114,8 @@ export type NativeAudioErrorPayload = {
 
 export type NativeAudioComponentsStatePayload = {
   outputBackendId?: string | null;
+  outputDeviceId?: string | null;
+  outputDevice?: string | null;
   preferredInputId?: string | null;
   activeInputId?: string | null;
 };

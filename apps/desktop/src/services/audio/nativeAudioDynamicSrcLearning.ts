@@ -1,36 +1,26 @@
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
-import { readString } from '../../modules/storage';
 import type {
   DynamicSrcLearningMap,
   DynamicSrcLearningRecord,
 } from './nativeAudioServiceTypes';
 
-export function buildDynamicSrcLearningDeviceKey(currentOutputBackendId: string | null): string {
-  const backend = currentOutputBackendId ?? 'unknown-backend';
-  const persistedOutputDevice = (() => {
-    try {
-      const raw = readString(STORAGE_KEYS.NATIVE_AUDIO_OUTPUT_DEVICE);
-      if (!raw) return '';
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object') {
-        const record = parsed as Record<string, unknown>;
-        if (typeof record.id === 'string' && record.id.trim().length > 0) {
-          return record.id.trim();
-        }
-        if (typeof record.name === 'string' && record.name.trim().length > 0) {
-          return record.name.trim();
-        }
-      }
-      if (typeof parsed === 'string' && parsed.trim().length > 0) {
-        return parsed.trim();
-      }
-    } catch {
-      // ignore
-    }
-    return '';
-  })();
+function sanitizeNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
-  return `${backend}::${persistedOutputDevice || 'default-device'}`;
+export function buildDynamicSrcLearningDeviceKey(
+  currentOutputBackendId: string | null,
+  currentOutputDeviceId: string | null,
+  currentOutputDeviceName: string | null,
+): string {
+  const backend = currentOutputBackendId ?? 'unknown-backend';
+  const device =
+    sanitizeNonEmptyString(currentOutputDeviceId) ??
+    sanitizeNonEmptyString(currentOutputDeviceName) ??
+    'default-device';
+
+  return `${backend}::${device}`;
 }
 
 export function parseDynamicSrcLearningProfile(
@@ -84,4 +74,3 @@ export function normalizeDynamicSrcLearningProfileForPersistence(
     .slice(0, maxItems);
   return Object.fromEntries(trimmedEntries);
 }
-
