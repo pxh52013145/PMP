@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import {
+  loadMusicLibraryBaseFieldCapabilities,
   loadMusicLibraryBaseState,
+  persistMusicLibraryBaseFieldCapabilities,
   persistMusicLibraryBaseState,
 } from '../basePersistence';
 
@@ -125,6 +127,81 @@ describe('basePersistence', () => {
       {
         mode: 'idle',
         debounceMs: 220,
+      }
+    );
+  });
+
+  it('loads persisted extension field capabilities', () => {
+    storageMocks.readJson.mockImplementation((key: string, fallback: unknown) => {
+      if (key === STORAGE_KEYS.MUSIC_LIBRARY_FIELD_CAPABILITIES_V1) {
+        return [
+          {
+            id: 'composerTag',
+            label: 'Composer Tag',
+            trackKey: 'composer',
+            filterable: true,
+            sortable: true,
+            groupable: true,
+          },
+          {
+            id: '',
+            label: '',
+          },
+        ];
+      }
+      return fallback;
+    });
+
+    expect(loadMusicLibraryBaseFieldCapabilities()).toEqual([
+      {
+        id: 'composerTag',
+        label: 'Composer Tag',
+        kind: 'text',
+        trackKey: 'composer',
+        filterable: true,
+        sortable: true,
+        groupable: true,
+        headerKey: undefined,
+        nativeFilterField: undefined,
+        nativeSortField: undefined,
+      },
+    ]);
+  });
+
+  it('persists normalized extension field capabilities payload', () => {
+    persistMusicLibraryBaseFieldCapabilities(
+      [
+        {
+          id: ' composerTag ',
+          label: ' Composer Tag ',
+          trackKey: ' composer ',
+          filterable: true,
+          sortable: true,
+          groupable: false,
+        },
+      ],
+      { debounceMs: 90 }
+    );
+
+    expect(storageMocks.writeJson).toHaveBeenCalledWith(
+      STORAGE_KEYS.MUSIC_LIBRARY_FIELD_CAPABILITIES_V1,
+      [
+        {
+          id: 'composerTag',
+          label: 'Composer Tag',
+          kind: 'text',
+          trackKey: 'composer',
+          filterable: true,
+          sortable: true,
+          groupable: false,
+          headerKey: undefined,
+          nativeFilterField: undefined,
+          nativeSortField: undefined,
+        },
+      ],
+      {
+        mode: 'idle',
+        debounceMs: 90,
       }
     );
   });

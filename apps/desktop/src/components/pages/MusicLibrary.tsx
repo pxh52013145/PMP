@@ -34,6 +34,7 @@ import {
   type MusicLibraryBaseFilterGroup,
   type MusicLibraryBaseGroupRule,
   type MusicLibraryBaseLogicalOperator,
+  type MusicLibraryBaseOrderField,
   type MusicLibraryBaseOperator,
   type MusicLibraryBaseQuery,
   type MusicLibraryBaseSortRule,
@@ -52,19 +53,32 @@ import {
   removeMusicLibraryBaseFilterGroup,
   removeMusicLibraryBaseGroupByRule,
   removeMusicLibraryBaseSortRule,
+  toggleMusicLibraryBaseSortField,
   updateMusicLibraryBaseFilterGroupOperator,
   updateMusicLibraryBaseGroupByRule,
   updateMusicLibraryBaseSortRule,
 } from '../../modules/music-library/baseState';
 import {
-  MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP,
-  MUSIC_LIBRARY_BASE_FILTER_FIELDS,
   MUSIC_LIBRARY_BASE_OPERATORS,
   MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP,
-  MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS,
 } from '../../modules/music-library/baseMeta';
 import {
+  registerMusicLibraryDiscoveredFieldCapabilitiesFromTracks,
+} from '../../modules/music-library/fieldDiscovery';
+import {
+  listRegisteredMusicLibraryBaseFieldCapabilities,
+  listMusicLibraryBaseFilterFieldIds,
+  listMusicLibraryBaseGroupFieldIds,
+  listMusicLibraryBaseOrderFieldIds,
+  registerMusicLibraryBaseFieldCapabilities,
+  resolveMusicLibraryBaseFieldHeaderKey,
+  resolveMusicLibraryBaseFieldLabel,
+  subscribeMusicLibraryBaseFieldCapabilities,
+} from '../../modules/music-library/fieldCapabilities';
+import {
+  loadMusicLibraryBaseFieldCapabilities,
   loadMusicLibraryBaseState,
+  persistMusicLibraryBaseFieldCapabilities,
   persistMusicLibraryBaseState,
 } from '../../modules/music-library/basePersistence';
 import {
@@ -74,10 +88,22 @@ import {
   LOCAL_TRACK_COLUMN_DEFINITIONS,
   normalizeLocalTrackColumnSettings,
   normalizeLocalTrackColumnWidth,
+  resolveMusicLibraryBaseFieldFromLocalTrackColumn,
   type LocalTrackColumnConfig,
   type LocalTrackColumnId,
 } from '../../modules/music-library/localTrackColumns';
 import { deriveLocalTrackLayoutModel } from '../../modules/music-library/localTrackLayout';
+import {
+  formatMusicLibraryFieldValue,
+  formatMusicLibraryFileSize,
+  formatMusicLibraryTimestamp,
+} from '../../modules/music-library/fieldValue';
+import {
+  buildMusicLibraryGroupedRows,
+  sliceMusicLibraryGroupedRows,
+  type MusicLibraryGroupedRow,
+} from '../../modules/music-library/groupedRows';
+import { compactTracksForMusicLibrary } from '../../modules/music-library/trackProjection';
 import {
   buildStableFallbackAuditSnapshot,
   buildTagsJsonFromText,
@@ -106,6 +132,31 @@ type ModuleCacheSnapshot = {
   hasMoreTracks: boolean;
   timestamp: number;
 };
+
+function getSelectableRuleFields<TField extends MusicLibraryBaseField>(
+  ruleId: string,
+  currentField: TField,
+  rules: Array<{ id: string; field: TField }>,
+  candidateFields: readonly TField[]
+): TField[] {
+  const usedFields = new Set(
+    rules.filter((rule) => rule.id !== ruleId).map((rule) => rule.field)
+  );
+  return candidateFields.filter((field) => field === currentField || !usedFields.has(field));
+}
+
+function getSelectableSortRuleFields(
+  ruleId: string,
+  currentField: MusicLibraryBaseOrderField,
+  sortRules: MusicLibraryBaseSortRule[],
+  groupRules: MusicLibraryBaseGroupRule[]
+): MusicLibraryBaseOrderField[] {
+  const groupedFields = new Set(groupRules.map((rule) => rule.field));
+  const candidateFields = listMusicLibraryBaseOrderFieldIds().filter(
+    (field) => field === currentField || !groupedFields.has(field)
+  ) as MusicLibraryBaseOrderField[];
+  return getSelectableRuleFields(ruleId, currentField, sortRules, candidateFields);
+}
 
 let moduleCache: ModuleCacheSnapshot | null = null;
 
@@ -162,14 +213,10 @@ const TRACK_LOAD_CHUNK_SIZE = 120;
 const TRACK_RENDER_CHUNK_SIZE = 160;
 const TRACK_SCROLL_LOAD_TRIGGER_PX = 320;
 const MODULE_CACHE_TRACK_CAP = 300;
-const TRACK_TEXT_MAX_CHARS = 200;
-const TRACK_TEXT_INTERN_POOL_MAX = 4096;
 const SEARCH_DEBOUNCE_MS = 180;
 const TRACK_ROW_HEIGHT_PX = 46;
 const TRACK_LIST_HEADER_HEIGHT_PX = 52;
 const TRACK_WINDOW_OVERSCAN_ROWS = 20;
-
-const trackTextInternPool = new Map<string, string>();
 
 type MissingCleanupConfirmTarget =
   | {
@@ -225,87 +272,6 @@ function isModuleCacheTrackMetadataCompatible(snapshot: ModuleCacheSnapshot): bo
       typeof track.fileSize === 'number' && Number.isFinite(track.fileSize) && track.fileSize > 0;
     return hasBitrate || hasFileSize;
   });
-}
-
-function trimTrackText(value: unknown, maxChars: number = TRACK_TEXT_MAX_CHARS): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
-}
-
-function internTrackText(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const existing = trackTextInternPool.get(value);
-  if (existing) return existing;
-  trackTextInternPool.set(value, value);
-  if (trackTextInternPool.size > TRACK_TEXT_INTERN_POOL_MAX) {
-    const oldestKey = trackTextInternPool.keys().next().value as string | undefined;
-    if (oldestKey) trackTextInternPool.delete(oldestKey);
-  }
-  return value;
-}
-
-function compactTrackForLibrary(track: Track): Track {
-  const safePath = typeof track.filePath === 'string' && track.filePath ? track.filePath : track.path;
-  const normalizedCoverUrl = typeof track.coverUrl === 'string' ? track.coverUrl.trim() : '';
-  const normalizedCoverLower = normalizedCoverUrl.toLowerCase();
-  const safeCoverUrl =
-    normalizedCoverLower.startsWith('blob:') ||
-    normalizedCoverLower.startsWith('http://') ||
-    normalizedCoverLower.startsWith('https://') ||
-    normalizedCoverLower.startsWith('pmp://cover/')
-      ? normalizedCoverUrl
-      : undefined;
-  const safeTitle = internTrackText(trimTrackText(track.title) || track.id) || track.id;
-  const safeArtist = internTrackText(trimTrackText(track.artist));
-  const safeAlbum = internTrackText(trimTrackText(track.album));
-  const safeGenre = internTrackText(trimTrackText(track.genre));
-  const safeCoverKey = internTrackText(trimTrackText(track.coverKey, 256));
-  const safeOriginalPath = internTrackText(trimTrackText(track.originalPath, 512));
-  const safeQuickFingerprint = internTrackText(trimTrackText(track.quickFingerprint, 80));
-  const safeComposer = internTrackText(trimTrackText(track.composer));
-  const safeFormat = internTrackText(trimTrackText(track.format, 32));
-  const safeCodecName = internTrackText(trimTrackText(track.codecName, 48));
-
-  return {
-    id: track.id,
-    title: safeTitle,
-    artist: safeArtist,
-    album: safeAlbum,
-    genre: safeGenre,
-    duration: typeof track.duration === 'number' ? track.duration : undefined,
-    year: typeof track.year === 'number' ? track.year : undefined,
-    trackNumber: typeof track.trackNumber === 'number' ? track.trackNumber : undefined,
-    discNumber: typeof track.discNumber === 'number' ? track.discNumber : undefined,
-    composer: safeComposer,
-    bitrate: typeof track.bitrate === 'number' ? track.bitrate : undefined,
-    sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : undefined,
-    format: safeFormat,
-    codecName: safeCodecName,
-    fileSize: typeof track.fileSize === 'number' ? track.fileSize : undefined,
-    dateAdded: typeof track.dateAdded === 'number' ? track.dateAdded : undefined,
-    lastPlayed: typeof track.lastPlayed === 'number' ? track.lastPlayed : undefined,
-    playCount: typeof track.playCount === 'number' ? track.playCount : undefined,
-    rating: typeof track.rating === 'number' ? track.rating : undefined,
-    favorite: typeof track.favorite === 'boolean' ? track.favorite : undefined,
-    filePath: typeof safePath === 'string' && safePath ? safePath : track.filePath,
-    path: safePath,
-    originalPath: safeOriginalPath,
-    fileHandle: safePath ? undefined : track.fileHandle,
-    coverKey: safeCoverKey,
-    coverUrl: safeCoverUrl,
-    quickFingerprint: safeQuickFingerprint,
-    replayGainTrackGainDb:
-      typeof track.replayGainTrackGainDb === 'number' ? track.replayGainTrackGainDb : undefined,
-    replayGainAlbumGainDb:
-      typeof track.replayGainAlbumGainDb === 'number' ? track.replayGainAlbumGainDb : undefined,
-  };
-}
-
-function compactTracksForLibrary(tracks: Track[]): Track[] {
-  if (tracks.length === 0) return tracks;
-  return tracks.map(compactTrackForLibrary);
 }
 
 type LocalTrackCardProps = {
@@ -799,12 +765,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [activeBaseFilterGroupId, setActiveBaseFilterGroupId] = useState<string | null>(null);
   const [baseGroupByRules, setBaseGroupByRules] = useState<MusicLibraryBaseGroupRule[]>([]);
   const [baseSortRules, setBaseSortRules] = useState<MusicLibraryBaseSortRule[]>([]);
+  const [collapsedTrackGroupKeys, setCollapsedTrackGroupKeys] = useState<Set<string>>(() => new Set());
   const [baseFilterField, setBaseFilterField] = useState<MusicLibraryBaseField>('artist');
   const [baseFilterRuleOperator, setBaseFilterRuleOperator] =
     useState<MusicLibraryBaseOperator>('contains');
   const [baseFilterValue, setBaseFilterValue] = useState('');
   const [propertySearchQuery, setPropertySearchQuery] = useState('');
+  const [baseFieldRegistryVersion, setBaseFieldRegistryVersion] = useState(0);
   const [nativeBaseTracks, setNativeBaseTracks] = useState<Track[] | null>(null);
+  const [fallbackBaseTracks, setFallbackBaseTracks] = useState<Track[] | null>(null);
   const [isNativeBaseTracksLoading, setIsNativeBaseTracksLoading] = useState(false);
 
   // 闁告瑦濞婇弫顓㈡嚕濠婂啫绀嬮柣妯垮煐閳?
@@ -837,7 +806,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         return false;
       }
 
-      const compactChunk = compactTracksForLibrary(nextChunk);
+      const compactChunk = compactTracksForMusicLibrary(nextChunk);
       const chunkHasMore = nextChunk.length >= TRACK_LOAD_CHUNK_SIZE;
 
       trackNextOffsetRef.current = offset + nextChunk.length;
@@ -1031,7 +1000,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       if (token !== libraryLoadTokenRef.current) return;
 
-      const compactInitialTracks = compactTracksForLibrary(initialTracks);
+      const compactInitialTracks = compactTracksForMusicLibrary(initialTracks);
       const hasMore = compactInitialTracks.length >= INITIAL_TRACK_LOAD_LIMIT;
       trackNextOffsetRef.current = initialTracks.length;
       setHasMoreTracks(hasMore);
@@ -1365,7 +1334,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       const results = await musicLibraryService.searchTracks(query, 600);
       if (token !== searchTokenRef.current) return;
 
-      const compactResults = compactTracksForLibrary(results);
+      const compactResults = compactTracksForMusicLibrary(results);
       setTracks(compactResults);
       trackNextOffsetRef.current = results.length;
       setHasMoreTracks(false);
@@ -1416,6 +1385,21 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, []);
 
   useEffect(() => {
+    const unsubscribe = subscribeMusicLibraryBaseFieldCapabilities(() => {
+      setBaseFieldRegistryVersion((value) => value + 1);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const persistedFieldCapabilities = loadMusicLibraryBaseFieldCapabilities();
+    if (persistedFieldCapabilities.length > 0) {
+      registerMusicLibraryBaseFieldCapabilities(persistedFieldCapabilities);
+    }
+  }, []);
+
+  useEffect(() => {
     const loadedState = loadMusicLibraryBaseState<LocalTrackColumnConfig>({
       createDefaultColumns: cloneDefaultLocalTrackColumnSettings,
       normalizeColumns: normalizeLocalTrackColumnSettings,
@@ -1455,6 +1439,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     localTrackColumnSettings,
     localTrackColumnsLoaded,
   ]);
+
+  useEffect(() => {
+    persistMusicLibraryBaseFieldCapabilities(listRegisteredMusicLibraryBaseFieldCapabilities(), {
+      debounceMs: 150,
+    });
+  }, [baseFieldRegistryVersion]);
+
+  useEffect(() => {
+    if (tracks.length === 0) {
+      return;
+    }
+
+    registerMusicLibraryDiscoveredFieldCapabilitiesFromTracks(tracks);
+  }, [tracks]);
 
   const toggleLocalTrackColumn = useCallback(
     (columnId: LocalTrackColumnId) => {
@@ -1834,8 +1832,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [isOpen, librarySourceMode, maybeLoadTrackChunkFromScroll, searchQuery, tracks.length]);
 
   const addBaseSortRule = useCallback(() => {
-    setBaseSortRules((prev) => appendMusicLibraryBaseSortRule(prev));
-  }, []);
+    setBaseSortRules((prev) =>
+      appendMusicLibraryBaseSortRule(prev, {
+        excludedFields: baseGroupByRules.map((rule) => rule.field),
+      })
+    );
+  }, [baseGroupByRules]);
 
   const addBaseGroupByRule = useCallback(() => {
     setBaseGroupByRules((prev) => appendMusicLibraryBaseGroupByRule(prev));
@@ -1870,6 +1872,57 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const moveBaseGroupByRule = useCallback((id: string, offset: -1 | 1) => {
     setBaseGroupByRules((prev) => moveMusicLibraryBaseGroupByRule(prev, id, offset));
   }, []);
+
+  const availableBaseGroupFields =
+    listMusicLibraryBaseGroupFieldIds() as MusicLibraryBaseGroupRule['field'][];
+  const availableBaseOrderFields =
+    listMusicLibraryBaseOrderFieldIds() as MusicLibraryBaseSortRule['field'][];
+  const availableBaseFilterFields = listMusicLibraryBaseFilterFieldIds();
+
+  const canAddBaseGroupByRule = baseGroupByRules.length < availableBaseGroupFields.length;
+  const canAddBaseSortRule = availableBaseOrderFields.some(
+    (field) =>
+      !baseGroupByRules.some((rule) => rule.field === field) &&
+      !baseSortRules.some((rule) => rule.field === field)
+  );
+
+  useEffect(() => {
+    setCollapsedTrackGroupKeys(new Set());
+  }, [baseGroupByRules]);
+
+  useEffect(() => {
+    const groupedFields = new Set(baseGroupByRules.map((rule) => rule.field));
+    setBaseSortRules((previous) => {
+      const next = previous.filter((rule) => !groupedFields.has(rule.field));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [baseGroupByRules]);
+
+  const toggleTrackGroupCollapsed = useCallback((groupKey: string) => {
+    setCollapsedTrackGroupKeys((previous) => {
+      const next = new Set(previous);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleColumnSortRule = useCallback(
+    (columnId: LocalTrackColumnId, event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      const sortField = LOCAL_TRACK_COLUMN_DEFINITIONS[columnId].sortField;
+      if (!sortField) return;
+      setBaseSortRules((previous) =>
+        toggleMusicLibraryBaseSortField(previous, sortField, {
+          multi: event.shiftKey,
+        })
+      );
+    },
+    []
+  );
 
   const filteredPropertyColumns = useMemo(() => {
     const keyword = propertySearchQuery.trim().toLowerCase();
@@ -1984,6 +2037,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       baseQueryState.groupByRules.length > 0 ||
       baseQueryState.sortRules.length > 0);
 
+  const shouldUseFallbackBaseQuery =
+    librarySourceMode === 'local' &&
+    !canUseNativeBaseQuery &&
+    (baseQueryState.filterGroups.some((group) => group.filters.length > 0) ||
+      baseQueryState.groupByRules.length > 0 ||
+      baseQueryState.sortRules.length > 0);
+
   useEffect(() => {
     if (!isOpen || !shouldUseNativeBaseQuery) {
       setNativeBaseTracks(null);
@@ -2017,14 +2077,46 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
   }, [isOpen, shouldUseNativeBaseQuery, searchQuery, baseQueryState]);
 
+  useEffect(() => {
+    if (!isOpen || !shouldUseFallbackBaseQuery) {
+      setFallbackBaseTracks(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsNativeBaseTracksLoading(true);
+
+    const loader = searchQuery.trim()
+      ? musicLibraryService.searchTracks(searchQuery)
+      : musicLibraryService.getAllTracks();
+
+    void loader
+      .then((rows) => {
+        if (cancelled) return;
+        setFallbackBaseTracks(compactTracksForMusicLibrary(rows));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsNativeBaseTracksLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, searchQuery, shouldUseFallbackBaseQuery]);
+
   // 闁兼儳鍢茶ぐ鍥ㄦ交閸ャ劍濮㈤柛婊冩湰鐢挻鎯旇箛鎾村€甸柣銊ュ瀵ゆ椽鏌?
   const filteredTracks = useMemo(() => {
     if (nativeBaseTracks) {
       return nativeBaseTracks;
     }
 
+    if (fallbackBaseTracks) {
+      return applyMusicLibraryBaseQuery(fallbackBaseTracks, baseQueryState);
+    }
+
     return applyMusicLibraryBaseQuery(tracks, baseQueryState);
-  }, [nativeBaseTracks, tracks, baseQueryState]);
+  }, [fallbackBaseTracks, nativeBaseTracks, tracks, baseQueryState]);
 
   // 闁兼儳鍢茶ぐ鍥箳閹烘垹纰嶉柛姘捣濞堟垶绋夐幘鍦竼闁告帗顨夐妴?
   const sortedStableEntries = useMemo(() => {
@@ -2058,7 +2150,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     header.scrollLeft = body.scrollLeft;
   }, [localTrackGridTemplate, renderedLocalTrackColumns.length]);
 
-  const isUsingNativeBaseTracks = nativeBaseTracks != null;
+  const isUsingNativeBaseTracks = nativeBaseTracks != null || fallbackBaseTracks != null;
+
+  const resolveBaseFieldLabel = useCallback(
+    (field: MusicLibraryBaseOrderField) => {
+      const headerKey = resolveMusicLibraryBaseFieldHeaderKey(field);
+      return headerKey ? t(headerKey) : resolveMusicLibraryBaseFieldLabel(field);
+    },
+    [t]
+  );
 
   const filteredTracksTotal = filteredTracks.length;
 
@@ -2072,9 +2172,52 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [filteredTracksTotal]);
 
   const renderedTracks = useMemo(() => {
+    if (baseView !== 'card') return filteredTracks;
     if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
     return filteredTracks.slice(0, renderedTrackLimit);
-  }, [filteredTracks, renderedTrackLimit]);
+  }, [baseView, filteredTracks, renderedTrackLimit]);
+
+  const groupedTrackRows = useMemo<MusicLibraryGroupedRow[]>(
+    () =>
+      buildMusicLibraryGroupedRows({
+        tracks: filteredTracks,
+        groupByRules: baseGroupByRules,
+        collapsedGroupKeys: collapsedTrackGroupKeys,
+        resolveFieldLabel: resolveBaseFieldLabel,
+        resolveFieldDisplayValue: (field, track) => formatMusicLibraryFieldValue(track, field),
+      }),
+    [
+      baseGroupByRules,
+      collapsedTrackGroupKeys,
+      filteredTracks,
+      resolveBaseFieldLabel,
+    ]
+  );
+
+  const groupedCardRows = useMemo<MusicLibraryGroupedRow[]>(
+    () =>
+      baseView === 'card'
+        ? buildMusicLibraryGroupedRows({
+            tracks: renderedTracks,
+            groupByRules: baseGroupByRules,
+            collapsedGroupKeys: collapsedTrackGroupKeys,
+            resolveFieldLabel: resolveBaseFieldLabel,
+            resolveFieldDisplayValue: (field, track) => formatMusicLibraryFieldValue(track, field),
+          })
+        : [],
+    [
+      baseGroupByRules,
+      baseView,
+      collapsedTrackGroupKeys,
+      renderedTracks,
+      resolveBaseFieldLabel,
+    ]
+  );
+
+  const virtualizedTrackSourceRows = useMemo(
+    () => (baseView === 'card' ? [] : groupedTrackRows),
+    [baseView, groupedTrackRows]
+  );
 
   const trackVirtualWindow = useMemo(() => {
     const viewportHeight = mainViewport.clientHeight > 0 ? mainViewport.clientHeight : 720;
@@ -2085,26 +2228,25 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       Math.floor(effectiveScrollTop / TRACK_ROW_HEIGHT_PX) - TRACK_WINDOW_OVERSCAN_ROWS
     );
     const end = Math.min(
-      renderedTracks.length,
+      virtualizedTrackSourceRows.length,
       start + visibleRows + TRACK_WINDOW_OVERSCAN_ROWS * 2
     );
-
-    return {
+    const visibleWindow = sliceMusicLibraryGroupedRows({
+      rows: virtualizedTrackSourceRows,
       start,
       end,
-      topSpacerPx: start * TRACK_ROW_HEIGHT_PX,
-      bottomSpacerPx: Math.max(0, (renderedTracks.length - end) * TRACK_ROW_HEIGHT_PX),
-    };
-  }, [mainViewport.clientHeight, mainViewport.scrollTop, renderedTracks.length]);
+    });
 
-  const virtualizedTracks = useMemo(
-    () => renderedTracks.slice(trackVirtualWindow.start, trackVirtualWindow.end),
-    [renderedTracks, trackVirtualWindow.end, trackVirtualWindow.start]
-  );
+    return {
+      rows: visibleWindow.rows,
+      topSpacerPx: visibleWindow.topSpacerRowCount * TRACK_ROW_HEIGHT_PX,
+      bottomSpacerPx: visibleWindow.bottomSpacerRowCount * TRACK_ROW_HEIGHT_PX,
+    };
+  }, [mainViewport.clientHeight, mainViewport.scrollTop, virtualizedTrackSourceRows]);
 
   const showTrackLoadHint =
     !isUsingNativeBaseTracks &&
-    (isTrackChunkLoading || hasMoreTracks || renderedTracks.length < filteredTracksTotal);
+    (isTrackChunkLoading || hasMoreTracks || (baseView === 'card' && renderedTracks.length < filteredTracksTotal));
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -2550,10 +2692,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   const formatFileSize = useCallback((bytes: number): string => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    return formatMusicLibraryFileSize(bytes);
   }, []);
 
   // 闁哄秶鍘х槐锟犲礌閺嶃劍顦ч梻鈧?
@@ -2570,25 +2709,27 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
   // 闁哄秶鍘х槐锟犲礌閺嶎剙缂撻梺顒佹尰濡炲倿姊?
-  const formatDuration = useCallback((seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  }, []);
-
   const formatOptionalTimestamp = useCallback(
     (value?: number) => {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        return '-';
-      }
-      const ms = value > 10_000_000_000 ? value : value * 1000;
-      return formatStableUpdatedAt(ms);
+      return formatMusicLibraryTimestamp(value, {
+        emptyPlaceholder: '-',
+        format: 'datetime',
+        locale,
+      });
     },
-    [formatStableUpdatedAt]
+    [locale]
   );
 
   const renderLocalTrackColumnValue = useCallback(
     (track: Track, columnId: LocalTrackColumnId): string => {
+      const baseField = resolveMusicLibraryBaseFieldFromLocalTrackColumn(columnId);
+      if (baseField) {
+        return formatMusicLibraryFieldValue(track, baseField, {
+          timestampFormat: 'datetime',
+          locale,
+        });
+      }
+
       const resolveBitrateKbps = (): number | null => {
         if (typeof track.bitrate === 'number' && Number.isFinite(track.bitrate) && track.bitrate > 0) {
           return track.bitrate >= 2000 ? track.bitrate / 1000 : track.bitrate;
@@ -2611,36 +2752,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
         return null;
       };
 
-      const resolveFormat = (): string | null => {
-        const explicit = (track.format || track.codecName || '').trim();
-        if (explicit.length > 0) {
-          return explicit.toUpperCase();
-        }
-
-        const path = (track.path || track.originalPath || '').trim();
-        const extension = path.includes('.') ? path.split('.').pop()?.trim() ?? '' : '';
-        if (extension.length > 0) {
-          return extension.toUpperCase();
-        }
-
-        return null;
-      };
-
       switch (columnId) {
-        case 'title':
-          return track.title || '-';
-        case 'artist':
-          return track.artist || '-';
-        case 'album':
-          return track.album || '-';
-        case 'duration':
-          return typeof track.duration === 'number' && Number.isFinite(track.duration)
-            ? formatDuration(track.duration)
-            : '-';
-        case 'year':
-          return typeof track.year === 'number' && Number.isFinite(track.year) ? String(track.year) : '-';
-        case 'genre':
-          return track.genre || '-';
         case 'trackNumber':
           return typeof track.trackNumber === 'number' && Number.isFinite(track.trackNumber)
             ? String(track.trackNumber)
@@ -2657,35 +2769,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
             ? `${Math.max(0, Math.round(bitrate))} kbps`
             : '-';
         }
-        case 'sampleRate':
-          return typeof track.sampleRate === 'number' && Number.isFinite(track.sampleRate)
-            ? `${Math.max(0, Math.round(track.sampleRate))} Hz`
-            : '-';
-        case 'format': {
-          const format = resolveFormat();
-          return format ?? '-';
-        }
-        case 'playCount':
-          return typeof track.playCount === 'number' && Number.isFinite(track.playCount)
-            ? String(Math.max(0, Math.floor(track.playCount)))
-            : '-';
-        case 'lastPlayed':
-          return formatOptionalTimestamp(track.lastPlayed);
-        case 'rating':
-          return typeof track.rating === 'number' && Number.isFinite(track.rating)
-            ? String(Math.max(0, Math.floor(track.rating)))
-            : '-';
-        case 'fileSize':
-          return typeof track.fileSize === 'number' && Number.isFinite(track.fileSize)
-            ? formatFileSize(Math.max(0, track.fileSize))
-            : '-';
-        case 'dateAdded':
-          return formatOptionalTimestamp(track.dateAdded);
         default:
           return '-';
       }
     },
-    [formatDuration, formatFileSize, formatOptionalTimestamp]
+    [locale]
   );
 
   const totalMissingTracks = useMemo(() => {
@@ -3010,13 +3098,19 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
               {showBaseSortPanel && (
                 <div className="music-library-base-popover-panel" role="dialog" aria-label="排序面板">
                   <div className="music-library-base-popover-section">
-                    <div className="music-library-base-popover-title">Group by</div>
+                    <div className="music-library-base-popover-title">
+                      {t('pages.music-library.group.panelTitle')}
+                    </div>
+                    <div className="music-library-base-popover-help">
+                      {t('pages.music-library.group.help')}
+                    </div>
                     {baseGroupByRules.length === 0 ? (
                       <div className="music-library-base-popover-note">未设置分组</div>
                     ) : (
                       <div className="music-library-base-rule-list">
                         {baseGroupByRules.map((rule, index) => (
                           <div className="music-library-base-popover-row" key={rule.id}>
+                            <span className="music-library-base-popover-priority">#{index + 1}</span>
                             <select
                               className="music-library-sort-select"
                               value={rule.field}
@@ -3026,9 +3120,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                                 })
                               }
                             >
-                              {MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS.map((field) => (
+                              {getSelectableRuleFields(
+                                rule.id,
+                                rule.field,
+                                baseGroupByRules,
+                                availableBaseGroupFields
+                              ).map((field) => (
                                 <option key={field} value={field}>
-                                  {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[field]}
+                                  {resolveBaseFieldLabel(field)}
                                 </option>
                               ))}
                             </select>
@@ -3071,18 +3170,33 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         ))}
                       </div>
                     )}
-                    <button className="music-library-btn" onClick={addBaseGroupByRule}>
+                    <button
+                      className="music-library-btn"
+                      onClick={addBaseGroupByRule}
+                      disabled={!canAddBaseGroupByRule}
+                      title={
+                        canAddBaseGroupByRule
+                          ? undefined
+                          : t('pages.music-library.group.addDisabledTitle')
+                      }
+                    >
                       + 添加分组
                     </button>
                   </div>
                   <div className="music-library-base-popover-section">
-                    <div className="music-library-base-popover-title">Sort by</div>
+                    <div className="music-library-base-popover-title">
+                      {t('pages.music-library.sort.panelTitle')}
+                    </div>
+                    <div className="music-library-base-popover-help">
+                      {t('pages.music-library.sort.help')}
+                    </div>
                     {baseSortRules.length === 0 ? (
                       <div className="music-library-base-popover-note">未设置排序</div>
                     ) : (
                       <div className="music-library-base-rule-list">
                         {baseSortRules.map((rule, index) => (
                           <div className="music-library-base-popover-row" key={rule.id}>
+                            <span className="music-library-base-popover-priority">#{index + 1}</span>
                             <select
                               className="music-library-sort-select"
                               value={rule.field}
@@ -3092,9 +3206,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                                 })
                               }
                             >
-                              {MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS.map((field) => (
+                              {getSelectableSortRuleFields(
+                                rule.id,
+                                rule.field,
+                                baseSortRules,
+                                baseGroupByRules
+                              ).map((field) => (
                                 <option key={field} value={field}>
-                                  {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[field]}
+                                  {resolveBaseFieldLabel(field)}
                                 </option>
                               ))}
                             </select>
@@ -3137,7 +3256,16 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         ))}
                       </div>
                     )}
-                    <button className="music-library-btn" onClick={addBaseSortRule}>
+                    <button
+                      className="music-library-btn"
+                      onClick={addBaseSortRule}
+                      disabled={!canAddBaseSortRule}
+                      title={
+                        canAddBaseSortRule
+                          ? undefined
+                          : t('pages.music-library.sort.addDisabledTitle')
+                      }
+                    >
                       + 添加排序
                     </button>
                   </div>
@@ -3188,9 +3316,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                           setBaseFilterField(event.target.value as MusicLibraryBaseField)
                         }
                       >
-                        {MUSIC_LIBRARY_BASE_FILTER_FIELDS.map((field) => (
+                        {availableBaseFilterFields.map((field) => (
                           <option key={field} value={field}>
-                            {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[field]}
+                            {resolveMusicLibraryBaseFieldHeaderKey(field)
+                              ? t(resolveMusicLibraryBaseFieldHeaderKey(field) as string)
+                              : resolveMusicLibraryBaseFieldLabel(field)}
                           </option>
                         ))}
                       </select>
@@ -3265,7 +3395,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                                     onClick={() => handleRemoveBaseFilter(group.id, filter.id)}
                                     title="移除筛选"
                                   >
-                                    {MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP[filter.field]}{' '}
+                                    {resolveMusicLibraryBaseFieldLabel(filter.field)}{' '}
                                     {MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP[filter.operator]}
                                     {valueText} ×
                                   </button>
@@ -3533,7 +3663,38 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               {baseView === 'card' && (
                 <div className="music-library-card-list">
-                  {renderedTracks.map((track, index) => {
+                  {groupedCardRows.map((row) => {
+                    if (row.kind === 'group-header') {
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          className="music-library-card-group-header"
+                          style={
+                            {
+                              '--music-library-group-indent': `${row.depth * 18}px`,
+                            } as React.CSSProperties
+                          }
+                          onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
+                          title={
+                            row.collapsed
+                              ? t('pages.music-library.group.expandTitle')
+                              : t('pages.music-library.group.collapseTitle')
+                          }
+                        >
+                          <span className="music-library-card-group-arrow" aria-hidden="true">
+                            {row.collapsed ? '▶' : '▼'}
+                          </span>
+                          <span className="music-library-card-group-field">{row.fieldLabel}</span>
+                          <span className="music-library-card-group-title">{row.title}</span>
+                          <span className="music-library-card-group-count">
+                            {t('pages.album.stats.trackCount', { count: row.count })}
+                          </span>
+                        </button>
+                      );
+                    }
+
+                    const track = row.track;
                     const isPlayPending =
                       pendingPlayTrackIdentity !== null &&
                       resolveTrackIdentity(track) === pendingPlayTrackIdentity;
@@ -3547,7 +3708,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       <LocalTrackCard
                         key={`card-${track.id}`}
                         track={track}
-                        index={index}
+                        index={row.trackIndex}
                         isPlayPending={isPlayPending}
                         subtitle={subtitle}
                         onTrackDoubleClick={handleTrackDoubleClick}
@@ -3580,6 +3741,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                         </div>
                         {renderedLocalTrackColumns.map((column) => {
                           const isDragging = draggingLocalTrackColumnId === column.id;
+                          const sortField = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].sortField;
+                          const activeSortIndex = sortField
+                            ? baseSortRules.findIndex((rule) => rule.field === sortField)
+                            : -1;
+                          const activeSortRule = activeSortIndex >= 0 ? baseSortRules[activeSortIndex] : null;
+                          const isGroupedColumn = sortField
+                            ? baseGroupByRules.some((rule) => rule.field === sortField)
+                            : false;
                           const isDropTarget =
                             dragOverLocalTrackColumnId === column.id &&
                             draggingLocalTrackColumnId != null &&
@@ -3594,9 +3763,42 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                               onPointerDown={(event) => handleLocalTrackColumnPointerDown(column.id, event)}
                               title={t('pages.music-library.columns.action.dragToReorder')}
                             >
-                              <span className="music-library-list-header-label">
-                                {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
-                              </span>
+                              {sortField ? (
+                                <button
+                                  type="button"
+                                  className={`music-library-list-header-sort-btn${activeSortRule ? ' is-active' : ''}`}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => toggleColumnSortRule(column.id, event)}
+                                  title={t('pages.music-library.sort.headerToggleTitle')}
+                                >
+                                  <span className="music-library-list-header-label">
+                                    {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
+                                  </span>
+                                  <span className="music-library-list-header-meta">
+                                    {isGroupedColumn && (
+                                      <span className="music-library-list-header-group-badge">
+                                        {t('pages.music-library.group.badge')}
+                                      </span>
+                                    )}
+                                    {activeSortRule && (
+                                      <span className="music-library-list-header-sort-indicator">
+                                        <span aria-hidden="true">
+                                          {activeSortRule.order === 'asc' ? '↑' : '↓'}
+                                        </span>
+                                        {baseSortRules.length > 1 && (
+                                          <span className="music-library-list-header-sort-priority">
+                                            {activeSortIndex + 1}
+                                          </span>
+                                        )}
+                                      </span>
+                                    )}
+                                  </span>
+                                </button>
+                              ) : (
+                                <span className="music-library-list-header-label">
+                                  {t(LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].headerKey)}
+                                </span>
+                              )}
                               <button
                                 type="button"
                                 className="music-library-column-resize-handle"
@@ -3629,59 +3831,93 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
                       aria-hidden="true"
                     />
                   )}
-                  {virtualizedTracks.map((track, index) => {
-                    const absoluteIndex = trackVirtualWindow.start + index;
+                  {trackVirtualWindow.rows.map((row) => {
+                    if (row.kind === 'group-header') {
+                      return (
+                        <div
+                          key={row.id}
+                          className="music-library-track-group"
+                          style={{
+                            gridTemplateColumns: localTrackGridTemplate,
+                            '--music-library-group-indent': `${row.depth * 18}px`,
+                          } as React.CSSProperties}
+                        >
+                          <button
+                            type="button"
+                            className="music-library-track-group-toggle"
+                            onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
+                            title={
+                              row.collapsed
+                                ? t('pages.music-library.group.expandTitle')
+                                : t('pages.music-library.group.collapseTitle')
+                            }
+                          >
+                            <span className="music-library-track-group-arrow" aria-hidden="true">
+                              {row.collapsed ? '▶' : '▼'}
+                            </span>
+                            <span className="music-library-track-group-field">{row.fieldLabel}</span>
+                            <span className="music-library-track-group-title">{row.title}</span>
+                            <span className="music-library-track-group-count">
+                              {t('pages.album.stats.trackCount', { count: row.count })}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    const track = row.track;
+                    const absoluteIndex = row.trackIndex;
                     const isPlayPending =
                       pendingPlayTrackIdentity !== null &&
                       resolveTrackIdentity(track) === pendingPlayTrackIdentity;
                     return (
-                    <div
-                      key={track.id}
-                      data-track-id={track.id}
-                      className={`music-library-track${isPlayPending ? ' is-play-pending' : ''}`}
-                      style={{ gridTemplateColumns: localTrackGridTemplate }}
-                      onDoubleClick={() => handleTrackDoubleClick(track, absoluteIndex)}
-                      onContextMenu={(e) => handleTrackContextMenu(track, absoluteIndex, e)}
-                      title={t('pages.music-library.tracks.rowTooltip')}
-                    >
-                      <div className="music-library-track-number">{absoluteIndex + 1}</div>
-                      {renderedLocalTrackColumns.map((column) => {
-                        const value = renderLocalTrackColumnValue(track, column.id);
-                        const className = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].className;
-                        const alignClass = LEFT_ALIGNED_LOCAL_TRACK_COLUMNS.has(column.id)
-                          ? 'music-library-track-cell-left'
-                          : 'music-library-track-cell-right';
-                        return (
-                          <div
-                            key={`${track.id}-${column.id}`}
-                            className={`${className} ${alignClass}`}
-                            title={value}
-                          >
-                            {value}
-                          </div>
-                        );
-                      })}
-                      <div className="music-library-track-actions">
-                        {onPlayNow && (
-                          <button
-                            onClick={(e) => handlePlaySingleTrack(track, e)}
-                            title={t('pages.music-library.tracks.action.playOneTitle')}
-                            className="track-action-play"
-                          >
-                            ▶
-                          </button>
-                        )}
-                        {onAddToQueue && (
-                          <button
-                            onClick={(e) => handleAddSingleTrack(track, e)}
-                            title={t('pages.music-library.tracks.action.addOneTitle')}
-                            className="track-action-add"
-                          >
-                            +
-                          </button>
-                        )}
+                      <div
+                        key={track.id}
+                        data-track-id={track.id}
+                        className={`music-library-track${isPlayPending ? ' is-play-pending' : ''}`}
+                        style={{ gridTemplateColumns: localTrackGridTemplate }}
+                        onDoubleClick={() => handleTrackDoubleClick(track, absoluteIndex)}
+                        onContextMenu={(e) => handleTrackContextMenu(track, absoluteIndex, e)}
+                        title={t('pages.music-library.tracks.rowTooltip')}
+                      >
+                        <div className="music-library-track-number">{absoluteIndex + 1}</div>
+                        {renderedLocalTrackColumns.map((column) => {
+                          const value = renderLocalTrackColumnValue(track, column.id);
+                          const className = LOCAL_TRACK_COLUMN_DEFINITIONS[column.id].className;
+                          const alignClass = LEFT_ALIGNED_LOCAL_TRACK_COLUMNS.has(column.id)
+                            ? 'music-library-track-cell-left'
+                            : 'music-library-track-cell-right';
+                          return (
+                            <div
+                              key={`${track.id}-${column.id}`}
+                              className={`${className} ${alignClass}`}
+                              title={value}
+                            >
+                              {value}
+                            </div>
+                          );
+                        })}
+                        <div className="music-library-track-actions">
+                          {onPlayNow && (
+                            <button
+                              onClick={(e) => handlePlaySingleTrack(track, e)}
+                              title={t('pages.music-library.tracks.action.playOneTitle')}
+                              className="track-action-play"
+                            >
+                              ▶
+                            </button>
+                          )}
+                          {onAddToQueue && (
+                            <button
+                              onClick={(e) => handleAddSingleTrack(track, e)}
+                              title={t('pages.music-library.tracks.action.addOneTitle')}
+                              className="track-action-add"
+                            >
+                              +
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
                     );
                   })}
                   {trackVirtualWindow.bottomSpacerPx > 0 && (

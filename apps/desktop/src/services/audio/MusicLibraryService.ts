@@ -77,6 +77,10 @@ import {
   type MusicLibraryBaseSortRule,
   type MusicLibraryBaseSortField,
 } from '../../modules/music-library/baseQuery';
+import {
+  getMusicLibraryBaseNativeFilterField,
+  getMusicLibraryBaseNativeSortField,
+} from '../../modules/music-library/fieldCapabilities';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import {
   recordCoverBlobUrlsReleased,
@@ -709,6 +713,7 @@ export class MusicLibraryService {
       replayGainTrackGainDb: record.replayGainTrackDb,
       replayGainAlbumGainDb: record.replayGainAlbumDb,
       metadataScannedAtMs: record.updatedAtMs,
+      dateAdded: record.updatedAtMs,
       addedAt: record.updatedAtMs,
       playCount: record.playCount,
       lastPlayed: record.lastPlayedAtMs,
@@ -741,26 +746,7 @@ export class MusicLibraryService {
   private toNativeTrackFilterFromBase(
     filter: MusicLibraryBaseFilter
   ): NativeLibraryTrackFilterInput | null {
-    const mapField = (): NativeLibraryTrackFilterInput['field'] | null => {
-      switch (filter.field) {
-        case 'title':
-          return 'title';
-        case 'artist':
-          return 'artist';
-        case 'album':
-          return 'album';
-        case 'genre':
-          return 'genre';
-        case 'duration':
-          return 'durationSeconds';
-        case 'playCount':
-          return 'playCount';
-        default:
-          return null;
-      }
-    };
-
-    const field = mapField();
+    const field = getMusicLibraryBaseNativeFilterField(filter.field);
     if (!field) return null;
 
     const operator = filter.operator;
@@ -800,22 +786,8 @@ export class MusicLibraryService {
   private toNativeTrackSortFieldFromBase(
     field: MusicLibraryBaseSortField
   ): NativeLibraryTrackSortInput['field'] | null {
-    switch (field) {
-      case 'title':
-        return 'title';
-      case 'artist':
-        return 'artist';
-      case 'album':
-        return 'album';
-      case 'genre':
-        return 'genre';
-      case 'duration':
-        return 'durationSeconds';
-      case 'playCount':
-        return 'playCount';
-      default:
-        return null;
-    }
+    if (field === 'default') return null;
+    return getMusicLibraryBaseNativeSortField(field);
   }
 
   private buildNativeTrackSortFromBase(

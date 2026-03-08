@@ -5,9 +5,14 @@ import {
   type MusicLibraryBaseFilterGroup,
   type MusicLibraryBaseGroupRule,
   type MusicLibraryBaseLogicalOperator,
+  type MusicLibraryBaseOrderField,
   type MusicLibraryBaseOperator,
   type MusicLibraryBaseSortRule,
 } from './baseQuery';
+import {
+  listMusicLibraryBaseGroupFieldIds,
+  listMusicLibraryBaseOrderFieldIds,
+} from './fieldCapabilities';
 
 const OPERATORS_REQUIRING_VALUE = new Set<MusicLibraryBaseOperator>([
   'contains',
@@ -41,6 +46,45 @@ function createFilterValue(
   return { valid: true, value: normalizedValue };
 }
 
+function resolveNextAvailableRuleField<TField extends MusicLibraryBaseField, TRule extends { field: TField }>(
+  rules: TRule[],
+  candidateFields: readonly TField[],
+  fallbackField: TField
+): TField {
+  const usedFields = new Set(rules.map((rule) => rule.field));
+  return candidateFields.find((field) => !usedFields.has(field)) ?? fallbackField;
+}
+
+function updateRuleCollection<T extends { id: string; field: MusicLibraryBaseOrderField; order: 'asc' | 'desc' }>(
+  rules: T[],
+  id: string,
+  patch: Partial<Pick<T, 'field' | 'order'>>
+): T[] {
+  const targetRule = rules.find((rule) => rule.id === id);
+  if (!targetRule) return rules;
+
+  const nextField = patch.field ?? targetRule.field;
+  const nextOrder = patch.order ?? targetRule.order;
+
+  return rules.reduce<T[]>((result, rule) => {
+    if (rule.id === id) {
+      result.push({
+        ...rule,
+        field: nextField,
+        order: nextOrder,
+      });
+      return result;
+    }
+
+    if (patch.field && rule.field === nextField) {
+      return result;
+    }
+
+    result.push(rule);
+    return result;
+  }, []);
+}
+
 export type MusicLibraryBaseFilterGroupState = {
   filterGroups: MusicLibraryBaseFilterGroup[];
   activeFilterGroupId: string | null;
@@ -51,13 +95,24 @@ export function createMusicLibraryBaseEntityId(prefix: string): string {
 }
 
 export function appendMusicLibraryBaseSortRule(
-  rules: MusicLibraryBaseSortRule[]
+  rules: MusicLibraryBaseSortRule[],
+  options?: { excludedFields?: MusicLibraryBaseOrderField[] }
 ): MusicLibraryBaseSortRule[] {
+  const excludedFields = new Set(options?.excludedFields ?? []);
+  const availableFields = listMusicLibraryBaseOrderFieldIds() as MusicLibraryBaseOrderField[];
+  const candidateFields = availableFields.filter(
+    (field) => !excludedFields.has(field)
+  );
+  const field = resolveNextAvailableRuleField(
+    rules,
+    candidateFields.length > 0 ? candidateFields : availableFields,
+    candidateFields[0] ?? 'title'
+  );
   return [
     ...rules,
     {
       id: createMusicLibraryBaseEntityId('sort'),
-      field: 'title',
+      field,
       order: 'asc',
     },
   ];
@@ -66,11 +121,13 @@ export function appendMusicLibraryBaseSortRule(
 export function appendMusicLibraryBaseGroupByRule(
   rules: MusicLibraryBaseGroupRule[]
 ): MusicLibraryBaseGroupRule[] {
+  const availableFields = listMusicLibraryBaseGroupFieldIds() as MusicLibraryBaseGroupRule['field'][];
+  const field = resolveNextAvailableRuleField(rules, availableFields, 'artist');
   return [
     ...rules,
     {
       id: createMusicLibraryBaseEntityId('group'),
-      field: 'artist',
+      field,
       order: 'asc',
     },
   ];
@@ -81,15 +138,7 @@ export function updateMusicLibraryBaseSortRule(
   id: string,
   patch: Partial<Pick<MusicLibraryBaseSortRule, 'field' | 'order'>>
 ): MusicLibraryBaseSortRule[] {
-  return rules.map((rule) =>
-    rule.id === id
-      ? {
-          ...rule,
-          ...(patch.field ? { field: patch.field } : {}),
-          ...(patch.order ? { order: patch.order } : {}),
-        }
-      : rule
-  );
+  return updateRuleCollection(rules, id, patch);
 }
 
 export function updateMusicLibraryBaseGroupByRule(
@@ -97,15 +146,7 @@ export function updateMusicLibraryBaseGroupByRule(
   id: string,
   patch: Partial<Pick<MusicLibraryBaseGroupRule, 'field' | 'order'>>
 ): MusicLibraryBaseGroupRule[] {
-  return rules.map((rule) =>
-    rule.id === id
-      ? {
-          ...rule,
-          ...(patch.field ? { field: patch.field } : {}),
-          ...(patch.order ? { order: patch.order } : {}),
-        }
-      : rule
-  );
+  return updateRuleCollection(rules, id, patch);
 }
 
 export function removeMusicLibraryBaseSortRule(
@@ -128,6 +169,41 @@ export function moveMusicLibraryBaseSortRule(
   offset: -1 | 1
 ): MusicLibraryBaseSortRule[] {
   return moveRuleById(rules, id, offset);
+}
+
+export function toggleMusicLibraryBaseSortField(
+  rules: MusicLibraryBaseSortRule[],
+  field: MusicLibraryBaseOrderField,
+  options?: { multi?: boolean }
+): MusicLibraryBaseSortRule[] {
+  const existingIndex = rules.findIndex((rule) => rule.field === field);
+  void options;
+
+  if (existingIndex < 0) {
+    return [
+      ...rules,
+      {
+        id: createMusicLibraryBaseEntityId('sort'),
+        field,
+        order: 'asc',
+      },
+    ];
+  }
+
+  const existingRule = rules[existingIndex];
+
+  if (existingRule.order === 'asc') {
+    return rules.map((rule, index) =>
+      index === existingIndex
+        ? {
+            ...rule,
+            order: 'desc',
+          }
+        : rule
+    );
+  }
+
+  return rules.filter((_, index) => index !== existingIndex);
 }
 
 export function moveMusicLibraryBaseGroupByRule(

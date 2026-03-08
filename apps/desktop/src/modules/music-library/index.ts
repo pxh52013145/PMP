@@ -150,6 +150,62 @@ export {
 } from './baseQuery';
 
 export {
+  clearRegisteredMusicLibraryBaseFieldCapabilities,
+  getMusicLibraryBaseFieldCapability,
+  getMusicLibraryBaseNativeFilterField,
+  getMusicLibraryBaseNativeSortField,
+  listMusicLibraryBaseFieldCapabilities,
+  listMusicLibraryBaseFilterFieldIds,
+  listMusicLibraryBaseGroupFieldIds,
+  listMusicLibraryBaseOrderFieldIds,
+  listRegisteredMusicLibraryBaseFieldCapabilities,
+  MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS,
+  MUSIC_LIBRARY_BASE_FIELD_KEYS,
+  MUSIC_LIBRARY_BASE_FILTER_FIELD_KEYS,
+  MUSIC_LIBRARY_BASE_GROUP_FIELD_KEYS,
+  MUSIC_LIBRARY_BASE_NUMERIC_FIELDS,
+  MUSIC_LIBRARY_BASE_ORDER_FIELD_KEYS,
+  registerMusicLibraryBaseFieldCapabilities,
+  resolveMusicLibraryBaseFieldHeaderKey,
+  resolveMusicLibraryBaseFieldLabel,
+  subscribeMusicLibraryBaseFieldCapabilities,
+  unregisterMusicLibraryBaseFieldCapability,
+  type MusicLibraryBaseFieldId,
+  type MusicLibraryBaseFieldKey,
+  type MusicLibraryExtensionFieldCapabilityInput,
+  type MusicLibraryResolvedFieldCapability,
+} from './fieldCapabilities';
+
+export {
+  compareMusicLibraryFieldValues,
+  formatMusicLibraryDuration,
+  formatMusicLibraryFieldValue,
+  formatMusicLibraryFileSize,
+  formatMusicLibraryTimestamp,
+  getMusicLibraryFieldComparableValue,
+  getMusicLibraryFieldRawValue,
+  normalizeMusicLibraryFieldNumber,
+  normalizeMusicLibraryFieldText,
+  normalizeMusicLibraryFieldTimestamp,
+  type MusicLibraryFieldComparableValue,
+  type MusicLibraryFieldFormattingOptions,
+  type MusicLibraryFieldRawValue,
+  type MusicLibraryFieldTimestampFormat,
+  type MusicLibraryTimestampFormattingOptions,
+} from './fieldValue';
+
+export {
+  discoverMusicLibraryFieldCapabilitiesFromTracks,
+  registerMusicLibraryDiscoveredFieldCapabilitiesFromTracks,
+} from './fieldDiscovery';
+
+export {
+  compactTrackForMusicLibrary,
+  compactTracksForMusicLibrary,
+  isMusicLibraryDynamicTrackFieldExcluded,
+} from './trackProjection';
+
+export {
   appendMusicLibraryBaseFilter,
   appendMusicLibraryBaseFilterGroup,
   appendMusicLibraryBaseGroupByRule,
@@ -172,13 +228,16 @@ export {
 export {
   MUSIC_LIBRARY_BASE_FIELD_LABEL_MAP,
   MUSIC_LIBRARY_BASE_FILTER_FIELDS,
+  MUSIC_LIBRARY_BASE_GROUP_RULE_FIELDS,
   MUSIC_LIBRARY_BASE_OPERATORS,
   MUSIC_LIBRARY_BASE_OPERATOR_LABEL_MAP,
   MUSIC_LIBRARY_BASE_ORDER_RULE_FIELDS,
 } from './baseMeta';
 
 export {
+  loadMusicLibraryBaseFieldCapabilities,
   loadMusicLibraryBaseState,
+  persistMusicLibraryBaseFieldCapabilities,
   persistMusicLibraryBaseState,
   type LoadMusicLibraryBaseStateOptions,
   type LoadedMusicLibraryBaseState,
@@ -197,6 +256,17 @@ export {
   type LocalTrackColumnDefinition,
   type LocalTrackColumnId,
 } from './localTrackColumns';
+
+export {
+  buildMusicLibraryGroupedRows,
+  sliceMusicLibraryGroupedRows,
+  type BuildMusicLibraryGroupedRowsOptions,
+  type MusicLibraryGroupHeaderRow,
+  type MusicLibraryGroupedRow,
+  type SliceMusicLibraryGroupedRowsOptions,
+  type SliceMusicLibraryGroupedRowsResult,
+  type MusicLibraryTrackRow,
+} from './groupedRows';
 
 export {
   deriveLocalTrackLayoutModel,

@@ -6,6 +6,7 @@ import {
   LOCAL_TRACK_COLUMN_ORDER,
   normalizeLocalTrackColumnSettings,
   normalizeLocalTrackColumnWidth,
+  resolveMusicLibraryBaseFieldFromLocalTrackColumn,
 } from '../localTrackColumns';
 
 describe('localTrackColumns', () => {
@@ -54,5 +55,18 @@ describe('localTrackColumns', () => {
 
     defaultsA[0].visible = !defaultsA[0].visible;
     expect(defaultsB[0].visible).not.toBe(defaultsA[0].visible);
+  });
+
+  it('marks database-backed metadata columns as sortable', () => {
+    expect(LOCAL_TRACK_COLUMN_DEFINITIONS.sampleRate.sortField).toBe('sampleRate');
+    expect(LOCAL_TRACK_COLUMN_DEFINITIONS.fileSize.sortField).toBe('fileSize');
+    expect(LOCAL_TRACK_COLUMN_DEFINITIONS.lastPlayed.sortField).toBe('lastPlayed');
+    expect(LOCAL_TRACK_COLUMN_DEFINITIONS.dateAdded.sortField).toBe('dateAdded');
+  });
+
+  it('resolves base field mapping from local columns', () => {
+    expect(resolveMusicLibraryBaseFieldFromLocalTrackColumn('title')).toBe('title');
+    expect(resolveMusicLibraryBaseFieldFromLocalTrackColumn('sampleRate')).toBe('sampleRate');
+    expect(resolveMusicLibraryBaseFieldFromLocalTrackColumn('bitrate')).toBeNull();
   });
 });

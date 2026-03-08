@@ -233,6 +233,8 @@ export const STORAGE_KEYS = {
   MUSIC_LIBRARY_CLOUD_FALLBACK_AUDIT_V1: 'pixel-matrix-music-library-cloud-fallback-audit-v1', // CloudPlaybackQueueAuditEntry[]
   MUSIC_LIBRARY_TRACK_COLUMNS_V1: 'pixel-matrix-music-library-track-columns-v1', // LocalTrackColumnConfig[]
   MUSIC_LIBRARY_BASE_SCHEMA_V1: 'pixel-matrix-music-library-base-schema-v1', // MusicLibraryBaseSchema
+  MUSIC_LIBRARY_FIELD_CAPABILITIES_V1:
+    'pixel-matrix-music-library-field-capabilities-v1', // MusicLibraryExtensionFieldCapabilityInput[]
 
   // === Memory Governance ===
   MEMORY_GOVERNANCE_AUTO_ENABLED: 'pixel-matrix-memory-governance-auto-enabled', // boolean

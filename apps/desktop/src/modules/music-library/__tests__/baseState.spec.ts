@@ -9,7 +9,10 @@ import {
   moveMusicLibraryBaseSortRule,
   removeMusicLibraryBaseFilter,
   removeMusicLibraryBaseFilterGroup,
+  toggleMusicLibraryBaseSortField,
+  updateMusicLibraryBaseGroupByRule,
   updateMusicLibraryBaseFilterGroupOperator,
+  updateMusicLibraryBaseSortRule,
 } from '../baseState';
 
 describe('baseState helpers', () => {
@@ -26,6 +29,29 @@ describe('baseState helpers', () => {
     expect(nextGroup[0].order).toBe('asc');
   });
 
+  it('appends the next available rule field instead of duplicating existing rules', () => {
+    const nextSort = appendMusicLibraryBaseSortRule([
+      { id: 'sort-1', field: 'title', order: 'asc' },
+      { id: 'sort-2', field: 'artist', order: 'asc' },
+    ]);
+    const nextGroup = appendMusicLibraryBaseGroupByRule([
+      { id: 'group-1', field: 'artist', order: 'asc' },
+      { id: 'group-2', field: 'album', order: 'asc' },
+    ]);
+
+    expect(nextSort.at(-1)?.field).toBe('album');
+    expect(nextGroup.at(-1)?.field).toBe('genre');
+  });
+
+  it('skips excluded fields when appending sort rules for grouped views', () => {
+    const nextSort = appendMusicLibraryBaseSortRule(
+      [{ id: 'sort-1', field: 'title', order: 'asc' }],
+      { excludedFields: ['artist', 'album'] }
+    );
+
+    expect(nextSort.at(-1)?.field).toBe('genre');
+  });
+
   it('moves sort rules by offset', () => {
     const moved = moveMusicLibraryBaseSortRule(
       [
@@ -37,6 +63,81 @@ describe('baseState helpers', () => {
     );
 
     expect(moved.map((item) => item.id)).toEqual(['rule-2', 'rule-1']);
+  });
+
+  it('cycles primary sort field through asc desc default', () => {
+    const asc = toggleMusicLibraryBaseSortField([], 'title');
+    expect(asc).toHaveLength(1);
+    expect(asc[0].field).toBe('title');
+    expect(asc[0].order).toBe('asc');
+
+    const desc = toggleMusicLibraryBaseSortField(asc, 'title');
+    expect(desc[0].order).toBe('desc');
+
+    const cleared = toggleMusicLibraryBaseSortField(desc, 'title');
+    expect(cleared).toEqual([]);
+  });
+
+  it('keeps first clicked field at highest priority in multi-sort mode', () => {
+    const base = toggleMusicLibraryBaseSortField([], 'artist');
+    const multi = toggleMusicLibraryBaseSortField(base, 'album', { multi: true });
+
+    expect(multi.map((item) => item.field)).toEqual(['artist', 'album']);
+    expect(multi[1].order).toBe('asc');
+
+    const toggled = toggleMusicLibraryBaseSortField(multi, 'album', { multi: true });
+    expect(toggled[1].order).toBe('desc');
+
+    const removed = toggleMusicLibraryBaseSortField(toggled, 'album', { multi: true });
+    expect(removed.map((item) => item.field)).toEqual(['artist']);
+  });
+
+  it('appends newly clicked fields after existing priorities', () => {
+    const step1 = toggleMusicLibraryBaseSortField([], 'title');
+    const step2 = toggleMusicLibraryBaseSortField(step1, 'artist', { multi: true });
+    const step3 = toggleMusicLibraryBaseSortField(step2, 'album', { multi: true });
+
+    expect(step3.map((item) => item.field)).toEqual(['title', 'artist', 'album']);
+    expect(step3[0].order).toBe('asc');
+  });
+
+  it('does not change priority when toggling an existing field order', () => {
+    const initial: Parameters<typeof toggleMusicLibraryBaseSortField>[0] = [
+      { id: 'sort-1', field: 'title', order: 'asc' as const },
+      { id: 'sort-2', field: 'artist', order: 'asc' as const },
+      { id: 'sort-3', field: 'album', order: 'asc' as const },
+    ];
+
+    const toggled = toggleMusicLibraryBaseSortField(initial, 'artist');
+
+    expect(toggled.map((item) => item.field)).toEqual(['title', 'artist', 'album']);
+    expect(toggled[1].order).toBe('desc');
+  });
+
+  it('deduplicates sort and group rules when changing a field to an existing one', () => {
+    const nextSort = updateMusicLibraryBaseSortRule(
+      [
+        { id: 'sort-1', field: 'title', order: 'asc' },
+        { id: 'sort-2', field: 'artist', order: 'desc' },
+      ],
+      'sort-2',
+      { field: 'title' }
+    );
+
+    const nextGroup = updateMusicLibraryBaseGroupByRule(
+      [
+        { id: 'group-1', field: 'artist', order: 'asc' },
+        { id: 'group-2', field: 'album', order: 'desc' },
+      ],
+      'group-2',
+      { field: 'artist' }
+    );
+
+    expect(nextSort).toHaveLength(1);
+    expect(nextSort[0]).toMatchObject({ id: 'sort-2', field: 'title', order: 'desc' });
+
+    expect(nextGroup).toHaveLength(1);
+    expect(nextGroup[0]).toMatchObject({ id: 'group-2', field: 'artist', order: 'desc' });
   });
 
   it('adds filter into an existing selected group', () => {

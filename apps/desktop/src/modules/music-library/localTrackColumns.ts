@@ -1,4 +1,4 @@
-import type { MusicLibraryBaseViewProperty } from './baseQuery';
+import type { MusicLibraryBaseOrderField, MusicLibraryBaseViewProperty } from './baseQuery';
 
 export type LocalTrackColumnId =
   | 'title'
@@ -31,6 +31,7 @@ export type LocalTrackColumnDefinition = {
   minWidthPx: number;
   maxWidthPx?: number;
   className: string;
+  sortField?: MusicLibraryBaseOrderField;
 };
 
 export const LOCAL_TRACK_COLUMN_ORDER: LocalTrackColumnId[] = [
@@ -67,6 +68,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 160,
     maxWidthPx: 640,
     className: 'music-library-track-title',
+    sortField: 'title',
   },
   artist: {
     headerKey: 'pages.music-library.tracks.header.artist',
@@ -74,6 +76,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 120,
     maxWidthPx: 520,
     className: 'music-library-track-artist',
+    sortField: 'artist',
   },
   album: {
     headerKey: 'pages.music-library.tracks.header.album',
@@ -81,6 +84,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 120,
     maxWidthPx: 520,
     className: 'music-library-track-album',
+    sortField: 'album',
   },
   duration: {
     headerKey: 'pages.music-library.tracks.header.duration',
@@ -88,6 +92,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 72,
     maxWidthPx: 140,
     className: 'music-library-track-duration',
+    sortField: 'duration',
   },
   year: {
     headerKey: 'pages.music-library.columns.year',
@@ -95,6 +100,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 60,
     maxWidthPx: 120,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'year',
   },
   genre: {
     headerKey: 'pages.music-library.columns.genre',
@@ -102,6 +108,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 100,
     maxWidthPx: 360,
     className: 'music-library-track-meta',
+    sortField: 'genre',
   },
   trackNumber: {
     headerKey: 'pages.music-library.columns.trackNumber',
@@ -137,6 +144,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 96,
     maxWidthPx: 180,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'sampleRate',
   },
   format: {
     headerKey: 'pages.music-library.columns.format',
@@ -144,6 +152,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 82,
     maxWidthPx: 160,
     className: 'music-library-track-meta music-library-track-meta-code',
+    sortField: 'format',
   },
   playCount: {
     headerKey: 'pages.music-library.columns.playCount',
@@ -151,6 +160,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 76,
     maxWidthPx: 140,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'playCount',
   },
   lastPlayed: {
     headerKey: 'pages.music-library.columns.lastPlayed',
@@ -158,6 +168,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 130,
     maxWidthPx: 360,
     className: 'music-library-track-meta',
+    sortField: 'lastPlayed',
   },
   rating: {
     headerKey: 'pages.music-library.columns.rating',
@@ -165,6 +176,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 64,
     maxWidthPx: 120,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'rating',
   },
   fileSize: {
     headerKey: 'pages.music-library.columns.fileSize',
@@ -172,6 +184,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 96,
     maxWidthPx: 180,
     className: 'music-library-track-meta music-library-track-meta-number',
+    sortField: 'fileSize',
   },
   dateAdded: {
     headerKey: 'pages.music-library.columns.dateAdded',
@@ -179,6 +192,7 @@ export const LOCAL_TRACK_COLUMN_DEFINITIONS: Record<LocalTrackColumnId, LocalTra
     minWidthPx: 130,
     maxWidthPx: 360,
     className: 'music-library-track-meta',
+    sortField: 'dateAdded',
   },
 };
 
@@ -192,6 +206,12 @@ const DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS: LocalTrackColumnConfig[] = LOCAL_TRAC
 
 export function cloneDefaultLocalTrackColumnSettings(): LocalTrackColumnConfig[] {
   return DEFAULT_LOCAL_TRACK_COLUMN_SETTINGS.map((item) => ({ ...item }));
+}
+
+export function resolveMusicLibraryBaseFieldFromLocalTrackColumn(
+  columnId: LocalTrackColumnId
+): MusicLibraryBaseOrderField | null {
+  return LOCAL_TRACK_COLUMN_DEFINITIONS[columnId].sortField ?? null;
 }
 
 function isLocalTrackColumnId(value: unknown): value is LocalTrackColumnId {

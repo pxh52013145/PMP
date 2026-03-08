@@ -1,17 +1,21 @@
 import { Track } from '../../services/audio';
+import {
+  getMusicLibraryBaseFieldCapability,
+  getMusicLibraryBaseNativeFilterField,
+  getMusicLibraryBaseNativeSortField,
+  listMusicLibraryBaseOrderFieldIds,
+  type MusicLibraryBaseFieldId,
+} from './fieldCapabilities';
+import {
+  compareMusicLibraryFieldValues,
+  getMusicLibraryFieldRawValue,
+  normalizeMusicLibraryFieldNumber,
+  normalizeMusicLibraryFieldText,
+} from './fieldValue';
 
 export type MusicLibraryBaseView = 'table' | 'card';
 
-export type MusicLibraryBaseField =
-  | 'title'
-  | 'artist'
-  | 'album'
-  | 'genre'
-  | 'year'
-  | 'duration'
-  | 'rating'
-  | 'playCount'
-  | 'format';
+export type MusicLibraryBaseField = MusicLibraryBaseFieldId;
 
 export type MusicLibraryBaseOperator =
   | 'contains'
@@ -73,18 +77,6 @@ export interface MusicLibraryBaseSchema {
   view: MusicLibraryBaseViewSchema;
 }
 
-const MUSIC_LIBRARY_BASE_FIELDS = new Set<MusicLibraryBaseField>([
-  'title',
-  'artist',
-  'album',
-  'genre',
-  'year',
-  'duration',
-  'rating',
-  'playCount',
-  'format',
-]);
-
 const MUSIC_LIBRARY_BASE_OPERATORS = new Set<MusicLibraryBaseOperator>([
   'contains',
   'equals',
@@ -95,77 +87,19 @@ const MUSIC_LIBRARY_BASE_OPERATORS = new Set<MusicLibraryBaseOperator>([
   'is_not_empty',
 ]);
 
-const NUMERIC_FIELDS = new Set<MusicLibraryBaseField>(['year', 'duration', 'rating', 'playCount']);
-
-const NATIVE_FILTER_FIELDS = new Set<MusicLibraryBaseField>([
-  'title',
-  'artist',
-  'album',
-  'genre',
-  'duration',
-  'playCount',
-]);
-
-const NATIVE_SORT_FIELDS = new Set<MusicLibraryBaseOrderField>([
-  'title',
-  'artist',
-  'album',
-  'genre',
-  'duration',
-  'playCount',
-]);
-
-function normalizeText(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  return value.trim().toLowerCase();
-}
-
-function normalizeNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string') return undefined;
-  const parsed = Number(value.trim());
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function resolveTrackFieldValue(track: Track, field: MusicLibraryBaseField): string | number | undefined {
-  switch (field) {
-    case 'title':
-      return track.title || '';
-    case 'artist':
-      return track.artist || '';
-    case 'album':
-      return track.album || '';
-    case 'genre':
-      return track.genre || '';
-    case 'year':
-      return typeof track.year === 'number' && Number.isFinite(track.year) ? track.year : undefined;
-    case 'duration':
-      return typeof track.duration === 'number' && Number.isFinite(track.duration)
-        ? track.duration
-        : undefined;
-    case 'rating':
-      return typeof track.rating === 'number' && Number.isFinite(track.rating) ? track.rating : undefined;
-    case 'playCount':
-      return typeof track.playCount === 'number' && Number.isFinite(track.playCount)
-        ? track.playCount
-        : undefined;
-    case 'format': {
-      const explicit = (track.format || track.codecName || '').trim();
-      if (explicit.length > 0) return explicit;
-      const path = (track.path || track.originalPath || '').trim();
-      const ext = path.includes('.') ? path.split('.').pop()?.trim() ?? '' : '';
-      return ext;
-    }
-    default:
-      return undefined;
-  }
-}
+const NATIVE_SORT_FIELDS = new Set<MusicLibraryBaseOrderField>(
+  listMusicLibraryBaseOrderFieldIds().filter(
+    (field): field is MusicLibraryBaseOrderField => getMusicLibraryBaseNativeSortField(field) != null
+  )
+);
 
 function normalizeFilterInput(raw: unknown): MusicLibraryBaseFilter | null {
   if (!raw || typeof raw !== 'object') return null;
   const candidate = raw as Partial<MusicLibraryBaseFilter>;
   if (!candidate.id || typeof candidate.id !== 'string') return null;
-  if (!candidate.field || !MUSIC_LIBRARY_BASE_FIELDS.has(candidate.field)) return null;
+  if (!candidate.field || typeof candidate.field !== 'string' || candidate.field.trim().length === 0) {
+    return null;
+  }
   if (!candidate.operator || !MUSIC_LIBRARY_BASE_OPERATORS.has(candidate.operator)) return null;
 
   const needsValue =
@@ -184,7 +118,7 @@ function normalizeFilterInput(raw: unknown): MusicLibraryBaseFilter | null {
 
   return {
     id: candidate.id,
-    field: candidate.field,
+    field: candidate.field.trim(),
     operator: candidate.operator,
     value: needsValue ? normalizedValue : undefined,
   };
@@ -264,23 +198,27 @@ function flattenFilterGroups(groups: MusicLibraryBaseFilterGroup[]): MusicLibrar
 }
 
 function matchesFilter(track: Track, filter: MusicLibraryBaseFilter): boolean {
-  const fieldValue = resolveTrackFieldValue(track, filter.field);
+  const fieldValue = getMusicLibraryFieldRawValue(track, filter.field);
+  const capability = getMusicLibraryBaseFieldCapability(filter.field);
+  const isNumericField = capability?.kind === 'number';
 
   if (filter.operator === 'is_empty') {
     if (fieldValue === undefined || fieldValue === null) return true;
+    if (fieldValue instanceof Date) return !Number.isFinite(fieldValue.getTime());
     if (typeof fieldValue === 'number') return !Number.isFinite(fieldValue);
-    return normalizeText(fieldValue).length === 0;
+    return normalizeMusicLibraryFieldText(fieldValue).length === 0;
   }
 
   if (filter.operator === 'is_not_empty') {
     if (fieldValue === undefined || fieldValue === null) return false;
+    if (fieldValue instanceof Date) return Number.isFinite(fieldValue.getTime());
     if (typeof fieldValue === 'number') return Number.isFinite(fieldValue);
-    return normalizeText(fieldValue).length > 0;
+    return normalizeMusicLibraryFieldText(fieldValue).length > 0;
   }
 
-  if (NUMERIC_FIELDS.has(filter.field)) {
-    const left = normalizeNumber(fieldValue);
-    const right = normalizeNumber(filter.value);
+  if (isNumericField) {
+    const left = normalizeMusicLibraryFieldNumber(fieldValue);
+    const right = normalizeMusicLibraryFieldNumber(filter.value);
     if (left === undefined || right === undefined) return false;
 
     if (filter.operator === 'equals') return left === right;
@@ -290,8 +228,8 @@ function matchesFilter(track: Track, filter: MusicLibraryBaseFilter): boolean {
     return false;
   }
 
-  const leftText = normalizeText(fieldValue);
-  const rightText = normalizeText(filter.value);
+  const leftText = normalizeMusicLibraryFieldText(fieldValue);
+  const rightText = normalizeMusicLibraryFieldText(filter.value);
 
   if (filter.operator === 'contains') {
     if (rightText.length === 0) return true;
@@ -312,21 +250,10 @@ function matchesFilterGroup(track: Track, group: MusicLibraryBaseFilterGroup): b
 }
 
 function compareByRule(leftTrack: Track, rightTrack: Track, rule: MusicLibraryBaseOrderRule): number {
-  const left = resolveTrackFieldValue(leftTrack, rule.field);
-  const right = resolveTrackFieldValue(rightTrack, rule.field);
-
-  let result = 0;
-  if (NUMERIC_FIELDS.has(rule.field)) {
-    const leftNumber = normalizeNumber(left) ?? 0;
-    const rightNumber = normalizeNumber(right) ?? 0;
-    result = leftNumber - rightNumber;
-  } else {
-    const leftText = normalizeText(left);
-    const rightText = normalizeText(right);
-    result = leftText.localeCompare(rightText);
-  }
-
-  return rule.order === 'asc' ? result : -result;
+  return compareMusicLibraryFieldValues(leftTrack, rightTrack, rule.field, {
+    nulls: 'last',
+    order: rule.order,
+  });
 }
 
 function mergeOrderRules(
@@ -466,7 +393,7 @@ export function applyMusicLibraryBaseQuery(tracks: Track[], query: MusicLibraryB
 }
 
 export function canUseNativeBaseFilter(filter: MusicLibraryBaseFilter): boolean {
-  if (!NATIVE_FILTER_FIELDS.has(filter.field)) return false;
+  if (!getMusicLibraryBaseNativeFilterField(filter.field)) return false;
   const numericField = filter.field === 'duration' || filter.field === 'playCount';
 
   if (numericField) {
@@ -495,11 +422,11 @@ export function canUseNativeBaseFilterGroup(group: MusicLibraryBaseFilterGroup):
 
 export function canUseNativeBaseSort(field: MusicLibraryBaseSortField): boolean {
   if (field === 'default') return true;
-  return NATIVE_SORT_FIELDS.has(field);
+  return NATIVE_SORT_FIELDS.has(field) && getMusicLibraryBaseNativeSortField(field) != null;
 }
 
 export function canUseNativeBaseOrderRule(rule: MusicLibraryBaseOrderRule): boolean {
-  return NATIVE_SORT_FIELDS.has(rule.field);
+  return NATIVE_SORT_FIELDS.has(rule.field) && getMusicLibraryBaseNativeSortField(rule.field) != null;
 }
 
 export function flattenMusicLibraryBaseFilters(query: MusicLibraryBaseQuery): MusicLibraryBaseFilter[] {
