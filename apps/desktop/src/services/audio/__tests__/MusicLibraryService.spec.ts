@@ -91,8 +91,8 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
   it('builds pmp cover url with size hint and requests matching thumbnail edge', async () => {
     const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
     invokeMock.mockResolvedValue({
-      key: 'cover-small-thumb-160px',
-      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-small-thumb-160px.jpg',
+      key: 'cover-small-thumb-96px',
+      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-small-thumb-96px.jpg',
       size: 8192,
       mediaType: 'image/jpeg',
     });
@@ -115,9 +115,9 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
 
     expect(invoke).toHaveBeenCalledWith(
       'music_library_get_cover',
-      expect.objectContaining({ path: 'C:\\Music\\sized.mp3', maxEdgePx: 160 })
+      expect.objectContaining({ path: 'C:\\Music\\sized.mp3', maxEdgePx: 96 })
     );
-    expect(url).toContain('cover-small-thumb-160px.jpg');
+    expect(url).toContain('cover-small-thumb-96px.jpg');
     expect(url?.startsWith('http://asset.localhost/')).toBe(true);
   });
 

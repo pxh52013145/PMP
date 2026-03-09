@@ -10,6 +10,8 @@ type CoverUrlState = { key: string; url?: string };
 
 const COVER_RELEASE_DELAY_MS = 3000;
 const COVER_KEEP_HOT_COUNT = 2;
+const SMALL_COVER_RELEASE_DELAY_MS = 1200;
+const SMALL_COVER_KEEP_HOT_COUNT = 1;
 
 type UseCoverUrlOptions = {
   coverSizeHint?: CoverSizeHint;
@@ -47,6 +49,9 @@ function buildCoverSignature(coverUrl: string | undefined): string {
 export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOptions): string | undefined {
   const coverSizeHint = options?.coverSizeHint;
   const bypassRuntimePolicy = options?.bypassRuntimePolicy === true;
+  const coverReleaseDelayMs =
+    coverSizeHint === 'small' ? SMALL_COVER_RELEASE_DELAY_MS : COVER_RELEASE_DELAY_MS;
+  const coverKeepHotCount = coverSizeHint === 'small' ? SMALL_COVER_KEEP_HOT_COUNT : COVER_KEEP_HOT_COUNT;
   const key = useMemo(() => trackKey(track), [track]);
   const trackId = track?.id;
   const trackTitle = track?.title;
@@ -177,7 +182,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
 
     const previousRecent = recentCoverUrlsRef.current;
     const nextRecent = currentUrl
-      ? [currentUrl, ...previousRecent.filter((url) => url !== currentUrl)].slice(0, COVER_KEEP_HOT_COUNT)
+      ? [currentUrl, ...previousRecent.filter((url) => url !== currentUrl)].slice(0, coverKeepHotCount)
       : [];
 
     for (const staleUrl of previousRecent) {
@@ -204,7 +209,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
       if (toRelease.length > 0) {
         musicLibraryService.releaseCoverUrls(toRelease);
       }
-    }, COVER_RELEASE_DELAY_MS);
+    }, coverReleaseDelayMs);
 
     return () => {
       if (releaseTimerRef.current != null) {
@@ -212,7 +217,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
         releaseTimerRef.current = null;
       }
     };
-  }, [preferredCoverUrl]);
+  }, [coverKeepHotCount, coverReleaseDelayMs, preferredCoverUrl]);
 
   useEffect(() => {
     return () => {

@@ -869,6 +869,10 @@ export class MusicLibraryService {
     );
   }
 
+  private restoreTrackForListProjection(storedTrack: StoredTrackRecord): Track {
+    return compactTrackForMusicLibrary(this.restoreTrackForPlayback(storedTrack));
+  }
+
   async getLocalSchemaEnvelope(): Promise<NativeLibrarySchemaEnvelope | null> {
     if (!isTauriRuntime()) return null;
     return getNativeLibrarySchemaEnvelope();
@@ -1790,7 +1794,7 @@ export class MusicLibraryService {
   private resolveCoverEdgePx(coverSizeHint?: CoverSizeHint): number {
     switch (coverSizeHint) {
       case 'small':
-        return 160;
+        return 96;
       case 'medium':
         return 256;
       case 'large':
@@ -2497,6 +2501,10 @@ export class MusicLibraryService {
       albumCoverUrlCacheEntries: this.albumCoverUrlCache.size,
       albumCoverUrlInflight: this.albumCoverUrlInflight.size,
     };
+  }
+
+  getCurrentCoverRuntimeCachePolicy(): CoverRuntimeCachePolicy {
+    return this.currentCoverRuntimeCachePolicy;
   }
 
   clearCoverRuntimeCaches(): void {
@@ -4038,7 +4046,7 @@ export class MusicLibraryService {
           }
 
           if (count < limit) {
-            tracks.push(this.restoreTrackForPlayback(value));
+            tracks.push(this.restoreTrackForListProjection(value));
             count++;
             cursor.continue();
           } else {
@@ -4055,7 +4063,9 @@ export class MusicLibraryService {
             .filter((track) =>
               this.isStoredTrackVisible(track as unknown as StoredTrackRecord, visibilityContext)
             )
-            .map((track) => this.restoreTrackForPlayback(track as unknown as StoredTrackRecord));
+            .map((track) =>
+              this.restoreTrackForListProjection(track as unknown as StoredTrackRecord)
+            );
           resolve(restoredTracks);
         };
         request.onerror = () => reject(request.error);
@@ -4099,7 +4109,7 @@ export class MusicLibraryService {
         const album = String(value.album || '').toLowerCase();
 
         if (title.includes(q) || artist.includes(q) || album.includes(q)) {
-          results.push(this.restoreTrackForPlayback(value));
+          results.push(this.restoreTrackForListProjection(value));
           if (typeof limit === 'number' && results.length >= limit) {
             resolve(results);
             return;

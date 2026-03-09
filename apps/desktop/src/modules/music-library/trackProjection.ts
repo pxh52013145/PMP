@@ -1,8 +1,8 @@
 import { Track } from '../../services/audio';
 
-const MUSIC_LIBRARY_TRACK_TEXT_MAX_CHARS = 200;
+const MUSIC_LIBRARY_TRACK_TEXT_MAX_CHARS = 120;
 const MUSIC_LIBRARY_TRACK_TEXT_INTERN_POOL_MAX = 4096;
-const MUSIC_LIBRARY_DYNAMIC_ARRAY_ITEM_LIMIT = 32;
+const MUSIC_LIBRARY_DYNAMIC_ARRAY_ITEM_LIMIT = 12;
 
 const DYNAMIC_TRACK_FIELD_EXCLUDED_KEYS = new Set<string>([
   'id',
@@ -15,6 +15,9 @@ const DYNAMIC_TRACK_FIELD_EXCLUDED_KEYS = new Set<string>([
   'metadataScannedAtMs',
   'coverKey',
   'coverUrl',
+  'comment',
+  'mimeType',
+  'addedAt',
   'fileHandle',
   'file',
   'fileContent',

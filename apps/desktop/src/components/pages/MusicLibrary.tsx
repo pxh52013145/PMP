@@ -214,9 +214,20 @@ import {
 
   type MusicLibraryGroupedRow,
 
+  type MusicLibraryTrackRow,
+
 } from '../../modules/music-library/groupedRows';
 
-import { compactTracksForMusicLibrary } from '../../modules/music-library/trackProjection';
+import {
+
+  buildMusicLibraryCardGroupLayout,
+
+  type MusicLibraryCardGroupEntry,
+
+  type MusicLibraryCardGroupNode,
+
+} from '../../modules/music-library/cardGroups';
+
 
 import {
 
@@ -430,7 +441,7 @@ const INITIAL_TRACK_LOAD_LIMIT = 180;
 
 const TRACK_LOAD_CHUNK_SIZE = 120;
 
-const TRACK_RENDER_CHUNK_SIZE = 160;
+const TRACK_RENDER_CHUNK_SIZE = 96;
 
 const TRACK_SCROLL_LOAD_TRIGGER_PX = 320;
 
@@ -446,7 +457,50 @@ const TRACK_WINDOW_OVERSCAN_ROWS = 20;
 
 const NATIVE_BASE_PAGE_SIZE = 240;
 
-const CARD_COVER_VISIBILITY_ROOT_MARGIN = '240px';
+const CARD_COVER_VISIBILITY_ROOT_MARGIN = '96px';
+
+const MUSIC_LIBRARY_MEMORY_LOG_DEBOUNCE_MS = 900;
+
+type MusicLibraryRuntimeDiagnosticSnapshot = {
+  timestampMs: number;
+  sourceMode: MusicLibrarySourceMode;
+  baseView: MusicLibraryBaseView;
+  searchQuery: string;
+  shouldUseNativeBaseQuery: boolean;
+  coverPolicy: CoverRuntimeCachePolicy;
+  counts: {
+    tracks: number;
+    nativeBaseTracks: number;
+    filteredTracks: number;
+    renderedTracks: number;
+    groupedRows: number;
+  };
+  estimatedBytes: {
+    tracks: number | null;
+    nativeBaseTracks: number | null;
+  };
+  coverCache: ReturnType<typeof musicLibraryService.getCoverRuntimeCacheStats>;
+  jsHeap: {
+    usedJSHeapSize: number;
+    totalJSHeapSize: number;
+    jsHeapSizeLimit: number;
+  } | null;
+};
+
+type VisibilityListener = (isVisible: boolean) => void;
+
+type SharedVisibilityObserverEntry = {
+  observer: IntersectionObserver;
+  listeners: Map<Element, Set<VisibilityListener>>;
+};
+
+const sharedVisibilityObservers = new Map<string, SharedVisibilityObserverEntry>();
+
+declare global {
+  interface Window {
+    __PMP_MUSIC_LIBRARY_GET_SNAPSHOT__?: () => MusicLibraryRuntimeDiagnosticSnapshot;
+  }
+}
 
 
 
@@ -562,6 +616,89 @@ function isModuleCacheTrackMetadataCompatible(snapshot: ModuleCacheSnapshot): bo
 
 
 
+function estimateMusicLibraryTrackArrayBytes(
+  tracks: Track[] | null | undefined,
+  sampleLimit: number = 24
+): number | null {
+
+  if (!Array.isArray(tracks)) return null;
+
+  if (tracks.length === 0) return 0;
+
+
+
+  const boundedSampleLimit = Math.max(1, Math.min(sampleLimit, tracks.length));
+
+  try {
+
+    const sampleJson = JSON.stringify(tracks.slice(0, boundedSampleLimit));
+
+    if (!sampleJson) return null;
+
+    const sampleBytes = new TextEncoder().encode(sampleJson).length;
+
+    return Math.round((sampleBytes / boundedSampleLimit) * tracks.length);
+
+  } catch {
+
+    return null;
+
+  }
+
+}
+
+
+
+function getSharedVisibilityObserver(rootMargin: string): SharedVisibilityObserverEntry | null {
+
+  if (typeof IntersectionObserver === 'undefined') return null;
+
+
+
+  const existing = sharedVisibilityObservers.get(rootMargin);
+
+  if (existing) return existing;
+
+
+
+  const listeners = new Map<Element, Set<VisibilityListener>>();
+
+  const observer = new IntersectionObserver(
+
+    (entries) => {
+
+      for (const entry of entries) {
+
+        const targetListeners = listeners.get(entry.target);
+
+        if (!targetListeners) continue;
+
+        for (const listener of targetListeners) {
+
+          listener(Boolean(entry.isIntersecting));
+
+        }
+
+      }
+
+    },
+
+    { rootMargin }
+
+  );
+
+
+
+  const nextEntry = { observer, listeners };
+
+  sharedVisibilityObservers.set(rootMargin, nextEntry);
+
+  return nextEntry;
+
+}
+
+
+
 function useElementVisibility<T extends HTMLElement>(rootMargin: string): [React.RefObject<T>, boolean] {
 
   const elementRef = useRef<T | null>(null);
@@ -588,25 +725,71 @@ function useElementVisibility<T extends HTMLElement>(rootMargin: string): [React
 
 
 
-    const observer = new IntersectionObserver(
+    const observerEntry = getSharedVisibilityObserver(rootMargin);
 
-      (entries) => {
+    if (!observerEntry) {
 
-        const nextEntry = entries[0];
+      setIsVisible(true);
 
-        setIsVisible(Boolean(nextEntry?.isIntersecting));
+      return;
 
-      },
-
-      { rootMargin }
-
-    );
+    }
 
 
 
-    observer.observe(element);
+    const listener: VisibilityListener = (nextVisible) => {
 
-    return () => observer.disconnect();
+      setIsVisible((previous) => (previous === nextVisible ? previous : nextVisible));
+
+    };
+
+
+
+    let targetListeners = observerEntry.listeners.get(element);
+
+    if (!targetListeners) {
+
+      targetListeners = new Set<VisibilityListener>();
+
+      observerEntry.listeners.set(element, targetListeners);
+
+      observerEntry.observer.observe(element);
+
+    }
+
+    targetListeners.add(listener);
+
+
+
+    return () => {
+
+      const currentTargetListeners = observerEntry.listeners.get(element);
+
+      if (!currentTargetListeners) return;
+
+
+
+      currentTargetListeners.delete(listener);
+
+      if (currentTargetListeners.size > 0) return;
+
+
+
+      observerEntry.listeners.delete(element);
+
+      observerEntry.observer.unobserve(element);
+
+
+
+      if (observerEntry.listeners.size === 0) {
+
+        observerEntry.observer.disconnect();
+
+        sharedVisibilityObservers.delete(rootMargin);
+
+      }
+
+    };
 
   }, [rootMargin]);
 
@@ -704,7 +887,7 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
 
       ? track.title.trim().slice(0, 1).toUpperCase()
 
-      : '?';
+      : '♪';
 
 
 
@@ -1009,6 +1192,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   });
 
   const currentCoverPolicyRef = useRef<CoverRuntimeCachePolicy>('default');
+
+  const musicLibraryDiagnosticsTimerRef = useRef<number | null>(null);
+
+  const musicLibraryDiagnosticsSignatureRef = useRef('');
 
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -1782,8 +1969,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      const compactChunk = compactTracksForMusicLibrary(nextChunk);
-
       const chunkHasMore = nextChunk.length >= TRACK_LOAD_CHUNK_SIZE;
 
 
@@ -1792,7 +1977,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setTracks((prev) => {
 
-        const merged = [...prev, ...compactChunk];
+        const merged = [...prev, ...nextChunk];
 
         if (moduleCache) {
 
@@ -1965,15 +2150,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             : null;
 
-        const compactRows = compactTracksForMusicLibrary(rows);
-
         const previousTracks = reset || currentNativeBaseTracks == null ? [] : currentNativeBaseTracks;
 
-        let nextTracks = compactRows;
+        let nextTracks = rows;
 
         if (!reset && previousTracks.length > 0) {
 
-          if (compactRows.length === 0) {
+          if (rows.length === 0) {
 
             nextTracks = previousTracks;
 
@@ -1981,7 +2164,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             const seen = new Set(previousTracks.map((item) => item.id));
 
-            const appended = compactRows.filter((item) => !seen.has(item.id));
+            const appended = rows.filter((item) => !seen.has(item.id));
 
             nextTracks = appended.length > 0 ? [...previousTracks, ...appended] : previousTracks;
 
@@ -1991,13 +2174,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-        nativeBaseTrackNextOffsetRef.current = offset + compactRows.length;
+        nativeBaseTrackNextOffsetRef.current = offset + rows.length;
 
         setNativeBaseTracksTotal(nextTotal);
 
         const nextHasMore =
 
-          nextTotal !== null ? nextTracks.length < nextTotal : compactRows.length >= NATIVE_BASE_PAGE_SIZE;
+          nextTotal !== null ? nextTracks.length < nextTotal : rows.length >= NATIVE_BASE_PAGE_SIZE;
 
         hasMoreNativeBaseTracksRef.current = nextHasMore;
 
@@ -2007,7 +2190,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
         setNativeBaseTracks(nextTracks);
 
-        return compactRows.length > 0;
+        return rows.length > 0;
 
       } finally {
 
@@ -2351,8 +2534,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
 
-      updateCoverRuntimePolicy('high');
-
 
 
       // ??i??T??\C^?YmT?w??Y?l?~??hauZ?R?R?o?cao?[?M^T??`Zq???r??'??_?~?U?g?
@@ -2391,9 +2572,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      const compactInitialTracks = compactTracksForMusicLibrary(initialTracks);
-
-      const hasMore = compactInitialTracks.length >= INITIAL_TRACK_LOAD_LIMIT;
+      const hasMore = initialTracks.length >= INITIAL_TRACK_LOAD_LIMIT;
 
       trackNextOffsetRef.current = initialTracks.length;
 
@@ -2401,13 +2580,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
 
-      updateCoverRuntimePolicy('high');
-
 
 
       console.log('Library data loaded:', {
 
-        tracks: compactInitialTracks.length,
+        tracks: initialTracks.length,
 
       });
 
@@ -2417,7 +2594,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       moduleCache = buildModuleCacheSnapshot({
 
-        tracks: compactInitialTracks,
+        tracks: initialTracks,
 
         trackNextOffset: trackNextOffsetRef.current,
 
@@ -2429,7 +2606,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      setTracks(compactInitialTracks);
+      setTracks(initialTracks);
 
 
 
@@ -2789,8 +2966,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-    updateCoverRuntimePolicy('high');
-
     if (shouldUseNativeBaseQuery) {
 
       return;
@@ -2937,9 +3112,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-    if (searchQuery.trim()) {
+    if (baseView !== 'card') {
 
-      updateCoverRuntimePolicy('high');
+      updateCoverRuntimePolicy('hidden');
 
       return;
 
@@ -2947,9 +3122,27 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-    updateCoverRuntimePolicy(hasMoreTracks ? 'watch' : 'high');
+    if (searchQuery.trim()) {
+
+      updateCoverRuntimePolicy('critical');
+
+      return;
+
+    }
+
+
+
+    updateCoverRuntimePolicy(
+
+      (shouldUseNativeBaseQuery ? hasMoreNativeBaseTracks : hasMoreTracks) ? 'watch' : 'critical'
+
+    );
 
   }, [
+
+    baseView,
+
+    hasMoreNativeBaseTracks,
 
     hasMoreTracks,
 
@@ -2958,6 +3151,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     librarySourceMode,
 
     searchQuery,
+
+    shouldUseNativeBaseQuery,
 
     updateCoverRuntimePolicy,
 
@@ -3073,19 +3268,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-      const compactResults = compactTracksForMusicLibrary(results);
-
-      setTracks(compactResults);
+      setTracks(results);
 
       trackNextOffsetRef.current = results.length;
 
       setHasMoreTracks(false);
 
-      updateCoverRuntimePolicy('high');
-
       moduleCache = buildModuleCacheSnapshot({
 
-        tracks: compactResults,
+        tracks: results,
 
         trackNextOffset: trackNextOffsetRef.current,
 
@@ -3098,8 +3289,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       await resetLibraryDataFromStorage();
 
       if (token !== searchTokenRef.current) return;
-
-      updateCoverRuntimePolicy('high');
 
     }
 
@@ -4883,6 +5072,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+  const cardGroupLayout = useMemo(() => buildMusicLibraryCardGroupLayout(groupedRows), [groupedRows]);
+
+
+
   const virtualizedTrackSourceRows = useMemo(
 
     () => (baseView === 'card' ? [] : groupedRows),
@@ -4956,6 +5149,242 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       hasMoreTracks ||
 
       (baseView === 'card' && renderedTracks.length < filteredTracksTotal);
+
+
+
+  const getMusicLibraryRuntimeDiagnosticSnapshot = useCallback(
+
+    (): MusicLibraryRuntimeDiagnosticSnapshot => {
+
+      const performanceMemory = (
+
+        performance as Performance & {
+
+          memory?: {
+
+            usedJSHeapSize?: number;
+
+            totalJSHeapSize?: number;
+
+            jsHeapSizeLimit?: number;
+
+          };
+
+        }
+
+      ).memory;
+
+
+
+      return {
+
+        timestampMs: Date.now(),
+
+        sourceMode: librarySourceMode,
+
+        baseView,
+
+        searchQuery: searchQuery.trim(),
+
+        shouldUseNativeBaseQuery,
+
+        coverPolicy: musicLibraryService.getCurrentCoverRuntimeCachePolicy(),
+
+        counts: {
+
+          tracks: tracks.length,
+
+          nativeBaseTracks: nativeBaseTracks?.length ?? 0,
+
+          filteredTracks: filteredTracks.length,
+
+          renderedTracks: renderedTracks.length,
+
+          groupedRows: groupedRows.length,
+
+        },
+
+        estimatedBytes: {
+
+          tracks: estimateMusicLibraryTrackArrayBytes(tracks),
+
+          nativeBaseTracks: estimateMusicLibraryTrackArrayBytes(nativeBaseTracks),
+
+        },
+
+        coverCache: musicLibraryService.getCoverRuntimeCacheStats(),
+
+        jsHeap:
+
+          performanceMemory &&
+
+          typeof performanceMemory.usedJSHeapSize === 'number' &&
+
+          typeof performanceMemory.totalJSHeapSize === 'number' &&
+
+          typeof performanceMemory.jsHeapSizeLimit === 'number'
+
+            ? {
+
+                usedJSHeapSize: performanceMemory.usedJSHeapSize,
+
+                totalJSHeapSize: performanceMemory.totalJSHeapSize,
+
+                jsHeapSizeLimit: performanceMemory.jsHeapSizeLimit,
+
+              }
+
+            : null,
+
+      };
+
+    },
+
+    [
+
+      baseView,
+
+      filteredTracks,
+
+      groupedRows.length,
+
+      librarySourceMode,
+
+      nativeBaseTracks,
+
+      renderedTracks.length,
+
+      searchQuery,
+
+      shouldUseNativeBaseQuery,
+
+      tracks,
+
+    ]
+
+  );
+
+
+
+  useEffect(() => {
+
+    if (typeof window === 'undefined') return;
+
+
+
+    window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__ = getMusicLibraryRuntimeDiagnosticSnapshot;
+
+
+
+    return () => {
+
+      if (window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__ === getMusicLibraryRuntimeDiagnosticSnapshot) {
+
+        delete window.__PMP_MUSIC_LIBRARY_GET_SNAPSHOT__;
+
+      }
+
+    };
+
+  }, [getMusicLibraryRuntimeDiagnosticSnapshot]);
+
+
+
+  useEffect(() => {
+
+    if (!isOpen) {
+
+      if (musicLibraryDiagnosticsTimerRef.current != null) {
+
+        window.clearTimeout(musicLibraryDiagnosticsTimerRef.current);
+
+        musicLibraryDiagnosticsTimerRef.current = null;
+
+      }
+
+      return;
+
+    }
+
+
+
+    if (typeof window === 'undefined') return;
+
+
+
+    if (musicLibraryDiagnosticsTimerRef.current != null) {
+
+      window.clearTimeout(musicLibraryDiagnosticsTimerRef.current);
+
+    }
+
+
+
+    musicLibraryDiagnosticsTimerRef.current = window.setTimeout(() => {
+
+      musicLibraryDiagnosticsTimerRef.current = null;
+
+      const snapshot = getMusicLibraryRuntimeDiagnosticSnapshot();
+
+      const signature = JSON.stringify({
+
+        sourceMode: snapshot.sourceMode,
+
+        baseView: snapshot.baseView,
+
+        searchQuery: snapshot.searchQuery,
+
+        tracks: snapshot.counts.tracks,
+
+        nativeBaseTracks: snapshot.counts.nativeBaseTracks,
+
+        filteredTracks: snapshot.counts.filteredTracks,
+
+        renderedTracks: snapshot.counts.renderedTracks,
+
+        groupedRows: snapshot.counts.groupedRows,
+
+        coverPolicy: snapshot.coverPolicy,
+
+        coverBlobUrlTotalBytes: snapshot.coverCache.coverBlobUrlTotalBytes,
+
+        coverDecodedEstimateTotalBytes: snapshot.coverCache.coverDecodedEstimateTotalBytes,
+
+        usedJSHeapSize: snapshot.jsHeap?.usedJSHeapSize ?? null,
+
+      });
+
+
+
+      if (musicLibraryDiagnosticsSignatureRef.current === signature) {
+
+        return;
+
+      }
+
+
+
+      musicLibraryDiagnosticsSignatureRef.current = signature;
+
+      console.info('[MusicLibrary][snapshot]', snapshot);
+
+    }, MUSIC_LIBRARY_MEMORY_LOG_DEBOUNCE_MS);
+
+
+
+    return () => {
+
+      if (musicLibraryDiagnosticsTimerRef.current != null) {
+
+        window.clearTimeout(musicLibraryDiagnosticsTimerRef.current);
+
+        musicLibraryDiagnosticsTimerRef.current = null;
+
+      }
+
+    };
+
+  }, [getMusicLibraryRuntimeDiagnosticSnapshot, isOpen]);
 
 
 
@@ -5813,6 +6242,230 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+  const cardViewContent = useMemo(() => {
+
+    const renderTrackCardByRow = (row: MusicLibraryTrackRow) => {
+
+      const track = renderedTracks[row.trackIndex];
+
+      if (!track) {
+
+        return null;
+
+      }
+
+      const isPlayPending =
+
+        pendingPlayTrackIdentity !== null &&
+
+        resolveTrackIdentity(track) === pendingPlayTrackIdentity;
+
+      const normalizedArtist = String(track.artist || '').trim();
+
+      const normalizedAlbum = String(track.album || '').trim();
+
+      const subtitle = normalizedAlbum
+
+        ? `${normalizedArtist || t('common.unknown.artist')} · ${normalizedAlbum}`
+
+        : normalizedArtist || t('common.unknown.artist');
+
+
+
+      return (
+
+        <LocalTrackCard
+
+          key={`card-${track.id}`}
+
+          track={track}
+
+          index={row.trackIndex}
+
+          isPlayPending={isPlayPending}
+
+          subtitle={subtitle}
+
+          onTrackDoubleClick={handleTrackDoubleClick}
+
+          onTrackContextMenu={handleTrackContextMenu}
+
+          onPlaySingleTrack={onPlayNow ? handlePlaySingleTrack : undefined}
+
+          onAddSingleTrack={onAddToQueue ? handleAddSingleTrack : undefined}
+
+          playButtonTitle={t('pages.music-library.tracks.action.playOneTitle')}
+
+          addButtonTitle={t('pages.music-library.tracks.action.addOneTitle')}
+
+        />
+
+      );
+
+    };
+
+
+
+    const renderGroupNode = (node: MusicLibraryCardGroupNode, keyPath: string): React.ReactNode => {
+
+      const row = node.header;
+
+      return (
+
+        <section key={`group:${keyPath}`} className="music-library-card-group-section">
+
+          <button
+
+            type="button"
+
+            className="music-library-card-group-header"
+
+            onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
+
+            title={
+
+              row.collapsed
+
+                ? t('pages.music-library.group.expandTitle')
+
+                : t('pages.music-library.group.collapseTitle')
+
+            }
+
+          >
+
+            <span className="music-library-card-group-arrow" aria-hidden="true">
+
+              {row.collapsed ? '▶' : '▼'}
+
+            </span>
+
+            <span className="music-library-card-group-field">{row.fieldLabel}</span>
+
+            <span className="music-library-card-group-title">{row.title}</span>
+
+            <span className="music-library-card-group-count">
+
+              {t('pages.album.stats.trackCount', { count: row.count })}
+
+            </span>
+
+          </button>
+
+
+
+          {!row.collapsed && node.entries.length > 0 ? (
+
+            <div className="music-library-card-group-body">
+
+              {renderEntries(node.entries, keyPath)}
+
+            </div>
+
+          ) : null}
+
+        </section>
+
+      );
+
+    };
+
+
+
+    const renderEntries = (
+
+      entries: MusicLibraryCardGroupEntry[],
+
+      parentKey: string
+
+    ): React.ReactNode[] => {
+
+      const nodes: React.ReactNode[] = [];
+
+      let pendingTrackRows: MusicLibraryTrackRow[] = [];
+
+
+
+      const flushTrackRows = () => {
+
+        if (pendingTrackRows.length === 0) return;
+
+        const trackRows = pendingTrackRows;
+
+        pendingTrackRows = [];
+
+        nodes.push(
+
+          <div key={`${parentKey}:tracks:${nodes.length}`} className="music-library-card-grid">
+
+            {trackRows.map(renderTrackCardByRow)}
+
+          </div>
+
+        );
+
+      };
+
+
+
+      for (const entry of entries) {
+
+        if (entry.kind === 'track') {
+
+          pendingTrackRows.push(entry.row);
+
+          continue;
+
+        }
+
+
+
+        flushTrackRows();
+
+        nodes.push(renderGroupNode(entry.node, `${parentKey}/${entry.node.header.groupKey}`));
+
+      }
+
+
+
+      flushTrackRows();
+
+      return nodes;
+
+    };
+
+
+
+    return renderEntries(cardGroupLayout.entries, 'root');
+
+  }, [
+
+    cardGroupLayout.entries,
+
+    handleAddSingleTrack,
+
+    handlePlaySingleTrack,
+
+    handleTrackContextMenu,
+
+    handleTrackDoubleClick,
+
+    onAddToQueue,
+
+    onPlayNow,
+
+    pendingPlayTrackIdentity,
+
+    renderedTracks,
+
+    t,
+
+    toggleTrackGroupCollapsed,
+
+  ]);
+
+
+
   // 濠㈣泛瀚幃濠冪▔閹惧湱甯嗛柛娆愬▕閺侇參鎳ｅ鍐ㄧ
 
   // 闁哄秶鍘х槐锟犲礌閺嶃劍鐎ù鐘烘硾閵囧洨浜?
@@ -6507,7 +7160,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <div className="music-library-base-toolbar-left">
 
-                <div className="music-library-base-view-switch" role="group" aria-label="视图模式">
+                <div
+                  className="music-library-base-view-switch"
+                  role="group"
+                  aria-label={t('pages.music-library.base.viewModeLabel')}
+                >
 
                   <button
 
@@ -6517,7 +7174,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                   >
 
-                    表格
+                    {t('pages.music-library.base.view.table')}
 
                   </button>
 
@@ -6529,13 +7186,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                   >
 
-                    卡片
+                    {t('pages.music-library.base.view.card')}
 
                   </button>
 
                 </div>
 
-                <span className="music-library-base-results">共 {filteredTracksTotal} 首</span>
+                <span className="music-library-base-results">
+                  {t('pages.music-library.base.results', { count: filteredTracksTotal })}
+                </span>
 
                 {isPartialBaseQueryResult ? (
 
@@ -6543,11 +7202,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     className="music-library-base-results-hint"
 
-                    title="当前排序/筛选仅基于已加载曲目。继续滚动加载，或为该字段补充数据库侧支持。"
+                    title={t('pages.music-library.base.partialResultTitle')}
 
                   >
 
-                    局部结果
+                    {t('pages.music-library.base.partialResultBadge')}
 
                   </span>
 
@@ -6613,7 +7272,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
             />
 
-            <span className="music-library-search-icon">??</span>
+            <span className="music-library-search-icon">⌕</span>
 
           </div>
 
@@ -6631,7 +7290,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               >
 
-                排序
+                {t('pages.music-library.base.sortButton')}
 
               </button>
 
@@ -6643,7 +7302,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               >
 
-                筛选
+                {t('pages.music-library.base.filterButton')}
 
               </button>
 
@@ -6655,7 +7314,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               >
 
-                属性
+                {t('pages.music-library.base.fieldsButton')}
 
               </button>
 
@@ -6675,7 +7334,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               {showBaseSortPanel && (
 
-                <div className="music-library-base-popover-panel" role="dialog" aria-label="排序面板">
+                <div
+                  className="music-library-base-popover-panel"
+                  role="dialog"
+                  aria-label={t('pages.music-library.sort.panelTitle')}
+                >
 
                   <div className="music-library-base-popover-section">
 
@@ -6693,7 +7356,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     {baseGroupByRules.length === 0 ? (
 
-                      <div className="music-library-base-popover-note">未设置分组</div>
+                      <div className="music-library-base-popover-note">
+                        {t('pages.music-library.group.empty')}
+                      </div>
 
                     ) : (
 
@@ -6763,9 +7428,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             >
 
-                              <option value="asc">A → Z</option>
+                              <option value="asc">{t('pages.music-library.order.asc')}</option>
 
-                              <option value="desc">Z → A</option>
+                              <option value="desc">{t('pages.music-library.order.desc')}</option>
 
                             </select>
 
@@ -6773,7 +7438,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="上移"
+                              title={t('pages.music-library.columns.action.moveUp')}
 
                               onClick={() => moveBaseGroupByRule(rule.id, -1)}
 
@@ -6789,7 +7454,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="下移"
+                              title={t('pages.music-library.columns.action.moveDown')}
 
                               onClick={() => moveBaseGroupByRule(rule.id, 1)}
 
@@ -6805,13 +7470,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="移除分组"
+                              title={t('common.action.remove')}
 
                               onClick={() => removeBaseGroupByRule(rule.id)}
 
                             >
 
-                              ?
+                              ×
 
                             </button>
 
@@ -6843,7 +7508,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     >
 
-                      + 添加分组
+                      {t('pages.music-library.group.addButton')}
 
                     </button>
 
@@ -6865,7 +7530,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     {baseSortRules.length === 0 ? (
 
-                      <div className="music-library-base-popover-note">未设置排序</div>
+                      <div className="music-library-base-popover-note">
+                        {t('pages.music-library.sort.empty')}
+                      </div>
 
                     ) : (
 
@@ -6935,9 +7602,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             >
 
-                              <option value="asc">A → Z</option>
+                              <option value="asc">{t('pages.music-library.order.asc')}</option>
 
-                              <option value="desc">Z → A</option>
+                              <option value="desc">{t('pages.music-library.order.desc')}</option>
 
                             </select>
 
@@ -6945,7 +7612,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="上移"
+                              title={t('pages.music-library.columns.action.moveUp')}
 
                               onClick={() => moveBaseSortRule(rule.id, -1)}
 
@@ -6961,7 +7628,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="下移"
+                              title={t('pages.music-library.columns.action.moveDown')}
 
                               onClick={() => moveBaseSortRule(rule.id, 1)}
 
@@ -6977,13 +7644,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="移除排序"
+                              title={t('common.action.remove')}
 
                               onClick={() => removeBaseSortRule(rule.id)}
 
                             >
 
-                              ?
+                              ×
 
                             </button>
 
@@ -7015,7 +7682,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     >
 
-                      + 添加排序
+                      {t('pages.music-library.sort.addButton')}
 
                     </button>
 
@@ -7029,11 +7696,17 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               {showBaseFilterPanel && (
 
-                <div className="music-library-base-popover-panel" role="dialog" aria-label="筛选面板">
+                <div
+                  className="music-library-base-popover-panel"
+                  role="dialog"
+                  aria-label={t('pages.music-library.filter.panelTitle')}
+                >
 
                   <div className="music-library-base-popover-section">
 
-                    <div className="music-library-base-popover-title">筛选规则组</div>
+                    <div className="music-library-base-popover-title">
+                      {t('pages.music-library.filter.groupRulesTitle')}
+                    </div>
 
                     <div className="music-library-base-filter-editor">
 
@@ -7055,9 +7728,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       >
 
-                        <option value="and">组之间 AND</option>
+                        <option value="and">{t('pages.music-library.filter.groupJoin.and')}</option>
 
-                        <option value="or">组之间 OR</option>
+                        <option value="or">{t('pages.music-library.filter.groupJoin.or')}</option>
 
                       </select>
 
@@ -7075,13 +7748,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       >
 
-                        <option value="">选择分组</option>
+                        <option value="">{t('pages.music-library.filter.selectGroupPlaceholder')}</option>
 
                         {baseFilterGroups.map((group, index) => (
 
                           <option key={group.id} value={group.id}>
 
-                            规则组 {index + 1}
+                            {t('pages.music-library.filter.groupLabel', { index: index + 1 })}
 
                           </option>
 
@@ -7091,7 +7764,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       <button className="music-library-btn" onClick={handleAddBaseFilterGroup}>
 
-                        + 分组
+                        {t('pages.music-library.filter.addGroupButton')}
 
                       </button>
 
@@ -7167,7 +7840,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         list={baseFilterFacetDescriptor ? baseFilterFacetValuesListId : undefined}
 
-                        placeholder={baseFilterFacetDescriptor ? '值（可选候选）' : '值'}
+                        placeholder={
+                          baseFilterFacetDescriptor
+                            ? t('pages.music-library.filter.valuePlaceholderWithFacet')
+                            : t('pages.music-library.filter.valuePlaceholder')
+                        }
 
                         className="music-library-base-filter-input"
 
@@ -7189,7 +7866,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       <button className="music-library-btn" onClick={handleAddBaseFilter}>
 
-                        添加筛选
+                        {t('pages.music-library.filter.addButton')}
 
                       </button>
 
@@ -7203,7 +7880,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       >
 
-                        清空筛选
+                        {t('pages.music-library.filter.clearButton')}
 
                       </button>
 
@@ -7215,9 +7892,14 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         {isBaseFilterFacetValuesLoading
 
-                          ? `正在加载 ${baseFilterFacetDescriptor.label} 候选值...`
+                          ? t('pages.music-library.filter.facetLoading', {
+                              label: baseFilterFacetDescriptor.label,
+                            })
 
-                          : `已加载 ${baseFilterFacetDescriptor.label} 候选值 ${baseFilterFacetValues.length} 个`}
+                          : t('pages.music-library.filter.facetLoaded', {
+                              label: baseFilterFacetDescriptor.label,
+                              count: baseFilterFacetValues.length,
+                            })}
 
                       </div>
 
@@ -7237,7 +7919,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                           <div className="music-library-base-filter-group-header">
 
-                            <strong>规则组 {index + 1}</strong>
+                            <strong>
+                              {t('pages.music-library.filter.groupLabel', { index: index + 1 })}
+                            </strong>
 
                             <select
 
@@ -7259,9 +7943,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             >
 
-                              <option value="and">组内 AND</option>
+                              <option value="and">{t('pages.music-library.filter.innerJoin.and')}</option>
 
-                              <option value="or">组内 OR</option>
+                              <option value="or">{t('pages.music-library.filter.innerJoin.or')}</option>
 
                             </select>
 
@@ -7269,13 +7953,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                               className="music-library-base-popover-icon-btn"
 
-                              title="移除分组"
+                              title={t('common.action.remove')}
 
                               onClick={() => handleRemoveBaseFilterGroup(group.id)}
 
                             >
 
-                              ?
+                              ×
 
                             </button>
 
@@ -7299,7 +7983,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                                     onClick={() => handleRemoveBaseFilter(group.id, filter.id)}
 
-                                    title="移除筛选"
+                                    title={t('pages.music-library.filter.removeTitle')}
 
                                   >
 
@@ -7319,7 +8003,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                           ) : (
 
-                            <div className="music-library-base-popover-note">该分组暂无条件</div>
+                            <div className="music-library-base-popover-note">
+                              {t('pages.music-library.filter.emptyGroup')}
+                            </div>
 
                           )}
 
@@ -7345,7 +8031,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                   role="dialog"
 
-                  aria-label="属性面板"
+                  aria-label={t('pages.music-library.fields.panelTitle')}
 
                 >
 
@@ -7359,7 +8045,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                       onChange={(event) => setPropertySearchQuery(event.target.value)}
 
-                      placeholder="查找属性..."
+                      placeholder={t('pages.music-library.fields.searchPlaceholder')}
 
                     />
 
@@ -7369,7 +8055,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     {filteredPropertyColumns.length === 0 ? (
 
-                      <div className="music-library-modal-empty">未找到匹配属性</div>
+                      <div className="music-library-modal-empty">
+                        {t('pages.music-library.fields.empty')}
+                      </div>
 
                     ) : (
 
@@ -7455,7 +8143,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     <button className="music-library-btn" onClick={resetLocalTrackColumns}>
 
-                      重置属性
+                      {t('pages.music-library.fields.resetButton')}
 
                     </button>
 
@@ -7593,7 +8281,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <div className="music-library-empty">
 
-                <div className="music-library-empty-icon">?</div>
+                <div className="music-library-empty-icon">⏳</div>
 
                 <div className="music-library-empty-text">{t('pages.music-library.stable.loading')}</div>
 
@@ -7603,7 +8291,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <div className="music-library-empty">
 
-                <div className="music-library-empty-icon">??</div>
+                <div className="music-library-empty-icon">☁</div>
 
                 <div className="music-library-empty-text">{t('pages.music-library.stable.empty.title')}</div>
 
@@ -7817,7 +8505,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               <div className="music-library-empty">
 
-                <div className="music-library-empty-icon">??</div>
+                <div className="music-library-empty-icon">♪</div>
 
                 <div className="music-library-empty-text">{t('pages.music-library.empty.title')}</div>
 
@@ -7837,129 +8525,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               {baseView === 'card' && (
 
-                <div className="music-library-card-list">
-
-                  {groupedRows.map((row) => {
-
-                    if (row.kind === 'group-header') {
-
-                      return (
-
-                        <button
-
-                          key={row.id}
-
-                          type="button"
-
-                          className="music-library-card-group-header"
-
-                          style={
-
-                            {
-
-                              '--music-library-group-indent': `${row.depth * 18}px`,
-
-                            } as React.CSSProperties
-
-                          }
-
-                          onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
-
-                          title={
-
-                            row.collapsed
-
-                              ? t('pages.music-library.group.expandTitle')
-
-                              : t('pages.music-library.group.collapseTitle')
-
-                          }
-
-                        >
-
-                          <span className="music-library-card-group-arrow" aria-hidden="true">
-
-                            {row.collapsed ? '?' : '▼'}
-
-                          </span>
-
-                          <span className="music-library-card-group-field">{row.fieldLabel}</span>
-
-                          <span className="music-library-card-group-title">{row.title}</span>
-
-                          <span className="music-library-card-group-count">
-
-                            {t('pages.album.stats.trackCount', { count: row.count })}
-
-                          </span>
-
-                        </button>
-
-                      );
-
-                    }
-
-
-
-                    const track = renderedTracks[row.trackIndex];
-
-                    if (!track) {
-
-                      return null;
-
-                    }
-
-                    const isPlayPending =
-
-                      pendingPlayTrackIdentity !== null &&
-
-                      resolveTrackIdentity(track) === pendingPlayTrackIdentity;
-
-                    const normalizedArtist = String(track.artist || '').trim();
-
-                    const normalizedAlbum = String(track.album || '').trim();
-
-                    const subtitle = normalizedAlbum
-
-                      ? `${normalizedArtist || t('common.unknown.artist')} · ${normalizedAlbum}`
-
-                      : normalizedArtist || t('common.unknown.artist');
-
-
-
-                    return (
-
-                      <LocalTrackCard
-
-                        key={`card-${track.id}`}
-
-                        track={track}
-
-                        index={row.trackIndex}
-
-                        isPlayPending={isPlayPending}
-
-                        subtitle={subtitle}
-
-                        onTrackDoubleClick={handleTrackDoubleClick}
-
-                        onTrackContextMenu={handleTrackContextMenu}
-
-                        onPlaySingleTrack={onPlayNow ? handlePlaySingleTrack : undefined}
-
-                        onAddSingleTrack={onAddToQueue ? handleAddSingleTrack : undefined}
-
-                        playButtonTitle={t('pages.music-library.tracks.action.playOneTitle')}
-
-                        addButtonTitle={t('pages.music-library.tracks.action.addOneTitle')}
-
-                      />
-
-                    );
-
-                  })}
-
-                </div>
+                <div className="music-library-card-groups">{cardViewContent}</div>
 
               )}
 
@@ -8225,7 +8791,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             <span className="music-library-track-group-arrow" aria-hidden="true">
 
-                              {row.collapsed ? '?' : '▼'}
+                              {row.collapsed ? '▶' : '▼'}
 
                             </span>
 
@@ -9123,7 +9689,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                 </button>
 
-                <button onClick={() => setShowPathsManager(false)}>X</button>
+                <button title={t('common.action.close')} onClick={() => setShowPathsManager(false)}>
+                  ×
+                </button>
 
               </div>
 
@@ -9137,7 +9705,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                 <div className="paths-manager-empty">
 
-                  <div className="paths-empty-icon">??</div>
+                  <div className="paths-empty-icon">📁</div>
 
                   <div className="paths-empty-text">{t('pages.music-library.pathsManager.empty.title')}</div>
 
@@ -9163,7 +9731,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                     <div key={path.id} className="path-item">
 
-                      <div className="path-item-icon">??</div>
+                      <div className="path-item-icon">📁</div>
 
                       <div className="path-item-info">
 
@@ -9223,7 +9791,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             <span className="path-meta-time">
 
-                              ??{' '}
+                              🕒{' '}
 
                               {new Date(path.lastScanned).toLocaleString(locale, {
 
@@ -9297,7 +9865,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         >
 
-                          {path.isVisible ? '??' : '??'}
+                          {path.isVisible
+                            ? t('pages.music-library.pathsManager.path.showButton')
+                            : t('pages.music-library.pathsManager.path.hideButton')}
 
                         </button>
 
@@ -9341,7 +9911,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         >
 
-                          {path.isScanned ? '停止' : '启用'}
+                          {path.isScanned
+                            ? t('pages.music-library.pathsManager.path.disableScanButton')
+                            : t('pages.music-library.pathsManager.path.enableScanButton')}
 
                         </button>
 
@@ -9389,7 +9961,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                             ? t('pages.music-library.pathsManager.path.cleanupMissingBusy')
 
-                            : '??'}
+                            : t('pages.music-library.pathsManager.path.cleanupMissingButton')}
 
                         </button>
 
@@ -9427,7 +9999,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         >
 
-                          ?
+                          {t('pages.music-library.pathsManager.path.rescanButton')}
 
                         </button>
 
@@ -9457,7 +10029,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                         >
 
-                          ?
+                          {t('pages.music-library.pathsManager.path.removeButton')}
 
                         </button>
 

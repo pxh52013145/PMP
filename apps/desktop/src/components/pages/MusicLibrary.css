@@ -874,11 +874,32 @@
   display: none;
 }
 
-.music-library-card-list {
+.music-library-card-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.music-library-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 10px;
-  margin-bottom: 12px;
+}
+
+.music-library-card-group-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.music-library-card-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-left: 14px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(140, 170, 255, 0.18);
 }
 
 .music-library-track-card {
@@ -905,18 +926,18 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  min-height: 38px;
-  padding: 0 12px;
-  padding-left: calc(12px + var(--music-library-group-indent, 0px));
-  border: none;
-  border-radius: 8px;
-  background: rgba(108, 148, 255, 0.12);
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid rgba(140, 170, 255, 0.2);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(108, 148, 255, 0.14), rgba(108, 148, 255, 0.08));
   color: rgba(222, 232, 255, 0.95);
   cursor: pointer;
 }
 
 .music-library-card-group-header:hover {
-  background: rgba(108, 148, 255, 0.18);
+  background: linear-gradient(180deg, rgba(108, 148, 255, 0.2), rgba(108, 148, 255, 0.12));
+  border-color: rgba(140, 170, 255, 0.3);
 }
 
 .music-library-card-group-arrow {
@@ -2097,6 +2118,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  white-space: nowrap;
+  line-height: 1;
 }
 
 .path-item-action-btn:hover:not(:disabled) {
