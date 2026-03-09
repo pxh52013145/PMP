@@ -902,6 +902,7 @@ fn query_track_record_by_path(
         offset: Some(0),
         include_missing: Some(true),
         visible_only: Some(false),
+        projection: Some("full".to_string()),
         search_query: None,
         artist: None,
         album: None,

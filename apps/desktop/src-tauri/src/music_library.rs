@@ -41,7 +41,8 @@ pub fn open_in_file_manager(path: &str) -> Result<(), String> {
     }
 
     let mut target = if normalized.to_ascii_lowercase().starts_with("file://") {
-        let parsed = Url::parse(normalized).map_err(|error| format!("Invalid file URL: {error}"))?;
+        let parsed =
+            Url::parse(normalized).map_err(|error| format!("Invalid file URL: {error}"))?;
         parsed
             .to_file_path()
             .map_err(|_| format!("Invalid file URL path: {normalized}"))?

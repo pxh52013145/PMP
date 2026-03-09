@@ -30,18 +30,26 @@ export {
   pollNativeBilibiliQrCodeSession,
   resolveNativeBilibiliLyricLocator,
   getNativeLibraryStats,
+  getNativeLibrarySchemaEnvelope,
+  notifyNativeLibrarySchemaChanged,
+  parseNativeLibrarySchemaChangedEventPayload,
   listNativeLibraryCloudHashJobs,
   listNativeLibraryConnectors,
   listNativeLibraryFallbackTasks,
   listNativeLibrarySourceHealth,
   listNativeLibraryAlbums,
+  listNativeLibraryFacetCatalog,
   listNativeLibraryArtists,
   listNativeLibraryGenres,
+  listNativeLibraryTextFacetValues,
+  listNativeLibraryFacetEntries,
   listNativeLibraryPlaylistItems,
   listNativeLibraryPlaylists,
   listNativeLibrarySources,
+  listNativeLibraryTrackFieldCatalog,
   listNativeLibraryUserEntries,
   queryNativeLibraryTracks,
+  queryNativeLibraryTracksPage,
   removeNativeLibrarySource,
   retryNativeLibrarySyncFailedSources,
   replaceNativeLibraryPlaylistItems,
@@ -90,11 +98,18 @@ export {
   type NativeLibrarySyncStatus,
   type NativeLibrarySyncTickResult,
   type NativeLibraryCloudHashJobUpsertInput,
+  type NativeLibrarySchemaEnvelope,
+  type NativeLibrarySchemaChangedEventPayload,
+  type NativeLibrarySchemaSourceTableRecord,
+  type NativeLibraryFacetCatalogRecord,
   type NativeLibraryPlaylistItemRecord,
   type NativeLibraryPlaylistItemUpsertInput,
   type NativeLibraryPlaylistQuery,
   type NativeLibraryPlaylistRecord,
   type NativeLibraryPlaylistUpsertInput,
+  type NativeLibraryFacetEntriesQuery,
+  type NativeLibraryFacetEntriesResult,
+  type NativeLibraryFacetKind,
   type NativeLibraryFacetQuery,
   type NativeLibraryFallbackTaskQuery,
   type NativeLibraryFallbackTaskRecord,
@@ -104,13 +119,16 @@ export {
   type NativeLibraryTrackLogicalOperator,
   type NativeLibraryTrackFilterOperator,
   type NativeLibraryTrackFilterInput,
+  type NativeLibraryTrackFieldCatalogRecord,
   type NativeLibraryTrackFilterGroupInput,
   type NativeLibraryTrackGroupByInput,
+  type NativeLibraryTrackPageResult,
   type NativeLibraryTrackSortField,
   type NativeLibraryTrackSortInput,
   type NativeLibraryTrackBaseQueryInput,
   type NativeLibraryTrackRecord,
   type NativeLibraryStatsRecord,
+  type NativeLibraryTextFacetQuery,
   type NativeLibrarySourceHealthQuery,
   type NativeLibrarySourceHealthRecord,
   type NativeLibrarySourceRecord,
@@ -121,6 +139,22 @@ export {
   type NativeLibraryUserEntryRecord,
   type NativeLibraryUserEntryUpsertInput,
 } from './nativeLibraryDb';
+
+export {
+  createMusicLibraryFieldCapabilitiesFromNativeCatalog,
+  isMusicLibraryRuntimeFieldCapability,
+  registerMusicLibraryFieldCapabilitiesFromNativeCatalog,
+} from './fieldCatalog';
+
+export {
+  createMusicLibraryFacetCollectionDescriptorsFromNativeCatalog,
+  registerMusicLibraryFacetCollectionDescriptorsFromNativeCatalog,
+} from './facetCatalog';
+
+export {
+  registerMusicLibrarySchemaFromNativeEnvelope,
+  type MusicLibraryNativeSchemaRegistration,
+} from './schemaEnvelope';
 
 export {
   applyMusicLibraryBaseQuery,
@@ -150,6 +184,7 @@ export {
 } from './baseQuery';
 
 export {
+  canFacetMusicLibraryBaseField,
   clearRegisteredMusicLibraryBaseFieldCapabilities,
   getMusicLibraryBaseFieldCapability,
   getMusicLibraryBaseNativeFilterField,
@@ -170,11 +205,25 @@ export {
   resolveMusicLibraryBaseFieldLabel,
   subscribeMusicLibraryBaseFieldCapabilities,
   unregisterMusicLibraryBaseFieldCapability,
+  type MusicLibraryCustomFieldCapabilitySource,
   type MusicLibraryBaseFieldId,
   type MusicLibraryBaseFieldKey,
   type MusicLibraryExtensionFieldCapabilityInput,
   type MusicLibraryResolvedFieldCapability,
 } from './fieldCapabilities';
+
+export {
+  clearRegisteredMusicLibraryFacetCollectionDescriptors,
+  getMusicLibraryFacetCollectionDescriptor,
+  listMusicLibraryFacetCollectionDescriptors,
+  registerMusicLibraryFacetCollectionDescriptors,
+  resolveMusicLibraryFieldFacetDescriptor,
+  subscribeMusicLibraryFacetCollectionDescriptors,
+  type MusicLibraryCollectionFacetDescriptor,
+  type MusicLibraryFacetCollectionId,
+  type MusicLibraryFacetDescriptorKind,
+  type MusicLibraryFieldFacetDescriptor,
+} from './facetDescriptors';
 
 export {
   compareMusicLibraryFieldValues,

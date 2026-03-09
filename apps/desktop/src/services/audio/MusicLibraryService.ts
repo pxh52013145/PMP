@@ -1,6 +1,7 @@
 import { Track } from '../audio';
 import { parseAudioFile } from '../../utils/audioMetadata';
 import { open } from '@tauri-apps/api/dialog';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { readDir, exists } from '@tauri-apps/api/fs';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { readJson } from '../../modules/storage';
@@ -19,15 +20,19 @@ import {
   getNativeLibraryStats,
   listNativeLibraryCloudHashJobs,
   listNativeLibraryFallbackTasks,
+  getNativeLibrarySchemaEnvelope,
+  parseNativeLibrarySchemaChangedEventPayload,
   markNativeLibraryTrackPlayed,
   markNativeLibraryUserEntryPlayed,
   listNativeLibrarySourceHealth,
-  listNativeLibraryAlbums,
-  listNativeLibraryArtists,
-  listNativeLibraryGenres,
+  listNativeLibraryFacetEntries,
   listNativeLibrarySources,
   listNativeLibraryUserEntries,
   queryNativeLibraryTracks,
+  queryNativeLibraryTracksPage,
+  getMusicLibraryFacetCollectionDescriptor,
+  registerMusicLibrarySchemaFromNativeEnvelope,
+  resolveMusicLibraryFieldFacetDescriptor,
   removeNativeLibrarySource,
   retryNativeLibrarySyncFailedSources,
   runNativeLibrarySyncTick,
@@ -62,15 +67,20 @@ import {
   type NativeLibraryTrackRecord,
   type NativeLibraryTrackFilterInput,
   type NativeLibraryTrackFilterGroupInput,
+  type NativeLibrarySchemaChangedEventPayload,
+  type NativeLibrarySchemaEnvelope,
+  type NativeLibraryTrackFieldCatalogRecord,
   type NativeLibraryTrackSortInput,
   type NativeLibraryTrackUpsertInput,
   type NativeLibraryUserEntryQuery,
   type NativeLibraryUserEntryRecord,
+  type MusicLibraryCollectionFacetDescriptor,
 } from '../../modules/music-library';
 import {
   canUseNativeBaseFilter,
   canUseNativeBaseFilterGroup,
   canUseNativeBaseOrderRule,
+  type MusicLibraryBaseField,
   type MusicLibraryBaseGroupRule,
   type MusicLibraryBaseFilter,
   type MusicLibraryBaseQuery,
@@ -81,7 +91,8 @@ import {
   getMusicLibraryBaseNativeFilterField,
   getMusicLibraryBaseNativeSortField,
 } from '../../modules/music-library/fieldCapabilities';
-import { STORAGE_KEYS } from '../../utils/windowCommunication';
+import { compactTrackForMusicLibrary } from '../../modules/music-library/trackProjection';
+import { STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import {
   recordCoverBlobUrlsReleased,
   recordCoverResolveCacheHit,
@@ -289,6 +300,11 @@ export interface LocalBaseTracksQuery {
   visibleOnly?: boolean;
 }
 
+export interface LocalBaseTracksPageResult {
+  tracks: Track[];
+  total: number;
+}
+
 export type CoverRuntimeCachePolicy = 'default' | 'watch' | 'high' | 'critical' | 'hidden';
 export type CoverSizeHint = 'small' | 'medium' | 'large';
 
@@ -328,6 +344,13 @@ export class MusicLibraryService {
   private currentCoverRuntimeCachePolicy: CoverRuntimeCachePolicy = 'default';
   private coverMaxEdgePx: number = 256;
   private nativeSourceBootstrapScheduled = false;
+  private readonly NATIVE_SCHEMA_ENVELOPE_CACHE_TTL_MS = 60_000;
+  private readonly NATIVE_SCHEMA_ENVELOPE_STALE_RETRY_MS = 10_000;
+  private nativeSchemaEnvelopeLoadPromise: Promise<NativeLibrarySchemaEnvelope | null> | null = null;
+  private nativeSchemaEnvelopeCache: NativeLibrarySchemaEnvelope | null = null;
+  private nativeSchemaEnvelopeCacheExpiresAtMs = 0;
+  private nativeSchemaEnvelopeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private nativeSchemaChangeUnlistenPromise: Promise<UnlistenFn | null> | null = null;
 
   // 缓存 - 减少数据库查询
   private cachedStats: LibraryStats | null = null;
@@ -341,6 +364,7 @@ export class MusicLibraryService {
     this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
     this.setupCoverSettingsListener();
     this.setupCoverVisibilityReclaimListener();
+    this.setupNativeSchemaEnvelopeListener();
     this.scheduleNativeSourceBootstrap();
     this.scheduleStartupRefresh();
   }
@@ -378,6 +402,53 @@ export class MusicLibraryService {
     };
 
     window.addEventListener('visibilitychange', onVisibilityChange);
+  }
+
+  private setupNativeSchemaEnvelopeListener(): void {
+    if (!isTauriRuntime()) return;
+    if (this.nativeSchemaChangeUnlistenPromise) return;
+
+    this.nativeSchemaChangeUnlistenPromise = listen(
+      TAURI_EVENTS.MUSIC_LIBRARY_SCHEMA_CHANGED,
+      (event) => {
+        const payload = parseNativeLibrarySchemaChangedEventPayload(event.payload);
+        if (!payload) return;
+        this.handleNativeSchemaChangedEvent(payload);
+      }
+    ).catch((error) => {
+      this.nativeSchemaChangeUnlistenPromise = null;
+      console.warn('[MusicLibraryService] failed to subscribe native schema change events:', error);
+      return null;
+    });
+  }
+
+  private handleNativeSchemaChangedEvent(payload: NativeLibrarySchemaChangedEventPayload): void {
+    if (
+      this.nativeSchemaEnvelopeCache?.schemaFingerprint &&
+      this.nativeSchemaEnvelopeCache.schemaFingerprint === payload.schemaFingerprint
+    ) {
+      this.nativeSchemaEnvelopeCacheExpiresAtMs =
+        Date.now() + this.NATIVE_SCHEMA_ENVELOPE_CACHE_TTL_MS;
+      return;
+    }
+
+    this.scheduleNativeSchemaEnvelopeRefresh(payload.reason);
+  }
+
+  private scheduleNativeSchemaEnvelopeRefresh(reason: string): void {
+    if (this.nativeSchemaEnvelopeRefreshTimer !== null) {
+      clearTimeout(this.nativeSchemaEnvelopeRefreshTimer);
+    }
+
+    this.nativeSchemaEnvelopeRefreshTimer = setTimeout(() => {
+      this.nativeSchemaEnvelopeRefreshTimer = null;
+      void this.refreshNativeSchemaEnvelope().catch((error) => {
+        console.warn(
+          `[MusicLibraryService] failed to refresh native schema envelope after ${reason}:`,
+          error
+        );
+      });
+    }, 120);
   }
 
   private getPolicyLimits(policy: CoverRuntimeCachePolicy): {
@@ -690,11 +761,63 @@ export class MusicLibraryService {
     }
   }
 
+  private copyDynamicTrackFields(
+    source: Record<string, unknown> | undefined,
+    target: Record<string, unknown>,
+    options?: { skipKeys?: string[] }
+  ): void {
+    if (!source) return;
+
+    const skipKeys = new Set(options?.skipKeys ?? []);
+    for (const [key, value] of Object.entries(source)) {
+      if (skipKeys.has(key) || key in target) {
+        continue;
+      }
+
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length > 0) {
+          target[key] = trimmed;
+        }
+        continue;
+      }
+
+      if (typeof value === 'number') {
+        if (Number.isFinite(value)) {
+          target[key] = value;
+        }
+        continue;
+      }
+
+      if (typeof value === 'boolean') {
+        target[key] = value;
+        continue;
+      }
+
+      if (Array.isArray(value)) {
+        const normalized = value.filter(
+          (item) =>
+            typeof item === 'string' ||
+            (typeof item === 'number' && Number.isFinite(item)) ||
+            typeof item === 'boolean'
+        );
+        if (normalized.length > 0) {
+          target[key] = normalized;
+        }
+      }
+    }
+  }
+
   private mapNativeTrackRecordToStoredTrack(record: NativeLibraryTrackRecord): StoredTrackRecord {
     const normalizedTitle =
       typeof record.title === 'string' && record.title.trim().length > 0
         ? record.title
         : record.filePath.split(/[\\/]/).pop()?.replace(/\.[^/.]+$/, '') || 'Unknown';
+
+    const createdAtMs =
+      typeof record.createdAtMs === 'number' && Number.isFinite(record.createdAtMs)
+        ? record.createdAtMs
+        : record.updatedAtMs;
 
     const mapped: StoredTrackRecord = {
       id: record.id,
@@ -713,8 +836,8 @@ export class MusicLibraryService {
       replayGainTrackGainDb: record.replayGainTrackDb,
       replayGainAlbumGainDb: record.replayGainAlbumDb,
       metadataScannedAtMs: record.updatedAtMs,
-      dateAdded: record.updatedAtMs,
-      addedAt: record.updatedAtMs,
+      dateAdded: createdAtMs,
+      addedAt: createdAtMs,
       playCount: record.playCount,
       lastPlayed: record.lastPlayedAtMs,
     };
@@ -723,7 +846,145 @@ export class MusicLibraryService {
       (mapped as unknown as { bitDepth?: number }).bitDepth = record.bitDepth;
     }
 
+    const mappedDynamicFields = mapped as unknown as Record<string, unknown>;
+    mappedDynamicFields.status = record.status;
+    if (typeof record.createdAtMs === 'number' && Number.isFinite(record.createdAtMs)) {
+      mappedDynamicFields.createdAtMs = record.createdAtMs;
+    }
+    mappedDynamicFields.updatedAtMs = record.updatedAtMs;
+    if (typeof record.lastSeenAtMs === 'number' && Number.isFinite(record.lastSeenAtMs)) {
+      mappedDynamicFields.lastSeenAtMs = record.lastSeenAtMs;
+    }
+
+    this.copyDynamicTrackFields(record.extraFields, mapped as unknown as Record<string, unknown>, {
+      skipKeys: ['status', 'createdAtMs', 'updatedAtMs', 'lastSeenAtMs'],
+    });
+
     return mapped;
+  }
+
+  private mapNativeTrackRecordToListTrack(record: NativeLibraryTrackRecord): Track {
+    return compactTrackForMusicLibrary(
+      this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(record))
+    );
+  }
+
+  async getLocalSchemaEnvelope(): Promise<NativeLibrarySchemaEnvelope | null> {
+    if (!isTauriRuntime()) return null;
+    return getNativeLibrarySchemaEnvelope();
+  }
+
+  private isNativeSchemaEnvelopeCacheFresh(nowMs = Date.now()): boolean {
+    return !!this.nativeSchemaEnvelopeCache && nowMs < this.nativeSchemaEnvelopeCacheExpiresAtMs;
+  }
+
+  private isSameNativeSchemaEnvelope(
+    previous: NativeLibrarySchemaEnvelope,
+    next: NativeLibrarySchemaEnvelope
+  ): boolean {
+    if (previous.schemaFingerprint && next.schemaFingerprint) {
+      return previous.schemaFingerprint === next.schemaFingerprint;
+    }
+
+    if (previous.schemaVersion !== next.schemaVersion) {
+      return false;
+    }
+
+    if (previous.sourceTables.length !== next.sourceTables.length) {
+      return false;
+    }
+
+    return previous.sourceTables.every((table, index) => {
+      const candidate = next.sourceTables[index];
+      return (
+        candidate?.name === table.name &&
+        candidate?.columnCount === table.columnCount &&
+        candidate?.schemaHash === table.schemaHash
+      );
+    });
+  }
+
+  invalidateNativeSchemaEnvelopeCache(): void {
+    this.nativeSchemaEnvelopeCacheExpiresAtMs = 0;
+  }
+
+  async refreshNativeSchemaEnvelope(): Promise<NativeLibrarySchemaEnvelope | null> {
+    this.invalidateNativeSchemaEnvelopeCache();
+    return this.loadAndRegisterNativeSchemaEnvelope({ force: true });
+  }
+
+  async listLocalTrackFieldCatalog(): Promise<NativeLibraryTrackFieldCatalogRecord[]> {
+    const envelope = await this.loadAndRegisterNativeSchemaEnvelope();
+    return envelope?.trackFields ?? [];
+  }
+
+  async listLocalFacetCollectionCatalog() {
+    const envelope = await this.loadAndRegisterNativeSchemaEnvelope();
+    return envelope?.facetCollections ?? [];
+  }
+
+  async loadAndRegisterNativeSchemaEnvelope(options?: {
+    force?: boolean;
+  }): Promise<NativeLibrarySchemaEnvelope | null> {
+    if (!isTauriRuntime()) return null;
+
+    const nowMs = Date.now();
+    const cachedEnvelope = this.nativeSchemaEnvelopeCache;
+    if (!options?.force && this.isNativeSchemaEnvelopeCacheFresh(nowMs)) {
+      return cachedEnvelope;
+    }
+    if (this.nativeSchemaEnvelopeLoadPromise) {
+      return this.nativeSchemaEnvelopeLoadPromise;
+    }
+
+    this.nativeSchemaEnvelopeLoadPromise = this.getLocalSchemaEnvelope()
+      .then((envelope) => {
+        if (!envelope) {
+          return cachedEnvelope ?? null;
+        }
+
+        const schemaChanged =
+          !cachedEnvelope || !this.isSameNativeSchemaEnvelope(cachedEnvelope, envelope);
+        if (schemaChanged) {
+          registerMusicLibrarySchemaFromNativeEnvelope(envelope);
+        }
+        this.nativeSchemaEnvelopeCache = envelope;
+        this.nativeSchemaEnvelopeCacheExpiresAtMs =
+          Date.now() + this.NATIVE_SCHEMA_ENVELOPE_CACHE_TTL_MS;
+        return envelope;
+      })
+      .catch((error) => {
+        if (cachedEnvelope) {
+          console.warn(
+            '[MusicLibraryService] failed to refresh native schema envelope, using stale cache:',
+            error
+          );
+          this.nativeSchemaEnvelopeCacheExpiresAtMs =
+            Date.now() + this.NATIVE_SCHEMA_ENVELOPE_STALE_RETRY_MS;
+          return cachedEnvelope;
+        }
+        throw error;
+      })
+      .finally(() => {
+        this.nativeSchemaEnvelopeLoadPromise = null;
+      });
+
+    return this.nativeSchemaEnvelopeLoadPromise;
+  }
+
+  private async ensureNativeSchemaEnvelopeLoaded(): Promise<void> {
+    try {
+      await this.loadAndRegisterNativeSchemaEnvelope();
+    } catch (error) {
+      console.warn('[MusicLibraryService] failed to load native schema envelope:', error);
+    }
+  }
+
+  private async resolveNativeFacetCollectionDescriptor(
+    id: 'artists' | 'genres' | 'albums'
+  ): Promise<MusicLibraryCollectionFacetDescriptor | null> {
+    await this.ensureNativeSchemaEnvelopeLoaded();
+    return getMusicLibraryFacetCollectionDescriptor(id);
   }
 
   private pickPreferredNativeTrackRecord(records: NativeLibraryTrackRecord[]): NativeLibraryTrackRecord | null {
@@ -832,6 +1093,13 @@ export class MusicLibraryService {
   }
 
   async queryLocalTracksByBase(query: LocalBaseTracksQuery): Promise<Track[] | null> {
+    const result = await this.queryLocalTracksPageByBase(query);
+    return result?.tracks ?? null;
+  }
+
+  async queryLocalTracksPageByBase(
+    query: LocalBaseTracksQuery
+  ): Promise<LocalBaseTracksPageResult | null> {
     if (!isTauriRuntime()) return null;
 
     const normalizedBaseQuery: MusicLibraryBaseQuery = {
@@ -900,7 +1168,8 @@ export class MusicLibraryService {
         : 0;
 
     try {
-      const rows = await queryNativeLibraryTracks({
+      const result = await queryNativeLibraryTracksPage({
+        projection: 'list',
         includeMissing: query.includeMissing === true,
         visibleOnly: query.visibleOnly !== false,
         searchQuery: normalizedSearchQuery,
@@ -915,7 +1184,10 @@ export class MusicLibraryService {
         offset: normalizedOffset,
       });
 
-      return rows.map((item) => this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item)));
+      return {
+        tracks: result.items.map((item) => this.mapNativeTrackRecordToListTrack(item)),
+        total: Math.max(0, Math.floor(result.total)),
+      };
     } catch (error) {
       console.warn('[MusicLibraryService] native base-track query failed:', error);
       return null;
@@ -932,6 +1204,7 @@ export class MusicLibraryService {
 
     try {
       const nativeTracks = await queryNativeLibraryTracks({
+        projection: 'list',
         limit: normalizedLimit,
         offset: normalizedOffset,
         includeMissing: false,
@@ -942,9 +1215,7 @@ export class MusicLibraryService {
         return null;
       }
 
-      return nativeTracks.map((item) =>
-        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
-      );
+      return nativeTracks.map((item) => this.mapNativeTrackRecordToListTrack(item));
     } catch (error) {
       console.warn('[MusicLibraryService] native track query failed, fallback to IndexedDB:', error);
       return null;
@@ -962,6 +1233,7 @@ export class MusicLibraryService {
 
     try {
       const nativeTracks = await queryNativeLibraryTracks({
+        projection: 'list',
         limit: normalizedLimit,
         offset: 0,
         includeMissing: false,
@@ -973,9 +1245,7 @@ export class MusicLibraryService {
         return null;
       }
 
-      return nativeTracks.map((item) =>
-        this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(item))
-      );
+      return nativeTracks.map((item) => this.mapNativeTrackRecordToListTrack(item));
     } catch (error) {
       console.warn('[MusicLibraryService] native search query failed, fallback to IndexedDB:', error);
       return null;
@@ -1063,33 +1333,78 @@ export class MusicLibraryService {
     }
   }
 
-  private async tryGetAllArtistsFromNativeDb(): Promise<string[] | null> {
+  private async loadNativeFacetCollection(
+    descriptor: MusicLibraryCollectionFacetDescriptor,
+    options?: { includeStoredCover?: boolean }
+  ): Promise<string[] | AlbumSummary[] | null> {
     if (!isTauriRuntime()) return null;
+    if (descriptor.kind === 'album-summaries' && options?.includeStoredCover) {
+      return null;
+    }
+
     try {
-      const artists = await listNativeLibraryArtists({
+      const result = await listNativeLibraryFacetEntries({
+        kind: descriptor.kind,
+        field: descriptor.nativeField ?? descriptor.field,
         includeMissing: false,
         visibleOnly: true,
       });
-      if (artists.length === 0) return null;
-      return artists;
+      if (!result) return null;
+
+      if (result.kind === 'album-summaries') {
+        const albums = (result.albums ?? [])
+          .map((item) => this.toAlbumSummaryFromNativeRecord(item))
+          .sort((a, b) => a.album.localeCompare(b.album));
+        return albums.length > 0 ? albums : null;
+      }
+
+      const values = result.textValues ?? [];
+      return values.length > 0 ? values : null;
     } catch (error) {
-      console.warn('[MusicLibraryService] native artist list failed, fallback to IndexedDB:', error);
+      console.warn('[MusicLibraryService] native facet list failed, fallback to IndexedDB:', {
+        descriptor,
+        error,
+      });
       return null;
     }
   }
 
+  private async tryGetAllArtistsFromNativeDb(): Promise<string[] | null> {
+    const descriptor = await this.resolveNativeFacetCollectionDescriptor('artists');
+    if (!descriptor) return null;
+    return (await this.loadNativeFacetCollection(descriptor)) as string[] | null;
+  }
+
   private async tryGetAllGenresFromNativeDb(): Promise<string[] | null> {
-    if (!isTauriRuntime()) return null;
+    const descriptor = await this.resolveNativeFacetCollectionDescriptor('genres');
+    if (!descriptor) return null;
+    return (await this.loadNativeFacetCollection(descriptor)) as string[] | null;
+  }
+
+  async getBaseFieldFacetValues(
+    field: MusicLibraryBaseField,
+    options?: { limit?: number }
+  ): Promise<string[]> {
+    const descriptor = resolveMusicLibraryFieldFacetDescriptor(field);
+    if (!descriptor) return [];
+    if (!isTauriRuntime()) return [];
+
     try {
-      const genres = await listNativeLibraryGenres({
+      const result = await listNativeLibraryFacetEntries({
+        kind: descriptor.kind,
+        field: descriptor.nativeField,
         includeMissing: false,
         visibleOnly: true,
+        limit: options?.limit,
       });
-      if (genres.length === 0) return null;
-      return genres;
+      return result?.kind === 'text-values' ? result.textValues ?? [] : [];
     } catch (error) {
-      console.warn('[MusicLibraryService] native genre list failed, fallback to IndexedDB:', error);
-      return null;
+      console.warn('[MusicLibraryService] base field facet values query failed:', {
+        field,
+        descriptor,
+        error,
+      });
+      return [];
     }
   }
 
@@ -1105,22 +1420,11 @@ export class MusicLibraryService {
   private async tryGetAllAlbumsFromNativeDb(
     includeStoredCover: boolean
   ): Promise<AlbumSummary[] | null> {
-    if (!isTauriRuntime()) return null;
-    if (includeStoredCover) return null;
-
-    try {
-      const albums = await listNativeLibraryAlbums({
-        includeMissing: false,
-        visibleOnly: true,
-      });
-      if (albums.length === 0) return null;
-      return albums
-        .map((item) => this.toAlbumSummaryFromNativeRecord(item))
-        .sort((a, b) => a.album.localeCompare(b.album));
-    } catch (error) {
-      console.warn('[MusicLibraryService] native album list failed, fallback to IndexedDB:', error);
-      return null;
-    }
+    const descriptor = await this.resolveNativeFacetCollectionDescriptor('albums');
+    if (!descriptor) return null;
+    return (await this.loadNativeFacetCollection(descriptor, {
+      includeStoredCover,
+    })) as AlbumSummary[] | null;
   }
 
   private toLibraryStatsFromNativeRecord(record: NativeLibraryStatsRecord): LibraryStats {
@@ -3843,7 +4147,7 @@ export class MusicLibraryService {
     const normalizedPath =
       toOptionalString(storedTrack.filePath) || toOptionalString(storedTrack.path) || undefined;
 
-    const track: Track = {
+    const track: Track & Record<string, unknown> = {
       id: toOptionalString(storedTrack.id) || this.stableIdFromPath(normalizedPath || 'unknown'),
       title:
         toOptionalString(storedTrack.title) ||
@@ -3892,6 +4196,47 @@ export class MusicLibraryService {
       path: normalizedPath,
       filePath: normalizedPath,
     };
+
+    this.copyDynamicTrackFields(storedTrack as unknown as Record<string, unknown>, track, {
+      skipKeys: [
+        'id',
+        'title',
+        'artist',
+        'album',
+        'albumArtist',
+        'duration',
+        'year',
+        'genre',
+        'trackNumber',
+        'discNumber',
+        'composer',
+        'bitrate',
+        'sampleRate',
+        'replayGainTrackGainDb',
+        'replayGainAlbumGainDb',
+        'format',
+        'codecName',
+        'fileSize',
+        'dateAdded',
+        'lastPlayed',
+        'playCount',
+        'rating',
+        'favorite',
+        'tags',
+        'comment',
+        'mimeType',
+        'quickFingerprint',
+        'mtimeMs',
+        'metadataScannedAtMs',
+        'libraryPathId',
+        'originalPath',
+        'coverKey',
+        'path',
+        'filePath',
+        'coverUrl',
+        'addedAt',
+      ],
+    });
 
     const rawCoverUrl = storedTrack.coverUrl;
     track.coverUrl = this.sanitizeStoredCoverUrlForPath(rawCoverUrl, track.filePath || track.path);

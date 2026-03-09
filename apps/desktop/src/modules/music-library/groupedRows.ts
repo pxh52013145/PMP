@@ -26,7 +26,7 @@ export interface MusicLibraryGroupHeaderRow {
 export interface MusicLibraryTrackRow {
   kind: 'track';
   id: string;
-  track: Track;
+  trackId: string;
   trackIndex: number;
   groupKey?: string;
   parentGroupKeys: string[];
@@ -136,7 +136,7 @@ export function buildMusicLibraryGroupedRows(
     return tracks.map((track, trackIndex) => ({
       kind: 'track',
       id: track.id,
-      track,
+      trackId: track.id,
       trackIndex,
       parentGroupKeys: [],
     }));
@@ -199,7 +199,7 @@ export function buildMusicLibraryGroupedRows(
       rows.push({
         kind: 'track',
         id: track.id,
-        track,
+        trackId: track.id,
         trackIndex,
         groupKey: visibleGroupKeys.at(-1),
         parentGroupKeys: visibleGroupKeys,

@@ -13,6 +13,7 @@ const COVER_KEEP_HOT_COUNT = 2;
 
 type UseCoverUrlOptions = {
   coverSizeHint?: CoverSizeHint;
+  bypassRuntimePolicy?: boolean;
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -45,6 +46,7 @@ function buildCoverSignature(coverUrl: string | undefined): string {
 
 export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOptions): string | undefined {
   const coverSizeHint = options?.coverSizeHint;
+  const bypassRuntimePolicy = options?.bypassRuntimePolicy === true;
   const key = useMemo(() => trackKey(track), [track]);
   const trackId = track?.id;
   const trackTitle = track?.title;
@@ -113,7 +115,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     const currentKey = key;
 
     void musicLibraryService
-      .getCoverUrlForTrack(lookupTrack, { coverSizeHint, bypassRuntimePolicy: true })
+      .getCoverUrlForTrack(lookupTrack, { coverSizeHint, bypassRuntimePolicy })
       .then((url) => {
       if (cancelled) return;
       if (!isNonEmptyString(url)) return;

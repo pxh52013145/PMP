@@ -4,17 +4,25 @@ import {
   clearNativeLibraryTracks,
   deleteNativeLibraryUserEntry,
   deleteNativeLibraryTracks,
+  getNativeLibrarySchemaEnvelope,
+  notifyNativeLibrarySchemaChanged,
+  parseNativeLibrarySchemaChangedEventPayload,
   getNativeLibrarySelectedLyrics,
   listNativeBilibiliRecommendedResources,
   listNativeBilibiliSearchResources,
   listNativeLibraryCloudHashJobs,
   listNativeLibraryFallbackTasks,
+  listNativeLibraryFacetCatalog,
+  listNativeLibraryFacetEntries,
+  listNativeLibraryAlbums,
+  listNativeLibraryTextFacetValues,
   listNativeLibraryUserEntries,
   listNativeLibrarySourceHealth,
   listNativeLibrarySources,
   markNativeLibraryUserEntryPlayed,
   markNativeLibraryTrackPlayed,
   queryNativeLibraryTracks,
+  queryNativeLibraryTracksPage,
   resolveNativeLibraryLyrics,
   updateNativeLibraryCloudHashJobStatus,
   updateNativeLibraryFallbackTaskStatus,
@@ -44,6 +52,7 @@ describe('nativeLibraryDb', () => {
       offset: -10,
       includeMissing: true,
       visibleOnly: false,
+      projection: 'list',
       searchQuery: '  hello  ',
       artist: '  Artist A  ',
       album: '  Album A  ',
@@ -70,6 +79,7 @@ describe('nativeLibraryDb', () => {
         offset: 0,
         includeMissing: true,
         visibleOnly: false,
+        projection: 'list',
         searchQuery: 'hello',
         artist: 'Artist A',
         album: 'Album A',
@@ -147,6 +157,272 @@ describe('nativeLibraryDb', () => {
       fileSize: 1234567,
       playCount: 2,
       status: 'available',
+    });
+  });
+
+  it('queries paged native tracks with total count', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      total: 321,
+      items: [
+        {
+          id: 'track-page-1',
+          sourceId: 'source-9',
+          filePath: 'D:/Music/paged.flac',
+          status: 'available',
+          playCount: 1,
+          updatedAtMs: 1700000200000,
+        },
+      ],
+    });
+
+    const result = await queryNativeLibraryTracksPage({
+      limit: 240,
+      offset: 240,
+      projection: 'list',
+      includeMissing: false,
+      visibleOnly: true,
+      searchQuery: '  paged  ',
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_query_tracks_page', {
+      query: expect.objectContaining({
+        limit: 240,
+        offset: 240,
+        projection: 'list',
+        includeMissing: false,
+        visibleOnly: true,
+        searchQuery: 'paged',
+      }),
+    });
+    expect(result.total).toBe(321);
+    expect(result.items[0]).toMatchObject({
+      id: 'track-page-1',
+      sourceId: 'source-9',
+      filePath: 'D:/Music/paged.flac',
+    });
+  });
+
+  it('reads native schema envelope', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      schemaVersion: 8,
+      generatedAtMs: 1700000000,
+      schemaFingerprint: 'schema-fp-1',
+      sourceTables: [
+        {
+          name: 'local_tracks',
+          columnCount: 3,
+          schemaHash: 'table-fp-1',
+          columns: ['id', 'artist', 'album'],
+        },
+      ],
+      trackFields: [
+        {
+          id: 'artist',
+          label: 'Artist',
+          kind: 'text',
+          trackKey: 'artist',
+          columnName: 'artist',
+          sourceTable: 'local_tracks',
+          declaredType: 'TEXT',
+          nullable: true,
+          filterable: true,
+          sortable: true,
+          groupable: true,
+          facetable: true,
+          nativeFilterField: 'artist',
+          nativeSortField: 'artist',
+        },
+      ],
+      facetCollections: [
+        { id: 'artists', field: 'artist', label: 'Artist', kind: 'text-values', nativeField: 'artist' },
+      ],
+    });
+
+    const result = await getNativeLibrarySchemaEnvelope();
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_get_schema_envelope');
+    expect(result).toEqual({
+      schemaVersion: 8,
+      generatedAtMs: 1700000000,
+      schemaFingerprint: 'schema-fp-1',
+      sourceTables: [
+        {
+          name: 'local_tracks',
+          columnCount: 3,
+          schemaHash: 'table-fp-1',
+          columns: ['id', 'artist', 'album'],
+        },
+      ],
+      trackFields: [
+        {
+          id: 'artist',
+          label: 'Artist',
+          kind: 'text',
+          trackKey: 'artist',
+          columnName: 'artist',
+          sourceTable: 'local_tracks',
+          declaredType: 'TEXT',
+          nullable: true,
+          filterable: true,
+          sortable: true,
+          groupable: true,
+          facetable: true,
+          nativeFilterField: 'artist',
+          nativeSortField: 'artist',
+        },
+      ],
+      facetCollections: [
+        { id: 'artists', field: 'artist', label: 'Artist', kind: 'text-values', nativeField: 'artist' },
+      ],
+    });
+  });
+
+  it('parses native schema changed event payload', () => {
+    expect(
+      parseNativeLibrarySchemaChangedEventPayload({
+        reason: 'sync-status-updated',
+        emittedAtMs: 1700000000,
+        schemaVersion: 8,
+        schemaFingerprint: 'schema-fp-2',
+        sourceTables: [
+          {
+            name: 'local_tracks',
+            columnCount: 4,
+            schemaHash: 'table-fp-2',
+            columns: ['id', 'artist', 'album', 'mood'],
+          },
+        ],
+      })
+    ).toEqual({
+      reason: 'sync-status-updated',
+      emittedAtMs: 1700000000,
+      schemaVersion: 8,
+      schemaFingerprint: 'schema-fp-2',
+      sourceTables: [
+        {
+          name: 'local_tracks',
+          columnCount: 4,
+          schemaHash: 'table-fp-2',
+          columns: ['id', 'artist', 'album', 'mood'],
+        },
+      ],
+    });
+  });
+
+  it('notifies native schema changes through the tauri command', async () => {
+    tauriMocks.invoke.mockResolvedValue(true);
+
+    const result = await notifyNativeLibrarySchemaChanged(' editor-migration ');
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_notify_schema_changed', {
+      reason: 'editor-migration',
+    });
+    expect(result).toBe(true);
+  });
+
+  it('reads native facet catalog records', async () => {
+    tauriMocks.invoke.mockResolvedValue([
+      { id: 'artists', field: 'artist', label: 'Artist', kind: 'text-values', nativeField: 'artist' },
+      { id: 'albums', field: 'album', label: 'Album', kind: 'album-summaries', nativeField: 'album' },
+    ]);
+
+    const result = await listNativeLibraryFacetCatalog();
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_list_facet_catalog');
+    expect(result).toEqual([
+      { id: 'artists', field: 'artist', label: 'Artist', kind: 'text-values', nativeField: 'artist' },
+      { id: 'albums', field: 'album', label: 'Album', kind: 'album-summaries', nativeField: 'album' },
+    ]);
+  });
+
+  it('queries generic text facet values with normalized field payload', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      kind: 'text-values',
+      textValues: ['  Artist A  ', '', 'Artist B'],
+    });
+
+    const result = await listNativeLibraryTextFacetValues({
+      field: '  artist  ',
+      includeMissing: false,
+      visibleOnly: true,
+      limit: 120,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_list_facet_entries', {
+      query: {
+        kind: 'text-values',
+        field: 'artist',
+        includeMissing: false,
+        visibleOnly: true,
+        limit: 120,
+      },
+    });
+    expect(result).toEqual(['Artist A', 'Artist B']);
+  });
+
+  it('queries generic album facet entries through the unified dispatcher', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      kind: 'album-summaries',
+      albums: [
+        {
+          album: '  Album A  ',
+          artist: ' Artist A ',
+          coverTrackId: 'track-1',
+          coverTrackPath: 'D:/Music/a.flac',
+        },
+      ],
+    });
+
+    const result = await listNativeLibraryAlbums({
+      includeMissing: false,
+      visibleOnly: true,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_list_facet_entries', {
+      query: {
+        kind: 'album-summaries',
+        field: 'album',
+        includeMissing: false,
+        visibleOnly: true,
+        limit: undefined,
+      },
+    });
+    expect(result).toEqual([
+      {
+        album: 'Album A',
+        artist: 'Artist A',
+        coverTrackId: 'track-1',
+        coverTrackPath: 'D:/Music/a.flac',
+      },
+    ]);
+  });
+
+  it('parses unified facet dispatcher payloads', async () => {
+    tauriMocks.invoke.mockResolvedValue({
+      kind: 'text-values',
+      textValues: ['  Mood A  ', '', 'Mood B'],
+    });
+
+    const result = await listNativeLibraryFacetEntries({
+      kind: 'text-values',
+      field: ' moodLabel ',
+      includeMissing: true,
+      visibleOnly: false,
+      limit: 50,
+    });
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('music_library_db_list_facet_entries', {
+      query: {
+        kind: 'text-values',
+        field: 'moodLabel',
+        includeMissing: true,
+        visibleOnly: false,
+        limit: 50,
+      },
+    });
+    expect(result).toEqual({
+      kind: 'text-values',
+      textValues: ['Mood A', 'Mood B'],
     });
   });
 

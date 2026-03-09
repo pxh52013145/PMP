@@ -24,7 +24,8 @@ describe('groupedRows', () => {
       tracks,
       groupByRules: [{ id: 'group-1', field: 'artist', order: 'asc' }],
       resolveFieldLabel: (field) => field,
-      resolveFieldDisplayValue: (field, track) => String(track[field] ?? '-'),
+      resolveFieldDisplayValue: (field, track) =>
+        String((track as unknown as Record<string, unknown>)[field] ?? '-'),
     });
 
     expect(rows).toHaveLength(5);
@@ -55,7 +56,8 @@ describe('groupedRows', () => {
         { id: 'group-2', field: 'album', order: 'asc' },
       ],
       resolveFieldLabel: (field) => field,
-      resolveFieldDisplayValue: (field, track) => String(track[field] ?? '-'),
+      resolveFieldDisplayValue: (field, track) =>
+        String((track as unknown as Record<string, unknown>)[field] ?? '-'),
     });
 
     expect(rows[0]).toMatchObject({
@@ -95,7 +97,8 @@ describe('groupedRows', () => {
       groupByRules: [{ id: 'group-1', field: 'artist', order: 'asc' }],
       collapsedGroupKeys: new Set(['artist:muse']),
       resolveFieldLabel: (field) => field,
-      resolveFieldDisplayValue: (field, track) => String(track[field] ?? '-'),
+      resolveFieldDisplayValue: (field, track) =>
+        String((track as unknown as Record<string, unknown>)[field] ?? '-'),
     });
 
     expect(rows).toHaveLength(3);
@@ -122,7 +125,8 @@ describe('groupedRows', () => {
       ],
       collapsedGroupKeys: new Set(['artist:doudou']),
       resolveFieldLabel: (field) => field,
-      resolveFieldDisplayValue: (field, track) => String(track[field] ?? '-'),
+      resolveFieldDisplayValue: (field, track) =>
+        String((track as unknown as Record<string, unknown>)[field] ?? '-'),
     });
 
     expect(rows).toHaveLength(4);
@@ -146,7 +150,8 @@ describe('groupedRows', () => {
       ],
       groupByRules: [{ id: 'group-1', field: 'artist', order: 'asc' }],
       resolveFieldLabel: (field) => field,
-      resolveFieldDisplayValue: (field, track) => String(track[field] ?? '-'),
+      resolveFieldDisplayValue: (field, track) =>
+        String((track as unknown as Record<string, unknown>)[field] ?? '-'),
     });
 
     const sliced = sliceMusicLibraryGroupedRows({
@@ -175,7 +180,8 @@ describe('groupedRows', () => {
         { id: 'group-2', field: 'album', order: 'asc' },
       ],
       resolveFieldLabel: (field) => field,
-      resolveFieldDisplayValue: (field, track) => String(track[field] ?? '-'),
+      resolveFieldDisplayValue: (field, track) =>
+        String((track as unknown as Record<string, unknown>)[field] ?? '-'),
     });
 
     const sliced = sliceMusicLibraryGroupedRows({

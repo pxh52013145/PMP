@@ -69,6 +69,19 @@ function stringifyNumber(value: number): string {
   return String(value);
 }
 
+function isMusicLibraryTimestampField(field: MusicLibraryBaseFieldId): boolean {
+  if (field === 'dateAdded' || field === 'lastPlayed') {
+    return true;
+  }
+
+  const capability = getMusicLibraryBaseFieldCapability(field);
+  const candidates = [field, capability?.trackKey].filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0
+  );
+
+  return candidates.some((value) => /(?:^|[A-Z])(?:createdAtMs|updatedAtMs|lastSeenAtMs|lastPlayedAtMs)$/.test(value));
+}
+
 export function normalizeMusicLibraryFieldText(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
@@ -149,6 +162,8 @@ export function getMusicLibraryFieldRawValue(
   track: Track,
   field: MusicLibraryBaseFieldId
 ): MusicLibraryFieldRawValue {
+  const dynamicTrack = track as unknown as Record<string, unknown>;
+
   switch (field) {
     case 'title':
       return track.title || undefined;
@@ -172,10 +187,33 @@ export function getMusicLibraryFieldRawValue(
       return typeof track.fileSize === 'number' && Number.isFinite(track.fileSize)
         ? track.fileSize
         : undefined;
-    case 'dateAdded':
-      return track.dateAdded ?? track.addedAt;
-    case 'lastPlayed':
-      return track.lastPlayed;
+    case 'dateAdded': {
+      if (typeof track.dateAdded === 'number' && Number.isFinite(track.dateAdded)) {
+        return track.dateAdded;
+      }
+
+      const createdAtMs = dynamicTrack.createdAtMs;
+      if (typeof createdAtMs === 'number' && Number.isFinite(createdAtMs)) {
+        return createdAtMs;
+      }
+
+      const updatedAtMs = dynamicTrack.updatedAtMs;
+      if (typeof updatedAtMs === 'number' && Number.isFinite(updatedAtMs)) {
+        return updatedAtMs;
+      }
+
+      return track.addedAt;
+    }
+    case 'lastPlayed': {
+      if (typeof track.lastPlayed === 'number' && Number.isFinite(track.lastPlayed)) {
+        return track.lastPlayed;
+      }
+
+      const lastPlayedAtMs = dynamicTrack.lastPlayedAtMs;
+      return typeof lastPlayedAtMs === 'number' && Number.isFinite(lastPlayedAtMs)
+        ? lastPlayedAtMs
+        : undefined;
+    }
     case 'rating':
       return typeof track.rating === 'number' && Number.isFinite(track.rating) ? track.rating : undefined;
     case 'playCount':
@@ -190,7 +228,7 @@ export function getMusicLibraryFieldRawValue(
 
   const capability = getMusicLibraryBaseFieldCapability(field);
   const trackKey = capability?.trackKey ?? field;
-  const dynamicValue = (track as unknown as Record<string, unknown>)[trackKey];
+  const dynamicValue = dynamicTrack[trackKey];
 
   if (typeof dynamicValue === 'number' || typeof dynamicValue === 'string') {
     return dynamicValue;
@@ -243,7 +281,7 @@ export function getMusicLibraryFieldComparableValue(
       return undefined;
     }
 
-    if (field === 'dateAdded' || field === 'lastPlayed') {
+    if (isMusicLibraryTimestampField(field)) {
       return normalizeMusicLibraryFieldTimestamp(rawValue);
     }
 
@@ -260,6 +298,9 @@ export function getMusicLibraryFieldComparableValue(
   }
 
   if (isMusicLibraryBaseFieldNumeric(field)) {
+    if (isMusicLibraryTimestampField(field)) {
+      return normalizeMusicLibraryFieldTimestamp(trimmed);
+    }
     return normalizeMusicLibraryFieldNumber(trimmed);
   }
 
@@ -316,6 +357,13 @@ export function formatMusicLibraryFieldValue(
   }
 
   if (typeof rawValue === 'number') {
+    if (isMusicLibraryTimestampField(field)) {
+      return formatMusicLibraryTimestamp(rawValue, {
+        emptyPlaceholder: placeholder,
+        format: options.timestampFormat,
+        locale: options.locale,
+      });
+    }
     return Number.isFinite(rawValue) ? stringifyNumber(rawValue) : placeholder;
   }
 

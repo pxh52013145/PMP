@@ -529,10 +529,10 @@ export async function setupNativeListenersImpl(
             this.fallbackClockBaseTimeSec = nextCurrentTime;
             this.fallbackClockStartedAtMs = null;
           }
-          this.timeUpdateCallbacks.forEach((cb) => cb(nextCurrentTime));
+          this.timeUpdateCallbacks.forEach((cb: (time: number) => void) => cb(nextCurrentTime));
         }
         if (next.ended) {
-          this.endedCallbacks.forEach((cb) => cb());
+          this.endedCallbacks.forEach((cb: () => void) => cb());
           void this.handleTrackEnded();
         }
 

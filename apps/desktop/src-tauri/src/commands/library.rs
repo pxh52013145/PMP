@@ -661,6 +661,80 @@ pub async fn music_library_db_query_tracks(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_query_tracks_page(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryTrackQueryInput>,
+) -> Result<music_library_db::LibraryTrackQueryPageResult, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::query_tracks_page(&app, query))
+        .await
+        .map_err(|e| format!("Music library paged track query task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_db_list_track_field_catalog(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_library_db::LibraryTrackFieldCatalogRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_track_field_catalog(&app))
+        .await
+        .map_err(|e| format!("Music library track field catalog task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_db_list_facet_catalog(
+    app: tauri::AppHandle,
+) -> Result<Vec<music_library_db::LibraryFacetCatalogRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_facet_catalog(&app))
+        .await
+        .map_err(|e| format!("Music library facet catalog task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn music_library_db_get_schema_envelope(
+    app: tauri::AppHandle,
+) -> Result<music_library_db::LibrarySchemaEnvelope, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::get_schema_envelope(&app))
+        .await
+        .map_err(|e| format!("Music library schema envelope task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_notify_schema_changed(
+    app: tauri::AppHandle,
+    reason: Option<String>,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::notify_schema_envelope_changed_if_needed(
+            &app,
+            reason.as_deref().unwrap_or("manual-notify"),
+        )
+    })
+    .await
+    .map_err(|e| format!("Music library schema change notify task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_text_facet_values(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryTextFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        music_library_db::list_text_facet_values(&app, query)
+    })
+    .await
+    .map_err(|e| format!("Music library text facet list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn music_library_db_list_facet_entries(
+    app: tauri::AppHandle,
+    query: Option<music_library_db::LibraryFacetEntriesQueryInput>,
+) -> Result<music_library_db::LibraryFacetEntriesResult, String> {
+    tauri::async_runtime::spawn_blocking(move || music_library_db::list_facet_entries(&app, query))
+        .await
+        .map_err(|e| format!("Music library facet list task failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn music_library_db_list_artists(
     app: tauri::AppHandle,
     query: Option<music_library_db::LibraryFacetQueryInput>,

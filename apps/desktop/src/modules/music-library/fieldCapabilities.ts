@@ -12,6 +12,7 @@ type MusicLibraryBuiltinFieldCapability = {
   filterable: boolean;
   sortable: boolean;
   groupable: boolean;
+  facetable?: boolean;
   trackKey?: string;
   nativeFilterField?: NativeLibraryTrackFilterField;
   nativeSortField?: NativeLibraryTrackSortField;
@@ -25,10 +26,16 @@ export type MusicLibraryExtensionFieldCapabilityInput = {
   filterable?: boolean;
   sortable?: boolean;
   groupable?: boolean;
+  facetable?: boolean;
   trackKey?: string;
   nativeFilterField?: NativeLibraryTrackFilterField;
   nativeSortField?: NativeLibraryTrackSortField;
 };
+
+export type MusicLibraryCustomFieldCapabilitySource =
+  | 'extension'
+  | 'native-catalog'
+  | 'runtime-discovered';
 
 export type MusicLibraryResolvedFieldCapability = {
   id: string;
@@ -38,11 +45,27 @@ export type MusicLibraryResolvedFieldCapability = {
   filterable: boolean;
   sortable: boolean;
   groupable: boolean;
+  facetable: boolean;
   trackKey?: string;
   nativeFilterField?: NativeLibraryTrackFilterField;
   nativeSortField?: NativeLibraryTrackSortField;
-  source: 'builtin' | 'extension';
+  source: 'builtin' | MusicLibraryCustomFieldCapabilitySource;
 };
+
+function resolveMusicLibraryFieldFacetable(
+  capability: Pick<
+    MusicLibraryExtensionFieldCapabilityInput,
+    'kind' | 'filterable' | 'groupable' | 'facetable'
+  >
+): boolean {
+  if (typeof capability.facetable === 'boolean') {
+    return capability.facetable;
+  }
+  const kind = capability.kind === 'number' ? 'number' : 'text';
+  const filterable = capability.filterable !== false;
+  const groupable = capability.groupable === true;
+  return kind === 'text' && (filterable || groupable);
+}
 
 export const MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS = {
   title: {
@@ -128,7 +151,7 @@ export const MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS = {
     filterable: false,
     sortable: true,
     groupable: false,
-    nativeSortField: 'updatedAtMs',
+    nativeSortField: 'createdAtMs',
   },
   lastPlayed: {
     headerKey: 'pages.music-library.columns.lastPlayed',
@@ -168,11 +191,38 @@ export const MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS = {
 } as const satisfies Record<string, MusicLibraryBuiltinFieldCapability>;
 
 export type MusicLibraryBuiltinFieldKey = keyof typeof MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS;
-export type MusicLibraryBaseFieldId = MusicLibraryBuiltinFieldKey | (string & {});
+type MusicLibraryDynamicFieldId = string & {
+  readonly __musicLibraryDynamicFieldIdBrand?: unique symbol;
+};
+
+export type MusicLibraryBaseFieldId = MusicLibraryBuiltinFieldKey | MusicLibraryDynamicFieldId;
 export type MusicLibraryBaseFieldKey = MusicLibraryBuiltinFieldKey;
 
-const extensionFieldDefinitions = new Map<string, MusicLibraryResolvedFieldCapability>();
+const persistedFieldDefinitions = new Map<string, MusicLibraryResolvedFieldCapability>();
+const nativeCatalogFieldDefinitions = new Map<string, MusicLibraryResolvedFieldCapability>();
+const runtimeDiscoveredFieldDefinitions = new Map<string, MusicLibraryResolvedFieldCapability>();
 const fieldCapabilityListeners = new Set<() => void>();
+
+function getCustomFieldCapabilityMap(
+  source: MusicLibraryCustomFieldCapabilitySource
+): Map<string, MusicLibraryResolvedFieldCapability> {
+  switch (source) {
+    case 'native-catalog':
+      return nativeCatalogFieldDefinitions;
+    case 'runtime-discovered':
+      return runtimeDiscoveredFieldDefinitions;
+    case 'extension':
+    default:
+      return persistedFieldDefinitions;
+  }
+}
+
+function listCustomFieldCapabilityMapsInPriorityOrder(): Map<
+  string,
+  MusicLibraryResolvedFieldCapability
+>[] {
+  return [persistedFieldDefinitions, nativeCatalogFieldDefinitions, runtimeDiscoveredFieldDefinitions];
+}
 
 function notifyFieldCapabilityListeners(): void {
   for (const listener of fieldCapabilityListeners) {
@@ -193,12 +243,29 @@ function toResolvedBuiltinFieldCapability(
   return {
     id,
     ...definition,
+    facetable: resolveMusicLibraryFieldFacetable(definition),
     source: 'builtin',
   };
 }
 
+
+function areFieldCapabilityMapsEqual(
+  left: Map<string, MusicLibraryResolvedFieldCapability>,
+  right: Map<string, MusicLibraryResolvedFieldCapability>
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left.entries()) {
+    const candidate = right.get(key);
+    if (!candidate || JSON.stringify(candidate) !== JSON.stringify(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function normalizeExtensionFieldCapability(
-  input: MusicLibraryExtensionFieldCapabilityInput
+  input: MusicLibraryExtensionFieldCapabilityInput,
+  source: MusicLibraryCustomFieldCapabilitySource
 ): MusicLibraryResolvedFieldCapability | null {
   const id = normalizeMusicLibraryBaseFieldId(input.id);
   if (!id) return null;
@@ -214,13 +281,14 @@ function normalizeExtensionFieldCapability(
     filterable: input.filterable !== false,
     sortable: input.sortable !== false,
     groupable: input.groupable === true,
+    facetable: resolveMusicLibraryFieldFacetable(input),
     trackKey:
       typeof input.trackKey === 'string' && input.trackKey.trim().length > 0
         ? input.trackKey.trim()
         : id,
     nativeFilterField: input.nativeFilterField,
     nativeSortField: input.nativeSortField,
-    source: 'extension',
+    source,
   };
 }
 
@@ -245,33 +313,93 @@ export const MUSIC_LIBRARY_BASE_GROUP_FIELD_KEYS = MUSIC_LIBRARY_BASE_FIELD_KEYS
 );
 
 export function registerMusicLibraryBaseFieldCapabilities(
-  definitions: MusicLibraryExtensionFieldCapabilityInput[]
+  definitions: MusicLibraryExtensionFieldCapabilityInput[],
+  options?: { source?: MusicLibraryCustomFieldCapabilitySource }
 ): void {
+  const source = options?.source ?? 'extension';
+  const targetMap = getCustomFieldCapabilityMap(source);
   let changed = false;
   for (const definition of definitions) {
-    const normalized = normalizeExtensionFieldCapability(definition);
+    const normalized = normalizeExtensionFieldCapability(definition, source);
     if (!normalized) continue;
-    const previous = extensionFieldDefinitions.get(normalized.id);
+    const previous = targetMap.get(normalized.id);
     if (previous && JSON.stringify(previous) === JSON.stringify(normalized)) {
       continue;
     }
-    extensionFieldDefinitions.set(normalized.id, normalized);
+    targetMap.set(normalized.id, normalized);
     changed = true;
   }
   if (changed) notifyFieldCapabilityListeners();
 }
 
-export function unregisterMusicLibraryBaseFieldCapability(field: string): void {
+export function replaceMusicLibraryBaseFieldCapabilities(
+  definitions: MusicLibraryExtensionFieldCapabilityInput[],
+  options?: { source?: MusicLibraryCustomFieldCapabilitySource }
+): void {
+  const source = options?.source ?? 'extension';
+  const targetMap = getCustomFieldCapabilityMap(source);
+  const nextMap = new Map<string, MusicLibraryResolvedFieldCapability>();
+
+  for (const definition of definitions) {
+    const normalized = normalizeExtensionFieldCapability(definition, source);
+    if (!normalized) continue;
+    nextMap.set(normalized.id, normalized);
+  }
+
+  if (areFieldCapabilityMapsEqual(targetMap, nextMap)) {
+    return;
+  }
+
+  targetMap.clear();
+  nextMap.forEach((value, key) => {
+    targetMap.set(key, value);
+  });
+  notifyFieldCapabilityListeners();
+}
+
+export function unregisterMusicLibraryBaseFieldCapability(
+  field: string,
+  options?: { source?: MusicLibraryCustomFieldCapabilitySource }
+): void {
   const normalized = normalizeMusicLibraryBaseFieldId(field);
   if (!normalized) return;
-  if (extensionFieldDefinitions.delete(normalized)) {
+  const source = options?.source;
+  let changed = false;
+
+  if (source) {
+    changed = getCustomFieldCapabilityMap(source).delete(normalized);
+  } else {
+    for (const map of listCustomFieldCapabilityMapsInPriorityOrder()) {
+      changed = map.delete(normalized) || changed;
+    }
+  }
+
+  if (changed) {
     notifyFieldCapabilityListeners();
   }
 }
 
-export function clearRegisteredMusicLibraryBaseFieldCapabilities(): void {
-  if (extensionFieldDefinitions.size === 0) return;
-  extensionFieldDefinitions.clear();
+export function clearRegisteredMusicLibraryBaseFieldCapabilities(
+  options?: { source?: MusicLibraryCustomFieldCapabilitySource }
+): void {
+  const source = options?.source;
+  let changed = false;
+
+  if (source) {
+    const targetMap = getCustomFieldCapabilityMap(source);
+    if (targetMap.size > 0) {
+      targetMap.clear();
+      changed = true;
+    }
+  } else {
+    for (const map of listCustomFieldCapabilityMapsInPriorityOrder()) {
+      if (map.size === 0) continue;
+      map.clear();
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
   notifyFieldCapabilityListeners();
 }
 
@@ -283,14 +411,22 @@ export function subscribeMusicLibraryBaseFieldCapabilities(listener: () => void)
 }
 
 export function listMusicLibraryBaseFieldCapabilities(): MusicLibraryResolvedFieldCapability[] {
+  const customById = new Map<string, MusicLibraryResolvedFieldCapability>();
+  for (const map of listCustomFieldCapabilityMapsInPriorityOrder()) {
+    for (const [fieldId, capability] of map.entries()) {
+      if (customById.has(fieldId)) continue;
+      customById.set(fieldId, capability);
+    }
+  }
+
   return [
     ...MUSIC_LIBRARY_BASE_FIELD_KEYS.map((field) => toResolvedBuiltinFieldCapability(field)),
-    ...extensionFieldDefinitions.values(),
+    ...customById.values(),
   ];
 }
 
 export function listRegisteredMusicLibraryBaseFieldCapabilities(): MusicLibraryExtensionFieldCapabilityInput[] {
-  return [...extensionFieldDefinitions.values()].map((field) => ({
+  return [...persistedFieldDefinitions.values()].map((field) => ({
     id: field.id,
     headerKey: field.headerKey,
     label: field.label,
@@ -298,6 +434,7 @@ export function listRegisteredMusicLibraryBaseFieldCapabilities(): MusicLibraryE
     filterable: field.filterable,
     sortable: field.sortable,
     groupable: field.groupable,
+    facetable: field.facetable,
     trackKey: field.trackKey,
     nativeFilterField: field.nativeFilterField,
     nativeSortField: field.nativeSortField,
@@ -322,6 +459,10 @@ export function listMusicLibraryBaseFilterFieldIds(): MusicLibraryBaseFieldId[] 
     .map((field) => field.id);
 }
 
+export function canFacetMusicLibraryBaseField(field: MusicLibraryBaseFieldId): boolean {
+  return getMusicLibraryBaseFieldCapability(field)?.facetable === true;
+}
+
 export function isMusicLibraryBaseFieldNumeric(field: MusicLibraryBaseFieldId): boolean {
   return getMusicLibraryBaseFieldCapability(field)?.kind === 'number';
 }
@@ -334,7 +475,11 @@ export function getMusicLibraryBaseFieldCapability(
   if (normalized in MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS) {
     return toResolvedBuiltinFieldCapability(normalized as MusicLibraryBuiltinFieldKey);
   }
-  return extensionFieldDefinitions.get(normalized) ?? null;
+  for (const map of listCustomFieldCapabilityMapsInPriorityOrder()) {
+    const capability = map.get(normalized);
+    if (capability) return capability;
+  }
+  return null;
 }
 
 export function resolveMusicLibraryBaseFieldLabel(field: MusicLibraryBaseFieldId): string {

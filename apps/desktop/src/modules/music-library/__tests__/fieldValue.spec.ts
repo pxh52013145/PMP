@@ -80,6 +80,41 @@ describe('fieldValue', () => {
     expect(formatMusicLibraryFieldValue(track, 'ingestedAt')).toBe('2024-03-04');
   });
 
+  it('prefers createdAtMs for builtin dateAdded when native schema fields are present', () => {
+    const createdAtMs = Date.parse('2024-05-06T07:08:00Z');
+    const track = {
+      id: 'track-native-date-added',
+      title: 'A',
+      createdAtMs,
+      updatedAtMs: Date.parse('2024-06-07T08:09:00Z'),
+    };
+
+    expect(getMusicLibraryFieldComparableValue(track, 'dateAdded')).toBe(createdAtMs);
+    expect(formatMusicLibraryFieldValue(track, 'dateAdded')).toBe('2024-05-06');
+  });
+
+  it('formats native timestamp-like dynamic fields through the shared field layer', () => {
+    registerMusicLibraryBaseFieldCapabilities([
+      {
+        id: 'updatedAtMs',
+        label: 'Updated At',
+        kind: 'number',
+        trackKey: 'updatedAtMs',
+        sortable: true,
+      },
+    ]);
+
+    const updatedAtMs = Date.parse('2024-06-07T08:09:00Z');
+    const track = {
+      id: 'track-updated-at',
+      title: 'A',
+      updatedAtMs,
+    };
+
+    expect(getMusicLibraryFieldComparableValue(track, 'updatedAtMs')).toBe(updatedAtMs);
+    expect(formatMusicLibraryFieldValue(track, 'updatedAtMs')).toBe('2024-06-07');
+  });
+
   it('formats extension boolean and array values through the shared field layer', () => {
     registerMusicLibraryBaseFieldCapabilities([
       {

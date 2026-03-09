@@ -267,6 +267,7 @@ export const TAURI_EVENTS = {
   // 背景相关
   BACKGROUND_UPDATED: 'background-updated',
   MUSIC_LIBRARY_SYNC_STATUS_UPDATED: 'music-library-sync-status-updated',
+  MUSIC_LIBRARY_SCHEMA_CHANGED: 'music-library-schema-changed',
 
   // Pixel 渲染相关
   PIXEL_SHAPE_UPDATED: 'pixel-shape-updated',

@@ -246,6 +246,7 @@ export interface NativeLibraryTrackQuery {
   offset?: number;
   includeMissing?: boolean;
   visibleOnly?: boolean;
+  projection?: 'list' | 'full';
   searchQuery?: string;
   artist?: string;
   album?: string;
@@ -259,7 +260,11 @@ export interface NativeLibraryTrackQuery {
   sort?: NativeLibraryTrackSortInput[];
 }
 
-export type NativeLibraryTrackFilterField =
+type NativeLibraryDynamicTrackField = string & {
+  readonly __nativeLibraryTrackFieldBrand?: unique symbol;
+};
+
+export type NativeLibraryKnownTrackFilterField =
   | 'title'
   | 'artist'
   | 'album'
@@ -270,7 +275,15 @@ export type NativeLibraryTrackFilterField =
   | 'sampleRate'
   | 'bitDepth'
   | 'status'
-  | 'sourceId';
+  | 'sourceId'
+  | 'createdAtMs'
+  | 'updatedAtMs'
+  | 'lastSeenAtMs'
+  | 'lastPlayedAtMs';
+
+export type NativeLibraryTrackFilterField =
+  | NativeLibraryKnownTrackFilterField
+  | NativeLibraryDynamicTrackField;
 
 export type NativeLibraryTrackFilterOperator =
   | 'contains'
@@ -294,7 +307,7 @@ export interface NativeLibraryTrackFilterGroupInput {
   filters?: NativeLibraryTrackFilterInput[];
 }
 
-export type NativeLibraryTrackSortField =
+export type NativeLibraryKnownTrackSortField =
   | 'title'
   | 'artist'
   | 'album'
@@ -305,7 +318,13 @@ export type NativeLibraryTrackSortField =
   | 'fileSize'
   | 'sampleRate'
   | 'bitDepth'
+  | 'createdAtMs'
+  | 'lastSeenAtMs'
   | 'updatedAtMs';
+
+export type NativeLibraryTrackSortField =
+  | NativeLibraryKnownTrackSortField
+  | NativeLibraryDynamicTrackField;
 
 export interface NativeLibraryTrackSortInput {
   field: NativeLibraryTrackSortField;
@@ -325,20 +344,6 @@ export interface NativeLibraryTrackBaseQueryInput {
   sort?: NativeLibraryTrackSortInput[];
 }
 
-const NATIVE_LIBRARY_TRACK_FILTER_FIELDS = new Set<NativeLibraryTrackFilterField>([
-  'title',
-  'artist',
-  'album',
-  'genre',
-  'durationSeconds',
-  'playCount',
-  'fileSize',
-  'sampleRate',
-  'bitDepth',
-  'status',
-  'sourceId',
-]);
-
 const NATIVE_LIBRARY_TRACK_FILTER_OPERATORS = new Set<NativeLibraryTrackFilterOperator>([
   'contains',
   'equals',
@@ -349,19 +354,9 @@ const NATIVE_LIBRARY_TRACK_FILTER_OPERATORS = new Set<NativeLibraryTrackFilterOp
   'is_not_empty',
 ]);
 
-const NATIVE_LIBRARY_TRACK_SORT_FIELDS = new Set<NativeLibraryTrackSortField>([
-  'title',
-  'artist',
-  'album',
-  'genre',
-  'durationSeconds',
-  'playCount',
-  'lastPlayedAtMs',
-  'fileSize',
-  'sampleRate',
-  'bitDepth',
-  'updatedAtMs',
-]);
+function normalizeNativeTrackFieldName(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
 
 function normalizeNativeTrackFilters(
   filters: NativeLibraryTrackQuery['filters']
@@ -372,9 +367,9 @@ function normalizeNativeTrackFilters(
   for (const rawFilter of filters) {
     if (!rawFilter || typeof rawFilter !== 'object') continue;
 
-    const field = rawFilter.field;
+    const field = normalizeNativeTrackFieldName(rawFilter.field);
     const operator = rawFilter.operator;
-    if (!NATIVE_LIBRARY_TRACK_FILTER_FIELDS.has(field)) continue;
+    if (!field) continue;
     if (!NATIVE_LIBRARY_TRACK_FILTER_OPERATORS.has(operator)) continue;
 
     const needsValue =
@@ -432,8 +427,8 @@ function normalizeNativeTrackSort(sort: NativeLibraryTrackQuery['sort']): Native
   const normalized: NativeLibraryTrackSortInput[] = [];
   for (const rawSort of sort) {
     if (!rawSort || typeof rawSort !== 'object') continue;
-    const field = rawSort.field;
-    if (!NATIVE_LIBRARY_TRACK_SORT_FIELDS.has(field)) continue;
+    const field = normalizeNativeTrackFieldName(rawSort.field);
+    if (!field) continue;
 
     normalized.push({
       field,
@@ -454,8 +449,8 @@ function normalizeNativeTrackGroupBy(
   const normalized: NativeLibraryTrackGroupByInput[] = [];
   for (const rawGroup of groupBy) {
     if (!rawGroup || typeof rawGroup !== 'object') continue;
-    const field = rawGroup.field;
-    if (!NATIVE_LIBRARY_TRACK_SORT_FIELDS.has(field)) continue;
+    const field = normalizeNativeTrackFieldName(rawGroup.field);
+    if (!field) continue;
 
     normalized.push({
       field,
@@ -523,7 +518,40 @@ export interface NativeLibraryTrackRecord {
   playCount: number;
   lastPlayedAtMs?: number;
   status: string;
+  createdAtMs?: number;
   updatedAtMs: number;
+  lastSeenAtMs?: number;
+  extraFields?: Record<string, unknown>;
+}
+
+export interface NativeLibraryTrackPageResult {
+  items: NativeLibraryTrackRecord[];
+  total: number;
+}
+
+export interface NativeLibraryTrackFieldCatalogRecord {
+  id: string;
+  label: string;
+  kind: 'text' | 'number';
+  trackKey: string;
+  columnName: string;
+  sourceTable: string;
+  declaredType: string;
+  nullable: boolean;
+  filterable: boolean;
+  sortable: boolean;
+  groupable: boolean;
+  facetable: boolean;
+  nativeFilterField?: NativeLibraryTrackFilterField;
+  nativeSortField?: NativeLibraryTrackSortField;
+}
+
+export interface NativeLibraryFacetCatalogRecord {
+  id: string;
+  field: string;
+  label: string;
+  kind: NativeLibraryFacetKind;
+  nativeField?: NativeLibraryTrackFilterField | string;
 }
 
 export interface NativeLibraryFacetQuery {
@@ -531,11 +559,54 @@ export interface NativeLibraryFacetQuery {
   visibleOnly?: boolean;
 }
 
+export type NativeLibraryFacetKind = 'text-values' | 'album-summaries';
+
+export interface NativeLibraryTextFacetQuery extends NativeLibraryFacetQuery {
+  field: NativeLibraryTrackFilterField | string;
+  limit?: number;
+}
+
+export interface NativeLibraryFacetEntriesQuery extends NativeLibraryFacetQuery {
+  kind: NativeLibraryFacetKind;
+  field?: NativeLibraryTrackFilterField | string;
+  limit?: number;
+}
+
 export interface NativeLibraryAlbumRecord {
   album: string;
   artist: string;
   coverTrackId: string;
   coverTrackPath: string;
+}
+
+export interface NativeLibraryFacetEntriesResult {
+  kind: NativeLibraryFacetKind;
+  textValues?: string[];
+  albums?: NativeLibraryAlbumRecord[];
+}
+
+export interface NativeLibrarySchemaSourceTableRecord {
+  name: string;
+  columnCount: number;
+  schemaHash: string;
+  columns: string[];
+}
+
+export interface NativeLibrarySchemaEnvelope {
+  schemaVersion: number;
+  generatedAtMs: number;
+  schemaFingerprint: string;
+  sourceTables: NativeLibrarySchemaSourceTableRecord[];
+  trackFields: NativeLibraryTrackFieldCatalogRecord[];
+  facetCollections: NativeLibraryFacetCatalogRecord[];
+}
+
+export interface NativeLibrarySchemaChangedEventPayload {
+  reason: string;
+  emittedAtMs: number;
+  schemaVersion: number;
+  schemaFingerprint: string;
+  sourceTables: NativeLibrarySchemaSourceTableRecord[];
 }
 
 export interface NativeLibraryStatsRecord {
@@ -848,6 +919,10 @@ function asNumber(value: unknown): number | undefined {
 
 function asBool(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
 }
 
 function normalizeQuickFingerprint(value: unknown): string | undefined {
@@ -1447,7 +1522,102 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     playCount: Math.max(0, Math.floor(playCount)),
     lastPlayedAtMs: asNumber(readRecordField(value, 'lastPlayedAtMs', 'last_played_at_ms')),
     status,
+    createdAtMs: asNumber(readRecordField(value, 'createdAtMs', 'created_at_ms')),
     updatedAtMs,
+    lastSeenAtMs: asNumber(readRecordField(value, 'lastSeenAtMs', 'last_seen_at_ms')),
+    extraFields: asOptionalRecord(readRecordField(value, 'extraFields', 'extra_fields')),
+  };
+}
+
+function ensureTrackPageResult(value: unknown): NativeLibraryTrackPageResult | null {
+  if (!isRecord(value)) return null;
+
+  const totalValue = asNumber(readRecordField(value, 'total', 'totalCount', 'total_count'));
+  const itemsRaw = readRecordField(value, 'items', 'rows', 'tracks');
+  if (totalValue === undefined || !Array.isArray(itemsRaw)) return null;
+
+  const items: NativeLibraryTrackRecord[] = [];
+  for (const item of itemsRaw) {
+    const parsed = ensureTrackRecord(item);
+    if (!parsed) continue;
+    items.push(parsed);
+  }
+
+  return {
+    items,
+    total: Math.max(0, Math.floor(totalValue)),
+  };
+}
+
+function ensureFacetCatalogRecord(value: unknown): NativeLibraryFacetCatalogRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(readRecordField(value, 'id'));
+  const field = asTrimmedString(readRecordField(value, 'field'));
+  const label = asTrimmedString(readRecordField(value, 'label'));
+  const kind = normalizeFacetKind(readRecordField(value, 'kind'));
+  const nativeField = normalizeNativeTrackFieldName(readRecordField(value, 'nativeField', 'native_field'));
+  if (!id || !field || !label || !kind) return null;
+
+  return {
+    id,
+    field,
+    label,
+    kind,
+    nativeField,
+  };
+}
+
+function ensureTrackFieldCatalogRecord(value: unknown): NativeLibraryTrackFieldCatalogRecord | null {
+  if (!isRecord(value)) return null;
+
+  const id = asTrimmedString(readRecordField(value, 'id'));
+  const label = asTrimmedString(readRecordField(value, 'label'));
+  const trackKey = asTrimmedString(readRecordField(value, 'trackKey', 'track_key'));
+  const columnName = asTrimmedString(readRecordField(value, 'columnName', 'column_name'));
+  const sourceTable = asTrimmedString(readRecordField(value, 'sourceTable', 'source_table'));
+  const declaredType = asTrimmedString(readRecordField(value, 'declaredType', 'declared_type'));
+  const kindRaw = asTrimmedString(readRecordField(value, 'kind'));
+  const nullable = asBool(readRecordField(value, 'nullable'));
+  const filterable = asBool(readRecordField(value, 'filterable'));
+  const sortable = asBool(readRecordField(value, 'sortable'));
+  const groupable = asBool(readRecordField(value, 'groupable'));
+  const facetable = asBool(readRecordField(value, 'facetable'));
+
+  if (!id || !label || !trackKey || !columnName || !sourceTable) return null;
+  if (
+    nullable === undefined ||
+    filterable === undefined ||
+    sortable === undefined ||
+    groupable === undefined ||
+    facetable === undefined
+  ) {
+    return null;
+  }
+
+  const kind: NativeLibraryTrackFieldCatalogRecord['kind'] = kindRaw === 'number' ? 'number' : 'text';
+  const nativeFilterField = normalizeNativeTrackFieldName(
+    readRecordField(value, 'nativeFilterField', 'native_filter_field')
+  ) as NativeLibraryTrackFilterField | undefined;
+  const nativeSortField = normalizeNativeTrackFieldName(
+    readRecordField(value, 'nativeSortField', 'native_sort_field')
+  ) as NativeLibraryTrackSortField | undefined;
+
+  return {
+    id,
+    label,
+    kind,
+    trackKey,
+    columnName,
+    sourceTable,
+    declaredType,
+    nullable,
+    filterable,
+    sortable,
+    groupable,
+    facetable,
+    nativeFilterField,
+    nativeSortField,
   };
 }
 
@@ -1456,6 +1626,59 @@ function normalizeFacetQuery(query?: NativeLibraryFacetQuery): NativeLibraryFace
     includeMissing: query?.includeMissing === true,
     visibleOnly: query?.visibleOnly !== false,
   };
+}
+
+function normalizeTextFacetQuery(query?: NativeLibraryTextFacetQuery): NativeLibraryTextFacetQuery | null {
+  const field = normalizeNativeTrackFieldName(query?.field);
+  if (!field) return null;
+
+  return {
+    field,
+    includeMissing: query?.includeMissing === true,
+    visibleOnly: query?.visibleOnly !== false,
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(5000, Math.floor(query.limit)))
+        : undefined,
+  };
+}
+
+function normalizeFacetKind(value: unknown): NativeLibraryFacetKind | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'text-values') return 'text-values';
+  if (normalized === 'album-summaries') return 'album-summaries';
+  return undefined;
+}
+
+function normalizeFacetEntriesQuery(
+  query?: NativeLibraryFacetEntriesQuery
+): NativeLibraryFacetEntriesQuery | null {
+  const kind = normalizeFacetKind(query?.kind);
+  if (!kind) return null;
+
+  const normalized: NativeLibraryFacetEntriesQuery = {
+    kind,
+    includeMissing: query?.includeMissing === true,
+    visibleOnly: query?.visibleOnly !== false,
+    limit:
+      typeof query?.limit === 'number' && Number.isFinite(query.limit)
+        ? Math.max(1, Math.min(5000, Math.floor(query.limit)))
+        : undefined,
+  };
+
+  if (kind === 'text-values') {
+    const field = normalizeNativeTrackFieldName(query?.field);
+    if (!field) return null;
+    normalized.field = field;
+  } else {
+    const field = normalizeNativeTrackFieldName(query?.field);
+    if (field) {
+      normalized.field = field;
+    }
+  }
+
+  return normalized;
 }
 
 function ensureAlbumRecord(value: unknown): NativeLibraryAlbumRecord | null {
@@ -1472,6 +1695,172 @@ function ensureAlbumRecord(value: unknown): NativeLibraryAlbumRecord | null {
     artist,
     coverTrackId,
     coverTrackPath,
+  };
+}
+
+function ensureFacetEntriesResult(value: unknown): NativeLibraryFacetEntriesResult | null {
+  if (!isRecord(value)) return null;
+
+  const kind = normalizeFacetKind(readRecordField(value, 'kind'));
+  if (!kind) return null;
+
+  if (kind === 'text-values') {
+    const rawValues = readRecordField(value, 'textValues', 'text_values');
+    if (!Array.isArray(rawValues)) {
+      return {
+        kind,
+        textValues: [],
+      };
+    }
+
+    const textValues: string[] = [];
+    for (const item of rawValues) {
+      const normalized = asTrimmedString(item);
+      if (!normalized) continue;
+      textValues.push(normalized);
+    }
+
+    return {
+      kind,
+      textValues,
+    };
+  }
+
+  const rawAlbums = readRecordField(value, 'albums');
+  if (!Array.isArray(rawAlbums)) {
+    return {
+      kind,
+      albums: [],
+    };
+  }
+
+  const albums: NativeLibraryAlbumRecord[] = [];
+  for (const item of rawAlbums) {
+    const parsed = ensureAlbumRecord(item);
+    if (!parsed) continue;
+    albums.push(parsed);
+  }
+
+  return {
+    kind,
+    albums,
+  };
+}
+
+function ensureSchemaSourceTableRecord(
+  value: unknown
+): NativeLibrarySchemaSourceTableRecord | null {
+  if (!isRecord(value)) return null;
+
+  const name = asTrimmedString(readRecordField(value, 'name'));
+  const columnCount = asNumber(readRecordField(value, 'columnCount', 'column_count'));
+  const schemaHash = asTrimmedString(readRecordField(value, 'schemaHash', 'schema_hash'));
+  const rawColumns = readRecordField(value, 'columns');
+  if (!name || columnCount === undefined || !schemaHash || !Array.isArray(rawColumns)) return null;
+
+  const columns: string[] = [];
+  for (const item of rawColumns) {
+    const normalized = asTrimmedString(item);
+    if (!normalized) continue;
+    columns.push(normalized);
+  }
+
+  return {
+    name,
+    columnCount,
+    schemaHash,
+    columns,
+  };
+}
+
+function ensureSchemaEnvelope(value: unknown): NativeLibrarySchemaEnvelope | null {
+  if (!isRecord(value)) return null;
+
+  const schemaVersion = asNumber(readRecordField(value, 'schemaVersion', 'schema_version'));
+  const generatedAtMs = asNumber(readRecordField(value, 'generatedAtMs', 'generated_at_ms'));
+  const schemaFingerprint = asTrimmedString(
+    readRecordField(value, 'schemaFingerprint', 'schema_fingerprint')
+  );
+  const rawSourceTables = readRecordField(value, 'sourceTables', 'source_tables');
+  const rawTrackFields = readRecordField(value, 'trackFields', 'track_fields');
+  const rawFacetCollections = readRecordField(value, 'facetCollections', 'facet_collections');
+  if (
+    schemaVersion === undefined ||
+    generatedAtMs === undefined ||
+    !schemaFingerprint ||
+    !Array.isArray(rawSourceTables) ||
+    !Array.isArray(rawTrackFields) ||
+    !Array.isArray(rawFacetCollections)
+  ) {
+    return null;
+  }
+
+  const sourceTables: NativeLibrarySchemaSourceTableRecord[] = [];
+  for (const item of rawSourceTables) {
+    const parsed = ensureSchemaSourceTableRecord(item);
+    if (!parsed) continue;
+    sourceTables.push(parsed);
+  }
+
+  const trackFields: NativeLibraryTrackFieldCatalogRecord[] = [];
+  for (const item of rawTrackFields) {
+    const parsed = ensureTrackFieldCatalogRecord(item);
+    if (!parsed) continue;
+    trackFields.push(parsed);
+  }
+
+  const facetCollections: NativeLibraryFacetCatalogRecord[] = [];
+  for (const item of rawFacetCollections) {
+    const parsed = ensureFacetCatalogRecord(item);
+    if (!parsed) continue;
+    facetCollections.push(parsed);
+  }
+
+  return {
+    schemaVersion,
+    generatedAtMs,
+    schemaFingerprint,
+    sourceTables,
+    trackFields,
+    facetCollections,
+  };
+}
+
+export function parseNativeLibrarySchemaChangedEventPayload(
+  value: unknown
+): NativeLibrarySchemaChangedEventPayload | null {
+  if (!isRecord(value)) return null;
+
+  const reason = asTrimmedString(readRecordField(value, 'reason'));
+  const emittedAtMs = asNumber(readRecordField(value, 'emittedAtMs', 'emitted_at_ms'));
+  const schemaVersion = asNumber(readRecordField(value, 'schemaVersion', 'schema_version'));
+  const schemaFingerprint = asTrimmedString(
+    readRecordField(value, 'schemaFingerprint', 'schema_fingerprint')
+  );
+  const rawSourceTables = readRecordField(value, 'sourceTables', 'source_tables');
+  if (
+    !reason ||
+    emittedAtMs === undefined ||
+    schemaVersion === undefined ||
+    !schemaFingerprint ||
+    !Array.isArray(rawSourceTables)
+  ) {
+    return null;
+  }
+
+  const sourceTables: NativeLibrarySchemaSourceTableRecord[] = [];
+  for (const item of rawSourceTables) {
+    const parsed = ensureSchemaSourceTableRecord(item);
+    if (!parsed) continue;
+    sourceTables.push(parsed);
+  }
+
+  return {
+    reason,
+    emittedAtMs,
+    schemaVersion,
+    schemaFingerprint,
+    sourceTables,
   };
 }
 
@@ -2612,11 +3001,9 @@ export async function cleanupNativeLibrarySourceTracks(
   return Math.max(0, Math.floor(parsed));
 }
 
-export async function queryNativeLibraryTracks(
+function buildNativeLibraryTrackQueryPayload(
   query?: NativeLibraryTrackQuery
-): Promise<NativeLibraryTrackRecord[]> {
-  if (!isTauriRuntime()) return [];
-
+): NativeLibraryTrackQuery {
   const normalizedFilters = normalizeNativeTrackFilters(query?.filters);
   const normalizedGroupBy = normalizeNativeTrackGroupBy(query?.groupBy);
   const normalizedSort = normalizeNativeTrackSort(query?.sort);
@@ -2638,6 +3025,7 @@ export async function queryNativeLibraryTracks(
         : undefined,
     includeMissing: query?.includeMissing === true,
     visibleOnly: query?.visibleOnly !== false,
+    projection: query?.projection === 'list' ? 'list' : query?.projection === 'full' ? 'full' : undefined,
     searchQuery:
       typeof query?.searchQuery === 'string' && query.searchQuery.trim().length > 0
         ? query.searchQuery.trim()
@@ -2669,6 +3057,16 @@ export async function queryNativeLibraryTracks(
     sort: normalizedSort,
   };
 
+  return payload;
+}
+
+export async function queryNativeLibraryTracks(
+  query?: NativeLibraryTrackQuery
+): Promise<NativeLibraryTrackRecord[]> {
+  if (!isTauriRuntime()) return [];
+
+  const payload = buildNativeLibraryTrackQueryPayload(query);
+
   const raw = await invoke<unknown>('music_library_db_query_tracks', { query: payload }).catch(
     () => null
   );
@@ -2683,54 +3081,123 @@ export async function queryNativeLibraryTracks(
   return tracks;
 }
 
-export async function listNativeLibraryArtists(query?: NativeLibraryFacetQuery): Promise<string[]> {
-  if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_db_list_artists', {
-    query: normalizeFacetQuery(query),
+export async function queryNativeLibraryTracksPage(
+  query?: NativeLibraryTrackQuery
+): Promise<NativeLibraryTrackPageResult> {
+  if (!isTauriRuntime()) return { items: [], total: 0 };
+
+  const payload = buildNativeLibraryTrackQueryPayload(query);
+  const raw = await invoke<unknown>('music_library_db_query_tracks_page', {
+    query: payload,
   }).catch(() => null);
 
+  const parsed = ensureTrackPageResult(raw);
+  if (!parsed) return { items: [], total: 0 };
+  return parsed;
+}
+
+export async function getNativeLibrarySchemaEnvelope(): Promise<NativeLibrarySchemaEnvelope | null> {
+  if (!isTauriRuntime()) return null;
+
+  const raw = await invoke<unknown>('music_library_db_get_schema_envelope').catch(() => null);
+  return ensureSchemaEnvelope(raw);
+}
+
+export async function notifyNativeLibrarySchemaChanged(reason?: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+
+  const raw = await invoke<unknown>('music_library_db_notify_schema_changed', {
+    reason: typeof reason === 'string' && reason.trim().length > 0 ? reason.trim() : undefined,
+  }).catch(() => false);
+
+  return raw === true;
+}
+
+export async function listNativeLibraryTrackFieldCatalog(): Promise<
+  NativeLibraryTrackFieldCatalogRecord[]
+> {
+  const envelope = await getNativeLibrarySchemaEnvelope();
+  if (envelope) return envelope.trackFields;
+  if (!isTauriRuntime()) return [];
+
+  const raw = await invoke<unknown>('music_library_db_list_track_field_catalog').catch(() => null);
   if (!Array.isArray(raw)) return [];
-  const artists: string[] = [];
+
+  const fields: NativeLibraryTrackFieldCatalogRecord[] = [];
   for (const item of raw) {
-    const normalized = asTrimmedString(item);
-    if (!normalized) continue;
-    artists.push(normalized);
+    const parsed = ensureTrackFieldCatalogRecord(item);
+    if (!parsed) continue;
+    fields.push(parsed);
   }
-  return artists;
+  return fields;
+}
+
+export async function listNativeLibraryFacetCatalog(): Promise<NativeLibraryFacetCatalogRecord[]> {
+  const envelope = await getNativeLibrarySchemaEnvelope();
+  if (envelope) return envelope.facetCollections;
+  if (!isTauriRuntime()) return [];
+
+  const raw = await invoke<unknown>('music_library_db_list_facet_catalog').catch(() => null);
+  if (!Array.isArray(raw)) return [];
+
+  const items: NativeLibraryFacetCatalogRecord[] = [];
+  for (const item of raw) {
+    const parsed = ensureFacetCatalogRecord(item);
+    if (!parsed) continue;
+    items.push(parsed);
+  }
+  return items;
+}
+
+export async function listNativeLibraryFacetEntries(
+  query?: NativeLibraryFacetEntriesQuery
+): Promise<NativeLibraryFacetEntriesResult | null> {
+  if (!isTauriRuntime()) return null;
+  const normalizedQuery = normalizeFacetEntriesQuery(query);
+  if (!normalizedQuery) return null;
+
+  const raw = await invoke<unknown>('music_library_db_list_facet_entries', {
+    query: normalizedQuery,
+  }).catch(() => null);
+
+  return ensureFacetEntriesResult(raw);
+}
+
+export async function listNativeLibraryArtists(query?: NativeLibraryFacetQuery): Promise<string[]> {
+  return listNativeLibraryTextFacetValues({
+    field: 'artist',
+    ...normalizeFacetQuery(query),
+  });
+}
+
+export async function listNativeLibraryTextFacetValues(
+  query?: NativeLibraryTextFacetQuery
+): Promise<string[]> {
+  const normalizedQuery = normalizeTextFacetQuery(query);
+  if (!normalizedQuery) return [];
+  const result = await listNativeLibraryFacetEntries({
+    kind: 'text-values',
+    ...normalizedQuery,
+  });
+  return result?.kind === 'text-values' ? result.textValues ?? [] : [];
 }
 
 export async function listNativeLibraryGenres(query?: NativeLibraryFacetQuery): Promise<string[]> {
-  if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_db_list_genres', {
-    query: normalizeFacetQuery(query),
-  }).catch(() => null);
-
-  if (!Array.isArray(raw)) return [];
-  const genres: string[] = [];
-  for (const item of raw) {
-    const normalized = asTrimmedString(item);
-    if (!normalized) continue;
-    genres.push(normalized);
-  }
-  return genres;
+  return listNativeLibraryTextFacetValues({
+    field: 'genre',
+    ...normalizeFacetQuery(query),
+  });
 }
 
 export async function listNativeLibraryAlbums(
   query?: NativeLibraryFacetQuery
 ): Promise<NativeLibraryAlbumRecord[]> {
-  if (!isTauriRuntime()) return [];
-  const raw = await invoke<unknown>('music_library_db_list_albums', {
-    query: normalizeFacetQuery(query),
-  }).catch(() => null);
-
-  if (!Array.isArray(raw)) return [];
-  const albums: NativeLibraryAlbumRecord[] = [];
-  for (const item of raw) {
-    const parsed = ensureAlbumRecord(item);
-    if (!parsed) continue;
-    albums.push(parsed);
-  }
-  return albums;
+  const result = await listNativeLibraryFacetEntries({
+    kind: 'album-summaries',
+    field: 'album',
+    ...normalizeFacetQuery(query),
+  });
+  return result?.kind === 'album-summaries' ? result.albums ?? [] : [];
 }
 
 export async function getNativeLibraryStats(

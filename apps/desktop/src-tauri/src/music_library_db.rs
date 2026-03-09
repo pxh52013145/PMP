@@ -1,17 +1,27 @@
 use once_cell::sync::{Lazy, OnceCell};
-use rusqlite::{params, params_from_iter, types::Value, Connection};
+use rusqlite::{
+    params, params_from_iter,
+    types::{Value, ValueRef},
+    Connection,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
     path::PathBuf,
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 const DB_VERSION: i32 = 8;
+pub const EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED: &str = "music-library-schema-changed";
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
+static OBSERVED_SCHEMA_STATE: Lazy<Mutex<Option<ObservedLibrarySchemaState>>> =
+    Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +124,7 @@ pub struct LibraryTrackQueryInput {
     pub offset: Option<u32>,
     pub include_missing: Option<bool>,
     pub visible_only: Option<bool>,
+    pub projection: Option<String>,
     pub search_query: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -187,7 +198,36 @@ pub struct LibraryTrackRecord {
     pub play_count: u64,
     pub last_played_at_ms: Option<i64>,
     pub status: String,
+    pub created_at_ms: Option<i64>,
     pub updated_at_ms: i64,
+    pub last_seen_at_ms: Option<i64>,
+    pub extra_fields: Option<JsonMap<String, JsonValue>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackQueryPageResult {
+    pub items: Vec<LibraryTrackRecord>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrackFieldCatalogRecord {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub track_key: String,
+    pub column_name: String,
+    pub source_table: String,
+    pub declared_type: String,
+    pub nullable: bool,
+    pub filterable: bool,
+    pub sortable: bool,
+    pub groupable: bool,
+    pub facetable: bool,
+    pub native_filter_field: Option<String>,
+    pub native_sort_field: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -197,6 +237,25 @@ pub struct LibraryFacetQueryInput {
     pub visible_only: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTextFacetQueryInput {
+    pub field: String,
+    pub include_missing: Option<bool>,
+    pub visible_only: Option<bool>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFacetEntriesQueryInput {
+    pub kind: String,
+    pub field: Option<String>,
+    pub include_missing: Option<bool>,
+    pub visible_only: Option<bool>,
+    pub limit: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryAlbumRecord {
@@ -204,6 +263,61 @@ pub struct LibraryAlbumRecord {
     pub artist: String,
     pub cover_track_id: String,
     pub cover_track_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFacetCatalogRecord {
+    pub id: String,
+    pub field: String,
+    pub label: String,
+    pub kind: String,
+    pub native_field: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFacetEntriesResult {
+    pub kind: String,
+    pub text_values: Option<Vec<String>>,
+    pub albums: Option<Vec<LibraryAlbumRecord>>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySchemaSourceTableRecord {
+    pub name: String,
+    pub column_count: u32,
+    pub schema_hash: String,
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySchemaEnvelope {
+    pub schema_version: i32,
+    pub generated_at_ms: i64,
+    pub schema_fingerprint: String,
+    pub source_tables: Vec<LibrarySchemaSourceTableRecord>,
+    pub track_fields: Vec<LibraryTrackFieldCatalogRecord>,
+    pub facet_collections: Vec<LibraryFacetCatalogRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySchemaChangedEventPayload {
+    pub reason: String,
+    pub emitted_at_ms: i64,
+    pub schema_version: i32,
+    pub schema_fingerprint: String,
+    pub source_tables: Vec<LibrarySchemaSourceTableRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObservedLibrarySchemaState {
+    schema_version: i32,
+    schema_fingerprint: String,
+    source_tables: Vec<LibrarySchemaSourceTableRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -638,6 +752,20 @@ fn conn() -> Result<std::sync::MutexGuard<'static, Option<Connection>>, String> 
     DB_CONN
         .lock()
         .map_err(|_| "Music library DB state is locked".to_string())
+}
+
+fn observed_schema_state(
+) -> Result<std::sync::MutexGuard<'static, Option<ObservedLibrarySchemaState>>, String> {
+    OBSERVED_SCHEMA_STATE
+        .lock()
+        .map_err(|_| "Music library observed schema state is locked".to_string())
+}
+
+fn replace_observed_schema_state(
+    next: ObservedLibrarySchemaState,
+) -> Result<Option<ObservedLibrarySchemaState>, String> {
+    let mut guard = observed_schema_state()?;
+    Ok(guard.replace(next))
 }
 
 fn with_conn<T>(op: impl FnOnce(&mut Connection) -> Result<T, String>) -> Result<T, String> {
@@ -1242,9 +1370,12 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     let connection = Connection::open(&path)
         .map_err(|error| format!("Failed to open music library DB: {error}"))?;
     migrate(&connection)?;
+    let initial_schema_state = read_observed_schema_state(&connection)?;
 
     let mut guard = conn()?;
     *guard = Some(connection);
+    drop(guard);
+    let _ = replace_observed_schema_state(initial_schema_state)?;
     Ok(())
 }
 
@@ -1482,7 +1613,10 @@ fn user_entry_record_by_id(
     .map_err(|error| format!("Failed to load user entry record: {error}"))
 }
 
-fn playlist_record_by_id(conn: &Connection, playlist_id: &str) -> Result<LibraryPlaylistRecord, String> {
+fn playlist_record_by_id(
+    conn: &Connection,
+    playlist_id: &str,
+) -> Result<LibraryPlaylistRecord, String> {
     conn.query_row(
         r#"
         SELECT
@@ -4052,7 +4186,11 @@ pub fn list_playlists(
             .and_then(|item| item.kind.as_ref())
             .map(|value| normalize_playlist_kind(Some(value.as_str())))
             .filter(|value| !value.is_empty());
-        let kind_enabled_flag = if normalized_kind.is_some() { 1_i64 } else { 0_i64 };
+        let kind_enabled_flag = if normalized_kind.is_some() {
+            1_i64
+        } else {
+            0_i64
+        };
         let kind_exact_value = normalized_kind.unwrap_or_default();
 
         let mut stmt = conn
@@ -4184,9 +4322,9 @@ pub fn replace_playlist_items(
             return Ok(0);
         }
 
-        let tx = conn
-            .transaction()
-            .map_err(|error| format!("Failed to start replace playlist items transaction: {error}"))?;
+        let tx = conn.transaction().map_err(|error| {
+            format!("Failed to start replace playlist items transaction: {error}")
+        })?;
 
         tx.execute(
             "DELETE FROM playlist_items WHERE playlist_id = ?1",
@@ -4207,9 +4345,8 @@ pub fn replace_playlist_items(
                 continue;
             }
 
-            let item_id = normalize_text(raw_item.id.as_deref()).unwrap_or_else(|| {
-                format!("pli::{normalized_playlist_id}::{position}::{index}")
-            });
+            let item_id = normalize_text(raw_item.id.as_deref())
+                .unwrap_or_else(|| format!("pli::{normalized_playlist_id}::{position}::{index}"));
             let created_at_ms = raw_item.created_at_ms.unwrap_or(now).max(0);
             let snapshot_duration_seconds = raw_item
                 .snapshot_duration_seconds
@@ -4250,8 +4387,9 @@ pub fn replace_playlist_items(
             inserted = inserted.saturating_add(1);
         }
 
-        tx.commit()
-            .map_err(|error| format!("Failed to commit replace playlist items transaction: {error}"))?;
+        tx.commit().map_err(|error| {
+            format!("Failed to commit replace playlist items transaction: {error}")
+        })?;
 
         Ok(inserted)
     })
@@ -4310,7 +4448,8 @@ pub fn list_playlist_items(
 
         let mut result = Vec::new();
         for row in rows {
-            result.push(row.map_err(|error| format!("Failed to parse playlist item row: {error}"))?);
+            result
+                .push(row.map_err(|error| format!("Failed to parse playlist item row: {error}"))?);
         }
         Ok(result)
     })
@@ -4875,8 +5014,317 @@ fn normalize_logic_operator(raw: Option<&String>, default_value: &'static str) -
     }
 }
 
-fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String, Vec<Value>)> {
-    let field = filter.field.trim().to_ascii_lowercase();
+#[derive(Debug, Clone)]
+struct LocalTrackFieldDescriptor {
+    field_id: String,
+    label: String,
+    kind: String,
+    track_key: String,
+    column_name: String,
+    declared_type: String,
+    nullable: bool,
+    filterable: bool,
+    sortable: bool,
+    groupable: bool,
+    native_filter_field: Option<String>,
+    native_sort_field: Option<String>,
+}
+
+fn normalize_track_field_token(raw: &str) -> String {
+    raw.chars()
+        .filter(|char| char.is_ascii_alphanumeric())
+        .map(|char| char.to_ascii_lowercase())
+        .collect()
+}
+
+fn quote_sqlite_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn camel_case_identifier(raw: &str) -> String {
+    let mut result = String::new();
+    let mut uppercase_next = false;
+
+    for char in raw.chars() {
+        if !char.is_ascii_alphanumeric() {
+            uppercase_next = true;
+            continue;
+        }
+
+        if result.is_empty() {
+            result.push(char.to_ascii_lowercase());
+            uppercase_next = false;
+            continue;
+        }
+
+        if uppercase_next {
+            result.push(char.to_ascii_uppercase());
+            uppercase_next = false;
+        } else {
+            result.push(char.to_ascii_lowercase());
+        }
+    }
+
+    result
+}
+
+fn humanize_identifier(raw: &str) -> String {
+    raw.replace('_', " ")
+        .split_whitespace()
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_numeric_declared_type(declared_type: &str) -> bool {
+    let normalized = declared_type.trim().to_ascii_uppercase();
+    normalized.contains("INT")
+        || normalized.contains("REAL")
+        || normalized.contains("FLOA")
+        || normalized.contains("DOUB")
+        || normalized.contains("NUM")
+        || normalized.contains("DEC")
+        || normalized.contains("BOOL")
+}
+
+fn local_track_field_alias(column_name: &str) -> (String, String, Option<String>, Option<String>) {
+    match column_name {
+        "duration_seconds" => (
+            "duration".to_string(),
+            "duration".to_string(),
+            Some("durationSeconds".to_string()),
+            Some("durationSeconds".to_string()),
+        ),
+        "sample_rate" => (
+            "sampleRate".to_string(),
+            "sampleRate".to_string(),
+            None,
+            Some("sampleRate".to_string()),
+        ),
+        "file_size" => (
+            "fileSize".to_string(),
+            "fileSize".to_string(),
+            None,
+            Some("fileSize".to_string()),
+        ),
+        "play_count" => (
+            "playCount".to_string(),
+            "playCount".to_string(),
+            Some("playCount".to_string()),
+            Some("playCount".to_string()),
+        ),
+        "last_played_at_ms" => (
+            "lastPlayed".to_string(),
+            "lastPlayed".to_string(),
+            None,
+            Some("lastPlayedAtMs".to_string()),
+        ),
+        "created_at_ms" => (
+            "dateAdded".to_string(),
+            "createdAtMs".to_string(),
+            Some("createdAtMs".to_string()),
+            Some("createdAtMs".to_string()),
+        ),
+        "updated_at_ms" => (
+            "updatedAtMs".to_string(),
+            "updatedAtMs".to_string(),
+            Some("updatedAtMs".to_string()),
+            Some("updatedAtMs".to_string()),
+        ),
+        "last_seen_at_ms" => (
+            "lastSeenAtMs".to_string(),
+            "lastSeenAtMs".to_string(),
+            Some("lastSeenAtMs".to_string()),
+            Some("lastSeenAtMs".to_string()),
+        ),
+        "source_id" => (
+            "libraryPathId".to_string(),
+            "libraryPathId".to_string(),
+            Some("sourceId".to_string()),
+            Some("sourceId".to_string()),
+        ),
+        "file_path" => (
+            "filePath".to_string(),
+            "filePath".to_string(),
+            Some("filePath".to_string()),
+            Some("filePath".to_string()),
+        ),
+        "quick_fingerprint" => (
+            "quickFingerprint".to_string(),
+            "quickFingerprint".to_string(),
+            Some("quickFingerprint".to_string()),
+            Some("quickFingerprint".to_string()),
+        ),
+        "mtime_ms" => (
+            "mtimeMs".to_string(),
+            "mtimeMs".to_string(),
+            Some("mtimeMs".to_string()),
+            Some("mtimeMs".to_string()),
+        ),
+        "bit_depth" => (
+            "bitDepth".to_string(),
+            "bitDepth".to_string(),
+            Some("bitDepth".to_string()),
+            Some("bitDepth".to_string()),
+        ),
+        "replay_gain_track_db" => (
+            "replayGainTrackGainDb".to_string(),
+            "replayGainTrackGainDb".to_string(),
+            Some("replayGainTrackGainDb".to_string()),
+            Some("replayGainTrackGainDb".to_string()),
+        ),
+        "replay_gain_album_db" => (
+            "replayGainAlbumGainDb".to_string(),
+            "replayGainAlbumGainDb".to_string(),
+            Some("replayGainAlbumGainDb".to_string()),
+            Some("replayGainAlbumGainDb".to_string()),
+        ),
+        _ => {
+            let field_id = camel_case_identifier(column_name);
+            let native_field = if field_id.is_empty() {
+                None
+            } else {
+                Some(field_id.clone())
+            };
+            (
+                field_id.clone(),
+                field_id,
+                native_field.clone(),
+                native_field,
+            )
+        }
+    }
+}
+
+fn list_local_track_field_descriptors(
+    conn: &Connection,
+) -> Result<Vec<LocalTrackFieldDescriptor>, String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(local_tracks)")
+        .map_err(|error| format!("Failed to prepare local_tracks field catalog pragma: {error}"))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            let column_name: String = row.get(1)?;
+            let declared_type: Option<String> = row.get(2)?;
+            let not_null: i64 = row.get(3)?;
+
+            let (field_id, track_key, native_filter_field, native_sort_field) =
+                local_track_field_alias(column_name.as_str());
+
+            let normalized_declared_type = declared_type.unwrap_or_default();
+            let kind = if is_numeric_declared_type(normalized_declared_type.as_str()) {
+                "number".to_string()
+            } else {
+                "text".to_string()
+            };
+
+            Ok(LocalTrackFieldDescriptor {
+                field_id: if field_id.is_empty() {
+                    column_name.clone()
+                } else {
+                    field_id
+                },
+                label: humanize_identifier(column_name.as_str()),
+                kind,
+                track_key: if track_key.is_empty() {
+                    column_name.clone()
+                } else {
+                    track_key
+                },
+                column_name,
+                declared_type: normalized_declared_type,
+                nullable: not_null == 0,
+                filterable: true,
+                sortable: true,
+                groupable: true,
+                native_filter_field,
+                native_sort_field,
+            })
+        })
+        .map_err(|error| format!("Failed to inspect local_tracks field catalog: {error}"))?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(
+            row.map_err(|error| {
+                format!("Failed to parse local_tracks field catalog row: {error}")
+            })?,
+        );
+    }
+    Ok(items)
+}
+
+fn resolve_local_track_field_descriptor<'a>(
+    descriptors: &'a [LocalTrackFieldDescriptor],
+    raw_field: &str,
+) -> Option<&'a LocalTrackFieldDescriptor> {
+    let normalized = normalize_track_field_token(raw_field);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    descriptors.iter().find(|descriptor| {
+        normalized == normalize_track_field_token(descriptor.field_id.as_str())
+            || normalized == normalize_track_field_token(descriptor.track_key.as_str())
+            || normalized == normalize_track_field_token(descriptor.column_name.as_str())
+            || descriptor
+                .native_filter_field
+                .as_ref()
+                .map(|field| normalized == normalize_track_field_token(field.as_str()))
+                .unwrap_or(false)
+            || descriptor
+                .native_sort_field
+                .as_ref()
+                .map(|field| normalized == normalize_track_field_token(field.as_str()))
+                .unwrap_or(false)
+    })
+}
+
+fn build_text_filter_expression(column_name: &str) -> String {
+    let column = quote_sqlite_identifier(column_name);
+    format!("LOWER(TRIM(COALESCE(t.{column}, '')))")
+}
+
+fn build_numeric_filter_expression(column_name: &str) -> String {
+    let column = quote_sqlite_identifier(column_name);
+    format!("CAST(t.{column} AS REAL)")
+}
+
+fn build_order_expression(descriptor: &LocalTrackFieldDescriptor) -> String {
+    let column = quote_sqlite_identifier(descriptor.column_name.as_str());
+    if descriptor.kind == "number" {
+        return format!("COALESCE(CAST(t.{column} AS REAL), 0)");
+    }
+
+    if descriptor.column_name == "title" {
+        return format!("LOWER(COALESCE(t.{column}, t.\"file_path\"))");
+    }
+
+    format!("LOWER(COALESCE(CAST(t.{column} AS TEXT), ''))")
+}
+
+fn sqlite_value_ref_to_json(value: ValueRef<'_>) -> JsonValue {
+    match value {
+        ValueRef::Null => JsonValue::Null,
+        ValueRef::Integer(value) => JsonValue::from(value),
+        ValueRef::Real(value) => JsonValue::from(value),
+        ValueRef::Text(value) => JsonValue::from(String::from_utf8_lossy(value).to_string()),
+        ValueRef::Blob(_) => JsonValue::Null,
+    }
+}
+
+fn build_track_filter_clause(
+    filter: &LibraryTrackFilterInput,
+    descriptors: &[LocalTrackFieldDescriptor],
+) -> Option<(String, Vec<Value>)> {
+    let descriptor = resolve_local_track_field_descriptor(descriptors, filter.field.as_str())?;
     let operator = filter.operator.trim().to_ascii_lowercase();
     let value_text = filter
         .value
@@ -4884,22 +5332,19 @@ fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty());
 
-    let text_expr = match field.as_str() {
-        "title" => Some("LOWER(TRIM(COALESCE(t.title, '')))"),
-        "artist" => Some("LOWER(TRIM(COALESCE(t.artist, '')))"),
-        "album" => Some("LOWER(TRIM(COALESCE(t.album, '')))"),
-        "genre" => Some("LOWER(TRIM(COALESCE(t.genre, '')))"),
-        "status" => Some("LOWER(TRIM(COALESCE(t.status, '')))"),
-        "sourceid" => Some("LOWER(TRIM(COALESCE(t.source_id, '')))"),
-        _ => None,
+    let text_expr = if descriptor.kind == "text" {
+        Some(build_text_filter_expression(
+            descriptor.column_name.as_str(),
+        ))
+    } else {
+        None
     };
-    let numeric_expr = match field.as_str() {
-        "durationseconds" => Some("t.duration_seconds"),
-        "playcount" => Some("t.play_count"),
-        "filesize" => Some("t.file_size"),
-        "samplerate" => Some("t.sample_rate"),
-        "bitdepth" => Some("t.bit_depth"),
-        _ => None,
+    let numeric_expr = if descriptor.kind == "number" {
+        Some(build_numeric_filter_expression(
+            descriptor.column_name.as_str(),
+        ))
+    } else {
+        None
     };
 
     match operator.as_str() {
@@ -4920,7 +5365,10 @@ fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String
                     ));
                 }
             } else if let Some(expr) = numeric_expr {
-                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                if let Some(value) = value_text
+                    .as_ref()
+                    .and_then(|item| item.parse::<f64>().ok())
+                {
                     return Some((format!("{expr} = ?"), vec![Value::Real(value)]));
                 }
             }
@@ -4934,14 +5382,20 @@ fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String
                     ));
                 }
             } else if let Some(expr) = numeric_expr {
-                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                if let Some(value) = value_text
+                    .as_ref()
+                    .and_then(|item| item.parse::<f64>().ok())
+                {
                     return Some((format!("{expr} <> ?"), vec![Value::Real(value)]));
                 }
             }
         }
         "gte" => {
             if let Some(expr) = numeric_expr {
-                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                if let Some(value) = value_text
+                    .as_ref()
+                    .and_then(|item| item.parse::<f64>().ok())
+                {
                     return Some((
                         format!("{expr} IS NOT NULL AND {expr} >= ?"),
                         vec![Value::Real(value)],
@@ -4951,7 +5405,10 @@ fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String
         }
         "lte" => {
             if let Some(expr) = numeric_expr {
-                if let Some(value) = value_text.as_ref().and_then(|item| item.parse::<f64>().ok()) {
+                if let Some(value) = value_text
+                    .as_ref()
+                    .and_then(|item| item.parse::<f64>().ok())
+                {
                     return Some((
                         format!("{expr} IS NOT NULL AND {expr} <= ?"),
                         vec![Value::Real(value)],
@@ -4981,51 +5438,36 @@ fn build_track_filter_clause(filter: &LibraryTrackFilterInput) -> Option<(String
     None
 }
 
-pub fn query_tracks(
-    app: &AppHandle,
-    query: Option<LibraryTrackQueryInput>,
-) -> Result<Vec<LibraryTrackRecord>, String> {
-    ensure_initialized(app)?;
-    with_conn(|conn| {
-        let query_ref = query.as_ref();
-        let normalized_limit = query_ref
-            .and_then(|item| item.limit)
-            .map(|value| value.clamp(1, 2000) as i64)
-            .unwrap_or(i64::MAX);
-        let normalized_offset = query_ref
-            .and_then(|item| item.offset)
-            .map(|value| value.max(0) as i64)
-            .unwrap_or(0);
-        let include_missing = query_ref
-            .and_then(|item| item.include_missing)
-            .unwrap_or(false);
-        let visible_only = query_ref
-            .and_then(|item| item.visible_only)
-            .unwrap_or(true);
+struct TrackQuerySqlParts {
+    from_where_sql: String,
+    bind_values: Vec<Value>,
+    order_clauses: Vec<String>,
+}
 
-        let normalize_lower = |value: Option<&String>| -> Option<String> {
-            value
-                .map(|item| item.trim().to_ascii_lowercase())
-                .filter(|item| !item.is_empty())
-        };
-        let normalize_trimmed = |value: Option<&String>| -> Option<String> {
-            value
-                .map(|item| item.trim().to_string())
-                .filter(|item| !item.is_empty())
-        };
+fn resolve_track_query_limit(query_ref: Option<&LibraryTrackQueryInput>) -> i64 {
+    query_ref
+        .and_then(|item| item.limit)
+        .map(|value| value.clamp(1, 2000) as i64)
+        .unwrap_or(i64::MAX)
+}
 
-        let normalized_search_query = normalize_lower(query_ref.and_then(|item| item.search_query.as_ref()));
-        let normalized_artist = normalize_lower(query_ref.and_then(|item| item.artist.as_ref()));
-        let normalized_album = normalize_lower(query_ref.and_then(|item| item.album.as_ref()));
-        let normalized_track_id = normalize_trimmed(query_ref.and_then(|item| item.track_id.as_ref()));
-        let normalized_source_id = normalize_trimmed(query_ref.and_then(|item| item.source_id.as_ref()));
-        let normalized_quick_fingerprint = query_ref
-            .and_then(|item| item.quick_fingerprint.as_ref())
-            .and_then(|value| normalize_quick_fingerprint(Some(value.as_str())));
-        let normalized_file_path = normalize_trimmed(query_ref.and_then(|item| item.file_path.as_ref()));
+fn resolve_track_query_offset(query_ref: Option<&LibraryTrackQueryInput>) -> i64 {
+    query_ref
+        .and_then(|item| item.offset)
+        .map(|value| value as i64)
+        .unwrap_or(0)
+}
 
-        let mut sql = String::from(
-            r#"
+fn uses_list_track_projection(query_ref: Option<&LibraryTrackQueryInput>) -> bool {
+    query_ref
+        .and_then(|item| item.projection.as_ref())
+        .map(|value| value.trim().eq_ignore_ascii_case("list"))
+        .unwrap_or(false)
+}
+
+fn track_query_select_clause(use_list_projection: bool) -> &'static str {
+    if use_list_projection {
+        r#"
                 SELECT
                   t.id,
                   t.source_id,
@@ -5045,250 +5487,720 @@ pub fn query_tracks(
                   t.play_count,
                   t.last_played_at_ms,
                   t.status,
-                  t.updated_at_ms
+                  t.created_at_ms,
+                  t.updated_at_ms,
+                  t.last_seen_at_ms
+            "#
+    } else {
+        r#"
+                SELECT
+                  t.*
+            "#
+    }
+}
+
+fn build_track_query_sql(
+    query_ref: Option<&LibraryTrackQueryInput>,
+    track_field_descriptors: &[LocalTrackFieldDescriptor],
+) -> TrackQuerySqlParts {
+    let include_missing = query_ref
+        .and_then(|item| item.include_missing)
+        .unwrap_or(false);
+    let visible_only = query_ref.and_then(|item| item.visible_only).unwrap_or(true);
+
+    let normalize_lower = |value: Option<&String>| -> Option<String> {
+        value
+            .map(|item| item.trim().to_ascii_lowercase())
+            .filter(|item| !item.is_empty())
+    };
+    let normalize_trimmed = |value: Option<&String>| -> Option<String> {
+        value
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+    };
+
+    let normalized_search_query =
+        normalize_lower(query_ref.and_then(|item| item.search_query.as_ref()));
+    let normalized_artist = normalize_lower(query_ref.and_then(|item| item.artist.as_ref()));
+    let normalized_album = normalize_lower(query_ref.and_then(|item| item.album.as_ref()));
+    let normalized_track_id = normalize_trimmed(query_ref.and_then(|item| item.track_id.as_ref()));
+    let normalized_source_id =
+        normalize_trimmed(query_ref.and_then(|item| item.source_id.as_ref()));
+    let normalized_quick_fingerprint = query_ref
+        .and_then(|item| item.quick_fingerprint.as_ref())
+        .and_then(|value| normalize_quick_fingerprint(Some(value.as_str())));
+    let normalized_file_path =
+        normalize_trimmed(query_ref.and_then(|item| item.file_path.as_ref()));
+
+    let mut sql = String::from(
+        r#"
                 FROM local_tracks t
                 JOIN sources s ON s.id = t.source_id
                 WHERE 1 = 1
             "#,
-        );
-        let mut bind_values: Vec<Value> = Vec::new();
+    );
+    let mut bind_values: Vec<Value> = Vec::new();
 
-        if visible_only {
-            sql.push_str("\n AND s.is_visible = 1");
-        }
+    if visible_only {
+        sql.push_str("\n AND s.is_visible = 1");
+    }
 
-        if !include_missing {
-            sql.push_str("\n AND t.status = 'available'");
-        }
+    if !include_missing {
+        sql.push_str("\n AND t.status = 'available'");
+    }
 
-        if let Some(search_query) = normalized_search_query {
-            let like_pattern = format!("%{search_query}%");
-            sql.push_str(
-                "\n AND (\
-                 LOWER(COALESCE(t.title, '')) LIKE ?\
-                 OR LOWER(COALESCE(t.artist, '')) LIKE ?\
-                 OR LOWER(COALESCE(t.album, '')) LIKE ?\
-                 OR LOWER(t.file_path) LIKE ?\
+    if let Some(search_query) = normalized_search_query {
+        let like_pattern = format!("%{search_query}%");
+        sql.push_str(
+            "\n AND (\\
+                 LOWER(COALESCE(t.title, '')) LIKE ?\\
+                 OR LOWER(COALESCE(t.artist, '')) LIKE ?\\
+                 OR LOWER(COALESCE(t.album, '')) LIKE ?\\
+                 OR LOWER(t.file_path) LIKE ?\\
                 )",
-            );
-            bind_values.push(Value::Text(like_pattern.clone()));
-            bind_values.push(Value::Text(like_pattern.clone()));
-            bind_values.push(Value::Text(like_pattern.clone()));
-            bind_values.push(Value::Text(like_pattern));
-        }
+        );
+        bind_values.push(Value::Text(like_pattern.clone()));
+        bind_values.push(Value::Text(like_pattern.clone()));
+        bind_values.push(Value::Text(like_pattern.clone()));
+        bind_values.push(Value::Text(like_pattern));
+    }
 
-        if let Some(artist) = normalized_artist {
-            sql.push_str("\n AND LOWER(TRIM(COALESCE(t.artist, ''))) = ?");
-            bind_values.push(Value::Text(artist));
-        }
+    if let Some(artist) = normalized_artist {
+        sql.push_str("\n AND LOWER(TRIM(COALESCE(t.artist, ''))) = ?");
+        bind_values.push(Value::Text(artist));
+    }
 
-        if let Some(album) = normalized_album {
-            sql.push_str("\n AND LOWER(TRIM(COALESCE(t.album, ''))) = ?");
-            bind_values.push(Value::Text(album));
-        }
+    if let Some(album) = normalized_album {
+        sql.push_str("\n AND LOWER(TRIM(COALESCE(t.album, ''))) = ?");
+        bind_values.push(Value::Text(album));
+    }
 
-        if let Some(track_id) = normalized_track_id {
-            sql.push_str("\n AND t.id = ?");
-            bind_values.push(Value::Text(track_id));
-        }
+    if let Some(track_id) = normalized_track_id {
+        sql.push_str("\n AND t.id = ?");
+        bind_values.push(Value::Text(track_id));
+    }
 
-        if let Some(source_id) = normalized_source_id {
-            sql.push_str("\n AND t.source_id = ?");
-            bind_values.push(Value::Text(source_id));
-        }
+    if let Some(source_id) = normalized_source_id {
+        sql.push_str("\n AND t.source_id = ?");
+        bind_values.push(Value::Text(source_id));
+    }
 
-        if let Some(quick_fingerprint) = normalized_quick_fingerprint {
-            sql.push_str("\n AND t.quick_fingerprint = ?");
-            bind_values.push(Value::Text(quick_fingerprint));
-        }
+    if let Some(quick_fingerprint) = normalized_quick_fingerprint {
+        sql.push_str("\n AND t.quick_fingerprint = ?");
+        bind_values.push(Value::Text(quick_fingerprint));
+    }
 
-        if let Some(file_path) = normalized_file_path {
-            sql.push_str("\n AND t.file_path = ?");
-            bind_values.push(Value::Text(file_path));
-        }
+    if let Some(file_path) = normalized_file_path {
+        sql.push_str("\n AND t.file_path = ?");
+        bind_values.push(Value::Text(file_path));
+    }
 
-        let base_query_ref = query_ref.and_then(|item| item.base_query.as_ref());
+    let base_query_ref = query_ref.and_then(|item| item.base_query.as_ref());
 
-        let mut has_applied_group_filters = false;
-        if let Some(filter_groups) = base_query_ref.and_then(|base| base.filter_groups.as_ref()) {
-            let groups_joiner = normalize_logic_operator(
-                base_query_ref.and_then(|base| base.filter_operator.as_ref()),
-                "AND",
-            );
+    let mut has_applied_group_filters = false;
+    if let Some(filter_groups) = base_query_ref.and_then(|base| base.filter_groups.as_ref()) {
+        let groups_joiner = normalize_logic_operator(
+            base_query_ref.and_then(|base| base.filter_operator.as_ref()),
+            "AND",
+        );
 
-            let mut rendered_group_clauses: Vec<String> = Vec::new();
-            let mut rendered_group_bind_values: Vec<Value> = Vec::new();
+        let mut rendered_group_clauses: Vec<String> = Vec::new();
+        let mut rendered_group_bind_values: Vec<Value> = Vec::new();
 
-            for group in filter_groups.iter().take(8) {
-                let filters = match group.filters.as_ref() {
-                    Some(items) => items,
-                    None => continue,
-                };
-                let group_joiner = normalize_logic_operator(group.operator.as_ref(), "AND");
+        for group in filter_groups.iter().take(8) {
+            let filters = match group.filters.as_ref() {
+                Some(items) => items,
+                None => continue,
+            };
+            let group_joiner = normalize_logic_operator(group.operator.as_ref(), "AND");
 
-                let mut rendered_filter_clauses: Vec<String> = Vec::new();
-                let mut rendered_filter_bind_values: Vec<Value> = Vec::new();
+            let mut rendered_filter_clauses: Vec<String> = Vec::new();
+            let mut rendered_filter_bind_values: Vec<Value> = Vec::new();
 
-                for filter in filters.iter().take(20) {
-                    if let Some((clause, values)) = build_track_filter_clause(filter) {
-                        rendered_filter_clauses.push(clause);
-                        rendered_filter_bind_values.extend(values);
-                    }
-                }
-
-                if rendered_filter_clauses.is_empty() {
-                    continue;
-                }
-
-                rendered_group_clauses
-                    .push(format!("({})", rendered_filter_clauses.join(&format!(" {group_joiner} "))));
-                rendered_group_bind_values.extend(rendered_filter_bind_values);
-            }
-
-            if !rendered_group_clauses.is_empty() {
-                sql.push_str("\n AND (");
-                sql.push_str(&rendered_group_clauses.join(&format!(" {groups_joiner} ")));
-                sql.push(')');
-                bind_values.extend(rendered_group_bind_values);
-                has_applied_group_filters = true;
-            }
-        }
-
-        if !has_applied_group_filters {
-            let filter_inputs = base_query_ref
-                .and_then(|base| base.filters.as_ref())
-                .or_else(|| query_ref.and_then(|item| item.filters.as_ref()));
-
-            if let Some(filters) = filter_inputs {
-                for filter in filters.iter().take(20) {
-                    if let Some((clause, values)) = build_track_filter_clause(filter) {
-                        sql.push_str("\n AND ");
-                        sql.push_str(&clause);
-                        bind_values.extend(values);
-                    }
+            for filter in filters.iter().take(20) {
+                if let Some((clause, values)) =
+                    build_track_filter_clause(filter, track_field_descriptors)
+                {
+                    rendered_filter_clauses.push(clause);
+                    rendered_filter_bind_values.extend(values);
                 }
             }
+
+            if rendered_filter_clauses.is_empty() {
+                continue;
+            }
+
+            rendered_group_clauses.push(format!(
+                "({})",
+                rendered_filter_clauses.join(&format!(" {group_joiner} "))
+            ));
+            rendered_group_bind_values.extend(rendered_filter_bind_values);
         }
 
-        let mut order_clauses: Vec<String> = Vec::new();
-        let mut order_fields: Vec<String> = Vec::new();
+        if !rendered_group_clauses.is_empty() {
+            sql.push_str("\n AND (");
+            sql.push_str(&rendered_group_clauses.join(&format!(" {groups_joiner} ")));
+            sql.push(')');
+            bind_values.extend(rendered_group_bind_values);
+            has_applied_group_filters = true;
+        }
+    }
 
-        let mut push_order_input = |field_raw: &str, order_raw: Option<&String>| {
-            let field = field_raw.trim().to_ascii_lowercase();
-            if field.is_empty() {
-                return;
+    if !has_applied_group_filters {
+        let filter_inputs = base_query_ref
+            .and_then(|base| base.filters.as_ref())
+            .or_else(|| query_ref.and_then(|item| item.filters.as_ref()));
+
+        if let Some(filters) = filter_inputs {
+            for filter in filters.iter().take(20) {
+                if let Some((clause, values)) =
+                    build_track_filter_clause(filter, track_field_descriptors)
+                {
+                    sql.push_str("\n AND ");
+                    sql.push_str(&clause);
+                    bind_values.extend(values);
+                }
             }
+        }
+    }
 
-            if order_fields.iter().any(|item| item == &field) {
-                return;
-            }
+    let mut order_clauses: Vec<String> = Vec::new();
+    let mut order_fields: Vec<String> = Vec::new();
 
-            let maybe_expr = match field.as_str() {
-                "title" => Some("LOWER(COALESCE(t.title, t.file_path))"),
-                "artist" => Some("LOWER(COALESCE(t.artist, ''))"),
-                "album" => Some("LOWER(COALESCE(t.album, ''))"),
-                "genre" => Some("LOWER(COALESCE(t.genre, ''))"),
-                "durationseconds" => Some("COALESCE(t.duration_seconds, 0)"),
-                "playcount" => Some("COALESCE(t.play_count, 0)"),
-                "lastplayedatms" => Some("COALESCE(t.last_played_at_ms, 0)"),
-                "filesize" => Some("COALESCE(t.file_size, 0)"),
-                "samplerate" => Some("COALESCE(t.sample_rate, 0)"),
-                "bitdepth" => Some("COALESCE(t.bit_depth, 0)"),
-                "updatedatms" => Some("COALESCE(t.updated_at_ms, 0)"),
-                _ => None,
+    let mut push_order_input = |field_raw: &str, order_raw: Option<&String>| {
+        let field = normalize_track_field_token(field_raw);
+        if field.is_empty() {
+            return;
+        }
+
+        if order_fields.iter().any(|item| item == &field) {
+            return;
+        }
+
+        let maybe_expr = resolve_local_track_field_descriptor(track_field_descriptors, field_raw)
+            .map(build_order_expression);
+
+        if let Some(expr) = maybe_expr {
+            let direction = match order_raw {
+                Some(order) if order.trim().eq_ignore_ascii_case("desc") => "DESC",
+                _ => "ASC",
             };
 
-            if let Some(expr) = maybe_expr {
-                let direction = match order_raw {
-                    Some(order) if order.trim().eq_ignore_ascii_case("desc") => "DESC",
-                    _ => "ASC",
-                };
-
-                order_fields.push(field);
-                order_clauses.push(format!("{expr} {direction}"));
-            }
-        };
-
-        let group_inputs = query_ref
-            .and_then(|item| item.base_query.as_ref())
-            .and_then(|base| base.group_by.as_ref())
-            .or_else(|| query_ref.and_then(|item| item.group_by.as_ref()));
-
-        if let Some(groups) = group_inputs {
-            for group in groups.iter().take(4) {
-                push_order_input(group.field.as_str(), group.order.as_ref());
-            }
+            order_fields.push(field);
+            order_clauses.push(format!("{expr} {direction}"));
         }
+    };
 
-        let sort_inputs = query_ref
-            .and_then(|item| item.base_query.as_ref())
-            .and_then(|base| base.sort.as_ref())
-            .or_else(|| query_ref.and_then(|item| item.sort.as_ref()));
+    let group_inputs = query_ref
+        .and_then(|item| item.base_query.as_ref())
+        .and_then(|base| base.group_by.as_ref())
+        .or_else(|| query_ref.and_then(|item| item.group_by.as_ref()));
 
-        if let Some(sorts) = sort_inputs {
-            for sort in sorts.iter().take(4) {
-                push_order_input(sort.field.as_str(), sort.order.as_ref());
+    if let Some(groups) = group_inputs {
+        for group in groups.iter().take(4) {
+            push_order_input(group.field.as_str(), group.order.as_ref());
+        }
+    }
+
+    let sort_inputs = query_ref
+        .and_then(|item| item.base_query.as_ref())
+        .and_then(|base| base.sort.as_ref())
+        .or_else(|| query_ref.and_then(|item| item.sort.as_ref()));
+
+    if let Some(sorts) = sort_inputs {
+        for sort in sorts.iter().take(4) {
+            push_order_input(sort.field.as_str(), sort.order.as_ref());
+        }
+    }
+
+    if order_clauses.is_empty() {
+        order_clauses.push("LOWER(COALESCE(t.title, t.file_path)) ASC".to_string());
+        order_clauses.push("t.updated_at_ms DESC".to_string());
+    }
+    order_clauses.push("t.id ASC".to_string());
+
+    TrackQuerySqlParts {
+        from_where_sql: sql,
+        bind_values,
+        order_clauses,
+    }
+}
+
+fn execute_track_query(
+    conn: &Connection,
+    sql: &str,
+    bind_values: &[Value],
+    use_list_projection: bool,
+    track_field_descriptors: &[LocalTrackFieldDescriptor],
+) -> Result<Vec<LibraryTrackRecord>, String> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|error| format!("Failed to prepare query tracks statement: {error}"))?;
+
+    let rows = stmt
+        .query_map(params_from_iter(bind_values.iter()), |row| {
+            let mut extra_fields = JsonMap::new();
+            if !use_list_projection {
+                for index in 0..row.as_ref().column_count() {
+                    let column_name = match row.as_ref().column_name(index) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+
+                    if matches!(
+                        column_name,
+                        "id" | "source_id"
+                            | "file_path"
+                            | "quick_fingerprint"
+                            | "title"
+                            | "artist"
+                            | "album"
+                            | "genre"
+                            | "duration_seconds"
+                            | "sample_rate"
+                            | "bit_depth"
+                            | "file_size"
+                            | "mtime_ms"
+                            | "replay_gain_track_db"
+                            | "replay_gain_album_db"
+                            | "play_count"
+                            | "last_played_at_ms"
+                            | "status"
+                            | "created_at_ms"
+                            | "updated_at_ms"
+                            | "last_seen_at_ms"
+                    ) {
+                        continue;
+                    }
+
+                    let Some(descriptor) = track_field_descriptors
+                        .iter()
+                        .find(|descriptor| descriptor.column_name == column_name)
+                    else {
+                        continue;
+                    };
+
+                    let value = sqlite_value_ref_to_json(row.get_ref(index)?);
+                    if value.is_null() {
+                        continue;
+                    }
+                    extra_fields.insert(descriptor.track_key.clone(), value);
+                }
             }
-        }
 
-        if order_clauses.is_empty() {
-            order_clauses.push("LOWER(COALESCE(t.title, t.file_path)) ASC".to_string());
-            order_clauses.push("t.updated_at_ms DESC".to_string());
-        }
-        order_clauses.push("t.id ASC".to_string());
+            Ok(LibraryTrackRecord {
+                id: row.get("id")?,
+                source_id: row.get("source_id")?,
+                file_path: row.get("file_path")?,
+                quick_fingerprint: row.get("quick_fingerprint")?,
+                title: row.get("title")?,
+                artist: row.get("artist")?,
+                album: row.get("album")?,
+                genre: row.get("genre")?,
+                duration_seconds: row.get("duration_seconds")?,
+                sample_rate: row
+                    .get::<_, Option<i64>>("sample_rate")?
+                    .map(|value| value as u32),
+                bit_depth: row
+                    .get::<_, Option<i64>>("bit_depth")?
+                    .map(|value| value as u32),
+                file_size: row
+                    .get::<_, Option<i64>>("file_size")?
+                    .map(|value| value as u64),
+                mtime_ms: row.get("mtime_ms")?,
+                replay_gain_track_db: row.get("replay_gain_track_db")?,
+                replay_gain_album_db: row.get("replay_gain_album_db")?,
+                play_count: row.get::<_, i64>("play_count")?.max(0) as u64,
+                last_played_at_ms: row.get("last_played_at_ms")?,
+                status: row.get("status")?,
+                created_at_ms: row.get("created_at_ms")?,
+                updated_at_ms: row.get("updated_at_ms")?,
+                last_seen_at_ms: row.get("last_seen_at_ms")?,
+                extra_fields: if extra_fields.is_empty() {
+                    None
+                } else {
+                    Some(extra_fields)
+                },
+            })
+        })
+        .map_err(|error| format!("Failed to query tracks: {error}"))?;
 
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(|error| format!("Failed to parse queried track row: {error}"))?);
+    }
+
+    Ok(items)
+}
+
+fn count_track_query(conn: &Connection, sql_parts: &TrackQuerySqlParts) -> Result<u64, String> {
+    let count_sql = format!("SELECT COUNT(*) {}", sql_parts.from_where_sql);
+    conn.query_row(
+        count_sql.as_str(),
+        params_from_iter(sql_parts.bind_values.iter()),
+        |row| {
+            let value = row.get::<_, i64>(0)?;
+            Ok(value.max(0) as u64)
+        },
+    )
+    .map_err(|error| format!("Failed to count queried tracks: {error}"))
+}
+
+pub fn query_tracks(
+    app: &AppHandle,
+    query: Option<LibraryTrackQueryInput>,
+) -> Result<Vec<LibraryTrackRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let track_field_descriptors = list_local_track_field_descriptors(conn)?;
+        let query_ref = query.as_ref();
+        let normalized_limit = resolve_track_query_limit(query_ref);
+        let normalized_offset = resolve_track_query_offset(query_ref);
+        let use_list_projection = uses_list_track_projection(query_ref);
+        let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors);
+
+        let mut sql = String::from(track_query_select_clause(use_list_projection));
+        sql.push_str(&sql_parts.from_where_sql);
         sql.push_str("\n ORDER BY ");
-        sql.push_str(&order_clauses.join(", "));
+        sql.push_str(&sql_parts.order_clauses.join(", "));
         sql.push_str("\n LIMIT ?\n OFFSET ?");
+
+        let mut bind_values = sql_parts.bind_values;
         bind_values.push(Value::Integer(normalized_limit));
         bind_values.push(Value::Integer(normalized_offset));
 
-        let mut stmt = conn
-            .prepare(sql.as_str())
-            .map_err(|error| format!("Failed to prepare query tracks statement: {error}"))?;
-
-        let rows = stmt
-            .query_map(params_from_iter(bind_values.iter()), |row| {
-                Ok(LibraryTrackRecord {
-                    id: row.get(0)?,
-                    source_id: row.get(1)?,
-                    file_path: row.get(2)?,
-                    quick_fingerprint: row.get(3)?,
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    genre: row.get(7)?,
-                    duration_seconds: row.get(8)?,
-                    sample_rate: row.get::<_, Option<i64>>(9)?.map(|value| value as u32),
-                    bit_depth: row.get::<_, Option<i64>>(10)?.map(|value| value as u32),
-                    file_size: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
-                    mtime_ms: row.get(12)?,
-                    replay_gain_track_db: row.get(13)?,
-                    replay_gain_album_db: row.get(14)?,
-                    play_count: row.get::<_, i64>(15)?.max(0) as u64,
-                    last_played_at_ms: row.get(16)?,
-                    status: row.get(17)?,
-                    updated_at_ms: row.get(18)?,
-                })
-            })
-            .map_err(|error| format!("Failed to query tracks: {error}"))?;
-
-        let mut items = Vec::new();
-        for row in rows {
-            items.push(row.map_err(|error| format!("Failed to parse queried track row: {error}"))?);
-        }
-
-        Ok(items)
+        execute_track_query(
+            conn,
+            sql.as_str(),
+            bind_values.as_slice(),
+            use_list_projection,
+            &track_field_descriptors,
+        )
     })
 }
 
-fn resolve_facet_flags(query: Option<&LibraryFacetQueryInput>) -> (i64, i64) {
-    let include_missing_flag = if query.and_then(|item| item.include_missing).unwrap_or(false) {
+pub fn query_tracks_page(
+    app: &AppHandle,
+    query: Option<LibraryTrackQueryInput>,
+) -> Result<LibraryTrackQueryPageResult, String> {
+    ensure_initialized(app)?;
+
+    with_conn(|conn| {
+        let track_field_descriptors = list_local_track_field_descriptors(conn)?;
+        let query_ref = query.as_ref();
+        let normalized_limit = resolve_track_query_limit(query_ref);
+        let normalized_offset = resolve_track_query_offset(query_ref);
+        let use_list_projection = uses_list_track_projection(query_ref);
+        let sql_parts = build_track_query_sql(query_ref, &track_field_descriptors);
+
+        let total = count_track_query(conn, &sql_parts)?;
+
+        let mut sql = String::from(track_query_select_clause(use_list_projection));
+        sql.push_str(&sql_parts.from_where_sql);
+        sql.push_str("\n ORDER BY ");
+        sql.push_str(&sql_parts.order_clauses.join(", "));
+        sql.push_str("\n LIMIT ?\n OFFSET ?");
+
+        let mut bind_values = sql_parts.bind_values;
+        bind_values.push(Value::Integer(normalized_limit));
+        bind_values.push(Value::Integer(normalized_offset));
+
+        let items = execute_track_query(
+            conn,
+            sql.as_str(),
+            bind_values.as_slice(),
+            use_list_projection,
+            &track_field_descriptors,
+        )?;
+
+        Ok(LibraryTrackQueryPageResult { items, total })
+    })
+}
+
+fn list_track_field_catalog_from_descriptors(
+    descriptors: &[LocalTrackFieldDescriptor],
+) -> Vec<LibraryTrackFieldCatalogRecord> {
+    descriptors
+        .iter()
+        .cloned()
+        .map(|descriptor| {
+            let facetable = descriptor.kind == "text" && (descriptor.filterable || descriptor.groupable);
+            LibraryTrackFieldCatalogRecord {
+                id: descriptor.field_id,
+                label: descriptor.label,
+                kind: descriptor.kind,
+                track_key: descriptor.track_key,
+                column_name: descriptor.column_name,
+                source_table: "local_tracks".to_string(),
+                declared_type: descriptor.declared_type,
+                nullable: descriptor.nullable,
+                filterable: descriptor.filterable,
+                sortable: descriptor.sortable,
+                groupable: descriptor.groupable,
+                facetable,
+                native_filter_field: descriptor.native_filter_field,
+                native_sort_field: descriptor.native_sort_field,
+            }
+        })
+        .collect()
+}
+
+pub fn list_track_field_catalog(
+    app: &AppHandle,
+) -> Result<Vec<LibraryTrackFieldCatalogRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let descriptors = list_local_track_field_descriptors(conn)?;
+        Ok(list_track_field_catalog_from_descriptors(&descriptors))
+    })
+}
+
+fn build_facet_catalog_record(
+    id: &str,
+    kind: &str,
+    descriptor: &LocalTrackFieldDescriptor,
+) -> LibraryFacetCatalogRecord {
+    LibraryFacetCatalogRecord {
+        id: id.to_string(),
+        field: descriptor.field_id.clone(),
+        label: descriptor.label.clone(),
+        kind: kind.to_string(),
+        native_field: descriptor
+            .native_filter_field
+            .clone()
+            .or_else(|| Some(descriptor.track_key.clone())),
+    }
+}
+
+fn list_facet_catalog_from_descriptors(
+    descriptors: &[LocalTrackFieldDescriptor],
+) -> Vec<LibraryFacetCatalogRecord> {
+    let mut items = Vec::new();
+
+    if let Some(descriptor) = resolve_text_facet_descriptor(descriptors, "artist") {
+        items.push(build_facet_catalog_record("artists", "text-values", descriptor));
+    }
+
+    if let Some(descriptor) = resolve_text_facet_descriptor(descriptors, "genre") {
+        items.push(build_facet_catalog_record("genres", "text-values", descriptor));
+    }
+
+    if let Some(descriptor) = resolve_text_facet_descriptor(descriptors, "album") {
+        items.push(build_facet_catalog_record("albums", "album-summaries", descriptor));
+    }
+
+    items
+}
+
+pub fn list_facet_catalog(app: &AppHandle) -> Result<Vec<LibraryFacetCatalogRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let descriptors = list_local_track_field_descriptors(conn)?;
+        Ok(list_facet_catalog_from_descriptors(&descriptors))
+    })
+}
+
+fn read_schema_version(conn: &Connection) -> Result<i32, String> {
+    conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
+        .map_err(|error| format!("Failed to read schema user_version: {error}"))
+}
+
+fn inspect_schema_source_table(
+    conn: &Connection,
+    table_name: &str,
+) -> Result<LibrarySchemaSourceTableRecord, String> {
+    let sql = format!("PRAGMA table_info({})", quote_sqlite_identifier(table_name));
+    let mut stmt = conn
+        .prepare(sql.as_str())
+        .map_err(|error| format!("Failed to prepare schema table_info pragma for {table_name}: {error}"))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            let column_name: String = row.get(1)?;
+            let declared_type: Option<String> = row.get(2)?;
+            let not_null: i64 = row.get(3)?;
+            let default_value: Option<String> = row.get(4)?;
+            let primary_key: i64 = row.get(5)?;
+            Ok((column_name, declared_type.unwrap_or_default(), not_null, default_value.unwrap_or_default(), primary_key))
+        })
+        .map_err(|error| format!("Failed to inspect schema table {table_name}: {error}"))?;
+
+    let mut columns = Vec::new();
+    let mut schema_tokens = Vec::new();
+    for row in rows {
+        let (column_name, declared_type, not_null, default_value, primary_key) = row
+            .map_err(|error| format!("Failed to parse schema table row for {table_name}: {error}"))?;
+        columns.push(column_name.clone());
+        schema_tokens.push(format!(
+            "{}:{}:{}:{}:{}",
+            column_name, declared_type, not_null, default_value, primary_key
+        ));
+    }
+
+    if columns.is_empty() {
+        return Err(format!("Schema source table not found or empty: {table_name}"));
+    }
+
+    let mut hasher = DefaultHasher::new();
+    table_name.hash(&mut hasher);
+    schema_tokens.iter().for_each(|token| token.hash(&mut hasher));
+    let schema_hash = format!("{:016x}", hasher.finish());
+
+    Ok(LibrarySchemaSourceTableRecord {
+        name: table_name.to_string(),
+        column_count: columns.len() as u32,
+        schema_hash,
+        columns,
+    })
+}
+
+fn list_schema_source_tables(conn: &Connection) -> Result<Vec<LibrarySchemaSourceTableRecord>, String> {
+    ["local_tracks", "sources"]
+        .into_iter()
+        .map(|table_name| inspect_schema_source_table(conn, table_name))
+        .collect()
+}
+
+fn compute_schema_fingerprint(
+    schema_version: i32,
+    source_tables: &[LibrarySchemaSourceTableRecord],
+    track_fields: &[LibraryTrackFieldCatalogRecord],
+    facet_collections: &[LibraryFacetCatalogRecord],
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    schema_version.hash(&mut hasher);
+
+    source_tables.iter().for_each(|table| {
+        table.name.hash(&mut hasher);
+        table.column_count.hash(&mut hasher);
+        table.schema_hash.hash(&mut hasher);
+        table.columns.iter().for_each(|column| column.hash(&mut hasher));
+    });
+
+    track_fields.iter().for_each(|field| {
+        field.id.hash(&mut hasher);
+        field.kind.hash(&mut hasher);
+        field.track_key.hash(&mut hasher);
+        field.column_name.hash(&mut hasher);
+        field.declared_type.hash(&mut hasher);
+        field.nullable.hash(&mut hasher);
+        field.filterable.hash(&mut hasher);
+        field.sortable.hash(&mut hasher);
+        field.groupable.hash(&mut hasher);
+        field.facetable.hash(&mut hasher);
+        field.native_filter_field.hash(&mut hasher);
+        field.native_sort_field.hash(&mut hasher);
+    });
+
+    facet_collections.iter().for_each(|facet| {
+        facet.id.hash(&mut hasher);
+        facet.field.hash(&mut hasher);
+        facet.kind.hash(&mut hasher);
+        facet.native_field.hash(&mut hasher);
+    });
+
+    format!("{:016x}", hasher.finish())
+}
+
+
+fn read_observed_schema_state(conn: &Connection) -> Result<ObservedLibrarySchemaState, String> {
+    let descriptors = list_local_track_field_descriptors(conn)?;
+    let schema_version = read_schema_version(conn)?;
+    let source_tables = list_schema_source_tables(conn)?;
+    let track_fields = list_track_field_catalog_from_descriptors(&descriptors);
+    let facet_collections = list_facet_catalog_from_descriptors(&descriptors);
+    let schema_fingerprint = compute_schema_fingerprint(
+        schema_version,
+        &source_tables,
+        &track_fields,
+        &facet_collections,
+    );
+
+    Ok(ObservedLibrarySchemaState {
+        schema_version,
+        schema_fingerprint,
+        source_tables,
+    })
+}
+
+fn observed_schema_state_from_envelope(
+    envelope: &LibrarySchemaEnvelope,
+) -> ObservedLibrarySchemaState {
+    ObservedLibrarySchemaState {
+        schema_version: envelope.schema_version,
+        schema_fingerprint: envelope.schema_fingerprint.clone(),
+        source_tables: envelope.source_tables.clone(),
+    }
+}
+
+pub fn notify_schema_envelope_changed_if_needed(
+    app: &AppHandle,
+    reason: &str,
+) -> Result<bool, String> {
+    ensure_initialized(app)?;
+    let next_state = with_conn(|conn| read_observed_schema_state(conn))?;
+    let previous_state = replace_observed_schema_state(next_state.clone())?;
+
+    let Some(previous_state) = previous_state else {
+        return Ok(false);
+    };
+
+    if previous_state == next_state {
+        return Ok(false);
+    }
+
+    let payload = LibrarySchemaChangedEventPayload {
+        reason: reason.trim().to_string(),
+        emitted_at_ms: now_ms(),
+        schema_version: next_state.schema_version,
+        schema_fingerprint: next_state.schema_fingerprint.clone(),
+        source_tables: next_state.source_tables.clone(),
+    };
+
+    app.emit_all(EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED, payload)
+        .map_err(|error| format!("Failed to emit music library schema changed event: {error}"))?;
+
+    Ok(true)
+}
+
+pub fn get_schema_envelope(app: &AppHandle) -> Result<LibrarySchemaEnvelope, String> {
+    ensure_initialized(app)?;
+    let envelope = with_conn(|conn| {
+        let descriptors = list_local_track_field_descriptors(conn)?;
+        let schema_version = read_schema_version(conn)?;
+        let source_tables = list_schema_source_tables(conn)?;
+        let track_fields = list_track_field_catalog_from_descriptors(&descriptors);
+        let facet_collections = list_facet_catalog_from_descriptors(&descriptors);
+        let schema_fingerprint = compute_schema_fingerprint(
+            schema_version,
+            &source_tables,
+            &track_fields,
+            &facet_collections,
+        );
+        Ok(LibrarySchemaEnvelope {
+            schema_version,
+            generated_at_ms: now_ms(),
+            schema_fingerprint,
+            source_tables,
+            track_fields,
+            facet_collections,
+        })
+    })?;
+
+    let _ = replace_observed_schema_state(observed_schema_state_from_envelope(&envelope))?;
+    Ok(envelope)
+}
+
+fn resolve_facet_flag_values(
+    include_missing: Option<bool>,
+    visible_only: Option<bool>,
+) -> (i64, i64) {
+    let include_missing_flag = if include_missing.unwrap_or(false) {
         1_i64
     } else {
         0_i64
     };
-    let visible_only_flag = if query.and_then(|item| item.visible_only).unwrap_or(true) {
+    let visible_only_flag = if visible_only.unwrap_or(true) {
         1_i64
     } else {
         0_i64
@@ -5296,96 +6208,101 @@ fn resolve_facet_flags(query: Option<&LibraryFacetQueryInput>) -> (i64, i64) {
     (include_missing_flag, visible_only_flag)
 }
 
-pub fn list_artists(
-    app: &AppHandle,
-    query: Option<LibraryFacetQueryInput>,
+fn resolve_facet_flags(query: Option<&LibraryFacetQueryInput>) -> (i64, i64) {
+    resolve_facet_flag_values(
+        query.and_then(|item| item.include_missing),
+        query.and_then(|item| item.visible_only),
+    )
+}
+
+fn resolve_facet_limit(limit: Option<u32>) -> i64 {
+    limit
+        .map(|value| value.clamp(1, 5000) as i64)
+        .unwrap_or(i64::MAX)
+}
+
+fn resolve_text_facet_limit(query: Option<&LibraryTextFacetQueryInput>) -> i64 {
+    resolve_facet_limit(query.and_then(|item| item.limit))
+}
+
+fn resolve_facet_kind(raw_kind: &str) -> Option<&'static str> {
+    match normalize_track_field_token(raw_kind).as_str() {
+        "textvalues" => Some("text-values"),
+        "albumsummaries" => Some("album-summaries"),
+        _ => None,
+    }
+}
+
+fn resolve_text_facet_descriptor<'a>(
+    descriptors: &'a [LocalTrackFieldDescriptor],
+    raw_field: &str,
+) -> Option<&'a LocalTrackFieldDescriptor> {
+    let descriptor = resolve_local_track_field_descriptor(descriptors, raw_field)?;
+    if descriptor.kind != "text" {
+        return None;
+    }
+    Some(descriptor)
+}
+
+fn list_text_facet_values_from_conn(
+    conn: &Connection,
+    descriptors: &[LocalTrackFieldDescriptor],
+    raw_field: &str,
+    include_missing_flag: i64,
+    visible_only_flag: i64,
+    limit: i64,
 ) -> Result<Vec<String>, String> {
-    ensure_initialized(app)?;
-    with_conn(|conn| {
-        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT DISTINCT TRIM(t.artist) AS artist
+    let descriptor = resolve_text_facet_descriptor(descriptors, raw_field)
+        .ok_or_else(|| format!("Unsupported text facet field: {raw_field}"))?;
+
+    let column = quote_sqlite_identifier(descriptor.column_name.as_str());
+    let value_expr = format!("TRIM(COALESCE(CAST(t.{column} AS TEXT), ''))");
+    let order_expr = format!("LOWER({value_expr})");
+    let sql = format!(
+        r#"
+                SELECT DISTINCT {value_expr} AS value
                 FROM local_tracks t
                 JOIN sources s ON s.id = t.source_id
                 WHERE (?1 = 0 OR s.is_visible = 1)
                   AND (?2 = 1 OR t.status = 'available')
-                  AND TRIM(COALESCE(t.artist, '')) <> ''
-                ORDER BY LOWER(TRIM(t.artist)) ASC
-                "#,
-            )
-            .map_err(|error| format!("Failed to prepare list artists statement: {error}"))?;
+                  AND {value_expr} <> ''
+                ORDER BY {order_expr} ASC
+                LIMIT ?3
+                "#
+    );
 
-        let rows = stmt
-            .query_map(params![visible_only_flag, include_missing_flag], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|error| format!("Failed to query artists: {error}"))?;
+    let mut stmt = conn
+        .prepare(sql.as_str())
+        .map_err(|error| format!("Failed to prepare text facet statement: {error}"))?;
 
-        let mut items = Vec::new();
-        for row in rows {
-            let value = row.map_err(|error| format!("Failed to parse artist row: {error}"))?;
-            let normalized = value.trim();
-            if normalized.is_empty() {
-                continue;
-            }
-            items.push(normalized.to_string());
+    let rows = stmt
+        .query_map(
+            params![visible_only_flag, include_missing_flag, limit],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| format!("Failed to query text facet values: {error}"))?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        let value = row.map_err(|error| format!("Failed to parse text facet row: {error}"))?;
+        let normalized = value.trim();
+        if normalized.is_empty() {
+            continue;
         }
-        Ok(items)
-    })
+        items.push(normalized.to_string());
+    }
+    Ok(items)
 }
 
-pub fn list_genres(
-    app: &AppHandle,
-    query: Option<LibraryFacetQueryInput>,
-) -> Result<Vec<String>, String> {
-    ensure_initialized(app)?;
-    with_conn(|conn| {
-        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT DISTINCT TRIM(t.genre) AS genre
-                FROM local_tracks t
-                JOIN sources s ON s.id = t.source_id
-                WHERE (?1 = 0 OR s.is_visible = 1)
-                  AND (?2 = 1 OR t.status = 'available')
-                  AND TRIM(COALESCE(t.genre, '')) <> ''
-                ORDER BY LOWER(TRIM(t.genre)) ASC
-                "#,
-            )
-            .map_err(|error| format!("Failed to prepare list genres statement: {error}"))?;
-
-        let rows = stmt
-            .query_map(params![visible_only_flag, include_missing_flag], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|error| format!("Failed to query genres: {error}"))?;
-
-        let mut items = Vec::new();
-        for row in rows {
-            let value = row.map_err(|error| format!("Failed to parse genre row: {error}"))?;
-            let normalized = value.trim();
-            if normalized.is_empty() {
-                continue;
-            }
-            items.push(normalized.to_string());
-        }
-        Ok(items)
-    })
-}
-
-pub fn list_albums(
-    app: &AppHandle,
-    query: Option<LibraryFacetQueryInput>,
+fn list_album_facet_values_from_conn(
+    conn: &Connection,
+    include_missing_flag: i64,
+    visible_only_flag: i64,
+    limit: i64,
 ) -> Result<Vec<LibraryAlbumRecord>, String> {
-    ensure_initialized(app)?;
-    with_conn(|conn| {
-        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
-        let mut stmt = conn
-            .prepare(
-                r#"
+    let mut stmt = conn
+        .prepare(
+            r#"
                 SELECT
                   TRIM(t.album) AS album,
                   COALESCE(NULLIF(TRIM(t.artist), ''), 'Unknown Artist') AS artist,
@@ -5402,26 +6319,160 @@ pub fn list_albums(
                 ORDER BY
                   LOWER(TRIM(t.album)) ASC,
                   LOWER(COALESCE(NULLIF(TRIM(t.artist), ''), 'Unknown Artist')) ASC
+                LIMIT ?3
                 "#,
-            )
-            .map_err(|error| format!("Failed to prepare list albums statement: {error}"))?;
+        )
+        .map_err(|error| format!("Failed to prepare album facet statement: {error}"))?;
 
-        let rows = stmt
-            .query_map(params![visible_only_flag, include_missing_flag], |row| {
-                Ok(LibraryAlbumRecord {
-                    album: row.get(0)?,
-                    artist: row.get(1)?,
-                    cover_track_id: row.get(2)?,
-                    cover_track_path: row.get(3)?,
-                })
+    let rows = stmt
+        .query_map(params![visible_only_flag, include_missing_flag, limit], |row| {
+            Ok(LibraryAlbumRecord {
+                album: row.get(0)?,
+                artist: row.get(1)?,
+                cover_track_id: row.get(2)?,
+                cover_track_path: row.get(3)?,
             })
-            .map_err(|error| format!("Failed to query albums: {error}"))?;
+        })
+        .map_err(|error| format!("Failed to query album facet values: {error}"))?;
 
-        let mut items = Vec::new();
-        for row in rows {
-            items.push(row.map_err(|error| format!("Failed to parse album row: {error}"))?);
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(|error| format!("Failed to parse album facet row: {error}"))?);
+    }
+    Ok(items)
+}
+
+pub fn list_text_facet_values(
+    app: &AppHandle,
+    query: Option<LibraryTextFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let descriptors = list_local_track_field_descriptors(conn)?;
+        let query_ref = query
+            .as_ref()
+            .ok_or_else(|| "Missing text facet query".to_string())?;
+        let field = query_ref.field.trim();
+        if field.is_empty() {
+            return Err("Missing text facet field".to_string());
         }
-        Ok(items)
+
+        let (include_missing_flag, visible_only_flag) =
+            resolve_facet_flag_values(query_ref.include_missing, query_ref.visible_only);
+        let limit = resolve_text_facet_limit(query.as_ref());
+        list_text_facet_values_from_conn(
+            conn,
+            &descriptors,
+            field,
+            include_missing_flag,
+            visible_only_flag,
+            limit,
+        )
+    })
+}
+
+pub fn list_facet_entries(
+    app: &AppHandle,
+    query: Option<LibraryFacetEntriesQueryInput>,
+) -> Result<LibraryFacetEntriesResult, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let query_ref = query
+            .as_ref()
+            .ok_or_else(|| "Missing facet query".to_string())?;
+        let facet_kind = resolve_facet_kind(query_ref.kind.as_str())
+            .ok_or_else(|| format!("Unsupported facet kind: {}", query_ref.kind.trim()))?;
+        let (include_missing_flag, visible_only_flag) =
+            resolve_facet_flag_values(query_ref.include_missing, query_ref.visible_only);
+        let limit = resolve_facet_limit(query_ref.limit);
+
+        match facet_kind {
+            "text-values" => {
+                let field = query_ref
+                    .field
+                    .as_deref()
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .ok_or_else(|| "Missing facet field for text-values query".to_string())?;
+                let descriptors = list_local_track_field_descriptors(conn)?;
+                let values = list_text_facet_values_from_conn(
+                    conn,
+                    &descriptors,
+                    field,
+                    include_missing_flag,
+                    visible_only_flag,
+                    limit,
+                )?;
+                Ok(LibraryFacetEntriesResult {
+                    kind: facet_kind.to_string(),
+                    text_values: Some(values),
+                    albums: None,
+                })
+            }
+            "album-summaries" => {
+                let albums = list_album_facet_values_from_conn(
+                    conn,
+                    include_missing_flag,
+                    visible_only_flag,
+                    limit,
+                )?;
+                Ok(LibraryFacetEntriesResult {
+                    kind: facet_kind.to_string(),
+                    text_values: None,
+                    albums: Some(albums),
+                })
+            }
+            _ => Err(format!("Unsupported facet kind: {}", query_ref.kind.trim())),
+        }
+    })
+}
+
+pub fn list_artists(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let descriptors = list_local_track_field_descriptors(conn)?;
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+        list_text_facet_values_from_conn(
+            conn,
+            &descriptors,
+            "artist",
+            include_missing_flag,
+            visible_only_flag,
+            i64::MAX,
+        )
+    })
+}
+
+pub fn list_genres(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<Vec<String>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let descriptors = list_local_track_field_descriptors(conn)?;
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+        list_text_facet_values_from_conn(
+            conn,
+            &descriptors,
+            "genre",
+            include_missing_flag,
+            visible_only_flag,
+            i64::MAX,
+        )
+    })
+}
+
+pub fn list_albums(
+    app: &AppHandle,
+    query: Option<LibraryFacetQueryInput>,
+) -> Result<Vec<LibraryAlbumRecord>, String> {
+    ensure_initialized(app)?;
+    with_conn(|conn| {
+        let (include_missing_flag, visible_only_flag) = resolve_facet_flags(query.as_ref());
+        list_album_facet_values_from_conn(conn, include_missing_flag, visible_only_flag, i64::MAX)
     })
 }
 
@@ -5517,6 +6568,153 @@ mod tests {
     fn read_user_version(conn: &Connection) -> i32 {
         conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
             .expect("read user_version")
+    }
+
+    #[test]
+    fn facet_catalog_exposes_builtin_collection_descriptors() {
+        let (conn, path) = open_temp_db("music-library-facet-catalog");
+        migrate(&conn).expect("migrate empty db");
+
+        let descriptors =
+            list_local_track_field_descriptors(&conn).expect("read local track field descriptors");
+        let catalog = list_facet_catalog_from_descriptors(&descriptors);
+
+        assert_eq!(
+            catalog.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            vec!["artists", "genres", "albums"]
+        );
+
+        let albums = catalog
+            .iter()
+            .find(|item| item.id == "albums")
+            .expect("find albums facet descriptor");
+        assert_eq!(albums.field, "album");
+        assert_eq!(albums.kind, "album-summaries");
+        assert_eq!(albums.native_field.as_deref(), Some("album"));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn schema_envelope_reuses_field_and_facet_catalogs() {
+        let (conn, path) = open_temp_db("music-library-schema-envelope");
+        migrate(&conn).expect("migrate empty db");
+
+        let descriptors =
+            list_local_track_field_descriptors(&conn).expect("read local track field descriptors");
+        let source_tables = list_schema_source_tables(&conn).expect("read schema source tables");
+        let track_fields = list_track_field_catalog_from_descriptors(&descriptors);
+        let facet_collections = list_facet_catalog_from_descriptors(&descriptors);
+        let envelope = LibrarySchemaEnvelope {
+            schema_version: read_schema_version(&conn).expect("read schema version"),
+            generated_at_ms: now_ms(),
+            schema_fingerprint: compute_schema_fingerprint(
+                read_schema_version(&conn).expect("read schema version"),
+                &source_tables,
+                &track_fields,
+                &facet_collections,
+            ),
+            source_tables,
+            track_fields,
+            facet_collections,
+        };
+
+        assert!(envelope.track_fields.iter().any(|field| field.id == "artist"));
+        assert!(envelope
+            .facet_collections
+            .iter()
+            .any(|facet| facet.id == "artists" && facet.kind == "text-values"));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn local_track_field_catalog_detects_dynamic_columns() {
+        let (conn, path) = open_temp_db("music-library-field-catalog");
+        migrate(&conn).expect("migrate empty db");
+        conn.execute(
+            "ALTER TABLE local_tracks ADD COLUMN custom_score INTEGER",
+            [],
+        )
+        .expect("add custom_score column");
+        conn.execute("ALTER TABLE local_tracks ADD COLUMN mood_label TEXT", [])
+            .expect("add mood_label column");
+
+        let descriptors =
+            list_local_track_field_descriptors(&conn).expect("read local track field descriptors");
+
+        let custom_score = descriptors
+            .iter()
+            .find(|descriptor| descriptor.column_name == "custom_score")
+            .expect("find custom_score descriptor");
+        assert_eq!(custom_score.field_id, "customScore");
+        assert_eq!(custom_score.track_key, "customScore");
+        assert_eq!(custom_score.kind, "number");
+        assert_eq!(
+            custom_score.native_filter_field.as_deref(),
+            Some("customScore")
+        );
+        assert_eq!(
+            custom_score.native_sort_field.as_deref(),
+            Some("customScore")
+        );
+
+        let mood_label = descriptors
+            .iter()
+            .find(|descriptor| descriptor.column_name == "mood_label")
+            .expect("find mood_label descriptor");
+        assert_eq!(mood_label.field_id, "moodLabel");
+        assert_eq!(mood_label.track_key, "moodLabel");
+        assert_eq!(mood_label.kind, "text");
+        assert_eq!(mood_label.native_filter_field.as_deref(), Some("moodLabel"));
+        assert_eq!(mood_label.native_sort_field.as_deref(), Some("moodLabel"));
+
+        let created_at = descriptors
+            .iter()
+            .find(|descriptor| descriptor.column_name == "created_at_ms")
+            .expect("find created_at_ms descriptor");
+        assert_eq!(created_at.field_id, "dateAdded");
+        assert_eq!(created_at.track_key, "createdAtMs");
+        assert_eq!(created_at.kind, "number");
+        assert_eq!(
+            created_at.native_filter_field.as_deref(),
+            Some("createdAtMs")
+        );
+        assert_eq!(created_at.native_sort_field.as_deref(), Some("createdAtMs"));
+
+        drop(conn);
+        cleanup_temp_db(&path);
+    }
+
+    #[test]
+    fn track_filter_clause_resolves_dynamic_fields_from_catalog() {
+        let (conn, path) = open_temp_db("music-library-filter-clause");
+        migrate(&conn).expect("migrate empty db");
+        conn.execute(
+            "ALTER TABLE local_tracks ADD COLUMN custom_score INTEGER",
+            [],
+        )
+        .expect("add custom_score column");
+
+        let descriptors =
+            list_local_track_field_descriptors(&conn).expect("read local track field descriptors");
+        let clause = build_track_filter_clause(
+            &LibraryTrackFilterInput {
+                field: "customScore".to_string(),
+                operator: "gte".to_string(),
+                value: Some("80".to_string()),
+            },
+            &descriptors,
+        )
+        .expect("resolve dynamic numeric filter clause");
+
+        assert_eq!(clause.0, "CAST(t.\"custom_score\" AS REAL) IS NOT NULL AND CAST(t.\"custom_score\" AS REAL) >= ?");
+        assert_eq!(clause.1, vec![Value::Real(80.0)]);
+
+        drop(conn);
+        cleanup_temp_db(&path);
     }
 
     #[test]

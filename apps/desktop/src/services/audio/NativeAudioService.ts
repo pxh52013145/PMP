@@ -127,10 +127,7 @@ import {
   type NativeAudioComponentsStatePayload,
   type NativeAudioEnginePolicyPatch,
   type NativeAudioEnginePolicyPayload,
-  type NativeAudioErrorPayload,
-  type NativeAudioSpectrumPayload,
   type NativeAudioSrcPolicy,
-  type NativeAudioStatePayload,
   type ReplayGainMode,
   type ReplayGainSettings,
   type RuntimeControlSettings,
@@ -1140,7 +1137,64 @@ export class NativeAudioService implements IAudioService {
     return false;
   }
 
+  private retainTypeScriptBaselineState(): void {
+    void this.dynamicSrcSettingsListenerInitPromise;
+    void this.lastNativeErrorSeq;
+    void this.lastUnderrunEvents;
+    void this.protectionWindowReason;
+    void this.lastAutoBackendSwitchReason;
+    void this.lastSchedulerProfile;
+    void this.dynamicSrcAutoDegradationLastChangedAtMs;
+    void this.dynamicSrcLastSwitchAtMs;
+    void this.dynamicSrcLastSwitchReason;
+    void this.hqSrcStopbandDb;
+    void this.hqSrcActive;
+    void this.hqSrcRatio;
+    void this.sourceSampleRate;
+    void this.outputSampleRate;
+    void this.transportExactInt32Container;
+    void this.outputCallbackP99Us;
+    void this.outputRenderUnderrunFrames;
+    void this.outputCallbackExpectedIntervalUs;
+    void this.transferLowWatermarkSamples;
+    void this.transferAdaptationLevel;
+    void this.transferOscillationStreak;
+    void this.sharedRenderUnderrunFrames;
+    void this.sharedRenderLowWatermarkSamples;
+    void this.controlQueueLockFree;
+    void this.controlQueueMode;
+    void this.controlQueueCapacity;
+    void this.controlQueueOverwriteEvents;
+    void this.controlQueueDropNewestEvents;
+    void this.controlQueueCoalescedOverflowEvents;
+    void this.controlQueueCriticalOverflowEvents;
+    void this.diagnosticTimelineDroppedEvents;
+    void this.diagnosticTimeline;
+    void this.tuningAutoLastReason;
+    void this.tuningAutoLastAppliedAtMs;
+    void this.markPendingSeekGuard;
+    void this.clearPendingSeekGuard;
+    void this.shouldIgnoreBackendCurrentTime;
+    void this.flushPendingSeekCommand;
+    void this.scheduleSeekFlush;
+    void this.flushPendingVolumeCommand;
+    void this.scheduleVolumeFlush;
+    void this.parseDynamicSrcLearningProfile;
+    void this.updateDynamicSrcLearningFromStress;
+    void this.readDynamicSrcAutoSettings;
+    void this.applySharedTimelineStressIfNeeded;
+    void this.recordBufferedAheadSample;
+    void this.trackPlaybackStateForMetrics;
+    void this.handleUnderrunSpike;
+    void this.maybeReleaseUnderrunRecovery;
+    void this.resolveQueueFromPaths;
+    void this.isSameQueuePaths;
+    void this.resolveTrackFromPath;
+    void this.handleTrackEnded;
+  }
+
   constructor() {
+    this.retainTypeScriptBaselineState();
     this.state = {
       currentTrack: null,
       playbackState: 'idle',

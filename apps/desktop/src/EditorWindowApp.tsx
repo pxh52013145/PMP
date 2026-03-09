@@ -328,7 +328,11 @@ function EditorControlPanel({ onExitEditMode }: EditorControlPanelProps) {
 
       try {
         const { appWindow } = await import('@tauri-apps/api/window');
-        const resolvedPinned = await appWindow.isAlwaysOnTop().catch(() => false);
+        const resolvedPinned = await (
+          (appWindow as typeof appWindow & {
+            isAlwaysOnTop?: () => Promise<boolean>;
+          }).isAlwaysOnTop?.() ?? Promise.resolve(false)
+        ).catch(() => false);
         if (!disposed) {
           setIsAlwaysOnTop(Boolean(resolvedPinned));
         }

@@ -1,7 +1,7 @@
 import { Track } from '../../services/audio';
 import {
   getMusicLibraryBaseFieldCapability,
-  registerMusicLibraryBaseFieldCapabilities,
+  replaceMusicLibraryBaseFieldCapabilities,
   type MusicLibraryExtensionFieldCapabilityInput,
 } from './fieldCapabilities';
 import { isMusicLibraryDynamicTrackFieldExcluded } from './trackProjection';
@@ -167,8 +167,8 @@ export function registerMusicLibraryDiscoveredFieldCapabilitiesFromTracks(
   options?: { sampleLimit?: number }
 ): MusicLibraryExtensionFieldCapabilityInput[] {
   const definitions = discoverMusicLibraryFieldCapabilitiesFromTracks(tracks, options);
-  if (definitions.length > 0) {
-    registerMusicLibraryBaseFieldCapabilities(definitions);
-  }
+  replaceMusicLibraryBaseFieldCapabilities(definitions, {
+    source: 'runtime-discovered',
+  });
   return definitions;
 }
