@@ -2365,6 +2365,7 @@
   "pages.music-library.columns.composer": "作曲",
   "pages.music-library.columns.bitrate": "比特率",
   "pages.music-library.columns.sampleRate": "采样率",
+  "pages.music-library.columns.bitDepth": "位深",
   "pages.music-library.columns.format": "格式",
   "pages.music-library.columns.playCount": "播放次数",
   "pages.music-library.columns.lastPlayed": "上次播放",

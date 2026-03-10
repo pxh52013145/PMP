@@ -3,7 +3,7 @@ import {
   getMusicLibraryBaseFieldCapability,
   getMusicLibraryBaseNativeFilterField,
   getMusicLibraryBaseNativeSortField,
-  listMusicLibraryBaseOrderFieldIds,
+  isMusicLibraryBaseFieldVisibleInBaseUi,
   type MusicLibraryBaseFieldId,
 } from './fieldCapabilities';
 import {
@@ -87,17 +87,14 @@ const MUSIC_LIBRARY_BASE_OPERATORS = new Set<MusicLibraryBaseOperator>([
   'is_not_empty',
 ]);
 
-const NATIVE_SORT_FIELDS = new Set<MusicLibraryBaseOrderField>(
-  listMusicLibraryBaseOrderFieldIds().filter(
-    (field): field is MusicLibraryBaseOrderField => getMusicLibraryBaseNativeSortField(field) != null
-  )
-);
-
 function normalizeFilterInput(raw: unknown): MusicLibraryBaseFilter | null {
   if (!raw || typeof raw !== 'object') return null;
   const candidate = raw as Partial<MusicLibraryBaseFilter>;
   if (!candidate.id || typeof candidate.id !== 'string') return null;
   if (!candidate.field || typeof candidate.field !== 'string' || candidate.field.trim().length === 0) {
+    return null;
+  }
+  if (!isMusicLibraryBaseFieldVisibleInBaseUi(candidate.field)) {
     return null;
   }
   if (!candidate.operator || !MUSIC_LIBRARY_BASE_OPERATORS.has(candidate.operator)) return null;
@@ -128,12 +125,15 @@ function normalizeOrderRuleInput(raw: unknown): MusicLibraryBaseOrderRule | null
   if (!raw || typeof raw !== 'object') return null;
   const candidate = raw as Partial<MusicLibraryBaseOrderRule>;
   if (!candidate.id || typeof candidate.id !== 'string') return null;
-  if (!candidate.field || !NATIVE_SORT_FIELDS.has(candidate.field)) return null;
+  if (!candidate.field || typeof candidate.field !== 'string') return null;
+  if (!isMusicLibraryBaseFieldVisibleInBaseUi(candidate.field)) return null;
+  const capability = getMusicLibraryBaseFieldCapability(candidate.field);
+  if (!capability?.sortable) return null;
   const order = candidate.order === 'desc' ? 'desc' : 'asc';
 
   return {
     id: candidate.id,
-    field: candidate.field,
+    field: candidate.field as MusicLibraryBaseOrderField,
     order,
   };
 }
@@ -393,8 +393,9 @@ export function applyMusicLibraryBaseQuery(tracks: Track[], query: MusicLibraryB
 }
 
 export function canUseNativeBaseFilter(filter: MusicLibraryBaseFilter): boolean {
-  if (!getMusicLibraryBaseNativeFilterField(filter.field)) return false;
-  const numericField = filter.field === 'duration' || filter.field === 'playCount';
+  const nativeField = getMusicLibraryBaseNativeFilterField(filter.field);
+  if (!nativeField) return false;
+  const numericField = getMusicLibraryBaseFieldCapability(filter.field)?.kind === 'number';
 
   if (numericField) {
     return (
@@ -422,11 +423,11 @@ export function canUseNativeBaseFilterGroup(group: MusicLibraryBaseFilterGroup):
 
 export function canUseNativeBaseSort(field: MusicLibraryBaseSortField): boolean {
   if (field === 'default') return true;
-  return NATIVE_SORT_FIELDS.has(field) && getMusicLibraryBaseNativeSortField(field) != null;
+  return getMusicLibraryBaseNativeSortField(field) != null;
 }
 
 export function canUseNativeBaseOrderRule(rule: MusicLibraryBaseOrderRule): boolean {
-  return NATIVE_SORT_FIELDS.has(rule.field) && getMusicLibraryBaseNativeSortField(rule.field) != null;
+  return getMusicLibraryBaseNativeSortField(rule.field) != null;
 }
 
 export function flattenMusicLibraryBaseFilters(query: MusicLibraryBaseQuery): MusicLibraryBaseFilter[] {

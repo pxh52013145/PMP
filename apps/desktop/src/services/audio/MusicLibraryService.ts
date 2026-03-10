@@ -90,6 +90,7 @@ import {
 import {
   getMusicLibraryBaseNativeFilterField,
   getMusicLibraryBaseNativeSortField,
+  getMusicLibraryBaseFieldCapability,
 } from '../../modules/music-library/fieldCapabilities';
 import { compactTrackForMusicLibrary } from '../../modules/music-library/trackProjection';
 import { STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
@@ -114,6 +115,21 @@ import {
 // 音乐库数据库版本
 const DB_VERSION = 5;
 const DB_NAME = 'MusicLibrary';
+
+const NATIVE_LIST_PROJECTION_FIELD_IDS = new Set<MusicLibraryBaseField>([
+  'title',
+  'artist',
+  'album',
+  'genre',
+  'year',
+  'format',
+  'duration',
+  'sampleRate',
+  'fileSize',
+  'dateAdded',
+  'lastPlayed',
+  'playCount',
+]);
 
 // 库统计信息
 export interface LibraryStats {
@@ -704,6 +720,8 @@ export class MusicLibraryService {
       artist: typeof track.artist === 'string' ? track.artist : undefined,
       album: typeof track.album === 'string' ? track.album : undefined,
       genre: typeof track.genre === 'string' ? track.genre : undefined,
+      year: typeof track.year === 'number' ? Math.floor(track.year) : undefined,
+      format: typeof track.format === 'string' ? track.format : undefined,
       duration: typeof track.duration === 'number' ? track.duration : undefined,
       sampleRate: typeof track.sampleRate === 'number' ? track.sampleRate : undefined,
       bitDepth,
@@ -827,6 +845,8 @@ export class MusicLibraryService {
       artist: record.artist,
       album: record.album,
       genre: record.genre,
+      year: record.year,
+      format: record.format,
       duration: record.durationSeconds,
       sampleRate: record.sampleRate,
       fileSize: record.fileSize,
@@ -867,6 +887,21 @@ export class MusicLibraryService {
     return compactTrackForMusicLibrary(
       this.restoreTrackForPlayback(this.mapNativeTrackRecordToStoredTrack(record))
     );
+  }
+
+  private isFieldCoveredByNativeListProjection(field: MusicLibraryBaseField): boolean {
+    const capability = getMusicLibraryBaseFieldCapability(field);
+    if (!capability) return false;
+    if (capability.source !== 'builtin') return false;
+    return NATIVE_LIST_PROJECTION_FIELD_IDS.has(capability.id as MusicLibraryBaseField);
+  }
+
+  private resolveNativeBaseQueryProjection(query: MusicLibraryBaseQuery): 'list' | 'full' {
+    if (query.groupByRules.some((rule) => !this.isFieldCoveredByNativeListProjection(rule.field))) {
+      return 'full';
+    }
+
+    return 'list';
   }
 
   private restoreTrackForListProjection(storedTrack: StoredTrackRecord): Track {
@@ -1172,8 +1207,10 @@ export class MusicLibraryService {
         : 0;
 
     try {
+      const projection = this.resolveNativeBaseQueryProjection(normalizedBaseQuery);
+
       const result = await queryNativeLibraryTracksPage({
-        projection: 'list',
+        projection,
         includeMissing: query.includeMissing === true,
         visibleOnly: query.visibleOnly !== false,
         searchQuery: normalizedSearchQuery,

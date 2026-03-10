@@ -1,12 +1,53 @@
-import { describe, expect, it } from 'vitest';
-import { applyMusicLibraryBaseQuery, canUseNativeBaseOrderRule } from '../baseQuery';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  applyMusicLibraryBaseQuery,
+  canUseNativeBaseFilter,
+  canUseNativeBaseOrderRule,
+} from '../baseQuery';
+import { replaceMusicLibraryBaseFieldCapabilities } from '../fieldCapabilities';
 
 describe('baseQuery', () => {
+  afterEach(() => {
+    replaceMusicLibraryBaseFieldCapabilities([], { source: 'extension' });
+  });
+
   it('supports native ordering for database-backed metadata fields', () => {
     expect(canUseNativeBaseOrderRule({ id: 'rule-1', field: 'sampleRate', order: 'asc' })).toBe(true);
     expect(canUseNativeBaseOrderRule({ id: 'rule-2', field: 'fileSize', order: 'asc' })).toBe(true);
     expect(canUseNativeBaseOrderRule({ id: 'rule-3', field: 'dateAdded', order: 'asc' })).toBe(true);
     expect(canUseNativeBaseOrderRule({ id: 'rule-4', field: 'lastPlayed', order: 'asc' })).toBe(true);
+    expect(canUseNativeBaseOrderRule({ id: 'rule-5', field: 'format', order: 'asc' })).toBe(true);
+    expect(canUseNativeBaseOrderRule({ id: 'rule-6', field: 'year', order: 'asc' })).toBe(true);
+  });
+
+  it('supports native numeric filters for builtin database-backed metadata fields', () => {
+    expect(
+      canUseNativeBaseFilter({
+        id: 'filter-year',
+        field: 'year',
+        operator: 'gte',
+        value: '2020',
+      })
+    ).toBe(true);
+  });
+
+  it('recognizes dynamically registered native order fields', () => {
+    replaceMusicLibraryBaseFieldCapabilities(
+      [
+        {
+          id: 'moodLabel',
+          label: 'Mood',
+          kind: 'text',
+          sortable: true,
+          groupable: true,
+          facetable: true,
+          nativeSortField: 'moodLabel',
+        },
+      ],
+      { source: 'extension' }
+    );
+
+    expect(canUseNativeBaseOrderRule({ id: 'rule-custom', field: 'moodLabel', order: 'asc' })).toBe(true);
   });
 
   it('sorts by sample rate and file size in fallback mode', () => {

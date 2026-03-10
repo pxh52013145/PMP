@@ -16,6 +16,7 @@ vi.mock('@tauri-apps/api/fs', () => ({
 
 import { invoke } from '@tauri-apps/api/tauri';
 import { MusicLibraryService } from '../MusicLibraryService';
+import { replaceMusicLibraryBaseFieldCapabilities } from '../../../modules/music-library/fieldCapabilities';
 import {
   clearCloudPlaybackFallbackQueue,
   getCloudPlaybackFallbackQueueSnapshot,
@@ -26,6 +27,7 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     vi.clearAllMocks();
     localStorage.clear();
     clearCloudPlaybackFallbackQueue();
+    replaceMusicLibraryBaseFieldCapabilities([], { source: 'extension' });
 
     delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
     (MusicLibraryService as unknown as { instance?: unknown }).instance = undefined;
@@ -119,6 +121,142 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     );
     expect(url).toContain('cover-small-thumb-96px.jpg');
     expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+  });
+
+  it('uses full projection when native grouping depends on a custom field', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({ items: [], total: 0 });
+
+    replaceMusicLibraryBaseFieldCapabilities(
+      [
+        {
+          id: 'moodLabel',
+          label: 'Mood',
+          kind: 'text',
+          filterable: true,
+          sortable: true,
+          groupable: true,
+          facetable: true,
+          nativeSortField: 'moodLabel',
+        },
+      ],
+      { source: 'extension' }
+    );
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    await service.queryLocalTracksPageByBase({
+      searchQuery: '',
+      baseQuery: {
+        filterOperator: 'and',
+        filterGroups: [],
+        groupByRules: [
+          {
+            id: 'group-1',
+            field: 'moodLabel',
+            order: 'asc',
+          },
+        ],
+        sortRules: [],
+      },
+      limit: 120,
+      offset: 0,
+      includeMissing: false,
+      visibleOnly: true,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'music_library_db_query_tracks_page',
+      expect.objectContaining({
+        query: expect.objectContaining({
+          projection: 'full',
+        }),
+      })
+    );
+  });
+
+  it('keeps builtin format grouping on native base query path with list projection', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({ items: [], total: 0 });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const result = await service.queryLocalTracksPageByBase({
+      searchQuery: '',
+      baseQuery: {
+        filterOperator: 'and',
+        filterGroups: [],
+        groupByRules: [
+          {
+            id: 'group-format',
+            field: 'format',
+            order: 'asc',
+          },
+        ],
+        sortRules: [],
+      },
+      limit: 120,
+      offset: 0,
+      includeMissing: false,
+      visibleOnly: true,
+    });
+
+    expect(result).toEqual({ tracks: [], total: 0 });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'music_library_db_query_tracks_page',
+      expect.objectContaining({
+        query: expect.objectContaining({
+          projection: 'list',
+        }),
+      })
+    );
+  });
+
+  it('maps native year and format fields into restored local tracks', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({
+      items: [
+        {
+          id: 'track-format-1',
+          sourceId: 'source-1',
+          filePath: 'C:\\Music\\format-test.flac',
+          title: 'Format Test',
+          artist: 'Tester',
+          album: 'Album',
+          genre: 'Jazz',
+          year: 2024,
+          format: 'flac',
+          playCount: 0,
+          status: 'available',
+          updatedAtMs: 1700000000000,
+        },
+      ],
+      total: 1,
+    });
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    const result = await service.queryLocalTracksPageByBase({
+      searchQuery: '',
+      baseQuery: {
+        filterOperator: 'and',
+        filterGroups: [],
+        groupByRules: [{ id: 'group-format', field: 'format', order: 'asc' }],
+        sortRules: [],
+      },
+      limit: 120,
+      offset: 0,
+      includeMissing: false,
+      visibleOnly: true,
+    });
+
+    expect(result?.tracks[0]).toMatchObject({
+      year: 2024,
+      format: 'flac',
+    });
   });
 
   it('replaces stale pmp coverUrl in http dev runtime with asset url fallback', async () => {

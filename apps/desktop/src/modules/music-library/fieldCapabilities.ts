@@ -115,6 +115,8 @@ export const MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS = {
     filterable: true,
     sortable: true,
     groupable: true,
+    nativeFilterField: 'year',
+    nativeSortField: 'year',
   },
   duration: {
     headerKey: 'pages.music-library.tracks.header.duration',
@@ -187,12 +189,39 @@ export const MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS = {
     filterable: true,
     sortable: true,
     groupable: true,
+    nativeFilterField: 'format',
+    nativeSortField: 'format',
   },
 } as const satisfies Record<string, MusicLibraryBuiltinFieldCapability>;
 
 export type MusicLibraryBuiltinFieldKey = keyof typeof MUSIC_LIBRARY_BASE_FIELD_DEFINITIONS;
 type MusicLibraryDynamicFieldId = string & {
   readonly __musicLibraryDynamicFieldIdBrand?: unique symbol;
+};
+
+const MUSIC_LIBRARY_HIDDEN_BASE_UI_FIELD_IDS = new Set<string>([
+  'id',
+  'sourceId',
+  'libraryPathId',
+  'filePath',
+  'path',
+  'originalPath',
+  'quickFingerprint',
+  'mtimeMs',
+  'metadataScannedAtMs',
+  'coverKey',
+  'coverUrl',
+  'replayGainTrackGainDb',
+  'replayGainAlbumGainDb',
+  'status',
+  'updatedAtMs',
+  'lastSeenAtMs',
+  'createdAtMs',
+  'addedAt',
+]);
+
+const MUSIC_LIBRARY_RUNTIME_FIELD_HEADER_KEY_MAP: Record<string, string> = {
+  bitDepth: 'pages.music-library.columns.bitDepth',
 };
 
 export type MusicLibraryBaseFieldId = MusicLibraryBuiltinFieldKey | MusicLibraryDynamicFieldId;
@@ -275,7 +304,10 @@ function normalizeExtensionFieldCapability(
 
   return {
     id,
-    headerKey: typeof input.headerKey === 'string' && input.headerKey.trim() ? input.headerKey.trim() : undefined,
+    headerKey:
+      typeof input.headerKey === 'string' && input.headerKey.trim()
+        ? input.headerKey.trim()
+        : MUSIC_LIBRARY_RUNTIME_FIELD_HEADER_KEY_MAP[id],
     label,
     kind: input.kind === 'number' ? 'number' : 'text',
     filterable: input.filterable !== false,
@@ -290,6 +322,21 @@ function normalizeExtensionFieldCapability(
     nativeSortField: input.nativeSortField,
     source,
   };
+}
+
+function isMusicLibraryBaseUiFieldHidden(
+  capability: Pick<MusicLibraryResolvedFieldCapability, 'id' | 'trackKey' | 'source'>
+): boolean {
+  if (capability.source === 'builtin') return false;
+
+  if (MUSIC_LIBRARY_HIDDEN_BASE_UI_FIELD_IDS.has(capability.id)) {
+    return true;
+  }
+
+  return (
+    typeof capability.trackKey === 'string' &&
+    MUSIC_LIBRARY_HIDDEN_BASE_UI_FIELD_IDS.has(capability.trackKey)
+  );
 }
 
 export const MUSIC_LIBRARY_BASE_FIELD_KEYS = Object.keys(
@@ -415,6 +462,7 @@ export function listMusicLibraryBaseFieldCapabilities(): MusicLibraryResolvedFie
   for (const map of listCustomFieldCapabilityMapsInPriorityOrder()) {
     for (const [fieldId, capability] of map.entries()) {
       if (customById.has(fieldId)) continue;
+      if (isMusicLibraryBaseUiFieldHidden(capability)) continue;
       customById.set(fieldId, capability);
     }
   }
@@ -423,6 +471,12 @@ export function listMusicLibraryBaseFieldCapabilities(): MusicLibraryResolvedFie
     ...MUSIC_LIBRARY_BASE_FIELD_KEYS.map((field) => toResolvedBuiltinFieldCapability(field)),
     ...customById.values(),
   ];
+}
+
+export function isMusicLibraryBaseFieldVisibleInBaseUi(field: MusicLibraryBaseFieldId): boolean {
+  const capability = getMusicLibraryBaseFieldCapability(field);
+  if (!capability) return false;
+  return !isMusicLibraryBaseUiFieldHidden(capability);
 }
 
 export function listRegisteredMusicLibraryBaseFieldCapabilities(): MusicLibraryExtensionFieldCapabilityInput[] {

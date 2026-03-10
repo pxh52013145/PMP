@@ -227,6 +227,8 @@ export interface NativeLibraryTrackUpsertInput {
   artist?: string;
   album?: string;
   genre?: string;
+  year?: number;
+  format?: string;
   duration?: number;
   sampleRate?: number;
   bitDepth?: number;
@@ -269,6 +271,8 @@ export type NativeLibraryKnownTrackFilterField =
   | 'artist'
   | 'album'
   | 'genre'
+  | 'year'
+  | 'format'
   | 'durationSeconds'
   | 'playCount'
   | 'fileSize'
@@ -312,6 +316,8 @@ export type NativeLibraryKnownTrackSortField =
   | 'artist'
   | 'album'
   | 'genre'
+  | 'year'
+  | 'format'
   | 'durationSeconds'
   | 'playCount'
   | 'lastPlayedAtMs'
@@ -508,6 +514,8 @@ export interface NativeLibraryTrackRecord {
   artist?: string;
   album?: string;
   genre?: string;
+  year?: number;
+  format?: string;
   durationSeconds?: number;
   sampleRate?: number;
   bitDepth?: number;
@@ -1508,6 +1516,8 @@ function ensureTrackRecord(value: unknown): NativeLibraryTrackRecord | null {
     artist: asOptionalString(readRecordField(value, 'artist')),
     album: asOptionalString(readRecordField(value, 'album')),
     genre: asOptionalString(readRecordField(value, 'genre')),
+    year: asNumber(readRecordField(value, 'year')),
+    format: asOptionalString(readRecordField(value, 'format')),
     durationSeconds: asNumber(readRecordField(value, 'durationSeconds', 'duration_seconds')),
     sampleRate: asNumber(readRecordField(value, 'sampleRate', 'sample_rate')),
     bitDepth: asNumber(readRecordField(value, 'bitDepth', 'bit_depth')),

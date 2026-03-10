@@ -136,6 +136,8 @@ import {
 
   listRegisteredMusicLibraryBaseFieldCapabilities,
 
+  isMusicLibraryBaseFieldVisibleInBaseUi,
+
   listMusicLibraryBaseFilterFieldIds,
 
   listMusicLibraryBaseGroupFieldIds,
@@ -4470,15 +4472,53 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  const availableBaseGroupFields =
+  const availableBaseGroupFields = useMemo(
 
-    listMusicLibraryBaseGroupFieldIds() as MusicLibraryBaseGroupRule['field'][];
+    () =>
 
-  const availableBaseOrderFields =
+      (listMusicLibraryBaseGroupFieldIds() as MusicLibraryBaseGroupRule['field'][]).filter((field) => {
 
-    listMusicLibraryBaseOrderFieldIds() as MusicLibraryBaseSortRule['field'][];
+        if (!isMusicLibraryBaseFieldVisibleInBaseUi(field)) return false;
 
-  const availableBaseFilterFields = listMusicLibraryBaseFilterFieldIds();
+        return true;
+
+      }),
+
+    [librarySourceMode, baseFieldRegistryVersion]
+
+  );
+
+  const availableBaseOrderFields = useMemo(
+
+    () =>
+
+      (listMusicLibraryBaseOrderFieldIds() as MusicLibraryBaseSortRule['field'][]).filter((field) => {
+
+        if (!isMusicLibraryBaseFieldVisibleInBaseUi(field)) return false;
+
+        return true;
+
+      }),
+
+    [librarySourceMode, baseFieldRegistryVersion]
+
+  );
+
+  const availableBaseFilterFields = useMemo(
+
+    () =>
+
+      listMusicLibraryBaseFilterFieldIds().filter((field) => {
+
+        if (!isMusicLibraryBaseFieldVisibleInBaseUi(field)) return false;
+
+        return true;
+
+      }),
+
+    [librarySourceMode, baseFieldRegistryVersion]
+
+  );
 
   const baseFilterFacetDescriptor = useMemo(
 
@@ -4509,6 +4549,50 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     setCollapsedTrackGroupKeys(new Set());
 
   }, [baseGroupByRules]);
+
+
+
+  useEffect(() => {
+
+    const allowedGroupFields = new Set(availableBaseGroupFields);
+
+    setBaseGroupByRules((previous) => {
+
+      const next = previous.filter((rule) => allowedGroupFields.has(rule.field));
+
+      return next.length === previous.length ? previous : next;
+
+    });
+
+  }, [availableBaseGroupFields]);
+
+
+
+  useEffect(() => {
+
+    const allowedOrderFields = new Set(availableBaseOrderFields);
+
+    setBaseSortRules((previous) => {
+
+      const next = previous.filter((rule) => allowedOrderFields.has(rule.field));
+
+      return next.length === previous.length ? previous : next;
+
+    });
+
+  }, [availableBaseOrderFields]);
+
+
+
+  useEffect(() => {
+
+    if (availableBaseFilterFields.length === 0) return;
+
+    if (availableBaseFilterFields.includes(baseFilterField)) return;
+
+    setBaseFilterField(availableBaseFilterFields[0] as MusicLibraryBaseField);
+
+  }, [availableBaseFilterFields, baseFilterField]);
 
 
 
@@ -5002,6 +5086,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       : filteredTracks.length;
 
+  const shouldEagerFillGroupedCardView =
+
+    baseView === 'card' && baseGroupByRules.length > 0;
+
 
 
   useEffect(() => {
@@ -5026,11 +5114,57 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (baseView !== 'card') return filteredTracks;
 
+    if (shouldEagerFillGroupedCardView) return filteredTracks;
+
     if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
 
     return filteredTracks.slice(0, renderedTrackLimit);
 
-  }, [baseView, filteredTracks, renderedTrackLimit]);
+  }, [baseView, filteredTracks, renderedTrackLimit, shouldEagerFillGroupedCardView]);
+
+
+
+  useEffect(() => {
+
+    if (!isOpen || !shouldEagerFillGroupedCardView) return;
+
+
+
+    if (renderedTrackLimit < filteredTracks.length) {
+
+      setRenderedTrackLimit(filteredTracks.length);
+
+      return;
+
+    }
+
+
+
+    if (!hasMoreVisibleTrackSource) return;
+
+
+
+    void (shouldUseNativeBaseQuery ? loadNativeBaseTrackChunk() : scheduleTrackChunkLoad());
+
+  }, [
+
+    filteredTracks.length,
+
+    hasMoreVisibleTrackSource,
+
+    isOpen,
+
+    loadNativeBaseTrackChunk,
+
+    renderedTrackLimit,
+
+    scheduleTrackChunkLoad,
+
+    shouldEagerFillGroupedCardView,
+
+    shouldUseNativeBaseQuery,
+
+  ]);
 
 
 

@@ -922,6 +922,7 @@
   "pages.music-library.columns.composer": "Composer",
   "pages.music-library.columns.bitrate": "Bitrate",
   "pages.music-library.columns.sampleRate": "Sample Rate",
+  "pages.music-library.columns.bitDepth": "Bit Depth",
   "pages.music-library.columns.format": "Format",
   "pages.music-library.columns.playCount": "Play Count",
   "pages.music-library.columns.lastPlayed": "Last Played",

@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyMusicLibraryBaseQuery } from '../baseQuery';
 import {
   clearRegisteredMusicLibraryBaseFieldCapabilities,
+  getMusicLibraryBaseNativeFilterField,
+  getMusicLibraryBaseNativeSortField,
   listMusicLibraryBaseFilterFieldIds,
   listMusicLibraryBaseGroupFieldIds,
   listMusicLibraryBaseOrderFieldIds,
   listRegisteredMusicLibraryBaseFieldCapabilities,
   registerMusicLibraryBaseFieldCapabilities,
+  resolveMusicLibraryBaseFieldHeaderKey,
   resolveMusicLibraryBaseFieldLabel,
   subscribeMusicLibraryBaseFieldCapabilities,
 } from '../fieldCapabilities';
@@ -33,6 +36,43 @@ describe('fieldCapabilities', () => {
     expect(listMusicLibraryBaseOrderFieldIds()).toContain('composerTag');
     expect(listMusicLibraryBaseGroupFieldIds()).toContain('composerTag');
     expect(resolveMusicLibraryBaseFieldLabel('composerTag')).toBe('Composer Tag');
+  });
+
+  it('maps builtin year and format fields to native local DB columns', () => {
+    expect(getMusicLibraryBaseNativeFilterField('format')).toBe('format');
+    expect(getMusicLibraryBaseNativeSortField('format')).toBe('format');
+    expect(getMusicLibraryBaseNativeFilterField('year')).toBe('year');
+    expect(getMusicLibraryBaseNativeSortField('year')).toBe('year');
+  });
+
+  it('hides internal native catalog fields from base UI lists and localizes useful ones', () => {
+    registerMusicLibraryBaseFieldCapabilities(
+      [
+        {
+          id: 'libraryPathId',
+          label: 'Source Id',
+          trackKey: 'libraryPathId',
+          filterable: true,
+          sortable: true,
+          groupable: true,
+        },
+        {
+          id: 'bitDepth',
+          label: 'Bit Depth',
+          trackKey: 'bitDepth',
+          filterable: true,
+          sortable: true,
+          groupable: true,
+        },
+      ],
+      { source: 'native-catalog' }
+    );
+
+    expect(listMusicLibraryBaseGroupFieldIds()).not.toContain('libraryPathId');
+    expect(listMusicLibraryBaseOrderFieldIds()).toContain('bitDepth');
+    expect(resolveMusicLibraryBaseFieldHeaderKey('bitDepth')).toBe(
+      'pages.music-library.columns.bitDepth'
+    );
   });
 
   it('uses extension trackKey in fallback sorting', () => {

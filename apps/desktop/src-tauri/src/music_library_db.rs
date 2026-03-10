@@ -15,7 +15,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-const DB_VERSION: i32 = 8;
+const DB_VERSION: i32 = 9;
 pub const EVENT_MUSIC_LIBRARY_SCHEMA_CHANGED: &str = "music-library-schema-changed";
 
 static DB_CONN: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
@@ -101,6 +101,8 @@ pub struct LibraryTrackUpsertInput {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub genre: Option<String>,
+    pub year: Option<i64>,
+    pub format: Option<String>,
     pub duration: Option<f64>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
@@ -188,6 +190,8 @@ pub struct LibraryTrackRecord {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub genre: Option<String>,
+    pub year: Option<i64>,
+    pub format: Option<String>,
     pub duration_seconds: Option<f64>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
@@ -1120,6 +1124,8 @@ fn migrate(conn: &Connection) -> Result<(), String> {
               artist TEXT,
               album TEXT,
               genre TEXT,
+              year INTEGER,
+              format TEXT,
               duration_seconds REAL,
               sample_rate INTEGER,
               bit_depth INTEGER,
@@ -1339,6 +1345,24 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         version = 8;
     }
 
+    if version == 8 {
+        let local_track_columns = list_table_columns(conn, "local_tracks")?;
+
+        if !local_track_columns.iter().any(|column| column == "year") {
+            conn.execute_batch("ALTER TABLE local_tracks ADD COLUMN year INTEGER;")
+                .map_err(|error| format!("Failed to migrate music library schema to v9 (year): {error}"))?;
+        }
+
+        if !local_track_columns.iter().any(|column| column == "format") {
+            conn.execute_batch("ALTER TABLE local_tracks ADD COLUMN format TEXT;")
+                .map_err(|error| format!("Failed to migrate music library schema to v9 (format): {error}"))?;
+        }
+
+        conn.execute_batch("PRAGMA user_version = 9;")
+            .map_err(|error| format!("Failed to migrate music library schema to v9: {error}"))?;
+        version = 9;
+    }
+
     if version != DB_VERSION {
         return Err(format!(
             "Unsupported music library DB schema version: {version} (expected {DB_VERSION})"
@@ -1349,6 +1373,8 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         r#"
         CREATE INDEX IF NOT EXISTS local_tracks_artist_idx ON local_tracks(artist);
         CREATE INDEX IF NOT EXISTS local_tracks_album_idx ON local_tracks(album);
+        CREATE INDEX IF NOT EXISTS local_tracks_year_idx ON local_tracks(year);
+        CREATE INDEX IF NOT EXISTS local_tracks_format_idx ON local_tracks(format);
         CREATE INDEX IF NOT EXISTS local_tracks_last_played_at_ms_idx ON local_tracks(last_played_at_ms);
         "#,
     )
@@ -3645,6 +3671,8 @@ pub fn sync_source_tracks(
                   artist,
                   album,
                   genre,
+                  year,
+                  format,
                   duration_seconds,
                   sample_rate,
                   bit_depth,
@@ -3673,10 +3701,12 @@ pub fn sync_source_tracks(
                   ?13,
                   ?14,
                   ?15,
-                  'available',
                   ?16,
                   ?17,
-                  ?18
+                  'available',
+                  ?18,
+                  ?19,
+                  ?20
                 )
                 ON CONFLICT(id) DO UPDATE SET
                   source_id = excluded.source_id,
@@ -3686,6 +3716,8 @@ pub fn sync_source_tracks(
                   artist = excluded.artist,
                   album = excluded.album,
                   genre = excluded.genre,
+                  year = excluded.year,
+                  format = excluded.format,
                   duration_seconds = excluded.duration_seconds,
                   sample_rate = excluded.sample_rate,
                   bit_depth = excluded.bit_depth,
@@ -3706,6 +3738,8 @@ pub fn sync_source_tracks(
                     normalize_text(item.artist.as_deref()),
                     normalize_text(item.album.as_deref()),
                     normalize_text(item.genre.as_deref()),
+                    item.year,
+                    normalize_text(item.format.as_deref()),
                     item.duration,
                     item.sample_rate.map(|value| value as i64),
                     item.bit_depth.map(|value| value as i64),
@@ -5477,6 +5511,8 @@ fn track_query_select_clause(use_list_projection: bool) -> &'static str {
                   t.artist,
                   t.album,
                   t.genre,
+                  t.year,
+                  t.format,
                   t.duration_seconds,
                   t.sample_rate,
                   t.bit_depth,
@@ -5756,6 +5792,8 @@ fn execute_track_query(
                             | "artist"
                             | "album"
                             | "genre"
+                            | "year"
+                            | "format"
                             | "duration_seconds"
                             | "sample_rate"
                             | "bit_depth"
@@ -5797,6 +5835,8 @@ fn execute_track_query(
                 artist: row.get("artist")?,
                 album: row.get("album")?,
                 genre: row.get("genre")?,
+                year: row.get("year")?,
+                format: row.get("format")?,
                 duration_seconds: row.get("duration_seconds")?,
                 sample_rate: row
                     .get::<_, Option<i64>>("sample_rate")?
@@ -6003,6 +6043,28 @@ pub fn list_facet_catalog(app: &AppHandle) -> Result<Vec<LibraryFacetCatalogReco
 fn read_schema_version(conn: &Connection) -> Result<i32, String> {
     conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
         .map_err(|error| format!("Failed to read schema user_version: {error}"))
+}
+
+fn list_table_columns(conn: &Connection, table_name: &str) -> Result<Vec<String>, String> {
+    let sql = format!("PRAGMA table_info({})", quote_sqlite_identifier(table_name));
+    let mut stmt = conn
+        .prepare(sql.as_str())
+        .map_err(|error| format!("Failed to prepare table_info pragma for {table_name}: {error}"))?;
+
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("Failed to inspect table columns for {table_name}: {error}"))?;
+
+    let mut columns = Vec::new();
+    for row in rows {
+        columns.push(
+            row.map_err(|error| {
+                format!("Failed to parse table column row for {table_name}: {error}")
+            })?,
+        );
+    }
+
+    Ok(columns)
 }
 
 fn inspect_schema_source_table(
@@ -6718,11 +6780,11 @@ mod tests {
     }
 
     #[test]
-    fn migrate_empty_db_to_v8_schema() {
+    fn migrate_empty_db_to_v9_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-empty");
         migrate(&conn).expect("migrate empty db");
 
-        assert_eq!(read_user_version(&conn), 8);
+        assert_eq!(read_user_version(&conn), 9);
         assert!(has_table(&conn, "connectors"));
         assert!(has_table(&conn, "source_sync_state"));
         assert!(has_table(&conn, "source_fingerprint_state"));
@@ -6740,13 +6802,16 @@ mod tests {
         assert!(has_index(&conn, "lyric_fetch_jobs_status_idx"));
         assert!(has_index(&conn, "playlists_owner_uid_idx"));
         assert!(has_index(&conn, "playlist_items_playlist_id_idx"));
+        let local_track_columns = list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
+        assert!(local_track_columns.iter().any(|column| column == "year"));
+        assert!(local_track_columns.iter().any(|column| column == "format"));
 
         drop(conn);
         cleanup_temp_db(&path);
     }
 
     #[test]
-    fn migrate_v4_db_to_v8_schema() {
+    fn migrate_v4_db_to_v9_schema() {
         let (conn, path) = open_temp_db("music-library-migrate-v4");
         conn.execute_batch(
             r#"
@@ -6781,7 +6846,7 @@ mod tests {
 
         migrate(&conn).expect("migrate v4 db");
 
-        assert_eq!(read_user_version(&conn), 8);
+        assert_eq!(read_user_version(&conn), 9);
         assert!(has_table(&conn, "connector_accounts"));
         assert!(has_table(&conn, "cover_refs"));
         assert!(has_table(&conn, "lyric_refs"));
@@ -6796,6 +6861,9 @@ mod tests {
         ));
         assert!(has_index(&conn, "lyric_candidates_document_id_idx"));
         assert!(has_index(&conn, "playlists_owner_last_opened_idx"));
+        let local_track_columns = list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
+        assert!(local_track_columns.iter().any(|column| column == "year"));
+        assert!(local_track_columns.iter().any(|column| column == "format"));
 
         drop(conn);
         cleanup_temp_db(&path);
