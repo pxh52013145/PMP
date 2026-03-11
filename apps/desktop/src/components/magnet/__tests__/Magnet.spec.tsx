@@ -45,6 +45,34 @@ function createDraggableMagnet(onDrag: () => void): Magnet {
   };
 }
 
+function createPaddedMagnet(): Magnet {
+  return {
+    id: 'content-style-test',
+    type: 'custom',
+    name: 'Content Style Test',
+    anchorType: 'single',
+    anchors: [{ id: 'anchor-1', gridX: 0, gridY: 0, role: 'anchor' }],
+    content: 'Content',
+    style: {
+      width: '36px',
+      height: '36px',
+      backgroundColor: 'rgba(0, 0, 0, 0.8)',
+      border: '1px solid rgba(255, 255, 255, 0.12)',
+      padding: '8px',
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'flex-start',
+      color: 'rgb(255, 0, 0)',
+      fontSize: '13px',
+    },
+    state: 'idle',
+    interactions: {
+      draggable: false,
+      clickable: false,
+    },
+  };
+}
+
 describe('MagnetComponent', () => {
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
@@ -101,5 +129,55 @@ describe('MagnetComponent', () => {
       shell?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
     });
     expect(shell?.dataset.interactionState).toBe('idle');
+  });
+
+  it('routes content layout styles to the content layer instead of chrome', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(<MagnetComponent magnet={createPaddedMagnet()} pixelPositions={pixelPositions} />);
+    });
+
+    const chrome = container.querySelector('.magnet') as HTMLDivElement | null;
+    const contentLayer = container.querySelector('.magnet-content-layer') as HTMLDivElement | null;
+
+    expect(chrome).not.toBeNull();
+    expect(contentLayer).not.toBeNull();
+    expect(chrome?.style.padding).toBe('');
+    expect(chrome?.style.color).toBe('');
+    expect(contentLayer?.style.padding).toBe('8px');
+    expect(contentLayer?.style.display).toBe('flex');
+    expect(contentLayer?.style.alignItems).toBe('flex-start');
+    expect(contentLayer?.style.justifyContent).toBe('flex-start');
+    expect(contentLayer?.style.color).toBe('rgb(255, 0, 0)');
+    expect(contentLayer?.style.fontSize).toBe('13px');
+  });
+
+  it('flattens joined seam corners while keeping outer corners rounded', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        <MagnetComponent
+          magnet={createPaddedMagnet()}
+          pixelPositions={pixelPositions}
+          joinEdges={{ left: false, right: true, top: false, bottom: false }}
+        />
+      );
+    });
+
+    const chrome = container.querySelector('.magnet') as HTMLDivElement | null;
+    const baseLayer = container.querySelector('.magnet-base-layer') as HTMLDivElement | null;
+
+    expect(chrome?.style.borderTopLeftRadius).toBe('2px');
+    expect(chrome?.style.borderBottomLeftRadius).toBe('2px');
+    expect(chrome?.style.borderTopRightRadius).toBe('0px');
+    expect(chrome?.style.borderBottomRightRadius).toBe('0px');
+    expect(baseLayer?.style.borderTopRightRadius).toBe('0px');
+    expect(baseLayer?.style.borderTopLeftRadius).toBe('2px');
   });
 });

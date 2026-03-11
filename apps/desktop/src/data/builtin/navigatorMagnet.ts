@@ -1,4 +1,16 @@
 import { Magnet } from '../../types/pixel';
+import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+
+const NAVIGATOR_CHROME = createPanelChromePreset({
+  style: {
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+  },
+  hoverStyle: {
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+  },
+});
 
 /**
  * 路由导航 Magnet
@@ -13,16 +25,8 @@ export const NAVIGATOR_MAGNET: Magnet = {
   anchors: [],
   gridFootprint: { width: 27, height: 14 },
   content: '', // 内容由 Navigator 组件渲染
-  style: {
-    backgroundColor: 'rgba(0, 0, 0, 0)', // 透明，让组件自己处理背景
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-    overflow: 'hidden',
-    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-  },
+  style: NAVIGATOR_CHROME.style,
+  animation: NAVIGATOR_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,

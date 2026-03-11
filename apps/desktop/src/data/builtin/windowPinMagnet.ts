@@ -1,4 +1,7 @@
 import { Magnet } from '../../types/pixel';
+import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+
+const WINDOW_PIN_CHROME = createControlChromePreset();
 
 /**
  * 窗口置顶按钮 Magnet 配置
@@ -15,24 +18,8 @@ export const WINDOW_PIN_MAGNET: Magnet = {
   anchorType: 'single',
   anchors: [],
   content: '📌',
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(60, 60, 60, 0.9)',
-      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  style: WINDOW_PIN_CHROME.style,
+  animation: WINDOW_PIN_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,

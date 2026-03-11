@@ -1,13 +1,11 @@
-/* Magnet layout shell (position/size + hit-testing). */
 .magnet-shell {
   box-sizing: border-box;
   user-select: none;
   -webkit-user-select: none;
-  z-index: 1; /* Default layer (hover elevates). */
-  overflow: visible; /* Allow glow overflow. */
+  z-index: 1;
+  overflow: visible;
 }
 
-/* 悬停时提升层级，避免被其他magnet遮挡 */
 .magnet-shell:hover {
   z-index: 10;
 }
@@ -16,7 +14,6 @@
   z-index: 12;
 }
 
-/* Magnet 基础样式 */
 .magnet {
   display: flex;
   align-items: center;
@@ -25,19 +22,19 @@
   box-sizing: border-box;
   user-select: none;
   -webkit-user-select: none;
-  position: relative; /* 确保z-index生效 */
-  z-index: 1; /* 默认层级 */
-  overflow: visible; /* 允许发光效果溢出 */
-  border-radius: 2.7px;
-  /* 注意：过渡动画和 hover/active 效果现在由 Magnet 的 animation 配置控制 */
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+  border-radius: var(--magnet-corner-radius, 2px);
+  isolation: isolate;
 }
 
-/* Avoid default browser focus rings inside magnets (can cause white outlines / jank in WebView2). */
 .magnet-base-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 0;
+  border-radius: inherit;
 }
 
 .magnet-content-layer {
@@ -45,17 +42,25 @@
   z-index: 1;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: inherit;
 }
 
 .magnet-renderer {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: inherit;
 }
 
 .magnet-shell button:focus,
@@ -76,62 +81,26 @@
   height: 100%;
 }
 
-/* 窗口控制按钮基础样式（动画已迁移到 JSON 配置） */
 .magnet-window-control {
-  border-radius: 2.7px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  cursor: pointer;
   line-height: 1;
 }
 
-/* 拖动手柄基础样式（动画已迁移到 JSON 配置） */
 .magnet-drag-handle {
-  border-radius: 2.7px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   cursor: inherit;
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* 禁用状态样式 */
 .magnet-state-disabled {
   opacity: 0.4;
   pointer-events: none;
   cursor: not-allowed;
 }
 
-/* 搜索栏基础样式 */
-.magnet-search-bar {
-  border-radius: 2.7px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-/* 播放列表基础样式 */
-.magnet-playlist {
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-/* 进度条基础样式（动画已迁移到 JSON 配置） */
 .magnet-progress-bar {
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   cursor: pointer;
 }
 
-/* 播放控制按钮基础样式（动画已迁移到 JSON 配置） */
-.magnet-playback-control {
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-/* 歌曲信息基础样式（动画已迁移到 JSON 配置） */
 .magnet-track-info {
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   cursor: pointer;
 }

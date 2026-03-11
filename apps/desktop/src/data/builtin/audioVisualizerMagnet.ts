@@ -1,4 +1,19 @@
 import { Magnet } from '../../types/pixel';
+import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+
+const AUDIO_VISUALIZER_CHROME = createPanelChromePreset({
+  style: {
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    padding: '6px',
+    display: 'flex',
+    alignItems: 'stretch',
+    justifyContent: 'stretch',
+  },
+  hoverStyle: {
+    border: '1px solid rgba(0, 255, 136, 0.25)',
+    boxShadow: '0 10px 25px rgba(0, 255, 136, 0.08)',
+  },
+});
 
 /**
  * Audio Visualizer Magnet
@@ -16,27 +31,11 @@ export const AUDIO_VISUALIZER_MAGNET: Magnet = {
   anchors: [],
   gridFootprint: { width: 6, height: 6 },
   content: '',
-  style: {
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-    overflow: 'hidden',
-    padding: '6px',
-    display: 'flex',
-    alignItems: 'stretch',
-    justifyContent: 'stretch',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      border: '1px solid rgba(0, 255, 136, 0.25)',
-      boxShadow: '0 10px 25px rgba(0, 255, 136, 0.08)',
-    },
-  },
+  style: AUDIO_VISUALIZER_CHROME.style,
+  animation: AUDIO_VISUALIZER_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
     clickable: false,
   },
 };
-

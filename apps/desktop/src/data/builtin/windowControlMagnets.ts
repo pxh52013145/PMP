@@ -1,4 +1,13 @@
 import { Magnet } from '../../types/pixel';
+import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+
+const MINIMIZE_CHROME = createControlChromePreset();
+const MAXIMIZE_CHROME = createControlChromePreset({ style: { fontSize: '14px' } });
+const CLOSE_CHROME = createControlChromePreset({
+  hoverStyle: {
+    backgroundColor: 'rgba(220, 38, 38, 0.9)',
+  },
+});
 
 /**
  * 窗口控制按钮 Magnet 配置
@@ -14,24 +23,8 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     anchorType: 'single',
     anchors: [],
     content: '\u2500', // ─
-    style: {
-      width: '36px',
-      height: '36px',
-      backgroundColor: 'rgba(0, 0, 0, 0.7)',
-      border: '1px solid rgba(255, 255, 255, 0.1)',
-      borderRadius: '2.7px',
-    },
-    animation: {
-      transition: 'all 0.2s ease',
-      hoverStyle: {
-        transform: 'scale(1.05)',
-        backgroundColor: 'rgba(60, 60, 60, 0.9)',
-        boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-      },
-      activeStyle: {
-        transform: 'scale(0.95)',
-      },
-    },
+    style: MINIMIZE_CHROME.style,
+    animation: MINIMIZE_CHROME.animation,
     state: 'idle',
     interactions: {
       draggable: false,
@@ -45,25 +38,8 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     anchorType: 'single',
     anchors: [],
     content: '\u25fb', // ◻ 使用 Unicode 正方形符号，更好居中
-    style: {
-      width: '36px',
-      height: '36px',
-      backgroundColor: 'rgba(0, 0, 0, 0.7)',
-      border: '1px solid rgba(255, 255, 255, 0.1)',
-      borderRadius: '2.7px',
-      fontSize: '14px', // 稍微调小字体
-    },
-    animation: {
-      transition: 'all 0.2s ease',
-      hoverStyle: {
-        transform: 'scale(1.05)',
-        backgroundColor: 'rgba(60, 60, 60, 0.9)',
-        boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-      },
-      activeStyle: {
-        transform: 'scale(0.95)',
-      },
-    },
+    style: MAXIMIZE_CHROME.style,
+    animation: MAXIMIZE_CHROME.animation,
     state: 'idle',
     interactions: {
       draggable: false,
@@ -77,24 +53,8 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     anchorType: 'single',
     anchors: [],
     content: '\u2715', // ✕
-    style: {
-      width: '36px',
-      height: '36px',
-      backgroundColor: 'rgba(0, 0, 0, 0.7)',
-      border: '1px solid rgba(255, 255, 255, 0.1)',
-      borderRadius: '2.7px',
-    },
-    animation: {
-      transition: 'all 0.2s ease',
-      hoverStyle: {
-        transform: 'scale(1.05)',
-        backgroundColor: 'rgba(220, 38, 38, 0.9)',
-        boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-      },
-      activeStyle: {
-        transform: 'scale(0.95)',
-      },
-    },
+    style: CLOSE_CHROME.style,
+    animation: CLOSE_CHROME.animation,
     state: 'idle',
     interactions: {
       draggable: false,

@@ -1,4 +1,18 @@
 import { Magnet } from '../../types/pixel';
+import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+
+const PROCESS_PERF_MONITOR_CHROME = createPanelChromePreset({
+  style: {
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    display: 'flex',
+    alignItems: 'stretch',
+    justifyContent: 'stretch',
+  },
+  hoverStyle: {
+    border: '1px solid rgba(255, 255, 255, 0.22)',
+  },
+});
 
 export const PROCESS_PERF_MONITOR_MAGNET: Magnet = {
   id: 'process-perf-monitor',
@@ -12,21 +26,8 @@ export const PROCESS_PERF_MONITOR_MAGNET: Magnet = {
   anchors: [],
   gridFootprint: { width: 6, height: 8 },
   content: '',
-  style: {
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    border: '1px solid rgba(255, 255, 255, 0.12)',
-    borderRadius: '2.7px',
-    overflow: 'hidden',
-    display: 'flex',
-    alignItems: 'stretch',
-    justifyContent: 'stretch',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      border: '1px solid rgba(255, 255, 255, 0.22)',
-    },
-  },
+  style: PROCESS_PERF_MONITOR_CHROME.style,
+  animation: PROCESS_PERF_MONITOR_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: true,

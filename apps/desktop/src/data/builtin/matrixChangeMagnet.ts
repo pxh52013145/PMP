@@ -1,4 +1,11 @@
 import { Magnet } from '../../types/pixel';
+import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+
+const MATRIX_CHANGE_CHROME = createPanelChromePreset({
+  style: {
+    height: '36px',
+  },
+});
 
 export const MATRIX_CHANGE_MAGNET: Magnet = {
   id: 'btn-matrix-change',
@@ -12,14 +19,8 @@ export const MATRIX_CHANGE_MAGNET: Magnet = {
   anchors: [],
   gridFootprint: { width: 3, height: 1 },
   content: '',
-  style: {
-    height: '36px',
-    borderRadius: '2.7px',
-    overflow: 'hidden',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-  },
+  style: MATRIX_CHANGE_CHROME.style,
+  animation: MATRIX_CHANGE_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: true,

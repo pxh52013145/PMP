@@ -1,4 +1,7 @@
 import { Magnet } from '../../types/pixel';
+import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+
+const DEBUG_BUTTON_CHROME = createControlChromePreset();
 
 /**
  * 设置按钮 Magnet（历史 id：btn-debug）
@@ -18,26 +21,10 @@ export const DEBUG_BUTTON_MAGNET: Magnet = {
   content: '🛠️',
 
   // 样式
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-  },
+  style: DEBUG_BUTTON_CHROME.style,
 
   // 动画
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(60, 60, 60, 0.9)',
-      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  animation: DEBUG_BUTTON_CHROME.animation,
 
   // 状态
   state: 'idle',

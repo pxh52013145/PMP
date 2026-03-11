@@ -1,4 +1,20 @@
 import { Magnet } from '../../types/pixel';
+import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+
+const DSP_VST_CHROME = createPanelChromePreset({
+  style: {
+    height: '36px',
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    padding: '6px',
+    display: 'flex',
+    alignItems: 'stretch',
+    justifyContent: 'stretch',
+  },
+  hoverStyle: {
+    border: '1px solid rgba(0, 255, 136, 0.25)',
+    boxShadow: '0 10px 25px rgba(0, 255, 136, 0.08)',
+  },
+});
 
 export const DSP_VST_MAGNET: Magnet = {
   id: 'dsp-vst',
@@ -12,24 +28,8 @@ export const DSP_VST_MAGNET: Magnet = {
   anchors: [],
   gridFootprint: { width: 3, height: 1 },
   content: '',
-  style: {
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-    overflow: 'hidden',
-    padding: '6px',
-    display: 'flex',
-    alignItems: 'stretch',
-    justifyContent: 'stretch',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      border: '1px solid rgba(0, 255, 136, 0.25)',
-      boxShadow: '0 10px 25px rgba(0, 255, 136, 0.08)',
-    },
-  },
+  style: DSP_VST_CHROME.style,
+  animation: DSP_VST_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,

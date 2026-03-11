@@ -1,4 +1,47 @@
 import { Magnet } from '../../types/pixel';
+import { createControlChromePreset, createPanelChromePreset } from '../../modules/magnets/chromePresets';
+
+const PLAYER_CONTROL_CHROME = createControlChromePreset();
+const PRIMARY_PLAYER_CONTROL_CHROME = createControlChromePreset({
+  style: {
+    backgroundColor: 'rgba(0, 123, 255, 0.8)',
+    border: '2px solid rgba(255, 255, 255, 0.2)',
+  },
+  hoverStyle: {
+    backgroundColor: 'rgba(0, 123, 255, 1)',
+    boxShadow: '0 4px 8px rgba(0, 123, 255, 0.3)',
+  },
+});
+const PROGRESS_BAR_CHROME = createPanelChromePreset({
+  style: {
+    height: '24px',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  hoverStyle: {
+    backgroundColor: 'rgba(18, 22, 30, 0.92)',
+    border: '1px solid rgba(0, 212, 255, 0.22)',
+    boxShadow: '0 0 12px rgba(0, 212, 255, 0.12)',
+  },
+});
+const TRACK_INFO_CHROME = createPanelChromePreset({
+  style: {
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    color: '#ffffff',
+    fontSize: '12px',
+  },
+  hoverStyle: {
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    border: '1px solid rgba(255, 255, 255, 0.2)',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+  },
+});
 
 /**
  * 音乐播放器控制按钮 Magnet 配置
@@ -19,24 +62,8 @@ export const PREVIOUS_BUTTON: Magnet = {
   anchorType: 'single',
   anchors: [],
   content: '⟪',
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(60, 60, 60, 0.9)',
-      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  style: PLAYER_CONTROL_CHROME.style,
+  animation: PLAYER_CONTROL_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
@@ -60,24 +87,8 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
   anchorType: 'single',
   anchors: [],
   content: '▶', // 默认显示播放
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 123, 255, 0.8)', // 主要操作使用醒目的蓝色
-    border: '2px solid rgba(255, 255, 255, 0.2)',
-    borderRadius: '2.7px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(0, 123, 255, 1)',
-      boxShadow: '0 4px 8px rgba(0, 123, 255, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  style: PRIMARY_PLAYER_CONTROL_CHROME.style,
+  animation: PRIMARY_PLAYER_CONTROL_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
@@ -102,24 +113,8 @@ export const NEXT_BUTTON: Magnet = {
   anchorType: 'single',
   anchors: [],
   content: '⟫',
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(60, 60, 60, 0.9)',
-      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  style: PLAYER_CONTROL_CHROME.style,
+  animation: PLAYER_CONTROL_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
@@ -143,24 +138,8 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
   anchorType: 'single',
   anchors: [],
   content: '↻', // 默认循环播放
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(60, 60, 60, 0.9)',
-      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  style: PLAYER_CONTROL_CHROME.style,
+  animation: PLAYER_CONTROL_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
@@ -184,24 +163,8 @@ export const VOLUME_BUTTON: Magnet = {
   anchorType: 'single',
   anchors: [],
   content: '♪', // 音量图标
-  style: {
-    width: '36px',
-    height: '36px',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      transform: 'scale(1.05)',
-      backgroundColor: 'rgba(60, 60, 60, 0.9)',
-      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-    },
-    activeStyle: {
-      transform: 'scale(0.95)',
-    },
-  },
+  style: PLAYER_CONTROL_CHROME.style,
+  animation: PLAYER_CONTROL_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
@@ -227,25 +190,8 @@ export const PROGRESS_BAR: Magnet = {
   anchors: [],
   gridFootprint: { width: 27, height: 1 },
   content: '', // 进度条内容由React组件渲染
-  style: {
-    height: '24px',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: '2.7px',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    overflow: 'hidden',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    padding: '0 8px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      backgroundColor: 'rgba(18, 22, 30, 0.92)',
-      border: '1px solid rgba(0, 212, 255, 0.22)',
-      boxShadow: '0 0 12px rgba(0, 212, 255, 0.12)',
-    },
-  },
+  style: PROGRESS_BAR_CHROME.style,
+  animation: PROGRESS_BAR_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
@@ -271,27 +217,8 @@ export const TRACK_INFO: Magnet = {
   anchors: [],
   gridFootprint: { width: 6, height: 4 },
   content: '', // 内容由React组件渲染
-  style: {
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: '2.7px',
-    padding: '8px',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    color: '#ffffff',
-    fontSize: '12px',
-  },
-  animation: {
-    transition: 'all 0.2s ease',
-    hoverStyle: {
-      backgroundColor: 'rgba(0, 0, 0, 0.85)',
-      border: '1px solid rgba(255, 255, 255, 0.2)',
-      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-    },
-  },
+  style: TRACK_INFO_CHROME.style,
+  animation: TRACK_INFO_CHROME.animation,
   state: 'idle',
   interactions: {
     draggable: false,
