@@ -99,6 +99,9 @@ export interface MagnetAnimation {
   // active 状态样式（点击/按下）
   activeStyle?: MagnetStyle;
 
+  // dragging 状态样式（拖动反馈）
+  dragStyle?: MagnetStyle;
+
   // 过渡动画配置
   transition?: string; // 例如: "all 0.2s ease"
 }

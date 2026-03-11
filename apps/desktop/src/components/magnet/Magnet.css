@@ -12,11 +12,16 @@
   z-index: 10;
 }
 
+.magnet-shell.magnet-shell--dragging {
+  z-index: 12;
+}
+
 /* Magnet 基础样式 */
 .magnet {
   display: flex;
   align-items: center;
   justify-content: center;
+  color: white;
   box-sizing: border-box;
   user-select: none;
   -webkit-user-select: none;
@@ -62,7 +67,7 @@
 
 .magnet-text {
   font-size: 16px;
-  color: white;
+  color: inherit;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   display: flex;
   align-items: center;
@@ -85,8 +90,7 @@
   border-radius: 2.7px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  opacity: 0.6;
+  cursor: inherit;
   user-select: none;
   -webkit-user-select: none;
 }

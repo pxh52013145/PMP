@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
-import { Magnet } from '../../types/pixel';
+import type { Magnet } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
 import { getMagnetRenderer } from '../../magnet-system/registry';
 import type { MagnetChromeOverrideMode } from '../../modules/magnets';
@@ -58,7 +58,9 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
   const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
   const [isHovering, setIsHovering] = useState(false);
   const [isActive, setIsActive] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const { PIXEL_SIZE } = MATRIX_CONFIG;
+  const dragFeedbackTimerRef = useRef<number | null>(null);
 
   // ✅ 优化：检测大幅度位置变化，禁用 transition 以避免卡顿
   const [disableTransition, setDisableTransition] = useState(true); // ✅ 首次渲染禁用动画
@@ -66,6 +68,27 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
     null
   );
   const isFirstRenderRef = useRef(true);
+
+  const clearDragFeedbackTimer = useCallback(() => {
+    if (dragFeedbackTimerRef.current === null) return;
+    window.clearTimeout(dragFeedbackTimerRef.current);
+    dragFeedbackTimerRef.current = null;
+  }, []);
+
+  const resetTransientInteractionState = useCallback(() => {
+    clearDragFeedbackTimer();
+    setIsActive(false);
+    setIsDragging(false);
+  }, [clearDragFeedbackTimer]);
+
+  const scheduleDragFeedbackReset = useCallback(() => {
+    clearDragFeedbackTimer();
+    dragFeedbackTimerRef.current = window.setTimeout(() => {
+      dragFeedbackTimerRef.current = null;
+      setIsActive(false);
+      setIsDragging(false);
+    }, 240);
+  }, [clearDragFeedbackTimer]);
 
   // 根据锚点计算实际位置和尺寸
   const bounds = useMemo(() => {
@@ -173,19 +196,23 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      setIsActive(true);
+
       if (magnet.interactions.draggable && magnet.interactions.onDrag) {
         e.preventDefault();
+        setIsDragging(true);
+        scheduleDragFeedbackReset();
         magnet.interactions.onDrag(magnet.anchors);
         onInteract?.(magnet.id, 'drag');
+        return;
       }
-      setIsActive(true);
     },
-    [magnet, onInteract]
+    [magnet, onInteract, scheduleDragFeedbackReset]
   );
 
   const handleMouseUp = useCallback(() => {
-    setIsActive(false);
-  }, []);
+    resetTransientInteractionState();
+  }, [resetTransientInteractionState]);
 
   const handleMouseEnter = useCallback(() => {
     setIsHovering(true);
@@ -194,7 +221,32 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
   const handleMouseLeave = useCallback(() => {
     setIsHovering(false);
     setIsActive(false);
-  }, []);
+    if (!isDragging) return;
+    scheduleDragFeedbackReset();
+  }, [isDragging, scheduleDragFeedbackReset]);
+
+  useEffect(() => {
+    const handleWindowBlur = () => {
+      resetTransientInteractionState();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        resetTransientInteractionState();
+      }
+    };
+
+    window.addEventListener('mouseup', handleWindowBlur);
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('mouseup', handleWindowBlur);
+      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearDragFeedbackTimer();
+    };
+  }, [clearDragFeedbackTimer, resetTransientInteractionState]);
 
   // 计算当前应用的样式
   const currentStyle = useMemo(() => {
@@ -210,8 +262,12 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
       appliedStyle = { ...appliedStyle, ...magnet.animation.activeStyle };
     }
 
+    if (isDragging && magnet.animation?.dragStyle) {
+      appliedStyle = { ...appliedStyle, ...magnet.animation.dragStyle };
+    }
+
     return appliedStyle;
-  }, [magnet.style, magnet.animation, isHovering, isActive]);
+  }, [magnet.style, magnet.animation, isHovering, isActive, isDragging]);
 
   // ✅ 检测大幅度位置变化（窗口大小变化），禁用 transition
   useEffect(() => {
@@ -375,10 +431,13 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
         ? false
         : magnet.chrome?.enabled !== false;
 
+  const interactionState = isDragging ? 'dragging' : isActive ? 'active' : isHovering ? 'hover' : 'idle';
+
   return (
     <div
-      className={`magnet-shell magnet-state-${magnet.state}`}
+      className={`magnet-shell magnet-shell--${interactionState} magnet-state-${magnet.state}`}
       data-magnet-id={magnet.id}
+      data-interaction-state={interactionState}
       style={shellStyle}
       onClick={handleClick}
       onMouseDown={handleMouseDown}
@@ -388,7 +447,7 @@ export function MagnetComponent({ magnet, pixelPositions, onInteract, chromeOver
     >
       {chromeEnabled ? (
         <div
-          className={`magnet magnet-${magnet.type} magnet-state-${magnet.state}`}
+          className={`magnet magnet--${interactionState} magnet-${magnet.type} magnet-state-${magnet.state}`}
           style={chromeStyle}
         >
           <div className="magnet-base-layer" style={chromeBaseStyle} />
