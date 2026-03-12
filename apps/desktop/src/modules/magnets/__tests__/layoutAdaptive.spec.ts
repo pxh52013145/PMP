@@ -38,6 +38,15 @@ function createSingleMagnet(id: string, gridX: number, gridY: number): Magnet {
   };
 }
 
+function createLeftDockedSingleMagnet(id: string, gridX: number, gridY: number): Magnet {
+  return {
+    ...createSingleMagnet(id, gridX, gridY),
+    type: 'navigation',
+    boundsMode: 'docked',
+    boundsDock: { x: 'start' },
+  };
+}
+
 function createNavigationPageMagnet(): Magnet {
   return {
     id: 'navigation-page',
@@ -124,7 +133,36 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(pageTop - buttonBottom).toBeGreaterThanOrEqual(0);
   });
 
-  it('keeps adjacent left dock rectangles aligned without compact drift', () => {
+  it('preserves free gaps between left panels and the navigation page when the viewport is roomy', () => {
+    const result = buildAdaptiveMagnetLayout(
+      [
+        createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7),
+        createRectangularMagnet('audio-visualizer', 0, 9, 5, 14),
+        createRectangularMagnet('track-info', 0, 15, 5, 18),
+        createNavigationPageMagnet(),
+      ],
+      createPixelPositions(32, 32),
+      { width: 1000, height: 800 }
+    );
+
+    expect(result.mode).toBe('normal');
+
+    const perfBounds = result.boundsByMagnetId['process-perf-monitor'];
+    const visualizerBounds = result.boundsByMagnetId['audio-visualizer'];
+    const trackInfoBounds = result.boundsByMagnetId['track-info'];
+    const pageBounds = result.boundsByMagnetId['navigation-page'];
+
+    expect(pageBounds.x - (perfBounds.x + perfBounds.width)).toBeGreaterThan(0);
+    expect(pageBounds.x - (visualizerBounds.x + visualizerBounds.width)).toBeGreaterThan(0);
+    expect(pageBounds.x - (trackInfoBounds.x + trackInfoBounds.width)).toBeGreaterThan(0);
+
+    expect(result.joinsByMagnetId['process-perf-monitor'].right).toBe(false);
+    expect(result.joinsByMagnetId['audio-visualizer'].right).toBe(false);
+    expect(result.joinsByMagnetId['track-info'].right).toBe(false);
+    expect(result.joinsByMagnetId['navigation-page'].left).toBe(false);
+  });
+
+  it('lets adjacent left panels meet the navigation page seam at minimum spacing without compact drift', () => {
     const result = buildAdaptiveMagnetLayout(
       [
         createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7),
@@ -153,5 +191,23 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(result.joinsByMagnetId['audio-visualizer'].right).toBe(true);
     expect(result.joinsByMagnetId['track-info'].right).toBe(true);
     expect(result.joinsByMagnetId['navigation-page'].left).toBe(true);
+  });
+
+  it('keeps the back button aligned to the navigation left seam without sticking to the page below in a roomy layout', () => {
+    const result = buildAdaptiveMagnetLayout(
+      [createLeftDockedSingleMagnet('btn-back', 6, 0), createNavigationPageMagnet()],
+      createPixelPositions(32, 32),
+      { width: 1000, height: 800 }
+    );
+
+    expect(result.mode).toBe('normal');
+
+    const backBounds = result.boundsByMagnetId['btn-back'];
+    const pageBounds = result.boundsByMagnetId['navigation-page'];
+
+    expect(backBounds.x).toBe(pageBounds.x);
+    expect(backBounds.y + backBounds.height).toBeLessThan(pageBounds.y);
+    expect(result.joinsByMagnetId['btn-back'].bottom).toBe(false);
+    expect(result.joinsByMagnetId['navigation-page'].top).toBe(false);
   });
 });

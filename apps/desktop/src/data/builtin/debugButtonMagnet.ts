@@ -1,7 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const DEBUG_BUTTON_CHROME = createControlChromePreset();
+const DEBUG_BUTTON_LAYOUT = createCenteredSingleControlLayoutPreset();
 
 /**
  * 设置按钮 Magnet（历史 id：btn-debug）
@@ -16,6 +18,7 @@ export const DEBUG_BUTTON_MAGNET: Magnet = {
   // 单点锚定在左下角
   anchorType: 'single',
   anchors: [],
+  ...DEBUG_BUTTON_LAYOUT,
 
   // 内容
   content: '🛠️',

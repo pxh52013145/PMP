@@ -105,12 +105,12 @@
 .queue-header-btn {
   width: 32px;
   height: 32px;
-  background: transparent;
+  background-color: transparent;
   border: none;
   color: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
   font-size: 14px;
   display: flex;
   align-items: center;
@@ -118,7 +118,7 @@
 }
 
 .queue-header-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -135,12 +135,12 @@
 .queue-modal-close {
   width: 32px;
   height: 32px;
-  background: transparent;
+  background-color: transparent;
   border: none;
   color: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease;
   font-size: 18px;
   display: flex;
   align-items: center;
@@ -148,7 +148,7 @@
 }
 
 .queue-modal-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -202,17 +202,17 @@
 .queue-empty-btn {
   margin-top: 8px;
   padding: 8px 16px;
-  background: rgba(70, 130, 180, 0.8);
+  background-color: rgba(70, 130, 180, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.9);
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .queue-empty-btn:hover {
-  background: rgba(70, 130, 180, 1);
+  background-color: rgba(70, 130, 180, 1);
   box-shadow: 0 2px 8px rgba(70, 130, 180, 0.3);
 }
 
@@ -221,8 +221,8 @@
   align-items: center;
   gap: 12px;
   padding: 12px 24px;
-  background: transparent;
-  transition: all 0.25s ease;
+  background-color: transparent;
+  transition: background-color 0.25s ease, border-left-color 0.25s ease;
   border-left: 3px solid transparent;
   cursor: pointer;
   position: relative;
@@ -233,7 +233,7 @@
 }
 
 .queue-item-edit-mode:hover {
-  background: rgba(70, 130, 180, 0.08);
+  background-color: rgba(70, 130, 180, 0.08);
   border-left-color: rgba(70, 130, 180, 0.9);
 }
 
@@ -345,11 +345,11 @@
 }
 
 .queue-item-action-btn {
-  background: transparent;
+  background-color: transparent;
   border: none;
   cursor: pointer;
   opacity: 0;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
   font-size: 12px;
   padding: 4px 6px;
   color: rgba(255, 255, 255, 0.5);
@@ -362,12 +362,12 @@
 
 .queue-item-play:hover {
   color: rgba(70, 130, 180, 0.9);
-  background: rgba(70, 130, 180, 0.1);
+  background-color: rgba(70, 130, 180, 0.1);
 }
 
 .queue-item-remove:hover {
   color: rgba(236, 65, 65, 0.9);
-  background: rgba(236, 65, 65, 0.1);
+  background-color: rgba(236, 65, 65, 0.1);
 }
 
 /* 当前播放的歌曲始终显示播放按钮 */

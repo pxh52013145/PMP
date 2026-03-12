@@ -13,7 +13,11 @@ export interface MagnetStateConfig {
   variant?: string;
   variantConfig?: Record<string, unknown>;
   previewText?: string;
+  boundsMode?: Magnet['boundsMode'];
+  boundsDock?: Magnet['boundsDock'];
+  boundsInset?: Magnet['boundsInset'];
   chromeEnabled?: boolean;
+  chromeInset?: NonNullable<Magnet['chrome']>['inset'];
   styleOverride?: {
     style?: Magnet['style'];
     animation?: Magnet['animation'];
@@ -31,8 +35,48 @@ export interface MagnetConfig {
   customMagnets: Magnet[]; // 自定义 Magnet 的完整定义
 }
 
-const CONFIG_VERSION = '1.1.0';
+const CONFIG_VERSION = '1.2.0';
 const CONFIG_KEY = 'pixel-matrix-player-config';
+
+function createLayoutStateConfig(magnet: Magnet): Pick<
+  MagnetStateConfig,
+  'boundsMode' | 'boundsDock' | 'boundsInset' | 'chromeEnabled' | 'chromeInset'
+> {
+  return {
+    boundsMode: magnet.boundsMode,
+    boundsDock: magnet.boundsDock,
+    boundsInset: magnet.boundsInset,
+    chromeEnabled: magnet.chrome?.enabled,
+    chromeInset: magnet.chrome?.inset,
+  };
+}
+
+function applySavedLayoutState<TMagnet extends Magnet>(
+  magnet: TMagnet,
+  savedConfig: Pick<
+    MagnetStateConfig,
+    'boundsMode' | 'boundsDock' | 'boundsInset' | 'chromeEnabled' | 'chromeInset'
+  >
+): TMagnet {
+  const nextMagnet = {
+    ...magnet,
+    boundsMode: savedConfig.boundsMode ?? magnet.boundsMode,
+    boundsDock: savedConfig.boundsDock ?? magnet.boundsDock,
+    boundsInset: savedConfig.boundsInset ?? magnet.boundsInset,
+  };
+
+  if (typeof savedConfig.chromeEnabled === 'boolean' || savedConfig.chromeInset !== undefined) {
+    nextMagnet.chrome = {
+      ...(magnet.chrome ?? {}),
+      ...(typeof savedConfig.chromeEnabled === 'boolean'
+        ? { enabled: savedConfig.chromeEnabled }
+        : {}),
+      ...(savedConfig.chromeInset !== undefined ? { inset: savedConfig.chromeInset } : {}),
+    };
+  }
+
+  return nextMagnet;
+}
 
 /**
  * 保存配置到 localStorage
@@ -64,7 +108,7 @@ export function saveConfig(
         variant: magnet.variant,
         variantConfig: magnet.variantConfig,
         previewText: magnet.previewText,
-        chromeEnabled: magnet.chrome?.enabled,
+        ...createLayoutStateConfig(magnet),
       };
 
       // 对于内置 Magnet，检查样式是否被修改
@@ -211,7 +255,7 @@ export function exportConfig(
       variant: magnet.variant,
       variantConfig: magnet.variantConfig,
       previewText: magnet.previewText,
-      chromeEnabled: magnet.chrome?.enabled,
+      ...createLayoutStateConfig(magnet),
     };
 
     // 对于内置 Magnet，检查样式是否被修改
@@ -399,12 +443,9 @@ export function applyConfig(
       appliedMagnet.variant = savedConfig.variant ?? appliedMagnet.variant;
       appliedMagnet.variantConfig = savedConfig.variantConfig ?? appliedMagnet.variantConfig;
       appliedMagnet.previewText = savedConfig.previewText ?? appliedMagnet.previewText;
+      const layoutAppliedMagnet = applySavedLayoutState(appliedMagnet, savedConfig);
 
-      if (typeof savedConfig.chromeEnabled === 'boolean') {
-        appliedMagnet.chrome = { ...(appliedMagnet.chrome ?? {}), enabled: savedConfig.chromeEnabled };
-      }
-
-      magnetLibrary.push(appliedMagnet);
+      magnetLibrary.push(layoutAppliedMagnet);
       addedIds.add(defaultMagnet.id);
 
       // 恢复激活状态
@@ -448,11 +489,9 @@ export function applyConfig(
           previewText: savedConfig.previewText ?? customMagnet.previewText,
         };
 
-        if (typeof savedConfig.chromeEnabled === 'boolean') {
-          nextMagnet.chrome = { ...(nextMagnet.chrome ?? {}), enabled: savedConfig.chromeEnabled };
-        }
+        const layoutAppliedMagnet = applySavedLayoutState(nextMagnet, savedConfig);
 
-        magnetLibrary.push(nextMagnet);
+        magnetLibrary.push(layoutAppliedMagnet);
         addedIds.add(customMagnet.id);
 
         // 恢复激活状态

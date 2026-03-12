@@ -1,5 +1,6 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const MINIMIZE_CHROME = createControlChromePreset();
 const MAXIMIZE_CHROME = createControlChromePreset({ style: { fontSize: '14px' } });
@@ -8,6 +9,7 @@ const CLOSE_CHROME = createControlChromePreset({
     backgroundColor: 'rgba(220, 38, 38, 0.9)',
   },
 });
+const WINDOW_CONTROL_LAYOUT = createCenteredSingleControlLayoutPreset();
 
 /**
  * 窗口控制按钮 Magnet 配置
@@ -22,6 +24,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     name: '最小化',
     anchorType: 'single',
     anchors: [],
+    ...WINDOW_CONTROL_LAYOUT,
     content: '\u2500', // ─
     style: MINIMIZE_CHROME.style,
     animation: MINIMIZE_CHROME.animation,
@@ -37,6 +40,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     name: '最大化',
     anchorType: 'single',
     anchors: [],
+    ...WINDOW_CONTROL_LAYOUT,
     content: '\u25fb', // ◻ 使用 Unicode 正方形符号，更好居中
     style: MAXIMIZE_CHROME.style,
     animation: MAXIMIZE_CHROME.animation,
@@ -52,6 +56,7 @@ export const WINDOW_CONTROL_MAGNETS: Magnet[] = [
     name: '关闭',
     anchorType: 'single',
     anchors: [],
+    ...WINDOW_CONTROL_LAYOUT,
     content: '\u2715', // ✕
     style: CLOSE_CHROME.style,
     animation: CLOSE_CHROME.animation,

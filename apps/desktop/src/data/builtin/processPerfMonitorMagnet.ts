@@ -1,5 +1,6 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const PROCESS_PERF_MONITOR_CHROME = createPanelChromePreset({
   style: {
@@ -13,6 +14,9 @@ const PROCESS_PERF_MONITOR_CHROME = createPanelChromePreset({
     border: '1px solid rgba(255, 255, 255, 0.22)',
   },
 });
+const PROCESS_PERF_MONITOR_LAYOUT = createPanelLayoutPreset({
+  boundsInset: { top: 8 },
+});
 
 export const PROCESS_PERF_MONITOR_MAGNET: Magnet = {
   id: 'process-perf-monitor',
@@ -25,6 +29,7 @@ export const PROCESS_PERF_MONITOR_MAGNET: Magnet = {
   anchorType: 'rectangular',
   anchors: [],
   gridFootprint: { width: 6, height: 8 },
+  ...PROCESS_PERF_MONITOR_LAYOUT,
   content: '',
   style: PROCESS_PERF_MONITOR_CHROME.style,
   animation: PROCESS_PERF_MONITOR_CHROME.animation,

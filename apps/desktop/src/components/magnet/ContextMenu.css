@@ -42,12 +42,12 @@
   color: rgba(255, 255, 255, 0.9);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
   user-select: none;
 }
 
 .context-menu-item:hover:not(.disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 .context-menu-item.disabled {
@@ -60,7 +60,7 @@
 }
 
 .context-menu-item.danger:hover:not(.disabled) {
-  background: rgba(255, 100, 100, 0.15);
+  background-color: rgba(255, 100, 100, 0.15);
   color: rgba(255, 100, 100, 1);
 }
 

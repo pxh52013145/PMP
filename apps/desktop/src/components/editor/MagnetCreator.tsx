@@ -1,8 +1,17 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Magnet, PixelAnchor, AnchorType, MagnetStyle } from '../../types/pixel';
+import {
+  Magnet,
+  PixelAnchor,
+  AnchorType,
+  MagnetBoundsMode,
+  MagnetBoundsDockAxis,
+  MagnetInsetConfig,
+} from '../../types/pixel';
 import { open } from '@tauri-apps/api/dialog';
 import { readTextFile } from '@tauri-apps/api/fs';
 import { useEditor } from '../../contexts/EditorContext';
+import { MagnetComponent } from '../magnet/Magnet';
+import { computeMagnetBounds } from '../../modules/magnets/geometry';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import { readJson, writeJson } from '../../modules/storage';
 import { useLocale, useT } from '../../i18n';
@@ -64,6 +73,69 @@ const addHistoryItem = (
   saveHistory(magnet.id, history);
 };
 
+type InsetSide = keyof MagnetInsetConfig;
+type InsetDraft = Record<InsetSide, string>;
+type DockAxisDraft = MagnetBoundsDockAxis | '';
+
+const INSET_SIDES: InsetSide[] = ['top', 'right', 'bottom', 'left'];
+
+function createEmptyInsetDraft(): InsetDraft {
+  return {
+    top: '',
+    right: '',
+    bottom: '',
+    left: '',
+  };
+}
+
+function createInsetDraft(config?: MagnetInsetConfig): InsetDraft {
+  const draft = createEmptyInsetDraft();
+
+  INSET_SIDES.forEach((side) => {
+    const value = config?.[side];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      draft[side] = String(value);
+    }
+  });
+
+  return draft;
+}
+
+function parseInsetDraft(draft: InsetDraft): MagnetInsetConfig | undefined {
+  const inset: MagnetInsetConfig = {};
+
+  INSET_SIDES.forEach((side) => {
+    const raw = draft[side].trim();
+    if (!raw) return;
+
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) return;
+
+    const normalized = Math.max(0, parsed);
+    if (normalized > 0) {
+      inset[side] = normalized;
+    }
+  });
+
+  return Object.keys(inset).length > 0 ? inset : undefined;
+}
+
+function parseDockAxis(value: DockAxisDraft): MagnetBoundsDockAxis | undefined {
+  return value === '' ? undefined : value;
+}
+
+function buildChromeConfig(
+  enabled: boolean | undefined,
+  inset: MagnetInsetConfig | undefined
+): Magnet['chrome'] | undefined {
+  if (enabled === undefined && inset === undefined) return undefined;
+
+  return {
+    ...(enabled !== undefined ? { enabled } : {}),
+    ...(inset !== undefined ? { inset } : {}),
+  };
+}
+
 export function MagnetCreator({
   mode,
   editingMagnet,
@@ -82,6 +154,11 @@ export function MagnetCreator({
   const [name, setName] = useState('');
   const [anchorType, setAnchorType] = useState<AnchorType>('single');
   const [content, setContent] = useState('');
+  const [boundsMode, setBoundsMode] = useState<MagnetBoundsMode>('centered');
+  const [boundsDockX, setBoundsDockX] = useState<DockAxisDraft>('');
+  const [boundsDockY, setBoundsDockY] = useState<DockAxisDraft>('');
+  const [boundsInsetDraft, setBoundsInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
+  const [chromeInsetDraft, setChromeInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
 
   // 锚点配置 - pixel 尺寸
   const [horizontalPixels, setHorizontalPixels] = useState(5); // 水平方向 pixel 数量
@@ -126,6 +203,7 @@ export function MagnetCreator({
   // 历史记录相关
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<MagnetHistory[]>([]);
+  const [sourceMagnet, setSourceMagnet] = useState<Magnet | null>(editingMagnet ?? null);
 
   // 是否为内置 Magnet（判断是否显示还原按钮）
   const isBuiltinMagnet = useMemo(() => {
@@ -156,12 +234,34 @@ export function MagnetCreator({
     }
   }, [animationJson]);
 
+  const parsedBoundsInset = useMemo(() => parseInsetDraft(boundsInsetDraft), [boundsInsetDraft]);
+
+  const parsedChromeInset = useMemo(() => parseInsetDraft(chromeInsetDraft), [chromeInsetDraft]);
+
+  const parsedBoundsDock = useMemo(() => {
+    const x = parseDockAxis(boundsDockX);
+    const y = parseDockAxis(boundsDockY);
+
+    if (x === undefined && y === undefined) return undefined;
+
+    return {
+      ...(x !== undefined ? { x } : {}),
+      ...(y !== undefined ? { y } : {}),
+    };
+  }, [boundsDockX, boundsDockY]);
+
   // 加载 Magnet 配置的辅助函数
   const loadMagnetConfig = useCallback((magnet: Magnet) => {
+    setSourceMagnet(magnet);
     setId(magnet.id);
     setName(magnet.name);
     setAnchorType(magnet.anchorType);
     setContent(typeof magnet.content === 'string' ? magnet.content : '');
+    setBoundsMode(magnet.boundsMode ?? 'centered');
+    setBoundsDockX(magnet.boundsDock?.x ?? '');
+    setBoundsDockY(magnet.boundsDock?.y ?? '');
+    setBoundsInsetDraft(createInsetDraft(magnet.boundsInset));
+    setChromeInsetDraft(createInsetDraft(magnet.chrome?.inset));
 
     // 加载锚点配置并计算 pixel 尺寸
     if (magnet.anchors.length >= 2) {
@@ -438,22 +538,42 @@ export function MagnetCreator({
   const previewMagnet = useMemo<Magnet | null>(() => {
     if (!id || !name) return null;
 
+    const chrome = buildChromeConfig(sourceMagnet?.chrome?.enabled, parsedChromeInset);
+
     return {
+      ...(sourceMagnet ?? {}),
       id,
-      type: 'custom',
+      type: sourceMagnet?.type ?? 'custom',
       name,
       anchorType,
       anchors: generateAnchors,
-      content: content,
+      boundsMode: anchorType === 'single' ? boundsMode : undefined,
+      boundsDock: anchorType === 'single' && boundsMode === 'docked' ? parsedBoundsDock : undefined,
+      boundsInset: parsedBoundsInset,
+      content,
       style: parsedStyle,
       animation: parsedAnimation,
+      chrome,
       state: 'idle',
       interactions: {
-        draggable: false,
-        clickable: true,
+        draggable: sourceMagnet?.interactions?.draggable ?? false,
+        clickable: sourceMagnet?.interactions?.clickable ?? true,
       },
     };
-  }, [id, name, anchorType, content, parsedStyle, parsedAnimation, generateAnchors]);
+  }, [
+    anchorType,
+    boundsMode,
+    content,
+    generateAnchors,
+    id,
+    name,
+    parsedAnimation,
+    parsedBoundsDock,
+    parsedBoundsInset,
+    parsedChromeInset,
+    parsedStyle,
+    sourceMagnet,
+  ]);
 
   // 保存处理
   const handleSave = () => {
@@ -510,17 +630,24 @@ export function MagnetCreator({
     }
 
     // 保存时使用真实的 content，不使用占位符
+    const chrome = buildChromeConfig(sourceMagnet?.chrome?.enabled, parsedChromeInset);
+
     const magnetToSave: Magnet = {
+      ...(sourceMagnet ?? editingMagnet ?? {}),
       id,
-      type: editingMagnet?.type || 'custom',
+      type: sourceMagnet?.type ?? editingMagnet?.type ?? 'custom',
       name,
       anchorType,
       anchors: anchorsToSave,
+      boundsMode: anchorType === 'single' ? boundsMode : undefined,
+      boundsDock: anchorType === 'single' && boundsMode === 'docked' ? parsedBoundsDock : undefined,
+      boundsInset: parsedBoundsInset,
       content, // 真实的 content，可以是空字符串
       style: parsedStyle,
       animation: parsedAnimation,
+      chrome,
       state: 'idle',
-      interactions: editingMagnet?.interactions || {
+      interactions: sourceMagnet?.interactions ?? editingMagnet?.interactions ?? {
         draggable: false,
         clickable: true,
       },
@@ -537,8 +664,12 @@ export function MagnetCreator({
         lastMagnet.name !== magnetToSave.name ||
         lastMagnet.anchorType !== magnetToSave.anchorType ||
         JSON.stringify(lastMagnet.anchors) !== JSON.stringify(magnetToSave.anchors) ||
+        lastMagnet.boundsMode !== magnetToSave.boundsMode ||
+        JSON.stringify(lastMagnet.boundsDock ?? {}) !== JSON.stringify(magnetToSave.boundsDock ?? {}) ||
+        JSON.stringify(lastMagnet.boundsInset ?? {}) !== JSON.stringify(magnetToSave.boundsInset ?? {}) ||
         JSON.stringify(lastMagnet.style) !== JSON.stringify(magnetToSave.style) ||
         JSON.stringify(lastMagnet.animation) !== JSON.stringify(magnetToSave.animation) ||
+        JSON.stringify(lastMagnet.chrome ?? {}) !== JSON.stringify(magnetToSave.chrome ?? {}) ||
         lastMagnet.content !== magnetToSave.content;
 
       hasChanges = configChanged;
@@ -628,11 +759,21 @@ export function MagnetCreator({
     const exportData = {
       id: previewMagnet.id,
       type: previewMagnet.type,
+      renderer: previewMagnet.renderer,
+      previewText: previewMagnet.previewText,
+      description: previewMagnet.description,
+      tags: previewMagnet.tags,
+      variant: previewMagnet.variant,
+      variantConfig: previewMagnet.variantConfig,
       name: previewMagnet.name,
       anchorType: previewMagnet.anchorType,
       anchors: previewMagnet.anchors,
+      boundsMode: previewMagnet.boundsMode,
+      boundsDock: previewMagnet.boundsDock,
+      boundsInset: previewMagnet.boundsInset,
       content: previewMagnet.content,
       style: previewMagnet.style,
+      chrome: previewMagnet.chrome,
       animation: previewMagnet.animation,
       state: previewMagnet.state,
       interactions: {
@@ -666,7 +807,7 @@ export function MagnetCreator({
   const isValid = id && name && !anchorsValidation.hasErrors;
 
   // 简化的预览组件（不依赖 MATRIX_CONFIG）
-  const PreviewMagnet = ({ magnet }: { magnet: Magnet }) => {
+  /* const PreviewMagnet = ({ magnet }: { magnet: Magnet }) => {
     const [isHovering, setIsHovering] = useState(false);
     const [isActive, setIsActive] = useState(false);
     const pixelSize = 8; // 预览用的 pixel 尺寸
@@ -780,7 +921,14 @@ export function MagnetCreator({
         )}
       </div>
     );
-  };
+  }; */
+
+  const previewStageSize = 240;
+
+  const previewBounds = useMemo(() => {
+    if (!previewMagnet) return null;
+    return computeMagnetBounds(previewMagnet, previewPixelPositions);
+  }, [previewMagnet, previewPixelPositions]);
 
   return (
     <div className="editor-creator">
@@ -804,14 +952,22 @@ export function MagnetCreator({
                   transition: 'transform 0.2s ease',
                 }}
               >
-                <PreviewMagnet magnet={previewMagnet} />
+                <div
+                  className="creator-preview-stage"
+                  style={{
+                    width: `${previewStageSize}px`,
+                    height: `${previewStageSize}px`,
+                  }}
+                >
+                  <MagnetComponent magnet={previewMagnet} pixelPositions={previewPixelPositions} />
+                </div>
               </div>
             </div>
             <div className="creator-preview-hint">
               {t('editor.magnet-creator.preview.hintHover')}
               <br />
               {t('editor.magnet-creator.preview.hintActive')}
-              {previewScale < 1 && (
+              {previewBounds && previewScale < 1 && (
                 <>
                   <br />
                   <span style={{ color: 'rgba(255, 204, 0, 0.9)' }}>
@@ -1080,6 +1236,153 @@ export function MagnetCreator({
         </div>
 
         {/* 样式配置 */}
+        <div className="creator-section">
+          <div className="creator-section-title">{t('editor.magnet-creator.section.layout')}</div>
+          <div className="creator-form">
+            <div className="creator-layout-hint">{t('editor.magnet-creator.layout.hint')}</div>
+
+            {anchorType === 'single' && (
+              <div className="creator-layout-subsection">
+                <div className="creator-form-row">
+                  <label className="creator-label">
+                    {t('editor.magnet-creator.field.boundsMode')}
+                  </label>
+                  <select
+                    className="creator-select"
+                    value={boundsMode}
+                    onChange={(e) => setBoundsMode(e.target.value as MagnetBoundsMode)}
+                  >
+                    <option value="centered">
+                      {t('editor.magnet-creator.boundsMode.centered')}
+                    </option>
+                    <option value="docked">{t('editor.magnet-creator.boundsMode.docked')}</option>
+                  </select>
+                </div>
+
+                <div className="creator-layout-hint">
+                  {t('editor.magnet-creator.layout.singleModeHint')}
+                </div>
+
+                {boundsMode === 'docked' && (
+                  <div className="creator-layout-grid creator-layout-grid--dock">
+                    <div className="creator-form-column">
+                      <label className="creator-label">
+                        {t('editor.magnet-creator.field.boundsDockX')}
+                      </label>
+                      <select
+                        className="creator-select"
+                        value={boundsDockX}
+                        onChange={(e) => setBoundsDockX(e.target.value as DockAxisDraft)}
+                      >
+                        <option value="">
+                          {t('editor.magnet-creator.boundsDockAxis.none')}
+                        </option>
+                        <option value="start">
+                          {t('editor.magnet-creator.boundsDockAxis.start')}
+                        </option>
+                        <option value="center">
+                          {t('editor.magnet-creator.boundsDockAxis.center')}
+                        </option>
+                        <option value="end">
+                          {t('editor.magnet-creator.boundsDockAxis.end')}
+                        </option>
+                      </select>
+                    </div>
+
+                    <div className="creator-form-column">
+                      <label className="creator-label">
+                        {t('editor.magnet-creator.field.boundsDockY')}
+                      </label>
+                      <select
+                        className="creator-select"
+                        value={boundsDockY}
+                        onChange={(e) => setBoundsDockY(e.target.value as DockAxisDraft)}
+                      >
+                        <option value="">
+                          {t('editor.magnet-creator.boundsDockAxis.none')}
+                        </option>
+                        <option value="start">
+                          {t('editor.magnet-creator.boundsDockAxis.start')}
+                        </option>
+                        <option value="center">
+                          {t('editor.magnet-creator.boundsDockAxis.center')}
+                        </option>
+                        <option value="end">
+                          {t('editor.magnet-creator.boundsDockAxis.end')}
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="creator-layout-subsection">
+              <div className="creator-layout-subtitle">
+                {t('editor.magnet-creator.layout.realInsetTitle')}
+              </div>
+              <div className="creator-layout-hint">
+                {t('editor.magnet-creator.layout.realInsetHint')}
+              </div>
+              <div className="creator-layout-grid">
+                {INSET_SIDES.map((side) => (
+                  <div key={`bounds-${side}`} className="creator-form-column">
+                    <label className="creator-label">
+                      {t(`editor.magnet-creator.field.boundsInset${side[0].toUpperCase()}${side.slice(1)}`)}
+                    </label>
+                    <input
+                      type="number"
+                      className="creator-input creator-input-number creator-layout-input"
+                      value={boundsInsetDraft[side]}
+                      onChange={(e) =>
+                        setBoundsInsetDraft((current) => ({
+                          ...current,
+                          [side]: e.target.value,
+                        }))
+                      }
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="creator-layout-subsection">
+              <div className="creator-layout-subtitle">
+                {t('editor.magnet-creator.layout.chromeInsetTitle')}
+              </div>
+              <div className="creator-layout-hint">
+                {t('editor.magnet-creator.layout.chromeInsetHint')}
+              </div>
+              <div className="creator-layout-grid">
+                {INSET_SIDES.map((side) => (
+                  <div key={`chrome-${side}`} className="creator-form-column">
+                    <label className="creator-label">
+                      {t(`editor.magnet-creator.field.chromeInset${side[0].toUpperCase()}${side.slice(1)}`)}
+                    </label>
+                    <input
+                      type="number"
+                      className="creator-input creator-input-number creator-layout-input"
+                      value={chromeInsetDraft[side]}
+                      onChange={(e) =>
+                        setChromeInsetDraft((current) => ({
+                          ...current,
+                          [side]: e.target.value,
+                        }))
+                      }
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="creator-section">
           <div className="creator-section-title">{t('editor.magnet-creator.section.styleJson')}</div>
           <div className="creator-form">

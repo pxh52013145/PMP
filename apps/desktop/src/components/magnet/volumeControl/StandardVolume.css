@@ -8,18 +8,22 @@
   width: 100%;
   height: 100%;
   border: none;
-  background: transparent;
+  background-color: transparent;
   color: rgba(255, 255, 255, 0.8);
   font-size: 18px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease,
+    opacity 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .volume-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
   color: white;
   transform: scale(1.05);
 }
@@ -58,16 +62,16 @@
   width: 28px;
   height: 28px;
   border: none;
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.8);
   font-size: 14px;
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .volume-mute-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.2);
   color: white;
 }
 
@@ -103,7 +107,7 @@
   background: white;
   border-radius: 50%;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .volume-slider::-moz-range-thumb {
@@ -113,7 +117,7 @@
   border-radius: 50%;
   cursor: pointer;
   border: none;
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .volume-slider:hover::-webkit-slider-thumb {

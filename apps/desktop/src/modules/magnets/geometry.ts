@@ -1,5 +1,5 @@
 import { MATRIX_CONFIG } from '../../constants/config';
-import type { Magnet, MagnetStyle } from '../../types/pixel';
+import type { Magnet, MagnetInsetConfig, MagnetStyle } from '../../types/pixel';
 
 export interface MagnetBounds {
   x: number;
@@ -21,26 +21,10 @@ function parseSize(value: string | undefined, fallbackPx: number): number {
   return fallbackPx;
 }
 
-function deriveGridStep(distancePx: number, distanceGrid: number): number {
+function resolveHorizontalSpanBounds(leftX: number, rightX: number) {
   const { PIXEL_SIZE } = MATRIX_CONFIG;
-  if (distanceGrid <= 0) return PIXEL_SIZE;
-
-  const step = distancePx / distanceGrid;
-  if (!Number.isFinite(step) || step <= 0) return PIXEL_SIZE;
-  return step;
-}
-
-function resolveHalfGap(step: number): number {
-  const { PIXEL_SIZE } = MATRIX_CONFIG;
-  return Math.max(0, step - PIXEL_SIZE) / 2;
-}
-
-function resolveHorizontalSpanBounds(leftX: number, rightX: number, leftCol: number, rightCol: number) {
-  const { COLUMNS, EDGE_PADDING, PIXEL_SIZE } = MATRIX_CONFIG;
-  const stepX = deriveGridStep(rightX - leftX, rightCol - leftCol);
-  const halfGap = resolveHalfGap(stepX);
-  const x = leftCol <= 0 ? EDGE_PADDING / 2 : leftX - halfGap;
-  const right = rightCol >= COLUMNS - 1 ? rightX + PIXEL_SIZE + EDGE_PADDING / 2 : rightX + PIXEL_SIZE + halfGap;
+  const x = leftX;
+  const right = rightX + PIXEL_SIZE;
 
   return {
     x,
@@ -48,12 +32,10 @@ function resolveHorizontalSpanBounds(leftX: number, rightX: number, leftCol: num
   };
 }
 
-function resolveVerticalSpanBounds(topY: number, bottomY: number, topRow: number, bottomRow: number) {
-  const { ROWS, EDGE_PADDING, PIXEL_SIZE } = MATRIX_CONFIG;
-  const stepY = deriveGridStep(bottomY - topY, bottomRow - topRow);
-  const halfGap = resolveHalfGap(stepY);
-  const y = topRow <= 0 ? EDGE_PADDING / 2 : topY - halfGap;
-  const bottom = bottomRow >= ROWS - 1 ? bottomY + PIXEL_SIZE + EDGE_PADDING / 2 : bottomY + PIXEL_SIZE + halfGap;
+function resolveVerticalSpanBounds(topY: number, bottomY: number) {
+  const { PIXEL_SIZE } = MATRIX_CONFIG;
+  const y = topY;
+  const bottom = bottomY + PIXEL_SIZE;
 
   return {
     y,
@@ -61,31 +43,114 @@ function resolveVerticalSpanBounds(topY: number, bottomY: number, topRow: number
   };
 }
 
+function resolveSingleHorizontalSlotBounds(
+  gridX: number,
+  gridY: number,
+  currentX: number,
+  pixelPositions: Map<string, { x: number; y: number }>
+) {
+  const { COLUMNS, PIXEL_SIZE } = MATRIX_CONFIG;
+  const left = currentX;
+  const right =
+    gridX >= COLUMNS - 1
+      ? currentX + PIXEL_SIZE
+      : (() => {
+          const next = pixelPositions.get(`${gridX + 1},${gridY}`);
+          return next?.x ?? currentX + PIXEL_SIZE;
+        })();
+
+  return { left, right };
+}
+
+function resolveSingleVerticalSlotBounds(
+  gridX: number,
+  gridY: number,
+  currentY: number,
+  pixelPositions: Map<string, { x: number; y: number }>
+) {
+  const { ROWS, PIXEL_SIZE } = MATRIX_CONFIG;
+  const top = currentY;
+  const bottom =
+    gridY >= ROWS - 1
+      ? currentY + PIXEL_SIZE
+      : (() => {
+          const next = pixelPositions.get(`${gridX},${gridY + 1}`);
+          return next?.y ?? currentY + PIXEL_SIZE;
+        })();
+
+  return { top, bottom };
+}
+
+function resolveDockOffset(
+  slotStart: number,
+  slotEnd: number,
+  sizePx: number,
+  dock: 'start' | 'center' | 'end'
+) {
+  if (dock === 'start') return slotStart;
+  if (dock === 'end') return slotEnd - sizePx;
+  return slotStart + (slotEnd - slotStart - sizePx) / 2;
+}
+
+function normalizeInsetValue(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, value ?? 0);
+}
+
+export function resolveMagnetInsets(config?: MagnetInsetConfig): MagnetInsets {
+  return {
+    top: normalizeInsetValue(config?.top),
+    right: normalizeInsetValue(config?.right),
+    bottom: normalizeInsetValue(config?.bottom),
+    left: normalizeInsetValue(config?.left),
+  };
+}
+
 export function computeMagnetBounds(
-  magnet: Pick<Magnet, 'anchorType' | 'anchors' | 'style'>,
+  magnet: Pick<Magnet, 'anchorType' | 'anchors' | 'style' | 'boundsMode' | 'boundsDock' | 'boundsInset'>,
   pixelPositions: Map<string, { x: number; y: number }>
 ): MagnetBounds | null {
   const { PIXEL_SIZE } = MATRIX_CONFIG;
   const { anchorType, style } = magnet;
   const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
+  const applyBoundsInset = (bounds: MagnetBounds) => insetMagnetBounds(bounds, resolveMagnetInsets(magnet.boundsInset));
 
   switch (anchorType) {
     case 'single': {
       if (anchors.length < 1) return null;
-      const pos = pixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
+      const anchor = anchors[0];
+      const pos = pixelPositions.get(`${anchor.gridX},${anchor.gridY}`);
       if (!pos) return null;
 
       const magnetWidth = parseSize(style.width, 36);
       const magnetHeight = parseSize(style.height, 36);
-      const offsetX = (PIXEL_SIZE - magnetWidth) / 2;
-      const offsetY = (PIXEL_SIZE - magnetHeight) / 2;
+      const centeredX = pos.x + (PIXEL_SIZE - magnetWidth) / 2;
+      const centeredY = pos.y + (PIXEL_SIZE - magnetHeight) / 2;
 
-      return {
-        x: pos.x + offsetX,
-        y: pos.y + offsetY,
+      if (magnet.boundsMode === 'docked') {
+        const horizontalSlot = resolveSingleHorizontalSlotBounds(anchor.gridX, anchor.gridY, pos.x, pixelPositions);
+        const verticalSlot = resolveSingleVerticalSlotBounds(anchor.gridX, anchor.gridY, pos.y, pixelPositions);
+
+        return applyBoundsInset({
+          x:
+            magnet.boundsDock?.x === undefined
+              ? centeredX
+              : resolveDockOffset(horizontalSlot.left, horizontalSlot.right, magnetWidth, magnet.boundsDock.x),
+          y:
+            magnet.boundsDock?.y === undefined
+              ? centeredY
+              : resolveDockOffset(verticalSlot.top, verticalSlot.bottom, magnetHeight, magnet.boundsDock.y),
+          width: magnetWidth,
+          height: magnetHeight,
+        });
+      }
+
+      return applyBoundsInset({
+        x: centeredX,
+        y: centeredY,
         width: magnetWidth,
         height: magnetHeight,
-      };
+      });
     }
 
     case 'horizontal': {
@@ -98,14 +163,14 @@ export function computeMagnetBounds(
 
       const magnetHeight = parseSize(style.height, 36);
       const offsetY = (PIXEL_SIZE - magnetHeight) / 2;
-      const horizontalSpan = resolveHorizontalSpanBounds(left.x, right.x, leftAnchor.gridX, rightAnchor.gridX);
+      const horizontalSpan = resolveHorizontalSpanBounds(left.x, right.x);
 
-      return {
+      return applyBoundsInset({
         x: horizontalSpan.x,
         y: left.y + offsetY,
         width: horizontalSpan.width,
         height: magnetHeight,
-      };
+      });
     }
 
     case 'vertical': {
@@ -118,14 +183,14 @@ export function computeMagnetBounds(
 
       const magnetWidth = parseSize(style.width, 36);
       const offsetX = (PIXEL_SIZE - magnetWidth) / 2;
-      const verticalSpan = resolveVerticalSpanBounds(top.y, bottom.y, topAnchor.gridY, bottomAnchor.gridY);
+      const verticalSpan = resolveVerticalSpanBounds(top.y, bottom.y);
 
-      return {
+      return applyBoundsInset({
         x: top.x + offsetX,
         y: verticalSpan.y,
         width: magnetWidth,
         height: verticalSpan.height,
-      };
+      });
     }
 
     case 'rectangular': {
@@ -140,15 +205,15 @@ export function computeMagnetBounds(
       const bottomLeft = pixelPositions.get(`${leftCol},${bottomRow}`);
       if (!topLeft || !topRight || !bottomLeft) return null;
 
-      const horizontalSpan = resolveHorizontalSpanBounds(topLeft.x, topRight.x, leftCol, rightCol);
-      const verticalSpan = resolveVerticalSpanBounds(topLeft.y, bottomLeft.y, topRow, bottomRow);
+      const horizontalSpan = resolveHorizontalSpanBounds(topLeft.x, topRight.x);
+      const verticalSpan = resolveVerticalSpanBounds(topLeft.y, bottomLeft.y);
 
-      return {
+      return applyBoundsInset({
         x: horizontalSpan.x,
         y: verticalSpan.y,
         width: horizontalSpan.width,
         height: verticalSpan.height,
-      };
+      });
     }
 
     default:

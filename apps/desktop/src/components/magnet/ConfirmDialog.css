@@ -83,18 +83,23 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
   min-width: 80px;
 }
 
 .confirm-dialog-btn-cancel {
-  background: rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.15);
   color: rgba(255, 255, 255, 0.8);
 }
 
 .confirm-dialog-btn-cancel:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background-color: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.25);
   color: rgba(255, 255, 255, 0.95);
 }
@@ -104,26 +109,26 @@
 }
 
 .confirm-dialog-btn-primary {
-  background: rgba(100, 100, 255, 0.3);
+  background-color: rgba(100, 100, 255, 0.3);
   border-color: rgba(100, 100, 255, 0.5);
   color: white;
 }
 
 .confirm-dialog-btn-primary:hover {
-  background: rgba(100, 100, 255, 0.4);
+  background-color: rgba(100, 100, 255, 0.4);
   border-color: rgba(100, 100, 255, 0.6);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(100, 100, 255, 0.3);
 }
 
 .confirm-dialog-btn-danger {
-  background: rgba(236, 65, 65, 0.3);
+  background-color: rgba(236, 65, 65, 0.3);
   border-color: rgba(236, 65, 65, 0.5);
   color: white;
 }
 
 .confirm-dialog-btn-danger:hover {
-  background: rgba(236, 65, 65, 0.4);
+  background-color: rgba(236, 65, 65, 0.4);
   border-color: rgba(236, 65, 65, 0.6);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(236, 65, 65, 0.3);

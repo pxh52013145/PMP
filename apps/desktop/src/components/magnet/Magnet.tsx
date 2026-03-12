@@ -6,6 +6,7 @@ import { DEFAULT_MAGNET_TRANSITION } from '../../modules/magnets/chromePresets';
 import {
   alignMagnetBounds,
   computeMagnetBounds,
+  resolveMagnetInsets,
   type MagnetBounds,
 } from '../../modules/magnets/geometry';
 import type { MagnetAdaptiveLayoutMode, MagnetJoinEdges } from '../../modules/magnets/layoutAdaptive';
@@ -260,8 +261,18 @@ export function MagnetComponent({
     return magnet.animation?.transition || DEFAULT_MAGNET_TRANSITION;
   }, [lowRenderMode, disableTransition, magnet.animation?.transition]);
 
+  const chromeEnabled =
+    chromeOverrideMode === 'force-on'
+      ? true
+      : chromeOverrideMode === 'force-off'
+        ? false
+        : magnet.chrome?.enabled !== false;
+
   const chromeBaseOpacity = normalizeOpacity(currentStyle.opacity) ?? 1;
   const borderStroke = extractBorderStroke(currentStyle.border);
+  const chromeInsets = useMemo(() => resolveMagnetInsets(magnet.chrome?.inset), [magnet.chrome?.inset]);
+  const hasChromeInset = chromeInsets.top > 0 || chromeInsets.right > 0 || chromeInsets.bottom > 0 || chromeInsets.left > 0;
+  const chromeInsetApplies = chromeEnabled && hasChromeInset;
 
   const shellStyle = useMemo(() => {
     if (!bounds) return null;
@@ -311,7 +322,10 @@ export function MagnetComponent({
 
     return {
       position: 'absolute' as const,
-      inset: 0,
+      top: chromeInsets.top,
+      right: chromeInsets.right,
+      bottom: chromeInsets.bottom,
+      left: chromeInsets.left,
       pointerEvents: 'none' as const,
       transition: transitionValue,
       opacity: chromeBaseOpacity,
@@ -331,23 +345,53 @@ export function MagnetComponent({
     currentStyle.boxShadow,
     currentStyle.backdropFilter,
     currentStyle.filter,
+    chromeInsets.top,
+    chromeInsets.right,
+    chromeInsets.bottom,
+    chromeInsets.left,
     layoutMode,
     resolvedCornerRadii,
     transitionValue,
   ]);
 
-  const rendererStyle = useMemo(
-    () => ({
-      width: '100%',
-      height: '100%',
+  const rendererStyle = useMemo(() => {
+    const baseStyle = {
       minWidth: 0,
       minHeight: 0,
       boxSizing: 'border-box' as const,
       transition: transitionValue,
+      ...resolvedCornerRadii,
       ...contentTokens,
-    }),
-    [contentTokens, transitionValue]
-  );
+    };
+
+    if (!chromeInsetApplies) {
+      return {
+        width: '100%',
+        height: '100%',
+        ...baseStyle,
+      };
+    }
+
+    return {
+      position: 'absolute' as const,
+      top: chromeInsets.top,
+      right: chromeInsets.right,
+      bottom: chromeInsets.bottom,
+      left: chromeInsets.left,
+      width: 'auto',
+      height: 'auto',
+      ...baseStyle,
+    };
+  }, [
+    contentTokens,
+    transitionValue,
+    resolvedCornerRadii,
+    chromeInsetApplies,
+    chromeInsets.top,
+    chromeInsets.right,
+    chromeInsets.bottom,
+    chromeInsets.left,
+  ]);
 
   const renderContent = () => {
     const rendererId = magnet.renderer ?? magnet.id;
@@ -364,13 +408,6 @@ export function MagnetComponent({
   };
 
   if (!bounds || !shellStyle) return null;
-
-  const chromeEnabled =
-    chromeOverrideMode === 'force-on'
-      ? true
-      : chromeOverrideMode === 'force-off'
-        ? false
-        : magnet.chrome?.enabled !== false;
 
   const interactionState = isDragging ? 'dragging' : isActive ? 'active' : isHovering ? 'hover' : 'idle';
 

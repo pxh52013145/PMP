@@ -1,7 +1,11 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+import { createDockedSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const BACK_BUTTON_CHROME = createControlChromePreset();
+const BACK_BUTTON_LAYOUT = createDockedSingleControlLayoutPreset({
+  dock: { x: 'start' },
+});
 
 /**
  * 返回按钮 Magnet
@@ -13,6 +17,7 @@ export const BACK_BUTTON_MAGNET: Magnet = {
   name: '返回',
   anchorType: 'single',
   anchors: [],
+  ...BACK_BUTTON_LAYOUT,
   content: '←',
   style: BACK_BUTTON_CHROME.style,
   animation: BACK_BUTTON_CHROME.animation,

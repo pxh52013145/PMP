@@ -75,7 +75,7 @@
 .playlists-create-btn {
   width: 32px;
   height: 32px;
-  background: rgba(70, 130, 180, 0.8);
+  background-color: rgba(70, 130, 180, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.9);
   border-radius: 6px;
@@ -84,11 +84,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .playlists-create-btn:hover {
-  background: rgba(70, 130, 180, 1);
+  background-color: rgba(70, 130, 180, 1);
   box-shadow: 0 2px 8px rgba(70, 130, 180, 0.3);
 }
 
@@ -142,17 +142,17 @@
 .playlists-empty-btn {
   margin-top: 8px;
   padding: 8px 16px;
-  background: rgba(70, 130, 180, 0.8);
+  background-color: rgba(70, 130, 180, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.9);
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .playlists-empty-btn:hover {
-  background: rgba(70, 130, 180, 1);
+  background-color: rgba(70, 130, 180, 1);
   box-shadow: 0 2px 8px rgba(70, 130, 180, 0.3);
 }
 
@@ -161,20 +161,20 @@
   align-items: center;
   gap: 12px;
   padding: 12px;
-  background: transparent;
+  background-color: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
   margin-bottom: 4px;
 }
 
 .playlists-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .playlists-item-active {
-  background: rgba(70, 130, 180, 0.2);
+  background-color: rgba(70, 130, 180, 0.2);
   border-color: rgba(70, 130, 180, 0.4);
 }
 
@@ -324,12 +324,12 @@
 .playlists-close-btn {
   width: 32px;
   height: 32px;
-  background: transparent;
+  background-color: transparent;
   border: none;
   color: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease;
   font-size: 18px;
   display: flex;
   align-items: center;
@@ -337,7 +337,7 @@
 }
 
 .playlists-close-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -390,13 +390,18 @@
 
 .playlists-detail-btn {
   padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.05);
+  background-color: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.7);
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
   white-space: nowrap;
   min-height: 32px;
   display: inline-flex;
@@ -406,7 +411,7 @@
 }
 
 .playlists-detail-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -520,17 +525,17 @@
 .playlists-tracks-empty-btn {
   margin-top: 8px;
   padding: 8px 16px;
-  background: rgba(70, 130, 180, 0.8);
+  background-color: rgba(70, 130, 180, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.9);
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .playlists-tracks-empty-btn:hover {
-  background: rgba(70, 130, 180, 1);
+  background-color: rgba(70, 130, 180, 1);
   box-shadow: 0 2px 8px rgba(70, 130, 180, 0.3);
 }
 
@@ -539,11 +544,11 @@
   grid-template-columns: 50px 2fr 1.5fr 1.5fr 80px 80px;
   gap: 12px;
   padding: 12px;
-  background: transparent;
+  background-color: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
   position: relative;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
   align-items: center;
 }
 
@@ -553,7 +558,7 @@
 
 .playlists-track-selected {
   border-color: transparent;
-  background: rgba(255, 86, 86, 0.1);
+  background-color: rgba(255, 86, 86, 0.1);
 }
 
 .playlists-track-selected::after {
@@ -566,11 +571,11 @@
 }
 
 .playlists-track-selected:hover {
-  background: rgba(255, 96, 96, 0.13);
+  background-color: rgba(255, 96, 96, 0.13);
 }
 
 .playlists-track:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .playlists-track-number {
@@ -611,11 +616,11 @@
 }
 
 .playlists-track-action-btn {
-  background: transparent;
+  background-color: transparent;
   border: none;
   cursor: pointer;
   opacity: 0;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
   font-size: 12px;
   padding: 4px 8px;
   color: rgba(255, 255, 255, 0.5);
@@ -628,12 +633,12 @@
 
 .playlists-track-play:hover {
   color: rgba(70, 130, 180, 0.9);
-  background: rgba(70, 130, 180, 0.1);
+  background-color: rgba(70, 130, 180, 0.1);
 }
 
 .playlists-track-remove:hover {
   color: rgba(236, 65, 65, 0.9);
-  background: rgba(236, 65, 65, 0.1);
+  background-color: rgba(236, 65, 65, 0.1);
 }
 
 @media (max-width: 1180px) {
@@ -967,7 +972,12 @@
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
-  transition: all 0.2s ease;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .playlists-hero-btn:hover:not(:disabled) {

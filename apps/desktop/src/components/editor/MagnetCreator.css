@@ -98,6 +98,11 @@
   justify-content: center;
 }
 
+.creator-preview-stage {
+  position: relative;
+  flex: 0 0 auto;
+}
+
 /* 预览中的 Magnet - 覆盖绝对定位，使用相对定位以支持居中 */
 .creator-preview .magnet {
   position: relative !important;
@@ -201,6 +206,44 @@
   color: rgba(255, 255, 255, 0.5);
   line-height: 1.5;
   margin-top: 4px;
+}
+
+.creator-layout-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.creator-layout-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.84);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.creator-layout-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.creator-layout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.creator-layout-grid--dock {
+  margin-top: 4px;
+}
+
+.creator-layout-input {
+  width: 100% !important;
+  text-align: left;
 }
 
 .creator-input:disabled {
@@ -825,6 +868,10 @@
   .creator-form-row {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .creator-layout-grid {
+    grid-template-columns: 1fr;
   }
 
   .creator-footer-fixed {

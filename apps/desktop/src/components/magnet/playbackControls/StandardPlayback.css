@@ -2,18 +2,23 @@
   width: 100%;
   height: 100%;
   border: none;
-  background: transparent;
+  background-color: transparent;
   color: rgba(255, 255, 255, 0.8);
   font-size: 18px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .playback-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
   color: white;
   transform: scale(1.05);
 }
@@ -30,10 +35,10 @@
 /* 播放/暂停按钮特殊样式 */
 .play-pause-btn {
   font-size: 20px;
-  background: rgba(255, 255, 255, 0.05);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .play-pause-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
+  background-color: rgba(255, 255, 255, 0.15);
   box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
 }

@@ -9,6 +9,7 @@ import { useEditor } from '../../contexts/EditorContext';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { Magnet, PixelAnchor } from '../../types/pixel';
 import { MATRIX_CONFIG } from '../../constants/config';
+import { alignMagnetBounds, computeMagnetBounds } from '../../modules/magnets/geometry';
 import { calculateNewAnchors, checkMagnetCollision, getMagnetOccupiedPixels } from '../../utils/magnetEditor';
 import { buildMagnetAnchorsAtTopLeft, resolveMagnetFootprintShape } from '../../utils/magnetPlacement';
 import {
@@ -45,81 +46,17 @@ function getMagnetBounds(
   magnet: Magnet,
   pixelPositions: Map<string, { x: number; y: number }>
 ): { left: number; top: number; right: number; bottom: number } | null {
-  const { anchorType, anchors } = magnet;
+  const bounds = computeMagnetBounds(magnet, pixelPositions);
+  if (!bounds) return null;
 
-  switch (anchorType) {
-    case 'single': {
-      const anchor = anchors[0];
-      const pos = pixelPositions.get(`${anchor.gridX},${anchor.gridY}`);
-      if (!pos) return null;
+  const aligned = alignMagnetBounds(bounds);
 
-      const width = parseInt(magnet.style.width as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const height = parseInt(magnet.style.height as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const offsetX = (MATRIX_CONFIG.PIXEL_SIZE - width) / 2;
-      const offsetY = (MATRIX_CONFIG.PIXEL_SIZE - height) / 2;
-
-      return {
-        left: pos.x + offsetX,
-        top: pos.y + offsetY,
-        right: pos.x + offsetX + width,
-        bottom: pos.y + offsetY + height,
-      };
-    }
-
-    case 'horizontal': {
-      const leftAnchor = anchors[0];
-      const rightAnchor = anchors[1];
-      const leftPos = pixelPositions.get(`${leftAnchor.gridX},${leftAnchor.gridY}`);
-      const rightPos = pixelPositions.get(`${rightAnchor.gridX},${rightAnchor.gridY}`);
-      if (!leftPos || !rightPos) return null;
-
-      const height = parseInt(magnet.style.height as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const offsetY = (MATRIX_CONFIG.PIXEL_SIZE - height) / 2;
-
-      return {
-        left: leftPos.x,
-        top: leftPos.y + offsetY,
-        right: rightPos.x + MATRIX_CONFIG.PIXEL_SIZE,
-        bottom: leftPos.y + offsetY + height,
-      };
-    }
-
-    case 'vertical': {
-      const topAnchor = anchors[0];
-      const bottomAnchor = anchors[1];
-      const topPos = pixelPositions.get(`${topAnchor.gridX},${topAnchor.gridY}`);
-      const bottomPos = pixelPositions.get(`${bottomAnchor.gridX},${bottomAnchor.gridY}`);
-      if (!topPos || !bottomPos) return null;
-
-      const width = parseInt(magnet.style.width as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const offsetX = (MATRIX_CONFIG.PIXEL_SIZE - width) / 2;
-
-      return {
-        left: topPos.x + offsetX,
-        top: topPos.y,
-        right: topPos.x + offsetX + width,
-        bottom: bottomPos.y + MATRIX_CONFIG.PIXEL_SIZE,
-      };
-    }
-
-    case 'rectangular': {
-      const topLeft = anchors[0];
-      const bottomRight = anchors[3];
-      const topLeftPos = pixelPositions.get(`${topLeft.gridX},${topLeft.gridY}`);
-      const bottomRightPos = pixelPositions.get(`${bottomRight.gridX},${bottomRight.gridY}`);
-      if (!topLeftPos || !bottomRightPos) return null;
-
-      return {
-        left: topLeftPos.x,
-        top: topLeftPos.y,
-        right: bottomRightPos.x + MATRIX_CONFIG.PIXEL_SIZE,
-        bottom: bottomRightPos.y + MATRIX_CONFIG.PIXEL_SIZE,
-      };
-    }
-
-    default:
-      return null;
-  }
+  return {
+    left: aligned.x,
+    top: aligned.y,
+    right: aligned.x + aligned.width,
+    bottom: aligned.y + aligned.height,
+  };
 }
 
 export function EditorOverlay({
@@ -955,86 +892,22 @@ function getMagnetPreviewStyle(
   anchors: PixelAnchor[],
   pixelPositions: Map<string, { x: number; y: number }>
 ): React.CSSProperties {
-  const { anchorType } = magnet;
+  const previewMagnet: Magnet = {
+    ...magnet,
+    anchors,
+  };
 
-  switch (anchorType) {
-    case 'single': {
-      const anchor = anchors[0];
-      const pos = pixelPositions.get(`${anchor.gridX},${anchor.gridY}`);
-      if (!pos) return {};
+  const bounds = computeMagnetBounds(previewMagnet, pixelPositions);
+  if (!bounds) return {};
 
-      const width = parseInt(magnet.style.width as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const height = parseInt(magnet.style.height as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const offsetX = (MATRIX_CONFIG.PIXEL_SIZE - width) / 2;
-      const offsetY = (MATRIX_CONFIG.PIXEL_SIZE - height) / 2;
+  const aligned = alignMagnetBounds(bounds);
 
-      return {
-        left: pos.x + offsetX,
-        top: pos.y + offsetY,
-        width,
-        height,
-      };
-    }
-
-    case 'horizontal': {
-      const leftAnchor = anchors[0];
-      const rightAnchor = anchors[1];
-      const leftPos = pixelPositions.get(`${leftAnchor.gridX},${leftAnchor.gridY}`);
-      const rightPos = pixelPositions.get(`${rightAnchor.gridX},${rightAnchor.gridY}`);
-      if (!leftPos || !rightPos) return {};
-
-      const height = parseInt(magnet.style.height as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const offsetY = (MATRIX_CONFIG.PIXEL_SIZE - height) / 2;
-      const width = rightPos.x - leftPos.x + MATRIX_CONFIG.PIXEL_SIZE;
-
-      return {
-        left: leftPos.x,
-        top: leftPos.y + offsetY,
-        width,
-        height,
-      };
-    }
-
-    case 'vertical': {
-      const topAnchor = anchors[0];
-      const bottomAnchor = anchors[1];
-      const topPos = pixelPositions.get(`${topAnchor.gridX},${topAnchor.gridY}`);
-      const bottomPos = pixelPositions.get(`${bottomAnchor.gridX},${bottomAnchor.gridY}`);
-      if (!topPos || !bottomPos) return {};
-
-      const width = parseInt(magnet.style.width as string) || MATRIX_CONFIG.PIXEL_SIZE;
-      const offsetX = (MATRIX_CONFIG.PIXEL_SIZE - width) / 2;
-      const height = bottomPos.y - topPos.y + MATRIX_CONFIG.PIXEL_SIZE;
-
-      return {
-        left: topPos.x + offsetX,
-        top: topPos.y,
-        width,
-        height,
-      };
-    }
-
-    case 'rectangular': {
-      const topLeft = anchors[0];
-      const bottomRight = anchors[3];
-      const topLeftPos = pixelPositions.get(`${topLeft.gridX},${topLeft.gridY}`);
-      const bottomRightPos = pixelPositions.get(`${bottomRight.gridX},${bottomRight.gridY}`);
-      if (!topLeftPos || !bottomRightPos) return {};
-
-      const width = bottomRightPos.x - topLeftPos.x + MATRIX_CONFIG.PIXEL_SIZE;
-      const height = bottomRightPos.y - topLeftPos.y + MATRIX_CONFIG.PIXEL_SIZE;
-
-      return {
-        left: topLeftPos.x,
-        top: topLeftPos.y,
-        width,
-        height,
-      };
-    }
-
-    default:
-      return {};
-  }
+  return {
+    left: aligned.x,
+    top: aligned.y,
+    width: aligned.width,
+    height: aligned.height,
+  };
 }
 
 /**

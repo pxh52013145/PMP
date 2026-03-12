@@ -73,6 +73,36 @@ function createPaddedMagnet(): Magnet {
   };
 }
 
+function createChromeInsetMagnet(): Magnet {
+  return {
+    id: 'chrome-inset-test',
+    type: 'custom',
+    name: 'Chrome Inset Test',
+    anchorType: 'single',
+    anchors: [{ id: 'anchor-1', gridX: 0, gridY: 0, role: 'anchor' }],
+    content: 'Inset',
+    style: {
+      width: '36px',
+      height: '36px',
+      backgroundColor: 'rgba(0, 0, 0, 0.8)',
+      border: '1px solid rgba(255, 255, 255, 0.12)',
+    },
+    chrome: {
+      inset: {
+        top: 8,
+        right: 4,
+        bottom: 2,
+        left: 6,
+      },
+    },
+    state: 'idle',
+    interactions: {
+      draggable: false,
+      clickable: false,
+    },
+  };
+}
+
 describe('MagnetComponent', () => {
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
@@ -179,5 +209,28 @@ describe('MagnetComponent', () => {
     expect(chrome?.style.borderBottomRightRadius).toBe('0px');
     expect(baseLayer?.style.borderTopRightRadius).toBe('0px');
     expect(baseLayer?.style.borderTopLeftRadius).toBe('2px');
+  });
+
+  it('applies chrome inset to the base and content layers without changing shell bounds', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(<MagnetComponent magnet={createChromeInsetMagnet()} pixelPositions={pixelPositions} />);
+    });
+
+    const shell = container.querySelector('[data-magnet-id="chrome-inset-test"]') as HTMLDivElement | null;
+    const baseLayer = container.querySelector('.magnet-base-layer') as HTMLDivElement | null;
+    const contentLayer = container.querySelector('.magnet-content-layer') as HTMLDivElement | null;
+
+    expect(shell?.style.width).toBe('36px');
+    expect(shell?.style.height).toBe('36px');
+    expect(baseLayer?.style.top).toBe('8px');
+    expect(baseLayer?.style.right).toBe('4px');
+    expect(baseLayer?.style.bottom).toBe('2px');
+    expect(baseLayer?.style.left).toBe('6px');
+    expect(contentLayer?.style.top).toBe('8px');
+    expect(contentLayer?.style.left).toBe('6px');
   });
 });

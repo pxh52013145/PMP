@@ -1,5 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset, createPanelChromePreset } from '../../modules/magnets/chromePresets';
+import {
+  createCenteredSingleControlLayoutPreset,
+  createPanelLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const PLATFORM_MAGNET_CHROME = createPanelChromePreset({
   style: {
@@ -29,6 +33,8 @@ const PLATFORM_LOGIN_CHROME = createControlChromePreset({
     transform: 'scale(0.96)',
   },
 });
+const PLATFORM_MAGNET_LAYOUT = createPanelLayoutPreset();
+const PLATFORM_LOGIN_LAYOUT = createCenteredSingleControlLayoutPreset();
 
 export const PLATFORM_MAGNET: Magnet = {
   id: 'platform-magnet',
@@ -39,6 +45,7 @@ export const PLATFORM_MAGNET: Magnet = {
   anchorType: 'rectangular',
   anchors: [],
   gridFootprint: { width: 27, height: 17 },
+  ...PLATFORM_MAGNET_LAYOUT,
   content: '',
   style: PLATFORM_MAGNET_CHROME.style,
   animation: PLATFORM_MAGNET_CHROME.animation,
@@ -57,6 +64,7 @@ export const PLATFORM_LOGIN_MAGNET: Magnet = {
   previewText: 'Login',
   anchorType: 'single',
   anchors: [],
+  ...PLATFORM_LOGIN_LAYOUT,
   content: '',
   style: PLATFORM_LOGIN_CHROME.style,
   animation: PLATFORM_LOGIN_CHROME.animation,

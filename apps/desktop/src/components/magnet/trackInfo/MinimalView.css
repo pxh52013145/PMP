@@ -5,14 +5,14 @@
   align-items: center;
   gap: 1rem;
   padding: 0.5rem 1rem;
-  background: rgba(26, 26, 46, 0.8);
+  background-color: rgba(26, 26, 46, 0.8);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease;
 }
 
 .track-info-minimal:hover {
-  background: rgba(26, 26, 46, 0.95);
+  background-color: rgba(26, 26, 46, 0.95);
 }
 
 .minimal-text {

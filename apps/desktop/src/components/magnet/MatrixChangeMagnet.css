@@ -15,7 +15,7 @@
   letter-spacing: 0.5px;
   cursor: pointer;
   user-select: none;
-  transition: all 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .matrix-change-magnet:hover {
@@ -91,7 +91,7 @@
   color: inherit;
   cursor: pointer;
   user-select: none;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .matrix-change-magnet-panel-item:hover {
@@ -146,7 +146,7 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 700;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .matrix-change-magnet-panel-action:hover:not(:disabled) {
@@ -269,7 +269,7 @@
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .matrix-change-presets-item-action:hover {
@@ -304,7 +304,7 @@
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .matrix-change-presets-footer-btn:hover {
@@ -417,7 +417,7 @@
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .matrix-change-history-item-action:hover {
@@ -447,7 +447,7 @@
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .matrix-change-history-footer-btn:hover:not(:disabled) {
