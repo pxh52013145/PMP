@@ -25,7 +25,7 @@ export const StandardMusicLibrary: React.FC<MusicLibraryVariantProps> = ({ logic
 
   return (
     <button
-      className="music-library-button"
+      className="magnet-control-button music-library-button"
       onClick={handleClick}
       title={t('magnet.renderers.btn-music-library.preview')}
     >

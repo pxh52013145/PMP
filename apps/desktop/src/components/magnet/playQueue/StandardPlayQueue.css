@@ -1,23 +1,8 @@
+@import '../shared/MagnetControlButton.css';
+
 .play-queue-button {
-  width: 100%;
-  height: 100%;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  --magnet-control-color: rgba(255, 255, 255, 0.92);
   position: relative;
-  color: rgba(255, 255, 255, 0.92);
-  transition: color 120ms ease, opacity 120ms ease;
-}
-
-.play-queue-button:hover {
-  color: rgba(255, 255, 255, 1);
-}
-
-.play-queue-button:active {
-  opacity: 0.8;
 }
 
 .play-queue-icon {
@@ -41,7 +26,7 @@
   text-align: center;
 }
 
-/* 弹窗样式 -右侧侧边栏 */
+/* 閻庢鍠栧﹢閬嶆偘閵夆晛鍐€鐎瑰嫭澹嗙涵鈧?-闂佸憡鐟ラ崢鏍疾閼哥數鐟圭憸鎴犵博閻旂厧鍐€?*/
 .queue-modal-overlay {
   position: fixed;
   top: 0;
@@ -370,7 +355,7 @@
   background-color: rgba(236, 65, 65, 0.1);
 }
 
-/* 当前播放的歌曲始终显示播放按钮 */
+/* 閻熸粎澧楅幐鍛婃櫠閻樿绠绘い鎾跺枑閺夊綊鏌ｉ妸銉ヮ仾闁烩剝娲熷鎾箵閹烘繃缍忕紓鍌欑閻楀﹤螣婢跺瞼鐭嗛柣鎴炆戠亸锟犳煛閳ь剟鎮欓鈧惁濠氭⒑?*/
 .queue-item-active .queue-item-play {
   opacity: 0.6;
   color: rgba(236, 65, 65, 0.9);

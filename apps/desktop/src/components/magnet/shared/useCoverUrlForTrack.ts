@@ -130,7 +130,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     return () => {
       cancelled = true;
     };
-  }, [coverSizeHint, fetchKey, key, lookupTrack]);
+  }, [bypassRuntimePolicy, coverSizeHint, fetchKey, key, lookupTrack]);
 
   const resolvedUrl = resolved.key === key ? resolved.url : undefined;
 

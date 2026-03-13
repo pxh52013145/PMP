@@ -3,6 +3,7 @@ import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
+import './ProcessPerfMonitorMagnet.css';
 
 type DisplaySnapshot = {
   updatedAtMs: number;
@@ -112,28 +113,13 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
           navigation.navigateTo('debug', { tab: 'perf-monitor' });
         }
       }}
-      style={{
-        width: '100%',
-        height: '100%',
-        padding: 8,
-        boxSizing: 'border-box',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        color: 'rgba(255,255,255,0.92)',
-        fontSize: 11,
-        lineHeight: 1.15,
-        fontVariantNumeric: 'tabular-nums',
-        contain: 'content',
-        cursor: 'pointer',
-        userSelect: 'none',
-      }}
+      className="process-perf-monitor"
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
-        <span style={{ fontSize: 11, letterSpacing: 0.5, opacity: 0.92 }}>
+      <div className="process-perf-monitor__header">
+        <span className="process-perf-monitor__title">
           {t('magnet.processPerf.title')}
         </span>
-        <span style={{ fontSize: 10, opacity: 0.65 }}>
+        <span className="process-perf-monitor__badge">
           {renderMode === 'pause'
             ? t('magnet.processPerf.badge.paused')
             : renderMode === 'throttle'
@@ -143,29 +129,29 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
       </div>
 
       {error ? (
-        <div style={{ color: 'rgba(255,140,140,0.92)', fontSize: 10 }}>{error}</div>
+        <div className="process-perf-monitor__error">{error}</div>
       ) : null}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          <span style={{ opacity: 0.72 }}>{t('magnet.processPerf.row.webview2Private')}</span>
+      <div className="process-perf-monitor__stats">
+        <div className="process-perf-monitor__row">
+          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.webview2Private')}</span>
           <span>{toMb(snapshot?.totals.webview2PrivateBytes ?? null)}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          <span style={{ opacity: 0.72 }}>{t('magnet.processPerf.row.treePrivate')}</span>
+        <div className="process-perf-monitor__row">
+          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.treePrivate')}</span>
           <span>{toMb(snapshot?.totals.privateBytes ?? null)}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          <span style={{ opacity: 0.72 }}>{t('magnet.processPerf.row.webview2Cpu')}</span>
+        <div className="process-perf-monitor__row">
+          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.webview2Cpu')}</span>
           <span>{toCpu(snapshot?.totals.webview2CpuPercent ?? null)}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          <span style={{ opacity: 0.72 }}>{t('magnet.processPerf.row.treeCpu')}</span>
+        <div className="process-perf-monitor__row">
+          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.treeCpu')}</span>
           <span>{toCpu(snapshot?.totals.cpuPercent ?? null)}</span>
         </div>
       </div>
 
-      <div style={{ marginTop: 'auto', fontSize: 10, opacity: 0.68, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+      <div className="process-perf-monitor__footer">
         {systemLine}
       </div>
     </div>

@@ -23,7 +23,7 @@ export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ logic }) =>
   return (
     <>
       <button
-        className="playlists-button"
+        className="magnet-control-button playlists-button"
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();

@@ -1,8 +1,39 @@
 ﻿import { readString } from '../../modules/storage';
 import { STORAGE_KEYS, setupDualListener } from '../../utils/windowCommunication';
 import { resolveDynamicSrcAdaptiveProfile } from './dynamicSrcAdaptiveTiming';
+import type { AudioDynamicSrcAdaptiveProfile, AudioDynamicSrcAutoSettings } from './types';
+import type { DynamicSrcLearningMap } from './nativeAudioServiceTypes';
 
-type DynamicSrcHost = any;
+type DynamicSrcSettingsListenerCleanup = (() => void) | null;
+
+export type DynamicSrcHost = {
+  dynamicSrcLearningProfile: DynamicSrcLearningMap;
+  dynamicSrcLearningLastPersistedSignature: string;
+  dynamicSrcLearningLastPersistAtMs: number;
+  dynamicSrcAutoEnabled: boolean;
+  dynamicSrcAdaptiveEnabled: boolean;
+  dynamicSrcLearningEnabled: boolean;
+  dynamicSrcRestoreDebounceMs: number;
+  dynamicSrcMinSwitchIntervalMs: number;
+  dynamicSrcSeekHoldMs: number;
+  dynamicSrcUnderrunHoldMs: number;
+  dynamicSrcSharedStressHoldMs: number;
+  dynamicSrcOutputErrorHoldMs: number;
+  dynamicSrcAdaptiveProfile: AudioDynamicSrcAdaptiveProfile;
+  dynamicSrcProfile: 'quality' | 'latency';
+  dynamicSrcHoldUntilMs: number;
+  dynamicSrcSettingsListenerCleanup: DynamicSrcSettingsListenerCleanup;
+  dynamicSrcSettingsListenerInitPromise: Promise<void> | null;
+  parseDynamicSrcLearningProfile(raw: string | null): DynamicSrcLearningMap;
+  normalizeDynamicSrcLearningProfileForPersistence(): DynamicSrcLearningMap;
+  readDynamicSrcAutoSettings(): AudioDynamicSrcAutoSettings;
+  getDynamicSrcStressScore(): number;
+  evaluateDynamicSrcAutoDegradation(options: { triggerActions: boolean }): void;
+  emitRobustnessSnapshot(force?: boolean): void;
+  clearDynamicSrcLearningPersistTimer(): void;
+  clearDynamicSrcRestoreTimer(): void;
+  scheduleDynamicSrcRestoreEvaluation(): void;
+};
 
 export async function restoreDynamicSrcAutoSettingsFromStorageImpl(
   this: DynamicSrcHost,

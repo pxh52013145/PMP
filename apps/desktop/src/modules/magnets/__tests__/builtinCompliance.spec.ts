@@ -33,6 +33,14 @@ describe('builtin magnet compliance', () => {
     expect(unknownInLibrary).toEqual([]);
   });
 
+  it('single builtin magnets declare bounds mode explicitly', () => {
+    const defaultLibrary = createDefaultMagnetLibrary();
+    const singleMagnets = defaultLibrary.filter((magnet) => magnet.anchorType === 'single');
+
+    expect(singleMagnets.length).toBeGreaterThan(0);
+    expect(singleMagnets.every((magnet) => magnet.boundsMode !== undefined)).toBe(true);
+  });
+
   it('space1 layout keeps required magnets active and anchored', () => {
     const layout = createDefaultMagnetSpaceLayout('space1');
     const active = new Set(layout.activeMagnetIds);

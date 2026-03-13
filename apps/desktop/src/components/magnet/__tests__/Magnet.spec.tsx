@@ -211,6 +211,20 @@ describe('MagnetComponent', () => {
     expect(baseLayer?.style.borderTopLeftRadius).toBe('2px');
   });
 
+  it('uses a consistent inset stroke in normal mode for crisp host chrome alignment', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(<MagnetComponent magnet={createPaddedMagnet()} pixelPositions={pixelPositions} />);
+    });
+
+    const baseLayer = container.querySelector('.magnet-base-layer') as HTMLDivElement | null;
+
+    expect(baseLayer?.style.boxShadow).toContain('inset 0 0 0 1px');
+  });
+
   it('applies chrome inset to the base and content layers without changing shell bounds', async () => {
     container = document.createElement('div');
     document.body.appendChild(container);

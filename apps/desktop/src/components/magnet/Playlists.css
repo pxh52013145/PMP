@@ -1,4 +1,4 @@
-/* 歌单管理弹窗 */
+/* 姝屽崟绠＄悊寮圭獥 */
 .playlists-overlay {
   position: fixed;
   top: 0;
@@ -48,7 +48,7 @@
   }
 }
 
-/* 左侧边栏 */
+/* 宸︿晶杈规爮 */
 .playlists-sidebar {
   width: 280px;
   background: rgba(0, 0, 0, 0.2);
@@ -279,7 +279,7 @@
   font-size: 12px;
 }
 
-/* 右侧详情 */
+/* 鍙充晶璇︽儏 */
 .playlists-detail {
   flex: 1;
   display: flex;
@@ -718,7 +718,7 @@
   }
 }
 
-/* 未选择歌单 */
+/* 鏈€夋嫨姝屽崟 */
 .playlists-no-selection {
   display: flex;
   flex-direction: column;
@@ -740,7 +740,7 @@
   line-height: 1.6;
 }
 
-/* 添加歌曲模态框 */
+/* 娣诲姞姝屾洸妯℃€佹 */
 
 /* Kugou-like hierarchy refresh */
 .playlists-container {
@@ -821,7 +821,7 @@
 }
 
 .playlists-close-btn::before {
-  content: '×';
+  content: '脳';
   font-size: 20px;
   line-height: 1;
 }
@@ -888,7 +888,7 @@
 .playlists-tracks-empty-icon::before,
 .playlists-no-selection-icon::before,
 .playlists-empty-icon::before {
-  content: '♪';
+  content: '鈾?;
   font-size: 52px;
   line-height: 1;
 }
@@ -1067,7 +1067,7 @@
   justify-content: center;
   cursor: pointer;
   line-height: 1;
-  transition: background 0.18s ease, color 0.18s ease;
+  transition: background-color 0.18s ease, color 0.18s ease;
 }
 
 .playlists-tracks-icon-svg {
@@ -1242,7 +1242,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .playlists-tracks-batch-icon-btn svg {
@@ -1334,11 +1334,11 @@
 }
 
 .playlists-track-play::before {
-  content: '▶';
+  content: '鈻?;
 }
 
 .playlists-track-remove::before {
-  content: '×';
+  content: '脳';
 }
 
 .playlists-track:hover .playlists-track-action-btn {

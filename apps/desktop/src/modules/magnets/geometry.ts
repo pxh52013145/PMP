@@ -106,14 +106,25 @@ export function resolveMagnetInsets(config?: MagnetInsetConfig): MagnetInsets {
   };
 }
 
+function adjustMagnetBounds(bounds: MagnetBounds, inset: MagnetInsets, outset: MagnetInsets): MagnetBounds {
+  return alignMagnetBounds({
+    x: bounds.x + inset.left - outset.left,
+    y: bounds.y + inset.top - outset.top,
+    width: Math.max(1, bounds.width - inset.left - inset.right + outset.left + outset.right),
+    height: Math.max(1, bounds.height - inset.top - inset.bottom + outset.top + outset.bottom),
+  });
+}
+
 export function computeMagnetBounds(
-  magnet: Pick<Magnet, 'anchorType' | 'anchors' | 'style' | 'boundsMode' | 'boundsDock' | 'boundsInset'>,
+  magnet: Pick<Magnet, 'anchorType' | 'anchors' | 'style' | 'boundsMode' | 'boundsDock' | 'boundsInset' | 'boundsOutset'>,
   pixelPositions: Map<string, { x: number; y: number }>
 ): MagnetBounds | null {
   const { PIXEL_SIZE } = MATRIX_CONFIG;
   const { anchorType, style } = magnet;
   const anchors = Array.isArray(magnet.anchors) ? magnet.anchors : [];
-  const applyBoundsInset = (bounds: MagnetBounds) => insetMagnetBounds(bounds, resolveMagnetInsets(magnet.boundsInset));
+  const boundsInset = resolveMagnetInsets(magnet.boundsInset);
+  const boundsOutset = resolveMagnetInsets(magnet.boundsOutset);
+  const applyBoundsAdjustments = (bounds: MagnetBounds) => adjustMagnetBounds(bounds, boundsInset, boundsOutset);
 
   switch (anchorType) {
     case 'single': {
@@ -131,7 +142,7 @@ export function computeMagnetBounds(
         const horizontalSlot = resolveSingleHorizontalSlotBounds(anchor.gridX, anchor.gridY, pos.x, pixelPositions);
         const verticalSlot = resolveSingleVerticalSlotBounds(anchor.gridX, anchor.gridY, pos.y, pixelPositions);
 
-        return applyBoundsInset({
+        return applyBoundsAdjustments({
           x:
             magnet.boundsDock?.x === undefined
               ? centeredX
@@ -145,7 +156,7 @@ export function computeMagnetBounds(
         });
       }
 
-      return applyBoundsInset({
+      return applyBoundsAdjustments({
         x: centeredX,
         y: centeredY,
         width: magnetWidth,
@@ -165,7 +176,7 @@ export function computeMagnetBounds(
       const offsetY = (PIXEL_SIZE - magnetHeight) / 2;
       const horizontalSpan = resolveHorizontalSpanBounds(left.x, right.x);
 
-      return applyBoundsInset({
+      return applyBoundsAdjustments({
         x: horizontalSpan.x,
         y: left.y + offsetY,
         width: horizontalSpan.width,
@@ -185,7 +196,7 @@ export function computeMagnetBounds(
       const offsetX = (PIXEL_SIZE - magnetWidth) / 2;
       const verticalSpan = resolveVerticalSpanBounds(top.y, bottom.y);
 
-      return applyBoundsInset({
+      return applyBoundsAdjustments({
         x: top.x + offsetX,
         y: verticalSpan.y,
         width: magnetWidth,
@@ -208,7 +219,7 @@ export function computeMagnetBounds(
       const horizontalSpan = resolveHorizontalSpanBounds(topLeft.x, topRight.x);
       const verticalSpan = resolveVerticalSpanBounds(topLeft.y, bottomLeft.y);
 
-      return applyBoundsInset({
+      return applyBoundsAdjustments({
         x: horizontalSpan.x,
         y: verticalSpan.y,
         width: horizontalSpan.width,
@@ -236,17 +247,11 @@ export function alignMagnetBounds(bounds: MagnetBounds): MagnetBounds {
 }
 
 export function insetMagnetBounds(bounds: MagnetBounds, insets: MagnetInsets): MagnetBounds {
-  const left = bounds.x + insets.left;
-  const top = bounds.y + insets.top;
-  const width = Math.max(1, bounds.width - insets.left - insets.right);
-  const height = Math.max(1, bounds.height - insets.top - insets.bottom);
+  return adjustMagnetBounds(bounds, insets, createZeroInsets());
+}
 
-  return alignMagnetBounds({
-    x: left,
-    y: top,
-    width,
-    height,
-  });
+export function outsetMagnetBounds(bounds: MagnetBounds, outsets: MagnetInsets): MagnetBounds {
+  return adjustMagnetBounds(bounds, createZeroInsets(), outsets);
 }
 
 export function createZeroInsets(): MagnetInsets {

@@ -1,7 +1,3 @@
-/**
- * 标准播放队列按钮变体
- */
-
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { PlayQueueVariantProps } from './PlayQueueTypes';
@@ -54,7 +50,6 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
 
     const list = listRef.current;
     if (!list) return;
-
     if (queueLength === 0) return;
 
     if (currentIndex < 0) {
@@ -74,7 +69,6 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
     const listRect = list.getBoundingClientRect();
     const activeRect = active.getBoundingClientRect();
     const activeTop = activeRect.top - listRect.top + list.scrollTop;
-
     const desiredOffset = active.offsetHeight;
     const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
     list.scrollTop = Math.min(Math.max(0, activeTop - desiredOffset), maxScrollTop);
@@ -84,25 +78,25 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
   const modal = showQueue
     ? createPortal(
         <div className="queue-modal-overlay" onClick={closeQueue}>
-          <div className="queue-modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="queue-modal-content" onClick={(event) => event.stopPropagation()}>
             <div className="queue-modal-header">
-              <span className="queue-modal-title">☰ 播放列表 ({queueLength})</span>
+              <span className="queue-modal-title">♫ 播放队列 ({queueLength})</span>
               <div className="queue-header-actions">
                 <button
                   className={`queue-header-btn ${editMode ? 'queue-header-btn-active' : ''}`}
                   onClick={toggleEditMode}
-                  title={editMode ? '完成编辑' : '编辑排序'}
+                  title={editMode ? '完成编辑' : '编辑顺序'}
                 >
-                  {editMode ? '✓' : '⚙'}
+                  {editMode ? '✓' : '✎'}
                 </button>
-                <button className="queue-header-btn" onClick={addFiles} title="添加文件到列表">
+                <button className="queue-header-btn" onClick={() => void addFiles()} title="添加文件到队列">
                   +
                 </button>
                 <button
                   className="queue-header-btn"
                   onClick={clearQueue}
                   disabled={queueLength === 0}
-                  title="清空播放列表"
+                  title="清空播放队列"
                 >
                   ×
                 </button>
@@ -112,9 +106,9 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
               {queueLength === 0 ? (
                 <div className="queue-empty">
                   <NoteIcon />
-                  <div className="queue-empty-text">播放列表为空</div>
-                  <button className="queue-empty-btn" onClick={addFiles}>
-                    添加音乐文件
+                  <div className="queue-empty-text">播放队列为空</div>
+                  <button className="queue-empty-btn" onClick={() => void addFiles()}>
+                    添加音频文件
                   </button>
                 </div>
               ) : (
@@ -128,18 +122,18 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
                       dragState.dragOverIndex === index ? 'queue-item-drag-over' : ''
                     }`}
                     draggable={editMode}
-                    onDragStart={(e) => {
-                      e.dataTransfer.effectAllowed = 'move';
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move';
                       handleDragStart(index);
                     }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = 'move';
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
                       handleDragOver(index);
                     }}
                     onDragLeave={handleDragLeave}
-                    onDrop={(e) => {
-                      e.preventDefault();
+                    onDrop={(event) => {
+                      event.preventDefault();
                       handleDrop(index);
                     }}
                     onDragEnd={handleDragEnd}
@@ -157,13 +151,11 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
                     <div className="queue-item-duration">
                       {track.duration ? formatTime(track.duration) : '-'}
                     </div>
-                    <div
-                      className={`queue-item-actions ${editMode ? 'queue-item-actions-hidden' : ''}`}
-                    >
+                    <div className={`queue-item-actions ${editMode ? 'queue-item-actions-hidden' : ''}`}>
                       <button
                         className="queue-item-action-btn queue-item-play"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={(event) => {
+                          event.stopPropagation();
                           playTrack(index);
                         }}
                         title="播放"
@@ -173,11 +165,11 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
                       </button>
                       <button
                         className="queue-item-action-btn queue-item-remove"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={(event) => {
+                          event.stopPropagation();
                           removeTrack(index);
                         }}
-                        title="从播放列表移除"
+                        title="从播放队列移除"
                         disabled={editMode}
                       >
                         ✕
@@ -196,13 +188,13 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
   return (
     <>
       <button
-        className="play-queue-button"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
+        className="magnet-control-button play-queue-button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
           toggleQueue();
         }}
-        title="播放列表"
+        title="播放队列"
       >
         <QueueIcon />
         {queueLength > 0 && <span className="play-queue-count">{queueLength}</span>}

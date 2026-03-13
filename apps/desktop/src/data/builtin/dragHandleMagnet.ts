@@ -1,7 +1,9 @@
 import type { Magnet } from '../../types/pixel';
 import { createDragHandleChromePreset } from '../../modules/magnets/chromePresets';
+import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const DRAG_HANDLE_CHROME = createDragHandleChromePreset();
+const DRAG_HANDLE_LAYOUT = createPanelLayoutPreset();
 
 export const DRAG_HANDLE_MAGNET: Magnet = {
   id: 'drag-handle',
@@ -9,6 +11,7 @@ export const DRAG_HANDLE_MAGNET: Magnet = {
   name: '拖动区域',
   anchorType: 'horizontal',
   anchors: [],
+  ...DRAG_HANDLE_LAYOUT,
   gridFootprint: { width: 9, height: 1 },
   content: '\u22ee\u22ee',
   style: DRAG_HANDLE_CHROME.style,

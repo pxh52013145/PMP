@@ -5,8 +5,10 @@
 
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const MUSIC_BUTTON_CHROME = createControlChromePreset();
+const MUSIC_BUTTON_LAYOUT = createCenteredSingleControlLayoutPreset();
 
 /**
  * 播放列表按钮 Magnet
@@ -21,6 +23,7 @@ export const PLAY_QUEUE_MAGNET: Magnet = {
   description: '显示当前播放队列',
   anchorType: 'single',
   anchors: [],
+  ...MUSIC_BUTTON_LAYOUT,
   content: '☰',
   style: MUSIC_BUTTON_CHROME.style,
   animation: MUSIC_BUTTON_CHROME.animation,
@@ -47,6 +50,7 @@ export const PLAYLISTS_MAGNET: Magnet = {
   description: '显示歌单列表',
   anchorType: 'single',
   anchors: [],
+  ...MUSIC_BUTTON_LAYOUT,
   content: '♬',
   style: MUSIC_BUTTON_CHROME.style,
   animation: MUSIC_BUTTON_CHROME.animation,
@@ -73,6 +77,7 @@ export const MUSIC_LIBRARY_MAGNET: Magnet = {
   description: '进入音乐库管理界面',
   anchorType: 'single',
   anchors: [],
+  ...MUSIC_BUTTON_LAYOUT,
   content: '♪',
   style: MUSIC_BUTTON_CHROME.style,
   animation: MUSIC_BUTTON_CHROME.animation,

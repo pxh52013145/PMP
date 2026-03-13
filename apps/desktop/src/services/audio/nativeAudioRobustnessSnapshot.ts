@@ -3,6 +3,99 @@ import type { DynamicSrcEffectiveTiming } from './dynamicSrcAdaptiveTiming';
 import { toDynamicSrcAutoDegradationLabel } from './robustnessDegradation';
 import type { AudioRobustnessSnapshot, AudioState } from './types';
 
+type NativeAudioRobustnessSnapshotSourceRecord = {
+  currentOutputBackendId: AudioRobustnessSnapshot['outputBackendId'];
+  availableOutputBackends: AudioRobustnessSnapshot['outputBackends'];
+  lastSchedulerProfile?: AudioRobustnessSnapshot['schedulerProfile'];
+  transportMode?: AudioRobustnessSnapshot['transportMode'];
+  hqSrcPhaseMode?: AudioRobustnessSnapshot['hqSrcPhaseMode'];
+  srcMode?: AudioRobustnessSnapshot['srcMode'];
+  srcBackend?: AudioRobustnessSnapshot['srcBackend'];
+  srcTargetSampleRate?: AudioRobustnessSnapshot['srcTargetSampleRate'];
+  outputQuantizationMode?: AudioRobustnessSnapshot['outputQuantizationMode'];
+  dynamicSrcAutoEnabled?: AudioRobustnessSnapshot['dynamicSrcAutoEnabled'];
+  dynamicSrcProfile?: AudioRobustnessSnapshot['dynamicSrcProfile'];
+  dynamicSrcLastSwitchAtMs?: AudioRobustnessSnapshot['dynamicSrcLastSwitchAtMs'];
+  dynamicSrcLastSwitchReason?: AudioRobustnessSnapshot['dynamicSrcLastSwitchReason'];
+  dynamicSrcHoldUntilMs: number;
+  dynamicSrcManualLockActive?: AudioRobustnessSnapshot['dynamicSrcManualLockActive'];
+  dynamicSrcAdaptiveEnabled?: AudioRobustnessSnapshot['dynamicSrcAdaptiveEnabled'];
+  dynamicSrcAdaptiveProfile?: AudioRobustnessSnapshot['dynamicSrcAdaptiveProfile'];
+  dynamicSrcAutoDegradationLevel?: AudioRobustnessSnapshot['dynamicSrcAutoDegradationLevel'];
+  dynamicSrcAutoDegradationReason?: AudioRobustnessSnapshot['dynamicSrcAutoDegradationReason'];
+  dynamicSrcAutoDegradationLastChangedAtMs?: AudioRobustnessSnapshot['dynamicSrcAutoDegradationLastChangedAtMs'];
+  dynamicSrcLearningEnabled?: AudioRobustnessSnapshot['dynamicSrcLearningEnabled'];
+  dynamicSrcRestoreDebounceMs?: AudioRobustnessSnapshot['dynamicSrcRestoreDebounceMs'];
+  dynamicSrcMinSwitchIntervalMs?: AudioRobustnessSnapshot['dynamicSrcMinSwitchIntervalMs'];
+  dynamicSrcSeekHoldMs?: AudioRobustnessSnapshot['dynamicSrcSeekHoldMs'];
+  dynamicSrcUnderrunHoldMs?: AudioRobustnessSnapshot['dynamicSrcUnderrunHoldMs'];
+  dynamicSrcSharedStressHoldMs?: AudioRobustnessSnapshot['dynamicSrcSharedStressHoldMs'];
+  dynamicSrcOutputErrorHoldMs?: AudioRobustnessSnapshot['dynamicSrcOutputErrorHoldMs'];
+  tuningAutoEnabled?: AudioRobustnessSnapshot['tuningAutoEnabled'];
+  tuningAutoTickIntervalMs?: AudioRobustnessSnapshot['tuningAutoTickIntervalMs'];
+  tuningAutoStableWindowMs?: AudioRobustnessSnapshot['tuningAutoStableWindowMs'];
+  tuningAutoMinSwitchIntervalMs?: AudioRobustnessSnapshot['tuningAutoMinSwitchIntervalMs'];
+  tuningAutoPostSwitchObserveWindowMs?: AudioRobustnessSnapshot['tuningAutoPostSwitchObserveWindowMs'];
+  tuningAutoElevatedStressScore?: AudioRobustnessSnapshot['tuningAutoElevatedStressScore'];
+  tuningAutoCriticalStressScore?: AudioRobustnessSnapshot['tuningAutoCriticalStressScore'];
+  tuningAutoCriticalUnderrunEventsWindow?: AudioRobustnessSnapshot['tuningAutoCriticalUnderrunEventsWindow'];
+  tuningAutoCriticalOverflowGrowthTicks?: AudioRobustnessSnapshot['tuningAutoCriticalOverflowGrowthTicks'];
+  tuningAutoLastReason?: AudioRobustnessSnapshot['tuningAutoLastReason'];
+  tuningAutoLastAppliedAtMs?: AudioRobustnessSnapshot['tuningAutoLastAppliedAtMs'];
+  tuningAutoControllerState: {
+    criticalOverflowGrowthStreak: NonNullable<AudioRobustnessSnapshot['tuningAutoCriticalOverflowGrowthStreak']>;
+    activeProfile: NonNullable<AudioRobustnessSnapshot['tuningAutoActiveProfile']>;
+    stableSinceMs: NonNullable<AudioRobustnessSnapshot['tuningAutoStableSinceMs']>;
+    lastSwitchAtMs: NonNullable<AudioRobustnessSnapshot['tuningAutoLastSwitchAtMs']>;
+  };
+  hqSrcStopbandDb?: AudioRobustnessSnapshot['hqSrcStopbandDb'];
+  hqSrcActive?: AudioRobustnessSnapshot['hqSrcActive'];
+  hqSrcRatio?: AudioRobustnessSnapshot['hqSrcRatio'];
+  sourceSampleRate?: AudioRobustnessSnapshot['sourceSampleRate'];
+  outputSampleRate?: AudioRobustnessSnapshot['outputSampleRate'];
+  transportExactInt32Container?: AudioRobustnessSnapshot['transportExactInt32Container'];
+  outputCallbackMetricsValid?: AudioRobustnessSnapshot['outputCallbackMetricsValid'];
+  lastUnderrunEvents: AudioRobustnessSnapshot['underrunEvents'];
+  lastUnderrunFrames: AudioRobustnessSnapshot['underrunFrames'];
+  underrunSpikeTimestampsMs: number[];
+  protectionWindowRefCount: AudioRobustnessSnapshot['protectionRefCount'];
+  autoBackendSwitchCount: AudioRobustnessSnapshot['autoSwitchCount'];
+  lastAutoBackendSwitchAtMs: AudioRobustnessSnapshot['lastAutoSwitchAtMs'];
+  lastAutoBackendSwitchReason: AudioRobustnessSnapshot['lastAutoSwitchReason'];
+  bufferedAheadMinSeconds: AudioRobustnessSnapshot['bufferedAheadMinSeconds'];
+  rebufferCount: AudioRobustnessSnapshot['rebufferCount'];
+  outputCallbackP99Us?: AudioRobustnessSnapshot['outputCallbackP99Us'];
+  outputWaitTimeoutCount?: AudioRobustnessSnapshot['outputWaitTimeoutCount'];
+  outputRenderUnderrunEvents?: AudioRobustnessSnapshot['outputRenderUnderrunEvents'];
+  outputRenderUnderrunFrames?: AudioRobustnessSnapshot['outputRenderUnderrunFrames'];
+  outputCallbackIntervalJitterP99Us?: AudioRobustnessSnapshot['outputCallbackIntervalJitterP99Us'];
+  outputCallbackIntervalOverrunCount?: AudioRobustnessSnapshot['outputCallbackIntervalOverrunCount'];
+  outputCallbackExpectedIntervalUs?: AudioRobustnessSnapshot['outputCallbackExpectedIntervalUs'];
+  transferLowWatermarkSamples?: AudioRobustnessSnapshot['transferLowWatermarkSamples'];
+  transferRenderLowHitCount?: AudioRobustnessSnapshot['transferRenderLowHitCount'];
+  transferDecodeLowHitCount?: AudioRobustnessSnapshot['transferDecodeLowHitCount'];
+  transferAdaptationLevel?: AudioRobustnessSnapshot['transferAdaptationLevel'];
+  transferOscillationStreak?: AudioRobustnessSnapshot['transferOscillationStreak'];
+  renderQueuePageLocked?: AudioRobustnessSnapshot['renderQueuePageLocked'];
+  transferMetricsValid?: AudioRobustnessSnapshot['transferMetricsValid'];
+  sharedRenderAheadEnabled?: AudioRobustnessSnapshot['sharedRenderAheadEnabled'];
+  sharedRenderUnderrunEvents?: AudioRobustnessSnapshot['sharedRenderUnderrunEvents'];
+  sharedRenderUnderrunFrames?: AudioRobustnessSnapshot['sharedRenderUnderrunFrames'];
+  sharedRenderLowHitCount?: AudioRobustnessSnapshot['sharedRenderLowHitCount'];
+  sharedRenderLowWatermarkSamples?: AudioRobustnessSnapshot['sharedRenderLowWatermarkSamples'];
+  controlQueueLockFree?: AudioRobustnessSnapshot['controlQueueLockFree'];
+  controlQueueMode?: AudioRobustnessSnapshot['controlQueueMode'];
+  controlQueueCapacity?: AudioRobustnessSnapshot['controlQueueCapacity'];
+  controlQueueOverwriteEvents?: AudioRobustnessSnapshot['controlQueueOverwriteEvents'];
+  controlQueueDropNewestEvents?: AudioRobustnessSnapshot['controlQueueDropNewestEvents'];
+  controlQueueCoalescedOverflowEvents?: AudioRobustnessSnapshot['controlQueueCoalescedOverflowEvents'];
+  controlQueueCriticalOverflowEvents?: AudioRobustnessSnapshot['controlQueueCriticalOverflowEvents'];
+  diagnosticTimelineDroppedEvents?: AudioRobustnessSnapshot['diagnosticTimelineDroppedEvents'];
+  diagnosticTimeline: NonNullable<AudioRobustnessSnapshot['diagnosticTimeline']>;
+  protectionWindowReason: string | null;
+  sharedStressReason: string | null;
+};
+
 export type NativeAudioRobustnessSnapshotSource = {
   pruneUnderrunSpikeWindow(nowMs: number): void;
   getEffectiveDynamicSrcTiming(nowMs: number): DynamicSrcEffectiveTiming;
@@ -27,7 +120,8 @@ export function buildNativeAudioRobustnessSnapshot(
   source: NativeAudioRobustnessSnapshotSource,
   nowMs: number = Date.now(),
 ): AudioRobustnessSnapshot {
-  const sourceRecord = source as NativeAudioRobustnessSnapshotSource & Record<string, any>;
+  const sourceRecord = source as NativeAudioRobustnessSnapshotSource &
+    NativeAudioRobustnessSnapshotSourceRecord;
 
   source.pruneUnderrunSpikeWindow(nowMs);
   const effectiveDynamicSrc = source.getEffectiveDynamicSrcTiming(nowMs);
@@ -84,7 +178,7 @@ export function buildNativeAudioRobustnessSnapshot(
     dynamicSrcStressScore: effectiveDynamicSrc.stressScore,
     dynamicSrcAutoDegradationLevel: sourceRecord.dynamicSrcAutoDegradationLevel,
     dynamicSrcAutoDegradationLabel: toDynamicSrcAutoDegradationLabel(
-      sourceRecord.dynamicSrcAutoDegradationLevel,
+      sourceRecord.dynamicSrcAutoDegradationLevel ?? 0,
     ),
     dynamicSrcAutoDegradationReason: sourceRecord.dynamicSrcAutoDegradationReason,
     dynamicSrcAutoDegradationLastChangedAtMs:

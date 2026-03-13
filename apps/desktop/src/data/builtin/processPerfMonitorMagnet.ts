@@ -15,7 +15,8 @@ const PROCESS_PERF_MONITOR_CHROME = createPanelChromePreset({
   },
 });
 const PROCESS_PERF_MONITOR_LAYOUT = createPanelLayoutPreset({
-  boundsInset: { top: 8 },
+  boundsOutset: { top: 9 },
+  boundsAlign: { topToMagnetId: 'btn-back' },
 });
 
 export const PROCESS_PERF_MONITOR_MAGNET: Magnet = {

@@ -1,7 +1,14 @@
-import type { Magnet, MagnetBoundsDockConfig, MagnetChromeConfig, MagnetInsetConfig } from '../../types/pixel';
+import type {
+  Magnet,
+  MagnetBoundsAlignConfig,
+  MagnetBoundsDockConfig,
+  MagnetChromeConfig,
+  MagnetInsetConfig,
+} from '../../types/pixel';
 
 export interface SingleControlLayoutPresetOptions {
   boundsInset?: MagnetInsetConfig;
+  boundsOutset?: MagnetInsetConfig;
   chromeInset?: MagnetInsetConfig;
 }
 
@@ -11,10 +18,12 @@ export interface DockedSingleControlLayoutPresetOptions extends SingleControlLay
 
 export interface PanelLayoutPresetOptions {
   boundsInset?: MagnetInsetConfig;
+  boundsOutset?: MagnetInsetConfig;
+  boundsAlign?: MagnetBoundsAlignConfig;
   chromeInset?: MagnetInsetConfig;
 }
 
-type MagnetLayoutPreset = Pick<Magnet, 'boundsMode' | 'boundsDock' | 'boundsInset' | 'chrome'>;
+type MagnetLayoutPreset = Pick<Magnet, 'boundsMode' | 'boundsDock' | 'boundsInset' | 'boundsOutset' | 'boundsAlign' | 'chrome'>;
 
 function buildChromeConfig(inset?: MagnetInsetConfig): MagnetChromeConfig | undefined {
   if (!inset) return undefined;
@@ -27,6 +36,7 @@ export function createCenteredSingleControlLayoutPreset(
   return {
     boundsMode: 'centered',
     ...(options.boundsInset ? { boundsInset: options.boundsInset } : {}),
+    ...(options.boundsOutset ? { boundsOutset: options.boundsOutset } : {}),
     ...(options.chromeInset ? { chrome: buildChromeConfig(options.chromeInset) } : {}),
   };
 }
@@ -38,6 +48,7 @@ export function createDockedSingleControlLayoutPreset(
     boundsMode: 'docked',
     ...(options.dock ? { boundsDock: options.dock } : {}),
     ...(options.boundsInset ? { boundsInset: options.boundsInset } : {}),
+    ...(options.boundsOutset ? { boundsOutset: options.boundsOutset } : {}),
     ...(options.chromeInset ? { chrome: buildChromeConfig(options.chromeInset) } : {}),
   };
 }
@@ -45,7 +56,8 @@ export function createDockedSingleControlLayoutPreset(
 export function createPanelLayoutPreset(options: PanelLayoutPresetOptions = {}): MagnetLayoutPreset {
   return {
     ...(options.boundsInset ? { boundsInset: options.boundsInset } : {}),
+    ...(options.boundsOutset ? { boundsOutset: options.boundsOutset } : {}),
+    ...(options.boundsAlign ? { boundsAlign: options.boundsAlign } : {}),
     ...(options.chromeInset ? { chrome: buildChromeConfig(options.chromeInset) } : {}),
   };
 }
-

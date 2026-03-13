@@ -45,6 +45,25 @@ function createEmptyJoinEdges(): MagnetJoinEdges {
   };
 }
 
+function alignMagnetTopToReference(bounds: MagnetBounds, referenceTop: number): void {
+  const bottom = bounds.y + bounds.height;
+  bounds.y = referenceTop;
+  bounds.height = Math.max(1, bottom - referenceTop);
+}
+
+function applyMagnetBoundsAlignment(magnets: Magnet[], boundsByMagnetId: Record<string, MagnetBounds>): void {
+  for (const magnet of magnets) {
+    const referenceId = magnet.boundsAlign?.topToMagnetId;
+    if (!referenceId) continue;
+
+    const bounds = boundsByMagnetId[magnet.id];
+    const referenceBounds = boundsByMagnetId[referenceId];
+    if (!bounds || !referenceBounds) continue;
+
+    alignMagnetTopToReference(bounds, referenceBounds.y);
+  }
+}
+
 function getHorizontalGap(first: MagnetBounds, second: MagnetBounds): number {
   return Math.max(0, Math.max(second.x - (first.x + first.width), first.x - (second.x + second.width)));
 }
@@ -215,6 +234,8 @@ export function buildAdaptiveMagnetLayout(
   const boundsByMagnetId = Object.fromEntries(
     rawBoundsEntries.map(([magnetId, bounds]) => [magnetId, cloneBounds(bounds)])
   ) as Record<string, MagnetBounds>;
+
+  applyMagnetBoundsAlignment(magnets, boundsByMagnetId);
 
   const conflicts: MagnetAdaptiveConflict[] = [];
   let maxAdjustmentPx = 0;

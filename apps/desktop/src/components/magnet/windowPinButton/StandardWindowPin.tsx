@@ -11,7 +11,7 @@ const PinIcon: React.FC = () => (
 export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic }) => {
   return (
     <button
-      className={`window-pin-button ${data.isPinned ? 'pinned' : 'unpinned'}`}
+      className={`magnet-control-button window-pin-button ${data.isPinned ? 'pinned' : 'unpinned'}`}
       onClick={logic.togglePin}
       onMouseDown={(e) => {
         e.preventDefault();

@@ -205,7 +205,9 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s,
+    transform 0.2s;
   white-space: nowrap;
 }
 
@@ -278,7 +280,9 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s,
+    transform 0.2s;
 }
 
 .import-submit-btn:hover {
@@ -739,7 +743,10 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   font-size: 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    transform 0.2s;
   clip-path: polygon(
     0% var(--action-btn-corner),
     var(--action-btn-corner) 0%,
@@ -1042,7 +1049,10 @@
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition:
+    background 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.3s ease;
   box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
   /* 左上和右下剪角 */
   clip-path: polygon(

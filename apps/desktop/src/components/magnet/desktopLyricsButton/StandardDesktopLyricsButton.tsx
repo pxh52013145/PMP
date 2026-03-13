@@ -25,7 +25,7 @@ export const StandardDesktopLyricsButton: React.FC<DesktopLyricsButtonVariantPro
 
   return (
     <button
-      className={`desktop-lyrics-button ${enabled ? 'active' : ''}`}
+      className={`magnet-control-button desktop-lyrics-button ${enabled ? 'active' : ''}`}
       onClick={(event) =>
         void toggleDesktopLyrics(
           {

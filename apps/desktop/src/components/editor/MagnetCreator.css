@@ -174,7 +174,11 @@
   font-size: 13px;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   outline: none;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
   clip-path: polygon(
     0% var(--input-corner-size),
     var(--input-corner-size) 0%,
@@ -295,7 +299,11 @@
   font-weight: 600;
   border: none;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition:
+    background 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.3s ease;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   clip-path: polygon(
@@ -448,7 +456,10 @@
   border: 2px solid rgba(0, 217, 255, 0.5);
   border-radius: 50%;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s;
   box-shadow: 0 0 8px rgba(0, 217, 255, 0.3);
 }
 
@@ -476,7 +487,10 @@
   border: 2px solid rgba(0, 217, 255, 0.5);
   border-radius: 50%;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s;
   box-shadow: 0 0 8px rgba(0, 217, 255, 0.3);
 }
 
@@ -586,7 +600,10 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s;
   border-radius: 4px;
   text-transform: uppercase;
 }
@@ -621,7 +638,10 @@
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  transition: all 0.2s;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .creator-history-item:hover {
@@ -660,7 +680,10 @@
   font-weight: 600;
   border: none;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s;
   border-radius: 4px;
   text-transform: uppercase;
 }
@@ -777,7 +800,10 @@
   font-size: 18px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s;
   border-radius: 4px;
   display: flex;
   align-items: center;

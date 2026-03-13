@@ -17,6 +17,36 @@ A magnet is split into three concerns:
 
 Do not mix these concerns.
 
+## 1.1 Builtin declaration pattern
+
+Every builtin magnet should declare two explicit preset constants:
+
+- `*_CHROME` from `apps/desktop/src/modules/magnets/chromePresets.ts`
+- `*_LAYOUT` from `apps/desktop/src/modules/magnets/layoutPresets.ts`
+
+Even when a layout preset is empty, keep it explicit in the builtin definition.
+
+Why:
+
+- avoids hidden reliance on fallback geometry behavior
+- makes single-vs-panel placement intent obvious in code review
+- keeps future layout migrations mechanical and low risk
+
+Example:
+
+```ts
+const BACK_BUTTON_CHROME = createControlChromePreset()
+const BACK_BUTTON_LAYOUT = createDockedSingleControlLayoutPreset({
+  dock: { x: 'start' },
+})
+
+export const BACK_BUTTON_MAGNET: Magnet = {
+  ...BACK_BUTTON_LAYOUT,
+  style: BACK_BUTTON_CHROME.style,
+  animation: BACK_BUTTON_CHROME.animation,
+}
+```
+
 ## 2. DOM layers
 
 Runtime DOM structure:
@@ -105,6 +135,35 @@ Typical use cases:
 - reduce a panel's true footprint without changing its anchors
 - keep spacing stable across resize and adaptive layout passes
 
+
+### `boundsOutset`
+
+Real layout outset.
+
+```ts
+boundsOutset?: {
+  top?: number
+  right?: number
+  bottom?: number
+  left?: number
+}
+```
+
+Use `boundsOutset` when you want to expand the actual shell bounds outward without changing anchors.
+
+It affects:
+
+- layout position
+- occupied visual area
+- collision behavior
+- adaptive join detection
+- hit testing area
+
+Typical use cases:
+
+- align a top-row panel's outer border with a 36px single control that overhangs the first grid row
+- extend a panel shell to create a shared top baseline without moving internal content
+- keep seam logic host-driven instead of using renderer transforms
 ### `chrome.inset`
 
 Visual inset only.
@@ -190,7 +249,7 @@ Use these for inner layout only:
 
 If the problem is “text is too close to the border”, use content spacing first.
 
-If the problem is “the frame itself should sit farther from the edge”, use `boundsInset` or `chrome.inset` instead.
+If the problem is "the frame itself should sit farther from the edge" or needs to extend outward to meet another shell, use `boundsInset`, `boundsOutset`, or `chrome.inset` instead.
 
 ## 5. Recommended archetypes
 
@@ -216,13 +275,14 @@ Use for large content areas.
 
 - `anchorType: 'rectangular'`
 - panel preset chrome
-- `boundsInset` only when the shell itself needs true breathing room
+- `boundsInset` or `boundsOutset` only when the shell itself needs true geometry adjustment
 
 ### Top-row panel
 
-Use when a panel begins in row `0` but should not feel glued to the window edge.
+Use when a panel begins in row `0` and needs either inward breathing room or outward alignment to top-bar controls.
 
-- start with `boundsInset.top`
+- use `boundsInset.top` when the panel itself should sit lower inside its anchored footprint
+- use `boundsOutset.top` when the panel's outer border should align with an overhanging top-row single control
 - only use `chrome.inset.top` if you want a purely visual adjustment without changing layout relationships
 
 ## 6. How to adjust spacing correctly
@@ -233,6 +293,7 @@ Use one of:
 
 - anchors
 - `boundsInset`
+- `boundsOutset`
 - adaptive layout policy
 
 Do not use CSS margin hacks on `magnet-shell`.
@@ -277,8 +338,8 @@ Use the shared layout presets in `apps/desktop/src/modules/magnets/layoutPresets
 
 ### `process-perf-monitor`
 
-- uses `boundsInset.top`
-- creates real top breathing room while keeping panel layout logic stable
+- uses `boundsOutset.top`
+- extends its shell upward so the outer border aligns with top-row single controls while keeping anchors unchanged
 
 ## 8. Anti-patterns
 
@@ -294,7 +355,7 @@ Avoid these:
 
 Before shipping a magnet layout change, verify:
 
-- Does the shell spacing come from anchors, `boundsMode`, or `boundsInset`?
+- Does the shell spacing come from anchors, `boundsMode`, `boundsInset`, or `boundsOutset`?
 - Does the chrome paint come from presets and chrome tokens?
 - Does inner spacing come from content tokens or renderer CSS?
 - Does resize behavior stay stable in roomy and compact windows?
@@ -302,7 +363,7 @@ Before shipping a magnet layout change, verify:
 
 ## 10. Practical rule of thumb
 
-- **Move the shell** -> anchors / `boundsMode` / `boundsInset`
+- **Move the shell** -> anchors / `boundsMode` / `boundsInset` / `boundsOutset`
 - **Move the frame visually inside the shell** -> `chrome.inset`
 - **Move content inside the frame** -> `padding` / renderer CSS
 

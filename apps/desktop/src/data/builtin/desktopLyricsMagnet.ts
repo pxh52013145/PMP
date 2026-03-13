@@ -1,7 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset } from '../../modules/magnets/chromePresets';
+import { createCenteredSingleControlLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const DESKTOP_LYRICS_CHROME = createControlChromePreset();
+const DESKTOP_LYRICS_LAYOUT = createCenteredSingleControlLayoutPreset();
 
 export const DESKTOP_LYRICS_MAGNET: Magnet = {
   id: 'btn-desktop-lyrics',
@@ -12,6 +14,7 @@ export const DESKTOP_LYRICS_MAGNET: Magnet = {
   description: 'Toggle desktop lyrics overlay',
   anchorType: 'single',
   anchors: [],
+  ...DESKTOP_LYRICS_LAYOUT,
   content: 'LRC',
   style: DESKTOP_LYRICS_CHROME.style,
   animation: DESKTOP_LYRICS_CHROME.animation,

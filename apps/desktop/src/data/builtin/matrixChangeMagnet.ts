@@ -1,11 +1,13 @@
 import { Magnet } from '../../types/pixel';
 import { createPanelChromePreset } from '../../modules/magnets/chromePresets';
+import { createPanelLayoutPreset } from '../../modules/magnets/layoutPresets';
 
 const MATRIX_CHANGE_CHROME = createPanelChromePreset({
   style: {
     height: '36px',
   },
 });
+const MATRIX_CHANGE_LAYOUT = createPanelLayoutPreset();
 
 export const MATRIX_CHANGE_MAGNET: Magnet = {
   id: 'btn-matrix-change',
@@ -18,6 +20,7 @@ export const MATRIX_CHANGE_MAGNET: Magnet = {
   anchorType: 'horizontal',
   anchors: [],
   gridFootprint: { width: 3, height: 1 },
+  ...MATRIX_CHANGE_LAYOUT,
   content: '',
   style: MATRIX_CHANGE_CHROME.style,
   animation: MATRIX_CHANGE_CHROME.animation,

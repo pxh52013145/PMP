@@ -1,12 +1,99 @@
 ﻿import { listen } from '@tauri-apps/api/event';
-import type { AudioState } from './types';
+import type { AudioSpectrumFrame, AudioSpectrumTap, AudioState } from './types';
 import type {
   NativeAudioErrorPayload,
   NativeAudioSpectrumPayload,
   NativeAudioStatePayload,
 } from './nativeAudioServiceTypes';
 
-type NativeAudioListenerHost = any;
+type NativeAudioListenerCleanup = (() => void) | null;
+
+export type NativeAudioListenerHost = {
+  [key: string]: unknown;
+  state: AudioState;
+  stateListener: NativeAudioListenerCleanup;
+  errorListener: NativeAudioListenerCleanup;
+  spectrumListener: NativeAudioListenerCleanup;
+  lastUnderrunEvents: number;
+  lastUnderrunFrames: number;
+  lastNativeErrorSeq: number;
+  lastSchedulerProfile?: 'normal' | 'guarded' | 'critical';
+  transportMode?: 'robust' | 'transport-exact';
+  hqSrcPhaseMode?: 'linear' | 'minimum' | 'intermediate';
+  srcMode?: 'source-native' | 'match-output' | 'target-rate';
+  srcBackend?: 'rubato' | 'linear-simd';
+  srcTargetSampleRate: number | null;
+  outputQuantizationMode?: 'round' | 'tpdf';
+  outputSampleRate: number;
+  sourceSampleRate: number;
+  hqSrcStopbandDb: number;
+  hqSrcActive: boolean;
+  hqSrcRatio: number;
+  transportExactInt32Container: boolean;
+  outputCallbackMetricsValid: boolean;
+  outputCallbackP99Us: number;
+  outputWaitTimeoutCount: number;
+  outputRenderUnderrunEvents: number;
+  outputRenderUnderrunFrames: number;
+  outputCallbackIntervalJitterP99Us: number;
+  outputCallbackIntervalOverrunCount: number;
+  outputCallbackExpectedIntervalUs: number;
+  transferLowWatermarkSamples: number;
+  transferRenderLowHitCount: number;
+  transferDecodeLowHitCount: number;
+  transferAdaptationLevel: number;
+  transferOscillationStreak: number;
+  renderQueuePageLocked: boolean;
+  transferMetricsValid: boolean;
+  sharedRenderAheadEnabled: boolean;
+  sharedRenderUnderrunEvents: number;
+  sharedRenderUnderrunFrames: number;
+  sharedRenderLowHitCount: number;
+  sharedRenderLowWatermarkSamples: number;
+  controlQueueLockFree: boolean;
+  controlQueueMode: string;
+  controlQueueCapacity: number;
+  controlQueueOverwriteEvents: number;
+  controlQueueDropNewestEvents: number;
+  controlQueueCoalescedOverflowEvents: number;
+  controlQueueCriticalOverflowEvents: number;
+  diagnosticTimelineDroppedEvents: number;
+  diagnosticTimeline: Array<{
+    seq: number;
+    timestampMs: number;
+    kind: string;
+    value: number;
+    aux: number;
+  }>;
+  fallbackClockBaseTimeSec: number;
+  fallbackClockStartedAtMs: number | null;
+  lastBackendTimeUpdateAtMs: number;
+  timeUpdateCallbacks: Set<(time: number) => void>;
+  endedCallbacks: Set<() => void>;
+  spectrumData: Uint8Array;
+  spectrumFrames: Partial<Record<AudioSpectrumTap, AudioSpectrumFrame>>;
+  shouldIgnoreBackendCurrentTime(nextTime: number): boolean;
+  handleUnderrunSpike(...args: unknown[]): void;
+  maybeReleaseUnderrunRecovery(...args: unknown[]): void;
+  ensureFallbackTicker(): void;
+  applyPlaybackStateSideEffects(...args: unknown[]): void;
+  applySharedTimelineStressIfNeeded(...args: unknown[]): void;
+  deriveTitleFromPath(path: string): string;
+  emitError(...args: unknown[]): void;
+  emitRobustnessSnapshot(...args: unknown[]): void;
+  evaluateDynamicSrcAutoDegradation(...args: unknown[]): void;
+  getEffectiveDynamicSrcTiming(...args: unknown[]): { stressScore: number };
+  getTrackPath(track: AudioState['currentTrack'] | null | undefined): string | null;
+  handleTrackEnded(): void;
+  isSameQueuePaths(...args: unknown[]): boolean;
+  normalizeTrackPathForCompare(path: string | null): string;
+  recordBufferedAheadSample(...args: unknown[]): void;
+  resolveQueueFromPaths(paths: string[]): AudioState['queue'];
+  resolveTrackFromPath(path: string): { track: NonNullable<AudioState['currentTrack']>; index: number } | null;
+  trackPlaybackStateForMetrics(...args: unknown[]): void;
+  updateDynamicSrcLearningFromStress(...args: unknown[]): void;
+  updateState(partial: Partial<AudioState>, options?: { emitStateChange?: boolean }): AudioState;
+};
 
 export async function setupNativeListenersImpl(
   this: NativeAudioListenerHost,

@@ -2638,7 +2638,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     }
 
-  }, [beginAudioProtection, updateCoverRuntimePolicy]);
+  }, [beginAudioProtection]);
 
 
 
@@ -3305,8 +3305,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     maybeLoadTrackChunkFromScroll,
 
     resetLibraryDataFromStorage,
-
-    updateCoverRuntimePolicy,
 
   ]);
 
@@ -4474,57 +4472,74 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   const availableBaseGroupFields = useMemo(
 
-    () =>
+    () => {
 
-      (listMusicLibraryBaseGroupFieldIds() as MusicLibraryBaseGroupRule['field'][]).filter((field) => {
+      void baseFieldRegistryVersion;
+
+      return (listMusicLibraryBaseGroupFieldIds() as MusicLibraryBaseGroupRule['field'][]).filter((field) => {
 
         if (!isMusicLibraryBaseFieldVisibleInBaseUi(field)) return false;
 
         return true;
 
-      }),
+      });
 
-    [librarySourceMode, baseFieldRegistryVersion]
+    },
+
+    [baseFieldRegistryVersion]
 
   );
 
   const availableBaseOrderFields = useMemo(
 
-    () =>
+    () => {
 
-      (listMusicLibraryBaseOrderFieldIds() as MusicLibraryBaseSortRule['field'][]).filter((field) => {
+      void baseFieldRegistryVersion;
+
+      return (listMusicLibraryBaseOrderFieldIds() as MusicLibraryBaseSortRule['field'][]).filter((field) => {
 
         if (!isMusicLibraryBaseFieldVisibleInBaseUi(field)) return false;
 
         return true;
 
-      }),
+      });
 
-    [librarySourceMode, baseFieldRegistryVersion]
+    },
+
+    [baseFieldRegistryVersion]
 
   );
 
   const availableBaseFilterFields = useMemo(
 
-    () =>
+    () => {
 
-      listMusicLibraryBaseFilterFieldIds().filter((field) => {
+      void baseFieldRegistryVersion;
+
+      return listMusicLibraryBaseFilterFieldIds().filter((field) => {
 
         if (!isMusicLibraryBaseFieldVisibleInBaseUi(field)) return false;
 
         return true;
 
-      }),
+      });
 
-    [librarySourceMode, baseFieldRegistryVersion]
+    },
+
+    [baseFieldRegistryVersion]
 
   );
 
   const baseFilterFacetDescriptor = useMemo(
 
-    () => resolveMusicLibraryFieldFacetDescriptor(baseFilterField),
+    () => {
 
-    [baseFilterField, baseFieldRegistryVersion]
+      void baseFieldRegistryVersion;
+      return resolveMusicLibraryFieldFacetDescriptor(baseFilterField);
+
+    },
+
+    [baseFieldRegistryVersion, baseFilterField]
 
   );
 
@@ -5756,7 +5771,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   // 闁告瑥鑻崵顔碱潰鐏炵偓閿ら柨娑欑閸у﹪宕濋悩鍐差暡闁哄牆顦崇换鍐煥閵堝懏鍊甸柣銊ュ閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹顏堟晬鐏炶偐鐭ら梺顐㈩槷閼垫垿鎯冮崟顒傛憙闁哄洦褰冪槐鎴炴叏鐎ｎ偅灏￠柡鈧?
 
-  const handleTrackDoubleClick = (track: Track, index: number) => {
+  const handleTrackDoubleClick = useCallback((track: Track, index: number) => {
 
     if (!onPlayNow) {
 
@@ -5778,13 +5793,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     onPlayNow(filteredTracks, startIndex);
 
-  };
+  }, [filteredTracks, markPendingPlayTrack, onPlayNow]);
 
 
 
   // 闁告瑯浜濋幐閬嶅绩閹冪濡絾鐗楅悺鏇㈠即?
 
-  const handlePlaySingleTrack = (track: Track, e?: React.MouseEvent) => {
+  const handlePlaySingleTrack = useCallback((track: Track, e?: React.MouseEvent) => {
 
     e?.stopPropagation();
 
@@ -5802,13 +5817,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     onPlayNow([track]);
 
-  };
+  }, [markPendingPlayTrack, onPlayNow]);
 
 
 
   // 闁告瑯浜濋崸濠囧礉閻樻彃绀嬪Λ锝嗙墬閻℃洟寮撮幓鎺戠厒闂傚啰鍠庨崹?
 
-  const handleAddSingleTrack = (track: Track, e?: React.MouseEvent) => {
+  const handleAddSingleTrack = useCallback((track: Track, e?: React.MouseEvent) => {
 
     e?.stopPropagation();
 
@@ -5824,7 +5839,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     onAddToQueue([track]);
 
-  };
+  }, [onAddToQueue]);
 
 
 
@@ -6278,7 +6293,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   // 濠㈣泛瀚幃濠傤潰鐏炵偓閿ら柛娆愬▕閺侇參鎳ｅ鍐ㄧ
 
-  const handleTrackContextMenu = (track: Track, index: number, e: React.MouseEvent) => {
+  const handleTrackContextMenu = useCallback((track: Track, index: number, e: React.MouseEvent) => {
 
     e.preventDefault();
 
@@ -6372,7 +6387,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     });
 
-  };
+  }, [audioService, filteredTracks, handleAddSingleTrack, handleApplyQuickBaseFilter, handlePlaySingleTrack, onPlayNow, t]);
 
 
 
@@ -6589,6 +6604,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     onPlayNow,
 
     pendingPlayTrackIdentity,
+
+    resolveTrackIdentity,
 
     renderedTracks,
 

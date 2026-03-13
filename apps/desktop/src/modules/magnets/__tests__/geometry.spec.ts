@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { MATRIX_CONFIG } from '../../../constants/config';
 import type { Magnet } from '../../../types/pixel';
 import { alignMagnetBounds, computeMagnetBounds } from '../geometry';
+import { BACK_BUTTON_MAGNET } from '../../../data/builtin/backButtonMagnet';
+import { PROCESS_PERF_MONITOR_MAGNET } from '../../../data/builtin/processPerfMonitorMagnet';
+import { SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID } from '../systemLayouts';
 
 function createPixelPositions(stepX: number, stepY: number) {
   const positions = new Map<string, { x: number; y: number }>();
@@ -16,7 +19,14 @@ function createPixelPositions(stepX: number, stepY: number) {
   return positions;
 }
 
-function createRectangularMagnet(id: string, leftCol: number, topRow: number, rightCol: number, bottomRow: number): Magnet {
+function createRectangularMagnet(
+  id: string,
+  leftCol: number,
+  topRow: number,
+  rightCol: number,
+  bottomRow: number,
+  layout?: Pick<Magnet, 'boundsInset' | 'boundsOutset'>
+): Magnet {
   return {
     id,
     type: 'custom',
@@ -28,6 +38,7 @@ function createRectangularMagnet(id: string, leftCol: number, topRow: number, ri
       { id: 'bottom-left', gridX: leftCol, gridY: bottomRow, role: 'boundary' },
       { id: 'bottom-right', gridX: rightCol, gridY: bottomRow, role: 'boundary' },
     ],
+    ...(layout ?? {}),
     content: '',
     style: {
       backgroundColor: 'rgba(0, 0, 0, 0.7)',
@@ -39,20 +50,6 @@ function createRectangularMagnet(id: string, leftCol: number, topRow: number, ri
       draggable: false,
       clickable: false,
     },
-  };
-}
-
-function createInsetRectangularMagnet(
-  id: string,
-  leftCol: number,
-  topRow: number,
-  rightCol: number,
-  bottomRow: number,
-  topInset: number
-): Magnet {
-  return {
-    ...createRectangularMagnet(id, leftCol, topRow, rightCol, bottomRow),
-    boundsInset: { top: topInset },
   };
 }
 
@@ -115,14 +112,30 @@ describe('computeMagnetBounds', () => {
     expect(nav.x - (perf.x + perf.width)).toBeGreaterThan(0);
   });
 
-  it('applies bounds inset to rectangular magnets as real layout breathing room', () => {
+  it('applies bounds inset to rectangular magnets as real inward shell spacing', () => {
     const positions = createPixelPositions(MATRIX_CONFIG.PIXEL_SIZE, MATRIX_CONFIG.PIXEL_SIZE);
     const insetPanel = alignMagnetBounds(
-      computeMagnetBounds(createInsetRectangularMagnet('process-perf-monitor', 0, 0, 5, 7, 8), positions)!
+      computeMagnetBounds(
+        createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7, { boundsInset: { top: 8 } }),
+        positions
+      )!
     );
 
     expect(insetPanel.y).toBe(MATRIX_CONFIG.EDGE_PADDING + 8);
     expect(insetPanel.height).toBe(144 - 8);
+  });
+
+  it('applies bounds outset to rectangular magnets as real outward shell expansion', () => {
+    const positions = createPixelPositions(MATRIX_CONFIG.PIXEL_SIZE, MATRIX_CONFIG.PIXEL_SIZE);
+    const outsetPanel = alignMagnetBounds(
+      computeMagnetBounds(
+        createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7, { boundsOutset: { top: 9 } }),
+        positions
+      )!
+    );
+
+    expect(outsetPanel.y).toBe(MATRIX_CONFIG.EDGE_PADDING - 9);
+    expect(outsetPanel.height).toBe(144 + 9);
   });
 
   it('keeps docked single magnets aligned to the slot seam even when the grid has extra spacing', () => {
@@ -148,5 +161,31 @@ describe('computeMagnetBounds', () => {
     expect(back.x).toBe(nav.x);
     expect(back.y + back.height).toBeLessThan(nav.y);
     expect(nav.y - (back.y + back.height)).toBeGreaterThan(0);
+  });
+
+  it('aligns the builtin perf panel outer top border with the back button outer top border', () => {
+    const positions = createPixelPositions(MATRIX_CONFIG.PIXEL_SIZE, MATRIX_CONFIG.PIXEL_SIZE);
+    const perf = alignMagnetBounds(
+      computeMagnetBounds(
+        {
+          ...PROCESS_PERF_MONITOR_MAGNET,
+          anchors: SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID['process-perf-monitor'],
+        },
+        positions
+      )!
+    );
+    const back = alignMagnetBounds(
+      computeMagnetBounds(
+        {
+          ...BACK_BUTTON_MAGNET,
+          anchors: SYSTEM_SPACE1_DEFAULT_ANCHORS_BY_MAGNET_ID['btn-back'],
+        },
+        positions
+      )!
+    );
+
+    expect(perf.x).toBe(MATRIX_CONFIG.EDGE_PADDING);
+    expect(perf.y).toBe(back.y);
+    expect(back.y).toBe(MATRIX_CONFIG.EDGE_PADDING - 9);
   });
 });

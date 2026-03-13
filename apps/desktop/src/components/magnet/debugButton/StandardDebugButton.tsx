@@ -19,7 +19,7 @@ export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, l
 
   return (
     <button
-      className={`debug-button ${isOpen ? 'active' : ''}`}
+      className={`magnet-control-button debug-button ${isOpen ? 'active' : ''}`}
       onClick={handleClick}
       title={getButtonTitle(isOpen)}
       aria-label={getButtonTitle(isOpen)}

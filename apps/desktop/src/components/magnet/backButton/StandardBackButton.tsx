@@ -22,7 +22,7 @@ export const StandardBackButton: React.FC<BackButtonVariantProps> = ({ data, log
 
   return (
     <button
-      className={`back-button ${!canGoBack ? 'back-button-disabled' : ''}`}
+      className={`magnet-control-button back-button ${!canGoBack ? 'back-button-disabled' : ''}`}
       onClick={handleClick}
       disabled={!canGoBack}
       title={getButtonTitle(canGoBack)}

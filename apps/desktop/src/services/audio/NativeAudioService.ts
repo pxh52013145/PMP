@@ -1042,51 +1042,69 @@ export class NativeAudioService implements IAudioService {
   }
 
   private createTransportFacadeContext(): NativeAudioTransportFacadeContext {
-    const service = this;
-
-    return {
+    const context = {
       seekCoalesceMs: NativeAudioService.SEEK_COALESCE_MS,
       volumeCoalesceMs: NativeAudioService.VOLUME_COALESCE_MS,
-      get seekCommandSeqCounter() {
-        return service.seekCommandSeqCounter;
+      timeUpdateCallbacks: this.timeUpdateCallbacks,
+      seekCommandCoalescer: this.seekCommandCoalescer,
+      volumeCommandCoalescer: this.volumeCommandCoalescer,
+      invokeCommand: (command, payload) => this.invokeCommand(command, payload),
+      fireAndForgetCommand: (command, payload) => this.fireAndForgetCommand(command, payload),
+      flushDeferredLatencySrcPolicy: (trigger) => this.flushDeferredLatencySrcPolicy(trigger),
+      getEffectiveDynamicSrcTiming: (nowMs) => this.getEffectiveDynamicSrcTiming(nowMs),
+      withDynamicSrcHold: (reason, holdMs) => this.withDynamicSrcHold(reason, holdMs),
+      updateState: (partial) => this.updateState(partial),
+      ensureFallbackTicker: () => this.ensureFallbackTicker(),
+      readRuntimeControlSettings: () => this.readRuntimeControlSettings(),
+      notifyLatestSeekSequence: (seekSeq) => this.notifyLatestSeekSequence(seekSeq),
+    } as Omit<
+      NativeAudioTransportFacadeContext,
+      | 'seekCommandSeqCounter'
+      | 'dynamicSrcDeferredLatencyReason'
+      | 'state'
+      | 'fallbackClockBaseTimeSec'
+      | 'fallbackClockStartedAtMs'
+    >;
+
+    return Object.defineProperties(context, {
+      seekCommandSeqCounter: {
+        enumerable: true,
+        configurable: true,
+        get: () => this.seekCommandSeqCounter,
+        set: (value: number) => {
+          this.seekCommandSeqCounter = value;
+        },
       },
-      set seekCommandSeqCounter(value: number) {
-        service.seekCommandSeqCounter = value;
+      dynamicSrcDeferredLatencyReason: {
+        enumerable: true,
+        configurable: true,
+        get: () => this.dynamicSrcDeferredLatencyReason,
+        set: (value: string | null) => {
+          this.dynamicSrcDeferredLatencyReason = value;
+        },
       },
-      get dynamicSrcDeferredLatencyReason() {
-        return service.dynamicSrcDeferredLatencyReason;
+      state: {
+        enumerable: true,
+        configurable: true,
+        get: () => this.state,
       },
-      set dynamicSrcDeferredLatencyReason(value: string | null) {
-        service.dynamicSrcDeferredLatencyReason = value;
+      fallbackClockBaseTimeSec: {
+        enumerable: true,
+        configurable: true,
+        get: () => this.fallbackClockBaseTimeSec,
+        set: (value: number) => {
+          this.fallbackClockBaseTimeSec = value;
+        },
       },
-      get state() {
-        return service.state;
+      fallbackClockStartedAtMs: {
+        enumerable: true,
+        configurable: true,
+        get: () => this.fallbackClockStartedAtMs,
+        set: (value: number | null) => {
+          this.fallbackClockStartedAtMs = value;
+        },
       },
-      get fallbackClockBaseTimeSec() {
-        return service.fallbackClockBaseTimeSec;
-      },
-      set fallbackClockBaseTimeSec(value: number) {
-        service.fallbackClockBaseTimeSec = value;
-      },
-      get fallbackClockStartedAtMs() {
-        return service.fallbackClockStartedAtMs;
-      },
-      set fallbackClockStartedAtMs(value: number | null) {
-        service.fallbackClockStartedAtMs = value;
-      },
-      timeUpdateCallbacks: service.timeUpdateCallbacks,
-      seekCommandCoalescer: service.seekCommandCoalescer,
-      volumeCommandCoalescer: service.volumeCommandCoalescer,
-      invokeCommand: (command, payload) => service.invokeCommand(command, payload),
-      fireAndForgetCommand: (command, payload) => service.fireAndForgetCommand(command, payload),
-      flushDeferredLatencySrcPolicy: (trigger) => service.flushDeferredLatencySrcPolicy(trigger),
-      getEffectiveDynamicSrcTiming: (nowMs) => service.getEffectiveDynamicSrcTiming(nowMs),
-      withDynamicSrcHold: (reason, holdMs) => service.withDynamicSrcHold(reason, holdMs),
-      updateState: (partial) => service.updateState(partial),
-      ensureFallbackTicker: () => service.ensureFallbackTicker(),
-      readRuntimeControlSettings: () => service.readRuntimeControlSettings(),
-      notifyLatestSeekSequence: (seekSeq) => service.notifyLatestSeekSequence(seekSeq),
-    };
+    }) as NativeAudioTransportFacadeContext;
   }
 
   private clearPendingSeek(): void {
@@ -2101,7 +2119,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async restoreDynamicSrcAutoSettingsFromStorage(): Promise<void> {
-    return restoreDynamicSrcAutoSettingsFromStorageImpl.call(this, {
+    return restoreDynamicSrcAutoSettingsFromStorageImpl.call(this as unknown as import('./nativeAudioDynamicSrcAutoSettings').DynamicSrcHost, {
       elevatedScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_ELEVATED,
       criticalScoreThreshold: NativeAudioService.DYNAMIC_SRC_ADAPTIVE_SCORE_CRITICAL,
     });
@@ -3264,7 +3282,7 @@ export class NativeAudioService implements IAudioService {
   }
 
   private async setupNativeListeners() {
-    return setupNativeListenersImpl.call(this);
+    return setupNativeListenersImpl.call(this as unknown as import('./nativeAudioNativeListeners').NativeAudioListenerHost);
   }
 
   private async setupRuntimeAudioComponentsListeners(): Promise<void> {

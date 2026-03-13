@@ -1,8 +1,7 @@
-import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import type { Magnet } from '../../types/pixel';
 import { getMagnetRenderer } from '../../magnet-system/registry';
 import type { MagnetChromeOverrideMode } from '../../modules/magnets';
-import { DEFAULT_MAGNET_TRANSITION } from '../../modules/magnets/chromePresets';
 import {
   alignMagnetBounds,
   computeMagnetBounds,
@@ -14,6 +13,15 @@ import {
   resolveMagnetCornerRadii,
   splitMagnetStyleTokens,
 } from '../../modules/magnets/stylePolicy';
+import {
+  extractMagnetBorderStroke,
+  normalizeMagnetOpacity,
+  resolveMagnetChromeEnabled,
+  resolveMagnetCurrentStyle,
+  resolveMagnetInteractionState,
+  resolveMagnetTransitionValue,
+  toOpaqueMagnetColor,
+} from '../../modules/magnets/runtimeStyle';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -26,59 +34,7 @@ interface MagnetProps {
   joinEdges?: MagnetJoinEdges;
 }
 
-function normalizeOpacity(value: string | number | undefined): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.max(0, Math.min(1, value));
-  }
-
-  if (typeof value === 'string') {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) {
-      return Math.max(0, Math.min(1, parsed));
-    }
-  }
-
-  return undefined;
-}
-
-function toOpaqueColor(value: string | undefined): string | undefined {
-  if (typeof value !== 'string') return value;
-  const normalized = value.trim();
-  if (!normalized) return value;
-
-  const hexMatch = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
-  if (hexMatch) {
-    const hex = hexMatch[1];
-    if (hex.length === 4) return `#${hex.slice(0, 3)}`;
-    if (hex.length === 8) return `#${hex.slice(0, 6)}`;
-    return normalized;
-  }
-
-  const rgbaMatch = normalized.match(/^rgba?\((.+)\)$/i);
-  if (!rgbaMatch) return value;
-  const channels = rgbaMatch[1]
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (channels.length < 3) return value;
-  return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
-}
-
-function extractBorderStroke(value: string | undefined): { width: string; color: string } | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim();
-  if (!normalized) return null;
-
-  const match = normalized.match(/^([0-9.]+px)\s+\S+\s+(.+)$/);
-  if (!match) return null;
-
-  return {
-    width: match[1],
-    color: match[2].trim(),
-  };
-}
-
-export function MagnetComponent({
+function MagnetComponentImpl({
   magnet,
   pixelPositions,
   onInteract,
@@ -184,23 +140,15 @@ export function MagnetComponent({
     };
   }, [clearDragFeedbackTimer, resetTransientInteractionState]);
 
-  const currentStyle = useMemo(() => {
-    let appliedStyle = { ...magnet.style };
-
-    if (isHovering && magnet.animation?.hoverStyle) {
-      appliedStyle = { ...appliedStyle, ...magnet.animation.hoverStyle };
-    }
-
-    if (isActive && magnet.animation?.activeStyle) {
-      appliedStyle = { ...appliedStyle, ...magnet.animation.activeStyle };
-    }
-
-    if (isDragging && magnet.animation?.dragStyle) {
-      appliedStyle = { ...appliedStyle, ...magnet.animation.dragStyle };
-    }
-
-    return appliedStyle;
-  }, [magnet.style, magnet.animation, isHovering, isActive, isDragging]);
+  const currentStyle = useMemo(
+    () =>
+      resolveMagnetCurrentStyle(magnet.style, magnet.animation, {
+        isHovering,
+        isActive,
+        isDragging,
+      }),
+    [magnet.style, magnet.animation, isHovering, isActive, isDragging]
+  );
 
   const { chromeStyle: chromeTokens, contentStyle: contentTokens } = useMemo(
     () => splitMagnetStyleTokens(currentStyle),
@@ -256,20 +204,18 @@ export function MagnetComponent({
     lastBoundsRef.current = bounds;
   }, [bounds, lowRenderMode]);
 
-  const transitionValue = useMemo(() => {
-    if (lowRenderMode || disableTransition) return 'none';
-    return magnet.animation?.transition || DEFAULT_MAGNET_TRANSITION;
-  }, [lowRenderMode, disableTransition, magnet.animation?.transition]);
+  const transitionValue = useMemo(
+    () => resolveMagnetTransitionValue(lowRenderMode, disableTransition, magnet.animation?.transition),
+    [lowRenderMode, disableTransition, magnet.animation?.transition]
+  );
 
-  const chromeEnabled =
-    chromeOverrideMode === 'force-on'
-      ? true
-      : chromeOverrideMode === 'force-off'
-        ? false
-        : magnet.chrome?.enabled !== false;
+  const chromeEnabled = useMemo(
+    () => resolveMagnetChromeEnabled(magnet.chrome, chromeOverrideMode),
+    [magnet.chrome, chromeOverrideMode]
+  );
 
-  const chromeBaseOpacity = normalizeOpacity(currentStyle.opacity) ?? 1;
-  const borderStroke = extractBorderStroke(currentStyle.border);
+  const chromeBaseOpacity = normalizeMagnetOpacity(currentStyle.opacity) ?? 1;
+  const borderStroke = extractMagnetBorderStroke(currentStyle.border);
   const chromeInsets = useMemo(() => resolveMagnetInsets(magnet.chrome?.inset), [magnet.chrome?.inset]);
   const hasChromeInset = chromeInsets.top > 0 || chromeInsets.right > 0 || chromeInsets.bottom > 0 || chromeInsets.left > 0;
   const chromeInsetApplies = chromeEnabled && hasChromeInset;
@@ -313,12 +259,11 @@ export function MagnetComponent({
   }, [chromeTokens, resolvedCornerRadii, transitionValue]);
 
   const chromeBaseStyle = useMemo(() => {
-    const shouldUseInsetStroke = layoutMode !== 'normal' && borderStroke;
-    const boxShadow = shouldUseInsetStroke
-      ? [currentStyle.boxShadow, `inset 0 0 0 ${borderStroke.width} ${borderStroke.color}`]
-          .filter(Boolean)
-          .join(', ')
-      : currentStyle.boxShadow;
+    const shouldUseInsetStroke = Boolean(borderStroke);
+    const insetStrokeShadow = borderStroke
+      ? `inset 0 0 0 ${borderStroke.width} ${borderStroke.color}`
+      : undefined;
+    const boxShadow = [currentStyle.boxShadow, insetStrokeShadow].filter(Boolean).join(', ');
 
     return {
       position: 'absolute' as const,
@@ -329,9 +274,9 @@ export function MagnetComponent({
       pointerEvents: 'none' as const,
       transition: transitionValue,
       opacity: chromeBaseOpacity,
-      backgroundColor: toOpaqueColor(currentStyle.backgroundColor),
+      backgroundColor: toOpaqueMagnetColor(currentStyle.backgroundColor),
       border: shouldUseInsetStroke ? 'none' : currentStyle.border,
-      boxShadow,
+      boxShadow: boxShadow || undefined,
       backdropFilter: currentStyle.backdropFilter,
       WebkitBackdropFilter: currentStyle.backdropFilter,
       filter: currentStyle.filter,
@@ -349,7 +294,6 @@ export function MagnetComponent({
     chromeInsets.right,
     chromeInsets.bottom,
     chromeInsets.left,
-    layoutMode,
     resolvedCornerRadii,
     transitionValue,
   ]);
@@ -393,7 +337,7 @@ export function MagnetComponent({
     chromeInsets.left,
   ]);
 
-  const renderContent = () => {
+  const renderedContent = useMemo(() => {
     const rendererId = magnet.renderer ?? magnet.id;
     const rendererEntry =
       getMagnetRenderer(rendererId) ??
@@ -405,11 +349,15 @@ export function MagnetComponent({
     }
 
     return magnet.content;
-  };
+  }, [magnet.renderer, magnet.id, magnet.content]);
 
   if (!bounds || !shellStyle) return null;
 
-  const interactionState = isDragging ? 'dragging' : isActive ? 'active' : isHovering ? 'hover' : 'idle';
+  const interactionState = resolveMagnetInteractionState({
+    isHovering,
+    isActive,
+    isDragging,
+  });
 
   return (
     <div
@@ -430,15 +378,14 @@ export function MagnetComponent({
           style={chromeStyle}
         >
           <div className="magnet-base-layer" style={chromeBaseStyle} />
-          <div className="magnet-content-layer" style={rendererStyle}>
-            {renderContent()}
-          </div>
+          <div className="magnet-content-layer" style={rendererStyle}>{renderedContent}</div>
         </div>
       ) : (
-        <div className="magnet-renderer" style={rendererStyle}>
-          {renderContent()}
-        </div>
+        <div className="magnet-renderer" style={rendererStyle}>{renderedContent}</div>
       )}
     </div>
   );
 }
+
+export const MagnetComponent = memo(MagnetComponentImpl);
+MagnetComponent.displayName = 'MagnetComponent';

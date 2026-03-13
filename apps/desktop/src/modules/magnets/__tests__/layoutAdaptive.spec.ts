@@ -73,26 +73,36 @@ function createNavigationPageMagnet(): Magnet {
   };
 }
 
-function createRectangularMagnet(id: string, leftCol: number, topRow: number, rightCol: number, bottomRow: number): Magnet {
+function createRectangularMagnet(
+  id: string,
+  leftCol: number,
+  topRow: number,
+  rightCol: number,
+  bottomRow: number,
+  overrides: Partial<Magnet> = {}
+): Magnet {
   return {
     id,
-    type: 'custom',
-    name: id,
+    type: overrides.type ?? 'custom',
+    name: overrides.name ?? id,
     anchorType: 'rectangular',
-    anchors: [
+    anchors: overrides.anchors ?? [
       { id: 'top-left', gridX: leftCol, gridY: topRow, role: 'anchor' },
       { id: 'top-right', gridX: rightCol, gridY: topRow, role: 'boundary' },
       { id: 'bottom-left', gridX: leftCol, gridY: bottomRow, role: 'boundary' },
       { id: 'bottom-right', gridX: rightCol, gridY: bottomRow, role: 'boundary' },
     ],
-    content: '',
-    style: {
+    boundsInset: overrides.boundsInset,
+    boundsOutset: overrides.boundsOutset,
+    boundsAlign: overrides.boundsAlign,
+    content: overrides.content ?? '',
+    style: overrides.style ?? {
       backgroundColor: 'rgba(0, 0, 0, 0.45)',
       border: '1px solid rgba(255, 255, 255, 0.12)',
       borderRadius: '2.7px',
     },
-    state: 'idle',
-    interactions: {
+    state: overrides.state ?? 'idle',
+    interactions: overrides.interactions ?? {
       draggable: false,
       clickable: false,
     },
@@ -191,6 +201,29 @@ describe('buildAdaptiveMagnetLayout', () => {
     expect(result.joinsByMagnetId['audio-visualizer'].right).toBe(true);
     expect(result.joinsByMagnetId['track-info'].right).toBe(true);
     expect(result.joinsByMagnetId['navigation-page'].left).toBe(true);
+  });
+
+  it('lets the perf panel dynamically follow the back button top baseline even if the back button keeps a legacy y dock', () => {
+    const legacyBack: Magnet = {
+      ...createLeftDockedSingleMagnet('btn-back', 6, 0),
+      boundsDock: { x: 'start', y: 'end' },
+    };
+    const perf = createRectangularMagnet('process-perf-monitor', 0, 0, 5, 7, {
+      boundsOutset: { top: 9 },
+      boundsAlign: { topToMagnetId: 'btn-back' },
+    });
+
+    const result = buildAdaptiveMagnetLayout(
+      [perf, legacyBack, createNavigationPageMagnet()],
+      createPixelPositions(32, 32),
+      { width: 1000, height: 800 }
+    );
+
+    const perfBounds = result.boundsByMagnetId['process-perf-monitor'];
+    const backBounds = result.boundsByMagnetId['btn-back'];
+
+    expect(result.mode).toBe('normal');
+    expect(perfBounds.y).toBe(backBounds.y);
   });
 
   it('keeps the back button aligned to the navigation left seam without sticking to the page below in a roomy layout', () => {

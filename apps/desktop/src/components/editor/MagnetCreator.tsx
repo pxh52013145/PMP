@@ -1,140 +1,46 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  Magnet,
-  PixelAnchor,
-  AnchorType,
-  MagnetBoundsMode,
-  MagnetBoundsDockAxis,
-  MagnetInsetConfig,
-} from '../../types/pixel';
+import { Magnet, PixelAnchor, AnchorType, MagnetBoundsMode } from '../../types/pixel';
 import { open } from '@tauri-apps/api/dialog';
 import { readTextFile } from '@tauri-apps/api/fs';
 import { useEditor } from '../../contexts/EditorContext';
 import { MagnetComponent } from '../magnet/Magnet';
 import { computeMagnetBounds } from '../../modules/magnets/geometry';
 import { getMagnetOccupiedPixels } from '../../utils/magnetEditor';
-import { readJson, writeJson } from '../../modules/storage';
+import {
+  appendMagnetHistory,
+  loadMagnetHistory,
+  saveMagnetHistory,
+  type MagnetHistoryItem,
+} from './magnetCreatorHistory';
+import {
+  type DockAxisDraft,
+  type InsetDraft,
+  INSET_SIDES,
+  PREVIEW_PIXEL_POSITIONS,
+  PREVIEW_STAGE_SIZE,
+  buildAnchorsFromOrigin,
+  buildEditorMagnet,
+  createEmptyInsetDraft,
+  createInsetDraft,
+  getPreviewScaleFromBounds,
+  hasMagnetConfigChanges,
+  parseDockAxis,
+  parseInsetDraft,
+} from './magnetCreatorModel';
+import { DEFAULT_MAGNET_TRANSITION } from '../../modules/magnets/chromePresets';
 import { useLocale, useT } from '../../i18n';
 import './MagnetCreator.css';
 
 interface MagnetCreatorProps {
   mode: 'create' | 'edit';
   editingMagnet?: Magnet;
-  defaultMagnet?: Magnet; // 默认配置（用于还原）
+  defaultMagnet?: Magnet; // 濮掓稒顭堥濠氭煀瀹ュ洨鏋傞柨娑樼墢閺併倖绂嶆惔銈囩闁告鍣﹂敓?
   onSave: (magnet: Magnet) => void;
   onCancel: () => void;
 }
 
-// 历史记录接口
-interface MagnetHistory {
-  id: string;
-  timestamp: number;
-  magnet: Magnet;
-  description: string;
-}
-
-// 历史记录管理
-const HISTORY_STORAGE_KEY = 'magnet-creator-history';
-const MAX_HISTORY_ITEMS = 20; // 每个 Magnet 最多保存 20 条历史
-
-const loadHistory = (magnetId: string): MagnetHistory[] => {
-  try {
-    return readJson<MagnetHistory[]>(`${HISTORY_STORAGE_KEY}-${magnetId}`, []);
-  } catch {
-    return [];
-  }
-};
-
-const saveHistory = (magnetId: string, history: MagnetHistory[]) => {
-  try {
-    writeJson(`${HISTORY_STORAGE_KEY}-${magnetId}`, history);
-  } catch (error) {
-    console.error('Failed to save history:', error);
-  }
-};
-
-const addHistoryItem = (
-  magnet: Magnet,
-  description: string = 'editor.magnet-creator.history.manualSave'
-) => {
-  const history = loadHistory(magnet.id);
-  const newItem: MagnetHistory = {
-    id: `${magnet.id}-${Date.now()}`,
-    timestamp: Date.now(),
-    magnet: JSON.parse(JSON.stringify(magnet)), // 深拷贝
-    description,
-  };
-
-  history.unshift(newItem); // 添加到开头
-  if (history.length > MAX_HISTORY_ITEMS) {
-    history.splice(MAX_HISTORY_ITEMS); // 限制数量
-  }
-
-  saveHistory(magnet.id, history);
-};
-
-type InsetSide = keyof MagnetInsetConfig;
-type InsetDraft = Record<InsetSide, string>;
-type DockAxisDraft = MagnetBoundsDockAxis | '';
-
-const INSET_SIDES: InsetSide[] = ['top', 'right', 'bottom', 'left'];
-
-function createEmptyInsetDraft(): InsetDraft {
-  return {
-    top: '',
-    right: '',
-    bottom: '',
-    left: '',
-  };
-}
-
-function createInsetDraft(config?: MagnetInsetConfig): InsetDraft {
-  const draft = createEmptyInsetDraft();
-
-  INSET_SIDES.forEach((side) => {
-    const value = config?.[side];
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-      draft[side] = String(value);
-    }
-  });
-
-  return draft;
-}
-
-function parseInsetDraft(draft: InsetDraft): MagnetInsetConfig | undefined {
-  const inset: MagnetInsetConfig = {};
-
-  INSET_SIDES.forEach((side) => {
-    const raw = draft[side].trim();
-    if (!raw) return;
-
-    const parsed = Number.parseFloat(raw);
-    if (!Number.isFinite(parsed)) return;
-
-    const normalized = Math.max(0, parsed);
-    if (normalized > 0) {
-      inset[side] = normalized;
-    }
-  });
-
-  return Object.keys(inset).length > 0 ? inset : undefined;
-}
-
-function parseDockAxis(value: DockAxisDraft): MagnetBoundsDockAxis | undefined {
-  return value === '' ? undefined : value;
-}
-
-function buildChromeConfig(
-  enabled: boolean | undefined,
-  inset: MagnetInsetConfig | undefined
-): Magnet['chrome'] | undefined {
-  if (enabled === undefined && inset === undefined) return undefined;
-
-  return {
-    ...(enabled !== undefined ? { enabled } : {}),
-    ...(inset !== undefined ? { inset } : {}),
-  };
-}
+// 闁告ê妫楄ぐ鍓佹媼閺夎法绉块柟鎭掑劚閿?
+type MagnetHistory = MagnetHistoryItem;
 
 export function MagnetCreator({
   mode,
@@ -146,10 +52,10 @@ export function MagnetCreator({
   const t = useT();
   const locale = useLocale();
 
-  // 获取编辑器上下文（用于冲突检测）
+  // 闁兼儳鍢茶ぐ鍥╃磽閺嶎剛甯嗛柛锝冨妺缁楀倹绋夌€ｎ偅鐎柨娑樼墢閺併倖绂嶆惔鈥虫毐缂佹劒鐒﹂ˉ鍛圭€ｅ墎绀?
   const { occupancyMap } = useEditor();
 
-  // 表单字段状态
+  // 閻炴稏鍔屽畷鐔衡偓娑欘殕椤斿矂鎮╅懜纰樺亾?
   const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [anchorType, setAnchorType] = useState<AnchorType>('single');
@@ -158,15 +64,16 @@ export function MagnetCreator({
   const [boundsDockX, setBoundsDockX] = useState<DockAxisDraft>('');
   const [boundsDockY, setBoundsDockY] = useState<DockAxisDraft>('');
   const [boundsInsetDraft, setBoundsInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
+  const [boundsOutsetDraft, setBoundsOutsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
   const [chromeInsetDraft, setChromeInsetDraft] = useState<InsetDraft>(createEmptyInsetDraft());
 
-  // 锚点配置 - pixel 尺寸
-  const [horizontalPixels, setHorizontalPixels] = useState(5); // 水平方向 pixel 数量
-  const [verticalPixels, setVerticalPixels] = useState(3); // 垂直方向 pixel 数量
-  const [rectWidth, setRectWidth] = useState(5); // 矩形宽度（pixel）
-  const [rectHeight, setRectHeight] = useState(3); // 矩形高度（pixel）
+  // 闂佹寧姘ㄩ崑锝夋煀瀹ュ洨鏋?- pixel 閻忓繐鎼敓?
+  const [horizontalPixels, setHorizontalPixels] = useState(5); // 婵ɑ娼欓柦鈺呭棘閻熺増鍊?pixel 闁轰椒鍗抽敓?
+  const [verticalPixels, setVerticalPixels] = useState(3); // 闁搞劌鍊诲ú鍧楀棘閻熺増鍊?pixel 闁轰椒鍗抽敓?
+  const [rectWidth, setRectWidth] = useState(5); // 闁活厸鏅涢懜鎵偓纭呮鐎规娊鏁嶉崸顪痻el閿?
+  const [rectHeight, setRectHeight] = useState(3); // 闁活厸鏅涢懜鐗堫殗濡搫顔婇柨娑樻椒ixel閿?
 
-  // 样式配置（JSON 字符串）
+  // 闁哄秴鍢茬槐锟犳煀瀹ュ洨鏋傞柨娑樻篂SON 閻庢稒顨堥浣圭▔鐠囇呯
   const [styleJson, setStyleJson] = useState<string>(`{
   "width": "36px",
   "height": "36px",
@@ -178,39 +85,45 @@ export function MagnetCreator({
   "cursor": "pointer"
 }`);
 
-  // 动画配置（JSON 字符串）
-  const [animationJson, setAnimationJson] = useState<string>(`{
-  "transition": "all 0.2s ease",
-  "hoverStyle": {
-    "transform": "scale(1.05)",
-    "filter": "brightness(1.1)"
-  },
-  "activeStyle": {
-    "transform": "scale(0.95)",
-    "filter": "brightness(0.9)"
-  }
-}`);
+  // 闁告柣鍔庨弫楣冩煀瀹ュ洨鏋傞柨娑樻篂SON 閻庢稒顨堥浣圭▔鐠囇呯
+  const [animationJson, setAnimationJson] = useState<string>(() =>
+    JSON.stringify(
+      {
+        transition: DEFAULT_MAGNET_TRANSITION,
+        hoverStyle: {
+          transform: 'scale(1.05)',
+          filter: 'brightness(1.1)',
+        },
+        activeStyle: {
+          transform: 'scale(0.95)',
+          filter: 'brightness(0.9)',
+        },
+      },
+      null,
+      2
+    )
+  );
 
-  // 样式解析错误
+  // 闁哄秴鍢茬槐锛勬喆閿濆棛鈧粙鏌ㄥ▎鎺濆殩
   const [styleError, setStyleError] = useState('');
   const [animationError, setAnimationError] = useState('');
 
-  // 导入状态
+  // 閻庣數鍘ч崣鍡涙偐閼哥鍋?
   const [showImport, setShowImport] = useState(false);
   const [importJson, setImportJson] = useState('');
   const [importError, setImportError] = useState('');
 
-  // 历史记录相关
+  // 闁告ê妫楄ぐ鍓佹媼閺夎法绉块柣鈺冾焾閿?
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<MagnetHistory[]>([]);
   const [sourceMagnet, setSourceMagnet] = useState<Magnet | null>(editingMagnet ?? null);
 
-  // 是否为内置 Magnet（判断是否显示还原按钮）
+  // 闁哄嫷鍨伴幆浣圭▔閸濆嫬鏁堕敓?Magnet闁挎稑鐗嗛崹浠嬪棘椤撶喐笑闁告熬闄勫Ο澶岀矆妤﹁法绠烽柛妯煎枑鐎垫粓鏌﹂鍡欑
   const isBuiltinMagnet = useMemo(() => {
     return mode === 'edit' && defaultMagnet !== undefined;
   }, [mode, defaultMagnet]);
 
-  // 解析样式 JSON
+  // 閻熸瑱绲鹃悗浠嬪冀瀹勬壆纭€ JSON
   const parsedStyle = useMemo(() => {
     try {
       const parsed = JSON.parse(styleJson);
@@ -222,7 +135,7 @@ export function MagnetCreator({
     }
   }, [styleJson]);
 
-  // 解析动画 JSON
+  // 閻熸瑱绲鹃悗浠嬪礉閵娧勬毎 JSON
   const parsedAnimation = useMemo(() => {
     try {
       const parsed = JSON.parse(animationJson);
@@ -235,6 +148,8 @@ export function MagnetCreator({
   }, [animationJson]);
 
   const parsedBoundsInset = useMemo(() => parseInsetDraft(boundsInsetDraft), [boundsInsetDraft]);
+
+  const parsedBoundsOutset = useMemo(() => parseInsetDraft(boundsOutsetDraft), [boundsOutsetDraft]);
 
   const parsedChromeInset = useMemo(() => parseInsetDraft(chromeInsetDraft), [chromeInsetDraft]);
 
@@ -250,7 +165,13 @@ export function MagnetCreator({
     };
   }, [boundsDockX, boundsDockY]);
 
-  // 加载 Magnet 配置的辅助函数
+  const anchorDimensions = useMemo(
+    () => ({ horizontalPixels, verticalPixels, rectWidth, rectHeight }),
+    [horizontalPixels, verticalPixels, rectWidth, rectHeight]
+  );
+
+
+  // 闁告梻濮鹃敓?Magnet 闂佹澘绉堕悿鍡涙儍閸曨喚绐￠柛鏂烘櫅閸ら亶寮?
   const loadMagnetConfig = useCallback((magnet: Magnet) => {
     setSourceMagnet(magnet);
     setId(magnet.id);
@@ -261,9 +182,10 @@ export function MagnetCreator({
     setBoundsDockX(magnet.boundsDock?.x ?? '');
     setBoundsDockY(magnet.boundsDock?.y ?? '');
     setBoundsInsetDraft(createInsetDraft(magnet.boundsInset));
+    setBoundsOutsetDraft(createInsetDraft(magnet.boundsOutset));
     setChromeInsetDraft(createInsetDraft(magnet.chrome?.inset));
 
-    // 加载锚点配置并计算 pixel 尺寸
+    // 闁告梻濮惧ù鍥煥濮樺崬浠梺鏉跨Ф閻ゅ棝鐛幆閭﹀悁閿?pixel 閻忓繐鎼敓?
     if (magnet.anchors.length >= 2) {
       if (magnet.anchorType === 'horizontal') {
         const width = Math.abs(magnet.anchors[1].gridX - magnet.anchors[0].gridX) + 1;
@@ -279,122 +201,53 @@ export function MagnetCreator({
       }
     }
 
-    // 加载样式 JSON
+    // 闁告梻濮惧ù鍥冀瀹勬壆纭€ JSON
     if (magnet.style) {
       setStyleJson(JSON.stringify(magnet.style, null, 2));
     }
 
-    // 加载动画 JSON
+    // 闁告梻濮惧ù鍥礉閵娧勬毎 JSON
     if (magnet.animation) {
       setAnimationJson(JSON.stringify(magnet.animation, null, 2));
     }
   }, []);
 
-  // 加载编辑数据
+  // 闁告梻濮惧ù鍥╃磽閺嶎剛甯嗛柡浣哄閿?
   useEffect(() => {
     if (mode === 'edit' && editingMagnet) {
       loadMagnetConfig(editingMagnet);
-      // 加载历史记录
-      setHistory(loadHistory(editingMagnet.id));
+      // 闁告梻濮惧ù鍥储閸℃钑夐悹浣规緲閿?
+      setHistory(loadMagnetHistory(editingMagnet.id));
     }
   }, [mode, editingMagnet, loadMagnetConfig]);
 
-  // 根据锚点类型和 pixel 尺寸生成锚点
+  // 闁哄秷顫夊畵渚€鏌ㄥ鍗炰化缂侇偉顕ч悗鐑藉椽?pixel 閻忓繐鎼顓㈡偨閻旂鐏囬梺鎸庢皑閿?
   const generateAnchors = useMemo((): PixelAnchor[] => {
-    const baseX = 10; // 基准起始 X (预览中心区域)
-    const baseY = 10; // 基准起始 Y (预览中心区域)
+    return buildAnchorsFromOrigin(anchorType, 10, 10, anchorDimensions);
+  }, [anchorType, anchorDimensions]);
 
-    switch (anchorType) {
-      case 'single':
-        return [{ id: 'anchor', gridX: baseX, gridY: baseY, role: 'anchor' }];
-
-      case 'horizontal':
-        // 水平方向：从 baseX 开始，占据 horizontalPixels 个 pixel
-        return [
-          { id: 'left', gridX: baseX, gridY: baseY, role: 'anchor' },
-          { id: 'right', gridX: baseX + horizontalPixels - 1, gridY: baseY, role: 'boundary' },
-        ];
-
-      case 'vertical':
-        // 垂直方向：从 baseY 开始，占据 verticalPixels 个 pixel
-        return [
-          { id: 'top', gridX: baseX, gridY: baseY, role: 'anchor' },
-          { id: 'bottom', gridX: baseX, gridY: baseY + verticalPixels - 1, role: 'boundary' },
-        ];
-
-      case 'rectangular':
-        // 矩形：从 (baseX, baseY) 开始，占据 rectWidth × rectHeight 个 pixel
-        return [
-          { id: 'top-left', gridX: baseX, gridY: baseY, role: 'anchor' },
-          { id: 'top-right', gridX: baseX + rectWidth - 1, gridY: baseY, role: 'boundary' },
-          { id: 'bottom-left', gridX: baseX, gridY: baseY + rectHeight - 1, role: 'boundary' },
-          {
-            id: 'bottom-right',
-            gridX: baseX + rectWidth - 1,
-            gridY: baseY + rectHeight - 1,
-            role: 'boundary',
-          },
-        ];
-
-      default:
-        return [];
-    }
-  }, [anchorType, horizontalPixels, verticalPixels, rectWidth, rectHeight]);
-
-  // 验证锚点是否超出网格边界
+  // 濡ょ姴鐭侀惁澶愭煥濮樺崬浠柡鍕靛灠閹胶鎼鹃崨顓炴瘔缂傚啯鍨堕悧鍛婃綇閸︻厽娅?
   const anchorsValidation = useMemo(() => {
-    const maxX = 26; // 网格最大 X 坐标
-    const maxY = 19; // 网格最大 Y 坐标
+    const maxX = 26; // 缂傚啯鍨堕悧鎼佸嫉閳ь剚寰?X 闁秆勫姈閿?
+    const maxY = 19; // 缂傚啯鍨堕悧鎼佸嫉閳ь剚寰?Y 闁秆勫姈閿?
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // 在编辑模式下，基于实际位置验证；在创建模式下，基于尺寸验证
+    // 闁革负鍔庣槐顏呮綇閹寸伣浣割嚕韫囧海鐟撻柨娑樿嫰閻斺偓濞存粌楠搁悿鍕⒔閸涱剛绉寸紓鍐惧櫍閻涙瑧鎷犳笟濠勫耿闁革负鍔岄崹鍗烆嚈閻戞◥浣割嚕韫囧海鐟撻柨娑樿嫰閻斺偓濞存粌楠搁弰鍌溾偓鍨倐閻涙瑧鎷?
     let anchorsToValidate: PixelAnchor[];
 
     if (mode === 'edit' && editingMagnet) {
-      // 编辑模式：基于实际位置生成锚点进行验证
       const baseAnchor = editingMagnet.anchors[0];
       const baseX = baseAnchor.gridX;
       const baseY = baseAnchor.gridY;
 
-      switch (anchorType) {
-        case 'single':
-          anchorsToValidate = [{ id: 'anchor', gridX: baseX, gridY: baseY, role: 'anchor' }];
-          break;
-        case 'horizontal':
-          anchorsToValidate = [
-            { id: 'left', gridX: baseX, gridY: baseY, role: 'anchor' },
-            { id: 'right', gridX: baseX + horizontalPixels - 1, gridY: baseY, role: 'boundary' },
-          ];
-          break;
-        case 'vertical':
-          anchorsToValidate = [
-            { id: 'top', gridX: baseX, gridY: baseY, role: 'anchor' },
-            { id: 'bottom', gridX: baseX, gridY: baseY + verticalPixels - 1, role: 'boundary' },
-          ];
-          break;
-        case 'rectangular':
-          anchorsToValidate = [
-            { id: 'top-left', gridX: baseX, gridY: baseY, role: 'anchor' },
-            { id: 'top-right', gridX: baseX + rectWidth - 1, gridY: baseY, role: 'boundary' },
-            { id: 'bottom-left', gridX: baseX, gridY: baseY + rectHeight - 1, role: 'boundary' },
-            {
-              id: 'bottom-right',
-              gridX: baseX + rectWidth - 1,
-              gridY: baseY + rectHeight - 1,
-              role: 'boundary',
-            },
-          ];
-          break;
-        default:
-          anchorsToValidate = [];
-      }
+      anchorsToValidate = buildAnchorsFromOrigin(anchorType, baseX, baseY, anchorDimensions);
     } else {
-      // 创建模式：使用预览锚点验证
+      // 闁告帗绋戠紓鎾澄熼垾宕囩闁挎稒鐭繛鍥偨閵娾晩鏆曢悷娆忕墦閺佸鎮欒ぐ鎺斿矗閿?
       anchorsToValidate = generateAnchors;
     }
 
-    // 验证锚点坐标
+    // 濡ょ姴鐭侀惁澶愭煥濮樺崬浠柛褎鍔栭敓?
     anchorsToValidate.forEach((anchor) => {
       if (anchor.gridX < 0 || anchor.gridX > maxX) {
         errors.push(
@@ -414,25 +267,25 @@ export function MagnetCreator({
       }
     });
 
-    // 在编辑模式下，检查是否与其他 magnet 冲突
+    // 闁革负鍔庣槐顏呮綇閹寸伣浣割嚕韫囧海鐟撻柨娑樻湰椤ュ懘寮婚妷锔叫﹂柛姘剧細缁楀矂宕楅張鐢甸搨 magnet 闁告劘灏欓敓?
     if (mode === 'edit' && editingMagnet && anchorsToValidate.length > 0) {
-      // 创建临时 magnet 对象，使用新的锚点和类型
+      // 闁告帗绋戠紓鎾寸▔鐎涙ɑ顦?magnet 閻庣數顢婇挅鍕晬鐏炵厧鈻忛柣顫妽閺屽﹪鎯冮崟顖涙櫔闁绘劗鎳撻幏鎵尵鐠囪鎷?
       const tempMagnet: Magnet = {
         ...editingMagnet,
         anchorType,
         anchors: anchorsToValidate,
       };
 
-      // 计算新尺寸下占用的 pixels
+      // 閻犱緤绱曢悾濠氬棘閺夋寧妲€閻庣敻鏅茬粭鍛村础閻樺灚鏆忛敓?pixels
       const occupiedPixels = getMagnetOccupiedPixels(tempMagnet);
 
-      // 检查冲突
+      // 婵☆偀鍋撻柡灞诲劚閸熻法绮?
       const conflictingPixels: Array<{ x: number; y: number; occupiedBy: string }> = [];
       occupiedPixels.forEach((pixel) => {
         const key = `${pixel.x},${pixel.y}`;
         const occupancy = occupancyMap.get(key);
 
-        // 如果 pixel 被占用，且不是被当前编辑的 magnet 占用
+        // 濠碘€冲€归敓?pixel 閻炴凹鍋勫畷浼存偨椤帞绀夊☉鎾存煣缁楀寮伴婵愭蕉鐟滅増鎸告晶鐘电磽閺嶎剛甯嗛敓?magnet 闁告濮烽敓?
         if (
           occupancy?.isOccupied &&
           occupancy.occupiedBy &&
@@ -446,9 +299,9 @@ export function MagnetCreator({
         }
       });
 
-      // 如果有冲突，添加错误信息
+      // 濠碘€冲€归悘澶愬嫉婢跺﹤鏆辩紒鎰筏缁辨繂菐鐠囨彃顫ｉ梺鎸庣懆椤曘倖绌遍埄鍐х礀
       if (conflictingPixels.length > 0) {
-        // 统计冲突的 magnet
+        // 缂備胶鍠曢鎼佸礃閼碱剛宕愰敓?magnet
         const conflictingMagnets = new Set(conflictingPixels.map((p) => p.occupiedBy));
         errors.push(
           t('editor.magnet-creator.validation.conflict', {
@@ -459,7 +312,7 @@ export function MagnetCreator({
       }
     }
 
-    // 创建模式下的预览位置提示
+    // 闁告帗绋戠紓鎾澄熼垾宕囩濞戞挸顑囧▓鎴烇紣閸曨噮娼斿ù锝呯Ф閻ゅ棝骞撻幇顔轰粵
     if (mode === 'create') {
       if (anchorType === 'horizontal' && horizontalPixels > 17) {
         warnings.push(t('editor.magnet-creator.validation.largeWidthWarning'));
@@ -478,6 +331,7 @@ export function MagnetCreator({
     mode,
     editingMagnet,
     generateAnchors,
+    anchorDimensions,
     anchorType,
     horizontalPixels,
     verticalPixels,
@@ -486,80 +340,24 @@ export function MagnetCreator({
     occupancyMap,
     t,
   ]);
-
-  // 动态生成预览用的 pixelPositions（使用较小的间距以适应预览区域）
-  const previewPixelPositions = useMemo(() => {
-    const positions = new Map<string, { x: number; y: number }>();
-    const pixelSize = 8; // 预览用的 pixel 尺寸（比实际的 18px 小）
-
-    // 生成 30x30 的网格
-    for (let y = 0; y < 30; y++) {
-      for (let x = 0; x < 30; x++) {
-        positions.set(`${x},${y}`, { x: x * pixelSize, y: y * pixelSize });
-      }
-    }
-    return positions;
-  }, []);
-
-  // 计算预览缩放比例（确保内容不超出预览区域）
-  const previewScale = useMemo(() => {
-    const maxPreviewWidth = 230; // 预览区域可用宽度（280px - padding）
-    const maxPreviewHeight = 250; // 预览区域可用高度
-    const pixelSize = 8;
-
-    let contentWidth = pixelSize;
-    let contentHeight = pixelSize;
-
-    switch (anchorType) {
-      case 'horizontal':
-        contentWidth = horizontalPixels * pixelSize;
-        contentHeight = pixelSize;
-        break;
-      case 'vertical':
-        contentWidth = pixelSize;
-        contentHeight = verticalPixels * pixelSize;
-        break;
-      case 'rectangular':
-        contentWidth = rectWidth * pixelSize;
-        contentHeight = rectHeight * pixelSize;
-        break;
-      default:
-        return 1;
-    }
-
-    const scaleX = maxPreviewWidth / contentWidth;
-    const scaleY = maxPreviewHeight / contentHeight;
-    const scale = Math.min(scaleX, scaleY, 1); // 不放大，只缩小
-
-    return scale;
-  }, [anchorType, horizontalPixels, verticalPixels, rectWidth, rectHeight]);
-
-  // 预览 Magnet（用于显示）
   const previewMagnet = useMemo<Magnet | null>(() => {
     if (!id || !name) return null;
 
-    const chrome = buildChromeConfig(sourceMagnet?.chrome?.enabled, parsedChromeInset);
-
-    return {
-      ...(sourceMagnet ?? {}),
+    return buildEditorMagnet({
+      seedMagnet: sourceMagnet ?? undefined,
       id,
-      type: sourceMagnet?.type ?? 'custom',
       name,
       anchorType,
       anchors: generateAnchors,
-      boundsMode: anchorType === 'single' ? boundsMode : undefined,
-      boundsDock: anchorType === 'single' && boundsMode === 'docked' ? parsedBoundsDock : undefined,
+      boundsMode,
+      boundsDock: parsedBoundsDock,
       boundsInset: parsedBoundsInset,
+      boundsOutset: parsedBoundsOutset,
       content,
       style: parsedStyle,
       animation: parsedAnimation,
-      chrome,
-      state: 'idle',
-      interactions: {
-        draggable: sourceMagnet?.interactions?.draggable ?? false,
-        clickable: sourceMagnet?.interactions?.clickable ?? true,
-      },
-    };
+      chromeInset: parsedChromeInset,
+    });
   }, [
     anchorType,
     boundsMode,
@@ -570,114 +368,54 @@ export function MagnetCreator({
     parsedAnimation,
     parsedBoundsDock,
     parsedBoundsInset,
+    parsedBoundsOutset,
     parsedChromeInset,
     parsedStyle,
     sourceMagnet,
   ]);
 
-  // 保存处理
+  const previewBounds = useMemo(() => {
+    if (!previewMagnet) return null;
+    return computeMagnetBounds(previewMagnet, PREVIEW_PIXEL_POSITIONS);
+  }, [previewMagnet]);
+
+  const previewScale = useMemo(() => getPreviewScaleFromBounds(previewBounds), [previewBounds]);
+
   const handleSave = () => {
     if (!id || !name) return;
 
-    // 计算实际保存的锚点（保留原始位置或使用用户设置的尺寸）
-    let anchorsToSave: PixelAnchor[];
+    const anchorsToSave =
+      mode === 'edit' && editingMagnet
+        ? buildAnchorsFromOrigin(
+            anchorType,
+            editingMagnet.anchors[0].gridX,
+            editingMagnet.anchors[0].gridY,
+            anchorDimensions
+          )
+        : generateAnchors;
 
-    if (mode === 'edit' && editingMagnet) {
-      // 编辑模式：基于原始锚点位置，只更新尺寸
-      const baseAnchor = editingMagnet.anchors[0];
-      const baseX = baseAnchor.gridX;
-      const baseY = baseAnchor.gridY;
-
-      switch (anchorType) {
-        case 'single':
-          anchorsToSave = [{ id: 'anchor', gridX: baseX, gridY: baseY, role: 'anchor' }];
-          break;
-
-        case 'horizontal':
-          anchorsToSave = [
-            { id: 'left', gridX: baseX, gridY: baseY, role: 'anchor' },
-            { id: 'right', gridX: baseX + horizontalPixels - 1, gridY: baseY, role: 'boundary' },
-          ];
-          break;
-
-        case 'vertical':
-          anchorsToSave = [
-            { id: 'top', gridX: baseX, gridY: baseY, role: 'anchor' },
-            { id: 'bottom', gridX: baseX, gridY: baseY + verticalPixels - 1, role: 'boundary' },
-          ];
-          break;
-
-        case 'rectangular':
-          anchorsToSave = [
-            { id: 'top-left', gridX: baseX, gridY: baseY, role: 'anchor' },
-            { id: 'top-right', gridX: baseX + rectWidth - 1, gridY: baseY, role: 'boundary' },
-            { id: 'bottom-left', gridX: baseX, gridY: baseY + rectHeight - 1, role: 'boundary' },
-            {
-              id: 'bottom-right',
-              gridX: baseX + rectWidth - 1,
-              gridY: baseY + rectHeight - 1,
-              role: 'boundary',
-            },
-          ];
-          break;
-
-        default:
-          anchorsToSave = editingMagnet.anchors;
-      }
-    } else {
-      // 创建模式：使用预览锚点（会在主窗口中重新定位）
-      anchorsToSave = generateAnchors;
-    }
-
-    // 保存时使用真实的 content，不使用占位符
-    const chrome = buildChromeConfig(sourceMagnet?.chrome?.enabled, parsedChromeInset);
-
-    const magnetToSave: Magnet = {
-      ...(sourceMagnet ?? editingMagnet ?? {}),
+    const magnetToSave = buildEditorMagnet({
+      seedMagnet: sourceMagnet ?? editingMagnet ?? undefined,
+      fallbackType: editingMagnet?.type ?? 'custom',
+      fallbackInteractions: editingMagnet?.interactions,
       id,
-      type: sourceMagnet?.type ?? editingMagnet?.type ?? 'custom',
       name,
       anchorType,
       anchors: anchorsToSave,
-      boundsMode: anchorType === 'single' ? boundsMode : undefined,
-      boundsDock: anchorType === 'single' && boundsMode === 'docked' ? parsedBoundsDock : undefined,
+      boundsMode,
+      boundsDock: parsedBoundsDock,
       boundsInset: parsedBoundsInset,
-      content, // 真实的 content，可以是空字符串
+      boundsOutset: parsedBoundsOutset,
+      content,
       style: parsedStyle,
       animation: parsedAnimation,
-      chrome,
-      state: 'idle',
-      interactions: sourceMagnet?.interactions ?? editingMagnet?.interactions ?? {
-        draggable: false,
-        clickable: true,
-      },
-    };
+      chromeInset: parsedChromeInset,
+    });
 
-    // 检查是否有实际修改（仅在编辑模式下）
-    let hasChanges = true;
-    if (mode === 'edit' && history.length > 0) {
-      const lastHistory = history[0]; // 最新的历史记录
-      const lastMagnet = lastHistory.magnet;
+    const lastMagnet = mode === 'edit' && history.length > 0 ? history[0].magnet : null;
 
-      // 比较关键配置是否改变
-      const configChanged =
-        lastMagnet.name !== magnetToSave.name ||
-        lastMagnet.anchorType !== magnetToSave.anchorType ||
-        JSON.stringify(lastMagnet.anchors) !== JSON.stringify(magnetToSave.anchors) ||
-        lastMagnet.boundsMode !== magnetToSave.boundsMode ||
-        JSON.stringify(lastMagnet.boundsDock ?? {}) !== JSON.stringify(magnetToSave.boundsDock ?? {}) ||
-        JSON.stringify(lastMagnet.boundsInset ?? {}) !== JSON.stringify(magnetToSave.boundsInset ?? {}) ||
-        JSON.stringify(lastMagnet.style) !== JSON.stringify(magnetToSave.style) ||
-        JSON.stringify(lastMagnet.animation) !== JSON.stringify(magnetToSave.animation) ||
-        JSON.stringify(lastMagnet.chrome ?? {}) !== JSON.stringify(magnetToSave.chrome ?? {}) ||
-        lastMagnet.content !== magnetToSave.content;
-
-      hasChanges = configChanged;
-    }
-
-    // 只有在有修改或创建新 Magnet 时才添加历史记录
-    if (hasChanges) {
-      addHistoryItem(
+    if (hasMagnetConfigChanges(lastMagnet, magnetToSave)) {
+      appendMagnetHistory(
         magnetToSave,
         mode === 'create'
           ? 'editor.magnet-creator.history.created'
@@ -686,36 +424,35 @@ export function MagnetCreator({
     }
 
     onSave(magnetToSave);
-
-    // 保存后关闭窗口
     onCancel();
   };
 
-  // 还原到默认配置
+
+  // 閺夆晜锚鐢偊宕氭导瀵稿笡閻犱降鍊濋崢銈囩磾?
   const handleRestore = () => {
     if (!defaultMagnet) return;
     loadMagnetConfig(defaultMagnet);
-    addHistoryItem(defaultMagnet, 'editor.magnet-creator.history.restoreDefault');
+    appendMagnetHistory(defaultMagnet, 'editor.magnet-creator.history.restoreDefault');
   };
 
-  // 应用历史记录
+  // 閹煎瓨姊婚弫銈夊储閸℃钑夐悹浣规緲閿?
   const handleApplyHistory = (historyItem: MagnetHistory) => {
     loadMagnetConfig(historyItem.magnet);
     setShowHistory(false);
   };
 
-  // 导入配置（从文本框）
+  // 閻庣數鍘ч崣鍡涙煀瀹ュ洨鏋傞柨娑樼墔缁娀寮崶銊︽嫳婵℃妫撮敓?
   const handleImport = () => {
     try {
       const data = JSON.parse(importJson);
 
-      // 验证必填字段
+      // 濡ょ姴鐭侀惁澶庣疀閸涱叏缍栭悗娑欘殕閿?
       if (!data.id) throw new Error(t('editor.magnet-creator.import.missingField.id'));
       if (!data.name) throw new Error(t('editor.magnet-creator.import.missingField.name'));
       if (!data.anchorType) throw new Error(t('editor.magnet-creator.import.missingField.anchorType'));
       if (!data.style) throw new Error(t('editor.magnet-creator.import.missingField.style'));
 
-      // 加载配置
+      // 闁告梻濮惧ù鍥煀瀹ュ洨鏋?
       loadMagnetConfig(data as Magnet);
       setShowImport(false);
       setImportJson('');
@@ -725,7 +462,7 @@ export function MagnetCreator({
     }
   };
 
-  // 从文件导入
+  // 濞寸姴瀛╅弸鍐╃鐠轰警鍤ら敓?
   const handleImportFromFile = async () => {
     try {
       const selected = await open({
@@ -752,7 +489,7 @@ export function MagnetCreator({
     }
   };
 
-  // 导出配置
+  // 閻庣數鍘ч崵顓㈡煀瀹ュ洨鏋?
   const handleExport = () => {
     if (!previewMagnet) return;
 
@@ -771,6 +508,8 @@ export function MagnetCreator({
       boundsMode: previewMagnet.boundsMode,
       boundsDock: previewMagnet.boundsDock,
       boundsInset: previewMagnet.boundsInset,
+      boundsOutset: previewMagnet.boundsOutset,
+      boundsAlign: previewMagnet.boundsAlign,
       content: previewMagnet.content,
       style: previewMagnet.style,
       chrome: previewMagnet.chrome,
@@ -794,152 +533,30 @@ export function MagnetCreator({
       });
   };
 
-  // 删除历史记录
+  // 闁告帞濞€濞呭酣宕㈤崱妤€钑夐悹浣规緲閿?
   const handleDeleteHistory = (historyId: string) => {
     const newHistory = history.filter((h) => h.id !== historyId);
     setHistory(newHistory);
     if (editingMagnet) {
-      saveHistory(editingMagnet.id, newHistory);
+      saveMagnetHistory(editingMagnet.id, newHistory);
     }
   };
 
-  // 验证表单
+  // 濡ょ姴鐭侀惁澶屾偘閵娿儱绀?
   const isValid = id && name && !anchorsValidation.hasErrors;
 
-  // 简化的预览组件（不依赖 MATRIX_CONFIG）
-  /* const PreviewMagnet = ({ magnet }: { magnet: Magnet }) => {
-    const [isHovering, setIsHovering] = useState(false);
-    const [isActive, setIsActive] = useState(false);
-    const pixelSize = 8; // 预览用的 pixel 尺寸
 
-    // 计算预览位置和尺寸
-    const bounds = useMemo(() => {
-      const { anchors, anchorType, style } = magnet;
-
-      switch (anchorType) {
-        case 'single': {
-          const pos = previewPixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
-          if (!pos) return null;
-          const magnetWidth = parseFloat(style.width || '36px');
-          const magnetHeight = parseFloat(style.height || '36px');
-          const offsetX = (pixelSize - magnetWidth) / 2;
-          const offsetY = (pixelSize - magnetHeight) / 2;
-          return {
-            x: pos.x + offsetX,
-            y: pos.y + offsetY,
-            width: magnetWidth,
-            height: magnetHeight,
-          };
-        }
-
-        case 'horizontal': {
-          const left = previewPixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
-          const right = previewPixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);
-          if (!left || !right) return null;
-          const magnetHeight = parseFloat(style.height || '36px');
-          const offsetY = (pixelSize - magnetHeight) / 2;
-          return {
-            x: left.x,
-            y: left.y + offsetY,
-            width: right.x - left.x + pixelSize,
-            height: magnetHeight,
-          };
-        }
-
-        case 'vertical': {
-          const top = previewPixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
-          const bottom = previewPixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);
-          if (!top || !bottom) return null;
-          const magnetWidth = parseFloat(style.width || '36px');
-          const offsetX = (pixelSize - magnetWidth) / 2;
-          return {
-            x: top.x + offsetX,
-            y: top.y,
-            width: magnetWidth,
-            height: bottom.y - top.y + pixelSize,
-          };
-        }
-
-        case 'rectangular': {
-          const topLeft = previewPixelPositions.get(`${anchors[0].gridX},${anchors[0].gridY}`);
-          const topRight = previewPixelPositions.get(`${anchors[1].gridX},${anchors[1].gridY}`);
-          const bottomLeft = previewPixelPositions.get(`${anchors[2].gridX},${anchors[2].gridY}`);
-          if (!topLeft || !topRight || !bottomLeft) return null;
-          return {
-            x: topLeft.x,
-            y: topLeft.y,
-            width: topRight.x - topLeft.x + pixelSize,
-            height: bottomLeft.y - topLeft.y + pixelSize,
-          };
-        }
-
-        default:
-          return null;
-      }
-    }, [magnet]);
-
-    if (!bounds) return null;
-
-    // 计算当前应用的样式
-    const currentStyle: MagnetStyle = (() => {
-      let appliedStyle = { ...magnet.style };
-      if (isHovering && magnet.animation?.hoverStyle) {
-        appliedStyle = { ...appliedStyle, ...magnet.animation.hoverStyle };
-      }
-      if (isActive && magnet.animation?.activeStyle) {
-        appliedStyle = { ...appliedStyle, ...magnet.animation.activeStyle };
-      }
-      return appliedStyle;
-    })();
-
-    const finalStyle = {
-      position: 'absolute' as const,
-      left: `${bounds.x}px`,
-      top: `${bounds.y}px`,
-      width: `${bounds.width}px`,
-      height: `${bounds.height}px`,
-      transition: magnet.animation?.transition || 'all 0.2s ease',
-      ...currentStyle,
-    };
-
-    return (
-      <div
-        className="magnet"
-        style={finalStyle}
-        onMouseEnter={() => setIsHovering(true)}
-        onMouseLeave={() => {
-          setIsHovering(false);
-          setIsActive(false);
-        }}
-        onMouseDown={() => setIsActive(true)}
-        onMouseUp={() => setIsActive(false)}
-      >
-        {typeof magnet.content === 'string' ? (
-          <span className="magnet-text">{magnet.content}</span>
-        ) : (
-          magnet.content
-        )}
-      </div>
-    );
-  }; */
-
-  const previewStageSize = 240;
-
-  const previewBounds = useMemo(() => {
-    if (!previewMagnet) return null;
-    return computeMagnetBounds(previewMagnet, previewPixelPositions);
-  }, [previewMagnet, previewPixelPositions]);
 
   return (
     <div className="editor-creator">
-      {/* 拖动标题栏 */}
+      {/* 闁归攱鐗曟慨鈺呭冀閸ヮ剦鏆敓?*/}
       <div className="editor-window-header" data-tauri-drag-region>
         <span className="window-title" data-tauri-drag-region>
-          ⋮⋮
+          闁抽偊鍠掗敓?
         </span>
       </div>
 
-      {/* 固定预览区域 */}
+      {/* 闁搞儱鎼悾鐐紣閸曨噮娼旈柛鏍ф惈閿?*/}
       <div className="creator-preview-fixed">
         <div className="creator-section-title">{t('editor.magnet-creator.preview.title')}</div>
         {previewMagnet ? (
@@ -955,11 +572,11 @@ export function MagnetCreator({
                 <div
                   className="creator-preview-stage"
                   style={{
-                    width: `${previewStageSize}px`,
-                    height: `${previewStageSize}px`,
+                    width: `${PREVIEW_STAGE_SIZE}px`,
+                    height: `${PREVIEW_STAGE_SIZE}px`,
                   }}
                 >
-                  <MagnetComponent magnet={previewMagnet} pixelPositions={previewPixelPositions} />
+                  <MagnetComponent magnet={previewMagnet} pixelPositions={PREVIEW_PIXEL_POSITIONS} />
                 </div>
               </div>
             </div>
@@ -984,16 +601,16 @@ export function MagnetCreator({
         )}
       </div>
 
-      {/* 内容区域 */}
+      {/* 闁告劕鎳庨鎰板礌閸濆嫮鍘?*/}
       <div className="editor-window-content">
-        {/* 模式标题 */}
+        {/* 婵☆垪鈧磭纭€闁哄秴娲敓?*/}
         <div className="creator-mode-title">
           {mode === 'edit'
             ? t('editor.magnet-creator.mode.edit')
             : t('editor.magnet-creator.mode.create')}
         </div>
 
-        {/* 必填字段 */}
+        {/* 闊洤鎳庨敐鐐碘偓娑欘殕閿?*/}
         <div className="creator-section">
           <div className="creator-section-title">{t('editor.magnet-creator.section.basic')}</div>
           <div className="creator-form">
@@ -1088,10 +705,10 @@ export function MagnetCreator({
                     />
                   </div>
                 </div>
-                {/* 验证提示 - 水平 */}
+                {/* 濡ょ姴鐭侀惁澶愬箵閹邦喓浠?- 婵ɑ娼欓敓?*/}
                 {anchorsValidation.hasErrors && (
                   <div className="creator-validation-error">
-                    ⚠️ {t('editor.magnet-creator.validation.outOfBounds')}
+                    闁宠法濯撮敓?{t('editor.magnet-creator.validation.outOfBounds')}
                     {anchorsValidation.errors.map((err, i) => (
                       <div key={i}>{err}</div>
                     ))}
@@ -1099,7 +716,7 @@ export function MagnetCreator({
                 )}
                 {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
                   <div className="creator-validation-warning">
-                    ⚡ {t('editor.magnet-creator.validation.hintTitle')}
+                    閿?{t('editor.magnet-creator.validation.hintTitle')}
                     {anchorsValidation.warnings.map((warn, i) => (
                       <div key={i}>{warn}</div>
                     ))}
@@ -1138,10 +755,10 @@ export function MagnetCreator({
                     />
                   </div>
                 </div>
-                {/* 验证提示 - 垂直 */}
+                {/* 濡ょ姴鐭侀惁澶愬箵閹邦喓浠?- 闁搞劌鍊婚敓?*/}
                 {anchorsValidation.hasErrors && (
                   <div className="creator-validation-error">
-                    ⚠️ {t('editor.magnet-creator.validation.outOfBounds')}
+                    闁宠法濯撮敓?{t('editor.magnet-creator.validation.outOfBounds')}
                     {anchorsValidation.errors.map((err, i) => (
                       <div key={i}>{err}</div>
                     ))}
@@ -1149,7 +766,7 @@ export function MagnetCreator({
                 )}
                 {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
                   <div className="creator-validation-warning">
-                    ⚡ {t('editor.magnet-creator.validation.hintTitle')}
+                    閿?{t('editor.magnet-creator.validation.hintTitle')}
                     {anchorsValidation.warnings.map((warn, i) => (
                       <div key={i}>{warn}</div>
                     ))}
@@ -1213,10 +830,10 @@ export function MagnetCreator({
                     />
                   </div>
                 </div>
-                {/* 验证提示 - 矩形 */}
+                {/* 濡ょ姴鐭侀惁澶愬箵閹邦喓浠?- 闁活厸鏅涢敓?*/}
                 {anchorsValidation.hasErrors && (
                   <div className="creator-validation-error">
-                    ⚠️ {t('editor.magnet-creator.validation.outOfBounds')}
+                    闁宠法濯撮敓?{t('editor.magnet-creator.validation.outOfBounds')}
                     {anchorsValidation.errors.map((err, i) => (
                       <div key={i}>{err}</div>
                     ))}
@@ -1224,7 +841,7 @@ export function MagnetCreator({
                 )}
                 {!anchorsValidation.hasErrors && anchorsValidation.warnings.length > 0 && (
                   <div className="creator-validation-warning">
-                    ⚡ {t('editor.magnet-creator.validation.hintTitle')}
+                    閿?{t('editor.magnet-creator.validation.hintTitle')}
                     {anchorsValidation.warnings.map((warn, i) => (
                       <div key={i}>{warn}</div>
                     ))}
@@ -1235,7 +852,7 @@ export function MagnetCreator({
           </div>
         </div>
 
-        {/* 样式配置 */}
+        {/* 闁哄秴鍢茬槐锟犳煀瀹ュ洨鏋?*/}
         <div className="creator-section">
           <div className="creator-section-title">{t('editor.magnet-creator.section.layout')}</div>
           <div className="creator-form">
@@ -1351,6 +968,38 @@ export function MagnetCreator({
 
             <div className="creator-layout-subsection">
               <div className="creator-layout-subtitle">
+                {t('editor.magnet-creator.layout.realOutsetTitle')}
+              </div>
+              <div className="creator-layout-hint">
+                {t('editor.magnet-creator.layout.realOutsetHint')}
+              </div>
+              <div className="creator-layout-grid">
+                {INSET_SIDES.map((side) => (
+                  <div key={`bounds-outset-${side}`} className="creator-form-column">
+                    <label className="creator-label">
+                      {t(`editor.magnet-creator.field.boundsOutset${side[0].toUpperCase()}${side.slice(1)}`)}
+                    </label>
+                    <input
+                      type="number"
+                      className="creator-input creator-input-number creator-layout-input"
+                      value={boundsOutsetDraft[side]}
+                      onChange={(e) =>
+                        setBoundsOutsetDraft((current) => ({
+                          ...current,
+                          [side]: e.target.value,
+                        }))
+                      }
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="creator-layout-subsection">
+              <div className="creator-layout-subtitle">
                 {t('editor.magnet-creator.layout.chromeInsetTitle')}
               </div>
               <div className="creator-layout-hint">
@@ -1405,7 +1054,7 @@ export function MagnetCreator({
           </div>
         </div>
 
-        {/* 动画配置 */}
+        {/* 闁告柣鍔庨弫楣冩煀瀹ュ洨鏋?*/}
         <div className="creator-section">
           <div className="creator-section-title">
             {t('editor.magnet-creator.section.animationJson')}
@@ -1417,16 +1066,16 @@ export function MagnetCreator({
                 className="creator-textarea"
                 value={animationJson}
                 onChange={(e) => setAnimationJson(e.target.value)}
-                placeholder='{"transition": "all 0.2s ease", "hoverStyle": {...}, "activeStyle": {...}}'
+                placeholder='{"transition": "opacity 140ms ease, transform 140ms ease", "hoverStyle": {...}, "activeStyle": {...}}'
                 rows={12}
               />
               {animationError && <div className="creator-error">{t(animationError)}</div>}
               <div className="creator-hint">
-                💡 {t('editor.magnet-creator.animation.hint.title')}
-                <br />• <strong>transition</strong>: {t('editor.magnet-creator.animation.hint.transition')}
-                <br />• <strong>hoverStyle</strong>:{' '}
+                妫ｅ啯瀵?{t('editor.magnet-creator.animation.hint.title')}
+                <br />閿?<strong>transition</strong>: {t('editor.magnet-creator.animation.hint.transition')}
+                <br />閿?<strong>hoverStyle</strong>:{' '}
                 {t('editor.magnet-creator.animation.hint.hoverStyle')}
-                <br />• <strong>activeStyle</strong>:{' '}
+                <br />閿?<strong>activeStyle</strong>:{' '}
                 {t('editor.magnet-creator.animation.hint.activeStyle')}
                 <br />
                 <br />
@@ -1437,7 +1086,7 @@ export function MagnetCreator({
         </div>
       </div>
 
-      {/* 底部固定按钮 */}
+      {/* 閹煎瓨娲熼崕鎾炊閸濆嫮鏆伴柟绋款樀閿?*/}
       <div className="creator-footer-fixed">
         <button className="creator-btn creator-btn-cancel" onClick={onCancel}>
           {t('common.action.cancel')}
@@ -1457,7 +1106,7 @@ export function MagnetCreator({
               : t('editor.magnet-creator.action.history')}
           </button>
         )}
-        {/* 创建模式：显示导入按钮 */}
+        {/* 闁告帗绋戠紓鎾澄熼垾宕囩闁挎稒纰嶅Ο澶岀矆閸濆嫷鍤ら柛蹇嬪劜鐎垫粓鏌?*/}
         {mode === 'create' && (
           <button
             className="creator-btn creator-btn-import"
@@ -1466,7 +1115,7 @@ export function MagnetCreator({
             {t('editor.magnet-creator.action.importConfig')}
           </button>
         )}
-        {/* 编辑模式：显示导出按钮 */}
+        {/* 缂傚倹鐗炵欢顐⑽熼垾宕囩闁挎稒纰嶅Ο澶岀矆閸濆嫷鍤ら柛鎴犲劋鐎垫粓鏌?*/}
         {mode === 'edit' && (
           <button
             className="creator-btn creator-btn-export"
@@ -1481,7 +1130,7 @@ export function MagnetCreator({
         </button>
       </div>
 
-      {/* 历史记录面板 */}
+      {/* 闁告ê妫楄ぐ鍓佹媼閺夎法绉块梻鍫涘灪閿?*/}
       {showHistory && mode === 'edit' && (
         <div className="creator-history-panel">
           <div className="creator-history-header">
@@ -1517,7 +1166,7 @@ export function MagnetCreator({
                       onClick={() => handleDeleteHistory(item.id)}
                       title={t('editor.magnet-creator.history.action.deleteTitle')}
                     >
-                      ✕
+                      閿?
                     </button>
                   </div>
                 </div>
@@ -1527,7 +1176,7 @@ export function MagnetCreator({
         </div>
       )}
 
-      {/* 导入面板 - 仅在创建模式显示 */}
+      {/* 閻庣數鍘ч崣鍡涙閵忊剝绶?- 濞寸姴鎳庡﹢顏堝礆濞戞绱︽俊顖椻偓宕囩闁哄嫬澧介敓?*/}
       {showImport && mode === 'create' && (
         <div className="creator-import-panel">
           <div className="creator-import-header">
@@ -1540,7 +1189,7 @@ export function MagnetCreator({
                 setImportError('');
               }}
             >
-              ✕
+              閿?
             </button>
           </div>
           <div className="creator-import-content">
@@ -1559,22 +1208,22 @@ export function MagnetCreator({
             />
             {importError && <div className="creator-import-error">{t(importError)}</div>}
             <div className="creator-import-hint">
-              💡 {t('editor.magnet-creator.import.hint.usageTitle')}
-              <br />• {t('editor.magnet-creator.import.hint.usage1')}
-              <br />• {t('editor.magnet-creator.import.hint.usage2')}
-              <br />• {t('editor.magnet-creator.import.hint.usage3')}
+              妫ｅ啯瀵?{t('editor.magnet-creator.import.hint.usageTitle')}
+              <br />閿?{t('editor.magnet-creator.import.hint.usage1')}
+              <br />閿?{t('editor.magnet-creator.import.hint.usage2')}
+              <br />閿?{t('editor.magnet-creator.import.hint.usage3')}
               <br />
               <br />
-              ⚠️ {t('editor.magnet-creator.import.hint.limitsTitle')}
-              <br />• {t('editor.magnet-creator.import.hint.limit1')}
-              <br />• {t('editor.magnet-creator.import.hint.limit2')}
-              <br />• {t('editor.magnet-creator.import.hint.limit3')}
+              闁宠法濯撮敓?{t('editor.magnet-creator.import.hint.limitsTitle')}
+              <br />閿?{t('editor.magnet-creator.import.hint.limit1')}
+              <br />閿?{t('editor.magnet-creator.import.hint.limit2')}
+              <br />閿?{t('editor.magnet-creator.import.hint.limit3')}
               <br />
               <br />
-              📖 {t('editor.magnet-creator.import.hint.howToTitle')}
-              <br />• {t('editor.magnet-creator.import.hint.howToSee')}{' '}
+              妫ｅ啯鎲?{t('editor.magnet-creator.import.hint.howToTitle')}
+              <br />閿?{t('editor.magnet-creator.import.hint.howToSee')}{' '}
               <code>apps/desktop/src/data/custom/exampleCustomMagnet.ts</code>
-              <br />• {t('editor.magnet-creator.import.hint.howToDoc')}{' '}
+              <br />閿?{t('editor.magnet-creator.import.hint.howToDoc')}{' '}
               <code>mannual/Magnet/how-to-add-magnets.md</code>
             </div>
           </div>

@@ -66,6 +66,10 @@ export interface MagnetInsetConfig {
   left?: number;
 }
 
+export interface MagnetBoundsAlignConfig {
+  topToMagnetId?: string;
+}
+
 export interface MagnetGridFootprint {
   width: number;
   height: number;
@@ -176,6 +180,12 @@ export interface Magnet {
 
   // Real layout inset. Affects shell bounds, collision, adaptive joins, and hit area.
   boundsInset?: MagnetInsetConfig;
+
+  // Real layout outset. Expands shell bounds outward without changing anchors.
+  boundsOutset?: MagnetInsetConfig;
+
+  // Runtime shell alignment to another magnet edge.
+  boundsAlign?: MagnetBoundsAlignConfig;
 
   // 内容配置
   content: React.ReactNode | string;

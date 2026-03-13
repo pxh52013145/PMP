@@ -1,5 +1,9 @@
 import { Magnet } from '../../types/pixel';
 import { createControlChromePreset, createPanelChromePreset } from '../../modules/magnets/chromePresets';
+import {
+  createCenteredSingleControlLayoutPreset,
+  createPanelLayoutPreset,
+} from '../../modules/magnets/layoutPresets';
 
 const PLAYER_CONTROL_CHROME = createControlChromePreset();
 const PRIMARY_PLAYER_CONTROL_CHROME = createControlChromePreset({
@@ -42,6 +46,9 @@ const TRACK_INFO_CHROME = createPanelChromePreset({
     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
   },
 });
+const PLAYER_CONTROL_LAYOUT = createCenteredSingleControlLayoutPreset();
+const PROGRESS_BAR_LAYOUT = createPanelLayoutPreset();
+const TRACK_INFO_LAYOUT = createPanelLayoutPreset();
 
 /**
  * 音乐播放器控制按钮 Magnet 配置
@@ -61,6 +68,7 @@ export const PREVIOUS_BUTTON: Magnet = {
   previewText: 'Prev',
   anchorType: 'single',
   anchors: [],
+  ...PLAYER_CONTROL_LAYOUT,
   content: '⟪',
   style: PLAYER_CONTROL_CHROME.style,
   animation: PLAYER_CONTROL_CHROME.animation,
@@ -86,6 +94,7 @@ export const PLAY_PAUSE_BUTTON: Magnet = {
   previewText: 'Play/Pause',
   anchorType: 'single',
   anchors: [],
+  ...PLAYER_CONTROL_LAYOUT,
   content: '▶', // 默认显示播放
   style: PRIMARY_PLAYER_CONTROL_CHROME.style,
   animation: PRIMARY_PLAYER_CONTROL_CHROME.animation,
@@ -112,6 +121,7 @@ export const NEXT_BUTTON: Magnet = {
   previewText: 'Next',
   anchorType: 'single',
   anchors: [],
+  ...PLAYER_CONTROL_LAYOUT,
   content: '⟫',
   style: PLAYER_CONTROL_CHROME.style,
   animation: PLAYER_CONTROL_CHROME.animation,
@@ -137,6 +147,7 @@ export const PLAYBACK_MODE_BUTTON: Magnet = {
   previewText: 'Mode',
   anchorType: 'single',
   anchors: [],
+  ...PLAYER_CONTROL_LAYOUT,
   content: '↻', // 默认循环播放
   style: PLAYER_CONTROL_CHROME.style,
   animation: PLAYER_CONTROL_CHROME.animation,
@@ -162,6 +173,7 @@ export const VOLUME_BUTTON: Magnet = {
   previewText: 'Volume',
   anchorType: 'single',
   anchors: [],
+  ...PLAYER_CONTROL_LAYOUT,
   content: '♪', // 音量图标
   style: PLAYER_CONTROL_CHROME.style,
   animation: PLAYER_CONTROL_CHROME.animation,
@@ -188,6 +200,7 @@ export const PROGRESS_BAR: Magnet = {
   name: '播放进度条',
   anchorType: 'horizontal',
   anchors: [],
+  ...PROGRESS_BAR_LAYOUT,
   gridFootprint: { width: 27, height: 1 },
   content: '', // 进度条内容由React组件渲染
   style: PROGRESS_BAR_CHROME.style,
@@ -215,6 +228,7 @@ export const TRACK_INFO: Magnet = {
   name: '歌曲信息',
   anchorType: 'rectangular',
   anchors: [],
+  ...TRACK_INFO_LAYOUT,
   gridFootprint: { width: 6, height: 4 },
   content: '', // 内容由React组件渲染
   style: TRACK_INFO_CHROME.style,

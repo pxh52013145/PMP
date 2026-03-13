@@ -16,6 +16,8 @@ export interface MagnetStateConfig {
   boundsMode?: Magnet['boundsMode'];
   boundsDock?: Magnet['boundsDock'];
   boundsInset?: Magnet['boundsInset'];
+  boundsOutset?: Magnet['boundsOutset'];
+  boundsAlign?: Magnet['boundsAlign'];
   chromeEnabled?: boolean;
   chromeInset?: NonNullable<Magnet['chrome']>['inset'];
   styleOverride?: {
@@ -37,15 +39,180 @@ export interface MagnetConfig {
 
 const CONFIG_VERSION = '1.2.0';
 const CONFIG_KEY = 'pixel-matrix-player-config';
+const PROCESS_PERF_MONITOR_MAGNET_ID = 'process-perf-monitor';
+const LEGACY_PROCESS_PERF_MONITOR_TOP_INSET = 8;
+const PROCESS_PERF_MONITOR_TOP_OUTSET = 9;
 
-function createLayoutStateConfig(magnet: Magnet): Pick<
+type SavedLayoutStateConfig = Pick<
   MagnetStateConfig,
-  'boundsMode' | 'boundsDock' | 'boundsInset' | 'chromeEnabled' | 'chromeInset'
-> {
+  | 'boundsMode'
+  | 'boundsDock'
+  | 'boundsInset'
+  | 'boundsOutset'
+  | 'boundsAlign'
+  | 'chromeEnabled'
+  | 'chromeInset'
+>;
+
+type SavedPresentationStateConfig = Pick<
+  MagnetStateConfig,
+  'renderer' | 'variant' | 'variantConfig' | 'previewText' | 'styleOverride'
+>;
+
+function hasValue<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
+function omitInsetSide(
+  inset: Magnet['boundsInset'] | undefined,
+  side: keyof NonNullable<Magnet['boundsInset']>
+): Magnet['boundsInset'] | undefined {
+  if (!inset) return undefined;
+  const nextInset = { ...inset };
+  delete nextInset[side];
+  return Object.keys(nextInset).length > 0 ? nextInset : undefined;
+}
+
+function normalizeSavedLayoutState(magnetId: string, savedConfig: SavedLayoutStateConfig): SavedLayoutStateConfig {
+  const shouldMigrateLegacyPerfTopInset =
+    magnetId === PROCESS_PERF_MONITOR_MAGNET_ID &&
+    savedConfig.boundsOutset?.top === undefined &&
+    savedConfig.boundsInset?.top === LEGACY_PROCESS_PERF_MONITOR_TOP_INSET;
+
+  if (!shouldMigrateLegacyPerfTopInset) return savedConfig;
+
+  return {
+    ...savedConfig,
+    boundsInset: omitInsetSide(savedConfig.boundsInset, 'top'),
+    boundsOutset: {
+      ...(savedConfig.boundsOutset ?? {}),
+      top: PROCESS_PERF_MONITOR_TOP_OUTSET,
+    },
+  };
+}
+
+function normalizeConfigMigrations(config: MagnetConfig): { config: MagnetConfig; changed: boolean } {
+  let changed = false;
+  let nextConfig = config;
+
+  const oldIds = ['btn-prev', 'song-info'];
+  const hasOldIds = Object.keys(nextConfig.magnets).some((id) => oldIds.includes(id));
+  if (hasOldIds) {
+    nextConfig = migrateMagnetIds(nextConfig);
+    changed = true;
+  }
+
+  const legacyLayoutMigration = migrateLegacyBuiltinLayoutConfig(nextConfig);
+  if (legacyLayoutMigration.changed) {
+    nextConfig = legacyLayoutMigration.config;
+    changed = true;
+  }
+
+  return { config: nextConfig, changed };
+}
+
+function createStyleOverrideConfig(
+  magnet: Magnet,
+  defaultMagnet: Magnet | undefined
+): NonNullable<MagnetStateConfig['styleOverride']> | undefined {
+  if (!defaultMagnet) return undefined;
+
+  const styleOverride: NonNullable<MagnetStateConfig['styleOverride']> = {};
+
+  if (JSON.stringify(magnet.style) !== JSON.stringify(defaultMagnet.style)) {
+    styleOverride.style = magnet.style;
+  }
+
+  if (JSON.stringify(magnet.animation) !== JSON.stringify(defaultMagnet.animation)) {
+    styleOverride.animation = magnet.animation;
+  }
+
+  if (JSON.stringify(magnet.content) !== JSON.stringify(defaultMagnet.content)) {
+    styleOverride.content = magnet.content;
+  }
+
+  return Object.keys(styleOverride).length > 0 ? styleOverride : undefined;
+}
+
+function createMagnetStateConfig(
+  magnet: Magnet,
+  isActive: boolean,
+  defaultMagnet?: Magnet
+): MagnetStateConfig {
+  const styleOverride = createStyleOverrideConfig(magnet, defaultMagnet);
+
+  return {
+    anchors: magnet.anchors,
+    isActive,
+    renderer: magnet.renderer,
+    variant: magnet.variant,
+    variantConfig: magnet.variantConfig,
+    previewText: magnet.previewText,
+    ...createLayoutStateConfig(magnet),
+    ...(hasValue(styleOverride) ? { styleOverride } : {}),
+  };
+}
+
+function applySavedPresentationState<TMagnet extends Magnet>(
+  magnet: TMagnet,
+  savedConfig: SavedPresentationStateConfig,
+  options: { keepInteractions?: Magnet['interactions'] } = {}
+): TMagnet {
+  const nextMagnet: TMagnet = {
+    ...magnet,
+    renderer: savedConfig.renderer ?? magnet.renderer,
+    variant: savedConfig.variant ?? magnet.variant,
+    variantConfig: savedConfig.variantConfig ?? magnet.variantConfig,
+    previewText: savedConfig.previewText ?? magnet.previewText,
+  };
+
+  if (savedConfig.styleOverride?.style !== undefined) {
+    nextMagnet.style = savedConfig.styleOverride.style;
+  }
+
+  if (savedConfig.styleOverride?.animation !== undefined) {
+    nextMagnet.animation = savedConfig.styleOverride.animation;
+  }
+
+  if (savedConfig.styleOverride?.content !== undefined) {
+    nextMagnet.content = savedConfig.styleOverride.content;
+  }
+
+  if (options.keepInteractions) {
+    nextMagnet.interactions = options.keepInteractions;
+  }
+
+  return nextMagnet;
+}
+
+function migrateLegacyBuiltinLayoutConfig(config: MagnetConfig): { config: MagnetConfig; changed: boolean } {
+  let changed = false;
+  const nextMagnets: MagnetConfig['magnets'] = {};
+
+  for (const [magnetId, state] of Object.entries(config.magnets)) {
+    const normalized = normalizeSavedLayoutState(magnetId, state);
+    const didChange =
+      normalized.boundsInset !== state.boundsInset ||
+      normalized.boundsOutset !== state.boundsOutset ||
+      normalized.boundsMode !== state.boundsMode ||
+      normalized.boundsDock !== state.boundsDock ||
+      normalized.chromeEnabled !== state.chromeEnabled ||
+      normalized.chromeInset !== state.chromeInset;
+
+    nextMagnets[magnetId] = didChange ? { ...state, ...normalized } : state;
+    if (didChange) changed = true;
+  }
+
+  return changed ? { config: { ...config, magnets: nextMagnets }, changed: true } : { config, changed: false };
+}
+
+function createLayoutStateConfig(magnet: Magnet): SavedLayoutStateConfig {
   return {
     boundsMode: magnet.boundsMode,
     boundsDock: magnet.boundsDock,
     boundsInset: magnet.boundsInset,
+    boundsOutset: magnet.boundsOutset,
+    boundsAlign: magnet.boundsAlign,
     chromeEnabled: magnet.chrome?.enabled,
     chromeInset: magnet.chrome?.inset,
   };
@@ -53,25 +220,30 @@ function createLayoutStateConfig(magnet: Magnet): Pick<
 
 function applySavedLayoutState<TMagnet extends Magnet>(
   magnet: TMagnet,
-  savedConfig: Pick<
-    MagnetStateConfig,
-    'boundsMode' | 'boundsDock' | 'boundsInset' | 'chromeEnabled' | 'chromeInset'
-  >
+  savedConfig: SavedLayoutStateConfig
 ): TMagnet {
+  const normalizedSavedConfig = normalizeSavedLayoutState(magnet.id, savedConfig);
   const nextMagnet = {
     ...magnet,
-    boundsMode: savedConfig.boundsMode ?? magnet.boundsMode,
-    boundsDock: savedConfig.boundsDock ?? magnet.boundsDock,
-    boundsInset: savedConfig.boundsInset ?? magnet.boundsInset,
+    boundsMode: normalizedSavedConfig.boundsMode ?? magnet.boundsMode,
+    boundsDock: normalizedSavedConfig.boundsDock ?? magnet.boundsDock,
+    boundsInset: normalizedSavedConfig.boundsInset ?? magnet.boundsInset,
+    boundsOutset: normalizedSavedConfig.boundsOutset ?? magnet.boundsOutset,
+    boundsAlign: normalizedSavedConfig.boundsAlign ?? magnet.boundsAlign,
   };
 
-  if (typeof savedConfig.chromeEnabled === 'boolean' || savedConfig.chromeInset !== undefined) {
+  if (
+    typeof normalizedSavedConfig.chromeEnabled === 'boolean' ||
+    normalizedSavedConfig.chromeInset !== undefined
+  ) {
     nextMagnet.chrome = {
       ...(magnet.chrome ?? {}),
-      ...(typeof savedConfig.chromeEnabled === 'boolean'
-        ? { enabled: savedConfig.chromeEnabled }
+      ...(typeof normalizedSavedConfig.chromeEnabled === 'boolean'
+        ? { enabled: normalizedSavedConfig.chromeEnabled }
         : {}),
-      ...(savedConfig.chromeInset !== undefined ? { inset: savedConfig.chromeInset } : {}),
+      ...(normalizedSavedConfig.chromeInset !== undefined
+        ? { inset: normalizedSavedConfig.chromeInset }
+        : {}),
     };
   }
 
@@ -101,48 +273,10 @@ export function saveConfig(
     // 保存所有 Magnet 的位置和激活状态
     magnetLibrary.forEach((magnet) => {
       const isActive = activeMagnetIds.has(magnet.id);
-      const magnetConfig: MagnetStateConfig = {
-        anchors: magnet.anchors,
-        isActive,
-        renderer: magnet.renderer,
-        variant: magnet.variant,
-        variantConfig: magnet.variantConfig,
-        previewText: magnet.previewText,
-        ...createLayoutStateConfig(magnet),
-      };
-
-      // 对于内置 Magnet，检查样式是否被修改
-      if (BUILTIN_MAGNET_IDS.has(magnet.id) && defaultMagnetLibrary) {
-        const defaultMagnet = defaultMagnetLibrary.find((m) => m.id === magnet.id);
-
-        if (defaultMagnet) {
-          const styleOverride: NonNullable<MagnetStateConfig['styleOverride']> = {};
-          let hasOverride = false;
-
-          // 检查 style 是否修改
-          if (JSON.stringify(magnet.style) !== JSON.stringify(defaultMagnet.style)) {
-            styleOverride.style = magnet.style;
-            hasOverride = true;
-          }
-
-          // 检查 animation 是否修改
-          if (JSON.stringify(magnet.animation) !== JSON.stringify(defaultMagnet.animation)) {
-            styleOverride.animation = magnet.animation;
-            hasOverride = true;
-          }
-
-          // 检查 content 是否修改
-          if (JSON.stringify(magnet.content) !== JSON.stringify(defaultMagnet.content)) {
-            styleOverride.content = magnet.content;
-            hasOverride = true;
-          }
-
-          // 如果有修改，保存样式覆盖
-          if (hasOverride) {
-            magnetConfig.styleOverride = styleOverride;
-          }
-        }
-      }
+      const defaultMagnet = BUILTIN_MAGNET_IDS.has(magnet.id)
+        ? defaultMagnetLibrary?.find((candidate) => candidate.id === magnet.id)
+        : undefined;
+      const magnetConfig = createMagnetStateConfig(magnet, isActive, defaultMagnet);
 
       config.magnets[magnet.id] = magnetConfig;
     });
@@ -201,26 +335,24 @@ export function loadConfig(storageKey: string = CONFIG_KEY): MagnetConfig | null
     }
 
     let config: MagnetConfig = JSON.parse(configStr);
+    let shouldPersist = false;
 
-    // 检查版本兼容性
+    // ???????
     if (config.version !== CONFIG_VERSION) {
-      console.warn(`配置版本不匹配: ${config.version} !== ${CONFIG_VERSION}`);
-      // 尝试迁移配置
-      config = migrateMagnetIds(config);
+      console.warn(`???????: ${config.version} !== ${CONFIG_VERSION}`);
       config.version = CONFIG_VERSION;
+      shouldPersist = true;
+    }
 
-      // 保存迁移后的配置
+    const migrationResult = normalizeConfigMigrations(config);
+    if (migrationResult.changed) {
+      config = migrationResult.config;
+      shouldPersist = true;
+    }
+
+    if (shouldPersist) {
       writeString(storageKey, JSON.stringify(config));
-    } else {
-      // 即使版本相同，也检查是否有旧 ID 需要迁移
-      const oldIds = ['btn-prev', 'song-info'];
-      const hasOldIds = Object.keys(config.magnets).some((id) => oldIds.includes(id));
-
-        if (hasOldIds) {
-          config = migrateMagnetIds(config);
-          writeString(storageKey, JSON.stringify(config));
-        }
-      }
+    }
 
     return config;
   } catch (error) {
@@ -248,44 +380,14 @@ export function exportConfig(
 
   // 保存所有 Magnet 的位置和激活状态
   magnetLibrary.forEach((magnet) => {
-    const magnetConfig: MagnetStateConfig = {
-      anchors: magnet.anchors,
-      isActive: activeMagnetIds.has(magnet.id),
-      renderer: magnet.renderer,
-      variant: magnet.variant,
-      variantConfig: magnet.variantConfig,
-      previewText: magnet.previewText,
-      ...createLayoutStateConfig(magnet),
-    };
-
-    // 对于内置 Magnet，检查样式是否被修改
-    if (BUILTIN_MAGNET_IDS.has(magnet.id) && defaultMagnetLibrary) {
-      const defaultMagnet = defaultMagnetLibrary.find((m) => m.id === magnet.id);
-
-      if (defaultMagnet) {
-        const styleOverride: NonNullable<MagnetStateConfig['styleOverride']> = {};
-        let hasOverride = false;
-
-        if (JSON.stringify(magnet.style) !== JSON.stringify(defaultMagnet.style)) {
-          styleOverride.style = magnet.style;
-          hasOverride = true;
-        }
-
-        if (JSON.stringify(magnet.animation) !== JSON.stringify(defaultMagnet.animation)) {
-          styleOverride.animation = magnet.animation;
-          hasOverride = true;
-        }
-
-        if (JSON.stringify(magnet.content) !== JSON.stringify(defaultMagnet.content)) {
-          styleOverride.content = magnet.content;
-          hasOverride = true;
-        }
-
-        if (hasOverride) {
-          magnetConfig.styleOverride = styleOverride;
-        }
-      }
-    }
+    const defaultMagnet = BUILTIN_MAGNET_IDS.has(magnet.id)
+      ? defaultMagnetLibrary?.find((candidate) => candidate.id === magnet.id)
+      : undefined;
+    const magnetConfig = createMagnetStateConfig(
+      magnet,
+      activeMagnetIds.has(magnet.id),
+      defaultMagnet
+    );
 
     config.magnets[magnet.id] = magnetConfig;
   });
@@ -300,7 +402,7 @@ export function exportConfig(
  */
 export function importConfig(jsonStr: string): MagnetConfig | null {
   try {
-    const config: MagnetConfig = JSON.parse(jsonStr);
+    let config: MagnetConfig = JSON.parse(jsonStr);
 
     // 验证必要字段
     if (!config.version || !config.gridSize || !config.magnets) {
@@ -310,7 +412,12 @@ export function importConfig(jsonStr: string): MagnetConfig | null {
     // 检查版本兼容性
     if (config.version !== CONFIG_VERSION) {
       console.warn(`配置版本不匹配: ${config.version} !== ${CONFIG_VERSION}`);
-      // 可以选择性地接受或拒绝
+      config.version = CONFIG_VERSION;
+    }
+
+    const migrationResult = normalizeConfigMigrations(config);
+    if (migrationResult.changed) {
+      config = migrationResult.config;
     }
 
     return config;
@@ -419,30 +526,14 @@ export function applyConfig(
     const savedConfig = cleanConfig.magnets[defaultMagnet.id];
 
     if (savedConfig) {
-      const appliedMagnet: Magnet = {
-        ...defaultMagnet,
-        anchors: savedConfig.anchors,
-      };
-
-      // 应用样式覆盖（如果有）
-      if (savedConfig.styleOverride) {
-        if (savedConfig.styleOverride.style !== undefined) {
-          appliedMagnet.style = savedConfig.styleOverride.style;
-        }
-        if (savedConfig.styleOverride.animation !== undefined) {
-          appliedMagnet.animation = savedConfig.styleOverride.animation;
-        }
-        if (savedConfig.styleOverride.content !== undefined) {
-          appliedMagnet.content = savedConfig.styleOverride.content;
-        }
-      }
-
-      // 保持 interactions 使用默认定义（功能不可修改）
-      appliedMagnet.interactions = defaultMagnet.interactions;
-      appliedMagnet.renderer = savedConfig.renderer ?? appliedMagnet.renderer;
-      appliedMagnet.variant = savedConfig.variant ?? appliedMagnet.variant;
-      appliedMagnet.variantConfig = savedConfig.variantConfig ?? appliedMagnet.variantConfig;
-      appliedMagnet.previewText = savedConfig.previewText ?? appliedMagnet.previewText;
+      const appliedMagnet = applySavedPresentationState(
+        {
+          ...defaultMagnet,
+          anchors: savedConfig.anchors,
+        },
+        savedConfig,
+        { keepInteractions: defaultMagnet.interactions }
+      );
       const layoutAppliedMagnet = applySavedLayoutState(appliedMagnet, savedConfig);
 
       magnetLibrary.push(layoutAppliedMagnet);
@@ -479,15 +570,13 @@ export function applyConfig(
       const savedConfig = cleanConfig.magnets[customMagnet.id];
 
       if (savedConfig) {
-        // 使用保存的锚点位置
-        const nextMagnet: Magnet = {
-          ...customMagnet,
-          anchors: savedConfig.anchors,
-          renderer: savedConfig.renderer ?? customMagnet.renderer,
-          variant: savedConfig.variant ?? customMagnet.variant,
-          variantConfig: savedConfig.variantConfig ?? customMagnet.variantConfig,
-          previewText: savedConfig.previewText ?? customMagnet.previewText,
-        };
+        const nextMagnet = applySavedPresentationState(
+          {
+            ...customMagnet,
+            anchors: savedConfig.anchors,
+          },
+          savedConfig
+        );
 
         const layoutAppliedMagnet = applySavedLayoutState(nextMagnet, savedConfig);
 
