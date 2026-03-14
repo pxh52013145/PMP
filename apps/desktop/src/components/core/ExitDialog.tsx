@@ -1,4 +1,5 @@
 import React from 'react';
+import { PmpButton, PmpDialog } from '../primitives';
 import './ConfirmDialog.css';
 
 export type ExitDialogProps = {
@@ -36,27 +37,33 @@ export const ExitDialog: React.FC<ExitDialogProps> = ({
   if (!open) return null;
 
   return (
-    <div className="pmp-confirm-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
-      <div className="pmp-confirm-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="pmp-confirm-header">
-          <div className="pmp-confirm-title">{title}</div>
-        </div>
-        <div className="pmp-confirm-body">
-          <pre className="pmp-confirm-message">{message}</pre>
-        </div>
-        <div className="pmp-confirm-footer">
-          <button type="button" className="pmp-confirm-btn" onClick={onCancel}>
+    <PmpDialog
+      open={open}
+      title={title}
+      overlaySurfaceId="overlay.modal"
+      dialogSurfaceId="primitive.dialog.default"
+      overlayClassName="pmp-confirm-overlay"
+      className="pmp-confirm-modal"
+      headerClassName="pmp-confirm-header"
+      titleClassName="pmp-confirm-title"
+      bodyClassName="pmp-confirm-body"
+      footerClassName="pmp-confirm-footer"
+      onClose={onCancel}
+      footer={
+        <>
+          <PmpButton type="button" className="pmp-confirm-btn" variant="ghost" onClick={onCancel}>
             {cancelText}
-          </button>
-          <button type="button" className="pmp-confirm-btn pmp-confirm-btn--primary" onClick={onHide}>
+          </PmpButton>
+          <PmpButton type="button" className="pmp-confirm-btn pmp-confirm-btn--primary" variant="primary" onClick={onHide}>
             {hideText}
-          </button>
-          <button type="button" className="pmp-confirm-btn pmp-confirm-btn--danger" onClick={onExit}>
+          </PmpButton>
+          <PmpButton type="button" className="pmp-confirm-btn pmp-confirm-btn--danger" variant="danger" onClick={onExit}>
             {exitText}
-          </button>
-        </div>
-      </div>
-    </div>
+          </PmpButton>
+        </>
+      }
+    >
+      <pre className="pmp-confirm-message">{message}</pre>
+    </PmpDialog>
   );
 };
-

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { readJson, usePersistentSetting, writeJson } from '../../modules/storage';
@@ -39,6 +47,7 @@ import {
   setupTauriListenerWithPayload,
 } from '../../utils/windowCommunication';
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
+import { PmpButton, PmpCard, PmpCheckbox, PmpChoiceButton, PmpSegmented } from '../primitives';
 
 const WINDOW_COMM_DEBUG_KEY = 'pixel-matrix-debug-window-comm';
 
@@ -249,6 +258,73 @@ function computeScenarioComparisons(
   }
 
   return comparisons.sort((left, right) => right.endAtMs - left.endAtMs);
+}
+
+type SettingsActionButtonProps = Omit<ComponentPropsWithoutRef<typeof PmpButton>, 'className' | 'variant'> & {
+  className?: string;
+};
+
+type SettingsToggleGroupProps = {
+  children: ReactNode;
+  className?: string;
+};
+
+type SettingsToggleButtonProps = ComponentPropsWithoutRef<typeof PmpChoiceButton>;
+type SettingsCheckboxProps = Omit<ComponentPropsWithoutRef<typeof PmpCheckbox>, 'className' | 'variant'> & {
+  className?: string;
+};
+type SettingsCardProps = Omit<ComponentPropsWithoutRef<typeof PmpCard>, 'className' | 'surfaceId'> & {
+  className?: string;
+  surfaceId?: ComponentPropsWithoutRef<typeof PmpCard>['surfaceId'];
+};
+
+function SettingsActionButton({ className, ...props }: SettingsActionButtonProps) {
+  return (
+    <PmpButton
+      variant="default"
+      className={['settings-action-btn', className].filter(Boolean).join(' ')}
+      {...props}
+    />
+  );
+}
+
+function SettingsToggleGroup({
+  children,
+  className = 'settings-toggle',
+}: SettingsToggleGroupProps) {
+  return (
+    <PmpSegmented className={className} surfaceId="primitive.segmented.toggle">
+      {children}
+    </PmpSegmented>
+  );
+}
+
+function SettingsToggleButton(props: SettingsToggleButtonProps) {
+  return <PmpChoiceButton {...props} />;
+}
+
+function SettingsCheckbox({ className, ...props }: SettingsCheckboxProps) {
+  return (
+    <PmpCheckbox
+      variant="settings"
+      className={['settings-checkbox', className].filter(Boolean).join(' ')}
+      {...props}
+    />
+  );
+}
+
+function SettingsCard({
+  className,
+  surfaceId = 'primitive.card.settings',
+  ...props
+}: SettingsCardProps) {
+  return (
+    <PmpCard
+      className={['settings-card', className].filter(Boolean).join(' ')}
+      surfaceId={surfaceId}
+      {...props}
+    />
+  );
 }
 
 function buildMemoryBaselineExportPayload(samples: MemoryBaselineSample[]): MemoryBaselineExportPayload {
@@ -1407,17 +1483,16 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
 
   const headerActions = (
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-      <button type="button" className="settings-action-btn" onClick={() => setConfirmRestart(true)} disabled={!isTauri}>
+      <SettingsActionButton type="button" onClick={() => setConfirmRestart(true)} disabled={!isTauri}>
         {t('debug.center.actions.restart')}
-      </button>
-      <button
+      </SettingsActionButton>
+      <SettingsActionButton
         type="button"
-        className="settings-action-btn"
         onClick={() => setConfirmRestartIntoDebug(true)}
         disabled={!isTauri}
       >
         {t('debug.center.actions.restartAndOpen')}
-      </button>
+      </SettingsActionButton>
     </div>
   );
 
@@ -1452,7 +1527,7 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
       ) : null}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: variant === 'page' ? 16 : 0 }}>
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.mode.label')}</p>
@@ -1463,14 +1538,22 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             </span>
           </div>
 
-          <div className="settings-toggle">
-            <button type="button" data-active={!config.enabled} onClick={() => updateConfig((prev) => ({ ...prev, enabled: false }))}>
+          <SettingsToggleGroup>
+            <SettingsToggleButton
+              type="button"
+              active={!config.enabled}
+              onClick={() => updateConfig((prev) => ({ ...prev, enabled: false }))}
+            >
               {t('common.state.off')}
-            </button>
-            <button type="button" data-active={config.enabled} onClick={() => updateConfig((prev) => ({ ...prev, enabled: true }))}>
+            </SettingsToggleButton>
+            <SettingsToggleButton
+              type="button"
+              active={config.enabled}
+              onClick={() => updateConfig((prev) => ({ ...prev, enabled: true }))}
+            >
               {t('common.state.on')}
-            </button>
-          </div>
+            </SettingsToggleButton>
+          </SettingsToggleGroup>
 
           {pendingRestart ? <p className="settings-card-note">{t('debug.center.mode.note.restartRequired')}</p> : null}
           {busy ? <p className="settings-card-note">{t('debug.center.mode.note.saving')}</p> : null}
@@ -1480,25 +1563,24 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
             </p>
           ) : null}
           {error ? <p className="settings-card-note" style={{ color: 'rgba(255,120,120,0.9)' }}>{error}</p> : null}
-        </div>
+        </SettingsCard>
 
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.sourceFacade.title')}</p>
               <p className="settings-card-desc">{t('debug.center.sourceFacade.desc')}</p>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void refreshUnifiedSources();
                 }}
                 disabled={unifiedBusy}
               >
                 {t('common.action.refresh')}
-              </button>
+              </SettingsActionButton>
             </div>
           </div>
 
@@ -1524,16 +1606,15 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   color: 'rgba(255,255,255,0.9)',
                 }}
               />
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void runUnifiedSearch();
                 }}
                 disabled={unifiedBusy}
               >
                 {t('debug.center.sourceFacade.searchAction')}
-              </button>
+              </SettingsActionButton>
             </div>
 
             <div
@@ -1554,36 +1635,33 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 })}
               </p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
+                <SettingsActionButton
                   type="button"
-                  className="settings-action-btn"
                   onClick={() => {
                     void generateBilibiliQrSession();
                   }}
                   disabled={bilibiliBusy}
                 >
                   {t('debug.center.sourceFacade.bilibili.generateAction')}
-                </button>
-                <button
+                </SettingsActionButton>
+                <SettingsActionButton
                   type="button"
-                  className="settings-action-btn"
                   onClick={() => {
                     void pollBilibiliQrSession();
                   }}
                   disabled={bilibiliBusy || !bilibiliQrSession}
                 >
                   {t('debug.center.sourceFacade.bilibili.pollAction')}
-                </button>
-                <button
+                </SettingsActionButton>
+                <SettingsActionButton
                   type="button"
-                  className="settings-action-btn"
                   onClick={() => {
                     void logoutBilibiliAuth();
                   }}
                   disabled={bilibiliBusy}
                 >
                   {t('debug.center.sourceFacade.bilibili.logoutAction')}
-                </button>
+                </SettingsActionButton>
               </div>
               {bilibiliQrSession ? (
                 <div style={{ display: 'grid', gap: 6 }}>
@@ -1652,9 +1730,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </div>
             ) : null}
           </div>
-        </div>
+        </SettingsCard>
 
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.sync.title')}</p>
@@ -1666,66 +1744,60 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => {
                 void refreshSyncOrchestrator();
               }}
               disabled={syncBusy}
             >
               {t('common.action.refresh')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => {
                 void runSyncTick();
               }}
               disabled={syncBusy}
             >
               {t('debug.center.sync.actions.tick')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => {
                 void retrySyncFailedSources();
               }}
               disabled={syncBusy}
             >
               {t('debug.center.sync.actions.retryFailedSources')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => {
                 void clearSyncFailedSources();
               }}
               disabled={syncBusy}
             >
               {t('debug.center.sync.actions.clearFailedSources')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => {
                 void startSyncScheduler();
               }}
               disabled={syncBusy}
             >
               {t('debug.center.sync.actions.startScheduler')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => {
                 void stopSyncScheduler();
               }}
               disabled={syncBusy}
             >
               {t('debug.center.sync.actions.stopScheduler')}
-            </button>
+            </SettingsActionButton>
           </div>
 
           <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
@@ -1800,22 +1872,20 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </p>
               {syncFailedSourceItems.length > 0 ? (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, marginBottom: 6 }}>
-                  <button
+                  <SettingsActionButton
                     type="button"
-                    className="settings-action-btn"
                     onClick={selectAllSyncFailureSources}
                     disabled={syncBusy}
                   >
                     {t('debug.center.sync.failedSources.selectAll')}
-                  </button>
-                  <button
+                  </SettingsActionButton>
+                  <SettingsActionButton
                     type="button"
-                    className="settings-action-btn"
                     onClick={clearSelectedSyncFailureSources}
                     disabled={syncBusy || !hasSelectedSyncFailureSources}
                   >
                     {t('debug.center.sync.failedSources.clearSelection')}
-                  </button>
+                  </SettingsActionButton>
                   <p className="settings-card-note" style={{ margin: 0, alignSelf: 'center' }}>
                     {t('debug.center.sync.failedSources.selectedSummary', {
                       selected: selectedSyncFailureSourceIds.length,
@@ -1834,62 +1904,54 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                         : 0;
 
                     return (
-                      <label
-                        className="settings-card-note"
+                      <SettingsCheckbox
+                        className="settings-checkbox--note"
                         key={`${item.sourceId}:${item.updatedAtMs}:${item.lastError ?? '-'}`}
+                        checked={selectedSyncFailureSourceIdSet.has(item.sourceId)}
+                        onCheckedChange={() => {
+                          toggleSyncFailureSourceSelection(item.sourceId);
+                        }}
+                        disabled={syncBusy}
                         style={{
-                          display: 'flex',
                           alignItems: 'flex-start',
-                          gap: 8,
-                          cursor: 'pointer',
+                          color: 'var(--settings-text-dim)',
                         }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedSyncFailureSourceIdSet.has(item.sourceId)}
-                          onChange={() => {
-                            toggleSyncFailureSourceSelection(item.sourceId);
-                          }}
-                          disabled={syncBusy}
-                          style={{ marginTop: 2 }}
-                        />
-                        <span>
-                          {t('debug.center.sync.failedSources.itemSummary', {
-                            sourceId: item.sourceId,
-                            sourceDisplayName: item.sourceDisplayName ?? '-',
-                            connectorId: item.connectorId,
-                            path: item.sourcePath,
-                            error: item.lastError ?? '-',
-                            lastScanAt:
-                              typeof item.incrementalScanAtMs === 'number'
-                                ? new Date(item.incrementalScanAtMs).toLocaleString()
-                                : '-',
-                            updatedAt: new Date(item.updatedAtMs).toLocaleString(),
-                            backoffSeconds,
-                          })}
-                        </span>
-                      </label>
+                        {t('debug.center.sync.failedSources.itemSummary', {
+                          sourceId: item.sourceId,
+                          sourceDisplayName: item.sourceDisplayName ?? '-',
+                          connectorId: item.connectorId,
+                          path: item.sourcePath,
+                          error: item.lastError ?? '-',
+                          lastScanAt:
+                            typeof item.incrementalScanAtMs === 'number'
+                              ? new Date(item.incrementalScanAtMs).toLocaleString()
+                              : '-',
+                          updatedAt: new Date(item.updatedAtMs).toLocaleString(),
+                          backoffSeconds,
+                        })}
+                      </SettingsCheckbox>
                     );
                   })}
                 </div>
               )}
             </div>
           </div>
-        </div>
+        </SettingsCard>
 
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.vstBridge.title')}</p>
               <p className="settings-card-desc">{t('debug.center.vstBridge.desc')}</p>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <button type="button" className="settings-action-btn" onClick={() => void refresh()} disabled={!isTauri}>
+              <SettingsActionButton type="button" onClick={() => void refresh()} disabled={!isTauri}>
                 {t('debug.center.actions.refreshEnv')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={handleCopyPowerShell}>
+              </SettingsActionButton>
+              <SettingsActionButton type="button" onClick={handleCopyPowerShell}>
                 {t('debug.center.actions.copyPowershell')}
-              </button>
+              </SettingsActionButton>
             </div>
           </div>
 
@@ -1904,22 +1966,22 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   {config.vstBridge.stderr ? t('common.state.on') : t('common.state.off')}
                 </span>
               </div>
-              <div className="settings-toggle">
-                <button
+              <SettingsToggleGroup>
+                <SettingsToggleButton
                   type="button"
-                  data-active={!config.vstBridge.stderr}
+                  active={!config.vstBridge.stderr}
                   onClick={() => updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, stderr: false } }))}
                 >
                   {t('common.state.off')}
-                </button>
-                <button
+                </SettingsToggleButton>
+                <SettingsToggleButton
                   type="button"
-                  data-active={config.vstBridge.stderr}
+                  active={config.vstBridge.stderr}
                   onClick={() => updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, stderr: true } }))}
                 >
                   {t('common.state.on')}
-                </button>
-              </div>
+                </SettingsToggleButton>
+              </SettingsToggleGroup>
             </div>
 
             <div>
@@ -1932,26 +1994,26 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   {config.vstBridge.logEditor ? t('common.state.on') : t('common.state.off')}
                 </span>
               </div>
-              <div className="settings-toggle">
-                <button
+              <SettingsToggleGroup>
+                <SettingsToggleButton
                   type="button"
-                  data-active={!config.vstBridge.logEditor}
+                  active={!config.vstBridge.logEditor}
                   onClick={() =>
                     updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, logEditor: false } }))
                   }
                 >
                   {t('common.state.off')}
-                </button>
-                <button
+                </SettingsToggleButton>
+                <SettingsToggleButton
                   type="button"
-                  data-active={config.vstBridge.logEditor}
+                  active={config.vstBridge.logEditor}
                   onClick={() =>
                     updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, logEditor: true } }))
                   }
                 >
                   {t('common.state.on')}
-                </button>
-              </div>
+                </SettingsToggleButton>
+              </SettingsToggleGroup>
             </div>
 
             <div>
@@ -1964,26 +2026,26 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   {config.vstBridge.minidump ? t('common.state.on') : t('common.state.off')}
                 </span>
               </div>
-              <div className="settings-toggle">
-                <button
+              <SettingsToggleGroup>
+                <SettingsToggleButton
                   type="button"
-                  data-active={!config.vstBridge.minidump}
+                  active={!config.vstBridge.minidump}
                   onClick={() =>
                     updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, minidump: false } }))
                   }
                 >
                   {t('common.state.off')}
-                </button>
-                <button
+                </SettingsToggleButton>
+                <SettingsToggleButton
                   type="button"
-                  data-active={config.vstBridge.minidump}
+                  active={config.vstBridge.minidump}
                   onClick={() =>
                     updateConfig((prev) => ({ ...prev, vstBridge: { ...prev.vstBridge, minidump: true } }))
                   }
                 >
                   {t('common.state.on')}
-                </button>
-              </div>
+                </SettingsToggleButton>
+              </SettingsToggleGroup>
 
               <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                 <input
@@ -2004,9 +2066,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                   }}
                   disabled={!isTauri}
                 />
-                <button type="button" className="settings-action-btn" onClick={() => void handlePickMinidumpDir()}>
+                <SettingsActionButton type="button" onClick={() => void handlePickMinidumpDir()}>
                   {t('debug.center.vstBridge.minidumpDir.pick')}
-                </button>
+                </SettingsActionButton>
               </div>
             </div>
 
@@ -2021,12 +2083,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 </span>
               </div>
 
-              <div className="settings-toggle">
+              <SettingsToggleGroup>
                 {(['auto', 'on', 'off'] as const).map((mode) => (
-                  <button
+                  <SettingsToggleButton
                     key={mode}
                     type="button"
-                    data-active={formatTriBool(config.vstBridge.editorSafeMode) === mode}
+                    active={formatTriBool(config.vstBridge.editorSafeMode) === mode}
                     onClick={() =>
                       updateConfig((prev) => ({
                         ...prev,
@@ -2035,9 +2097,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                     }
                   >
                     {t(`debug.center.vstBridge.editorSafeMode.option.${mode}`)}
-                  </button>
+                  </SettingsToggleButton>
                 ))}
-              </div>
+              </SettingsToggleGroup>
             </div>
 
             <div>
@@ -2051,12 +2113,12 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                 </span>
               </div>
 
-              <div className="settings-toggle">
+              <SettingsToggleGroup>
                 {(['auto', 'disabled', 'silence', 'self'] as const).map((mode) => (
-                  <button
+                  <SettingsToggleButton
                     key={mode}
                     type="button"
-                    data-active={(config.vstBridge.sidechainMode ?? 'auto') === mode}
+                    active={(config.vstBridge.sidechainMode ?? 'auto') === mode}
                     onClick={() =>
                       updateConfig((prev) => ({
                         ...prev,
@@ -2065,9 +2127,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
                     }
                   >
                     {t(`debug.center.vstBridge.sidechainMode.option.${mode}`)}
-                  </button>
+                  </SettingsToggleButton>
                 ))}
-              </div>
+              </SettingsToggleGroup>
             </div>
 
             <div>
@@ -2093,9 +2155,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               </pre>
             </div>
           </div>
-        </div>
+        </SettingsCard>
 
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.windowComm.title')}</p>
@@ -2105,102 +2167,94 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               {windowCommDebugEnabled ? t('common.state.on') : t('common.state.off')}
             </span>
           </div>
-          <div className="settings-toggle">
-            <button type="button" data-active={!windowCommDebugEnabled} onClick={() => setWindowCommDebug('0')}>
+          <SettingsToggleGroup>
+            <SettingsToggleButton type="button" active={!windowCommDebugEnabled} onClick={() => setWindowCommDebug('0')}>
               {t('common.state.off')}
-            </button>
-            <button type="button" data-active={windowCommDebugEnabled} onClick={() => setWindowCommDebug('1')}>
+            </SettingsToggleButton>
+            <SettingsToggleButton type="button" active={windowCommDebugEnabled} onClick={() => setWindowCommDebug('1')}>
               {t('common.state.on')}
-            </button>
-          </div>
+            </SettingsToggleButton>
+          </SettingsToggleGroup>
           <p className="settings-card-note">{t('debug.center.windowComm.note')}</p>
-        </div>
+        </SettingsCard>
 
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.memory.title')}</p>
               <p className="settings-card-desc">{t('debug.center.memory.desc')}</p>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void refreshMemory();
                 }}
               >
                 {t('common.action.refresh')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void captureMemoryBaseline();
                 }}
               >
                 {t('debug.center.memory.actions.captureBaseline')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void runThreeStageBaselineCapture();
                 }}
                 disabled={threeStageBaselineRunning}
               >
                 {t('debug.center.memory.actions.captureThreeStage')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={clearMemoryBaselines}>
+              </SettingsActionButton>
+              <SettingsActionButton type="button" onClick={clearMemoryBaselines}>
                 {t('debug.center.memory.actions.clearBaselines')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={handleExportBaselinesJson}
                 disabled={memoryBaselines.length === 0}
               >
                 {t('debug.center.memory.actions.exportBaselinesJson')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={handleExportBaselinesCsv}
                 disabled={memoryBaselines.length === 0}
               >
                 {t('debug.center.memory.actions.exportBaselinesCsv')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void handleCopyLatestScenarioSummary();
                 }}
                 disabled={!latestThreeStageComparison}
               >
                 {t('debug.center.memory.actions.copyLatestScenarioSummary')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => {
                   void handleWriteLatestScenarioReport();
                 }}
                 disabled={!latestThreeStageComparison}
               >
                 {t('debug.center.memory.actions.writeLatestScenarioReport')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={() => setConfirmClearCoverCaches(true)}>
+              </SettingsActionButton>
+              <SettingsActionButton type="button" onClick={() => setConfirmClearCoverCaches(true)}>
                 {t('debug.center.memory.actions.clearCoverCaches')}
-              </button>
-              <button
+              </SettingsActionButton>
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => setConfirmDestroyEditorWindows(true)}
                 disabled={!isTauri}
               >
                 {t('debug.center.memory.actions.destroyEditorWindows')}
-              </button>
+              </SettingsActionButton>
             </div>
           </div>
 
@@ -2308,9 +2362,9 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
               )}
             </div>
           </div>
-        </div>
+        </SettingsCard>
 
-        <div className="settings-card">
+        <SettingsCard>
           <div className="settings-card-header">
             <div>
               <p className="settings-card-label">{t('debug.center.shortcuts.title')}</p>
@@ -2319,41 +2373,37 @@ export function DebugCenter({ variant = 'page' }: { variant?: 'page' | 'settings
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => navigateTo('debug', { tab: 'perf-monitor' })}
             >
               {t('debug.center.shortcuts.perfMonitor')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => navigateTo('debug', { tab: 'native-debug' })}
             >
               {t('debug.center.shortcuts.nativeDebug')}
-            </button>
-            <button type="button" className="settings-action-btn" onClick={() => navigateTo('dsp-rack')}>
+            </SettingsActionButton>
+            <SettingsActionButton type="button" onClick={() => navigateTo('dsp-rack')}>
               {t('debug.center.shortcuts.dspRack')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => void handleOpenVstManager()}
               disabled={!isTauri}
             >
               {t('debug.center.shortcuts.vstManager')}
-            </button>
-            <button
+            </SettingsActionButton>
+            <SettingsActionButton
               type="button"
-              className="settings-action-btn"
               onClick={() => void handleOpenThemeDebugWindow()}
               disabled={!isTauri}
             >
               {t('debug.center.shortcuts.themeDebug')}
-            </button>
+            </SettingsActionButton>
           </div>
-        </div>
+        </SettingsCard>
       </div>
 
       <ConfirmDialog

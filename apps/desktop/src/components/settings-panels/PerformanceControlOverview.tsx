@@ -1,6 +1,7 @@
 import React from 'react';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 import { useT } from '../../i18n';
+import { PmpButton } from '../primitives';
 
 function formatMemoryMB(bytes: number): string {
   return `${Math.max(0, bytes) / 1024 / 1024 >= 100
@@ -62,15 +63,16 @@ export function PerformanceControlOverview() {
 
       <div className="settings-row-right">
         <div className="settings-row-stack">
-          <button
+          <PmpButton
             type="button"
             className="settings-action-btn"
+            variant="default"
             onClick={() => {
               void service.refreshNow();
             }}
           >
             {t('common.action.refresh')}
-          </button>
+          </PmpButton>
         </div>
       </div>
     </div>

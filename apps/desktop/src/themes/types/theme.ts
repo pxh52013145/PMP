@@ -2,7 +2,6 @@
  * 主题系统类型定义
  */
 
-import { Shader } from './shader';
 import { BackgroundConfig } from '../../types/background';
 
 /**
@@ -10,6 +9,13 @@ import { BackgroundConfig } from '../../types/background';
  * 用于TrackInfo等组件从封面提取颜色
  */
 export type DynamicColorEffect = 'tone' | 'gradient' | 'dynamic';
+export type ThemeSurfaceNamespace = 'magnet' | 'page' | 'overlay' | 'primitive';
+export type ThemeBindingNamespace = ThemeSurfaceNamespace;
+export type ThemeSurfaceId = `${ThemeSurfaceNamespace}.${string}` | string;
+export type ThemeBindingId = `${ThemeBindingNamespace}.${string}`;
+export type ThemeColorTokens = Record<string, string>;
+export type ThemeMotionTokens = Record<string, string | number | boolean>;
+export type ThemeTypographyTokens = Record<string, string | number>;
 
 export interface DynamicColorConfig {
   // 是否从封面提取颜色
@@ -31,6 +37,37 @@ export interface DynamicColorConfig {
     brightness?: number; // 亮度调整 (0.5-2.0)
     hueShift?: number; // 色相偏移 (-180 to 180)
   };
+}
+
+export interface ThemeBindingDynamicColorCapability {
+  enabled?: boolean;
+  source?: 'cover';
+  mode?: DynamicColorEffect;
+  apply?: 'full' | 'glow-only' | 'blend' | 'none';
+  blendRatio?: number;
+  gradientAngle?: number;
+  dynamicSpeed?: number;
+  colorAdjust?: DynamicColorConfig['colorAdjust'];
+}
+
+export interface ThemeBindingCapabilities {
+  dynamicColor?: ThemeBindingDynamicColorCapability;
+}
+
+/**
+ * 主题绑定
+ * 作为从旧 componentThemes 迁移到统一 binding 模型的过渡结构
+ */
+export interface ThemeBinding {
+  surface?: ThemeSurfaceId;
+  renderer?: string;
+  /**
+   * 兼容旧磁贴变体模型。
+   * 长期目标是收敛到 renderer + props，但过渡期仍保留 variant 以避免运行时断层。
+   */
+  variant?: string;
+  props?: Record<string, unknown>;
+  capabilities?: ThemeBindingCapabilities;
 }
 
 /**
@@ -126,8 +163,9 @@ export interface Theme {
   description?: string;
   thumbnail?: string;
 
-  // 核心：使用的着色器
-  shader: Shader;
+  colors?: ThemeColorTokens;
+  motion?: ThemeMotionTokens;
+  typography?: ThemeTypographyTokens;
 
   // Pixel系统配置
   pixel: {
@@ -166,7 +204,18 @@ export interface Theme {
   };
 
   // 组件主题化配置
+  surfaces?: {
+    [surfaceId: string]: ComponentTheme;
+  };
+
+  bindings?: {
+    [bindingId: string]: ThemeBinding;
+  };
+}
+
+export interface ThemeImportCandidate extends Theme {
   componentThemes?: {
     [componentId: string]: ComponentTheme;
   };
+  shader?: unknown;
 }

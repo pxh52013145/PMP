@@ -1,10 +1,19 @@
 import { invoke } from '@tauri-apps/api/tauri';
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { resolveAudioTuningProfilePayload } from '../../services/audio/audioTuningProfiles';
+import { PmpButton, PmpChoiceButton, PmpSegmented } from '../primitives';
 
 type ReplayGainMode = 'track' | 'album';
 type NativeAudioSrcMode = 'source-native' | 'match-output' | 'target-rate';
@@ -534,14 +543,15 @@ function SettingHelpLabel({ title, help }: SettingHelpLabelProps) {
   return (
     <div className="settings-inline-title-wrap">
       <p className="settings-inline-row-title">{title}</p>
-      <button
+      <PmpButton
         type="button"
+        variant="ghost"
         className="settings-inline-help"
         aria-label={help}
         title={help}
       >
         ?
-      </button>
+      </PmpButton>
     </div>
   );
 }
@@ -573,6 +583,42 @@ function AdvancedParamHead({
         <span className="settings-param-head-meter-value">{percent}%</span>
       </div>
     </div>
+  );
+}
+
+type SettingsChoiceGroupProps = {
+  children: ReactNode;
+  className?: string;
+};
+
+type SettingsChoiceButtonProps = Omit<ComponentPropsWithoutRef<typeof PmpChoiceButton>, 'className'>;
+
+type SettingsActionButtonProps = Omit<ComponentPropsWithoutRef<typeof PmpButton>, 'className' | 'variant'> & {
+  className?: string;
+};
+
+function SettingsChoiceGroup({
+  children,
+  className = 'settings-inline-row-controls',
+}: SettingsChoiceGroupProps) {
+  return (
+    <PmpSegmented className={className} surfaceId="primitive.segmented.toggle">
+      {children}
+    </PmpSegmented>
+  );
+}
+
+function SettingsChoiceButton(props: SettingsChoiceButtonProps) {
+  return <PmpChoiceButton className="settings-choice-btn" {...props} />;
+}
+
+function SettingsActionButton({ className, ...props }: SettingsActionButtonProps) {
+  return (
+    <PmpButton
+      variant="default"
+      className={['settings-action-btn', className].filter(Boolean).join(' ')}
+      {...props}
+    />
   );
 }
 
@@ -908,52 +954,48 @@ export function AudioEngineAdvancedSettingsPanel() {
               <div className="settings-inline-row-copy">
                 <p className="settings-inline-row-title">{t('common.state.label')}</p>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={replayGain.enabled}
+                  active={replayGain.enabled}
                   onClick={() => setReplayGain((prev) => ({ ...prev, enabled: true }))}
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!replayGain.enabled}
+                  active={!replayGain.enabled}
                   onClick={() => setReplayGain((prev) => ({ ...prev, enabled: false }))}
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
               <div className="settings-inline-row-copy">
                 <p className="settings-inline-row-title">{t('settings.audioAdvanced.replayGain.mode.label')}</p>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={replayGain.mode === 'track'}
+                  active={replayGain.mode === 'track'}
                   onClick={() => setReplayGain((prev) => ({ ...prev, mode: 'track' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.replayGain.mode.track')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={replayGain.mode === 'album'}
+                  active={replayGain.mode === 'album'}
                   onClick={() => setReplayGain((prev) => ({ ...prev, mode: 'album' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.replayGain.mode.album')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -980,14 +1022,13 @@ export function AudioEngineAdvancedSettingsPanel() {
             </div>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applyReplayGain()}
                 disabled={busy || !replayGainDirty}
               >
                 {t('common.action.apply')}
-              </button>
+              </SettingsActionButton>
             </div>
           </>
         ) : (
@@ -1014,11 +1055,10 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.runtimeControl.dynamicGain.help')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={runtimeControl.dynamicGainEnabled}
+                  active={runtimeControl.dynamicGainEnabled}
                   onClick={() =>
                     setRuntimeControl((prev) => ({
                       ...prev,
@@ -1028,11 +1068,10 @@ export function AudioEngineAdvancedSettingsPanel() {
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!runtimeControl.dynamicGainEnabled}
+                  active={!runtimeControl.dynamicGainEnabled}
                   onClick={() =>
                     setRuntimeControl((prev) => ({
                       ...prev,
@@ -1042,8 +1081,8 @@ export function AudioEngineAdvancedSettingsPanel() {
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -1053,11 +1092,10 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.runtimeControl.volumeDebounce.help')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={runtimeControl.volumeDebounceEnabled}
+                  active={runtimeControl.volumeDebounceEnabled}
                   onClick={() =>
                     setRuntimeControl((prev) => ({
                       ...prev,
@@ -1067,11 +1105,10 @@ export function AudioEngineAdvancedSettingsPanel() {
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!runtimeControl.volumeDebounceEnabled}
+                  active={!runtimeControl.volumeDebounceEnabled}
                   onClick={() =>
                     setRuntimeControl((prev) => ({
                       ...prev,
@@ -1081,19 +1118,18 @@ export function AudioEngineAdvancedSettingsPanel() {
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applyRuntimeControl()}
                 disabled={busy || !runtimeControlDirty}
               >
                 {t('common.action.apply')}
-              </button>
+              </SettingsActionButton>
             </div>
           </>
         ) : (
@@ -1117,26 +1153,24 @@ export function AudioEngineAdvancedSettingsPanel() {
               <div className="settings-inline-row-copy">
                 <p className="settings-inline-row-title">{t('common.state.label')}</p>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={crossfade.enabled}
+                  active={crossfade.enabled}
                   onClick={() => setCrossfade((prev) => ({ ...prev, enabled: true }))}
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!crossfade.enabled}
+                  active={!crossfade.enabled}
                   onClick={() => setCrossfade((prev) => ({ ...prev, enabled: false }))}
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -1163,14 +1197,13 @@ export function AudioEngineAdvancedSettingsPanel() {
             </div>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applyCrossfade()}
                 disabled={busy || !crossfadeDirty}
               >
                 {t('common.action.apply')}
-              </button>
+              </SettingsActionButton>
             </div>
           </>
         ) : (
@@ -1213,46 +1246,42 @@ export function AudioEngineAdvancedSettingsPanel() {
                   })}
                 </p>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={tuningProfile === 'extreme-ll'}
+                  active={tuningProfile === 'extreme-ll'}
                   onClick={() => setTuningProfile('extreme-ll')}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.tuning.profile.extreme-ll')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={tuningProfile === 'll-guarded'}
+                  active={tuningProfile === 'll-guarded'}
                   onClick={() => setTuningProfile('ll-guarded')}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.tuning.profile.ll-guarded')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={tuningProfile === 'robust-shield'}
+                  active={tuningProfile === 'robust-shield'}
                   onClick={() => setTuningProfile('robust-shield')}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.tuning.profile.robust-shield')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applySelectedTuningProfile()}
                 disabled={busy || tuningProfile === 'custom' || !tuningProfileDirty}
               >
                 {t('common.action.apply')}
-              </button>
+              </SettingsActionButton>
             </div>
 
             <div className="settings-inline-row">
@@ -1262,26 +1291,24 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.tuning.auto.help.enabled')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={tuningAutoSettings.enabled}
+                  active={tuningAutoSettings.enabled}
                   onClick={() => setTuningAutoSettings((prev) => ({ ...prev, enabled: true }))}
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!tuningAutoSettings.enabled}
+                  active={!tuningAutoSettings.enabled}
                   onClick={() => setTuningAutoSettings((prev) => ({ ...prev, enabled: false }))}
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <details className="settings-inline-details">
@@ -1510,14 +1537,13 @@ export function AudioEngineAdvancedSettingsPanel() {
             </details>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applyTuningAutoSettings()}
                 disabled={busy || !tuningAutoDirty}
               >
                 {t('common.action.apply')}
-              </button>
+              </SettingsActionButton>
             </div>
 
             <div className="settings-inline-row">
@@ -1534,26 +1560,24 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.enginePolicy.help.transport')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.transportMode === 'robust'}
+                  active={enginePolicy.transportMode === 'robust'}
                   onClick={() => setEnginePolicy((prev) => ({ ...prev, transportMode: 'robust' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.transport.robust')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.transportMode === 'transport-exact'}
+                  active={enginePolicy.transportMode === 'transport-exact'}
                   onClick={() => setEnginePolicy((prev) => ({ ...prev, transportMode: 'transport-exact' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.transport.exact')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -1563,29 +1587,26 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.enginePolicy.help.srcMode')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.srcMode === 'source-native'}
+                  active={enginePolicy.srcMode === 'source-native'}
                   onClick={() => setEnginePolicy((prev) => ({ ...prev, srcMode: 'source-native' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcMode.sourceNative')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.srcMode === 'match-output'}
+                  active={enginePolicy.srcMode === 'match-output'}
                   onClick={() => setEnginePolicy((prev) => ({ ...prev, srcMode: 'match-output' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcMode.matchOutput')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.srcMode === 'target-rate'}
+                  active={enginePolicy.srcMode === 'target-rate'}
                   onClick={() =>
                     setEnginePolicy((prev) => ({
                       ...prev,
@@ -1596,8 +1617,8 @@ export function AudioEngineAdvancedSettingsPanel() {
                   disabled={busy || isSharedOutputBackend}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcMode.targetRate')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -1607,26 +1628,24 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.enginePolicy.help.srcBackend')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.srcBackend === 'rubato'}
+                  active={enginePolicy.srcBackend === 'rubato'}
                   onClick={() => setEnginePolicy((prev) => ({ ...prev, srcBackend: 'rubato' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcBackend.rubato')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={enginePolicy.srcBackend === 'linear-simd'}
+                  active={enginePolicy.srcBackend === 'linear-simd'}
                   onClick={() => setEnginePolicy((prev) => ({ ...prev, srcBackend: 'linear-simd' }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.enginePolicy.srcBackend.linearSimd')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <details className="settings-inline-details">
@@ -1691,42 +1710,39 @@ export function AudioEngineAdvancedSettingsPanel() {
                     help={t('settings.audioAdvanced.enginePolicy.help.outputQuantizationMode')}
                   />
                 </div>
-                <div className="settings-inline-row-controls">
-                  <button
+                <SettingsChoiceGroup>
+                  <SettingsChoiceButton
                     type="button"
-                    className="settings-choice-btn"
-                    data-active={enginePolicy.outputQuantizationMode === 'round'}
+                    active={enginePolicy.outputQuantizationMode === 'round'}
                     onClick={() =>
                       setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'round' }))
                     }
                     disabled={busy || enginePolicy.transportMode === 'transport-exact'}
                   >
                     {t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.round')}
-                  </button>
-                  <button
+                  </SettingsChoiceButton>
+                  <SettingsChoiceButton
                     type="button"
-                    className="settings-choice-btn"
-                    data-active={enginePolicy.outputQuantizationMode === 'tpdf'}
+                    active={enginePolicy.outputQuantizationMode === 'tpdf'}
                     onClick={() =>
                       setEnginePolicy((prev) => ({ ...prev, outputQuantizationMode: 'tpdf' }))
                     }
                     disabled={busy || enginePolicy.transportMode === 'transport-exact'}
                   >
                     {t('settings.audioAdvanced.enginePolicy.outputQuantizationMode.tpdf')}
-                  </button>
-                </div>
+                  </SettingsChoiceButton>
+                </SettingsChoiceGroup>
               </div>
             </details>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applyEnginePolicy()}
                 disabled={busy || !enginePolicyDirty}
               >
                 {t('common.action.apply')}
-              </button>
+              </SettingsActionButton>
             </div>
           </>
         ) : (
@@ -1750,26 +1766,24 @@ export function AudioEngineAdvancedSettingsPanel() {
               <div className="settings-inline-row-copy">
                 <p className="settings-inline-row-title">{t('common.state.label')}</p>
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={dynamicSrc.enabled}
+                  active={dynamicSrc.enabled}
                   onClick={() => setDynamicSrc((prev) => ({ ...prev, enabled: true }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.dynamicSrc.enable')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!dynamicSrc.enabled}
+                  active={!dynamicSrc.enabled}
                   onClick={() => setDynamicSrc((prev) => ({ ...prev, enabled: false }))}
                   disabled={busy}
                 >
                   {t('settings.audioAdvanced.dynamicSrc.disable')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -1779,26 +1793,24 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.dynamicSrc.help.adaptive')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={dynamicSrc.adaptiveEnabled}
+                  active={dynamicSrc.adaptiveEnabled}
                   onClick={() => setDynamicSrc((prev) => ({ ...prev, adaptiveEnabled: true }))}
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!dynamicSrc.adaptiveEnabled}
+                  active={!dynamicSrc.adaptiveEnabled}
                   onClick={() => setDynamicSrc((prev) => ({ ...prev, adaptiveEnabled: false }))}
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <div className="settings-inline-row">
@@ -1808,26 +1820,24 @@ export function AudioEngineAdvancedSettingsPanel() {
                   help={t('settings.audioAdvanced.dynamicSrc.help.learning')}
                 />
               </div>
-              <div className="settings-inline-row-controls">
-                <button
+              <SettingsChoiceGroup>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={dynamicSrc.learningEnabled}
+                  active={dynamicSrc.learningEnabled}
                   onClick={() => setDynamicSrc((prev) => ({ ...prev, learningEnabled: true }))}
                   disabled={busy}
                 >
                   {t('common.state.on')}
-                </button>
-                <button
+                </SettingsChoiceButton>
+                <SettingsChoiceButton
                   type="button"
-                  className="settings-choice-btn"
-                  data-active={!dynamicSrc.learningEnabled}
+                  active={!dynamicSrc.learningEnabled}
                   onClick={() => setDynamicSrc((prev) => ({ ...prev, learningEnabled: false }))}
                   disabled={busy}
                 >
                   {t('common.state.off')}
-                </button>
-              </div>
+                </SettingsChoiceButton>
+              </SettingsChoiceGroup>
             </div>
 
             <details className="settings-inline-details">
@@ -1994,17 +2004,16 @@ export function AudioEngineAdvancedSettingsPanel() {
             </details>
 
             <div className="settings-section-controls">
-              <button
+              <SettingsActionButton
                 type="button"
-                className="settings-action-btn"
                 onClick={() => void applyDynamicSrc()}
                 disabled={busy || !dynamicSrcDirty}
               >
                 {t('common.action.apply')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={() => void refresh()} disabled={busy}>
+              </SettingsActionButton>
+              <SettingsActionButton type="button" onClick={() => void refresh()} disabled={busy}>
                 {t('common.action.refresh')}
-              </button>
+              </SettingsActionButton>
             </div>
           </>
         ) : (

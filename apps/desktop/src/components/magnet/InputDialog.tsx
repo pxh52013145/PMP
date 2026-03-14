@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { useT } from '../../i18n';
+import { PmpButton, PmpDialog } from '../primitives';
 import './InputDialog.css';
 
 interface InputDialogProps {
@@ -35,7 +35,6 @@ export const InputDialog: React.FC<InputDialogProps> = ({
   useEffect(() => {
     if (isOpen) {
       setValue(defaultValue);
-      // 延迟聚焦以确保对话框已渲染
       setTimeout(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -45,16 +44,10 @@ export const InputDialog: React.FC<InputDialogProps> = ({
 
   if (!isOpen) return null;
 
-  const handleConfirm = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleConfirm = () => {
     if (value.trim()) {
       onConfirm(value.trim());
     }
-  };
-
-  const handleCancel = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onCancel();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -67,38 +60,45 @@ export const InputDialog: React.FC<InputDialogProps> = ({
     }
   };
 
-  return createPortal(
-    <div className="input-dialog-overlay" onClick={handleCancel}>
-      <div className="input-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="input-dialog-header">
-          <h3 className="input-dialog-title">{title}</h3>
-        </div>
-        <div className="input-dialog-body">
-          {message && <p className="input-dialog-message">{message}</p>}
-          <input
-            ref={inputRef}
-            type="text"
-            className="input-dialog-input"
-            placeholder={placeholder}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
-        <div className="input-dialog-footer">
-          <button className="input-dialog-btn input-dialog-btn-cancel" onClick={handleCancel}>
+  return (
+    <PmpDialog
+      open={isOpen}
+      title={title}
+      overlaySurfaceId="overlay.modal"
+      dialogSurfaceId="primitive.dialog.default"
+      overlayClassName="input-dialog-overlay"
+      className="input-dialog"
+      headerClassName="input-dialog-header"
+      titleClassName="input-dialog-title"
+      bodyClassName="input-dialog-body"
+      footerClassName="input-dialog-footer"
+      onClose={onCancel}
+      footer={
+        <>
+          <PmpButton className="input-dialog-btn input-dialog-btn-cancel" variant="ghost" onClick={onCancel}>
             {resolvedCancelText}
-          </button>
-          <button
+          </PmpButton>
+          <PmpButton
             className="input-dialog-btn input-dialog-btn-confirm"
+            variant="primary"
             onClick={handleConfirm}
             disabled={!value.trim()}
           >
             {resolvedConfirmText}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body
+          </PmpButton>
+        </>
+      }
+    >
+      {message ? <p className="input-dialog-message">{message}</p> : null}
+      <input
+        ref={inputRef}
+        type="text"
+        className="input-dialog-input"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+    </PmpDialog>
   );
 };

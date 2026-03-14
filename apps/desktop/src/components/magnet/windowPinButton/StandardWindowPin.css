@@ -2,11 +2,14 @@
 
 .window-pin-button {
   --magnet-control-color: rgba(255, 255, 255, 0.88);
+  --magnet-control-color-hover: rgba(255, 255, 255, 1);
   --magnet-control-active-opacity: 0.78;
 }
 
 .window-pin-button.pinned {
-  color: rgba(98, 180, 255, 0.98);
+  --magnet-control-color: rgba(255, 108, 108, 0.96);
+  --magnet-control-color-hover: rgba(255, 128, 128, 1);
+  color: rgba(255, 108, 108, 0.96);
 }
 
 .window-pin-button.unpinned {
@@ -16,6 +19,125 @@
 .window-pin-icon {
   width: 24px;
   height: 24px;
-  fill: currentColor;
   display: block;
+  overflow: visible;
+}
+
+.window-pin-icon-shadow {
+  fill: rgba(255, 82, 82, 0.18);
+  opacity: 0;
+  transform: scale(0.45);
+  transform-origin: center;
+  transition:
+    opacity 200ms ease,
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.window-pin-icon-anchor {
+  fill: rgba(255, 84, 84, 0.94);
+  opacity: 0;
+  transform: scale(0.35);
+  transform-origin: center;
+  transition:
+    opacity 180ms ease,
+    transform 280ms cubic-bezier(0.2, 0.9, 0.3, 1.2),
+    filter 160ms ease;
+}
+
+.window-pin-icon-assembly {
+  transform: translateY(-0.2px) rotate(-11deg);
+  transform-origin: 12px 6px;
+  transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.window-pin-icon-head,
+.window-pin-icon-body {
+  transition:
+    fill 180ms ease,
+    filter 180ms ease;
+}
+
+.window-pin-icon-needle {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 1.7;
+  transform-box: fill-box;
+  transform-origin: center top;
+  transition:
+    stroke 180ms ease,
+    opacity 220ms ease,
+    transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.window-pin-button.unpinned .window-pin-icon-head,
+.window-pin-button.unpinned .window-pin-icon-body {
+  fill: currentColor;
+}
+
+.window-pin-button.unpinned .window-pin-icon-needle {
+  stroke: currentColor;
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+}
+
+.window-pin-button.pinned .window-pin-icon-head {
+  fill: rgba(255, 82, 82, 0.98);
+}
+
+.window-pin-button.pinned .window-pin-icon-body {
+  fill: rgba(255, 219, 219, 0.98);
+}
+
+.window-pin-button.pinned .window-pin-icon-assembly {
+  transform: translateY(1.45px) rotate(0deg);
+}
+
+.window-pin-button.pinned .window-pin-icon-needle {
+  stroke: rgba(255, 174, 174, 0.9);
+  opacity: 0;
+  transform: translateY(3px) scaleY(0.08);
+}
+
+.window-pin-button.pinned .window-pin-icon-anchor {
+  opacity: 1;
+  transform: scale(1);
+  filter: drop-shadow(0 0 3px rgba(255, 85, 85, 0.28));
+}
+
+.window-pin-button.pinned .window-pin-icon-shadow {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.window-pin-button:hover:not(:disabled) .window-pin-icon-assembly {
+  transform: translateY(-0.45px) rotate(-8deg) scale(1.03);
+}
+
+.window-pin-button.pinned:hover:not(:disabled) .window-pin-icon-assembly {
+  transform: translateY(1.15px) rotate(0deg) scale(1.03);
+}
+
+.window-pin-button.pinned:hover:not(:disabled) .window-pin-icon-head {
+  fill: rgba(255, 103, 103, 1);
+  filter: drop-shadow(0 0 3px rgba(255, 85, 85, 0.24));
+}
+
+.window-pin-button.pinned:hover:not(:disabled) .window-pin-icon-body {
+  fill: rgba(255, 232, 232, 1);
+}
+
+.window-pin-button.pinned:hover:not(:disabled) .window-pin-icon-anchor {
+  filter: drop-shadow(0 0 4px rgba(255, 85, 85, 0.34));
+}
+
+.window-pin-button.pinned:active:not(:disabled) .window-pin-icon-head {
+  fill: rgba(255, 92, 92, 0.96);
+}
+
+.window-pin-button.pinned:active:not(:disabled) .window-pin-icon-body {
+  fill: rgba(255, 208, 208, 0.96);
+}
+
+.window-pin-button.pinned:active:not(:disabled) .window-pin-icon-assembly {
+  transform: translateY(1.85px) rotate(0deg) scale(0.98);
 }

@@ -15,6 +15,7 @@ import { useT } from '../../i18n';
 import { useQuality } from '../../contexts/QualityContext';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 import { PerformanceControlOverview } from './PerformanceControlOverview';
+import { PmpChoiceButton, PmpSegmented } from '../primitives';
 
 export function PerformanceSettingsPanel() {
   const t = useT();
@@ -91,18 +92,18 @@ export function PerformanceSettingsPanel() {
           <span className="settings-row-badge">
             {t(`settings.performance.runtimeProfile.option.${runtimeProfile}`)}
           </span>
-          <div className="settings-toggle settings-toggle--compact">
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
             {PERFORMANCE_RUNTIME_PROFILES.map((profile) => (
-              <button
+              <PmpChoiceButton
                 key={profile}
                 type="button"
-                data-active={runtimeProfile === profile}
+                active={runtimeProfile === profile}
                 onClick={() => setRuntimeProfile(profile)}
               >
                 {t(`settings.performance.runtimeProfile.option.${profile}`)}
-              </button>
+              </PmpChoiceButton>
             ))}
-          </div>
+          </PmpSegmented>
         </div>
       </div>
 
@@ -115,14 +116,14 @@ export function PerformanceSettingsPanel() {
           <span className="settings-row-badge">
             {lowPerformanceMode ? t('common.state.on') : t('common.state.off')}
           </span>
-          <div className="settings-toggle settings-toggle--compact">
-            <button type="button" data-active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton type="button" active={!lowPerformanceMode} onClick={() => setLowPerformanceMode(false)}>
               {t('settings.performance.lowPerformance.option.standard')}
-            </button>
-            <button type="button" data-active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={lowPerformanceMode} onClick={() => setLowPerformanceMode(true)}>
               {t('settings.performance.lowPerformance.option.low')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
       </div>
 
@@ -133,20 +134,20 @@ export function PerformanceSettingsPanel() {
         </div>
         <div className="settings-row-right">
           <span className="settings-row-badge">{gifImportMaxFps <= 0 ? t('common.state.off') : `${gifImportMaxFps}fps`}</span>
-          <div className="settings-toggle settings-toggle--compact">
-            <button type="button" data-active={gifImportMaxFps <= 0} onClick={() => setGifImportMaxFps(0)}>
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton type="button" active={gifImportMaxFps <= 0} onClick={() => setGifImportMaxFps(0)}>
               {t('settings.performance.gifImportFps.option.original')}
-            </button>
-            <button type="button" data-active={gifImportMaxFps === 30} onClick={() => setGifImportMaxFps(30)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={gifImportMaxFps === 30} onClick={() => setGifImportMaxFps(30)}>
               30fps
-            </button>
-            <button type="button" data-active={gifImportMaxFps === 24} onClick={() => setGifImportMaxFps(24)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={gifImportMaxFps === 24} onClick={() => setGifImportMaxFps(24)}>
               24fps
-            </button>
-            <button type="button" data-active={gifImportMaxFps === 15} onClick={() => setGifImportMaxFps(15)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={gifImportMaxFps === 15} onClick={() => setGifImportMaxFps(15)}>
               15fps
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
       </div>
 
@@ -161,20 +162,20 @@ export function PerformanceSettingsPanel() {
               ? t('settings.performance.coverThumbnails.badge.original')
               : t('settings.performance.coverThumbnails.badge.px', { px: coverMaxEdgePx })}
           </span>
-          <div className="settings-toggle settings-toggle--compact">
-            <button type="button" data-active={coverMaxEdgePx === 128} onClick={() => setCoverMaxEdgePx(128)}>
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton type="button" active={coverMaxEdgePx === 128} onClick={() => setCoverMaxEdgePx(128)}>
               {t('settings.performance.coverThumbnails.option.low', { px: 128 })}
-            </button>
-            <button type="button" data-active={coverMaxEdgePx === 256} onClick={() => setCoverMaxEdgePx(256)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={coverMaxEdgePx === 256} onClick={() => setCoverMaxEdgePx(256)}>
               {t('settings.performance.coverThumbnails.option.balanced', { px: 256 })}
-            </button>
-            <button type="button" data-active={coverMaxEdgePx === 512} onClick={() => setCoverMaxEdgePx(512)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={coverMaxEdgePx === 512} onClick={() => setCoverMaxEdgePx(512)}>
               {t('settings.performance.coverThumbnails.option.high', { px: 512 })}
-            </button>
-            <button type="button" data-active={coverMaxEdgePx <= 0} onClick={() => setCoverMaxEdgePx(0)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={coverMaxEdgePx <= 0} onClick={() => setCoverMaxEdgePx(0)}>
               {t('settings.performance.coverThumbnails.option.original')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
       </div>
 
@@ -193,21 +194,29 @@ export function PerformanceSettingsPanel() {
                   })
                 : t('settings.performance.backgroundRenderPolicy.badge.pause')}
           </span>
-          <div className="settings-toggle settings-toggle--compact">
-            <button type="button" data-active={backgroundRenderPolicy === 'full'} onClick={() => setBackgroundRenderPolicy('full')}>
-              {t('settings.performance.backgroundRenderPolicy.option.full')}
-            </button>
-            <button
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton
               type="button"
-              data-active={backgroundRenderPolicy === 'throttle'}
+              active={backgroundRenderPolicy === 'full'}
+              onClick={() => setBackgroundRenderPolicy('full')}
+            >
+              {t('settings.performance.backgroundRenderPolicy.option.full')}
+            </PmpChoiceButton>
+            <PmpChoiceButton
+              type="button"
+              active={backgroundRenderPolicy === 'throttle'}
               onClick={() => setBackgroundRenderPolicy('throttle')}
             >
               {t('settings.performance.backgroundRenderPolicy.option.throttle', { fps: BACKGROUND_RENDER_THROTTLE_FPS })}
-            </button>
-            <button type="button" data-active={backgroundRenderPolicy === 'pause'} onClick={() => setBackgroundRenderPolicy('pause')}>
+            </PmpChoiceButton>
+            <PmpChoiceButton
+              type="button"
+              active={backgroundRenderPolicy === 'pause'}
+              onClick={() => setBackgroundRenderPolicy('pause')}
+            >
               {t('settings.performance.backgroundRenderPolicy.option.pause')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
       </div>
 
@@ -218,14 +227,14 @@ export function PerformanceSettingsPanel() {
         </div>
         <div className="settings-row-right">
           <span className="settings-row-badge">{autoGovernanceEnabled ? t('common.state.on') : t('common.state.off')}</span>
-          <div className="settings-toggle settings-toggle--compact">
-            <button type="button" data-active={!autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(false)}>
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton type="button" active={!autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(false)}>
               {t('common.state.off')}
-            </button>
-            <button type="button" data-active={autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(true)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={autoGovernanceEnabled} onClick={() => setAutoGovernanceEnabled(true)}>
               {t('common.state.on')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
       </div>
 
@@ -246,45 +255,45 @@ export function PerformanceSettingsPanel() {
                 })}
           </span>
 
-          <div className="settings-toggle settings-toggle--compact">
-            <button
+          <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton
               type="button"
-              data-active={uiQualitySettings.mode === 'auto'}
+              active={uiQualitySettings.mode === 'auto'}
               onClick={() => updateUiQualitySettings((prev) => ({ ...prev, mode: 'auto' }))}
             >
               {t('settings.performance.quality.mode.auto')}
-            </button>
-            <button
+            </PmpChoiceButton>
+            <PmpChoiceButton
               type="button"
-              data-active={uiQualitySettings.mode === 'fixed'}
+              active={uiQualitySettings.mode === 'fixed'}
               onClick={() => updateUiQualitySettings((prev) => ({ ...prev, mode: 'fixed' }))}
             >
               {t('settings.performance.quality.mode.fixed')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
 
           {uiQualitySettings.mode === 'fixed' ? (
-            <div className="settings-toggle settings-toggle--compact">
+            <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
               {QUALITY_LEVELS.map((level) => (
-                <button
+                <PmpChoiceButton
                   key={level}
                   type="button"
-                  data-active={uiQualitySettings.fixedLevel === level}
+                  active={uiQualitySettings.fixedLevel === level}
                   onClick={() => updateUiQualitySettings((prev) => ({ ...prev, fixedLevel: parseQualityLevel(level, prev.fixedLevel) }))}
                 >
                   {t(`settings.performance.quality.level.${level}`)}
-                </button>
+                </PmpChoiceButton>
                 ))}
-              </div>
+              </PmpSegmented>
           ) : (
             <div className="settings-row-grid">
               <div className="settings-row-desc">{t('settings.performance.quality.auto.range')}</div>
-              <div className="settings-toggle settings-toggle--compact">
+              <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
                 {QUALITY_LEVELS.map((level) => (
-                  <button
+                  <PmpChoiceButton
                     key={`min-${level}`}
                     type="button"
-                    data-active={uiQualitySettings.auto.minLevel === level}
+                    active={uiQualitySettings.auto.minLevel === level}
                     onClick={() =>
                       updateUiQualitySettings((prev) => {
                         const minLevel = parseQualityLevel(level, prev.auto.minLevel);
@@ -301,16 +310,16 @@ export function PerformanceSettingsPanel() {
                     }
                   >
                     {t(`settings.performance.quality.level.${level}`)}
-                  </button>
+                  </PmpChoiceButton>
                 ))}
-              </div>
+              </PmpSegmented>
               <div className="settings-row-desc">{t('settings.performance.quality.auto.rangeMax')}</div>
-              <div className="settings-toggle settings-toggle--compact">
+              <PmpSegmented className="settings-toggle settings-toggle--compact" surfaceId="primitive.segmented.toggle">
                 {QUALITY_LEVELS.map((level) => (
-                  <button
+                  <PmpChoiceButton
                     key={`max-${level}`}
                     type="button"
-                    data-active={uiQualitySettings.auto.maxLevel === level}
+                    active={uiQualitySettings.auto.maxLevel === level}
                     onClick={() =>
                       updateUiQualitySettings((prev) => {
                         const maxLevel = parseQualityLevel(level, prev.auto.maxLevel);
@@ -327,9 +336,9 @@ export function PerformanceSettingsPanel() {
                     }
                   >
                     {t(`settings.performance.quality.level.${level}`)}
-                  </button>
+                  </PmpChoiceButton>
                 ))}
-              </div>
+              </PmpSegmented>
             </div>
           )}
           </div>

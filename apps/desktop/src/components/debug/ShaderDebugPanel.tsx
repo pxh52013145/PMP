@@ -20,6 +20,7 @@ import { usePmpsMagnetShaderBinding } from '../../shader-system/usePmpsMagnetSha
 import { usePmpsMagnetUniformOverrides } from '../../shader-system/usePmpsMagnetUniformOverrides';
 import { usePmpsShaderFuse } from '../../shader-system/usePmpsShaderFuse';
 import { useInstalledPmpsShaderPack, useInstalledPmpsShaderPacks } from '../../shader-system/usePmpsShaderPacks';
+import { PmpButton, PmpCheckbox, PmpChoiceButton } from '../primitives';
 import './ShaderDebugPanel.css';
 
 export type ShaderDebugPanelProps = {
@@ -165,33 +166,39 @@ export function ShaderDebugPanel({ magnetId }: ShaderDebugPanelProps) {
     return (
       <div className="pmps-uniforms">
         <div className="pmps-uniforms-actions">
-          <button onClick={() => removePmpsMagnetUniformOverrides(magnetId, selectedShaderId)}>
+          <PmpButton
+            type="button"
+            variant="default"
+            className="pmps-action-btn"
+            onClick={() => removePmpsMagnetUniformOverrides(magnetId, selectedShaderId)}
+          >
             Reset (defaults)
-          </button>
+          </PmpButton>
         </div>
 
         {uniformGroups.map((group) => (
           <div key={group.name} className="pmps-uniform-group">
             <div className="pmps-uniform-group-title">{group.name}</div>
 
-	            {group.items.map((def) => {
-	              const current = (uniformValues as Record<string, unknown>)[def.name];
-	              const label = `${def.name} (${def.type})`;
-	              const range = getUniformRange(def);
+            {group.items.map((def) => {
+              const current = (uniformValues as Record<string, unknown>)[def.name];
+              const label = `${def.name} (${def.type})`;
+              const range = getUniformRange(def);
 
               if (def.type === 'bool') {
                 const checked = Boolean(current);
                 return (
-                  <label key={def.name} className="pmps-uniform-row">
+                  <PmpCheckbox
+                    key={def.name}
+                    className="pmps-checkbox pmps-uniform-row"
+                    variant="shader-debug"
+                    checked={checked}
+                    onCheckedChange={(nextChecked) =>
+                      setPmpsMagnetUniformValue(magnetId, selectedShaderId, def.name, nextChecked)
+                    }
+                  >
                     <span className="pmps-uniform-label">{label}</span>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) =>
-                        setPmpsMagnetUniformValue(magnetId, selectedShaderId, def.name, e.target.checked)
-                      }
-                    />
-                  </label>
+                  </PmpCheckbox>
                 );
               }
 
@@ -353,16 +360,18 @@ export function ShaderDebugPanel({ magnetId }: ShaderDebugPanelProps) {
               const id = pack.manifest.metadata.id;
               const selected = selectedShaderId === id;
               return (
-                <button
+                <PmpChoiceButton
                   type="button"
                   key={id}
+                  active={selected}
+                  variant="default"
                   className={`shader-card ${selected ? 'selected' : ''}`}
                   style={{ background: stableHslFromId(id) }}
                   onClick={() => handleSelectShader(id)}
                   title={id}
                 >
                   {pack.manifest.metadata.name}
-                </button>
+                </PmpChoiceButton>
               );
             })}
           </div>
@@ -387,16 +396,34 @@ export function ShaderDebugPanel({ magnetId }: ShaderDebugPanelProps) {
         </select>
 
         <div className="pmps-binding-actions">
-          <button onClick={() => removePmpsMagnetShaderBinding(magnetId)} disabled={!binding}>
+          <PmpButton
+            type="button"
+            variant="default"
+            className="pmps-action-btn"
+            onClick={() => removePmpsMagnetShaderBinding(magnetId)}
+            disabled={!binding}
+          >
             Clear override
-          </button>
+          </PmpButton>
           {selectedShaderId && (
-            <button onClick={() => uninstallPmpsShaderPack(selectedShaderId)}>Uninstall pack</button>
+            <PmpButton
+              type="button"
+              variant="danger"
+              className="pmps-action-btn"
+              onClick={() => uninstallPmpsShaderPack(selectedShaderId)}
+            >
+              Uninstall pack
+            </PmpButton>
           )}
           {selectedShaderId && fuse.record && (
-            <button onClick={() => clearPmpsShaderFuse(magnetId, selectedShaderId)}>
+            <PmpButton
+              type="button"
+              variant="default"
+              className="pmps-action-btn"
+              onClick={() => clearPmpsShaderFuse(magnetId, selectedShaderId)}
+            >
               Clear fuse
-            </button>
+            </PmpButton>
           )}
         </div>
 
@@ -411,16 +438,16 @@ export function ShaderDebugPanel({ magnetId }: ShaderDebugPanelProps) {
         <div className="pmps-binding-settings">
           <label className="pmps-setting">
             <span>entryPoint</span>
-	            <select
-	              value={binding?.entryPoint ?? 'auto'}
-	              disabled={!binding || selectedValue === '__inherit__'}
-	              onChange={(e) => {
-	                const next = e.target.value;
-	                if (next === 'auto' || next === 'main' || next === 'shadertoy') {
-	                  updateBinding({ entryPoint: next });
-	                }
-	              }}
-	            >
+            <select
+              value={binding?.entryPoint ?? 'auto'}
+              disabled={!binding || selectedValue === '__inherit__'}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === 'auto' || next === 'main' || next === 'shadertoy') {
+                  updateBinding({ entryPoint: next });
+                }
+              }}
+            >
               <option value="auto">auto</option>
               <option value="main">main</option>
               <option value="shadertoy">shadertoy</option>

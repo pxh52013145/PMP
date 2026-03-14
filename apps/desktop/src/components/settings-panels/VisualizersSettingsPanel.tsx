@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { VisualizerContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
+import { PmpButton, PmpCard } from '../primitives';
 
 function normalizeText(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
@@ -36,7 +37,7 @@ export function VisualizersSettingsPanel() {
   }, [kernel.contributions, query, revision]);
 
   return (
-    <div className="settings-card">
+    <PmpCard className="settings-card" surfaceId="primitive.card.settings">
       <div className="settings-card-header">
         <div>
           <p className="settings-card-label">{t('settings.panels.visualizers.title')}</p>
@@ -71,18 +72,13 @@ export function VisualizersSettingsPanel() {
                 )}
               </div>
 
-              <button
-                type="button"
-                className="settings-action-btn"
-                onClick={() => void item.open()}
-                title={item.id}
-              >
+              <PmpButton className="settings-action-btn" variant="default" onClick={() => void item.open()} title={item.id}>
                 {t('common.action.open')}
-              </button>
+              </PmpButton>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </PmpCard>
   );
 }

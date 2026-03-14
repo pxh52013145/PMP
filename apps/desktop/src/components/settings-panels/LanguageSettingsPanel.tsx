@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useLocale, useT, type Locale } from '../../i18n';
 import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
+import { PmpChoiceButton, PmpSegmented } from '../primitives';
 
 type LocaleOption = {
   id: Locale;
@@ -50,29 +51,29 @@ export function LanguageSettingsPanel() {
             <p className="settings-card-note settings-language-note">{t('settings.language.note')}</p>
           </div>
 
-          <div
+          <PmpSegmented
             className="settings-language-controls"
+            surfaceId="primitive.segmented.choice"
             role="radiogroup"
             aria-label={t('settings.language.title')}
           >
             {options.map((option) => {
               const isActive = option.id === locale;
               return (
-                <button
+                <PmpChoiceButton
                   key={option.id}
                   type="button"
+                  active={isActive}
                   className="settings-choice-btn"
-                  data-active={isActive}
                   disabled={busy}
                   onClick={() => void handleSelect(option.id)}
                   title={t(option.titleKey)}
-                  aria-pressed={isActive}
                 >
                   {t(option.titleKey)}
-                </button>
+                </PmpChoiceButton>
               );
             })}
-          </div>
+          </PmpSegmented>
         </div>
 
       </div>

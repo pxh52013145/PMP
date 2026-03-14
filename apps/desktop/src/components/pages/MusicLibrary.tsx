@@ -27,6 +27,7 @@ import {
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
+import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
 
@@ -7233,13 +7234,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+  const pageSurfaceTheme = useSkinSurface('page.music-library');
+
   if (!isOpen) return null;
-
-
 
   const libraryContent = (
 
-    <div className={`music-library ${embedded ? 'music-library-embedded' : ''}`}>
+    <div
+      className={[
+        'music-library',
+        embedded ? 'music-library-embedded' : '',
+        pageSurfaceTheme.classNameOverride?.container,
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      data-surface-id="page.music-library"
+      data-surface-variant={pageSurfaceTheme.variant}
+      style={pageSurfaceTheme.styleOverride?.container}
+    >
 
       {!embedded && (
 

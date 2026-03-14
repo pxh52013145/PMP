@@ -128,12 +128,17 @@
   font-size: 0.9rem;
 }
 
-.mode-btn:hover {
+.mode-btn:focus-visible {
+  outline: none;
+}
+
+.mode-btn:hover:not([data-active='true']),
+.mode-btn:focus-visible:not([data-active='true']) {
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.9);
 }
 
-.mode-btn.active {
+.mode-btn[data-active='true'] {
   background: #00ffff;
   color: #000;
   border-color: #00ffff;
@@ -222,33 +227,7 @@
   gap: 1rem;
 }
 
-.config-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.config-item label {
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.config-input {
-  padding: 0.5rem;
-  background: rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  color: #ffffff;
-  font-size: 0.9rem;
-}
-
 /* 组件配置 */
-.component-config {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
 .theme-json-editor {
   width: 100%;
   min-height: 200px;
@@ -335,18 +314,6 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
   text-align: center;
-}
-
-.config-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.config-group label {
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.8);
-  font-weight: 500;
 }
 
 .checkbox-group {
@@ -503,6 +470,40 @@
   justify-content: center;
 }
 
+.renderer-preview-fallback {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px dashed rgba(0, 255, 255, 0.24);
+  border-radius: 12px;
+  background: rgba(0, 255, 255, 0.04);
+  text-align: center;
+}
+
+.renderer-preview-fallback-id {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  font-family: monospace;
+}
+
+.renderer-preview-fallback-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+}
+
+.renderer-preview-fallback-description {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 /* TrackInfo 预览样式 */
 .preview-track-info {
   display: flex;
@@ -643,6 +644,14 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.channel-empty {
+  padding: 0.65rem 0.8rem;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.82rem;
 }
 
 .channel-item {

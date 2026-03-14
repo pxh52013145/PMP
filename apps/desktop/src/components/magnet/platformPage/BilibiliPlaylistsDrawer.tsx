@@ -1,4 +1,5 @@
 import type { Playlist } from '../../../services/audio';
+import { PmpButton, PmpDrawer } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -40,10 +41,13 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
   } = props;
 
   return (
-    <section
+    <PmpDrawer
+      as="section"
+      open={open}
       className={`platform-magnet-panel platform-magnet-bilibili-playlists ${
         open ? 'platform-magnet-bilibili-drawer-open' : ''
       }`}
+      surfaceId="overlay.drawer"
     >
       <div className="platform-magnet-panel-header">
         <h4>{t('magnet.platform.bilibili.playlist.title')}</h4>
@@ -53,9 +57,9 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
               count: selectedPlaylist?.tracks.length ?? 0,
             })}
           </span>
-          <button type="button" className="platform-magnet-mini-btn" onClick={onClose}>
+          <PmpButton type="button" className="platform-magnet-mini-btn" variant="ghost" onClick={onClose}>
             {t('common.action.done')}
-          </button>
+          </PmpButton>
         </div>
       </div>
 
@@ -69,9 +73,9 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
             onCreatePlaylist();
           }}
         />
-        <button type="button" className="platform-magnet-mini-btn" onClick={onCreatePlaylist}>
+        <PmpButton type="button" className="platform-magnet-mini-btn" variant="primary" onClick={onCreatePlaylist}>
           {t('magnet.platform.bilibili.playlist.createAction')}
-        </button>
+        </PmpButton>
       </div>
 
       <div className="platform-magnet-bilibili-playlist-actions">
@@ -90,22 +94,24 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
         </select>
 
         <div className="platform-magnet-bilibili-playlist-action-btns">
-          <button
+          <PmpButton
             type="button"
             className="platform-magnet-mini-btn"
+            variant="default"
             disabled={!selectedPlaylistId}
             onClick={onPlaySelected}
           >
             {t('magnet.platform.bilibili.playlist.playAction')}
-          </button>
-          <button
+          </PmpButton>
+          <PmpButton
             type="button"
             className="platform-magnet-mini-btn"
+            variant="danger"
             disabled={!selectedPlaylistId}
             onClick={onDeleteSelected}
           >
             {t('magnet.platform.bilibili.playlist.deleteAction')}
-          </button>
+          </PmpButton>
         </div>
       </div>
 
@@ -125,18 +131,18 @@ export function BilibiliPlaylistsDrawer(props: BilibiliPlaylistsDrawerProps) {
                   {track.artist || t('common.unknown.artist')} | {formatDuration(track.duration)}
                 </p>
               </div>
-              <button
+              <PmpButton
                 type="button"
                 className="platform-magnet-mini-btn"
+                variant="ghost"
                 onClick={() => onRemoveTrack(trackIndex)}
               >
                 {t('magnet.platform.bilibili.playlist.removeTrack')}
-              </button>
+              </PmpButton>
             </div>
           ))}
         </div>
       )}
-    </section>
+    </PmpDrawer>
   );
 }
-

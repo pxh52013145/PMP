@@ -9,8 +9,27 @@
 }
 
 .debug-button-icon {
-  width: 21px;
-  height: 21px;
-  fill: currentColor;
+  width: 20px;
+  height: 20px;
   display: block;
+  overflow: visible;
+  fill: none;
+  filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.22));
+}
+
+.debug-button-gear-outline,
+.debug-button-gear-center {
+  fill: none;
+}
+
+.debug-button:hover:not(.active) .debug-button-icon {
+  filter:
+    drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.22))
+    drop-shadow(0 0 2px rgba(255, 255, 255, 0.12));
+}
+
+.debug-button.active .debug-button-icon {
+  filter:
+    drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.2))
+    drop-shadow(0 0 2px rgba(98, 180, 255, 0.2));
 }

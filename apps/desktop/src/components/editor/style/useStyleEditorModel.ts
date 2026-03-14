@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { readJson, readString, writeJson, writeString } from '../../../modules/storage';
 import { useTheme } from '../../../themes/contexts/ThemeContextWithSync';
+import { assignMagnetComponentTheme } from '../../../themes/bindings';
 import type { DynamicColorConfig, DynamicColorEffect } from '../../../themes/types/theme';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../../utils/windowCommunication';
 import type { ColorThemePreset } from './stylePresets';
@@ -56,17 +57,17 @@ export interface StyleEditorModel {
 const COVER_COLOR_COMPONENT_IDS = ['track-info', 'progress-bar', 'audio-visualizer', 'btn-play-pause'] as const;
 
 export function useStyleEditorModel(): StyleEditorModel {
-  const { theme, applyTheme, getComponentTheme } = useTheme();
+  const { theme, applyTheme, getSurfaceTheme } = useTheme();
 
   const currentCoverColorConfig: DynamicColorConfig = useMemo(() => {
     for (const componentId of COVER_COLOR_COMPONENT_IDS) {
-      const config = getComponentTheme(componentId).dynamicColor;
+      const config = getSurfaceTheme(`magnet.${componentId}`).dynamicColor;
       if (config) {
         return config as DynamicColorConfig;
       }
     }
     return {} as DynamicColorConfig;
-  }, [getComponentTheme]);
+  }, [getSurfaceTheme]);
 
   const coverColorEnabled = currentCoverColorConfig.extractFromCover !== false;
   const coverColorEffect = normalizeCoverColorEffect(currentCoverColorConfig.effect);
@@ -75,29 +76,22 @@ export function useStyleEditorModel(): StyleEditorModel {
 
   const applyCoverColorConfig = useCallback(
     async (partial: Partial<DynamicColorConfig>) => {
-      const nextComponentThemes = {
-        ...(theme.componentThemes ?? {}),
-      };
+      let nextTheme = theme;
 
       for (const componentId of COVER_COLOR_COMPONENT_IDS) {
-        const currentComponentTheme = getComponentTheme(componentId);
-        nextComponentThemes[componentId] = {
+        const currentComponentTheme = getSurfaceTheme(`magnet.${componentId}`);
+        nextTheme = assignMagnetComponentTheme(nextTheme, componentId, {
           ...currentComponentTheme,
           dynamicColor: {
             ...(currentComponentTheme.dynamicColor ?? {}),
             ...partial,
           },
-        };
+        });
       }
-
-      const nextTheme = {
-        ...theme,
-        componentThemes: nextComponentThemes,
-      };
 
       await applyTheme(nextTheme);
     },
-    [applyTheme, getComponentTheme, theme]
+    [applyTheme, getSurfaceTheme, theme]
   );
 
   const [selectedPixelShape, setSelectedPixelShape] = useState(() => readString(STORAGE_KEYS.PIXEL_SHAPE) || 'circle');

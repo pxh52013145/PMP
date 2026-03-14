@@ -198,6 +198,15 @@
   color: #f0eae5;
 }
 
+.page-settings--debug .settings-checkbox {
+  color: #f0eae5;
+}
+
+.page-settings--debug .settings-checkbox .pmp-checkbox-box {
+  border-color: rgba(150, 118, 95, 0.74);
+  background: rgba(39, 30, 26, 0.6);
+}
+
 .page-settings--debug .settings-action-btn:hover:not(:disabled),
 .page-settings--debug .settings-danger-btn:hover:not(:disabled),
 .page-settings--debug .settings-select:focus,
@@ -213,6 +222,15 @@
     0 0 16px rgba(243, 124, 38, 0.24);
 }
 
+.page-settings--debug .settings-checkbox:hover:not(:disabled) .pmp-checkbox-box,
+.page-settings--debug .settings-checkbox:focus-visible .pmp-checkbox-box {
+  border-color: rgba(243, 124, 38, 0.92);
+  background: rgba(51, 35, 27, 0.74);
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 124, 38, 0.22),
+    0 0 16px rgba(243, 124, 38, 0.24);
+}
+
 .page-settings--debug .settings-choice-btn[data-active='true'],
 .page-settings--debug .settings-toggle button[data-active='true'] {
   border-color: rgba(243, 124, 38, 0.92);
@@ -221,6 +239,18 @@
   box-shadow:
     inset 0 0 10px rgba(243, 124, 38, 0.18),
     0 0 12px rgba(243, 124, 38, 0.2);
+}
+
+.page-settings--debug .settings-checkbox[data-checked='true'] .pmp-checkbox-box {
+  border-color: rgba(243, 124, 38, 0.92);
+  background: rgba(243, 124, 38, 0.12);
+  box-shadow:
+    inset 0 0 10px rgba(243, 124, 38, 0.18),
+    0 0 12px rgba(243, 124, 38, 0.2);
+}
+
+.page-settings--debug .settings-checkbox[data-checked='true'] .pmp-checkbox-indicator {
+  background: #f7d8be;
 }
 
 .page-settings--deltaforce .settings-shell {
@@ -1377,7 +1407,7 @@
   gap: 8px;
 }
 
-.page-settings--deltaforce .settings-demo-switch-label--dim {
+.page-settings--deltaforce .settings-switch-label--dim {
   min-width: 32px;
   font-size: 11px;
   color: var(--settings-text-muted);
@@ -1415,22 +1445,36 @@
   width: clamp(132px, 9.4vw, 180px);
 }
 
-.page-settings--deltaforce .settings-demo-switch {
+.page-settings--deltaforce .settings-switch {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 50px;
   height: 24px;
   flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
 }
 
-.page-settings--deltaforce .settings-demo-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-  position: absolute;
+.page-settings--deltaforce .settings-switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
-.page-settings--deltaforce .settings-demo-switch-track {
+.page-settings--deltaforce .settings-switch:focus-visible {
+  outline: none;
+}
+
+.page-settings--deltaforce .settings-switch:focus-visible .pmp-switch-track {
+  box-shadow:
+    0 0 0 1px rgba(var(--settings-accent-rgb), 0.34),
+    0 0 0 3px rgba(var(--settings-accent-rgb), 0.1);
+}
+
+.page-settings--deltaforce .settings-switch .pmp-switch-track {
   position: absolute;
   inset: 0;
   border: 1px solid var(--settings-control-border);
@@ -1438,7 +1482,7 @@
   transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
-.page-settings--deltaforce .settings-demo-switch-thumb {
+.page-settings--deltaforce .settings-switch .pmp-switch-thumb {
   position: absolute;
   left: 3px;
   bottom: 3px;
@@ -1448,18 +1492,18 @@
   transition: transform 0.22s ease, background-color 0.22s ease, box-shadow 0.22s ease;
 }
 
-.page-settings--deltaforce .settings-demo-switch input:checked + .settings-demo-switch-track {
+.page-settings--deltaforce .settings-switch[data-checked='true'] .pmp-switch-track {
   border-color: rgb(var(--settings-accent-rgb));
   background: rgba(var(--settings-accent-rgb), 0.1);
 }
 
-.page-settings--deltaforce .settings-demo-switch input:checked + .settings-demo-switch-track .settings-demo-switch-thumb {
+.page-settings--deltaforce .settings-switch[data-checked='true'] .pmp-switch-thumb {
   transform: translateX(26px);
   background: rgb(var(--settings-accent-rgb));
   box-shadow: 0 0 8px rgba(var(--settings-accent-rgb), 0.65);
 }
 
-.page-settings--deltaforce .settings-demo-switch-label {
+.page-settings--deltaforce .settings-switch-label {
   font-size: clamp(11px, 0.72vw, 14px);
   color: var(--settings-text-value);
   line-height: 1.1;
@@ -2060,10 +2104,96 @@
   width: 100%;
 }
 
-.page-settings--deltaforce .settings-plugin-permission-line {
-  display: flex;
+.page-settings--debug .settings-checkbox,
+.page-settings--deltaforce .settings-checkbox {
+  display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.page-settings--debug .settings-checkbox:disabled,
+.page-settings--deltaforce .settings-checkbox:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.page-settings--debug .settings-checkbox:focus-visible,
+.page-settings--deltaforce .settings-checkbox:focus-visible {
+  outline: none;
+}
+
+.page-settings--debug .settings-checkbox .pmp-checkbox-box,
+.page-settings--deltaforce .settings-checkbox .pmp-checkbox-box {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  border: 1px solid rgba(152, 210, 230, 0.46);
+  background: rgba(8, 20, 30, 0.42);
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.page-settings--debug .settings-checkbox .pmp-checkbox-indicator,
+.page-settings--deltaforce .settings-checkbox .pmp-checkbox-indicator {
+  width: 7px;
+  height: 7px;
+  background: rgba(194, 232, 246, 0.96);
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.page-settings--debug .settings-checkbox .pmp-checkbox-label,
+.page-settings--deltaforce .settings-checkbox .pmp-checkbox-label {
+  min-width: 0;
+}
+
+.page-settings--deltaforce .settings-checkbox:hover:not(:disabled) .pmp-checkbox-box,
+.page-settings--deltaforce .settings-checkbox:focus-visible .pmp-checkbox-box {
+  border-color: rgba(28, 240, 222, 0.78);
+  background: rgba(10, 23, 34, 0.62);
+  box-shadow:
+    inset 0 0 0 1px rgba(28, 240, 222, 0.14),
+    0 0 0.2vw rgba(28, 240, 222, 0.16);
+}
+
+.page-settings--deltaforce .settings-checkbox[data-checked='true'] .pmp-checkbox-box {
+  border-color: rgba(28, 240, 222, 0.88);
+  background: rgba(28, 240, 222, 0.1);
+  box-shadow:
+    inset 0 0 0 1px rgba(28, 240, 222, 0.18),
+    0 0 0.22vw rgba(28, 240, 222, 0.22);
+}
+
+.page-settings--deltaforce .settings-checkbox[data-checked='true'] .pmp-checkbox-indicator {
+  opacity: 1;
+  transform: scale(1);
+  background: #eaf7ff;
+}
+
+.page-settings--debug .settings-checkbox--note,
+.page-settings--deltaforce .settings-checkbox--note {
+  font-size: clamp(11px, 0.72vw, 13px);
+  line-height: 1.22;
+}
+
+.page-settings--deltaforce .settings-plugin-permission-line {
   cursor: pointer;
   font-size: clamp(11px, 0.72vw, 13px);
   color: var(--settings-text-desc);
@@ -2104,18 +2234,8 @@
 }
 
 .page-settings--deltaforce .settings-plugin-switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
   font-size: clamp(11px, 0.72vw, 13px);
   color: var(--settings-text-value);
-}
-
-.page-settings--deltaforce .settings-plugin-switch-row input[type='checkbox'] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
 }
 
 .page-settings--deltaforce .settings-row-stack {

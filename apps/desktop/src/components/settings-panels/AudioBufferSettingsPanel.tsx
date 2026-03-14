@@ -5,6 +5,7 @@ import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { PmpButton, PmpChoiceButton, PmpSegmented } from '../primitives';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
@@ -278,22 +279,25 @@ export function AudioBufferSettingsPanel() {
                   )}
                 </div>
                 <div className="settings-row-right">
-                  <div className="settings-toggle settings-toggle--compact settings-toggle--audio-preprocess">
-                    <button
+                  <PmpSegmented
+                    className="settings-toggle settings-toggle--compact settings-toggle--audio-preprocess"
+                    surfaceId="primitive.segmented.toggle"
+                  >
+                    <PmpChoiceButton
                       type="button"
-                      data-active={settings.decodeMode === 'streaming'}
+                      active={settings.decodeMode === 'streaming'}
                       onClick={() => handleDecodeModeChange('streaming')}
                     >
                       {t('settings.audioBuffer.decodeMode.streaming')}
-                    </button>
-                    <button
+                    </PmpChoiceButton>
+                    <PmpChoiceButton
                       type="button"
-                      data-active={settings.decodeMode === 'full-track'}
+                      active={settings.decodeMode === 'full-track'}
                       onClick={() => handleDecodeModeChange('full-track')}
                     >
                       {t('settings.audioBuffer.decodeMode.fullTrack')}
-                    </button>
-                  </div>
+                    </PmpChoiceButton>
+                  </PmpSegmented>
                 </div>
               </div>
 
@@ -309,29 +313,32 @@ export function AudioBufferSettingsPanel() {
                   <div className="settings-row-desc settings-row-meta">{t('settings.audioBuffer.interactiveProfile.stable')}</div>
                 </div>
                 <div className="settings-row-right">
-                  <div className="settings-toggle settings-toggle--compact settings-toggle--audio-preprocess">
-                    <button
+                  <PmpSegmented
+                    className="settings-toggle settings-toggle--compact settings-toggle--audio-preprocess"
+                    surfaceId="primitive.segmented.toggle"
+                  >
+                    <PmpChoiceButton
                       type="button"
-                      data-active={settings.interactiveProfile === 'fast'}
+                      active={settings.interactiveProfile === 'fast'}
                       onClick={() => handleInteractiveProfileChange('fast')}
                     >
                       {t('settings.audioBuffer.interactiveProfile.mode.fast')}
-                    </button>
-                    <button
+                    </PmpChoiceButton>
+                    <PmpChoiceButton
                       type="button"
-                      data-active={settings.interactiveProfile === 'balanced'}
+                      active={settings.interactiveProfile === 'balanced'}
                       onClick={() => handleInteractiveProfileChange('balanced')}
                     >
                       {t('settings.audioBuffer.interactiveProfile.mode.balanced')}
-                    </button>
-                    <button
+                    </PmpChoiceButton>
+                    <PmpChoiceButton
                       type="button"
-                      data-active={settings.interactiveProfile === 'stable'}
+                      active={settings.interactiveProfile === 'stable'}
                       onClick={() => handleInteractiveProfileChange('stable')}
                     >
                       {t('settings.audioBuffer.interactiveProfile.mode.stable')}
-                    </button>
-                  </div>
+                    </PmpChoiceButton>
+                  </PmpSegmented>
                 </div>
               </div>
 
@@ -350,22 +357,22 @@ export function AudioBufferSettingsPanel() {
                 </div>
                 <div className="settings-row-right">
                   <div className="settings-inline-row-controls settings-inline-row-controls--audio-preprocess">
-                    <button
+                    <PmpChoiceButton
                       type="button"
                       className="settings-choice-btn"
-                      data-active={settings.startOrSeekSeconds === null}
+                      active={settings.startOrSeekSeconds === null}
                       onClick={() => handleStartOrSeekMode('auto')}
                     >
                       {t('settings.audioBuffer.mode.auto')}
-                    </button>
-                    <button
+                    </PmpChoiceButton>
+                    <PmpChoiceButton
                       type="button"
                       className="settings-choice-btn"
-                      data-active={settings.startOrSeekSeconds !== null}
+                      active={settings.startOrSeekSeconds !== null}
                       onClick={() => handleStartOrSeekMode('custom')}
                     >
                       {t('settings.audioBuffer.mode.custom')}
-                    </button>
+                    </PmpChoiceButton>
                     <input
                       className="settings-number-input"
                       type="number"
@@ -392,22 +399,22 @@ export function AudioBufferSettingsPanel() {
                 </div>
                 <div className="settings-row-right">
                   <div className="settings-inline-row-controls settings-inline-row-controls--audio-preprocess">
-                    <button
+                    <PmpChoiceButton
                       type="button"
                       className="settings-choice-btn"
-                      data-active={settings.crossfadeSeconds === null}
+                      active={settings.crossfadeSeconds === null}
                       onClick={() => handleCrossfadeMode('auto')}
                     >
                       {t('settings.audioBuffer.mode.auto')}
-                    </button>
-                    <button
+                    </PmpChoiceButton>
+                    <PmpChoiceButton
                       type="button"
                       className="settings-choice-btn"
-                      data-active={settings.crossfadeSeconds !== null}
+                      active={settings.crossfadeSeconds !== null}
                       onClick={() => handleCrossfadeMode('custom')}
                     >
                       {t('settings.audioBuffer.mode.custom')}
-                    </button>
+                    </PmpChoiceButton>
                     <input
                       className="settings-number-input"
                       type="number"
@@ -424,12 +431,17 @@ export function AudioBufferSettingsPanel() {
             </div>
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void refreshComponentsState()}>
+              <PmpButton
+                type="button"
+                className="settings-action-btn"
+                variant="default"
+                onClick={() => void refreshComponentsState()}
+              >
                 {t('common.action.refresh')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={handleReset}>
+              </PmpButton>
+              <PmpButton type="button" className="settings-action-btn" variant="default" onClick={handleReset}>
                 {t('common.action.reset')}
-              </button>
+              </PmpButton>
             </div>
 
             <p className="settings-card-note">

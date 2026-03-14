@@ -6,6 +6,7 @@ import {
   type ProcessPerfSnapshot,
   type ProcessPerfRow,
 } from '../../modules/debug';
+import { PmpButton, PmpCard, PmpChoiceButton, PmpSegmented } from '../primitives';
 
 function formatBytesMb(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return '-';
@@ -91,9 +92,9 @@ export function PerfMonitorPage() {
           <h1 style={{ margin: 0 }}>{t('pages.perf-monitor.title')}</h1>
           <p style={{ margin: '8px 0 0 0', opacity: 0.75 }}>{t('pages.perf-monitor.subtitle')}</p>
         </div>
-        <div className="settings-card">
+        <PmpCard className="settings-card" surfaceId="primitive.card.settings">
           <p className="settings-card-desc">{t('debug.center.note.requireTauri')}</p>
-        </div>
+        </PmpCard>
       </div>
     );
   }
@@ -107,27 +108,33 @@ export function PerfMonitorPage() {
             <p style={{ margin: '8px 0 0 0', opacity: 0.75 }}>{t('pages.perf-monitor.subtitle')}</p>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <button type="button" className="settings-action-btn" onClick={() => void refresh()} disabled={busy}>
+            <PmpButton
+              type="button"
+              className="settings-action-btn"
+              variant="default"
+              onClick={() => void refresh()}
+              disabled={busy}
+            >
               {t('common.action.refresh')}
-            </button>
+            </PmpButton>
           </div>
         </div>
       </div>
 
-      <div className="settings-card">
+      <PmpCard className="settings-card" surfaceId="primitive.card.settings">
         <div className="settings-card-header">
           <div>
             <p className="settings-card-label">{t('pages.perf-monitor.section.totals.title')}</p>
             <p className="settings-card-desc">{t('pages.perf-monitor.section.totals.desc')}</p>
           </div>
-          <div className="settings-toggle">
-            <button type="button" data-active={!autoRefresh} onClick={() => setAutoRefresh(false)}>
+          <PmpSegmented className="settings-toggle" surfaceId="primitive.segmented.toggle">
+            <PmpChoiceButton type="button" active={!autoRefresh} onClick={() => setAutoRefresh(false)}>
               {t('common.state.off')}
-            </button>
-            <button type="button" data-active={autoRefresh} onClick={() => setAutoRefresh(true)}>
+            </PmpChoiceButton>
+            <PmpChoiceButton type="button" active={autoRefresh} onClick={() => setAutoRefresh(true)}>
               {t('common.state.on')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
 
         <p className="settings-card-note">{t('pages.perf-monitor.note.metrics')}</p>
@@ -173,9 +180,9 @@ export function PerfMonitorPage() {
         ) : (
           <p className="settings-card-note">{t('pages.perf-monitor.empty')}</p>
         )}
-      </div>
+      </PmpCard>
 
-      <div className="settings-card">
+      <PmpCard className="settings-card" surfaceId="primitive.card.settings">
         <div className="settings-card-header">
           <div>
             <p className="settings-card-label">{t('pages.perf-monitor.section.processes.title')}</p>
@@ -224,7 +231,7 @@ export function PerfMonitorPage() {
         ) : (
           <p className="settings-card-note">{t('pages.perf-monitor.empty')}</p>
         )}
-      </div>
+      </PmpCard>
     </div>
   );
 }

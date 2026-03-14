@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { usePersistentSetting } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useT } from '../../i18n';
+import { PmpChoiceButton, PmpSegmented } from '../primitives';
 
 type MainWindowCloseBehavior = 'ask' | 'hide' | 'exit';
 
@@ -42,36 +43,37 @@ export function WindowCloseSettingsPanel() {
             <p className="settings-card-note settings-window-close-note">{t('settings.windowClose.magnet.note')}</p>
           </div>
 
-          <div
+          <PmpSegmented
             className="settings-window-close-controls"
+            surfaceId="primitive.segmented.choice"
             role="radiogroup"
             aria-label={t('settings.windowClose.magnet.label')}
           >
-            <button
+            <PmpChoiceButton
               type="button"
               className="settings-choice-btn"
-              data-active={magnetBehavior === 'ask'}
+              active={magnetBehavior === 'ask'}
               onClick={() => setMagnetBehaviorRaw('ask')}
             >
               {t('settings.windowClose.behavior.ask')}
-            </button>
-            <button
+            </PmpChoiceButton>
+            <PmpChoiceButton
               type="button"
               className="settings-choice-btn"
-              data-active={magnetBehavior === 'hide'}
+              active={magnetBehavior === 'hide'}
               onClick={() => setMagnetBehaviorRaw('hide')}
             >
               {t('settings.windowClose.behavior.hide')}
-            </button>
-            <button
+            </PmpChoiceButton>
+            <PmpChoiceButton
               type="button"
               className="settings-choice-btn"
-              data-active={magnetBehavior === 'exit'}
+              active={magnetBehavior === 'exit'}
               onClick={() => setMagnetBehaviorRaw('exit')}
             >
               {t('settings.windowClose.behavior.exit')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
 
       </div>
@@ -89,36 +91,37 @@ export function WindowCloseSettingsPanel() {
             <p className="settings-card-note settings-window-close-note">{t('settings.windowClose.system.note')}</p>
           </div>
 
-          <div
+          <PmpSegmented
             className="settings-window-close-controls"
+            surfaceId="primitive.segmented.choice"
             role="radiogroup"
             aria-label={t('settings.windowClose.system.label')}
           >
-            <button
+            <PmpChoiceButton
               type="button"
               className="settings-choice-btn"
-              data-active={systemBehavior === 'ask'}
+              active={systemBehavior === 'ask'}
               onClick={() => setSystemBehaviorRaw('ask')}
             >
               {t('settings.windowClose.behavior.ask')}
-            </button>
-            <button
+            </PmpChoiceButton>
+            <PmpChoiceButton
               type="button"
               className="settings-choice-btn"
-              data-active={systemBehavior === 'hide'}
+              active={systemBehavior === 'hide'}
               onClick={() => setSystemBehaviorRaw('hide')}
             >
               {t('settings.windowClose.behavior.hide')}
-            </button>
-            <button
+            </PmpChoiceButton>
+            <PmpChoiceButton
               type="button"
               className="settings-choice-btn"
-              data-active={systemBehavior === 'exit'}
+              active={systemBehavior === 'exit'}
               onClick={() => setSystemBehaviorRaw('exit')}
             >
               {t('settings.windowClose.behavior.exit')}
-            </button>
-          </div>
+            </PmpChoiceButton>
+          </PmpSegmented>
         </div>
 
       </div>

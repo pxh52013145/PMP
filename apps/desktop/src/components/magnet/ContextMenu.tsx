@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
 import './ContextMenu.css';
 
 export interface ContextMenuItem {
@@ -22,6 +23,7 @@ interface ContextMenuProps {
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x, y });
+  const surfaceTheme = useSkinSurface('overlay.context-menu');
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -96,7 +98,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
   const renderItems = (menuItems: ContextMenuItem[], nested = false): React.ReactNode => {
     return menuItems.map((item, index) => {
       if (item.divider) {
-        return <div className="context-menu-divider" key={`${nested ? 'sub' : 'root'}-divider-${index}`} />;
+        return (
+          <div
+            className={['context-menu-divider', surfaceTheme.classNameOverride?.divider].filter(Boolean).join(' ')}
+            key={`${nested ? 'sub' : 'root'}-divider-${index}`}
+            style={surfaceTheme.styleOverride?.divider}
+          />
+        );
       }
 
       const hasChildren = Array.isArray(item.children) && item.children.length > 0;
@@ -109,26 +117,57 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
             item.disabled ? 'disabled' : '',
             item.danger ? 'danger' : '',
             hasChildren ? 'context-menu-item-has-children' : '',
+            surfaceTheme.classNameOverride?.item,
           ]
             .filter(Boolean)
             .join(' ')}
+          data-surface-role="item"
+          data-surface-variant={surfaceTheme.variant}
+          style={{
+            ...surfaceTheme.styleOverride?.item,
+            ...(item.disabled ? surfaceTheme.styleOverride?.disabled : undefined),
+            ...(item.danger ? surfaceTheme.styleOverride?.danger : undefined),
+          }}
           onClick={() => handleItemClick(item)}
         >
-          {item.icon ? <span className="context-menu-icon">{item.icon}</span> : null}
-          <span className="context-menu-label">{item.label ?? ''}</span>
-          {hasChildren ? <span className="context-menu-submenu-arrow">›</span> : null}
-          {hasChildren ? <div className="context-submenu">{renderItems(item.children ?? [], true)}</div> : null}
+          {item.icon ? (
+            <span className="context-menu-icon" style={surfaceTheme.styleOverride?.icon}>
+              {item.icon}
+            </span>
+          ) : null}
+          <span className="context-menu-label" style={surfaceTheme.styleOverride?.label}>
+            {item.label ?? ''}
+          </span>
+          {hasChildren ? (
+            <span className="context-menu-submenu-arrow" style={surfaceTheme.styleOverride?.arrow}>
+              {'>'}
+            </span>
+          ) : null}
+          {hasChildren ? (
+            <div
+              className={['context-submenu', surfaceTheme.classNameOverride?.submenu].filter(Boolean).join(' ')}
+              style={surfaceTheme.styleOverride?.submenu}
+            >
+              {renderItems(item.children ?? [], true)}
+            </div>
+          ) : null}
         </div>
       );
     });
   };
 
   return createPortal(
-    <div className="context-menu-overlay" onClick={onClose}>
+    <div
+      className={['context-menu-overlay', surfaceTheme.classNameOverride?.overlay].filter(Boolean).join(' ')}
+      data-surface-id="overlay.context-menu"
+      data-surface-variant={surfaceTheme.variant}
+      style={surfaceTheme.styleOverride?.overlay}
+      onClick={onClose}
+    >
       <div
         ref={menuRef}
-        className="context-menu"
-        style={{ left: position.x, top: position.y }}
+        className={['context-menu', surfaceTheme.classNameOverride?.container].filter(Boolean).join(' ')}
+        style={{ left: position.x, top: position.y, ...surfaceTheme.styleOverride?.container }}
         onClick={(event) => event.stopPropagation()}
       >
         {renderItems(items)}
@@ -137,4 +176,3 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     document.body
   );
 };
-

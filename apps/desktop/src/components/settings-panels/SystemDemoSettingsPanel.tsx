@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FocusEvent } from 'react';
 import { useT } from '../../i18n';
+import { PmpButton, PmpChoiceButton, PmpSegmented, PmpSwitch } from '../primitives';
 
 type LayoutMode = 'balanced' | 'focus' | 'compact';
 type VisualTone = 'default' | 'accent' | 'minimal';
@@ -144,60 +145,70 @@ export function SystemDemoSettingsPanel() {
           tone: t(`settings.systemDemo.preview.toneLabel.${visualTone}`),
         })}
         controls={
-          <div className="settings-demo-control-stack" role="radiogroup" aria-label={t('settings.systemDemo.preview.layout')}>
-            <div className="settings-demo-control-row">
-              <button
+          <div className="settings-demo-control-stack">
+            <PmpSegmented
+              className="settings-demo-control-row"
+              surfaceId="primitive.segmented.choice"
+              role="radiogroup"
+              aria-label={t('settings.systemDemo.preview.layout')}
+            >
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={layoutMode === 'balanced'}
+                active={layoutMode === 'balanced'}
                 onClick={() => setLayoutMode('balanced')}
               >
                 {t('settings.systemDemo.preview.layoutBalanced')}
-              </button>
-              <button
+              </PmpChoiceButton>
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={layoutMode === 'focus'}
+                active={layoutMode === 'focus'}
                 onClick={() => setLayoutMode('focus')}
               >
                 {t('settings.systemDemo.preview.layoutFocus')}
-              </button>
-              <button
+              </PmpChoiceButton>
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={layoutMode === 'compact'}
+                active={layoutMode === 'compact'}
                 onClick={() => setLayoutMode('compact')}
               >
                 {t('settings.systemDemo.preview.layoutCompact')}
-              </button>
-            </div>
+              </PmpChoiceButton>
+            </PmpSegmented>
 
-            <div className="settings-demo-control-row" role="radiogroup" aria-label={t('settings.systemDemo.preview.tone')}>
-              <button
+            <PmpSegmented
+              className="settings-demo-control-row"
+              surfaceId="primitive.segmented.choice"
+              role="radiogroup"
+              aria-label={t('settings.systemDemo.preview.tone')}
+            >
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={visualTone === 'default'}
+                active={visualTone === 'default'}
                 onClick={() => setVisualTone('default')}
               >
                 {t('settings.systemDemo.preview.toneDefault')}
-              </button>
-              <button
+              </PmpChoiceButton>
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={visualTone === 'accent'}
+                active={visualTone === 'accent'}
                 onClick={() => setVisualTone('accent')}
               >
                 {t('settings.systemDemo.preview.toneAccent')}
-              </button>
-              <button
+              </PmpChoiceButton>
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={visualTone === 'minimal'}
+                active={visualTone === 'minimal'}
                 onClick={() => setVisualTone('minimal')}
               >
                 {t('settings.systemDemo.preview.toneMinimal')}
-              </button>
-            </div>
+              </PmpChoiceButton>
+            </PmpSegmented>
           </div>
         }
       />
@@ -305,17 +316,14 @@ export function SystemDemoSettingsPanel() {
                   {t('settings.systemDemo.pipeline.streamRaw')}
                 </span>
                 <div className="settings-demo-pipeline-switch-right">
-                  <label className="settings-demo-switch" aria-label={t('settings.systemDemo.pipeline.streamRaw')}>
-                    <input
-                      type="checkbox"
-                      checked={streamRawEnabled}
-                      onChange={(event) => setStreamRawEnabled(event.target.checked)}
-                    />
-                    <span className="settings-demo-switch-track">
-                      <span className="settings-demo-switch-thumb" />
-                    </span>
-                  </label>
-                  <span className="settings-demo-switch-label settings-demo-switch-label--dim">
+                  <PmpSwitch
+                    className="settings-switch"
+                    variant="settings"
+                    checked={streamRawEnabled}
+                    onCheckedChange={(next) => setStreamRawEnabled(next)}
+                    aria-label={t('settings.systemDemo.pipeline.streamRaw')}
+                  />
+                  <span className="settings-switch-label settings-switch-label--dim">
                     {streamRawEnabled
                       ? t('settings.systemDemo.pipeline.switch.on')
                       : t('settings.systemDemo.pipeline.switch.off')}
@@ -328,17 +336,14 @@ export function SystemDemoSettingsPanel() {
                   {t('settings.systemDemo.pipeline.softLimiter')}
                 </span>
                 <div className="settings-demo-pipeline-switch-right">
-                  <label className="settings-demo-switch" aria-label={t('settings.systemDemo.pipeline.softLimiter')}>
-                    <input
-                      type="checkbox"
-                      checked={softLimiterEnabled}
-                      onChange={(event) => setSoftLimiterEnabled(event.target.checked)}
-                    />
-                    <span className="settings-demo-switch-track">
-                      <span className="settings-demo-switch-thumb" />
-                    </span>
-                  </label>
-                  <span className="settings-demo-switch-label settings-demo-switch-label--dim">
+                  <PmpSwitch
+                    className="settings-switch"
+                    variant="settings"
+                    checked={softLimiterEnabled}
+                    onCheckedChange={(next) => setSoftLimiterEnabled(next)}
+                    aria-label={t('settings.systemDemo.pipeline.softLimiter')}
+                  />
+                  <span className="settings-switch-label settings-switch-label--dim">
                     {softLimiterEnabled
                       ? t('settings.systemDemo.pipeline.switch.on')
                       : t('settings.systemDemo.pipeline.switch.off')}
@@ -347,28 +352,29 @@ export function SystemDemoSettingsPanel() {
               </div>
             </div>
 
-            <div
+            <PmpSegmented
               className="settings-demo-control-row settings-demo-pipeline-transport"
+              surfaceId="primitive.segmented.choice"
               role="radiogroup"
               aria-label={t('settings.systemDemo.pipeline.transportMode')}
             >
-              <button
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={transportMode === 'shared'}
+                active={transportMode === 'shared'}
                 onClick={() => setTransportMode('shared')}
               >
                 {t('settings.systemDemo.pipeline.transportShared')}
-              </button>
-              <button
+              </PmpChoiceButton>
+              <PmpChoiceButton
                 type="button"
                 className="settings-choice-btn"
-                data-active={transportMode === 'exclusive'}
+                active={transportMode === 'exclusive'}
                 onClick={() => setTransportMode('exclusive')}
               >
                 {t('settings.systemDemo.pipeline.transportExclusive')}
-              </button>
-            </div>
+              </PmpChoiceButton>
+            </PmpSegmented>
           </div>
         }
       />
@@ -412,9 +418,9 @@ export function SystemDemoSettingsPanel() {
                   onChange={(event) => setFrameCap(event.target.value)}
                   aria-label={t('settings.systemDemo.tuning.frameCap')}
                 />
-                <button type="button" className="settings-action-btn" onClick={applyFrameCap}>
+                <PmpButton type="button" className="settings-action-btn" variant="default" onClick={applyFrameCap}>
                   {t('settings.systemDemo.tuning.apply')}
-                </button>
+                </PmpButton>
               </div>
             </div>
           </div>
@@ -428,15 +434,15 @@ export function SystemDemoSettingsPanel() {
         note={t('settings.systemDemo.actions.warning')}
         controls={
           <div className="settings-demo-control-row">
-            <button type="button" className="settings-action-btn">
+            <PmpButton type="button" className="settings-action-btn" variant="default">
               {t('settings.systemDemo.actions.apply')}
-            </button>
-            <button type="button" className="settings-action-btn">
+            </PmpButton>
+            <PmpButton type="button" className="settings-action-btn" variant="default">
               {t('settings.systemDemo.actions.refresh')}
-            </button>
-            <button type="button" className="settings-danger-btn">
+            </PmpButton>
+            <PmpButton type="button" className="settings-danger-btn" variant="danger">
               {t('settings.systemDemo.actions.reset')}
-            </button>
+            </PmpButton>
           </div>
         }
       />

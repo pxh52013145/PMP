@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
 import { useConfirmDialog } from '../core/ConfirmDialog';
 import { listRegisteredMagnetRenderers, type MagnetRendererDefinition } from '../../magnet-system/registry';
+import { listMagnetVariants } from '../../magnet-system/variantRegistry';
 import { getInstalledPmpmPlugin, installPmpmPluginFromZipBytes } from '../../magnet-system/plugins/pmpm';
 import { getInstalledPmpsShaderPack } from '../../shader-system/pmps';
 import { installPmpsShaderPackFromZipBytes } from '../../shader-system/pmps';
@@ -43,10 +44,14 @@ import {
 import { filterMagnetConfigSnapshotForImport, filterMagnetSpaceLayoutForImport } from '../../themes/packs/profilePackApply';
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
-import type { ComponentTheme, Theme } from '../../themes/types/theme';
+import { assignMagnetComponentTheme } from '../../themes/bindings';
+import { resolveLegacyComponentThemeSurfaceId } from '../../themes/legacyComponentThemes';
+import type { ComponentTheme, Theme, ThemeImportCandidate, ThemeBindingId } from '../../themes/types/theme';
+import { useThemeBindingEditor } from '../../themes/useThemeBindingEditor';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { broadcastDataUpdate, STORAGE_KEYS, TAURI_EVENTS, setupTauriListenerWithPayload } from '../../utils/windowCommunication';
+import { ThemeBindingEditorPanel } from '../theme/ThemeBindingEditorPanel';
 
 function formatRendererSource(
   t: (key: string, params?: Record<string, unknown>) => string,
@@ -78,7 +83,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function validateThemeJson(value: unknown): asserts value is Theme {
+function assertObjectMap(value: unknown, path: string): asserts value is Record<string, Record<string, unknown>> {
+  assertObject(value, path);
+  for (const [key, entry] of Object.entries(value)) {
+    assertObject(entry, `${path}.${key}`);
+  }
+}
+
+function validateThemeJson(value: unknown): asserts value is ThemeImportCandidate {
   assertObject(value, 'theme');
 
   if (typeof value.id !== 'string' || value.id.length < 1) {
@@ -91,19 +103,30 @@ function validateThemeJson(value: unknown): asserts value is Theme {
     throw new Error('theme.version is required');
   }
 
-  assertObject(value.shader, 'theme.shader');
-  if (typeof value.shader.id !== 'string' || value.shader.id.length < 1) {
-    throw new Error('theme.shader.id is required');
+  if (typeof value.colors !== 'undefined') {
+    assertObject(value.colors, 'theme.colors');
+    for (const [key, tokenValue] of Object.entries(value.colors)) {
+      if (typeof tokenValue !== 'string') {
+        throw new Error(`theme.colors.${key} must be a string`);
+      }
+    }
   }
-  if (typeof value.shader.name !== 'string' || value.shader.name.length < 1) {
-    throw new Error('theme.shader.name is required');
-  }
-  assertObject(value.shader.colors, 'theme.shader.colors');
 
-  for (const slot of ['primary', 'secondary', 'accent', 'detail'] as const) {
-    assertObject(value.shader.colors[slot], `theme.shader.colors.${slot}`);
-    if (typeof value.shader.colors[slot].base !== 'string') {
-      throw new Error(`theme.shader.colors.${slot}.base is required`);
+  if (typeof value.motion !== 'undefined') {
+    assertObject(value.motion, 'theme.motion');
+    for (const [key, tokenValue] of Object.entries(value.motion)) {
+      if (!['string', 'number', 'boolean'].includes(typeof tokenValue)) {
+        throw new Error(`theme.motion.${key} must be a string, number, or boolean`);
+      }
+    }
+  }
+
+  if (typeof value.typography !== 'undefined') {
+    assertObject(value.typography, 'theme.typography');
+    for (const [key, tokenValue] of Object.entries(value.typography)) {
+      if (!['string', 'number'].includes(typeof tokenValue)) {
+        throw new Error(`theme.typography.${key} must be a string or number`);
+      }
     }
   }
 
@@ -125,6 +148,16 @@ function validateThemeJson(value: unknown): asserts value is Theme {
   assertObject(value.fonts, 'theme.fonts');
   if (typeof value.fonts.primary !== 'string' || value.fonts.primary.length < 1) {
     throw new Error('theme.fonts.primary is required');
+  }
+
+  if (typeof value.componentThemes !== 'undefined') {
+    assertObjectMap(value.componentThemes, 'theme.componentThemes');
+  }
+  if (typeof value.surfaces !== 'undefined') {
+    assertObjectMap(value.surfaces, 'theme.surfaces');
+  }
+  if (typeof value.bindings !== 'undefined') {
+    assertObjectMap(value.bindings, 'theme.bindings');
   }
 }
 
@@ -173,6 +206,86 @@ function buildDefaultProfilePackManifest(theme: Theme): ProfilePackManifestV1 {
   };
 }
 
+const STATIC_BINDING_GROUPS: Array<{
+  id: string;
+  label: string;
+  bindingIds: ThemeBindingId[];
+}> = [
+  {
+    id: 'page',
+    label: 'Page',
+    bindingIds: ['page.music-library', 'page.settings', 'page.settings.main-tab', 'page.settings.sub-tab'],
+  },
+  {
+    id: 'overlay',
+    label: 'Overlay',
+    bindingIds: ['overlay.confirm-dialog', 'overlay.context-menu', 'overlay.modal', 'overlay.drawer'],
+  },
+  {
+    id: 'primitive',
+    label: 'Primitive',
+    bindingIds: [
+      'primitive.button',
+      'primitive.button.default',
+      'primitive.button.primary',
+      'primitive.button.danger',
+      'primitive.button.ghost',
+      'primitive.card',
+      'primitive.card.default',
+      'primitive.card.settings',
+      'primitive.dialog',
+      'primitive.dialog.default',
+      'primitive.choice',
+      'primitive.segmented',
+      'primitive.switch',
+      'primitive.checkbox',
+    ],
+  },
+];
+
+const DEFAULT_SELECTED_SURFACE_BINDING_ID = STATIC_BINDING_GROUPS[0]?.bindingIds[0] ?? ('page.settings' as ThemeBindingId);
+
+function extractThemeRendererIds(themeValue: unknown): string[] {
+  if (!isPlainObject(themeValue)) {
+    return [];
+  }
+
+  const rendererIds = new Set<string>();
+
+  const componentThemes = themeValue.componentThemes;
+  if (isPlainObject(componentThemes)) {
+    for (const componentId of Object.keys(componentThemes)) {
+      const surfaceId = resolveLegacyComponentThemeSurfaceId(componentId);
+      if (surfaceId.startsWith('magnet.')) {
+        rendererIds.add(surfaceId.slice('magnet.'.length));
+      }
+    }
+  }
+
+  const bindings = themeValue.bindings;
+  if (isPlainObject(bindings)) {
+    for (const [bindingId, bindingValue] of Object.entries(bindings)) {
+      if (bindingId.startsWith('magnet.')) {
+        const fallbackRendererId = bindingId.slice('magnet.'.length).trim();
+        if (fallbackRendererId) {
+          rendererIds.add(fallbackRendererId);
+        }
+      }
+
+      if (!isPlainObject(bindingValue)) {
+        continue;
+      }
+
+      const rendererId = bindingValue.renderer;
+      if (typeof rendererId === 'string' && rendererId.trim().length > 0) {
+        rendererIds.add(rendererId.trim());
+      }
+    }
+  }
+
+  return [...rendererIds];
+}
+
 type ThemePackExportBundle = {
   kind: 'pmpm' | 'pmps';
   depId: string;
@@ -203,7 +316,7 @@ export type ThemeEditorProps = {
 
 export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEditorProps) {
   const t = useT();
-  const { theme, applyTheme, updateComponentTheme } = useTheme();
+  const { theme, applyTheme, getSurfaceTheme } = useTheme();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -232,6 +345,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
   const [profilePackExportChecksumsEnabled, setProfilePackExportChecksumsEnabled] = useState(true);
   const [profilePackApplyOpen, setProfilePackApplyOpen] = useState(false);
   const [profilePackApplyBusy, setProfilePackApplyBusy] = useState(false);
+  const [selectedSurfaceBindingId, setSelectedSurfaceBindingId] =
+    useState<ThemeBindingId>(DEFAULT_SELECTED_SURFACE_BINDING_ID);
   const [profilePackApplyOptions, setProfilePackApplyOptions] = useState<ProfilePackApplyOptions>(() => ({
     applyTheme: true,
     applyMagnets: false,
@@ -243,6 +358,51 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
 
   const [localMagnetSpacesState, setLocalMagnetSpacesState] = useState<MagnetSpacesState>(() =>
     sanitizeMagnetSpacesState(readJson(STORAGE_KEYS.MAGNET_SPACES, createDefaultMagnetSpacesState()))
+  );
+
+  const magnetBindingIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const magnet of magnetLibrary) {
+      const id = magnet.id.trim();
+      if (id) {
+        ids.add(`magnet.${id}`);
+      }
+    }
+    for (const renderer of rendererList) {
+      const id = renderer.id.trim();
+      if (id) {
+        ids.add(`magnet.${id}`);
+      }
+    }
+    for (const bindingId of Object.keys(theme.bindings ?? {})) {
+      if (bindingId.startsWith('magnet.')) {
+        ids.add(bindingId);
+      }
+    }
+    for (const surfaceId of Object.keys(theme.surfaces ?? {})) {
+      if (surfaceId.startsWith('magnet.')) {
+        ids.add(surfaceId);
+      }
+    }
+
+    return [...ids].sort() as ThemeBindingId[];
+  }, [magnetLibrary, rendererList, theme.bindings, theme.surfaces]);
+
+  const editableBindingGroups = useMemo(() => {
+    const groups = [...STATIC_BINDING_GROUPS];
+    if (magnetBindingIds.length > 0) {
+      groups.unshift({
+        id: 'magnet',
+        label: 'Magnet',
+        bindingIds: magnetBindingIds,
+      });
+    }
+    return groups;
+  }, [magnetBindingIds]);
+
+  const editableSurfaceBindingIds = useMemo(
+    () => editableBindingGroups.flatMap((group) => group.bindingIds),
+    [editableBindingGroups]
   );
 
   const loadMagnetLayoutStoreState = useCallback(async (): Promise<MagnetLayoutStoreState | null> => {
@@ -411,8 +571,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const rawId = `${theme.id}-${rendererId}`;
       const id = isValidId(rawId) ? rawId : isValidId(rendererId) ? rendererId : 'variant-preset';
 
-      const componentTheme = isPlainObject(theme.componentThemes?.[rendererId])
-        ? (theme.componentThemes?.[rendererId] as unknown as Record<string, unknown>)
+      const resolvedComponentTheme = getSurfaceTheme(`magnet.${rendererId}`);
+      const componentTheme = isPlainObject(resolvedComponentTheme)
+        ? (resolvedComponentTheme as unknown as Record<string, unknown>)
         : {};
 
       const preset: VariantPresetV1 = {
@@ -447,7 +608,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         text: t('editor.theme-editor.pmpv.message.exportFailed', { message }),
       });
     }
-  }, [selectedRendererId, t, theme.componentThemes, theme.id, theme.name, theme.version]);
+  }, [getSurfaceTheme, selectedRendererId, t, theme.id, theme.name, theme.version]);
 
   const handleVariantPresetUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -470,7 +631,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         if (!ok) return;
 
         const componentTheme = parsed.componentTheme as unknown as ComponentTheme;
-        await updateComponentTheme(rendererId, componentTheme);
+        await applyTheme(assignMagnetComponentTheme(theme, rendererId, componentTheme));
 
         setVariantPresetMessage({
           kind: 'success',
@@ -491,7 +652,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         event.target.value = '';
       }
     },
-    [confirm, rendererList, t, updateComponentTheme]
+    [applyTheme, confirm, rendererList, t, theme]
   );
 
   const applyThemeJson = useCallback(async () => {
@@ -1652,6 +1813,19 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     [rendererList, selectedRendererId]
   );
 
+  const selectedBindingEditor = useThemeBindingEditor({
+    bindingId: selectedSurfaceBindingId,
+    rendererSuggestions: rendererList.map((renderer) => renderer.id),
+  });
+
+  const selectedBindingVariantSuggestions = useMemo(() => {
+    if (!selectedSurfaceBindingId.startsWith('magnet.')) {
+      return [] as string[];
+    }
+
+    return listMagnetVariants(selectedSurfaceBindingId.slice('magnet.'.length)).map((variant) => variant.id);
+  }, [selectedSurfaceBindingId]);
+
   const profilePackApplyWarnings = useMemo(() => {
     if (!profilePack) {
       return {
@@ -1675,12 +1849,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     if (profilePack.themeEntry?.text) {
       try {
         const parsedTheme = JSON.parse(profilePack.themeEntry.text) as unknown;
-        if (isPlainObject(parsedTheme)) {
-          const componentThemes = parsedTheme.componentThemes;
-          if (isPlainObject(componentThemes)) {
-            for (const rendererId of Object.keys(componentThemes)) {
-              if (!registeredRendererIds.has(rendererId)) missingRendererIds.add(rendererId);
-            }
+        for (const rendererId of extractThemeRendererIds(parsedTheme)) {
+          if (!registeredRendererIds.has(rendererId)) {
+            missingRendererIds.add(rendererId);
           }
         }
       } catch {
@@ -1764,6 +1935,11 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
     if (!selectedRendererId || selectedRenderer) return;
     setSelectedRendererId(rendererList[0]?.id ?? '');
   }, [rendererList, selectedRenderer, selectedRendererId]);
+
+  useEffect(() => {
+    if (editableSurfaceBindingIds.includes(selectedSurfaceBindingId)) return;
+    setSelectedSurfaceBindingId(editableSurfaceBindingIds[0] ?? DEFAULT_SELECTED_SURFACE_BINDING_ID);
+  }, [editableSurfaceBindingIds, selectedSurfaceBindingId]);
 
   useEffect(() => {
     if (!profilePackApplyOpen) return;
@@ -1871,6 +2047,59 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                   onChange={(event) => setThemeJson(event.target.value)}
                   spellCheck={false}
                 />
+              </div>
+
+              <div className="theme-editor-section">
+                <div className="theme-editor-section-title">Bindings / Surfaces</div>
+
+                <div className="theme-binding-groups">
+                  {editableBindingGroups.map((group) => (
+                    <div key={group.id} className="theme-binding-group">
+                      <div className="theme-binding-group-title">{group.label}</div>
+                      <div className="theme-binding-group-items">
+                        {group.bindingIds.map((bindingId) => {
+                          const explicitBinding = theme.bindings?.[bindingId] ?? null;
+                          const hasSelfSurface = Boolean(theme.surfaces?.[bindingId]);
+                          const isSelected = bindingId === selectedSurfaceBindingId;
+                          return (
+                            <button
+                              key={bindingId}
+                              type="button"
+                              className={`theme-binding-item ${isSelected ? 'is-selected' : ''}`}
+                              onClick={() => setSelectedSurfaceBindingId(bindingId)}
+                            >
+                              <span className="theme-binding-item-id">{bindingId}</span>
+                              <span className="theme-binding-item-meta">
+                                {explicitBinding?.surface ?? (hasSelfSurface ? '(self surface)' : '(unbound)')}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="theme-binding-detail">
+                  <ThemeBindingEditorPanel
+                    bindingId={selectedSurfaceBindingId}
+                    bindingEditor={selectedBindingEditor}
+                    variantInput={{
+                      kind: 'input',
+                      suggestions: selectedBindingVariantSuggestions,
+                      placeholder: 'Optional explicit variant id',
+                    }}
+                    renderActionButton={(button) => (
+                      <button
+                        type="button"
+                        className="theme-editor-action-btn"
+                        onClick={button.onClick}
+                      >
+                        {button.label}
+                      </button>
+                    )}
+                  />
+                </div>
               </div>
 
               <div className="theme-editor-section">
@@ -2454,7 +2683,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                       {JSON.stringify(
                         {
                           rendererId: selectedRenderer.id,
-                          componentTheme: theme.componentThemes?.[selectedRenderer.id] ?? null,
+                          explicitBinding: theme.bindings?.[`magnet.${selectedRenderer.id}`] ?? null,
+                          materializedComponentTheme: getSurfaceTheme(`magnet.${selectedRenderer.id}`),
                         },
                         null,
                         2

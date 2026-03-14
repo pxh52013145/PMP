@@ -1,44 +1,37 @@
-/**
- * 支持窗口间同步的主题系统Context
- */
-
 import {
   createContext,
-  useContext,
-  useState,
   useCallback,
+  useContext,
   useEffect,
+  useState,
   type ReactNode,
 } from 'react';
-import { Theme, ComponentTheme } from '../types/theme';
-import { Shader } from '../types/shader';
-import { DefaultShader } from '../shaders/default';
+
 import { DEFAULT_BACKGROUND_SETTINGS } from '../../constants/defaultBackground';
-import { broadcastDataUpdate, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { readJson } from '../../modules/storage';
+import { broadcastDataUpdate, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
+import {
+  assignThemeBinding,
+  isThemeBindingEmpty,
+  materializeThemeBinding,
+  removeThemeBinding,
+  resolveThemeBinding,
+} from '../bindings';
+import { normalizeTheme } from '../normalizeTheme';
+import { assignThemeSurface, isComponentThemeEmpty, removeThemeSurface, resolveThemeSurface } from '../surfaces';
+import type {
+  ComponentTheme,
+  Theme,
+  ThemeBinding,
+  ThemeBindingId,
+  ThemeImportCandidate,
+  ThemeSurfaceId,
+} from '../types/theme';
 
-const LEGACY_COMPONENT_THEME_KEYS: Record<string, string[]> = {
-  'btn-play-pause': ['play-pause-button'],
-  'btn-previous': ['previous-button'],
-  'btn-next': ['next-button'],
-  'btn-mode': ['play-mode'],
-  'btn-volume': ['volume-control'],
-  'btn-back': ['back-button'],
-  'btn-debug': ['debug-button'],
-  'btn-window-pin': ['window-pin-button'],
-  'btn-play-queue': ['play-queue'],
-  'btn-playlists': ['playlists-button'],
-  'btn-music-library': ['music-library-button'],
-};
-
-/**
- * 默认主题
- */
 const DEFAULT_THEME: Theme = {
   id: 'theme-default',
-  name: '默认主题',
+  name: '榛樿涓婚',
   version: '1.0.0',
-  shader: DefaultShader,
   pixel: {
     shape: 'circle',
     size: 1.0,
@@ -54,9 +47,8 @@ const DEFAULT_THEME: Theme = {
   fonts: {
     primary: 'Inter, sans-serif',
   },
-  // TrackInfo 默认配置
-  componentThemes: {
-    'track-info': {
+  surfaces: {
+    'magnet.track-info': {
       variant: 'spinning-vinyl',
       dynamicColor: {
         extractFromCover: true,
@@ -68,48 +60,39 @@ const DEFAULT_THEME: Theme = {
 
 interface ThemeContextValue {
   theme: Theme;
-  shader: Shader;
-  applyTheme: (theme: Theme) => void;
-  applyShader: (shader: Shader) => void;
-  getComponentTheme: (componentId: string) => ComponentTheme;
-  updateComponentTheme: (componentId: string, componentTheme: ComponentTheme) => void;
+  applyTheme: (theme: ThemeImportCandidate) => void;
+  getBinding: (bindingId: ThemeBindingId) => ThemeBinding;
+  updateBinding: (bindingId: ThemeBindingId, binding: ThemeBinding) => void;
+  getSurfaceTheme: (surfaceId: ThemeSurfaceId) => ComponentTheme;
+  updateSurfaceTheme: (surfaceId: ThemeSurfaceId, surfaceTheme: ComponentTheme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 interface ThemeProviderProps {
   children: ReactNode;
-  initialTheme?: Theme;
+  initialTheme?: ThemeImportCandidate;
 }
 
-/**
- * 从 localStorage 加载主题
- */
 function loadThemeFromStorage(): Theme | null {
-  return readJson<Theme | null>(STORAGE_KEYS.THEME_CONFIG, null);
+  const theme = readJson<ThemeImportCandidate | null>(STORAGE_KEYS.THEME_CONFIG, null);
+  return theme ? normalizeTheme(theme) : null;
 }
 
-/**
- * 保存主题到 localStorage 并广播
- */
 async function saveAndBroadcastTheme(theme: Theme): Promise<void> {
+  const normalizedTheme = normalizeTheme(theme);
   try {
-    await broadcastDataUpdate(STORAGE_KEYS.THEME_CONFIG, theme, TAURI_EVENTS.THEME_UPDATED);
+    await broadcastDataUpdate(STORAGE_KEYS.THEME_CONFIG, normalizedTheme, TAURI_EVENTS.THEME_UPDATED);
   } catch (error) {
     console.error('[ThemeContextWithSync] Failed to save theme:', error);
   }
 }
 
-/**
- * 主题Provider（支持窗口间同步）
- */
 export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
-  // 初始化时从 localStorage 加载，如果没有则使用默认主题
   const [theme, setTheme] = useState<Theme>(() => {
-    return loadThemeFromStorage() || initialTheme || DEFAULT_THEME;
+    return loadThemeFromStorage() || (initialTheme ? normalizeTheme(initialTheme) : null) || DEFAULT_THEME;
   });
 
-  // 监听其他窗口的主题更新
   useEffect(() => {
     const reloadTheme = () => {
       const updatedTheme = loadThemeFromStorage();
@@ -118,14 +101,8 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
       }
     };
 
-    // 设置双重监听（localStorage + Tauri事件）
     const setupListenerAsync = async () => {
-      const cleanup = await setupDualListener(
-        [STORAGE_KEYS.THEME_CONFIG],
-        [TAURI_EVENTS.THEME_UPDATED],
-        reloadTheme
-      );
-      return cleanup;
+      return await setupDualListener([STORAGE_KEYS.THEME_CONFIG], [TAURI_EVENTS.THEME_UPDATED], reloadTheme);
     };
 
     let cleanupFn: (() => void) | null = null;
@@ -134,53 +111,50 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
     });
 
     return () => {
-      if (cleanupFn) {
-        cleanupFn();
-      }
+      cleanupFn?.();
     };
   }, []);
 
-  const applyTheme = useCallback(async (newTheme: Theme) => {
-    setTheme(newTheme);
-    await saveAndBroadcastTheme(newTheme);
+  const applyTheme = useCallback(async (newTheme: ThemeImportCandidate) => {
+    const normalizedTheme = normalizeTheme(newTheme);
+    setTheme(normalizedTheme);
+    await saveAndBroadcastTheme(normalizedTheme);
   }, []);
 
-  const applyShader = useCallback(
-    async (newShader: Shader) => {
-      const newTheme = { ...theme, shader: newShader };
+  const getBinding = useCallback(
+    (bindingId: ThemeBindingId): ThemeBinding => resolveThemeBinding(theme, bindingId).binding,
+    [theme]
+  );
+
+  const updateBinding = useCallback(
+    async (bindingId: ThemeBindingId, binding: ThemeBinding) => {
+      const nextTheme = isThemeBindingEmpty(binding)
+        ? removeThemeBinding(theme, bindingId)
+        : assignThemeBinding(theme, bindingId, binding);
+      const newTheme = normalizeTheme(nextTheme);
       setTheme(newTheme);
       await saveAndBroadcastTheme(newTheme);
     },
     [theme]
   );
 
-  const getComponentTheme = useCallback(
-    (componentId: string): ComponentTheme => {
-      const direct = theme.componentThemes?.[componentId];
-      if (direct) return direct;
-
-      const legacyKeys = LEGACY_COMPONENT_THEME_KEYS[componentId];
-      if (legacyKeys) {
-        for (const legacyKey of legacyKeys) {
-          const legacyTheme = theme.componentThemes?.[legacyKey];
-          if (legacyTheme) return legacyTheme;
-        }
+  const getSurfaceTheme = useCallback(
+    (surfaceId: ThemeSurfaceId): ComponentTheme => {
+      const binding = resolveThemeBinding(theme, surfaceId as ThemeBindingId);
+      if (binding.source !== 'none') {
+        return materializeThemeBinding(theme, surfaceId as ThemeBindingId);
       }
-
-      return {};
+      return resolveThemeSurface(theme, surfaceId);
     },
     [theme]
   );
 
-  const updateComponentTheme = useCallback(
-    async (componentId: string, componentTheme: ComponentTheme) => {
-      const newTheme = {
-        ...theme,
-        componentThemes: {
-          ...theme.componentThemes,
-          [componentId]: componentTheme,
-        },
-      };
+  const updateSurfaceTheme = useCallback(
+    async (surfaceId: ThemeSurfaceId, surfaceTheme: ComponentTheme) => {
+      const nextTheme = isComponentThemeEmpty(surfaceTheme)
+        ? removeThemeSurface(theme, surfaceId)
+        : assignThemeSurface(theme, surfaceId, surfaceTheme);
+      const newTheme = normalizeTheme(nextTheme);
       setTheme(newTheme);
       await saveAndBroadcastTheme(newTheme);
     },
@@ -191,11 +165,11 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
     <ThemeContext.Provider
       value={{
         theme,
-        shader: theme.shader,
         applyTheme,
-        applyShader,
-        getComponentTheme,
-        updateComponentTheme,
+        getBinding,
+        updateBinding,
+        getSurfaceTheme,
+        updateSurfaceTheme,
       }}
     >
       {children}
@@ -203,9 +177,6 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
   );
 }
 
-/**
- * 使用主题Hook
- */
 export function useTheme(): ThemeContextValue {
   const context = useContext(ThemeContext);
   if (!context) {
@@ -214,10 +185,17 @@ export function useTheme(): ThemeContextValue {
   return context;
 }
 
-/**
- * 使用组件主题配置
- */
 export function useComponentTheme(componentId: string): ComponentTheme {
-  const { getComponentTheme } = useTheme();
-  return getComponentTheme(componentId);
+  const { getSurfaceTheme } = useTheme();
+  return getSurfaceTheme(`magnet.${componentId}`);
+}
+
+export function useSkinSurface(surfaceId: ThemeSurfaceId): ComponentTheme {
+  const { getSurfaceTheme } = useTheme();
+  return getSurfaceTheme(surfaceId);
+}
+
+export function useThemeBinding(bindingId: ThemeBindingId): ThemeBinding {
+  const { getBinding } = useTheme();
+  return getBinding(bindingId);
 }

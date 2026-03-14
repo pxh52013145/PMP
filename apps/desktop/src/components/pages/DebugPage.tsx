@@ -4,6 +4,7 @@ import type { PageContribution } from '../../contracts/contributions';
 import { useKernel } from '../../contexts/KernelContext';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
+import { PmpButton, PmpChoiceButton } from '../primitives';
 
 function sortPages(a: PageContribution, b: PageContribution): number {
   const orderA = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
@@ -83,13 +84,14 @@ export const DebugPage: React.FC = () => {
             </div>
 
             <div className="settings-topbar-actions">
-              <button
+              <PmpButton
                 type="button"
                 className="settings-action-btn settings-action-btn--topbar"
+                variant="default"
                 onClick={() => navigateTo('settings')}
               >
                 {t('pages.settings.title')}
-              </button>
+              </PmpButton>
             </div>
           </header>
 
@@ -111,11 +113,15 @@ export const DebugPage: React.FC = () => {
               }}
             >
               {pages.map((page, index) => (
-                <button
+                <PmpChoiceButton
                   key={page.id}
                   type="button"
+                  role="tab"
+                  surfaceId="page.debug.sub-tab"
                   className="settings-sub-tab"
-                  data-active={page.id === activePageId}
+                  active={page.id === activePageId}
+                  aria-selected={page.id === activePageId}
+                  tabIndex={page.id === activePageId ? 0 : -1}
                   data-has-separator={index < pages.length - 1}
                   onClick={() => {
                     navigateTo('debug', { tab: page.id });
@@ -124,7 +130,7 @@ export const DebugPage: React.FC = () => {
                   title={page.title}
                 >
                   <span className="settings-sub-tab-label">{page.title}</span>
-                </button>
+                </PmpChoiceButton>
               ))}
             </div>
           </nav>

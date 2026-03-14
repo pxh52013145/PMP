@@ -2,6 +2,7 @@ import type {
   BilibiliPlaybackCacheSettings,
   BilibiliPlaybackQualityOption,
 } from '../../../modules/music-platform';
+import { PmpButton, PmpDialog } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -63,173 +64,168 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
   if (!open) return null;
 
   return (
-    <div className="platform-magnet-settings-overlay" role="presentation" onClick={onClose}>
-      <div
-        className="platform-magnet-settings-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('magnet.platform.bilibili.settings.title')}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="platform-magnet-panel-header">
-          <h4>{t('magnet.platform.bilibili.settings.title')}</h4>
-          <button type="button" className="platform-magnet-mini-btn" onClick={onClose}>
-            {t('common.action.done')}
-          </button>
-        </div>
+    <PmpDialog
+      open={open}
+      title={<h4>{t('magnet.platform.bilibili.settings.title')}</h4>}
+      overlaySurfaceId="overlay.modal"
+      dialogSurfaceId="primitive.dialog.default"
+      overlayClassName="platform-magnet-settings-overlay"
+      className="platform-magnet-settings-modal"
+      headerClassName="platform-magnet-panel-header"
+      onClose={onClose}
+      headerActions={
+        <PmpButton type="button" className="platform-magnet-mini-btn" variant="ghost" onClick={onClose}>
+          {t('common.action.done')}
+        </PmpButton>
+      }
+    >
+      <div className="platform-magnet-settings-row">
+        <select
+          value={normalizedPlaybackQualityHint}
+          disabled={!bilibiliAuthorized}
+          onChange={(event) => {
+            onQualityHintChange(event.target.value);
+          }}
+        >
+          {playbackQualityOptions.map((option) => {
+            const optionKey = option.key.trim().toLowerCase();
+            const label = qualityLabelForKey(optionKey);
+            return (
+              <option key={option.key} value={optionKey}>
+                {label}
+              </option>
+            );
+          })}
+        </select>
+        <PmpButton
+          type="button"
+          className="platform-magnet-mini-btn"
+          variant="default"
+          disabled={!qualityProbeSourceLocator || playbackQualityLoading}
+          onClick={onRefreshQualityOptions}
+        >
+          {playbackQualityLoading
+            ? t('magnet.platform.bilibili.quality.actionRefreshing')
+            : t('magnet.platform.bilibili.quality.actionRefresh')}
+        </PmpButton>
+      </div>
+
+      <p className="platform-magnet-note">
+        {t('magnet.platform.bilibili.quality.current', {
+          quality: qualityLabelForKey(normalizedPlaybackQualityHint),
+          available: availablePlaybackQualityLabel,
+        })}
+      </p>
+      <p className="platform-magnet-note">{t('magnet.platform.bilibili.quality.fallbackHint')}</p>
+
+      <div className="platform-magnet-settings-section">
+        <h5 className="platform-magnet-settings-section-title">
+          {t('magnet.platform.bilibili.settings.theme.title')}
+        </h5>
 
         <div className="platform-magnet-settings-row">
           <select
-            value={normalizedPlaybackQualityHint}
-            disabled={!bilibiliAuthorized}
+            value={normalizedBilibiliThemePreference}
             onChange={(event) => {
-              onQualityHintChange(event.target.value);
+              onBilibiliThemePreferenceChange(event.target.value);
             }}
           >
-            {playbackQualityOptions.map((option) => {
-              const optionKey = option.key.trim().toLowerCase();
-              const label = qualityLabelForKey(optionKey);
-              return (
-                <option key={option.key} value={optionKey}>
-                  {label}
-                </option>
-              );
-            })}
+            <option value="auto">{t('magnet.platform.bilibili.settings.theme.mode.auto')}</option>
+            <option value="light">{t('magnet.platform.bilibili.settings.theme.mode.light')}</option>
+            <option value="dark">{t('magnet.platform.bilibili.settings.theme.mode.dark')}</option>
           </select>
-          <button
+        </div>
+
+        <p className="platform-magnet-note">{t('magnet.platform.bilibili.settings.theme.hint')}</p>
+      </div>
+
+      <div className="platform-magnet-settings-section">
+        <h5 className="platform-magnet-settings-section-title">
+          {t('magnet.platform.bilibili.settings.cache.title')}
+        </h5>
+
+        <div className="platform-magnet-settings-path-item">
+          <span className="platform-magnet-settings-path-label">
+            {t('magnet.platform.bilibili.settings.cache.effectivePath')}
+          </span>
+          <p className="platform-magnet-settings-path-value">{playbackCacheSettings?.effectiveRootPath || '-'}</p>
+        </div>
+
+        <div className="platform-magnet-settings-path-item">
+          <span className="platform-magnet-settings-path-label">
+            {t('magnet.platform.bilibili.settings.cache.defaultPath')}
+          </span>
+          <p className="platform-magnet-settings-path-value">{playbackCacheSettings?.defaultRootPath || '-'}</p>
+        </div>
+
+        <div className="platform-magnet-settings-path-item">
+          <span className="platform-magnet-settings-path-label">
+            {t('magnet.platform.bilibili.settings.cache.customPath')}
+          </span>
+        </div>
+
+        <div className="platform-magnet-settings-row">
+          <input
+            type="text"
+            className="platform-magnet-settings-input"
+            value={playbackCachePathDraft}
+            placeholder={t('magnet.platform.bilibili.settings.cache.customPathPlaceholder')}
+            onChange={(event) => {
+              onPlaybackCachePathDraftChange(event.target.value);
+            }}
+            disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
+            spellCheck={false}
+          />
+
+          <PmpButton
             type="button"
             className="platform-magnet-mini-btn"
-            disabled={!qualityProbeSourceLocator || playbackQualityLoading}
-            onClick={onRefreshQualityOptions}
+            variant="default"
+            disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
+            onClick={onBrowsePlaybackCachePath}
           >
-            {playbackQualityLoading
-              ? t('magnet.platform.bilibili.quality.actionRefreshing')
-              : t('magnet.platform.bilibili.quality.actionRefresh')}
-          </button>
+            {t('magnet.platform.bilibili.settings.cache.actionBrowse')}
+          </PmpButton>
+        </div>
+
+        <div className="platform-magnet-settings-actions">
+          <PmpButton
+            type="button"
+            className="platform-magnet-mini-btn"
+            variant="primary"
+            disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
+            onClick={onSavePlaybackCachePath}
+          >
+            {playbackCacheSettingsSaving
+              ? t('magnet.platform.bilibili.settings.cache.stateSaving')
+              : t('magnet.platform.bilibili.settings.cache.actionSave')}
+          </PmpButton>
+
+          <PmpButton
+            type="button"
+            className="platform-magnet-mini-btn"
+            variant="ghost"
+            disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
+            onClick={onResetPlaybackCachePath}
+          >
+            {t('magnet.platform.bilibili.settings.cache.actionReset')}
+          </PmpButton>
         </div>
 
         <p className="platform-magnet-note">
-          {t('magnet.platform.bilibili.quality.current', {
-            quality: qualityLabelForKey(normalizedPlaybackQualityHint),
-            available: availablePlaybackQualityLabel,
-          })}
+          {t('magnet.platform.bilibili.settings.cache.customPathHint')}
         </p>
-        <p className="platform-magnet-note">{t('magnet.platform.bilibili.quality.fallbackHint')}</p>
 
-        <div className="platform-magnet-settings-section">
-          <h5 className="platform-magnet-settings-section-title">
-            {t('magnet.platform.bilibili.settings.theme.title')}
-          </h5>
+        {playbackCacheSettingsLoading ? (
+          <p className="platform-magnet-note">{t('magnet.platform.bilibili.settings.cache.stateLoading')}</p>
+        ) : null}
 
-          <div className="platform-magnet-settings-row">
-            <select
-              value={normalizedBilibiliThemePreference}
-              onChange={(event) => {
-                onBilibiliThemePreferenceChange(event.target.value);
-              }}
-            >
-              <option value="auto">{t('magnet.platform.bilibili.settings.theme.mode.auto')}</option>
-              <option value="light">{t('magnet.platform.bilibili.settings.theme.mode.light')}</option>
-              <option value="dark">{t('magnet.platform.bilibili.settings.theme.mode.dark')}</option>
-            </select>
-          </div>
+        {playbackCacheSettingsInfo ? <p className="platform-magnet-note">{playbackCacheSettingsInfo}</p> : null}
 
-          <p className="platform-magnet-note">{t('magnet.platform.bilibili.settings.theme.hint')}</p>
-        </div>
-
-        <div className="platform-magnet-settings-section">
-          <h5 className="platform-magnet-settings-section-title">
-            {t('magnet.platform.bilibili.settings.cache.title')}
-          </h5>
-
-          <div className="platform-magnet-settings-path-item">
-            <span className="platform-magnet-settings-path-label">
-              {t('magnet.platform.bilibili.settings.cache.effectivePath')}
-            </span>
-            <p className="platform-magnet-settings-path-value">
-              {playbackCacheSettings?.effectiveRootPath || '—'}
-            </p>
-          </div>
-
-          <div className="platform-magnet-settings-path-item">
-            <span className="platform-magnet-settings-path-label">
-              {t('magnet.platform.bilibili.settings.cache.defaultPath')}
-            </span>
-            <p className="platform-magnet-settings-path-value">
-              {playbackCacheSettings?.defaultRootPath || '—'}
-            </p>
-          </div>
-
-          <div className="platform-magnet-settings-path-item">
-            <span className="platform-magnet-settings-path-label">
-              {t('magnet.platform.bilibili.settings.cache.customPath')}
-            </span>
-          </div>
-
-          <div className="platform-magnet-settings-row">
-            <input
-              type="text"
-              className="platform-magnet-settings-input"
-              value={playbackCachePathDraft}
-              placeholder={t('magnet.platform.bilibili.settings.cache.customPathPlaceholder')}
-              onChange={(event) => {
-                onPlaybackCachePathDraftChange(event.target.value);
-              }}
-              disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
-              spellCheck={false}
-            />
-
-            <button
-              type="button"
-              className="platform-magnet-mini-btn"
-              disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
-              onClick={onBrowsePlaybackCachePath}
-            >
-              {t('magnet.platform.bilibili.settings.cache.actionBrowse')}
-            </button>
-          </div>
-
-          <div className="platform-magnet-settings-actions">
-            <button
-              type="button"
-              className="platform-magnet-mini-btn"
-              disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
-              onClick={onSavePlaybackCachePath}
-            >
-              {playbackCacheSettingsSaving
-                ? t('magnet.platform.bilibili.settings.cache.stateSaving')
-                : t('magnet.platform.bilibili.settings.cache.actionSave')}
-            </button>
-
-            <button
-              type="button"
-              className="platform-magnet-mini-btn"
-              disabled={playbackCacheSettingsLoading || playbackCacheSettingsSaving}
-              onClick={onResetPlaybackCachePath}
-            >
-              {t('magnet.platform.bilibili.settings.cache.actionReset')}
-            </button>
-          </div>
-
-          <p className="platform-magnet-note">
-            {t('magnet.platform.bilibili.settings.cache.customPathHint')}
-          </p>
-
-          {playbackCacheSettingsLoading ? (
-            <p className="platform-magnet-note">
-              {t('magnet.platform.bilibili.settings.cache.stateLoading')}
-            </p>
-          ) : null}
-
-          {playbackCacheSettingsInfo ? (
-            <p className="platform-magnet-note">{playbackCacheSettingsInfo}</p>
-          ) : null}
-
-          {playbackCacheSettingsError ? (
-            <p className="platform-magnet-error">{playbackCacheSettingsError}</p>
-          ) : null}
-        </div>
+        {playbackCacheSettingsError ? (
+          <p className="platform-magnet-error">{playbackCacheSettingsError}</p>
+        ) : null}
       </div>
-    </div>
+    </PmpDialog>
   );
 }

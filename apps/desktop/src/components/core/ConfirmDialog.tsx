@@ -1,6 +1,7 @@
 import React from 'react';
 import './ConfirmDialog.css';
 import { useT } from '../../i18n';
+import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
 
 export type ConfirmOptions = {
   title: string;
@@ -27,6 +28,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   onCancel,
 }) => {
   const t = useT();
+  const surfaceTheme = useSkinSurface('overlay.confirm-dialog');
   const resolvedConfirmText = confirmText === undefined ? t('common.action.confirm') : confirmText;
   const resolvedCancelText = cancelText === undefined ? t('common.action.cancel') : cancelText;
 
@@ -42,21 +44,71 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   if (!open) return null;
 
   return (
-    <div className="pmp-confirm-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
-      <div className="pmp-confirm-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="pmp-confirm-header">
-          <div className="pmp-confirm-title">{title}</div>
+    <div
+      className={['pmp-confirm-overlay', surfaceTheme.classNameOverride?.overlay].filter(Boolean).join(' ')}
+      data-surface-id="overlay.confirm-dialog"
+      data-surface-variant={surfaceTheme.variant}
+      role="dialog"
+      aria-modal="true"
+      style={surfaceTheme.styleOverride?.overlay}
+      onClick={onCancel}
+    >
+      <div
+        className={['pmp-confirm-modal', surfaceTheme.classNameOverride?.container].filter(Boolean).join(' ')}
+        style={surfaceTheme.styleOverride?.container}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className={['pmp-confirm-header', surfaceTheme.classNameOverride?.header].filter(Boolean).join(' ')}
+          style={surfaceTheme.styleOverride?.header}
+        >
+          <div
+            className={['pmp-confirm-title', surfaceTheme.classNameOverride?.title].filter(Boolean).join(' ')}
+            style={surfaceTheme.styleOverride?.title}
+          >
+            {title}
+          </div>
         </div>
-        <div className="pmp-confirm-body">
-          <pre className="pmp-confirm-message">{message}</pre>
+        <div
+          className={['pmp-confirm-body', surfaceTheme.classNameOverride?.body].filter(Boolean).join(' ')}
+          style={surfaceTheme.styleOverride?.body}
+        >
+          <pre
+            className={['pmp-confirm-message', surfaceTheme.classNameOverride?.message].filter(Boolean).join(' ')}
+            style={surfaceTheme.styleOverride?.message}
+          >
+            {message}
+          </pre>
         </div>
-        <div className="pmp-confirm-footer">
-          <button type="button" className="pmp-confirm-btn" onClick={onCancel}>
+        <div
+          className={['pmp-confirm-footer', surfaceTheme.classNameOverride?.footer].filter(Boolean).join(' ')}
+          style={surfaceTheme.styleOverride?.footer}
+        >
+          <button
+            type="button"
+            className={[
+              'pmp-confirm-btn',
+              surfaceTheme.classNameOverride?.button,
+              surfaceTheme.classNameOverride?.cancelButton,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            style={{ ...surfaceTheme.styleOverride?.button, ...surfaceTheme.styleOverride?.cancelButton }}
+            onClick={onCancel}
+          >
             {resolvedCancelText}
           </button>
           <button
             type="button"
-            className={`pmp-confirm-btn ${danger ? 'pmp-confirm-btn--danger' : 'pmp-confirm-btn--primary'}`}
+            className={[
+              'pmp-confirm-btn',
+              danger ? 'pmp-confirm-btn--danger' : 'pmp-confirm-btn--primary',
+              surfaceTheme.classNameOverride?.button,
+              surfaceTheme.classNameOverride?.confirmButton,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            style={{ ...surfaceTheme.styleOverride?.button, ...surfaceTheme.styleOverride?.confirmButton }}
             onClick={onConfirm}
           >
             {resolvedConfirmText}

@@ -1,4 +1,5 @@
 import type { BilibiliFavoriteFolderItem } from '../../../modules/music-platform';
+import { PmpButton, PmpDrawer } from '../../primitives';
 
 type Translator = (key: string, params?: Record<string, string | number>) => string;
 
@@ -32,27 +33,31 @@ export function BilibiliFoldersDrawer(props: BilibiliFoldersDrawerProps) {
   } = props;
 
   return (
-    <section
+    <PmpDrawer
+      as="section"
+      open={open}
       className={`platform-magnet-panel platform-magnet-bilibili-folders ${
         open ? 'platform-magnet-bilibili-drawer-open' : ''
       }`}
+      surfaceId="overlay.drawer"
     >
       <div className="platform-magnet-panel-header">
         <h4>{t('magnet.platform.bilibili.folder.title')}</h4>
         <div className="platform-magnet-bilibili-panel-actions">
-          <button
+          <PmpButton
             type="button"
             className="platform-magnet-mini-btn"
+            variant="default"
             disabled={!bilibiliAuthorized || folderLoading}
             onClick={onRefresh}
           >
             {folderLoading
               ? t('magnet.platform.bilibili.folder.actionRefreshing')
               : t('magnet.platform.bilibili.folder.actionRefresh')}
-          </button>
-          <button type="button" className="platform-magnet-mini-btn" onClick={onClose}>
+          </PmpButton>
+          <PmpButton type="button" className="platform-magnet-mini-btn" variant="ghost" onClick={onClose}>
             {t('common.action.done')}
-          </button>
+          </PmpButton>
         </div>
       </div>
 
@@ -62,11 +67,12 @@ export function BilibiliFoldersDrawer(props: BilibiliFoldersDrawerProps) {
         <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.folder.waiting')}</p>
       ) : (
         <div className="platform-magnet-bilibili-folder-list">
-          <button
+          <PmpButton
             type="button"
             className={`platform-magnet-bilibili-folder-item ${
               selectedFolderId === null ? 'platform-magnet-bilibili-folder-item--active' : ''
             }`}
+            variant="ghost"
             onClick={onShowRecommended}
           >
             <span className="platform-magnet-bilibili-folder-title">
@@ -78,30 +84,30 @@ export function BilibiliFoldersDrawer(props: BilibiliFoldersDrawerProps) {
             >
               {t('magnet.platform.bilibili.folder.count', { count: 0 })}
             </span>
-          </button>
+          </PmpButton>
 
           {folders.length === 0 ? (
             <p className="platform-magnet-panel-empty">{t('magnet.platform.bilibili.folder.empty')}</p>
           ) : null}
 
           {folders.map((folder) => (
-            <button
+            <PmpButton
               key={folder.folderId}
               type="button"
               className={`platform-magnet-bilibili-folder-item ${
                 folder.folderId === selectedFolderId ? 'platform-magnet-bilibili-folder-item--active' : ''
               }`}
+              variant="ghost"
               onClick={() => onSelectFolder(folder.folderId)}
             >
               <span className="platform-magnet-bilibili-folder-title">{folder.title}</span>
               <span className="platform-magnet-bilibili-folder-count">
                 {t('magnet.platform.bilibili.folder.count', { count: folder.mediaCount })}
               </span>
-            </button>
+            </PmpButton>
           ))}
         </div>
       )}
-    </section>
+    </PmpDrawer>
   );
 }
-

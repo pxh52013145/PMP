@@ -9,6 +9,7 @@ import {
   TAURI_EVENTS,
 } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { PmpButton, PmpChoiceButton } from '../primitives';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
@@ -348,17 +349,17 @@ export function AudioComponentsSettingsPanel() {
                 {outputBackendOptions.map((backend) => {
                   const isSelected = selectedBackend === backend.id;
                   return (
-                    <button
+                    <PmpChoiceButton
                       key={backend.id}
                       type="button"
                       className="settings-choice-btn"
-                      data-active={isSelected}
+                      active={isSelected}
                       disabled={busy || backend.disabled}
                       onClick={() => setSelectedBackend(backend.id)}
                       title={backend.desc}
                     >
                       {backend.title}
-                    </button>
+                    </PmpChoiceButton>
                   );
                 })}
               </div>
@@ -368,17 +369,24 @@ export function AudioComponentsSettingsPanel() {
             {selectedBackendOption?.warning && <p className="settings-card-note">{selectedBackendOption.warning}</p>}
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void refreshComponents()} disabled={busy}>
-                {t('common.action.refresh')}
-              </button>
-              <button
+              <PmpButton
                 type="button"
                 className="settings-action-btn"
+                variant="default"
+                onClick={() => void refreshComponents()}
+                disabled={busy}
+              >
+                {t('common.action.refresh')}
+              </PmpButton>
+              <PmpButton
+                type="button"
+                className="settings-action-btn"
+                variant="default"
                 onClick={() => void handleApplyOutputBackend()}
                 disabled={busy || Boolean(selectedBackendOption?.disabled)}
               >
                 {t('common.action.apply')}
-              </button>
+              </PmpButton>
             </div>
           </>
         )}
@@ -405,23 +413,25 @@ export function AudioComponentsSettingsPanel() {
             <p className="settings-card-note">{t('settings.audioComponents.outputDevice.desc')}</p>
 
             <div className="settings-section-controls">
-              <button
+              <PmpButton
                 type="button"
                 className="settings-action-btn"
+                variant="default"
                 onClick={() => void handleRefreshOutputRoute()}
                 disabled={busy}
               >
                 {t('common.action.refresh')}
-              </button>
+              </PmpButton>
               {hasAsioFeature && (selectedBackend === 'asio' || componentsState.outputBackendId === 'asio') && (
-                <button
+                <PmpButton
                   type="button"
                   className="settings-action-btn"
+                  variant="default"
                   onClick={() => void handleOpenAsioControlPanel()}
                   disabled={busy}
                 >
                   {t('settings.audioComponents.outputDevice.action.openAsioControlPanel')}
-                </button>
+                </PmpButton>
               )}
             </div>
           </>
@@ -479,12 +489,24 @@ export function AudioComponentsSettingsPanel() {
             </p>
 
             <div className="settings-section-controls">
-              <button type="button" className="settings-action-btn" onClick={() => void refreshComponents()} disabled={busy}>
+              <PmpButton
+                type="button"
+                className="settings-action-btn"
+                variant="default"
+                onClick={() => void refreshComponents()}
+                disabled={busy}
+              >
                 {t('common.action.refresh')}
-              </button>
-              <button type="button" className="settings-action-btn" onClick={() => void handleApplyAudioInput()} disabled={busy}>
+              </PmpButton>
+              <PmpButton
+                type="button"
+                className="settings-action-btn"
+                variant="default"
+                onClick={() => void handleApplyAudioInput()}
+                disabled={busy}
+              >
                 {t('common.action.apply')}
-              </button>
+              </PmpButton>
             </div>
           </>
         )}

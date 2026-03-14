@@ -4,7 +4,16 @@ import './StandardWindowPin.css';
 
 const PinIcon: React.FC = () => (
   <svg viewBox="0 0 24 24" className="window-pin-icon" aria-hidden="true">
-    <path d="M8 4a1 1 0 1 0 0 2h1v3.17l-2.59 2.58A1 1 0 0 0 7.12 13H11v7a1 1 0 1 0 2 0v-7h3.88a1 1 0 0 0 .71-1.7L15 9.17V6h1a1 1 0 1 0 0-2H8Z" />
+    <ellipse className="window-pin-icon-shadow" cx="12" cy="19.1" rx="4.7" ry="1.5" />
+    <circle className="window-pin-icon-anchor" cx="12" cy="18.55" r="1.2" />
+    <g className="window-pin-icon-assembly">
+      <path className="window-pin-icon-head" d="M8.1 4.15a1 1 0 1 0 0 2h7.8a1 1 0 1 0 0-2h-7.8Z" />
+      <path
+        className="window-pin-icon-body"
+        d="M9.15 6.15v2.8l-2.3 2.4a.9.9 0 0 0 .65 1.53h3.6v3.05a.9.9 0 1 0 1.8 0v-3.05h3.6a.9.9 0 0 0 .65-1.53l-2.3-2.4v-2.8h-5.7Z"
+      />
+      <path className="window-pin-icon-needle" d="M12 12.85v7.05" />
+    </g>
   </svg>
 );
 

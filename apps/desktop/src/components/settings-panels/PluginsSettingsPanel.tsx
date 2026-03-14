@@ -38,6 +38,7 @@ import {
   subscribePmpmSandbox,
 } from '../../magnet-system/plugins/pmpmSandboxConfig';
 import { useConfirmDialog } from '../core/ConfirmDialog';
+import { PmpButton, PmpCard, PmpCheckbox } from '../primitives';
 
 function formatAuditEvent(event: PmpmAuditEvent): string {
   if (event.type === 'permission-denied') {
@@ -326,50 +327,49 @@ export function PluginsSettingsPanel() {
   );
 
   return (
-    <div className="settings-card">
+    <PmpCard className="settings-card" surfaceId="primitive.card.settings">
       <div className="settings-card-header">
         <div>
           <p className="settings-card-label">{t('settings.plugins.pmpm.label')}</p>
           <p className="settings-card-desc">{t('settings.plugins.pmpm.desc')}</p>
         </div>
 
-        <button type="button" className="settings-action-btn" onClick={() => void handleInstall()} disabled={busy}>
+        <PmpButton className="settings-action-btn" variant="default" onClick={() => void handleInstall()} disabled={busy}>
           {t('common.action.installEllipsis')}
-        </button>
+        </PmpButton>
       </div>
 
       {error && <div className="settings-inline-error">{error}</div>}
 
       <div className="settings-plugin-switches settings-card-note">
-        <label className="settings-plugin-switch-row">
-          <input
-            type="checkbox"
-            checked={sandboxEnabled}
-            onChange={(e) => setPmpmSandboxRuntimeEnabled(Boolean(e.target.checked))}
-          />
-          <span>{t('settings.plugins.runtimeSandbox.label')}</span>
-        </label>
-        <label className="settings-plugin-switch-row">
-          <input
-            type="checkbox"
-            checked={requireTrustedSignatures}
-            onChange={(e) => {
-              const next = Boolean(e.target.checked);
+        <PmpCheckbox
+          className="settings-checkbox settings-plugin-switch-row"
+          variant="settings"
+          checked={sandboxEnabled}
+          onCheckedChange={(next) => setPmpmSandboxRuntimeEnabled(next)}
+        >
+          {t('settings.plugins.runtimeSandbox.label')}
+        </PmpCheckbox>
+        <PmpCheckbox
+          className="settings-checkbox settings-plugin-switch-row"
+          variant="settings"
+          checked={requireTrustedSignatures}
+          onCheckedChange={(next) => {
               setRequireTrustedSignatures(next);
               if (next) setAllowUnsignedPlugins(false);
-            }}
-          />
-          <span>{t('settings.plugins.requireTrustedSignatures.label')}</span>
-        </label>
-        <label className="settings-plugin-switch-row">
-          <input
-            type="checkbox"
-            checked={allowUnsignedPlugins}
-            disabled={requireTrustedSignatures}
-            onChange={(e) => setAllowUnsignedPlugins(Boolean(e.target.checked))}
-          />
-          <span>{t('settings.plugins.allowUnsignedPlugins.label')}</span>
-        </label>
+          }}
+        >
+          {t('settings.plugins.requireTrustedSignatures.label')}
+        </PmpCheckbox>
+        <PmpCheckbox
+          className="settings-checkbox settings-plugin-switch-row"
+          variant="settings"
+          checked={allowUnsignedPlugins}
+          disabled={requireTrustedSignatures}
+          onCheckedChange={(next) => setAllowUnsignedPlugins(next)}
+        >
+          {t('settings.plugins.allowUnsignedPlugins.label')}
+        </PmpCheckbox>
       </div>
 
       <div className="settings-plugin-list">
@@ -454,22 +454,22 @@ export function PluginsSettingsPanel() {
                         {permissions.map((perm) => {
                           const allowed = !deniedSet.has(perm);
                           return (
-                            <label key={perm} className="settings-plugin-permission-line">
-                              <input
-                                type="checkbox"
-                                checked={allowed}
-                                disabled={busy}
-                                onChange={(e) => {
-                                  const nextAllowed = Boolean(e.target.checked);
+                            <PmpCheckbox
+                              key={perm}
+                              className="settings-checkbox settings-plugin-permission-line"
+                              variant="settings"
+                              checked={allowed}
+                              disabled={busy}
+                              onCheckedChange={(nextAllowed) => {
                                   const nextDenied = new Set(deniedPermissions);
                                   if (nextAllowed) nextDenied.delete(perm);
                                   else nextDenied.add(perm);
                                   setPmpmPluginDeniedPermissions(meta.id, Array.from(nextDenied));
                                   restartPmpmRuntime(meta.id, 'permissions-updated');
-                                }}
-                              />
-                              <span>{perm}</span>
-                            </label>
+                              }}
+                            >
+                              {perm}
+                            </PmpCheckbox>
                           );
                         })}
                       </div>
@@ -493,23 +493,25 @@ export function PluginsSettingsPanel() {
                         ))}
                       </div>
                       <div className="settings-plugin-details-actions">
-                        <button
+                        <PmpButton
                           type="button"
                           className="settings-action-btn"
+                          variant="default"
                           onClick={() => clearPmpmAuditLog(meta.id)}
                           disabled={busy}
                         >
                           {t('common.action.clear')}
-                        </button>
+                        </PmpButton>
                       </div>
                     </details>
                   )}
                 </div>
 
                 <div className="settings-plugin-actions">
-                  <button
+                  <PmpButton
                     type="button"
                     className="settings-action-btn"
+                    variant="default"
                     disabled={busy}
                     onClick={() => void handleToggleEnabled(meta.id, !enabled)}
                     title={
@@ -519,22 +521,24 @@ export function PluginsSettingsPanel() {
                     }
                   >
                     {enabled ? t('common.action.disable') : t('common.action.enable')}
-                  </button>
+                  </PmpButton>
 
-                  <button
+                  <PmpButton
                     type="button"
                     className="settings-action-btn"
+                    variant="default"
                     disabled={busy}
                     onClick={() => restartPmpmRuntime(meta.id, 'manual')}
                     title={t('settings.plugins.action.restart.title')}
                   >
                     {t('common.action.restart')}
-                  </button>
+                  </PmpButton>
 
                   {signatureKeyId && (
-                    <button
+                    <PmpButton
                       type="button"
                       className="settings-action-btn"
+                      variant="default"
                       disabled={busy}
                       onClick={() => {
                         try {
@@ -563,12 +567,13 @@ export function PluginsSettingsPanel() {
                       {signatureTrusted
                         ? t('settings.plugins.action.untrustKey.label')
                         : t('settings.plugins.action.trustKey.label')}
-                    </button>
+                    </PmpButton>
                   )}
 
-                  <button
+                  <PmpButton
                     type="button"
                     className="settings-danger-btn"
+                    variant="danger"
                     disabled={busy || isActive}
                     onClick={() => void handleUninstall(meta.id)}
                     title={
@@ -578,7 +583,7 @@ export function PluginsSettingsPanel() {
                     }
                   >
                     {t('common.action.uninstall')}
-                  </button>
+                  </PmpButton>
                 </div>
               </div>
             );
@@ -586,6 +591,6 @@ export function PluginsSettingsPanel() {
         )}
       </div>
       {confirmDialog}
-    </div>
+    </PmpCard>
   );
 }

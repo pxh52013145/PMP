@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
+import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import { PmpChoiceButton } from '../primitives';
 
 function sortPanels(a: SettingsPanelContribution, b: SettingsPanelContribution): number {
   const orderA = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
@@ -57,6 +59,7 @@ type SettingsSection = {
 export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
   const t = useT();
+  const pageSurfaceTheme = useSkinSurface('page.settings');
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
@@ -164,7 +167,18 @@ export const SettingsPage: React.FC = () => {
   }, [activeSection]);
 
   return (
-    <div className="page-settings page-settings--deltaforce">
+    <div
+      className={[
+        'page-settings',
+        'page-settings--deltaforce',
+        pageSurfaceTheme.classNameOverride?.container,
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      data-surface-id="page.settings"
+      data-surface-variant={pageSurfaceTheme.variant}
+      style={pageSurfaceTheme.styleOverride?.container}
+    >
       {panels.length === 0 ? (
         <div className="settings-card-note">{t('pages.settings.empty')}</div>
       ) : (
@@ -176,11 +190,15 @@ export const SettingsPage: React.FC = () => {
                   {sections.map((section, index) => {
                     const isActive = section.id === activeSectionId;
                     return (
-                      <button
+                      <PmpChoiceButton
                         key={section.id}
                         type="button"
+                        role="tab"
+                        surfaceId="page.settings.main-tab"
                         className="settings-main-tab"
-                        data-active={isActive}
+                        active={isActive}
+                        aria-selected={isActive}
+                        tabIndex={isActive ? 0 : -1}
                         data-has-separator={index < sections.length - 1}
                         onClick={() => {
                           setActiveSectionId(section.id);
@@ -199,7 +217,7 @@ export const SettingsPage: React.FC = () => {
                         </span>
                         <span className="settings-main-tab-active-corner-fx" aria-hidden="true" />
                         <span className="settings-main-tab-corner" aria-hidden="true" />
-                      </button>
+                      </PmpChoiceButton>
                     );
                   })}
                 </div>
@@ -230,11 +248,15 @@ export const SettingsPage: React.FC = () => {
               }}
             >
               {visiblePanels.map((panel, index) => (
-                <button
+                <PmpChoiceButton
                   key={panel.id}
                   type="button"
+                  role="tab"
+                  surfaceId="page.settings.sub-tab"
                   className="settings-sub-tab"
-                  data-active={panel.id === activePanelId}
+                  active={panel.id === activePanelId}
+                  aria-selected={panel.id === activePanelId}
+                  tabIndex={panel.id === activePanelId ? 0 : -1}
                   data-has-separator={index < visiblePanels.length - 1}
                   onClick={() => {
                     setActivePanelId(panel.id);
@@ -246,7 +268,7 @@ export const SettingsPage: React.FC = () => {
                   {panel.source === 'plugin' && (
                     <span className="settings-sub-tab-tag">{t('common.source.plugin')}</span>
                   )}
-                </button>
+                </PmpChoiceButton>
               ))}
             </div>
           </nav>

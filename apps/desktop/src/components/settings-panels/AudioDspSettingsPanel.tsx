@@ -4,6 +4,7 @@ import { useAudioEngine } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import { broadcastDataUpdate, readData, STORAGE_KEYS, TAURI_EVENTS } from '../../utils/windowCommunication';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import { PmpButton, PmpChoiceButton } from '../primitives';
 
 type NativeDspEqBandKind = 'peaking' | 'low-shelf' | 'high-shelf';
 
@@ -249,33 +250,33 @@ export function AudioDspSettingsPanel() {
                 <p className="settings-inline-row-title">{t('settings.audioDsp.gain.presets')}</p>
               </div>
               <div className="settings-inline-row-controls">
-                <button
+                <PmpChoiceButton
                   type="button"
                   className="settings-choice-btn"
-                  data-active={Math.abs(dsp.gainDb + 6) <= 0.05}
+                  active={Math.abs(dsp.gainDb + 6) <= 0.05}
                   onClick={() => setDsp((prev) => ({ ...prev, gainDb: -6 }))}
                   disabled={busy}
                 >
                   {t('settings.audioDsp.gain.preset.minus6')}
-                </button>
-                <button
+                </PmpChoiceButton>
+                <PmpChoiceButton
                   type="button"
                   className="settings-choice-btn"
-                  data-active={Math.abs(dsp.gainDb) <= 0.05}
+                  active={Math.abs(dsp.gainDb) <= 0.05}
                   onClick={() => setDsp((prev) => ({ ...prev, gainDb: 0 }))}
                   disabled={busy}
                 >
                   {t('settings.audioDsp.gain.preset.zero')}
-                </button>
-                <button
+                </PmpChoiceButton>
+                <PmpChoiceButton
                   type="button"
                   className="settings-choice-btn"
-                  data-active={Math.abs(dsp.gainDb - 6) <= 0.05}
+                  active={Math.abs(dsp.gainDb - 6) <= 0.05}
                   onClick={() => setDsp((prev) => ({ ...prev, gainDb: 6 }))}
                   disabled={busy}
                 >
                   {t('settings.audioDsp.gain.preset.plus6')}
-                </button>
+                </PmpChoiceButton>
               </div>
             </div>
           </>
@@ -330,9 +331,10 @@ export function AudioDspSettingsPanel() {
             <p className="settings-card-note">{t('settings.audioDsp.eq.gainDb')}</p>
 
             <div className="settings-section-controls">
-              <button
+              <PmpButton
                 type="button"
                 className="settings-action-btn"
+                variant="default"
                 onClick={() =>
                   setDsp((prev) => ({
                     ...prev,
@@ -342,7 +344,7 @@ export function AudioDspSettingsPanel() {
                 disabled={busy}
               >
                 {t('common.action.reset')}
-              </button>
+              </PmpButton>
             </div>
           </>
         )}
@@ -366,24 +368,24 @@ export function AudioDspSettingsPanel() {
                 <p className="settings-inline-row-title">{t('common.state.label')}</p>
               </div>
               <div className="settings-inline-row-controls">
-                <button
+                <PmpChoiceButton
                   type="button"
                   className="settings-choice-btn"
-                  data-active={!dsp.limiterEnabled}
+                  active={!dsp.limiterEnabled}
                   onClick={() => setDsp((prev) => ({ ...prev, limiterEnabled: false }))}
                   disabled={busy}
                 >
                   {t('settings.audioDsp.limiter.disable')}
-                </button>
-                <button
+                </PmpChoiceButton>
+                <PmpChoiceButton
                   type="button"
                   className="settings-choice-btn"
-                  data-active={dsp.limiterEnabled}
+                  active={dsp.limiterEnabled}
                   onClick={() => setDsp((prev) => ({ ...prev, limiterEnabled: true }))}
                   disabled={busy}
                 >
                   {t('settings.audioDsp.limiter.enable')}
-                </button>
+                </PmpChoiceButton>
               </div>
             </div>
 
@@ -415,22 +417,35 @@ export function AudioDspSettingsPanel() {
 
       {canUseBackend && (
         <div className="settings-section-controls">
-          <button type="button" className="settings-action-btn" onClick={() => void applyChain(dsp)} disabled={busy}>
-            {t('common.action.apply')}
-          </button>
-          <button
+          <PmpButton
             type="button"
             className="settings-action-btn"
+            variant="default"
+            onClick={() => void applyChain(dsp)}
+            disabled={busy}
+          >
+            {t('common.action.apply')}
+          </PmpButton>
+          <PmpButton
+            type="button"
+            className="settings-action-btn"
+            variant="default"
             onClick={() => {
               resetAll();
             }}
             disabled={busy}
           >
             {t('common.action.reset')}
-          </button>
-          <button type="button" className="settings-action-btn" onClick={loadPersisted} disabled={busy}>
+          </PmpButton>
+          <PmpButton
+            type="button"
+            className="settings-action-btn"
+            variant="default"
+            onClick={loadPersisted}
+            disabled={busy}
+          >
             {t('common.action.refresh')}
-          </button>
+          </PmpButton>
         </div>
       )}
 
