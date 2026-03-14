@@ -1,12 +1,12 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { appWindow } from '@tauri-apps/api/window';
+import { appWindow, getAll } from '@tauri-apps/api/window';
 import { TAURI_EVENTS, setupTauriListener } from './utils/windowCommunication';
 import { WindowActivityProvider } from './contexts/WindowActivityContext';
 import { useAdaptiveRenderMode } from './contexts/useAdaptiveRenderMode';
 import { useKernel } from './contexts/KernelContext';
 import { QualityProvider } from './contexts/QualityContext';
 import { CommandPalette } from './components/commands/CommandPalette';
-import { EditorProvider } from './contexts/EditorContext';
+import { EditorProvider, useEditor } from './contexts/EditorContext';
 import { NavigationProvider, useNavigation } from './contexts/NavigationContext';
 import { ThemeProvider } from './themes/contexts/ThemeContextWithSync';
 import { AudioEngineProvider } from './contexts/AudioEngineContext';
@@ -17,6 +17,7 @@ import {
   createInitialMagnetState,
   MagnetLibraryProvider,
 } from './modules/magnets';
+import { hasFocusedVisibleEditorWindow } from './utils/editorWindowFocus';
 import { APP_LIFECYCLE_SERVICE_TOKEN } from './services/lifecycle';
 import { isTauriRuntime } from './utils/tauriRuntime';
 import { WindowCloseProvider } from './contexts/WindowCloseContext';
@@ -64,10 +65,12 @@ function AppContent() {
   const kernel = useKernel();
   const keybindings = kernel.services.get(KEYBINDINGS_SERVICE_TOKEN);
   const { navigateTo } = useNavigation();
+  const { editorState } = useEditor();
 
   const [isMainWindowVisible, setIsMainWindowVisible] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(!document.hidden);
   const [isMainWindowFocused, setIsMainWindowFocused] = useState(() => document.hasFocus());
+  const [isEditorAuxWindowFocused, setIsEditorAuxWindowFocused] = useState(false);
   const [isMainWindowMinimized, setIsMainWindowMinimized] = useState(false);
   const [isPageFrozen, setIsPageFrozen] = useState(false);
   const { service: performanceControlService, settings: performanceSettings } =
@@ -349,10 +352,48 @@ function AppContent() {
     };
   }, [isTauri]);
 
+  useEffect(() => {
+    if (!isTauri || !editorState.isEditing || isMainWindowFocused) {
+      setIsEditorAuxWindowFocused(false);
+      return;
+    }
+
+    let disposed = false;
+    let pollTimer: number | null = null;
+
+    const refreshEditorWindowFocus = async () => {
+      try {
+        const focused = await hasFocusedVisibleEditorWindow(getAll());
+        if (!disposed) {
+          setIsEditorAuxWindowFocused(focused);
+        }
+      } catch {
+        if (!disposed) {
+          setIsEditorAuxWindowFocused(false);
+        }
+      }
+    };
+
+    void refreshEditorWindowFocus();
+    pollTimer = window.setInterval(() => {
+      void refreshEditorWindowFocus();
+    }, 200);
+
+    return () => {
+      disposed = true;
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+      }
+    };
+  }, [editorState.isEditing, isMainWindowFocused, isTauri]);
+
+  const isRenderFocusActive = isMainWindowFocused || isEditorAuxWindowFocused;
+
   const renderMode = useAdaptiveRenderMode({
     isWindowVisible: isMainWindowVisible,
     isDocumentVisible,
-    isWindowFocused: isMainWindowFocused,
+    // Keep the main matrix responsive while an auxiliary editor window owns focus.
+    isWindowFocused: isRenderFocusActive,
     isWindowMinimized: isMainWindowMinimized,
     isPageFrozen,
     backgroundRenderPolicy: performanceSettings.backgroundRenderPolicy,
