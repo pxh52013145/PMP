@@ -3,10 +3,12 @@ import { useProgressBarLogic } from './useProgressBarLogic';
 import { useProgressBarData } from './useProgressBarData';
 import { useDynamicColor } from '../shared/useDynamicColor';
 import { StandardProgressBar } from './StandardProgressBar';
+import { PROGRESS_BAR_VARIANT_PRESETS } from './progressBarSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const PROGRESS_BAR_RENDERERS = {
-  default: StandardProgressBar,
+  ...buildMagnetVariantRenderers(StandardProgressBar, PROGRESS_BAR_VARIANT_PRESETS),
 };
 
 export const ProgressBar: React.FC = () => {

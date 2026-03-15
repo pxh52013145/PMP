@@ -15,14 +15,21 @@ import {
   GENERIC_PLATFORM_WORKSPACE_MODE,
   getWorkspaceConnectorId,
   normalizeWorkspaceMode,
+  toConnectorWorkspaceMode,
   type PlatformWorkspaceMode,
 } from './platformWorkspaceModes';
 import { resolvePlatformWorkspaceAdapter } from './platformWorkspaceAdapterRegistry';
 import { useBilibiliWorkspaceAdapterController } from './useBilibiliWorkspaceAdapterController';
 import { useDedicatedWorkspacePlaceholderController } from './useDedicatedWorkspacePlaceholderController';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
+import {
+  PLATFORM_MAGNET_DEFAULT_SEARCH_LIMIT,
+  PLATFORM_MAGNET_VARIANT_PRESETS,
+  parsePlatformMagnetSkinProps,
+  type PlatformMagnetSkinProps,
+} from './platformMagnetSkin';
 import './PlatformMagnet.css';
-
-const DEFAULT_SEARCH_LIMIT = 30;
 
 type PlatformTrackSearchItem = Awaited<ReturnType<typeof searchPlatformTracks>>['tracks'][number];
 
@@ -53,12 +60,30 @@ function isPlatformPlaylist(
   return playlist.sourceConnectorId === connectorId;
 }
 
-function getDefaultPlatformWorkspaceMode(): PlatformWorkspaceMode {
-  const descriptors = buildPlatformWorkspaceDescriptors(listPlatformConnectorDefinitions());
-  return descriptors[0]?.mode ?? GENERIC_PLATFORM_WORKSPACE_MODE;
+function resolveConfiguredPlatformMode(
+  defaultMode: PlatformMagnetSkinProps['defaultMode'],
+  workspaceDescriptors: ReturnType<typeof buildPlatformWorkspaceDescriptors>
+): PlatformWorkspaceMode {
+  if (defaultMode === 'generic') {
+    return GENERIC_PLATFORM_WORKSPACE_MODE;
+  }
+
+  const dedicatedWorkspace = workspaceDescriptors.find(
+    (descriptor) =>
+      descriptor.connectorId === defaultMode ||
+      descriptor.connectorId === `connector.platform.${defaultMode}` ||
+      descriptor.mode === toConnectorWorkspaceMode(defaultMode)
+  );
+
+  return dedicatedWorkspace?.mode ?? GENERIC_PLATFORM_WORKSPACE_MODE;
 }
 
-export const PlatformMagnet: React.FC = () => {
+type PlatformMagnetRendererProps = {
+  variantConfig?: Record<string, unknown>;
+};
+
+const PlatformMagnetDefaultRenderer: React.FC<PlatformMagnetRendererProps> = ({ variantConfig }) => {
+  const skinProps = useMemo(() => parsePlatformMagnetSkinProps(variantConfig), [variantConfig]);
   const t = useT();
   const audioService = useAudioService();
 
@@ -69,7 +94,19 @@ export const PlatformMagnet: React.FC = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
-  const [mode, setMode] = useState<PlatformWorkspaceMode>(getDefaultPlatformWorkspaceMode);
+  const connectorDefinitions = useMemo<PlatformConnectorDefinition[]>(
+    () => listPlatformConnectorDefinitions(),
+    []
+  );
+
+  const workspaceDescriptors = useMemo(
+    () => buildPlatformWorkspaceDescriptors(connectorDefinitions),
+    [connectorDefinitions]
+  );
+
+  const [mode, setMode] = useState<PlatformWorkspaceMode>(() =>
+    resolveConfiguredPlatformMode(skinProps.defaultMode, workspaceDescriptors)
+  );
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<PlatformConnectorFacadeItem[]>([]);
   const [lastUpdatedAtMs, setLastUpdatedAtMs] = useState<number | null>(null);
@@ -114,15 +151,9 @@ export const PlatformMagnet: React.FC = () => {
     }
   }, [t]);
 
-  const connectorDefinitions = useMemo<PlatformConnectorDefinition[]>(
-    () => listPlatformConnectorDefinitions(),
-    []
-  );
-
-  const workspaceDescriptors = useMemo(
-    () => buildPlatformWorkspaceDescriptors(connectorDefinitions),
-    [connectorDefinitions]
-  );
+  useEffect(() => {
+    setMode(resolveConfiguredPlatformMode(skinProps.defaultMode, workspaceDescriptors));
+  }, [skinProps.defaultMode, workspaceDescriptors]);
 
   const activeMode = useMemo(
     () => normalizeWorkspaceMode(mode, workspaceDescriptors),
@@ -271,7 +302,7 @@ export const PlatformMagnet: React.FC = () => {
     try {
       const result = await searchPlatformTracks({
         query: normalizedQuery,
-        limit: DEFAULT_SEARCH_LIMIT,
+        limit: skinProps.searchLimit || PLATFORM_MAGNET_DEFAULT_SEARCH_LIMIT,
         connectorIds,
       });
 
@@ -287,7 +318,7 @@ export const PlatformMagnet: React.FC = () => {
     } finally {
       setSearching(false);
     }
-  }, [searchQuery, searchScopeConnectorId, t]);
+  }, [searchQuery, searchScopeConnectorId, skinProps.searchLimit, t]);
 
   const handleCreatePlaylist = useCallback(() => {
     const normalizedName = newPlaylistName.trim();
@@ -428,7 +459,7 @@ export const PlatformMagnet: React.FC = () => {
         </div>
       </div>
 
-      {activeMode === GENERIC_PLATFORM_WORKSPACE_MODE && (
+      {skinProps.showSummary && activeMode === GENERIC_PLATFORM_WORKSPACE_MODE && (
         <div className="platform-magnet-summary-row">
           <p>
             {t('magnet.platform.summary.connectors', {
@@ -545,4 +576,17 @@ export const PlatformMagnet: React.FC = () => {
       {error ? <p className="platform-magnet-error">{error}</p> : null}
     </div>
   );
+};
+
+const PLATFORM_MAGNET_RENDERERS = {
+  ...buildMagnetVariantRenderers(PlatformMagnetDefaultRenderer, PLATFORM_MAGNET_VARIANT_PRESETS),
+} satisfies Record<string, React.ComponentType<PlatformMagnetRendererProps>>;
+
+export const PlatformMagnet: React.FC = () => {
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('platform-magnet', PLATFORM_MAGNET_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
+
+  return <Renderer variantConfig={skin.props} />;
 };

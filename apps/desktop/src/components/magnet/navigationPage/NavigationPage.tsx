@@ -2,10 +2,12 @@ import React from 'react';
 import { useNavigationPageData } from './useNavigationPageData';
 import { useNavigationPageLogic } from './useNavigationPageLogic';
 import { StandardNavigationPage } from './StandardNavigationPage';
+import { NAVIGATION_PAGE_VARIANT_PRESETS } from './navigationPageSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const NAVIGATION_PAGE_RENDERERS = {
-  default: StandardNavigationPage,
+  ...buildMagnetVariantRenderers(StandardNavigationPage, NAVIGATION_PAGE_VARIANT_PRESETS),
 };
 
 export const NavigationPage: React.FC = () => {

@@ -1,8 +1,14 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useT } from '../../i18n';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
+import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
+import { useResolvedMagnetSkinRenderer } from './shared/useResolvedMagnetSkinRenderer';
+import {
+  PROCESS_PERF_MONITOR_VARIANT_PRESETS,
+  parseProcessPerfMonitorSkinProps,
+} from './processPerfMonitorSkin';
 import './ProcessPerfMonitorMagnet.css';
 
 type DisplaySnapshot = {
@@ -41,7 +47,14 @@ function buildSnapshotHash(snapshot: DisplaySnapshot): string {
   ].join('|');
 }
 
-export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet() {
+type ProcessPerfMonitorRendererProps = {
+  variantConfig?: Record<string, unknown>;
+};
+
+const ProcessPerfMonitorDefaultRenderer = memo(function ProcessPerfMonitorDefaultRenderer({
+  variantConfig,
+}: ProcessPerfMonitorRendererProps) {
+  const skinProps = useMemo(() => parseProcessPerfMonitorSkinProps(variantConfig), [variantConfig]);
   const t = useT();
   const navigation = useNavigation();
   const { renderMode, isVisible } = useWindowActivity();
@@ -102,6 +115,43 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
     });
   }, [snapshot, t]);
 
+  const statRows = useMemo(() => {
+    const rows = [
+      {
+        key: 'webview2-private',
+        label: t('magnet.processPerf.row.webview2Private'),
+        value: toMb(snapshot?.totals.webview2PrivateBytes ?? null),
+        group: 'memory' as const,
+      },
+      {
+        key: 'tree-private',
+        label: t('magnet.processPerf.row.treePrivate'),
+        value: toMb(snapshot?.totals.privateBytes ?? null),
+        group: 'memory' as const,
+      },
+      {
+        key: 'webview2-cpu',
+        label: t('magnet.processPerf.row.webview2Cpu'),
+        value: toCpu(snapshot?.totals.webview2CpuPercent ?? null),
+        group: 'cpu' as const,
+      },
+      {
+        key: 'tree-cpu',
+        label: t('magnet.processPerf.row.treeCpu'),
+        value: toCpu(snapshot?.totals.cpuPercent ?? null),
+        group: 'cpu' as const,
+      },
+    ];
+
+    if (skinProps.metricSet === 'memory') {
+      return rows.filter((row) => row.group === 'memory');
+    }
+    if (skinProps.metricSet === 'cpu') {
+      return rows.filter((row) => row.group === 'cpu');
+    }
+    return rows;
+  }, [skinProps.metricSet, snapshot, t]);
+
   return (
     <div
       role="button"
@@ -119,13 +169,15 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
         <span className="process-perf-monitor__title">
           {t('magnet.processPerf.title')}
         </span>
-        <span className="process-perf-monitor__badge">
-          {renderMode === 'pause'
-            ? t('magnet.processPerf.badge.paused')
-            : renderMode === 'throttle'
-              ? t('magnet.processPerf.badge.throttle')
-              : t('magnet.processPerf.badge.live')}
-        </span>
+        {skinProps.showModeBadge ? (
+          <span className="process-perf-monitor__badge">
+            {renderMode === 'pause'
+              ? t('magnet.processPerf.badge.paused')
+              : renderMode === 'throttle'
+                ? t('magnet.processPerf.badge.throttle')
+                : t('magnet.processPerf.badge.live')}
+          </span>
+        ) : null}
       </div>
 
       {error ? (
@@ -133,27 +185,36 @@ export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet()
       ) : null}
 
       <div className="process-perf-monitor__stats">
-        <div className="process-perf-monitor__row">
-          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.webview2Private')}</span>
-          <span>{toMb(snapshot?.totals.webview2PrivateBytes ?? null)}</span>
-        </div>
-        <div className="process-perf-monitor__row">
-          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.treePrivate')}</span>
-          <span>{toMb(snapshot?.totals.privateBytes ?? null)}</span>
-        </div>
-        <div className="process-perf-monitor__row">
-          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.webview2Cpu')}</span>
-          <span>{toCpu(snapshot?.totals.webview2CpuPercent ?? null)}</span>
-        </div>
-        <div className="process-perf-monitor__row">
-          <span className="process-perf-monitor__label">{t('magnet.processPerf.row.treeCpu')}</span>
-          <span>{toCpu(snapshot?.totals.cpuPercent ?? null)}</span>
-        </div>
+        {statRows.map((row) => (
+          <div key={row.key} className="process-perf-monitor__row">
+            <span className="process-perf-monitor__label">{row.label}</span>
+            <span>{row.value}</span>
+          </div>
+        ))}
       </div>
 
-      <div className="process-perf-monitor__footer">
-        {systemLine}
-      </div>
+      {skinProps.showSystemSummary ? (
+        <div className="process-perf-monitor__footer">
+          {systemLine}
+        </div>
+      ) : null}
     </div>
   );
+});
+
+const PROCESS_PERF_MONITOR_RENDERERS = {
+  ...buildMagnetVariantRenderers(ProcessPerfMonitorDefaultRenderer, PROCESS_PERF_MONITOR_VARIANT_PRESETS),
+} satisfies Record<string, ComponentType<ProcessPerfMonitorRendererProps>>;
+
+export const ProcessPerfMonitorMagnet = memo(function ProcessPerfMonitorMagnet() {
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer(
+    'process-perf-monitor',
+    PROCESS_PERF_MONITOR_RENDERERS,
+    {
+      defaultRendererId: 'default',
+      defaultVariant: 'default',
+    }
+  );
+
+  return <Renderer variantConfig={skin.props} />;
 });

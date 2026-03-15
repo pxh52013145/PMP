@@ -1861,7 +1861,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn 0.2s ease;
 }
 
 .paths-manager-modal {
@@ -1876,7 +1875,6 @@
   flex-direction: column;
   overflow: hidden;
   box-shadow: 0 16px 64px rgba(0, 0, 0, 0.6);
-  animation: slideIn 0.3s ease;
 }
 
 .paths-manager-header {
@@ -1907,7 +1905,6 @@
   color: rgba(255, 255, 255, 0.9);
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.2s;
   font-size: 13px;
   font-weight: 500;
   display: flex;
@@ -1934,7 +1931,6 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
-  transition: all 0.2s;
 }
 
 .paths-clean-missing-btn:hover:not(:disabled) {
@@ -1948,7 +1944,7 @@
   cursor: not-allowed;
 }
 
-.paths-manager-header-actions > button:last-child {
+.paths-manager-close-btn {
   width: 32px;
   height: 32px;
   background: transparent;
@@ -1956,14 +1952,13 @@
   color: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   border-radius: 6px;
-  transition: all 0.2s;
   font-size: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.paths-manager-header-actions > button:last-child:hover {
+.paths-manager-close-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.9);
 }

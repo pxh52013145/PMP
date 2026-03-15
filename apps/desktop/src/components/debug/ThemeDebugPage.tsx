@@ -50,6 +50,11 @@ const DEBUG_MAGNET_LABEL_KEYS: Record<string, string> = {
   'btn-back': 'editor.theme-debug.component.option.btn-back',
   'btn-window-pin': 'editor.theme-debug.component.option.btn-window-pin',
   'btn-debug': 'editor.theme-debug.component.option.btn-debug',
+  'platform-magnet': 'editor.theme-debug.component.option.platform-magnet',
+  'btn-platform-login': 'editor.theme-debug.component.option.btn-platform-login',
+  'btn-matrix-change': 'editor.theme-debug.component.option.btn-matrix-change',
+  'process-perf-monitor': 'editor.theme-debug.component.option.process-perf-monitor',
+  'dsp-vst': 'editor.theme-debug.component.option.dsp-vst',
 };
 
 const DEBUG_MAGNET_MATERIAL_CHANNELS: Record<string, MaterialChannel[]> = {

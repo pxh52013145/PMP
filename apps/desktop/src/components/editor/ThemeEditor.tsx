@@ -44,7 +44,7 @@ import {
 import { filterMagnetConfigSnapshotForImport, filterMagnetSpaceLayoutForImport } from '../../themes/packs/profilePackApply';
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
-import { assignMagnetComponentTheme, materializeThemeBinding } from '../../themes/importAdapters';
+import { assignMagnetBindingFragment, materializeThemeBinding } from '../../themes/importAdapters';
 import { resolveLegacyComponentThemeSurfaceId } from '../../themes/legacyComponentThemes';
 import type { Theme, ThemeBindingId } from '../../themes/types/theme';
 import type { ThemeImportCandidate, ThemeImportSurfaceSpec } from '../../themes/types/themeImport';
@@ -102,6 +102,80 @@ function assertThemeTokens(value: unknown, path: string): void {
   for (const [key, tokenValue] of Object.entries(value)) {
     assertThemeTokenAssignments(tokenValue, `${path}.${key}`);
   }
+}
+
+function assertThemeMotionChannelSpec(value: unknown, path: string): void {
+  assertObject(value, path);
+
+  const stringFields = ['preset', 'easing', 'direction', 'fillMode', 'playState', 'origin'] as const;
+  for (const key of stringFields) {
+    const fieldValue = value[key];
+    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'string') {
+      throw new Error(`${path}.${key} must be a string`);
+    }
+  }
+
+  const scalarFields = ['duration', 'delay', 'distance'] as const;
+  for (const key of scalarFields) {
+    const fieldValue = value[key];
+    if (typeof fieldValue !== 'undefined' && !['string', 'number'].includes(typeof fieldValue)) {
+      throw new Error(`${path}.${key} must be a string or number`);
+    }
+  }
+
+  const numberFields = ['scale'] as const;
+  for (const key of numberFields) {
+    const fieldValue = value[key];
+    if (typeof fieldValue !== 'undefined' && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
+      throw new Error(`${path}.${key} must be a finite number`);
+    }
+  }
+
+  if (
+    typeof value.iterationCount !== 'undefined' &&
+    value.iterationCount !== 'infinite' &&
+    (typeof value.iterationCount !== 'number' || !Number.isFinite(value.iterationCount))
+  ) {
+    throw new Error(`${path}.iterationCount must be a finite number or "infinite"`);
+  }
+}
+
+function assertThemeMotionMap(value: unknown, path: string): void {
+  assertObject(value, path);
+  for (const [key, entry] of Object.entries(value)) {
+    assertThemeMotionChannelSpec(entry, `${path}.${key}`);
+  }
+}
+
+function assertMotionCapabilityValue(value: unknown, path: string): void {
+  assertObject(value, path);
+  if (typeof value.enabled !== 'undefined' && typeof value.enabled !== 'boolean') {
+    throw new Error(`${path}.enabled must be a boolean`);
+  }
+  if (typeof value.mode !== 'undefined' && typeof value.mode !== 'string') {
+    throw new Error(`${path}.mode must be a string`);
+  }
+  if (typeof value.layout !== 'undefined') {
+    assertObject(value.layout, `${path}.layout`);
+    const layoutStringFields = ['strategy', 'largeChange', 'sharedKey'] as const;
+    for (const key of layoutStringFields) {
+      const fieldValue = value.layout[key];
+      if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'string') {
+        throw new Error(`${path}.layout.${key} must be a string`);
+      }
+    }
+  }
+  if (typeof value.channels !== 'undefined') {
+    assertThemeMotionMap(value.channels, `${path}.channels`);
+  }
+}
+
+function assertMotionCapability(value: unknown, path: string): void {
+  assertObject(value, path);
+  if (typeof value.motion === 'undefined') {
+    return;
+  }
+  assertMotionCapabilityValue(value.motion, `${path}.motion`);
 }
 
 function assertDynamicColorCapability(value: unknown, path: string): void {
@@ -185,6 +259,9 @@ function assertThemePartStateSpec(value: unknown, path: string): void {
   if (typeof value.tokens !== 'undefined') {
     assertThemeTokenAssignments(value.tokens, `${path}.tokens`);
   }
+  if (typeof value.motion !== 'undefined') {
+    assertThemeMotionMap(value.motion, `${path}.motion`);
+  }
 }
 
 function assertThemeSurfaceStateSpec(value: unknown, path: string): void {
@@ -252,6 +329,9 @@ function assertComponentThemeDocument(value: unknown, path: string): void {
   if (typeof value.dynamicColor !== 'undefined') {
     assertLegacyDynamicColorConfig(value.dynamicColor, `${path}.dynamicColor`);
   }
+  if (typeof value.motionConfig !== 'undefined') {
+    assertMotionCapabilityValue(value.motionConfig, `${path}.motionConfig`);
+  }
 }
 
 function assertThemeBindingValue(value: unknown, path: string): void {
@@ -270,6 +350,7 @@ function assertThemeBindingValue(value: unknown, path: string): void {
   }
   if (typeof value.capabilities !== 'undefined') {
     assertDynamicColorCapability(value.capabilities, `${path}.capabilities`);
+    assertMotionCapability(value.capabilities, `${path}.capabilities`);
   }
 }
 
@@ -767,9 +848,9 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const rawId = `${theme.id}-${rendererId}`;
       const id = isValidId(rawId) ? rawId : isValidId(rendererId) ? rendererId : 'variant-preset';
 
-      const resolvedComponentTheme = materializeThemeBinding(theme, `magnet.${rendererId}` as ThemeBindingId);
-      const componentTheme = isPlainObject(resolvedComponentTheme)
-        ? (resolvedComponentTheme as unknown as Record<string, unknown>)
+      const resolvedFragment = materializeThemeBinding(theme, `magnet.${rendererId}` as ThemeBindingId);
+      const fragment = isPlainObject(resolvedFragment)
+        ? (resolvedFragment as unknown as Record<string, unknown>)
         : {};
 
       const preset: VariantPresetV1 = {
@@ -781,7 +862,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
           version: theme.version || '0.0.0',
         },
         target: { rendererId },
-        componentTheme,
+        fragment,
       };
 
       const text = JSON.stringify(preset, null, 2);
@@ -826,8 +907,8 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         });
         if (!ok) return;
 
-        const componentTheme = parsed.componentTheme as unknown as ThemeImportSurfaceSpec;
-        await applyTheme(assignMagnetComponentTheme(theme, rendererId, componentTheme));
+        const fragment = parsed.fragment as unknown as ThemeImportSurfaceSpec;
+        await applyTheme(assignMagnetBindingFragment(theme, rendererId, fragment));
 
         setVariantPresetMessage({
           kind: 'success',
@@ -2880,7 +2961,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                         {
                           rendererId: selectedRenderer.id,
                           explicitBinding: theme.bindings?.[`magnet.${selectedRenderer.id}`] ?? null,
-                          materializedComponentTheme: materializeThemeBinding(
+                          materializedFragment: materializeThemeBinding(
                             theme,
                             `magnet.${selectedRenderer.id}` as ThemeBindingId
                           ),

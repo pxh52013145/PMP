@@ -83,6 +83,44 @@ function hasOwnKeys(value: unknown): value is Record<string, unknown> {
   return Object.keys(value).length > 0;
 }
 
+function hasMeaningfulDynamicColorCapability(value: unknown): boolean {
+  if (!hasOwnKeys(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.enabled === 'boolean' ||
+    (typeof value.source === 'string' && value.source.trim().length > 0) ||
+    (typeof value.mode === 'string' && value.mode.trim().length > 0) ||
+    (typeof value.apply === 'string' && value.apply.trim().length > 0) ||
+    typeof value.blendRatio === 'number' ||
+    typeof value.gradientAngle === 'number' ||
+    typeof value.dynamicSpeed === 'number' ||
+    hasOwnKeys(value.colorAdjust)
+  );
+}
+
+function hasMeaningfulMotionCapability(value: unknown): boolean {
+  if (!hasOwnKeys(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.enabled === 'boolean' ||
+    (typeof value.mode === 'string' && value.mode.trim().length > 0) ||
+    hasOwnKeys(value.layout) ||
+    hasOwnKeys(value.channels)
+  );
+}
+
+function hasMeaningfulBindingCapabilities(value: unknown): boolean {
+  if (!hasOwnKeys(value)) {
+    return false;
+  }
+
+  return hasMeaningfulDynamicColorCapability(value.dynamicColor) || hasMeaningfulMotionCapability(value.motion);
+}
+
 export function isThemeBindingEmpty(binding: ThemeBinding | null | undefined): boolean {
   if (!binding) {
     return true;
@@ -93,8 +131,7 @@ export function isThemeBindingEmpty(binding: ThemeBinding | null | undefined): b
     !(typeof binding.renderer === 'string' && binding.renderer.trim().length > 0) &&
     !(typeof binding.variant === 'string' && binding.variant.trim().length > 0) &&
     !hasOwnKeys(binding.props) &&
-    !hasOwnKeys(binding.capabilities) &&
-    !hasOwnKeys(binding.capabilities?.dynamicColor)
+    !hasMeaningfulBindingCapabilities(binding.capabilities)
   );
 }
 

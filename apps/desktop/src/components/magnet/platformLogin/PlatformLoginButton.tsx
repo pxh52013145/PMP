@@ -15,9 +15,14 @@ import {
   type PlatformQrLoginPollResult,
   type PlatformQrLoginSession,
 } from '../../../modules/music-platform';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
+import {
+  PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS,
+  PLATFORM_LOGIN_VARIANT_PRESETS,
+  parsePlatformLoginSkinProps,
+} from './platformLoginSkin';
 import './PlatformLoginButton.css';
-
-const QR_AUTO_POLL_INTERVAL_MS = 1_800;
 const BILIBILI_CONNECTOR_ID = 'connector.platform.bilibili' as const;
 
 type PlatformSelectorItem = {
@@ -92,6 +97,23 @@ function buildPlatformSelectorItems(): PlatformSelectorItem[] {
   }));
 }
 
+function resolvePlatformSelectorId(
+  requestedConnectorId: string | undefined,
+  items: PlatformSelectorItem[]
+): string | null {
+  if (items.length === 0) return null;
+  if (!requestedConnectorId) {
+    return items.find((item) => item.id === BILIBILI_CONNECTOR_ID)?.id ?? items[0]?.id ?? null;
+  }
+
+  const normalizedRequested = requestedConnectorId.trim().toLowerCase();
+  const exactMatch =
+    items.find((item) => item.id.trim().toLowerCase() === normalizedRequested)?.id ??
+    items.find((item) => item.id.trim().toLowerCase().endsWith(`.${normalizedRequested}`))?.id;
+
+  return exactMatch ?? items.find((item) => item.id === BILIBILI_CONNECTOR_ID)?.id ?? items[0]?.id ?? null;
+}
+
 function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
   setter: React.Dispatch<React.SetStateAction<TRecord>>,
   connectorId: string,
@@ -103,7 +125,12 @@ function updateConnectorScopedValue<TRecord extends Record<string, unknown>>(
   } as TRecord));
 }
 
-export const PlatformLoginButton: React.FC = () => {
+type PlatformLoginButtonRendererProps = {
+  variantConfig?: Record<string, unknown>;
+};
+
+const PlatformLoginButtonDefaultRenderer: React.FC<PlatformLoginButtonRendererProps> = ({ variantConfig }) => {
+  const skinProps = useMemo(() => parsePlatformLoginSkinProps(variantConfig), [variantConfig]);
   const t = useT();
 
   const [selectorOpen, setSelectorOpen] = useState(false);
@@ -130,14 +157,23 @@ export const PlatformLoginButton: React.FC = () => {
   const authPopupRef = useRef<HTMLDivElement | null>(null);
 
   const platformItems = useMemo<PlatformSelectorItem[]>(() => buildPlatformSelectorItems(), []);
+  const preferredPlatformId = useMemo(
+    () => resolvePlatformSelectorId(skinProps.defaultConnectorId, platformItems),
+    [platformItems, skinProps.defaultConnectorId]
+  );
+
+  useEffect(() => {
+    setSelectedPlatformId(preferredPlatformId);
+  }, [preferredPlatformId]);
 
   const selectedPlatformItem = useMemo(
     () =>
       platformItems.find((item) => item.id === selectedPlatformId) ??
+      platformItems.find((item) => item.id === preferredPlatformId) ??
       platformItems.find((item) => item.id === BILIBILI_CONNECTOR_ID) ??
       platformItems[0] ??
       null,
-    [platformItems, selectedPlatformId]
+    [platformItems, preferredPlatformId, selectedPlatformId]
   );
 
   const activeConnectorId = selectedPlatformItem?.id ?? null;
@@ -286,12 +322,12 @@ export const PlatformLoginButton: React.FC = () => {
 
     const timer = window.setInterval(() => {
       void runPoll(activeQrSession.sessionId, activeConnectorId);
-    }, QR_AUTO_POLL_INTERVAL_MS);
+    }, skinProps.qrAutoPollIntervalMs || PLATFORM_LOGIN_DEFAULT_QR_AUTO_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeConnectorId, activeQrSession?.sessionId, authPopupVisible, runPoll]);
+  }, [activeConnectorId, activeQrSession?.sessionId, authPopupVisible, runPoll, skinProps.qrAutoPollIntervalMs]);
 
   const handleToggleSelector = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -300,7 +336,13 @@ export const PlatformLoginButton: React.FC = () => {
       if (!next) {
         setAuthPopupOpen(false);
         setSelectedPlatformId(null);
+        return next;
       }
+
+      const nextPlatformId = preferredPlatformId ?? selectedPlatformItem?.id ?? null;
+      setSelectedPlatformId(nextPlatformId);
+      const nextPlatformItem = platformItems.find((item) => item.id === nextPlatformId) ?? null;
+      setAuthPopupOpen(Boolean(skinProps.openAuthOnTrigger && nextPlatformItem?.enabled));
       return next;
     });
   };
@@ -422,9 +464,11 @@ export const PlatformLoginButton: React.FC = () => {
         className="platform-login-selector-popup"
         role="dialog"
       >
-        <div className="platform-login-selector-title">
-          {t('magnet.platform-login.selector.title')}
-        </div>
+        {skinProps.showSelectorTitle ? (
+          <div className="platform-login-selector-title">
+            {t('magnet.platform-login.selector.title')}
+          </div>
+        ) : null}
 
         <div className="platform-login-platform-list">
           {platformItems.map((item) => (
@@ -526,4 +570,17 @@ export const PlatformLoginButton: React.FC = () => {
       </CollisionAwarePopup>
     </>
   );
+};
+
+const PLATFORM_LOGIN_RENDERERS = {
+  ...buildMagnetVariantRenderers(PlatformLoginButtonDefaultRenderer, PLATFORM_LOGIN_VARIANT_PRESETS),
+} satisfies Record<string, React.ComponentType<PlatformLoginButtonRendererProps>>;
+
+export const PlatformLoginButton: React.FC = () => {
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-platform-login', PLATFORM_LOGIN_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
+
+  return <Renderer variantConfig={skin.props} />;
 };

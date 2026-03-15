@@ -2,6 +2,7 @@
 
 .back-button {
   --magnet-control-color: rgba(255, 255, 255, 0.92);
+  position: relative;
 }
 
 .back-button-icon {
@@ -12,12 +13,34 @@
   filter: drop-shadow(0 1.2px 1.8px rgba(0, 0, 0, 0.34));
 }
 
+.back-button-icon-outline {
+  filter: drop-shadow(0 1px 1.6px rgba(0, 0, 0, 0.28));
+}
+
 .back-button-icon-base {
   fill: currentColor;
 }
 
 .back-button-icon-highlight {
   fill: rgba(255, 255, 255, 0.34);
+}
+
+.back-button-count {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .back-button:hover:not(:disabled) .back-button-icon {

@@ -65,6 +65,16 @@
   animation: playmode-rotate-ring 2s linear infinite;
 }
 
+.minimal-play-mode-btn.play-mode-ring-always::before {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+  animation: playmode-rotate-ring 2.4s linear infinite;
+}
+
+.minimal-play-mode-btn.play-mode-ring-off::before {
+  display: none;
+}
+
 @keyframes playmode-rotate-ring {
   from {
     transform: rotate(0deg) scale(1);
@@ -131,4 +141,23 @@
   transform: scale(0.9) translateY(1px);
   color: rgba(255, 200, 100, 1);
   filter: drop-shadow(0 0 15px rgba(255, 200, 100, 1));
+}
+
+.play-mode-badge {
+  position: absolute;
+  bottom: -1px;
+  right: -4px;
+  min-width: 22px;
+  height: 14px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  line-height: 1;
 }

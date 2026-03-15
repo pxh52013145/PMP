@@ -143,3 +143,11 @@
   font-weight: 600;
   order: -1;
 }
+
+.volume-slider-popup-no-value {
+  padding-top: 12px;
+}
+
+.volume-slider-popup-no-mute {
+  padding-bottom: 12px;
+}

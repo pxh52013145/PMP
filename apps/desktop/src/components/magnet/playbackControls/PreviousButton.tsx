@@ -2,10 +2,12 @@ import React from 'react';
 import { usePlaybackData } from './usePlaybackData';
 import { usePlaybackLogic } from './usePlaybackLogic';
 import { StandardPrevious } from './StandardPrevious';
+import { PLAYBACK_STEP_VARIANT_PRESETS } from './playbackStepSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const PREVIOUS_BUTTON_RENDERERS = {
-  default: StandardPrevious,
+  ...buildMagnetVariantRenderers(StandardPrevious, PLAYBACK_STEP_VARIANT_PRESETS),
 };
 
 export const PreviousButton: React.FC = () => {

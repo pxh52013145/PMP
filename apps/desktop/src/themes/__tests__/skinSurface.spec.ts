@@ -13,6 +13,9 @@ function createBaseTheme(): Theme {
         'bg.surface': '#101010',
         'fg.default': '#f5f5f5',
       },
+      motion: {
+        'duration.fast': 120,
+      },
     },
     pixel: {
       shape: 'circle',
@@ -61,10 +64,22 @@ describe('skinSurface', () => {
           tokens: {
             'color.text': '{color.fg.default}',
           },
+          motion: {
+            enter: {
+              preset: 'fade',
+              duration: '{motion.duration.fast}',
+            },
+          },
           states: {
             active: {
               style: {
                 opacity: 1,
+              },
+              motion: {
+                hover: {
+                  preset: 'lift-sm',
+                  duration: 140,
+                },
               },
             },
           },
@@ -77,6 +92,12 @@ describe('skinSurface', () => {
               style: {
                 borderBottomWidth: 1,
               },
+              motion: {
+                focus: {
+                  preset: 'pulse-soft',
+                  iterationCount: 2,
+                },
+              },
             },
           },
         },
@@ -87,6 +108,10 @@ describe('skinSurface', () => {
 
     expect(header.classes).toContain('surface-header');
     expect((header.style as Record<string, string>)['--pmp-color-text']).toBe('#f5f5f5');
+    expect((header.style as Record<string, string>)['--pmp-motion-enter-preset']).toBe('fade');
+    expect((header.style as Record<string, string>)['--pmp-motion-enter-duration']).toBe('120ms');
+    expect((header.style as Record<string, string>)['--pmp-motion-hover-preset']).toBe('lift-sm');
+    expect((header.style as Record<string, string>)['--pmp-motion-focus-preset']).toBe('pulse-soft');
     expect(header.style.opacity).toBe(1);
     expect(header.style.borderBottomWidth).toBe(1);
   });
@@ -98,6 +123,12 @@ describe('skinSurface', () => {
       parts: {
         root: {
           classes: ['page-settings-root'],
+          motion: {
+            enter: {
+              preset: 'fade-up',
+              duration: 180,
+            },
+          },
         },
       },
     });
@@ -118,5 +149,7 @@ describe('skinSurface', () => {
     expect(props['data-pmp-primitive']).toBe('card');
     expect(props['data-pmp-binding']).toBe('page.settings');
     expect(props['data-pmp-variant']).toBe('glass');
+    expect(props['data-pmp-motion-channels']).toBe('enter');
+    expect((props.style as Record<string, string>)['--pmp-motion-enter-preset']).toBe('fade-up');
   });
 });

@@ -2,6 +2,8 @@
 
 .playlists-button {
   --magnet-control-color: rgba(255, 255, 255, 0.92);
+  position: relative;
+  gap: 6px;
 }
 
 .playlists-icon {
@@ -13,4 +15,44 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   display: block;
+}
+
+.playlists-button-labeled {
+  padding-inline: 10px;
+  justify-content: flex-start;
+}
+
+.playlists-button-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  line-height: 1;
+}
+
+.playlists-button-count {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.playlists-button-indicator {
+  position: absolute;
+  inset-inline: 6px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(120, 194, 255, 0.95);
+  box-shadow: 0 0 6px rgba(120, 194, 255, 0.4);
 }

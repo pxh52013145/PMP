@@ -2,6 +2,7 @@
 
 .debug-button {
   --magnet-control-color: rgba(255, 255, 255, 0.9);
+  position: relative;
 }
 
 .debug-button.active {
@@ -14,6 +15,7 @@
   display: block;
   overflow: visible;
   fill: none;
+  transition: transform 180ms ease, filter 180ms ease;
   filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.22));
 }
 
@@ -32,4 +34,37 @@
   filter:
     drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.2))
     drop-shadow(0 0 2px rgba(98, 180, 255, 0.2));
+}
+
+.debug-button.debug-button-indicator-none.active .debug-button-icon {
+  filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.2));
+}
+
+.debug-button-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(98, 180, 255, 1);
+  box-shadow: 0 0 6px rgba(98, 180, 255, 0.55);
+}
+
+.debug-button.debug-button-spin-hover:hover .debug-button-icon {
+  transform: rotate(28deg);
+}
+
+.debug-button.active.debug-button-spin-active .debug-button-icon {
+  animation: debug-button-gear-spin 6s linear infinite;
+}
+
+@keyframes debug-button-gear-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }

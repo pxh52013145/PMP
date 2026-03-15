@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { DebugButtonVariantProps } from './DebugButtonTypes';
+import { parseDebugButtonSkinProps } from './debugButtonSkin';
 import './StandardDebugButton.css';
 
 const GearIcon: React.FC = () => (
@@ -26,9 +27,10 @@ const GearIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, logic }) => {
+export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, logic, variantConfig }) => {
   const { isOpen, setIsOpen } = data;
   const { toggleDebugWindow, getButtonTitle } = logic;
+  const skinProps = useMemo(() => parseDebugButtonSkinProps(variantConfig), [variantConfig]);
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -37,12 +39,16 @@ export const StandardDebugButton: React.FC<DebugButtonVariantProps> = ({ data, l
 
   return (
     <button
-      className={`magnet-control-button debug-button ${isOpen ? 'active' : ''}`}
+      className={`magnet-control-button debug-button debug-button-indicator-${skinProps.activeIndicator} debug-button-spin-${skinProps.spinMode} ${
+        isOpen ? 'active' : ''
+      }`}
       onClick={handleClick}
       title={getButtonTitle(isOpen)}
       aria-label={getButtonTitle(isOpen)}
+      aria-pressed={isOpen}
     >
       <GearIcon />
+      {isOpen && skinProps.activeIndicator === 'dot' ? <span className="debug-button-dot" aria-hidden="true" /> : null}
     </button>
   );
 };

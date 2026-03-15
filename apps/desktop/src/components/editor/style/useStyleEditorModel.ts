@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { readJson, readString, writeJson, writeString } from '../../../modules/storage';
 import { useTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import {
-  assignMagnetComponentTheme,
+  assignMagnetBindingFragment,
   dynamicColorCapabilityToConfig,
   materializeThemeBinding,
 } from '../../../themes/importAdapters';
@@ -85,11 +85,11 @@ export function useStyleEditorModel(): StyleEditorModel {
 
       for (const componentId of COVER_COLOR_COMPONENT_IDS) {
         const bindingId = `magnet.${componentId}` as ThemeBindingId;
-        const currentComponentTheme = materializeThemeBinding(nextTheme, bindingId);
-        nextTheme = assignMagnetComponentTheme(nextTheme, componentId, {
-          ...currentComponentTheme,
+        const currentFragment = materializeThemeBinding(nextTheme, bindingId);
+        nextTheme = assignMagnetBindingFragment(nextTheme, componentId, {
+          ...currentFragment,
           dynamicColor: {
-            ...(currentComponentTheme.dynamicColor ?? {}),
+            ...(currentFragment.dynamicColor ?? {}),
             ...partial,
           },
         });

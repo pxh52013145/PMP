@@ -80,6 +80,10 @@
   transform: translateY(0) scaleY(1);
 }
 
+.window-pin-button.unpinned.window-pin-idle-upright .window-pin-icon-assembly {
+  transform: translateY(0) rotate(0deg);
+}
+
 .window-pin-button.pinned .window-pin-icon-head {
   fill: rgba(255, 82, 82, 0.98);
 }
@@ -111,6 +115,10 @@
 
 .window-pin-button:hover:not(:disabled) .window-pin-icon-assembly {
   transform: translateY(-0.45px) rotate(-8deg) scale(1.03);
+}
+
+.window-pin-button.unpinned.window-pin-idle-upright:hover:not(:disabled) .window-pin-icon-assembly {
+  transform: translateY(-0.2px) rotate(0deg) scale(1.03);
 }
 
 .window-pin-button.pinned:hover:not(:disabled) .window-pin-icon-assembly {

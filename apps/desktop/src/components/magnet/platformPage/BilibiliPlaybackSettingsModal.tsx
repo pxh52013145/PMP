@@ -61,8 +61,6 @@ export function BilibiliPlaybackSettingsModal(props: BilibiliPlaybackSettingsMod
     onResetPlaybackCachePath,
   } = props;
 
-  if (!open) return null;
-
   return (
     <PmpDialog
       open={open}

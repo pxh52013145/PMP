@@ -2,6 +2,8 @@
 
 .music-library-button {
   --magnet-control-color: rgba(255, 255, 255, 0.92);
+  position: relative;
+  gap: 6px;
 }
 
 .music-library-icon {
@@ -13,4 +15,26 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   display: block;
+}
+
+.music-library-button-labeled {
+  padding-inline: 10px;
+  justify-content: flex-start;
+}
+
+.music-library-button-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  line-height: 1;
+}
+
+.music-library-button-indicator {
+  position: absolute;
+  inset-inline: 6px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(120, 194, 255, 0.95);
+  box-shadow: 0 0 6px rgba(120, 194, 255, 0.4);
 }

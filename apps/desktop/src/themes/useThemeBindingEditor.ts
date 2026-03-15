@@ -73,6 +73,12 @@ function summarizeComponentTheme(themeValue: ComponentTheme) {
     tokenKeys: Object.keys(themeValue.tokens ?? {}),
     partNames: Object.keys(themeValue.parts ?? {}),
     stateNames: Object.keys(themeValue.states ?? {}),
+    partMotionChannels: Object.fromEntries(
+      Object.entries(themeValue.parts ?? {}).map(([partName, partValue]) => [partName, Object.keys(partValue.motion ?? {})])
+    ),
+    stateMotionChannels: Object.fromEntries(
+      Object.entries(themeValue.states ?? {}).map(([stateName, stateValue]) => [stateName, Object.keys(stateValue.motion ?? {})])
+    ),
     metadata: themeValue.metadata ?? null,
   };
 }
@@ -83,6 +89,7 @@ function summarizeThemeImportSurface(themeValue: ThemeImportSurfaceSpec) {
     bindingOverlay: {
       variantConfigKeys: Object.keys(themeValue.variantConfig ?? {}),
       dynamicColor: themeValue.dynamicColor ?? null,
+      motionConfig: themeValue.motionConfig ?? null,
     },
   };
 }

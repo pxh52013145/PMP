@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 
 import { dynamicColorCapabilityToConfig } from './importAdapters';
 import { useTheme } from './contexts/ThemeContextWithSync';
-import type { DynamicColorConfig, ThemeBindingId } from './types/theme';
+import { resolveThemeMotionCapability } from './motion';
+import type { DynamicColorConfig, ThemeBindingId, ThemeBindingMotionCapability } from './types/theme';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -14,6 +15,7 @@ export interface MagnetSkinModel {
   variant: string;
   props?: Record<string, unknown>;
   dynamicColor?: DynamicColorConfig;
+  motion?: ThemeBindingMotionCapability;
 }
 
 export function useMagnetSkin(
@@ -24,7 +26,7 @@ export function useMagnetSkin(
   } = {}
 ): MagnetSkinModel {
   const { defaultRendererId = componentId, defaultVariant = 'default' } = options;
-  const { getBinding } = useTheme();
+  const { theme, getBinding } = useTheme();
   const bindingId = `magnet.${componentId}` as ThemeBindingId;
   const binding = getBinding(bindingId);
 
@@ -39,6 +41,12 @@ export function useMagnetSkin(
         : defaultVariant;
     const props = isPlainObject(binding.props) ? binding.props : undefined;
     const dynamicColor = dynamicColorCapabilityToConfig(binding.capabilities?.dynamicColor);
+    const motion = resolveThemeMotionCapability(
+      theme,
+      isPlainObject(binding.capabilities?.motion)
+        ? (binding.capabilities?.motion as ThemeBindingMotionCapability)
+        : undefined
+    );
 
     return {
       bindingId,
@@ -46,14 +54,17 @@ export function useMagnetSkin(
       variant,
       ...(props ? { props } : {}),
       ...(dynamicColor ? { dynamicColor } : {}),
+      ...(motion ? { motion } : {}),
     };
   }, [
     binding.capabilities?.dynamicColor,
+    binding.capabilities?.motion,
     binding.props,
     binding.renderer,
     binding.variant,
     bindingId,
     defaultRendererId,
     defaultVariant,
+    theme,
   ]);
 }

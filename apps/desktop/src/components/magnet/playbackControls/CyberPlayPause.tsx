@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { useT } from '../../../i18n';
 import { PlaybackVariantProps } from './PlaybackTypes';
 import { buildCoverGradient } from '../shared/useDynamicColor';
+import { parsePlayPauseSkinProps } from './playPauseSkin';
 import './CyberPlayback.css';
 
 export const CyberPlayPause: React.FC<PlaybackVariantProps> = ({
@@ -8,9 +10,12 @@ export const CyberPlayPause: React.FC<PlaybackVariantProps> = ({
   logic,
   dynamicColors,
   dynamicColorConfig,
+  variantConfig,
 }) => {
-  const { playbackState } = data;
+  const { playbackState, queueLength } = data;
   const { togglePlayPause, getPlayPauseIcon, getPlayPauseTitle, isPlayPauseDisabled } = logic;
+  const t = useT();
+  const skinProps = useMemo(() => parsePlayPauseSkinProps(variantConfig), [variantConfig]);
   const effect = dynamicColorConfig?.effect ?? 'tone';
   const gradientAngle =
     typeof dynamicColorConfig?.gradientAngle === 'number' && isFinite(dynamicColorConfig.gradientAngle)
@@ -36,16 +41,38 @@ export const CyberPlayPause: React.FC<PlaybackVariantProps> = ({
         '--playback-animation-duration': `${dynamicSpeed}s`,
       } as React.CSSProperties)
     : undefined;
+  const stateLabel =
+    playbackState === 'loading' || playbackState === 'buffering'
+      ? t('common.state.loading')
+      : playbackState === 'playing'
+        ? t('pages.native-debug.transport.pause')
+        : t('common.action.play');
+  const pulseClass =
+    skinProps.pulseMode === 'always'
+      ? 'play-pause-pulse-always'
+      : skinProps.pulseMode === 'none'
+        ? 'play-pause-pulse-none'
+        : 'play-pause-pulse-playing';
 
   return (
     <button
-      className={`cyber-playback-btn cyber-play-pause-btn${playbackState === 'playing' ? ' playing' : ''}${dynamicColors ? ' cover-color-active' : ''}${effect === 'gradient' ? ' cover-color-gradient' : ''}${effect === 'dynamic' ? ' cover-color-dynamic' : ''}`}
+      className={`cyber-playback-btn cyber-play-pause-btn ${pulseClass}${skinProps.showStateLabel ? ' has-state-label' : ''}${playbackState === 'playing' ? ' playing' : ''}${dynamicColors ? ' cover-color-active' : ''}${effect === 'gradient' ? ' cover-color-gradient' : ''}${effect === 'dynamic' ? ' cover-color-dynamic' : ''}`}
       onClick={togglePlayPause}
       disabled={isPlayPauseDisabled(playbackState)}
       title={getPlayPauseTitle(playbackState)}
       style={playPauseStyle}
     >
-      {getPlayPauseIcon(playbackState)}
+      <span className="play-pause-content">
+        <span className="play-pause-icon" aria-hidden="true">
+          {getPlayPauseIcon(playbackState)}
+        </span>
+        {skinProps.showStateLabel ? <span className="play-pause-state-label">{stateLabel}</span> : null}
+      </span>
+      {skinProps.showQueueCount && queueLength > 0 ? (
+        <span className="play-pause-queue-count" aria-hidden="true">
+          {queueLength}
+        </span>
+      ) : null}
     </button>
   );
 };

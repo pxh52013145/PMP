@@ -11,9 +11,11 @@ import {
   normalizeDesktopLyricsRegionWidth,
 } from './DesktopLyricsButtonModel';
 import { StandardDesktopLyricsButton } from './StandardDesktopLyricsButton';
+import { DESKTOP_LYRICS_VARIANT_PRESETS } from './desktopLyricsSkin';
 import { useDesktopLyricsButtonData } from './useDesktopLyricsButtonData';
 import { useDesktopLyricsButtonLogic } from './useDesktopLyricsButtonLogic';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../../utils/windowCommunication';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 interface DesktopLyricsLayoutChangedPayload {
@@ -45,7 +47,7 @@ const LYRIC_OFFSET_OPTIONS: ReadonlyArray<{
 const LYRIC_OFFSET_NUDGE_STEP = 100;
 
 const DESKTOP_LYRICS_RENDERERS = {
-  default: StandardDesktopLyricsButton,
+  ...buildMagnetVariantRenderers(StandardDesktopLyricsButton, DESKTOP_LYRICS_VARIANT_PRESETS),
 };
 
 export const DesktopLyricsButton: React.FC = () => {

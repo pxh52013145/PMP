@@ -69,6 +69,12 @@ describe('theme surfaces', () => {
             style: {
               borderRadius: 12,
             },
+            motion: {
+              enter: {
+                preset: 'fade',
+                duration: 180,
+              },
+            },
           },
         },
       }),
@@ -78,6 +84,12 @@ describe('theme surfaces', () => {
         parts: {
           root: {
             classes: ['card-settings'],
+            motion: {
+              hover: {
+                preset: 'lift-sm',
+                duration: 140,
+              },
+            },
           },
           header: {
             style: {
@@ -92,6 +104,8 @@ describe('theme surfaces', () => {
 
     expect(resolved.parts?.root?.classes).toEqual(['card-base', 'card-settings']);
     expect(resolved.parts?.root?.style?.borderRadius).toBe(12);
+    expect(resolved.parts?.root?.motion?.enter?.preset).toBe('fade');
+    expect(resolved.parts?.root?.motion?.hover?.preset).toBe('lift-sm');
     expect(resolved.parts?.header?.style?.minHeight).toBe(56);
     expect(resolved.tokens?.['color.surface']).toBe('{color.bg.surface}');
   });

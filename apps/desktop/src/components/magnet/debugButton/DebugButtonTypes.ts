@@ -11,5 +11,5 @@ import { DebugButtonLogic } from './useDebugButtonLogic';
 export interface DebugButtonVariantProps {
   data: DebugButtonData & { setIsOpen: (value: boolean) => void };
   logic: DebugButtonLogic;
-  variantConfig?: unknown;
+  variantConfig?: Record<string, unknown>;
 }

@@ -2,10 +2,12 @@ import React from 'react';
 import { useMusicLibraryData } from './useMusicLibraryData';
 import { useMusicLibraryLogic } from './useMusicLibraryLogic';
 import { StandardMusicLibrary } from './StandardMusicLibrary';
+import { MUSIC_LIBRARY_VARIANT_PRESETS } from './musicLibrarySkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const MUSIC_LIBRARY_RENDERERS = {
-  default: StandardMusicLibrary,
+  ...buildMagnetVariantRenderers(StandardMusicLibrary, MUSIC_LIBRARY_VARIANT_PRESETS),
 };
 
 export const MusicLibraryButton: React.FC = () => {

@@ -1,12 +1,99 @@
-import { act } from 'react';
+import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Magnet } from '../../../types/pixel';
+import { ThemeProvider } from '../../../themes/contexts/ThemeContextWithSync';
+import type { Theme } from '../../../themes/types/theme';
 import { MagnetComponent } from '../Magnet';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const pixelPositions = new Map<string, { x: number; y: number }>([['0,0', { x: 0, y: 0 }]]);
+let container: HTMLDivElement | null = null;
+let root: Root | null = null;
+let lastTheme: Theme | null = null;
+
+function createBaseTheme(): Theme {
+  return {
+    id: 'theme-default',
+    name: 'Default Theme',
+    version: '1.0.0',
+    pixel: {
+      shape: 'circle',
+      size: 1,
+      opacity: 1,
+      colors: {
+        default: { slot: 'primary', alpha: 0.6 },
+        hover: { slot: 'accent', state: 'hover' },
+        active: { slot: 'primary', state: 'active' },
+        occupied: { slot: 'secondary', alpha: 0.3 },
+      },
+    },
+    background: {
+      maximized: {
+        type: 'color',
+        color: '#000000',
+      },
+      windowed: {
+        type: 'color',
+        color: '#111111',
+      },
+    },
+    fonts: {
+      primary: 'Inter, sans-serif',
+    },
+  };
+}
+
+function createSurfaceTheme(): Theme {
+  return {
+    ...createBaseTheme(),
+    surfaces: {
+      'magnet.content-style-test': {
+        variant: 'glass',
+        parts: {
+          root: {
+            classes: ['magnet-surface-root'],
+            style: {
+              opacity: 0.7,
+            },
+            tokens: {
+              'color.accent': '#ff00ff',
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function createMotionTheme(): Theme {
+  return {
+    ...createSurfaceTheme(),
+    bindings: {
+      'magnet.content-style-test': {
+        capabilities: {
+          motion: {
+            enabled: true,
+            mode: 'full',
+            layout: {
+              strategy: 'flip',
+              largeChange: 'animate',
+              sharedKey: 'content-style-test',
+            },
+            channels: {
+              spaceSwitch: {
+                preset: 'shared-axis',
+                duration: 240,
+                easing: 'ease-out',
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
 
 function createDraggableMagnet(onDrag: () => void): Magnet {
   return {
@@ -103,10 +190,48 @@ function createChromeInsetMagnet(): Magnet {
   };
 }
 
-describe('MagnetComponent', () => {
-  let container: HTMLDivElement | null = null;
-  let root: Root | null = null;
+async function renderMagnet(
+  magnet: Magnet,
+  options: Omit<ComponentProps<typeof MagnetComponent>, 'magnet' | 'pixelPositions'> = {},
+  theme = createBaseTheme()
+) {
+  lastTheme = theme;
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
 
+  await act(async () => {
+    root?.render(
+      <ThemeProvider initialTheme={theme}>
+        <MagnetComponent magnet={magnet} pixelPositions={pixelPositions} {...options} />
+      </ThemeProvider>
+    );
+  });
+}
+
+async function rerenderMagnet(
+  magnet: Magnet,
+  options: Omit<ComponentProps<typeof MagnetComponent>, 'magnet' | 'pixelPositions'> = {},
+  theme = lastTheme ?? createBaseTheme()
+) {
+  lastTheme = theme;
+  expect(root).not.toBeNull();
+
+  await act(async () => {
+    root?.render(
+      <ThemeProvider initialTheme={theme}>
+        <MagnetComponent magnet={magnet} pixelPositions={pixelPositions} {...options} />
+      </ThemeProvider>
+    );
+  });
+}
+
+function getContainer(): HTMLDivElement {
+  expect(container).not.toBeNull();
+  return container as HTMLDivElement;
+}
+
+describe('MagnetComponent', () => {
   afterEach(async () => {
     if (root) {
       await act(async () => {
@@ -117,21 +242,15 @@ describe('MagnetComponent', () => {
     container?.remove();
     container = null;
     root = null;
+    lastTheme = null;
   });
 
   it('separates hover, press, and drag feedback for draggable magnets', async () => {
     const onDrag = vi.fn();
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
+    await renderMagnet(createDraggableMagnet(onDrag));
 
-    await act(async () => {
-      root?.render(
-        <MagnetComponent magnet={createDraggableMagnet(onDrag)} pixelPositions={pixelPositions} />
-      );
-    });
-
-    const shell = container.querySelector('[data-magnet-id="drag-state-test"]') as HTMLDivElement | null;
+    const host = getContainer();
+    const shell = host.querySelector('[data-magnet-id="drag-state-test"]') as HTMLDivElement | null;
     expect(shell).not.toBeNull();
     expect(shell?.dataset.interactionState).toBe('idle');
     expect(shell?.style.cursor).toBe('grab');
@@ -162,16 +281,11 @@ describe('MagnetComponent', () => {
   });
 
   it('routes content layout styles to the content layer instead of chrome', async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
+    await renderMagnet(createPaddedMagnet());
 
-    await act(async () => {
-      root?.render(<MagnetComponent magnet={createPaddedMagnet()} pixelPositions={pixelPositions} />);
-    });
-
-    const chrome = container.querySelector('.magnet') as HTMLDivElement | null;
-    const contentLayer = container.querySelector('.magnet-content-layer') as HTMLDivElement | null;
+    const host = getContainer();
+    const chrome = host.querySelector('.magnet') as HTMLDivElement | null;
+    const contentLayer = host.querySelector('.magnet-content-layer') as HTMLDivElement | null;
 
     expect(chrome).not.toBeNull();
     expect(contentLayer).not.toBeNull();
@@ -186,22 +300,13 @@ describe('MagnetComponent', () => {
   });
 
   it('flattens joined seam corners while keeping outer corners rounded', async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
-
-    await act(async () => {
-      root?.render(
-        <MagnetComponent
-          magnet={createPaddedMagnet()}
-          pixelPositions={pixelPositions}
-          joinEdges={{ left: false, right: true, top: false, bottom: false }}
-        />
-      );
+    await renderMagnet(createPaddedMagnet(), {
+      joinEdges: { left: false, right: true, top: false, bottom: false },
     });
 
-    const chrome = container.querySelector('.magnet') as HTMLDivElement | null;
-    const baseLayer = container.querySelector('.magnet-base-layer') as HTMLDivElement | null;
+    const host = getContainer();
+    const chrome = host.querySelector('.magnet') as HTMLDivElement | null;
+    const baseLayer = host.querySelector('.magnet-base-layer') as HTMLDivElement | null;
 
     expect(chrome?.style.borderTopLeftRadius).toBe('2px');
     expect(chrome?.style.borderBottomLeftRadius).toBe('2px');
@@ -212,31 +317,21 @@ describe('MagnetComponent', () => {
   });
 
   it('uses a consistent inset stroke in normal mode for crisp host chrome alignment', async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
+    await renderMagnet(createPaddedMagnet());
 
-    await act(async () => {
-      root?.render(<MagnetComponent magnet={createPaddedMagnet()} pixelPositions={pixelPositions} />);
-    });
-
-    const baseLayer = container.querySelector('.magnet-base-layer') as HTMLDivElement | null;
+    const host = getContainer();
+    const baseLayer = host.querySelector('.magnet-base-layer') as HTMLDivElement | null;
 
     expect(baseLayer?.style.boxShadow).toContain('inset 0 0 0 1px');
   });
 
   it('applies chrome inset to the base and content layers without changing shell bounds', async () => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
+    await renderMagnet(createChromeInsetMagnet());
 
-    await act(async () => {
-      root?.render(<MagnetComponent magnet={createChromeInsetMagnet()} pixelPositions={pixelPositions} />);
-    });
-
-    const shell = container.querySelector('[data-magnet-id="chrome-inset-test"]') as HTMLDivElement | null;
-    const baseLayer = container.querySelector('.magnet-base-layer') as HTMLDivElement | null;
-    const contentLayer = container.querySelector('.magnet-content-layer') as HTMLDivElement | null;
+    const host = getContainer();
+    const shell = host.querySelector('[data-magnet-id="chrome-inset-test"]') as HTMLDivElement | null;
+    const baseLayer = host.querySelector('.magnet-base-layer') as HTMLDivElement | null;
+    const contentLayer = host.querySelector('.magnet-content-layer') as HTMLDivElement | null;
 
     expect(shell?.style.width).toBe('36px');
     expect(shell?.style.height).toBe('36px');
@@ -246,5 +341,63 @@ describe('MagnetComponent', () => {
     expect(baseLayer?.style.left).toBe('6px');
     expect(contentLayer?.style.top).toBe('8px');
     expect(contentLayer?.style.left).toBe('6px');
+  });
+
+  it('exposes stable magnet surface binding metadata on the rendered root', async () => {
+    await renderMagnet(createPaddedMagnet(), {}, createSurfaceTheme());
+
+    const host = getContainer();
+    const chrome = host.querySelector('.magnet') as HTMLDivElement | null;
+
+    expect(chrome?.dataset.surfaceId).toBe('magnet.content-style-test');
+    expect(chrome?.getAttribute('data-pmp-surface')).toBe('magnet.content-style-test');
+    expect(chrome?.getAttribute('data-pmp-part')).toBe('root');
+    expect(chrome?.getAttribute('data-pmp-binding')).toBe('magnet.content-style-test');
+    expect(chrome?.getAttribute('data-pmp-state')).toBe('idle');
+    expect(chrome?.hasAttribute('data-pmp-variant')).toBe(false);
+    expect(chrome?.className).toContain('magnet-surface-root');
+    expect(chrome?.style.opacity).toBe('0.7');
+    expect(chrome?.style.getPropertyValue('--pmp-color-accent')).toBe('#ff00ff');
+  });
+
+  it('keeps large same-id layout changes animatable when flip motion is enabled', async () => {
+    const rafCallbacks: FrameRequestCallback[] = [];
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback: FrameRequestCallback) => {
+        rafCallbacks.push(callback);
+        return rafCallbacks.length;
+      });
+    const cancelAnimationFrameSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+
+    await renderMagnet(
+      createPaddedMagnet(),
+      {
+        boundsOverride: { x: 0, y: 0, width: 36, height: 36 },
+      },
+      createMotionTheme()
+    );
+
+    await rerenderMagnet(createPaddedMagnet(), {
+      boundsOverride: { x: 220, y: 140, width: 72, height: 48 },
+    });
+
+    const host = getContainer();
+    const shell = host.querySelector('[data-magnet-id="content-style-test"]') as HTMLDivElement | null;
+    expect(shell).not.toBeNull();
+    expect(shell?.dataset.pmpMotionMode).toBe('full');
+    expect(shell?.dataset.pmpMotionLayout).toBe('flip');
+    expect(shell?.dataset.pmpMotionSharedKey).toBe('content-style-test');
+    expect(shell?.style.transition).toContain('transform 240ms ease-out');
+    expect(shell?.style.transform).toContain('translate(-220px, -140px)');
+    expect(shell?.style.transform).toContain('scale(0.5, 0.75)');
+
+    await act(async () => {
+      rafCallbacks.splice(0).forEach((callback) => callback(performance.now()));
+    });
+
+    expect(shell?.style.transform).toBe('');
+    expect(requestAnimationFrameSpy).toHaveBeenCalled();
+    expect(cancelAnimationFrameSpy).toHaveBeenCalledTimes(0);
   });
 });

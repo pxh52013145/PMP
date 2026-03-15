@@ -2,10 +2,12 @@ import React from 'react';
 import { usePlaylistsData } from './usePlaylistsData';
 import { usePlaylistsLogic } from './usePlaylistsLogic';
 import { StandardPlaylists } from './StandardPlaylists';
+import { PLAYLISTS_VARIANT_PRESETS } from './playlistsSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const PLAYLISTS_RENDERERS = {
-  default: StandardPlaylists,
+  ...buildMagnetVariantRenderers(StandardPlaylists, PLAYLISTS_VARIANT_PRESETS),
 };
 
 export const PlaylistsButton: React.FC = () => {

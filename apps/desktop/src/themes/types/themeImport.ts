@@ -4,6 +4,7 @@ import type {
   ComponentTheme,
   DynamicColorConfig,
   Theme,
+  ThemeBindingMotionCapability,
   ThemeColorTokens,
   ThemeMotionTokens,
   ThemeTypographyTokens,
@@ -12,6 +13,7 @@ import type {
 export interface ThemeImportSurfaceSpec extends ComponentTheme {
   variantConfig?: Record<string, unknown>;
   dynamicColor?: DynamicColorConfig;
+  motionConfig?: ThemeBindingMotionCapability;
   styleOverride?: {
     container?: CSSProperties;
     cover?: CSSProperties;

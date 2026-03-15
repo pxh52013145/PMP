@@ -1479,7 +1479,6 @@
   inset: 0;
   border: 1px solid var(--settings-control-border);
   background: var(--settings-control-bg);
-  transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
 .page-settings--deltaforce .settings-switch .pmp-switch-thumb {
@@ -1489,7 +1488,6 @@
   width: 16px;
   height: 16px;
   background: #7f9aad;
-  transition: transform 0.22s ease, background-color 0.22s ease, box-shadow 0.22s ease;
 }
 
 .page-settings--deltaforce .settings-switch[data-checked='true'] .pmp-switch-track {
@@ -2723,7 +2721,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: all 0.2s ease;
   backdrop-filter: blur(6px);
 }
 
@@ -2749,7 +2746,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: all 0.2s ease;
 }
 
 .settings-danger-btn:hover:not(:disabled) {

@@ -7,7 +7,9 @@ import type {
   Theme,
   ThemeBinding,
   ThemeBindingDynamicColorCapability,
+  ThemeBindingMotionCapability,
   ThemeBindingId,
+  ThemeMotionChannelMap,
   ThemePartStateSpec,
   ThemeSurfacePartSpec,
   ThemeSurfaceStateSpec,
@@ -20,6 +22,47 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function hasOwnKeys(value: unknown): value is Record<string, unknown> {
   return isPlainObject(value) && Object.keys(value).length > 0;
+}
+
+function cloneMotionChannels(value: ThemeMotionChannelMap | undefined): ThemeMotionChannelMap | undefined {
+  if (!hasOwnKeys(value)) {
+    return undefined;
+  }
+
+  const channels: ThemeMotionChannelMap = {};
+  for (const [key, channel] of Object.entries(value)) {
+    if (isPlainObject(channel)) {
+      channels[key] = { ...channel };
+    }
+  }
+
+  return Object.keys(channels).length > 0 ? channels : undefined;
+}
+
+function mergeMotionCapability(
+  base: ThemeBindingMotionCapability | undefined,
+  override: ThemeBindingMotionCapability | undefined
+): ThemeBindingMotionCapability | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+
+  const merged: ThemeBindingMotionCapability = {
+    ...(typeof base?.enabled === 'boolean' ? { enabled: base.enabled } : {}),
+    ...(typeof base?.mode === 'string' ? { mode: base.mode } : {}),
+    ...(hasOwnKeys(base?.layout) ? { layout: { ...base.layout } } : {}),
+    ...(hasOwnKeys(base?.channels) ? { channels: cloneMotionChannels(base.channels) } : {}),
+    ...(typeof override?.enabled === 'boolean' ? { enabled: override.enabled } : {}),
+    ...(typeof override?.mode === 'string' ? { mode: override.mode } : {}),
+    ...(hasOwnKeys(base?.layout) || hasOwnKeys(override?.layout)
+      ? { layout: { ...(base?.layout ?? {}), ...(override?.layout ?? {}) } }
+      : {}),
+    ...(hasOwnKeys(base?.channels) || hasOwnKeys(override?.channels)
+      ? { channels: { ...(cloneMotionChannels(base?.channels) ?? {}), ...(cloneMotionChannels(override?.channels) ?? {}) } }
+      : {}),
+  };
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 export function dynamicColorConfigToCapability(
@@ -162,6 +205,7 @@ function normalizeSurfaceStates(surfaceSpec: ThemeImportSurfaceSpec): ThemeImpor
           ...(stateSpec.classes?.length ? { classes: [...stateSpec.classes] } : {}),
           ...(isPlainObject(stateSpec.style) ? { style: { ...stateSpec.style } } : {}),
           ...(isPlainObject(stateSpec.tokens) ? { tokens: { ...stateSpec.tokens } } : {}),
+          ...(hasOwnKeys(stateSpec.motion) ? { motion: cloneMotionChannels(stateSpec.motion) } : {}),
           ...(Object.keys(nextParts).length > 0 ? { parts: nextParts } : {}),
         };
 
@@ -221,6 +265,10 @@ export function mergeThemeImportSurfaceSpecs(
           ...(surfaceSpec as ThemeImportSurfaceSpec).dynamicColor,
         }
       : (acc as ThemeImportSurfaceSpec).dynamicColor;
+    const nextMotionConfig = mergeMotionCapability(
+      (acc as ThemeImportSurfaceSpec).motionConfig,
+      (surfaceSpec as ThemeImportSurfaceSpec).motionConfig
+    );
 
     return {
       ...mergedSurface,
@@ -228,20 +276,23 @@ export function mergeThemeImportSurfaceSpecs(
       ...(nextStyleOverride ? { styleOverride: nextStyleOverride } : {}),
       ...(nextClassNameOverride ? { classNameOverride: nextClassNameOverride } : {}),
       ...(nextDynamicColor ? { dynamicColor: nextDynamicColor } : {}),
+      ...(nextMotionConfig ? { motionConfig: nextMotionConfig } : {}),
     };
   }, {});
 }
 
 export function importSurfaceToBinding(surfaceSpec: ThemeImportSurfaceSpec): ThemeBinding {
   const dynamicColorCapability = dynamicColorConfigToCapability(surfaceSpec.dynamicColor);
+  const motionCapability = mergeMotionCapability(undefined, surfaceSpec.motionConfig);
 
   return {
     ...(typeof surfaceSpec.variant === 'string' ? { variant: surfaceSpec.variant } : {}),
     ...(hasOwnKeys(surfaceSpec.variantConfig) ? { props: { ...surfaceSpec.variantConfig } } : {}),
-    ...(dynamicColorCapability
+    ...(dynamicColorCapability || motionCapability
       ? {
           capabilities: {
-            dynamicColor: dynamicColorCapability,
+            ...(dynamicColorCapability ? { dynamicColor: dynamicColorCapability } : {}),
+            ...(motionCapability ? { motion: motionCapability } : {}),
           },
         }
       : {}),
@@ -251,18 +302,21 @@ export function importSurfaceToBinding(surfaceSpec: ThemeImportSurfaceSpec): The
 export function bindingToImportSurfaceSpec(binding: ThemeBinding): ThemeImportSurfaceSpec {
   const dynamicColor = dynamicColorCapabilityToConfig(binding.capabilities?.dynamicColor);
   const props = hasOwnKeys(binding.props) ? binding.props : undefined;
+  const motionConfig = mergeMotionCapability(undefined, binding.capabilities?.motion);
 
   return {
     ...(typeof binding.variant === 'string' ? { variant: binding.variant } : {}),
     ...(props ? { variantConfig: { ...props } } : {}),
     ...(dynamicColor ? { dynamicColor } : {}),
+    ...(motionConfig ? { motionConfig } : {}),
   };
 }
 
 export function extractRuntimeSurfaceDocument(surfaceSpec: ThemeImportSurfaceSpec): ComponentTheme {
-  const { variantConfig, dynamicColor, styleOverride, classNameOverride, ...surfaceTheme } = surfaceSpec;
+  const { variantConfig, dynamicColor, motionConfig, styleOverride, classNameOverride, ...surfaceTheme } = surfaceSpec;
   void variantConfig;
   void dynamicColor;
+  void motionConfig;
   void styleOverride;
   void classNameOverride;
   return surfaceTheme;
@@ -283,13 +337,13 @@ export function materializeThemeBinding(theme: Theme, bindingId: ThemeBindingId)
   return mergeThemeImportSurfaceSpecs(surfaceTheme, bindingTheme);
 }
 
-export function assignMagnetComponentTheme(
+export function assignMagnetBindingFragment(
   theme: Theme,
   componentId: string,
-  componentTheme: ThemeImportSurfaceSpec
+  fragment: ThemeImportSurfaceSpec
 ): Theme {
   const bindingId = `magnet.${componentId}` as ThemeBindingId;
-  const normalizedTheme = normalizeThemeImportSurfaceSpec(componentTheme);
+  const normalizedTheme = normalizeThemeImportSurfaceSpec(fragment);
   const currentBinding = resolveThemeBinding(theme, bindingId).binding;
   const nextBinding: ThemeBinding = {
     ...currentBinding,

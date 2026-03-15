@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { createPortal } from 'react-dom';
 import { readString, removeKey, usePersistentSetting, writeString } from '../../modules/storage';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastDataUpdate, setupTauriListener } from '../../utils/windowCommunication';
@@ -28,6 +28,9 @@ import type { PixelAnchor } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InputDialog } from './InputDialog';
+import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
+import { useResolvedMagnetSkinRenderer } from './shared/useResolvedMagnetSkinRenderer';
+import { MATRIX_CHANGE_VARIANT_PRESETS, parseMatrixChangeSkinProps } from './matrixChangeSkin';
 import './MatrixChangeMagnet.css';
 
 const MAX_HISTORY_PER_SPACE = 20;
@@ -132,7 +135,12 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 }
 
-export function MatrixChangeMagnet() {
+type MatrixChangeRendererProps = {
+  variantConfig?: Record<string, unknown>;
+};
+
+function MatrixChangeMagnetDefaultRenderer({ variantConfig }: MatrixChangeRendererProps) {
+  const skinProps = useMemo(() => parseMatrixChangeSkinProps(variantConfig), [variantConfig]);
   const t = useT();
   const { magnetLibrary, activeMagnetIds, setActiveMagnetIds, setMagnetLibrary, reloadFromStorage } =
     useMagnetConfig();
@@ -407,30 +415,33 @@ export function MatrixChangeMagnet() {
   }, [activeSpace, closePanel]);
 
   const openDeleteDialog = useCallback(() => {
+    if (!skinProps.showDangerActions) return;
     if (!activeSpace) return;
     if (activeSpace.id === 'space1') return;
     if (spacesState.spaces.length <= 1) return;
     setDialog({ kind: 'delete', spaceId: activeSpace.id, spaceName: activeSpace.name });
     closePanel();
-  }, [activeSpace, closePanel, spacesState.spaces.length]);
+  }, [activeSpace, closePanel, skinProps.showDangerActions, spacesState.spaces.length]);
 
   const openClearDialog = useCallback(() => {
+    if (!skinProps.showDangerActions) return;
     setDialog({
       kind: 'clear',
       spaceId: activeSpaceId,
       spaceName: activeSpace?.name ?? activeSpaceId,
     });
     closePanel();
-  }, [activeSpace?.name, activeSpaceId, closePanel]);
+  }, [activeSpace?.name, activeSpaceId, closePanel, skinProps.showDangerActions]);
 
   const openResetDialog = useCallback(() => {
+    if (!skinProps.showDangerActions) return;
     setDialog({
       kind: 'reset',
       spaceId: activeSpaceId,
       spaceName: activeSpace?.name ?? activeSpaceId,
     });
     closePanel();
-  }, [activeSpace?.name, activeSpaceId, closePanel]);
+  }, [activeSpace?.name, activeSpaceId, closePanel, skinProps.showDangerActions]);
 
   const closeDialog = useCallback(() => setDialog(null), []);
 
@@ -441,9 +452,10 @@ export function MatrixChangeMagnet() {
   }, []);
 
   const openPresetsDialog = useCallback(() => {
+    if (!skinProps.showPresetsAction) return;
     setPresetsDialogOpen(true);
     closePanel();
-  }, [closePanel]);
+  }, [closePanel, skinProps.showPresetsAction]);
 
   const closeHistoryDialog = useCallback(() => {
     setHistoryDialogOpen(false);
@@ -452,9 +464,31 @@ export function MatrixChangeMagnet() {
   }, []);
 
   const openHistoryDialog = useCallback(() => {
+    if (!skinProps.showHistoryAction) return;
     setHistoryDialogOpen(true);
     closePanel();
-  }, [closePanel]);
+  }, [closePanel, skinProps.showHistoryAction]);
+
+  useEffect(() => {
+    if (skinProps.showPresetsAction) return;
+    setPresetsDialogOpen(false);
+    setPresetNameDialog(null);
+    setDeletePresetDialog(null);
+  }, [skinProps.showPresetsAction]);
+
+  useEffect(() => {
+    if (skinProps.showHistoryAction) return;
+    setHistoryDialogOpen(false);
+    setDeleteHistoryDialog(null);
+    setClearHistoryDialogOpen(false);
+  }, [skinProps.showHistoryAction]);
+
+  useEffect(() => {
+    if (skinProps.showDangerActions) return;
+    setDialog((prev) =>
+      prev && (prev.kind === 'delete' || prev.kind === 'clear' || prev.kind === 'reset') ? null : prev
+    );
+  }, [skinProps.showDangerActions]);
 
   useEffect(() => {
     if (!presetsDialogOpen) return;
@@ -637,7 +671,7 @@ export function MatrixChangeMagnet() {
         }
       >
         <span className="matrix-change-magnet-badge">{badge}</span>
-        <span>{t('magnet.matrix-change.button')}</span>
+        {skinProps.showLabel ? <span>{t('magnet.matrix-change.button')}</span> : null}
       </button>
 
       {panel.open && (
@@ -693,34 +727,42 @@ export function MatrixChangeMagnet() {
                   >
                     {t('magnet.matrix-change.action.clone')}
                   </button>
-                  <button
-                    type="button"
-                    className="matrix-change-magnet-panel-action"
-                    onClick={openPresetsDialog}
-                  >
-                    {t('magnet.matrix-change.action.presets')}
-                  </button>
-                  <button
-                    type="button"
-                    className="matrix-change-magnet-panel-action"
-                    onClick={openHistoryDialog}
-                  >
-                    {t('magnet.matrix-change.action.history')}
-                  </button>
-                  <button
-                    type="button"
-                    className="matrix-change-magnet-panel-action"
-                    onClick={openClearDialog}
-                  >
-                    {t('common.action.clear')}
-                  </button>
-                  <button
-                    type="button"
-                    className="matrix-change-magnet-panel-action"
-                    onClick={openResetDialog}
-                  >
-                    {t('common.action.reset')}
-                  </button>
+                  {skinProps.showPresetsAction ? (
+                    <button
+                      type="button"
+                      className="matrix-change-magnet-panel-action"
+                      onClick={openPresetsDialog}
+                    >
+                      {t('magnet.matrix-change.action.presets')}
+                    </button>
+                  ) : null}
+                  {skinProps.showHistoryAction ? (
+                    <button
+                      type="button"
+                      className="matrix-change-magnet-panel-action"
+                      onClick={openHistoryDialog}
+                    >
+                      {t('magnet.matrix-change.action.history')}
+                    </button>
+                  ) : null}
+                  {skinProps.showDangerActions ? (
+                    <button
+                      type="button"
+                      className="matrix-change-magnet-panel-action"
+                      onClick={openClearDialog}
+                    >
+                      {t('common.action.clear')}
+                    </button>
+                  ) : null}
+                  {skinProps.showDangerActions ? (
+                    <button
+                      type="button"
+                      className="matrix-change-magnet-panel-action"
+                      onClick={openResetDialog}
+                    >
+                      {t('common.action.reset')}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="matrix-change-magnet-panel-action"
@@ -729,14 +771,16 @@ export function MatrixChangeMagnet() {
                   >
                     {t('common.action.rename')}
                   </button>
-                  <button
-                    type="button"
-                    className="matrix-change-magnet-panel-action danger"
-                    onClick={openDeleteDialog}
-                    disabled={!activeSpace || activeSpaceId === 'space1' || spacesState.spaces.length <= 1}
-                  >
-                    {t('common.action.delete')}
-                  </button>
+                  {skinProps.showDangerActions ? (
+                    <button
+                      type="button"
+                      className="matrix-change-magnet-panel-action danger"
+                      onClick={openDeleteDialog}
+                      disabled={!activeSpace || activeSpaceId === 'space1' || spacesState.spaces.length <= 1}
+                    >
+                      {t('common.action.delete')}
+                    </button>
+                  ) : null}
                 </div>
               </div>,
               document.body
@@ -1295,4 +1339,17 @@ export function MatrixChangeMagnet() {
       />
     </>
   );
+}
+
+const MATRIX_CHANGE_RENDERERS = {
+  ...buildMagnetVariantRenderers(MatrixChangeMagnetDefaultRenderer, MATRIX_CHANGE_VARIANT_PRESETS),
+} satisfies Record<string, ComponentType<MatrixChangeRendererProps>>;
+
+export function MatrixChangeMagnet() {
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-matrix-change', MATRIX_CHANGE_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
+
+  return <Renderer variantConfig={skin.props} />;
 }

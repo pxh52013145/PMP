@@ -4,6 +4,12 @@ import { useKernel } from '../../contexts/KernelContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
 import { useSkinSurfaceModel } from '../../themes/skinSurface';
+import {
+  buildThemePresenceAnimationStyle,
+  getThemeMotionTotalMs,
+  pickThemeMotionChannel,
+  useThemePresenceState,
+} from '../../themes/surfaceMotion';
 import { PmpChoiceButton } from '../primitives';
 
 function sortPanels(a: SettingsPanelContribution, b: SettingsPanelContribution): number {
@@ -60,6 +66,17 @@ export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
   const t = useT();
   const pageSurface = useSkinSurfaceModel('page.settings');
+  const pageEnterMotion = useMemo(
+    () => pickThemeMotionChannel(pageSurface.root.motion, ['enter']),
+    [pageSurface.root.motion]
+  );
+  const pagePresence = useThemePresenceState({
+    open: true,
+    enterDurationMs: getThemeMotionTotalMs(pageEnterMotion?.spec),
+    unmountOnExit: false,
+  });
+  const pageMotionStyle =
+    pagePresence.phase === 'enter' ? buildThemePresenceAnimationStyle(pageEnterMotion?.spec, 'enter') : undefined;
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
@@ -169,6 +186,7 @@ export const SettingsPage: React.FC = () => {
   const rootProps = pageSurface.getElementProps({
     bindingId: 'page.settings',
     className: ['page-settings', 'page-settings--deltaforce'].join(' '),
+    style: pageMotionStyle,
   });
 
   return (
@@ -176,6 +194,9 @@ export const SettingsPage: React.FC = () => {
       {...rootProps}
       data-surface-id="page.settings"
       data-surface-variant={pageSurface.variant}
+      data-pmp-motion-phase={pagePresence.phase}
+      {...(pageEnterMotion?.name ? { 'data-pmp-motion-channel': pageEnterMotion.name } : {})}
+      {...(pageEnterMotion?.spec.preset ? { 'data-pmp-motion-preset': pageEnterMotion.spec.preset } : {})}
     >
       {panels.length === 0 ? (
         <div className="settings-card-note">{t('pages.settings.empty')}</div>

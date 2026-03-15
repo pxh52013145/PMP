@@ -2,10 +2,12 @@ import React from 'react';
 import { usePlayModeData } from './usePlayModeData';
 import { usePlayModeLogic } from './usePlayModeLogic';
 import { MinimalPlayMode } from './MinimalPlayMode';
+import { PLAY_MODE_VARIANT_PRESETS } from './playModeSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const PLAY_MODE_RENDERERS = {
-  default: MinimalPlayMode,
+  ...buildMagnetVariantRenderers(MinimalPlayMode, PLAY_MODE_VARIANT_PRESETS),
 };
 
 export const PlayModeButton: React.FC = () => {

@@ -11,5 +11,5 @@ import { PlayModeLogic } from './usePlayModeLogic';
 export interface PlayModeVariantProps {
   data: PlayModeData;
   logic: PlayModeLogic;
-  variantConfig?: unknown;
+  variantConfig?: Record<string, unknown>;
 }

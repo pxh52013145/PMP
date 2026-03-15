@@ -1,10 +1,6 @@
-/**
- * ProgressBar 变体：标准进度条
- * 当前的默认实现
- */
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProgressBarVariantProps } from './ProgressBarTypes';
+import { parseProgressBarSkinProps } from './progressBarSkin';
 import { buildCoverGradient } from '../shared/useDynamicColor';
 import './StandardProgressBar.css';
 
@@ -13,12 +9,14 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
   logic,
   dynamicColors,
   dynamicColorConfig,
+  variantConfig,
 }) => {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const latestSeekTimeRef = useRef<number | null>(null);
   const globalDragEndCleanupRef = useRef<(() => void) | null>(null);
   const [previewTime, setPreviewTime] = useState<number | null>(null);
+  const skinProps = useMemo(() => parseProgressBarSkinProps(variantConfig), [variantConfig]);
 
   const getTimeFromClientX = (clientX: number) => {
     if (!progressBarRef.current || !data.duration) return;
@@ -26,9 +24,7 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
     const rect = progressBarRef.current.getBoundingClientRect();
     const x = clientX - rect.left;
     const percentage = Math.max(0, Math.min(1, x / rect.width));
-    const newTime = percentage * data.duration;
-
-    return newTime;
+    return percentage * data.duration;
   };
 
   const cleanupGlobalDragEndListeners = useCallback(() => {
@@ -148,7 +144,9 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
 
   return (
     <div
-      className={`progress-bar-component${effect === 'gradient' ? ' progress-bar-gradient' : ''}${effect === 'dynamic' ? ' progress-bar-dynamic' : ''}`}
+      className={`progress-bar-component progress-bar-density-${skinProps.trackDensity} progress-bar-thumb-${skinProps.thumbVisibility}${
+        skinProps.showTimeLabels ? '' : ' progress-bar-no-times'
+      }${effect === 'gradient' ? ' progress-bar-gradient' : ''}${effect === 'dynamic' ? ' progress-bar-dynamic' : ''}`}
       style={
         dynamicColors
           ? ({
@@ -160,7 +158,7 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
           : undefined
       }
     >
-      <span className="progress-time">{logic.formatTime(effectiveTime)}</span>
+      {skinProps.showTimeLabels ? <span className="progress-time">{logic.formatTime(effectiveTime)}</span> : null}
 
       <div
         ref={progressBarRef}
@@ -172,14 +170,23 @@ export const StandardProgressBar: React.FC<ProgressBarVariantProps> = ({
         onLostPointerCapture={endDrag}
       >
         <div className="progress-bar-bg">
-          <div className="progress-bar-buffered progress-bar-buffered-decode" style={{ width: `${decodeBuffered}%` }} />
-          <div className="progress-bar-buffered progress-bar-buffered-output" style={{ width: `${outputBuffered}%` }} />
+          {skinProps.bufferLayers === 'all' ? (
+            <>
+              <div className="progress-bar-buffered progress-bar-buffered-decode" style={{ width: `${decodeBuffered}%` }} />
+              <div className="progress-bar-buffered progress-bar-buffered-output" style={{ width: `${outputBuffered}%` }} />
+            </>
+          ) : null}
+          {skinProps.bufferLayers === 'single' ? (
+            <div className="progress-bar-buffered progress-bar-buffered-single" style={{ width: `${buffered}%` }} />
+          ) : null}
           <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
-          <div className="progress-bar-thumb" style={{ left: `${progress}%` }} />
+          {skinProps.thumbVisibility === 'hidden' ? null : (
+            <div className="progress-bar-thumb" style={{ left: `${progress}%` }} />
+          )}
         </div>
       </div>
 
-      <span className="progress-time">{logic.formatTime(data.duration)}</span>
+      {skinProps.showTimeLabels ? <span className="progress-time">{logic.formatTime(data.duration)}</span> : null}
     </div>
   );
 };

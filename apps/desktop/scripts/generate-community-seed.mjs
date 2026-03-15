@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { zipSync } from 'fflate';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const resourceRoot = path.join(repoRoot, 'community', 'resource');
 
 const encoder = new TextEncoder();
 
@@ -18,38 +19,28 @@ function sha256Hex(bytes) {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
 }
 
-function parseBuiltinVariants(sourceText) {
-  const byRenderer = new Map();
-  const re = /register\(\s*'([^']+)'\s*,\s*'([^']+)'/g;
-  let match = null;
-  while ((match = re.exec(sourceText))) {
-    const rendererId = match[1]?.trim() ?? '';
-    const variantId = match[2]?.trim() ?? '';
-    if (!rendererId || !variantId) continue;
-    const variants = byRenderer.get(rendererId) ?? new Set();
-    variants.add(variantId);
-    byRenderer.set(rendererId, variants);
-  }
-  return byRenderer;
-}
+const BUILTIN_VARIANTS = new Map([
+  ['btn-back', ['default', 'rounded', 'standard']],
+  ['btn-debug', ['default', 'standard']],
+  ['btn-mode', ['default', 'minimal', 'standard']],
+  ['btn-music-library', ['default', 'standard']],
+  ['btn-next', ['default', 'rounded', 'standard']],
+  ['btn-play-pause', ['cover-glow', 'default', 'rounded', 'standard']],
+  ['btn-play-queue', ['default', 'standard']],
+  ['btn-playlists', ['default', 'standard']],
+  ['btn-previous', ['default', 'rounded', 'standard']],
+  ['btn-volume', ['cyber', 'default', 'standard']],
+  ['btn-window-pin', ['default', 'standard']],
+  ['navigation-page', ['default', 'standard']],
+  ['progress-bar', ['default', 'minimal', 'standard']],
+  ['track-info', ['card', 'default', 'minimal', 'spinning-vinyl']],
+]);
 
 function buildDefaultTheme() {
   return {
     id: 'theme-default',
     name: '默认主题',
     version: '1.0.0',
-    shader: {
-      id: 'shader-default',
-      name: '默认',
-      description: '经典的绿色+紫色配色方案',
-      colors: {
-        primary: { base: '#00ff88', hover: '#00cc6f', active: '#00aa5c' },
-        secondary: { base: '#1a1a2e', hover: '#25254a', active: '#16162e', opacity: 0.9 },
-        accent: { base: '#ff0088', hover: '#ff3399', active: '#cc0066' },
-        detail: { base: '#ffffff', hover: '#e0e0e0', disabled: '#666666' },
-      },
-      materials: { glow: 0.5 },
-    },
     pixel: {
       shape: 'circle',
       size: 1.0,
@@ -66,10 +57,16 @@ function buildDefaultTheme() {
       windowed: { type: 'color', color: '#000000', opacity: 1 },
     },
     fonts: { primary: 'Inter, sans-serif' },
-    componentThemes: {
-      'track-info': {
+    bindings: {
+      'magnet.track-info': {
         variant: 'spinning-vinyl',
-        dynamicColor: { extractFromCover: true, applyMode: 'full' },
+        capabilities: {
+          dynamicColor: {
+            enabled: true,
+            source: 'cover',
+            apply: 'full',
+          },
+        },
       },
     },
   };
@@ -131,7 +128,6 @@ function buildDefaultProfileSnapshot(now) {
 }
 
 async function main() {
-  const resourceRoot = path.join(repoRoot, 'resource');
   const variantOutDir = path.join(resourceRoot, 'varient(.pmpv)', 'builtin');
   const themeOutDir = path.join(resourceRoot, 'theme(.pmpt)', 'builtin');
   const packOutDir = path.join(resourceRoot, 'Pack(.pmpk)', 'builtin');
@@ -140,23 +136,13 @@ async function main() {
   await fs.mkdir(themeOutDir, { recursive: true });
   await fs.mkdir(packOutDir, { recursive: true });
 
-  const variantsSourcePath = path.join(
-    repoRoot,
-    'apps',
-    'desktop',
-    'src',
-    'builtin-modules',
-    'builtinMagnetRenderersModule.tsx'
-  );
-  const variantsSourceText = await fs.readFile(variantsSourcePath, 'utf8');
-  const variantsByRenderer = parseBuiltinVariants(variantsSourceText);
-  if (variantsByRenderer.size === 0) {
-    throw new Error(`No builtin variants found in ${variantsSourcePath}`);
+  if (BUILTIN_VARIANTS.size === 0) {
+    throw new Error('No builtin variants configured');
   }
 
   let generatedPmpv = 0;
-  for (const [rendererId, variants] of variantsByRenderer.entries()) {
-    for (const variantId of variants.values()) {
+  for (const [rendererId, variants] of BUILTIN_VARIANTS.entries()) {
+    for (const variantId of variants) {
       const presetId = `${rendererId}-${variantId}`;
       const preset = {
         formatVersion: '1.0',
@@ -168,7 +154,7 @@ async function main() {
           tags: [rendererId, variantId],
         },
         target: { rendererId },
-        componentTheme: {
+        fragment: {
           variant: variantId,
           variantConfig: {},
         },
@@ -260,4 +246,3 @@ main().catch((error) => {
   console.error('[community-seed] Failed:', error);
   process.exitCode = 1;
 });
-

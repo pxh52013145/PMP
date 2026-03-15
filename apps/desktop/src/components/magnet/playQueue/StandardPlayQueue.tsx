@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { useT } from '../../../i18n';
 import { PlayQueueVariantProps } from './PlayQueueTypes';
+import { parsePlayQueueSkinProps } from './playQueueSkin';
 import './StandardPlayQueue.css';
 
 const QueueIcon: React.FC = () => (
@@ -15,7 +17,7 @@ const NoteIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic }) => {
+export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic, variantConfig }) => {
   const { queue, currentIndex, queueLength } = data;
   const {
     showQueue,
@@ -35,12 +37,15 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
     handleDragEnd,
     formatTime,
   } = logic;
+  const skinProps = useMemo(() => parsePlayQueueSkinProps(variantConfig), [variantConfig]);
+  const t = useT();
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const activeItemRef = React.useRef<HTMLDivElement | null>(null);
   const didAutoScrollRef = React.useRef(false);
 
   React.useLayoutEffect(() => {
+    if (!skinProps.autoScrollToActive) return;
     if (!showQueue) {
       didAutoScrollRef.current = false;
       return;
@@ -73,43 +78,57 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
     const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
     list.scrollTop = Math.min(Math.max(0, activeTop - desiredOffset), maxScrollTop);
     didAutoScrollRef.current = true;
-  }, [showQueue, currentIndex, queueLength]);
+  }, [currentIndex, queueLength, showQueue, skinProps.autoScrollToActive]);
+
+  const showHeaderActions = skinProps.showEditAction || skinProps.showAddAction || skinProps.showClearAction;
 
   const modal = showQueue
     ? createPortal(
         <div className="queue-modal-overlay" onClick={closeQueue}>
           <div className="queue-modal-content" onClick={(event) => event.stopPropagation()}>
             <div className="queue-modal-header">
-              <span className="queue-modal-title">♫ 播放队列 ({queueLength})</span>
-              <div className="queue-header-actions">
-                <button
-                  className={`queue-header-btn ${editMode ? 'queue-header-btn-active' : ''}`}
-                  onClick={toggleEditMode}
-                  title={editMode ? '完成编辑' : '编辑顺序'}
-                >
-                  {editMode ? '✓' : '✎'}
-                </button>
-                <button className="queue-header-btn" onClick={() => void addFiles()} title="添加文件到队列">
-                  +
-                </button>
-                <button
-                  className="queue-header-btn"
-                  onClick={clearQueue}
-                  disabled={queueLength === 0}
-                  title="清空播放队列"
-                >
-                  ×
-                </button>
-              </div>
+              <span className="queue-modal-title">
+                {t('magnet.renderers.btn-play-queue.preview')} ({queueLength})
+              </span>
+              {showHeaderActions ? (
+                <div className="queue-header-actions">
+                  {skinProps.showEditAction ? (
+                    <button
+                      className={`queue-header-btn ${editMode ? 'queue-header-btn-active' : ''}`}
+                      onClick={toggleEditMode}
+                      title={editMode ? 'Done editing' : 'Edit order'}
+                    >
+                      {editMode ? 'Done' : 'Edit'}
+                    </button>
+                  ) : null}
+                  {skinProps.showAddAction ? (
+                    <button className="queue-header-btn" onClick={() => void addFiles()} title="Add audio files">
+                      +
+                    </button>
+                  ) : null}
+                  {skinProps.showClearAction ? (
+                    <button
+                      className="queue-header-btn"
+                      onClick={clearQueue}
+                      disabled={queueLength === 0}
+                      title={t('common.action.clear')}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             <div className="queue-list" ref={listRef}>
               {queueLength === 0 ? (
                 <div className="queue-empty">
                   <NoteIcon />
-                  <div className="queue-empty-text">播放队列为空</div>
-                  <button className="queue-empty-btn" onClick={() => void addFiles()}>
-                    添加音频文件
-                  </button>
+                  <div className="queue-empty-text">Queue is empty</div>
+                  {skinProps.showAddAction ? (
+                    <button className="queue-empty-btn" onClick={() => void addFiles()}>
+                      Add audio files
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 queue.map((track, index) => (
@@ -144,13 +163,11 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
                       <div className="queue-item-title" title={track.title}>
                         {track.title}
                       </div>
-                      <div className="queue-item-artist" title={track.artist || '未知艺术家'}>
-                        {track.artist || '未知艺术家'}
+                      <div className="queue-item-artist" title={track.artist || t('common.unknown.artist')}>
+                        {track.artist || t('common.unknown.artist')}
                       </div>
                     </div>
-                    <div className="queue-item-duration">
-                      {track.duration ? formatTime(track.duration) : '-'}
-                    </div>
+                    <div className="queue-item-duration">{track.duration ? formatTime(track.duration) : '-'}</div>
                     <div className={`queue-item-actions ${editMode ? 'queue-item-actions-hidden' : ''}`}>
                       <button
                         className="queue-item-action-btn queue-item-play"
@@ -158,10 +175,10 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
                           event.stopPropagation();
                           playTrack(index);
                         }}
-                        title="播放"
+                        title={t('common.action.play')}
                         disabled={editMode}
                       >
-                        ▶
+                        Play
                       </button>
                       <button
                         className="queue-item-action-btn queue-item-remove"
@@ -169,10 +186,10 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
                           event.stopPropagation();
                           removeTrack(index);
                         }}
-                        title="从播放队列移除"
+                        title={t('common.action.remove')}
                         disabled={editMode}
                       >
-                        ✕
+                        Remove
                       </button>
                     </div>
                   </div>
@@ -194,10 +211,10 @@ export const StandardPlayQueue: React.FC<PlayQueueVariantProps> = ({ data, logic
           event.stopPropagation();
           toggleQueue();
         }}
-        title="播放队列"
+        title={t('magnet.renderers.btn-play-queue.preview')}
       >
         <QueueIcon />
-        {queueLength > 0 && <span className="play-queue-count">{queueLength}</span>}
+        {skinProps.showCountBadge && queueLength > 0 ? <span className="play-queue-count">{queueLength}</span> : null}
       </button>
       {modal}
     </>

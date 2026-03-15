@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import type { Magnet } from '../../types/pixel';
 import { getMagnetRenderer } from '../../magnet-system/registry';
 import type { MagnetChromeOverrideMode } from '../../modules/magnets';
@@ -9,6 +9,11 @@ import {
   type MagnetBounds,
 } from '../../modules/magnets/geometry';
 import type { MagnetAdaptiveLayoutMode, MagnetJoinEdges } from '../../modules/magnets/layoutAdaptive';
+import {
+  buildMagnetLayoutCompensationTransform,
+  buildMagnetShellTransition,
+  resolveMagnetMotionRuntime,
+} from '../../modules/magnets/motionContract';
 import {
   resolveMagnetCornerRadii,
   splitMagnetStyleTokens,
@@ -22,6 +27,9 @@ import {
   resolveMagnetTransitionValue,
   toOpaqueMagnetColor,
 } from '../../modules/magnets/runtimeStyle';
+import { useSkinSurfaceModel } from '../../themes/skinSurface';
+import type { ThemeBindingId } from '../../themes/types/theme';
+import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import './Magnet.css';
 
 interface MagnetProps {
@@ -44,18 +52,32 @@ function MagnetComponentImpl({
   joinEdges,
 }: MagnetProps) {
   const lowRenderMode = import.meta.env.VITE_PERF_NEXT_LOW_RENDER === '1';
+  const magnetBindingId = `magnet.${magnet.id}` as ThemeBindingId;
+  const magnetSkin = useMagnetSkin(magnet.id, {
+    defaultRendererId: magnet.renderer ?? magnet.id,
+    defaultVariant: 'default',
+  });
+  const magnetSurface = useSkinSurfaceModel(magnetBindingId);
   const [isHovering, setIsHovering] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const dragFeedbackTimerRef = useRef<number | null>(null);
   const [disableTransition, setDisableTransition] = useState(true);
+  const [layoutCompensationTransform, setLayoutCompensationTransform] = useState<string | null>(null);
   const lastBoundsRef = useRef<MagnetBounds | null>(null);
   const isFirstRenderRef = useRef(true);
+  const layoutCompensationFrameRef = useRef<number | null>(null);
 
   const clearDragFeedbackTimer = useCallback(() => {
     if (dragFeedbackTimerRef.current === null) return;
     window.clearTimeout(dragFeedbackTimerRef.current);
     dragFeedbackTimerRef.current = null;
+  }, []);
+
+  const clearLayoutCompensationFrame = useCallback(() => {
+    if (layoutCompensationFrameRef.current === null) return;
+    window.cancelAnimationFrame(layoutCompensationFrameRef.current);
+    layoutCompensationFrameRef.current = null;
   }, []);
 
   const resetTransientInteractionState = useCallback(() => {
@@ -160,9 +182,16 @@ function MagnetComponentImpl({
     [chromeTokens.borderRadius, joinEdges]
   );
 
-  useEffect(() => {
-    if (lowRenderMode) {
+  const motionRuntime = useMemo(
+    () => resolveMagnetMotionRuntime(lowRenderMode, magnetSkin.motion),
+    [lowRenderMode, magnetSkin.motion]
+  );
+
+  useLayoutEffect(() => {
+    if (motionRuntime.mode === 'off') {
+      clearLayoutCompensationFrame();
       setDisableTransition(true);
+      setLayoutCompensationTransform(null);
       lastBoundsRef.current = bounds;
       return;
     }
@@ -172,6 +201,7 @@ function MagnetComponentImpl({
     if (isFirstRenderRef.current) {
       isFirstRenderRef.current = false;
       lastBoundsRef.current = bounds;
+      setLayoutCompensationTransform(null);
       const timer = setTimeout(() => {
         setDisableTransition(false);
       }, 50);
@@ -191,9 +221,12 @@ function MagnetComponentImpl({
     const totalDelta = deltaX + deltaY + deltaW + deltaH;
     const isLargeChange =
       deltaX > 100 || deltaY > 100 || deltaW > 100 || deltaH > 100 || totalDelta > 100;
+    const shouldSnapLargeChange = isLargeChange && motionRuntime.largeChange !== 'animate';
 
-    if (isLargeChange) {
+    if (shouldSnapLargeChange) {
+      clearLayoutCompensationFrame();
       setDisableTransition(true);
+      setLayoutCompensationTransform(null);
       const timer = setTimeout(() => {
         setDisableTransition(false);
         lastBoundsRef.current = bounds;
@@ -201,12 +234,44 @@ function MagnetComponentImpl({
       return () => clearTimeout(timer);
     }
 
-    lastBoundsRef.current = bounds;
-  }, [bounds, lowRenderMode]);
+    clearLayoutCompensationFrame();
+    const nextCompensationTransform = buildMagnetLayoutCompensationTransform(
+      last,
+      bounds,
+      motionRuntime.layoutStrategy
+    );
+    if (nextCompensationTransform) {
+      setLayoutCompensationTransform(nextCompensationTransform);
+      layoutCompensationFrameRef.current = window.requestAnimationFrame(() => {
+        layoutCompensationFrameRef.current = null;
+        setLayoutCompensationTransform(null);
+      });
+    } else {
+      setLayoutCompensationTransform(null);
+    }
 
-  const transitionValue = useMemo(
-    () => resolveMagnetTransitionValue(lowRenderMode, disableTransition, magnet.animation?.transition),
-    [lowRenderMode, disableTransition, magnet.animation?.transition]
+    setDisableTransition(false);
+    lastBoundsRef.current = bounds;
+    return () => {
+      clearLayoutCompensationFrame();
+    };
+  }, [bounds, clearLayoutCompensationFrame, motionRuntime]);
+
+  useEffect(
+    () => () => {
+      clearLayoutCompensationFrame();
+    },
+    [clearLayoutCompensationFrame]
+  );
+
+  const chromeTransitionValue = useMemo(
+    () => resolveMagnetTransitionValue(lowRenderMode || motionRuntime.mode === 'off', disableTransition, magnet.animation?.transition),
+    [lowRenderMode, motionRuntime.mode, disableTransition, magnet.animation?.transition]
+  );
+
+  const shellTransitionValue = useMemo(
+    () => buildMagnetShellTransition(motionRuntime, chromeTransitionValue, disableTransition),
+    [motionRuntime, chromeTransitionValue, disableTransition]
   );
 
   const chromeEnabled = useMemo(
@@ -231,10 +296,13 @@ function MagnetComponentImpl({
       top: `${bounds.y}px`,
       width: `${bounds.width}px`,
       height: `${bounds.height}px`,
-      transition: transitionValue,
+      transition: shellTransitionValue,
       cursor,
+      transform: layoutCompensationTransform ?? undefined,
+      transformOrigin: layoutCompensationTransform ? 'top left' : undefined,
+      willChange: layoutCompensationTransform ? 'transform' : undefined,
     };
-  }, [bounds, currentStyle.cursor, transitionValue]);
+  }, [bounds, currentStyle.cursor, shellTransitionValue, layoutCompensationTransform]);
 
   const chromeStyle = useMemo(() => {
     const next: Record<string, string | number | undefined> = { ...chromeTokens };
@@ -252,11 +320,11 @@ function MagnetComponentImpl({
     return {
       width: '100%',
       height: '100%',
-      transition: transitionValue,
+      transition: chromeTransitionValue,
       ...next,
       ...resolvedCornerRadii,
     };
-  }, [chromeTokens, resolvedCornerRadii, transitionValue]);
+  }, [chromeTokens, resolvedCornerRadii, chromeTransitionValue]);
 
   const chromeBaseStyle = useMemo(() => {
     const shouldUseInsetStroke = Boolean(borderStroke);
@@ -272,7 +340,7 @@ function MagnetComponentImpl({
       bottom: chromeInsets.bottom,
       left: chromeInsets.left,
       pointerEvents: 'none' as const,
-      transition: transitionValue,
+      transition: chromeTransitionValue,
       opacity: chromeBaseOpacity,
       backgroundColor: toOpaqueMagnetColor(currentStyle.backgroundColor),
       border: shouldUseInsetStroke ? 'none' : currentStyle.border,
@@ -295,7 +363,7 @@ function MagnetComponentImpl({
     chromeInsets.bottom,
     chromeInsets.left,
     resolvedCornerRadii,
-    transitionValue,
+    chromeTransitionValue,
   ]);
 
   const rendererStyle = useMemo(() => {
@@ -303,7 +371,7 @@ function MagnetComponentImpl({
       minWidth: 0,
       minHeight: 0,
       boxSizing: 'border-box' as const,
-      transition: transitionValue,
+      transition: chromeTransitionValue,
       ...resolvedCornerRadii,
       ...contentTokens,
     };
@@ -328,7 +396,7 @@ function MagnetComponentImpl({
     };
   }, [
     contentTokens,
-    transitionValue,
+    chromeTransitionValue,
     resolvedCornerRadii,
     chromeInsetApplies,
     chromeInsets.top,
@@ -359,12 +427,31 @@ function MagnetComponentImpl({
     isDragging,
   });
 
+  const chromeRootProps = magnetSurface.getElementProps({
+    bindingId: magnetBindingId,
+    state: interactionState,
+    className: `magnet magnet--${interactionState} magnet--${layoutMode} magnet-${magnet.type} magnet-state-${magnet.state}`,
+    style: chromeStyle,
+    includeSurfaceTokens: true,
+  });
+
+  const rendererRootProps = magnetSurface.getElementProps({
+    bindingId: magnetBindingId,
+    state: interactionState,
+    className: 'magnet-renderer',
+    style: rendererStyle,
+    includeSurfaceTokens: true,
+  });
+
   return (
     <div
       className={`magnet-shell magnet-shell--${interactionState} magnet-shell--${layoutMode} magnet-state-${magnet.state}`}
       data-magnet-id={magnet.id}
       data-interaction-state={interactionState}
       data-layout-mode={layoutMode}
+      data-pmp-motion-mode={motionRuntime.mode}
+      data-pmp-motion-layout={motionRuntime.layoutStrategy}
+      {...(motionRuntime.sharedKey ? { 'data-pmp-motion-shared-key': motionRuntime.sharedKey } : {})}
       style={shellStyle}
       onClick={handleClick}
       onMouseDown={handleMouseDown}
@@ -374,14 +461,21 @@ function MagnetComponentImpl({
     >
       {chromeEnabled ? (
         <div
-          className={`magnet magnet--${interactionState} magnet--${layoutMode} magnet-${magnet.type} magnet-state-${magnet.state}`}
-          style={chromeStyle}
+          {...chromeRootProps}
+          data-surface-id={magnetBindingId}
+          data-surface-variant={magnetSurface.variant}
         >
           <div className="magnet-base-layer" style={chromeBaseStyle} />
           <div className="magnet-content-layer" style={rendererStyle}>{renderedContent}</div>
         </div>
       ) : (
-        <div className="magnet-renderer" style={rendererStyle}>{renderedContent}</div>
+        <div
+          {...rendererRootProps}
+          data-surface-id={magnetBindingId}
+          data-surface-variant={magnetSurface.variant}
+        >
+          {renderedContent}
+        </div>
       )}
     </div>
   );

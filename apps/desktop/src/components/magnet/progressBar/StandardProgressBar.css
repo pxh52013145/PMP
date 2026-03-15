@@ -14,6 +14,10 @@
   user-select: none;
 }
 
+.progress-bar-component.progress-bar-no-times {
+  gap: 0;
+}
+
 .progress-time {
   font-size: 11px;
   font-weight: 500;
@@ -43,8 +47,24 @@
   transition: height 0.2s ease;
 }
 
+.progress-bar-density-thin .progress-bar-bg {
+  height: 3px;
+}
+
+.progress-bar-density-thick .progress-bar-bg {
+  height: 6px;
+}
+
 .progress-bar-track:hover .progress-bar-bg {
   height: 6px;
+}
+
+.progress-bar-density-thin .progress-bar-track:hover .progress-bar-bg {
+  height: 4px;
+}
+
+.progress-bar-density-thick .progress-bar-track:hover .progress-bar-bg {
+  height: 8px;
 }
 
 .progress-bar-fill {
@@ -77,6 +97,10 @@
   background: color-mix(in srgb, var(--progress-fill-color) 40%, transparent);
 }
 
+.progress-bar-buffered-single {
+  background: color-mix(in srgb, var(--progress-fill-color) 32%, transparent);
+}
+
 .progress-bar-thumb {
   position: absolute;
   top: 50%;
@@ -105,6 +129,14 @@
   box-shadow:
     0 4px 12px var(--progress-fill-color),
     0 0 0 4px color-mix(in srgb, var(--progress-fill-color) 30%, transparent);
+}
+
+.progress-bar-thumb-always .progress-bar-thumb {
+  opacity: 1;
+}
+
+.progress-bar-thumb-always .progress-bar-track:hover .progress-bar-thumb {
+  transform: scale(1.1);
 }
 
 .progress-bar-track:active .progress-bar-thumb {

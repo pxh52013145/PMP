@@ -42,8 +42,6 @@ export const InputDialog: React.FC<InputDialogProps> = ({
     }
   }, [isOpen, defaultValue]);
 
-  if (!isOpen) return null;
-
   const handleConfirm = () => {
     if (value.trim()) {
       onConfirm(value.trim());

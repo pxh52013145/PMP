@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useT } from '../../../i18n';
 import { PlaylistsVariantProps } from './PlaylistsTypes';
 import { Playlists } from '../Playlists';
+import { parsePlaylistsSkinProps } from './playlistsSkin';
 import './StandardPlaylists.css';
 
 const PlaylistsIcon: React.FC = () => (
@@ -16,14 +17,17 @@ const PlaylistsIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ logic }) => {
+export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ data, logic, variantConfig }) => {
   const { isOpen, openPlaylists, closePlaylists } = logic;
   const t = useT();
+  const skinProps = useMemo(() => parsePlaylistsSkinProps(variantConfig), [variantConfig]);
 
   return (
     <>
       <button
-        className="magnet-control-button playlists-button"
+        className={`magnet-control-button playlists-button ${skinProps.showLabel ? 'playlists-button-labeled' : ''} ${
+          isOpen && skinProps.showActiveIndicator ? 'playlists-button-active' : ''
+        }`}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -32,6 +36,13 @@ export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ logic }) =>
         title={t('magnet.renderers.btn-playlists.preview')}
       >
         <PlaylistsIcon />
+        {skinProps.showLabel ? <span className="playlists-button-label">{t('magnet.renderers.btn-playlists.preview')}</span> : null}
+        {skinProps.showCountBadge && data.playlistCount > 0 ? (
+          <span className="playlists-button-count" aria-hidden="true">
+            {data.playlistCount}
+          </span>
+        ) : null}
+        {isOpen && skinProps.showActiveIndicator ? <span className="playlists-button-indicator" aria-hidden="true" /> : null}
       </button>
       <Playlists isOpen={isOpen} onClose={closePlaylists} />
     </>

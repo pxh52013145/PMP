@@ -28,6 +28,12 @@ import { ConfirmDialog } from '../magnet/ConfirmDialog';
 
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
 import { useSkinSurfaceModel } from '../../themes/skinSurface';
+import {
+  buildThemePresenceAnimationStyle,
+  getThemeMotionTotalMs,
+  pickThemeMotionChannel,
+  useThemePresenceState,
+} from '../../themes/surfaceMotion';
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
 
@@ -253,6 +259,7 @@ import { useCoverUrlForTrack } from '../magnet/shared/useCoverUrlForTrack';
 import { buildLibraryTrackContextMenu } from '../magnet/trackContextMenu';
 
 import { useBaseControlPanels } from './useBaseControlPanels';
+import { PmpButton, PmpDialog } from '../primitives';
 
 import './MusicLibrary.css';
 
@@ -7235,12 +7242,33 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
   const pageSurface = useSkinSurfaceModel('page.music-library');
+  const pageEnterMotion = useMemo(
+    () => pickThemeMotionChannel(pageSurface.root.motion, ['enter']),
+    [pageSurface.root.motion]
+  );
+  const pageExitMotion = useMemo(
+    () => pickThemeMotionChannel(pageSurface.root.motion, ['exit']),
+    [pageSurface.root.motion]
+  );
+  const pagePresence = useThemePresenceState({
+    open: isOpen,
+    enterDurationMs: getThemeMotionTotalMs(pageEnterMotion?.spec),
+    exitDurationMs: getThemeMotionTotalMs(pageExitMotion?.spec),
+  });
 
-  if (!isOpen) return null;
+  if (!pagePresence.rendered) return null;
+
+  const pageMotionStyle =
+    pagePresence.phase === 'enter'
+      ? buildThemePresenceAnimationStyle(pageEnterMotion?.spec, 'enter')
+      : pagePresence.phase === 'exit'
+        ? buildThemePresenceAnimationStyle(pageExitMotion?.spec, 'exit')
+        : undefined;
 
   const rootProps = pageSurface.getElementProps({
     bindingId: 'page.music-library',
     className: ['music-library', embedded ? 'music-library-embedded' : ''].filter(Boolean).join(' '),
+    style: pageMotionStyle,
   });
 
   const libraryContent = (
@@ -7249,6 +7277,24 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {...rootProps}
       data-surface-id="page.music-library"
       data-surface-variant={pageSurface.variant}
+      data-open={isOpen ? 'true' : 'false'}
+      data-pmp-motion-phase={pagePresence.phase}
+      {...((pagePresence.phase === 'enter' ? pageEnterMotion?.name : pagePresence.phase === 'exit' ? pageExitMotion?.name : undefined)
+        ? {
+            'data-pmp-motion-channel':
+              pagePresence.phase === 'enter' ? pageEnterMotion?.name : pageExitMotion?.name,
+          }
+        : {})}
+      {...((pagePresence.phase === 'enter'
+        ? pageEnterMotion?.spec.preset
+        : pagePresence.phase === 'exit'
+          ? pageExitMotion?.spec.preset
+          : undefined)
+        ? {
+            'data-pmp-motion-preset':
+              pagePresence.phase === 'enter' ? pageEnterMotion?.spec.preset : pageExitMotion?.spec.preset,
+          }
+        : {})}
     >
 
       {!embedded && (
@@ -9160,60 +9206,44 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
       {showStableQueuePanel && (
-
-        <div className="music-library-modal-overlay" onClick={() => setShowStableQueuePanel(false)}>
-
-          <div
-
-            className="music-library-modal music-library-stable-queue-modal"
-
-            onClick={(event) => event.stopPropagation()}
-
-          >
-
-            <div className="music-library-modal-header">
-
-              <h3>{t('pages.music-library.stable.queue.title')}</h3>
-
-              <div className="music-library-modal-header-actions">
-
-                <button
-
-                  className="music-library-btn"
-
-                  onClick={() => {
-
-                    void loadStableQueueData();
-
-                  }}
-
-                  disabled={isStableQueueLoading}
-
-                >
-
-                  {t('common.action.refresh')}
-
-                </button>
-
-                <button className="music-library-modal-close" onClick={() => setShowStableQueuePanel(false)}>
-
-                  X
-
-                </button>
-
-              </div>
-
+        <PmpDialog
+          open={showStableQueuePanel}
+          title={<h3>{t('pages.music-library.stable.queue.title')}</h3>}
+          overlayClassName="music-library-modal-overlay"
+          className="music-library-modal music-library-stable-queue-modal"
+          headerClassName="music-library-modal-header"
+          bodyClassName="music-library-modal-body"
+          headerActions={
+            <div className="music-library-modal-header-actions">
+              <PmpButton
+                type="button"
+                className="music-library-btn"
+                variant="default"
+                onClick={() => {
+                  void loadStableQueueData();
+                }}
+                disabled={isStableQueueLoading}
+              >
+                {t('common.action.refresh')}
+              </PmpButton>
+              <PmpButton
+                type="button"
+                className="music-library-modal-close"
+                variant="ghost"
+                onClick={() => setShowStableQueuePanel(false)}
+                title={t('common.action.close')}
+                aria-label={t('common.action.close')}
+              >
+                ×
+              </PmpButton>
             </div>
-
-            <div className="music-library-modal-body">
-
-              {isStableQueueLoading ? (
-
-                <div className="music-library-modal-loading">{t('pages.music-library.stable.queue.loading')}</div>
-
-              ) : (
-
-                <>
+          }
+          onClose={() => setShowStableQueuePanel(false)}
+        >
+          {isStableQueueLoading ? (
+            <div className="music-library-modal-loading">{t('pages.music-library.stable.queue.loading')}</div>
+          ) : (
+            <>
 
                   <div className="music-library-queue-section">
 
@@ -9511,120 +9541,80 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
                   </div>
 
-                </>
-
-              )}
-
-            </div>
-
-          </div>
-
-        </div>
-
+            </>
+          )}
+        </PmpDialog>
       )}
 
 
 
       {editingStableEntry && (
-
-        <div className="music-library-modal-overlay" onClick={handleCloseStableMetadataEditor}>
-
-          <div
-
-            className="music-library-modal music-library-stable-metadata-modal"
-
-            onClick={(event) => event.stopPropagation()}
-
-          >
-
-            <div className="music-library-modal-header">
-
-              <h3>{t('pages.music-library.stable.metadata.title')}</h3>
-
-              <button className="music-library-modal-close" onClick={handleCloseStableMetadataEditor}>
-
-                X
-
-              </button>
-
-            </div>
-
-            <div className="music-library-modal-body">
-
-              <label className="music-library-stable-metadata-field">
-
-                <span>{t('pages.music-library.stable.metadata.rating')}</span>
-
-                <input
-
-                  type="number"
-
-                  min={0}
-
-                  max={100}
-
-                  value={stableEntryRatingInput}
-
-                  onChange={(event) => setStableEntryRatingInput(event.target.value)}
-
-                />
-
-              </label>
-
-              <label className="music-library-stable-metadata-field">
-
-                <span>{t('pages.music-library.stable.metadata.tags')}</span>
-
-                <textarea
-
-                  value={stableEntryTagsInput}
-
-                  onChange={(event) => setStableEntryTagsInput(event.target.value)}
-
-                  placeholder={t('pages.music-library.stable.metadata.tagsHint')}
-
-                />
-
-              </label>
-
-              <div className="music-library-modal-footer">
-
-                <button className="music-library-btn" onClick={handleCloseStableMetadataEditor}>
-
-                  {t('common.action.cancel')}
-
-                </button>
-
-                <button
-
-                  className="music-library-btn"
-
-                  onClick={() => {
-
-                    void handleSaveStableMetadata();
-
-                  }}
-
-                  disabled={isStableMetadataSaving}
-
-                >
-
-                  {isStableMetadataSaving
-
-                    ? t('common.action.save')
-
-                    : t('pages.music-library.stable.metadata.save')}
-
-                </button>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
+        <PmpDialog
+          open={Boolean(editingStableEntry)}
+          title={<h3>{t('pages.music-library.stable.metadata.title')}</h3>}
+          overlayClassName="music-library-modal-overlay"
+          className="music-library-modal music-library-stable-metadata-modal"
+          headerClassName="music-library-modal-header"
+          bodyClassName="music-library-modal-body"
+          footerClassName="music-library-modal-footer"
+          headerActions={
+            <PmpButton
+              type="button"
+              className="music-library-modal-close"
+              variant="ghost"
+              onClick={handleCloseStableMetadataEditor}
+              title={t('common.action.close')}
+              aria-label={t('common.action.close')}
+            >
+              ×
+            </PmpButton>
+          }
+          footer={
+            <>
+              <PmpButton
+                type="button"
+                className="music-library-btn"
+                variant="ghost"
+                onClick={handleCloseStableMetadataEditor}
+              >
+                {t('common.action.cancel')}
+              </PmpButton>
+              <PmpButton
+                type="button"
+                className="music-library-btn"
+                variant="primary"
+                onClick={() => {
+                  void handleSaveStableMetadata();
+                }}
+                disabled={isStableMetadataSaving}
+              >
+                {isStableMetadataSaving
+                  ? t('common.action.save')
+                  : t('pages.music-library.stable.metadata.save')}
+              </PmpButton>
+            </>
+          }
+          onClose={handleCloseStableMetadataEditor}
+        >
+          <label className="music-library-stable-metadata-field">
+            <span>{t('pages.music-library.stable.metadata.rating')}</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={stableEntryRatingInput}
+              onChange={(event) => setStableEntryRatingInput(event.target.value)}
+            />
+          </label>
+          <label className="music-library-stable-metadata-field">
+            <span>{t('pages.music-library.stable.metadata.tags')}</span>
+            <textarea
+              value={stableEntryTagsInput}
+              onChange={(event) => setStableEntryTagsInput(event.target.value)}
+              placeholder={t('pages.music-library.stable.metadata.tagsHint')}
+            />
+          </label>
+        </PmpDialog>
       )}
 
 
@@ -9780,88 +9770,80 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       {/* 閹煎瓨鎹侀惌鎯ь嚗閸曨収鍚€闁荤偛妫楀▍?*/}
 
       {showPathsManager && (
-
-        <div className="paths-manager-overlay" onClick={() => setShowPathsManager(false)}>
-
-          <div className="paths-manager-modal" onClick={(e) => e.stopPropagation()}>
-
-            <div className="paths-manager-header">
-
-              <h3>{t('pages.music-library.pathsManager.title')}</h3>
-
-              <div className="paths-manager-header-actions">
-
-                <button
-
-                  className="paths-scan-btn"
-
-                  onClick={async () => {
-
-                    await handleScanFolder();
-
-                    await loadLibraryPaths();
-
-                  }}
-
-                  disabled={scanProgress?.isScanning}
-
-                >
-
-                  {t('pages.music-library.pathsManager.addFolderButton')}
-
-                </button>
-
-                <button
-
-                  className="paths-clean-missing-btn"
-
-                  onClick={handleRequestCleanupMissingForAllPaths}
-
-                  disabled={
-
-                    scanProgress?.isScanning ||
-
-                    isCleanupAllMissingBusy ||
-
-                    isLibraryPathHealthLoading ||
-
-                    cleanupConfirmTarget !== null ||
-
-                    totalMissingTracks <= 0
-
-                  }
-
-                  title={t('pages.music-library.pathsManager.path.cleanupMissingAllTitle', {
-
-                    count: totalMissingTracks,
-
-                  })}
-
-                >
-
-                  {isCleanupAllMissingBusy
-
-                    ? t('pages.music-library.pathsManager.path.cleanupMissingBusy')
-
-                    : t('pages.music-library.pathsManager.path.cleanupMissingAllButton', {
-
-                        count: totalMissingTracks,
-
-                      })}
-
-                </button>
-
-                <button title={t('common.action.close')} onClick={() => setShowPathsManager(false)}>
-                  ×
-                </button>
-
-              </div>
-
+        <PmpDialog
+          open={showPathsManager}
+          title={<h3>{t('pages.music-library.pathsManager.title')}</h3>}
+          overlayClassName="paths-manager-overlay"
+          className="paths-manager-modal"
+          headerClassName="paths-manager-header"
+          bodyClassName="paths-manager-body"
+          footerClassName="paths-manager-footer"
+          headerActions={
+            <div className="paths-manager-header-actions">
+              <PmpButton
+                type="button"
+                className="paths-scan-btn"
+                variant="primary"
+                onClick={async () => {
+                  await handleScanFolder();
+                  await loadLibraryPaths();
+                }}
+                disabled={scanProgress?.isScanning}
+              >
+                {t('pages.music-library.pathsManager.addFolderButton')}
+              </PmpButton>
+              <PmpButton
+                type="button"
+                className="paths-clean-missing-btn"
+                variant="default"
+                onClick={handleRequestCleanupMissingForAllPaths}
+                disabled={
+                  scanProgress?.isScanning ||
+                  isCleanupAllMissingBusy ||
+                  isLibraryPathHealthLoading ||
+                  cleanupConfirmTarget !== null ||
+                  totalMissingTracks <= 0
+                }
+                title={t('pages.music-library.pathsManager.path.cleanupMissingAllTitle', {
+                  count: totalMissingTracks,
+                })}
+              >
+                {isCleanupAllMissingBusy
+                  ? t('pages.music-library.pathsManager.path.cleanupMissingBusy')
+                  : t('pages.music-library.pathsManager.path.cleanupMissingAllButton', {
+                      count: totalMissingTracks,
+                    })}
+              </PmpButton>
+              <PmpButton
+                type="button"
+                className="paths-manager-close-btn"
+                variant="ghost"
+                title={t('common.action.close')}
+                aria-label={t('common.action.close')}
+                onClick={() => setShowPathsManager(false)}
+              >
+                ×
+              </PmpButton>
             </div>
-
-
-
-            <div className="paths-manager-body">
+          }
+          footer={
+            <>
+              <div className="paths-manager-info">
+                {t('pages.music-library.pathsManager.footer')}
+              </div>
+              <div className="paths-manager-health-info">
+                {isLibraryPathHealthLoading
+                  ? t('pages.music-library.pathsManager.health.loading')
+                  : isLibraryPathHealthAvailable
+                    ? t('pages.music-library.pathsManager.health.summary', {
+                        count: totalMissingTracks,
+                      })
+                    : t('pages.music-library.pathsManager.health.unavailable')}
+              </div>
+            </>
+          }
+          onClose={() => setShowPathsManager(false)}
+        >
 
               {libraryPaths.length === 0 ? (
 
@@ -10207,42 +10189,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
               )}
 
-            </div>
-
-
-
-            <div className="paths-manager-footer">
-
-              <div className="paths-manager-info">
-
-                {t('pages.music-library.pathsManager.footer')}
-
-              </div>
-
-              <div className="paths-manager-health-info">
-
-                {isLibraryPathHealthLoading
-
-                  ? t('pages.music-library.pathsManager.health.loading')
-
-                  : isLibraryPathHealthAvailable
-
-                    ? t('pages.music-library.pathsManager.health.summary', {
-
-                        count: totalMissingTracks,
-
-                      })
-
-                    : t('pages.music-library.pathsManager.health.unavailable')}
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
+        </PmpDialog>
       )}
 
 

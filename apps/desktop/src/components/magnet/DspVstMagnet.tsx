@@ -7,6 +7,9 @@ import { isTauriRuntime } from '../../utils/tauriRuntime';
 import { useT } from '../../i18n';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';
+import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
+import { useResolvedMagnetSkinRenderer } from './shared/useResolvedMagnetSkinRenderer';
+import { DSP_VST_VARIANT_PRESETS, parseDspVstSkinProps } from './dspVstSkin';
 import './DspVstMagnet.css';
 
 type VstNodeSnapshot = {
@@ -152,7 +155,12 @@ function computeWarmupState(enabledVstNodes: VstNodeSnapshot[], statuses: Record
   return resolvedStatuses.length > 0 ? 'loading' : 'notLoaded';
 }
 
-export const DspVstMagnet: React.FC = () => {
+type DspVstRendererProps = {
+  variantConfig?: Record<string, unknown>;
+};
+
+const DspVstDefaultRenderer: React.FC<DspVstRendererProps> = ({ variantConfig }) => {
+  const skinProps = useMemo(() => parseDspVstSkinProps(variantConfig), [variantConfig]);
   const t = useT();
   const navigation = useNavigation();
   const [graph, setGraph] = useState<DspGraphConfig | null>(() => readData<DspGraphConfig>(STORAGE_KEYS.NATIVE_AUDIO_DSP_GRAPH));
@@ -221,7 +229,12 @@ export const DspVstMagnet: React.FC = () => {
   }, [enabledVstNodes, vstEnabled, vstStatuses, warmupBusy, vstToggleBusy]);
 
   const ringStyle = useMemo(() => {
-    const visible = warmupState !== 'none';
+    const visible =
+      skinProps.ringVisibility === 'always'
+        ? true
+        : skinProps.ringVisibility === 'off'
+          ? false
+          : warmupState !== 'none';
     const ringColor =
       warmupState === 'loaded'
         ? 'rgba(74, 222, 128, 0.95)'
@@ -237,15 +250,7 @@ export const DspVstMagnet: React.FC = () => {
       '--dsp-vst-progress-opacity': warmupState === 'loading' ? '1' : '0',
       '--dsp-vst-progress-color': ringColor,
     } as React.CSSProperties;
-  }, [warmupState]);
-
-  const label = useMemo(() => {
-    const fallback = t('magnet.renderers.dsp-vst.preview');
-    if (!firstEnabled) return fallback;
-    const primary = firstEnabled.pluginId?.trim() ? firstEnabled.pluginId : fallback;
-    const suffix = vstNodes.length > 1 ? `+${vstNodes.length - 1}` : '';
-    return `${primary}${suffix ? ` ${suffix}` : ''}`;
-  }, [firstEnabled, t, vstNodes.length]);
+  }, [skinProps.ringVisibility, warmupState]);
 
   const warmupStateLabel = useMemo(() => {
     switch (warmupState) {
@@ -263,6 +268,21 @@ export const DspVstMagnet: React.FC = () => {
         return t('magnet.dsp-vst.status.none');
     }
   }, [t, warmupState]);
+
+  const label = useMemo(() => {
+    if (skinProps.labelMode === 'generic') {
+      return t('magnet.renderers.dsp-vst.preview');
+    }
+
+    const fallback = t('magnet.renderers.dsp-vst.preview');
+    if (skinProps.labelMode === 'status') {
+      return warmupStateLabel;
+    }
+    if (!firstEnabled) return fallback;
+    const primary = firstEnabled.pluginId?.trim() ? firstEnabled.pluginId : fallback;
+    const suffix = vstNodes.length > 1 ? `+${vstNodes.length - 1}` : '';
+    return `${primary}${suffix ? ` ${suffix}` : ''}`;
+  }, [firstEnabled, skinProps.labelMode, t, vstNodes.length, warmupStateLabel]);
 
   const handleOpenRack = useCallback(() => {
     navigation.navigateTo('dsp-rack');
@@ -439,14 +459,16 @@ export const DspVstMagnet: React.FC = () => {
         title={title}
       >
         <span className="dsp-vst-magnet-label">{label}</span>
-        <span
-          className={`dsp-vst-magnet-progress${warmupState === 'loading' ? ' dsp-vst-magnet-progress--loading' : ''}`}
-          aria-hidden="true"
-        >
-          {PROGRESS_DOT_KEYS.map((key, idx) => (
-            <span key={key} className="dsp-vst-magnet-progress-dot" data-dot={idx} />
-          ))}
-        </span>
+        {skinProps.showProgressDots ? (
+          <span
+            className={`dsp-vst-magnet-progress${warmupState === 'loading' ? ' dsp-vst-magnet-progress--loading' : ''}`}
+            aria-hidden="true"
+          >
+            {PROGRESS_DOT_KEYS.map((key, idx) => (
+              <span key={key} className="dsp-vst-magnet-progress-dot" data-dot={idx} />
+            ))}
+          </span>
+        ) : null}
       </button>
 
       {contextMenu && (
@@ -484,4 +506,17 @@ export const DspVstMagnet: React.FC = () => {
       />
     </>
   );
+};
+
+const DSP_VST_RENDERERS = {
+  ...buildMagnetVariantRenderers(DspVstDefaultRenderer, DSP_VST_VARIANT_PRESETS),
+} satisfies Record<string, React.ComponentType<DspVstRendererProps>>;
+
+export const DspVstMagnet: React.FC = () => {
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('dsp-vst', DSP_VST_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
+
+  return <Renderer variantConfig={skin.props} />;
 };

@@ -17,6 +17,23 @@ export type ThemeBorderTokens = Record<string, string | number>;
 export type ThemeTokenPrimitive = string | number | boolean;
 export type ThemeTokenReference = `{${string}}`;
 export type ThemeTokenAssignments = Record<string, ThemeTokenPrimitive>;
+export type ThemeMotionValue = string | number;
+
+export interface ThemeMotionChannelSpec {
+  preset?: string;
+  duration?: ThemeMotionValue;
+  easing?: ThemeMotionValue;
+  delay?: ThemeMotionValue;
+  iterationCount?: number | 'infinite';
+  direction?: 'normal' | 'reverse' | 'alternate' | 'alternate-reverse';
+  fillMode?: 'none' | 'forwards' | 'backwards' | 'both';
+  playState?: 'running' | 'paused';
+  distance?: ThemeMotionValue;
+  scale?: number;
+  origin?: string;
+}
+
+export type ThemeMotionChannelMap = Record<string, ThemeMotionChannelSpec>;
 
 export interface DynamicColorConfig {
   extractFromCover?: boolean;
@@ -43,8 +60,22 @@ export interface ThemeBindingDynamicColorCapability {
   colorAdjust?: DynamicColorConfig['colorAdjust'];
 }
 
+export interface ThemeBindingMotionLayoutPolicy {
+  strategy?: 'none' | 'position' | 'transform' | 'flip';
+  largeChange?: 'snap' | 'animate';
+  sharedKey?: string;
+}
+
+export interface ThemeBindingMotionCapability {
+  enabled?: boolean;
+  mode?: 'full' | 'reduced' | 'off';
+  layout?: ThemeBindingMotionLayoutPolicy;
+  channels?: ThemeMotionChannelMap;
+}
+
 export interface ThemeBindingCapabilities {
   dynamicColor?: ThemeBindingDynamicColorCapability;
+  motion?: ThemeBindingMotionCapability;
 }
 
 export interface ThemeBinding {
@@ -70,6 +101,7 @@ export interface ThemePartStateSpec {
   classes?: string[];
   style?: Record<string, unknown>;
   tokens?: ThemeTokenAssignments;
+  motion?: ThemeMotionChannelMap;
 }
 
 export interface ThemeSurfacePartSpec extends ThemePartStateSpec {

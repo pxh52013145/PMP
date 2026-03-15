@@ -2,7 +2,16 @@ import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 
 import { useTheme } from './contexts/ThemeContextWithSync';
-import type { ComponentTheme, Theme, ThemeBindingId, ThemeSurfaceId, ThemeTokenAssignments, ThemeTokenPrimitive } from './types/theme';
+import { buildThemeMotionStyle, listThemeMotionChannels, mergeThemeMotionChannels, resolveThemeMotionChannels } from './motion';
+import type {
+  ComponentTheme,
+  Theme,
+  ThemeBindingId,
+  ThemeMotionChannelMap,
+  ThemeSurfaceId,
+  ThemeTokenAssignments,
+  ThemeTokenPrimitive,
+} from './types/theme';
 
 const TOKEN_REFERENCE_PATTERN = /^\{([^}]+)\}$/;
 
@@ -12,6 +21,7 @@ export interface ResolvedThemePart {
   className?: string;
   style: CSSProperties;
   tokens: ThemeTokenAssignments;
+  motion?: ThemeMotionChannelMap;
 }
 
 export interface SkinElementOptions {
@@ -39,6 +49,7 @@ export interface ResolvedSkinSurfaceModel {
     'data-pmp-primitive'?: string;
     'data-pmp-binding'?: string;
     'data-pmp-variant'?: string;
+    'data-pmp-motion-channels'?: string;
   };
 }
 
@@ -161,14 +172,27 @@ export function resolveThemePart(
     partState?.tokens,
     surfaceStatePart?.tokens
   );
+  const motion = resolveThemeMotionChannels(
+    theme,
+    mergeThemeMotionChannels(
+      partName === 'root' ? surfaceState?.motion : undefined,
+      part?.motion,
+      partState?.motion,
+      surfaceStatePart?.motion
+    ),
+    tokens
+  );
+  const motionStyle = buildThemeMotionStyle(motion);
 
   return {
     name: partName,
     classes,
     className: classesToString(classes),
     tokens,
+    ...(motion ? { motion } : {}),
     style: {
       ...buildTokenStyle(theme, tokens),
+      ...(motionStyle ?? {}),
       ...(partName === 'root' && isPlainObject(surfaceState?.style) ? (surfaceState.style as CSSProperties) : {}),
       ...(isPlainObject(part?.style) ? (part.style as CSSProperties) : {}),
       ...(isPlainObject(partState?.style) ? (partState.style as CSSProperties) : {}),
@@ -206,6 +230,7 @@ export function createResolvedSkinSurfaceModel(
         ...(primitive ? { 'data-pmp-primitive': primitive } : {}),
         ...(bindingId ? { 'data-pmp-binding': bindingId } : {}),
         ...(surfaceTheme.variant ? { 'data-pmp-variant': surfaceTheme.variant } : {}),
+        ...(resolvedPart.motion ? { 'data-pmp-motion-channels': listThemeMotionChannels(resolvedPart.motion) } : {}),
       };
     },
   };

@@ -4,11 +4,13 @@ import { usePlaybackLogic } from './usePlaybackLogic';
 import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
 import { useDynamicColor } from '../shared/useDynamicColor';
 import { CyberPlayPause } from './CyberPlayPause';
+import { PLAY_PAUSE_VARIANT_PRESETS } from './playPauseSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const PLAY_PAUSE_RENDERERS = {
-  default: CyberPlayPause,
   cyber: CyberPlayPause,
+  ...buildMagnetVariantRenderers(CyberPlayPause, PLAY_PAUSE_VARIANT_PRESETS),
 };
 
 export const PlayPauseButton: React.FC = () => {

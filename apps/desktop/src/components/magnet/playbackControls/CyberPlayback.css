@@ -59,6 +59,50 @@
   background: var(--playback-surface-bg);
 }
 
+.cyber-play-pause-btn.has-state-label {
+  border-radius: 18px;
+}
+
+.play-pause-content {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.play-pause-icon {
+  line-height: 1;
+}
+
+.play-pause-state-label {
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.play-pause-queue-count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--playback-accent-color) 78%, rgba(8, 12, 20, 0.92));
+  color: var(--playback-text-color);
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(8, 12, 20, 0.28);
+}
+
 .cyber-play-pause-btn:hover:not(:disabled) {
   background: var(--playback-hover-surface-bg);
   box-shadow: 0 0 20px color-mix(in srgb, var(--playback-accent-color) 42%, transparent);
@@ -95,11 +139,21 @@
   animation: playback-gradient-shift var(--playback-animation-duration) ease-in-out infinite;
 }
 
-.cyber-play-pause-btn.playing {
+.cyber-play-pause-btn.play-pause-pulse-always {
   animation: pulse-cyber 2s ease-in-out infinite;
 }
 
-.cyber-play-pause-btn.cover-color-dynamic.playing {
+.cyber-play-pause-btn.play-pause-pulse-always.cover-color-dynamic {
+  animation:
+    pulse-cyber 2s ease-in-out infinite,
+    playback-gradient-shift var(--playback-animation-duration) ease-in-out infinite;
+}
+
+.cyber-play-pause-btn.play-pause-pulse-playing.playing {
+  animation: pulse-cyber 2s ease-in-out infinite;
+}
+
+.cyber-play-pause-btn.cover-color-dynamic.play-pause-pulse-playing.playing {
   animation:
     pulse-cyber 2s ease-in-out infinite,
     playback-gradient-shift var(--playback-animation-duration) ease-in-out infinite;

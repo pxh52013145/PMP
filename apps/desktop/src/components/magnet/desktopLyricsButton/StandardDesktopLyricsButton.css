@@ -8,10 +8,17 @@
 .desktop-lyrics-button {
   --magnet-control-color: rgba(255, 255, 255, 0.9);
   --magnet-control-active-opacity: 0.82;
+  position: relative;
 }
 
 .desktop-lyrics-button.active {
   color: rgba(98, 180, 255, 0.98);
+}
+
+.desktop-lyrics-button-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .desktop-lyrics-button-label {
@@ -19,4 +26,49 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 1;
+}
+
+.desktop-lyrics-button.icon-only .desktop-lyrics-button-content {
+  width: 16px;
+  height: 16px;
+}
+
+.desktop-lyrics-button-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.desktop-lyrics-button-indicator {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28);
+}
+
+.desktop-lyrics-button-indicator.enabled {
+  background: rgba(93, 226, 255, 0.98);
+  box-shadow: 0 0 10px rgba(93, 226, 255, 0.42);
+}
+
+.desktop-lyrics-button-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(98, 180, 255, 0.2);
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }

@@ -2,6 +2,11 @@ import React, { useEffect, useRef } from 'react';
 import { useWindowActivity } from '../../contexts/WindowActivityContext';
 import { useQuality } from '../../contexts/QualityContext';
 import { BACKGROUND_RENDER_THROTTLE_FPS } from '../../contracts/performance';
+import type {
+  AudioVisualizerBackdropMode,
+  AudioVisualizerDensity,
+  AudioVisualizerEnergyProfile,
+} from './audioVisualizerSkin';
 import './AudioVisualizer.css';
 
 type RgbColor = { r: number; g: number; b: number };
@@ -49,7 +54,56 @@ interface AudioVisualizerProps {
   getFrequencyData: () => Uint8Array | null;
   isPlaying: boolean;
   accentColor?: string;
+  fallbackAccentColor?: string;
+  density?: AudioVisualizerDensity;
+  energyProfile?: AudioVisualizerEnergyProfile;
+  backdrop?: AudioVisualizerBackdropMode;
 }
+
+const DENSITY_SCALE: Record<AudioVisualizerDensity, number> = {
+  sparse: 0.72,
+  balanced: 1,
+  dense: 1.28,
+};
+
+const ENERGY_PROFILE_STYLE: Record<
+  AudioVisualizerEnergyProfile,
+  {
+    bandScale: number;
+    strokeBaseAlpha: number;
+    strokePulseAlpha: number;
+    shadowBase: number;
+    shadowPulse: number;
+  }
+> = {
+  soft: {
+    bandScale: 0.84,
+    strokeBaseAlpha: 0.68,
+    strokePulseAlpha: 0.12,
+    shadowBase: 2,
+    shadowPulse: 3.5,
+  },
+  balanced: {
+    bandScale: 1,
+    strokeBaseAlpha: 0.82,
+    strokePulseAlpha: 0.16,
+    shadowBase: 3,
+    shadowPulse: 5,
+  },
+  bright: {
+    bandScale: 1.16,
+    strokeBaseAlpha: 0.9,
+    strokePulseAlpha: 0.2,
+    shadowBase: 4,
+    shadowPulse: 7,
+  },
+};
+
+const BACKDROP_ALPHA: Record<AudioVisualizerBackdropMode, number> = {
+  none: 0,
+  soft: 0.14,
+  strong: 0.24,
+};
 
 /**
  * Audio spectrum visualizer.
@@ -63,6 +117,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   getFrequencyData,
   isPlaying,
   accentColor,
+  fallbackAccentColor,
+  density = 'balanced',
+  energyProfile = 'balanced',
+  backdrop = 'soft',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -90,7 +148,11 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const visualizerColor = parseCssColorToRgb(accentColor) ?? DEFAULT_VISUALIZER_COLOR;
+    const visualizerColor =
+      parseCssColorToRgb(accentColor ?? fallbackAccentColor) ?? DEFAULT_VISUALIZER_COLOR;
+    const densityScale = DENSITY_SCALE[density];
+    const energyStyle = ENERGY_PROFILE_STYLE[energyProfile];
+    const backdropAlpha = BACKDROP_ALPHA[backdrop];
 
     const animationGeneration = animationGenerationRef.current + 1;
     animationGenerationRef.current = animationGeneration;
@@ -215,8 +277,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       ctx.clearRect(0, 0, width, height);
 
       // Soft overlay so the spokes read consistently on top of the magnet background.
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
-      ctx.fillRect(0, 0, width, height);
+      if (backdropAlpha > 0) {
+        ctx.fillStyle = `rgba(0, 0, 0, ${backdropAlpha})`;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       if (currentLevels.length < 2) return;
 
@@ -233,17 +297,17 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       const centerX = width / 2;
       const centerY = height / 2;
       const outerRadius = minSide * 0.48;
-      const bandThickness = Math.max(8, outerRadius * 0.32);
+      const bandThickness = Math.max(8, outerRadius * 0.32 * energyStyle.bandScale);
       const midRadius = outerRadius - bandThickness * 0.5;
 
       // Spokes + glow.
       ctx.save();
-      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.82 + 0.16 * pulse})`;
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${energyStyle.strokeBaseAlpha + energyStyle.strokePulseAlpha * pulse})`;
       ctx.lineWidth = Math.max(0.9, Math.min(1.8, bandThickness * 0.02));
       ctx.lineJoin = 'miter';
       ctx.lineCap = 'butt';
       ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.16 + 0.28 * pulse})`;
-      ctx.shadowBlur = 3 + pulse * 5;
+      ctx.shadowBlur = energyStyle.shadowBase + pulse * energyStyle.shadowPulse;
 
       for (let i = 0; i < currentLevels.length; i++) {
         const raw = currentLevels[i] ?? 0;
@@ -297,7 +361,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       lastTickAt = now;
 
       const frequencyData = getFrequencyData();
-      const maxLines = Math.max(180, Math.min(260, quality.visualizerBars * 5));
+      const maxLines = Math.max(48, Math.round(Math.max(180, Math.min(260, quality.visualizerBars * 5)) * densityScale));
       const lineCount = Math.min(maxLines, frequencyData?.length ? maxLines : 0);
 
       const playing = isPlayingRef.current;
@@ -334,6 +398,10 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     };
   }, [
     accentColor,
+    backdrop,
+    density,
+    energyProfile,
+    fallbackAccentColor,
     getFrequencyData,
     quality.fpsBackground,
     quality.fpsEffects,

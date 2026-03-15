@@ -1,6 +1,6 @@
 # PMP 皮肤作者指南
 
-更新时间: 2026-03-15
+更新时间: 2026-03-16
 
 ## 1. 当前正式模型
 
@@ -105,6 +105,42 @@ magnet 现在是 binding-first:
   }
 }
 ```
+
+### 3.1.1 已定稿的 simple magnet props
+
+当前这批 simple magnet 已经完成正式 props 抽象, 可以直接写入主题包:
+
+| Binding ID | 推荐 props |
+| --- | --- |
+| `magnet.progress-bar` | `showTimeLabels`, `trackDensity`, `bufferLayers`, `thumbVisibility` |
+| `magnet.btn-play-pause` | `showStateLabel`, `showQueueCount`, `pulseMode` |
+| `magnet.btn-previous` / `magnet.btn-next` | `showQueueCount`, `showLabel` |
+| `magnet.btn-mode` | `showModeBadge`, `ringVisibility`, `pulseOnSwitch` |
+| `magnet.btn-volume` | `popupPlacement`, `showValue`, `showMuteToggle` |
+| `magnet.btn-play-queue` | `showCountBadge`, `showEditAction`, `showAddAction`, `showClearAction`, `autoScrollToActive` |
+| `magnet.btn-playlists` | `showCountBadge`, `showLabel`, `showActiveIndicator` |
+| `magnet.btn-music-library` | `showLabel`, `showActiveIndicator` |
+| `magnet.btn-back` | `iconStyle`, `showHistoryCount` |
+| `magnet.btn-window-pin` | `showPinnedAnchor`, `showPinnedShadow`, `idlePose` |
+| `magnet.btn-debug` | `activeIndicator`, `spinMode` |
+| `magnet.btn-desktop-lyrics` | `labelMode`, `showActiveIndicator`, `showClickThroughBadge` |
+| `magnet.navigation-page` | `sourceSwitcherMode`, `showLibraryStats`, `placeholderMode` |
+
+对应的 built-in variant 可直接通过 `bindings["magnet.<id>"].variant` 复用:
+
+- `progress-bar`: `default` / `minimal` / `monitor`
+- `btn-play-pause`: `default` / `labeled` / `queue-chip` / `ambient`
+- `btn-previous`, `btn-next`: `default` / `queue-hint` / `labeled`
+- `btn-mode`: `default` / `badge-chip` / `ambient`
+- `btn-volume`: `default` / `compact` / `dock-start`
+- `btn-play-queue`: `default` / `monitor` / `minimal`
+- `btn-playlists`: `default` / `badge` / `chip`
+- `btn-music-library`: `default` / `indicator` / `chip`
+- `btn-back`: `default` / `outline` / `history-chip`
+- `btn-window-pin`: `default` / `minimal` / `signal`
+- `btn-debug`: `default` / `status-dot` / `quiet`
+- `btn-desktop-lyrics`: `default` / `status-dot` / `full-label` / `compact-icon`
+- `navigation-page`: `default` / `inline-sources` / `compact-meta`
 
 ### 3.2 page / overlay / primitive
 

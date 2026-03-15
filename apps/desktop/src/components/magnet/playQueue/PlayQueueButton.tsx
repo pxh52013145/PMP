@@ -2,10 +2,12 @@ import React from 'react';
 import { usePlayQueueData } from './usePlayQueueData';
 import { usePlayQueueLogic } from './usePlayQueueLogic';
 import { StandardPlayQueue } from './StandardPlayQueue';
+import { PLAY_QUEUE_VARIANT_PRESETS } from './playQueueSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const PLAY_QUEUE_RENDERERS = {
-  default: StandardPlayQueue,
+  ...buildMagnetVariantRenderers(StandardPlayQueue, PLAY_QUEUE_VARIANT_PRESETS),
 };
 
 export const PlayQueueButton: React.FC = () => {

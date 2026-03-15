@@ -1,11 +1,15 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { WindowPinVariantProps } from './WindowPinTypes';
+import { parseWindowPinSkinProps } from './windowPinSkin';
 import './StandardWindowPin.css';
 
-const PinIcon: React.FC = () => (
+const PinIcon: React.FC<{ showPinnedAnchor: boolean; showPinnedShadow: boolean }> = ({
+  showPinnedAnchor,
+  showPinnedShadow,
+}) => (
   <svg viewBox="0 0 24 24" className="window-pin-icon" aria-hidden="true">
-    <ellipse className="window-pin-icon-shadow" cx="12" cy="19.1" rx="4.7" ry="1.5" />
-    <circle className="window-pin-icon-anchor" cx="12" cy="18.55" r="1.2" />
+    {showPinnedShadow ? <ellipse className="window-pin-icon-shadow" cx="12" cy="19.1" rx="4.7" ry="1.5" /> : null}
+    {showPinnedAnchor ? <circle className="window-pin-icon-anchor" cx="12" cy="18.55" r="1.2" /> : null}
     <g className="window-pin-icon-assembly">
       <path className="window-pin-icon-head" d="M8.1 4.15a1 1 0 1 0 0 2h7.8a1 1 0 1 0 0-2h-7.8Z" />
       <path
@@ -17,10 +21,14 @@ const PinIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic }) => {
+export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic, variantConfig }) => {
+  const skinProps = useMemo(() => parseWindowPinSkinProps(variantConfig), [variantConfig]);
+
   return (
     <button
-      className={`magnet-control-button window-pin-button ${data.isPinned ? 'pinned' : 'unpinned'}`}
+      className={`magnet-control-button window-pin-button window-pin-idle-${skinProps.idlePose} ${
+        data.isPinned ? 'pinned' : 'unpinned'
+      }`}
       onClick={logic.togglePin}
       onMouseDown={(e) => {
         e.preventDefault();
@@ -29,7 +37,10 @@ export const StandardWindowPin: React.FC<WindowPinVariantProps> = ({ data, logic
       title={logic.getButtonTitle(data.isPinned)}
       aria-pressed={data.isPinned}
     >
-      <PinIcon />
+      <PinIcon
+        showPinnedAnchor={skinProps.showPinnedAnchor}
+        showPinnedShadow={skinProps.showPinnedShadow}
+      />
     </button>
   );
 };

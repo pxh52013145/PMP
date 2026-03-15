@@ -1,15 +1,52 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import type { Track } from '../../services/audio';
-import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import { AudioVisualizer } from './AudioVisualizer';
+import {
+  AUDIO_VISUALIZER_VARIANT_PRESETS,
+  parseAudioVisualizerSkinProps,
+} from './audioVisualizerSkin';
+import { buildMagnetVariantRenderers } from './shared/magnetVariantCatalog';
 import { useCoverUrlForTrack } from './shared/useCoverUrlForTrack';
 import { useDynamicColor } from './shared/useDynamicColor';
+import { useResolvedMagnetSkinRenderer } from './shared/useResolvedMagnetSkinRenderer';
 import { isSameTrackRenderIdentity, sanitizeTrackForRuntime } from './shared/sanitizeTrackForRuntime';
+
+type AudioVisualizerRendererProps = {
+  accentColor?: string;
+  getFrequencyData: () => Uint8Array | null;
+  isPlaying: boolean;
+  variantConfig?: Record<string, unknown>;
+};
+
+const AudioVisualizerDefaultRenderer = memo(function AudioVisualizerDefaultRenderer({
+  accentColor,
+  getFrequencyData,
+  isPlaying,
+  variantConfig,
+}: AudioVisualizerRendererProps) {
+  const skinProps = useMemo(() => parseAudioVisualizerSkinProps(variantConfig), [variantConfig]);
+
+  return (
+    <AudioVisualizer
+      getFrequencyData={getFrequencyData}
+      isPlaying={isPlaying}
+      accentColor={accentColor}
+      fallbackAccentColor={skinProps.fallbackAccentColor}
+      density={skinProps.density}
+      energyProfile={skinProps.energyProfile}
+      backdrop={skinProps.backdrop}
+    />
+  );
+});
+
+const AUDIO_VISUALIZER_RENDERERS = {
+  ...buildMagnetVariantRenderers(AudioVisualizerDefaultRenderer, AUDIO_VISUALIZER_VARIANT_PRESETS),
+} satisfies Record<string, ComponentType<AudioVisualizerRendererProps>>;
 
 export const AudioVisualizerMagnet: React.FC = () => {
   const audioService = useAudioService();
-  const skin = useMagnetSkin('audio-visualizer', {
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('audio-visualizer', AUDIO_VISUALIZER_RENDERERS, {
     defaultRendererId: 'default',
     defaultVariant: 'default',
   });
@@ -47,10 +84,11 @@ export const AudioVisualizerMagnet: React.FC = () => {
   );
 
   return (
-    <AudioVisualizer
+    <Renderer
       getFrequencyData={getFrequencyData}
       isPlaying={playbackState === 'playing'}
       accentColor={dynamicColorEnabled ? dynamicColors.accentColor : undefined}
+      variantConfig={skin.props}
     />
   );
 };

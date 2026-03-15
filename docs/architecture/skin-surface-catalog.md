@@ -1,6 +1,6 @@
 # PMP Surface / Part 目录
 
-更新时间: 2026-03-15
+更新时间: 2026-03-16
 
 本文只记录当前已经在代码中稳定暴露的 surface / part / state 合约。
 
@@ -38,6 +38,33 @@
 
 - 当前 magnet renderer 内部 DOM 不列为正式 part API
 - magnet 的正式可写入口是 `bindings["magnet.*"]`
+
+### 2.1 已具备正式 variant catalog 的 magnet props
+
+下面这些 magnet 已经具备“可稳定对外写皮肤”的 props 契约:
+
+| Binding ID | 稳定 props | 内置 variants |
+| --- | --- | --- |
+| `magnet.progress-bar` | `showTimeLabels`, `trackDensity`, `bufferLayers`, `thumbVisibility` | `default`, `minimal`, `monitor` |
+| `magnet.btn-play-pause` | `showStateLabel`, `showQueueCount`, `pulseMode` | `default`, `labeled`, `queue-chip`, `ambient` |
+| `magnet.btn-previous` | `showQueueCount`, `showLabel` | `default`, `queue-hint`, `labeled` |
+| `magnet.btn-next` | `showQueueCount`, `showLabel` | `default`, `queue-hint`, `labeled` |
+| `magnet.btn-mode` | `showModeBadge`, `ringVisibility`, `pulseOnSwitch` | `default`, `badge-chip`, `ambient` |
+| `magnet.btn-volume` | `popupPlacement`, `showValue`, `showMuteToggle` | `default`, `compact`, `dock-start` |
+| `magnet.btn-play-queue` | `showCountBadge`, `showEditAction`, `showAddAction`, `showClearAction`, `autoScrollToActive` | `default`, `monitor`, `minimal` |
+| `magnet.btn-playlists` | `showCountBadge`, `showLabel`, `showActiveIndicator` | `default`, `badge`, `chip` |
+| `magnet.btn-music-library` | `showLabel`, `showActiveIndicator` | `default`, `indicator`, `chip` |
+| `magnet.btn-back` | `iconStyle`, `showHistoryCount` | `default`, `outline`, `history-chip` |
+| `magnet.btn-window-pin` | `showPinnedAnchor`, `showPinnedShadow`, `idlePose` | `default`, `minimal`, `signal` |
+| `magnet.btn-debug` | `activeIndicator`, `spinMode` | `default`, `status-dot`, `quiet` |
+| `magnet.btn-desktop-lyrics` | `labelMode`, `showActiveIndicator`, `showClickThroughBadge` | `default`, `status-dot`, `full-label`, `compact-icon` |
+| `magnet.navigation-page` | `sourceSwitcherMode`, `showLibraryStats`, `placeholderMode` | `default`, `inline-sources`, `compact-meta` |
+| `magnet.platform-magnet` | `defaultMode`, `searchLimit`, `showSummary` | `default`, `search-focus`, `workspace-bilibili` |
+| `magnet.btn-platform-login` | `defaultConnectorId`, `openAuthOnTrigger`, `qrAutoPollIntervalMs`, `showSelectorTitle` | `default`, `quick-bilibili`, `multi-platform` |
+| `magnet.btn-matrix-change` | `showLabel`, `showPresetsAction`, `showHistoryAction`, `showDangerActions` | `default`, `badge-only`, `compact-panel` |
+| `magnet.process-perf-monitor` | `metricSet`, `showModeBadge`, `showSystemSummary` | `default`, `compact`, `cpu-focus` |
+| `magnet.dsp-vst` | `labelMode`, `showProgressDots`, `ringVisibility` | `default`, `status-chip`, `compact` |
+| `magnet.audio-visualizer` | `density`, `energyProfile`, `backdrop`, `fallbackAccentColor` | `default`, `dense-halo`, `minimal` |
 
 ## 3. page surface 目录
 

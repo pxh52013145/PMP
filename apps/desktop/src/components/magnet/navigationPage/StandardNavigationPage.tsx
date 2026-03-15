@@ -10,12 +10,17 @@ import {
 import { useKernel } from '../../../contexts/KernelContext';
 import { useT } from '../../../i18n';
 import { NavigationPageVariantProps } from './NavigationPageTypes';
+import { parseNavigationPageSkinProps } from './navigationPageSkin';
 import './NavigationPage.css';
 
-export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({ data }) => {
+export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({
+  data,
+  variantConfig,
+}) => {
   const { currentPage } = data;
   const kernel = useKernel();
   const t = useT();
+  const skinProps = useMemo(() => parseNavigationPageSkinProps(variantConfig), [variantConfig]);
   const [registryRevision, setRegistryRevision] = useState(0);
   const [showSourcePopup, setShowSourcePopup] = useState(false);
   const [librarySourceMode, setLibrarySourceMode] = useState<MusicLibrarySourceMode>('local');
@@ -41,6 +46,12 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({ d
     setShowSourcePopup(false);
     setMusicLibraryStats(null);
   }, [isMusicLibraryPage]);
+
+  useEffect(() => {
+    if (skinProps.sourceSwitcherMode !== 'popup') {
+      setShowSourcePopup(false);
+    }
+  }, [skinProps.sourceSwitcherMode]);
 
   useEffect(() => {
     const onStatsChange = (event: Event) => {
@@ -81,9 +92,9 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({ d
   }, [showSourcePopup]);
 
   const handleToggleSourcePopup = useCallback(() => {
-    if (!isMusicLibraryPage) return;
+    if (!isMusicLibraryPage || skinProps.sourceSwitcherMode !== 'popup') return;
     setShowSourcePopup((prev) => !prev);
-  }, [isMusicLibraryPage]);
+  }, [isMusicLibraryPage, skinProps.sourceSwitcherMode]);
 
   const handleSelectLibrarySource = useCallback((mode: MusicLibrarySourceMode) => {
     setLibrarySourceMode(mode);
@@ -103,6 +114,7 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({ d
             icon="?"
             text={t('pages.navigation.unknownPage', { type: String(currentPage.type) })}
             cssClass="page-unknown"
+            mode={skinProps.placeholderMode}
           />
         )}
       </div>
@@ -110,43 +122,62 @@ export const StandardNavigationPage: React.FC<NavigationPageVariantProps> = ({ d
       <div className={`navigation-footer ${isMusicLibraryPage ? 'navigation-footer-music-library' : ''}`}>
         {isMusicLibraryPage ? (
           <div className="navigation-footer-music-library-row">
-            <div className="page-info-switcher" ref={sourceSwitcherRef}>
-              <button className="page-info page-info-button" onClick={handleToggleSourcePopup}>
-                {title}
-              </button>
-              <CollisionAwarePopup
-                ref={sourcePopupRef}
-                open={showSourcePopup}
-                anchorRef={sourceSwitcherRef}
-                placement="top-start"
-                className="page-info-popup"
-                role="dialog"
-              >
+            {skinProps.sourceSwitcherMode === 'inline' ? (
+              <div className="page-info-inline-group" role="group" aria-label={title}>
                 <button
-                  className={`page-info-popup-option ${librarySourceMode === 'local' ? 'active' : ''}`}
+                  className={`page-info-inline-option ${librarySourceMode === 'local' ? 'active' : ''}`}
                   onClick={() => handleSelectLibrarySource('local')}
                 >
                   {t('pages.music-library.source.local')}
                 </button>
                 <button
-                  className={`page-info-popup-option ${librarySourceMode === 'stable' ? 'active' : ''}`}
+                  className={`page-info-inline-option ${librarySourceMode === 'stable' ? 'active' : ''}`}
                   onClick={() => handleSelectLibrarySource('stable')}
                 >
                   {t('pages.music-library.source.stable')}
                 </button>
-              </CollisionAwarePopup>
-            </div>
-            <div className="navigation-footer-music-library-stats">
-              {(musicLibraryStats?.items || []).map((item, index) => (
-                <div
-                  className="navigation-footer-music-library-stat"
-                  key={`${item.value}-${item.unit ?? 'none'}-${index}`}
+              </div>
+            ) : (
+              <div className="page-info-switcher" ref={sourceSwitcherRef}>
+                <button className="page-info page-info-button" onClick={handleToggleSourcePopup}>
+                  {title}
+                </button>
+                <CollisionAwarePopup
+                  ref={sourcePopupRef}
+                  open={showSourcePopup}
+                  anchorRef={sourceSwitcherRef}
+                  placement="top-start"
+                  className="page-info-popup"
+                  role="dialog"
                 >
-                  <strong>{item.value}</strong>
-                  {item.unit ? <span>{item.unit}</span> : null}
-                </div>
-              ))}
-            </div>
+                  <button
+                    className={`page-info-popup-option ${librarySourceMode === 'local' ? 'active' : ''}`}
+                    onClick={() => handleSelectLibrarySource('local')}
+                  >
+                    {t('pages.music-library.source.local')}
+                  </button>
+                  <button
+                    className={`page-info-popup-option ${librarySourceMode === 'stable' ? 'active' : ''}`}
+                    onClick={() => handleSelectLibrarySource('stable')}
+                  >
+                    {t('pages.music-library.source.stable')}
+                  </button>
+                </CollisionAwarePopup>
+              </div>
+            )}
+            {skinProps.showLibraryStats ? (
+              <div className="navigation-footer-music-library-stats">
+                {(musicLibraryStats?.items || []).map((item, index) => (
+                  <div
+                    className="navigation-footer-music-library-stat"
+                    key={`${item.value}-${item.unit ?? 'none'}-${index}`}
+                  >
+                    <strong>{item.value}</strong>
+                    {item.unit ? <span>{item.unit}</span> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="page-info">{title}</div>
@@ -160,14 +191,16 @@ function Placeholder({
   icon,
   text,
   cssClass,
+  mode,
 }: {
   icon: string;
   text: string;
   cssClass?: string;
+  mode: 'icon' | 'minimal';
 }) {
   return (
-    <div className={`page-placeholder ${cssClass || ''}`}>
-      <div className="placeholder-icon">{icon}</div>
+    <div className={`page-placeholder ${cssClass || ''} ${mode === 'minimal' ? 'page-placeholder-minimal' : ''}`}>
+      {mode === 'icon' ? <div className="placeholder-icon">{icon}</div> : null}
       <div className="placeholder-text">{text}</div>
     </div>
   );

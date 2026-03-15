@@ -56,6 +56,16 @@ describe('normalizeTheme', () => {
             extractFromCover: true,
             effect: 'gradient',
           },
+          motionConfig: {
+            enabled: true,
+            mode: 'full',
+            channels: {
+              spaceSwitch: {
+                preset: 'shared-axis',
+                duration: 220,
+              },
+            },
+          },
         },
         'play-pause-button': {
           variant: 'pill',
@@ -63,6 +73,16 @@ describe('normalizeTheme', () => {
       },
       surfaces: {
         'magnet.track-info': {
+          parts: {
+            root: {
+              motion: {
+                hover: {
+                  preset: 'lift-sm',
+                  duration: 140,
+                },
+              },
+            },
+          },
           styleOverride: {
             container: {
               opacity: 0.9,
@@ -95,7 +115,10 @@ describe('normalizeTheme', () => {
     expect(normalized.bindings?.['magnet.track-info']?.props?.layout).toBe('full');
     expect(normalized.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.enabled).toBe(true);
     expect(normalized.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.mode).toBe('gradient');
+    expect(normalized.bindings?.['magnet.track-info']?.capabilities?.motion?.enabled).toBe(true);
+    expect(normalized.bindings?.['magnet.track-info']?.capabilities?.motion?.channels?.spaceSwitch?.preset).toBe('shared-axis');
     expect(normalized.surfaces?.['magnet.track-info']?.parts?.root?.style?.opacity).toBe(0.9);
+    expect(normalized.surfaces?.['magnet.track-info']?.parts?.root?.motion?.hover?.preset).toBe('lift-sm');
     expect(normalized.surfaces?.['magnet.track-info']?.variant).toBeUndefined();
     expect(normalized.surfaces?.['magnet.btn-play-pause']?.parts).toBeUndefined();
     expect(normalized.bindings?.['magnet.btn-play-pause']?.variant).toBe('pill');

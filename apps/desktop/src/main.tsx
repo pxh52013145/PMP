@@ -7,6 +7,7 @@ import { readString } from './modules/storage';
 import { STORAGE_KEYS } from './utils/windowCommunication';
 import { bootstrapPerformanceRuntimeProfileStorage } from './modules/startup/performanceRuntimeBootstrap';
 import './index.css';
+import './themes/surfaceMotion.css';
 
 function applyRuntimePlatformDataset(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return;

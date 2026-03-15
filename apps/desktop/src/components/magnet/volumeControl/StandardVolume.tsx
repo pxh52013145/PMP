@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { CollisionAwarePopup } from '../../core/CollisionAwarePopup';
 import { VolumeVariantProps } from './VolumeTypes';
+import { parseVolumeSkinProps } from './volumeSkin';
 import './StandardVolume.css';
 
-export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) => {
+export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic, variantConfig }) => {
   const { volume, muted } = data;
   const {
     popupState,
@@ -15,6 +16,7 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) =>
     getVolumeIcon,
     formatVolumePercent,
   } = logic;
+  const skinProps = useMemo(() => parseVolumeSkinProps(variantConfig), [variantConfig]);
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextVolume = parseFloat(e.target.value);
@@ -24,11 +26,7 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) =>
   return (
     <>
       <div className="volume-control-container" ref={containerRef}>
-        <button
-          className="volume-btn"
-          onClick={togglePopup}
-          title={formatVolumePercent(volume)}
-        >
+        <button className="volume-btn" onClick={togglePopup} title={formatVolumePercent(volume)}>
           {getVolumeIcon(volume, muted)}
         </button>
       </div>
@@ -37,13 +35,15 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) =>
         ref={popupRef}
         open={popupState.show}
         anchorRef={containerRef}
-        placement="top-center"
+        placement={skinProps.popupPlacement}
         offset={6}
         viewportPadding={8}
-        className="volume-slider-popup volume-slider-popup-portal"
+        className={`volume-slider-popup volume-slider-popup-portal ${
+          !skinProps.showValue ? 'volume-slider-popup-no-value' : ''
+        } ${!skinProps.showMuteToggle ? 'volume-slider-popup-no-mute' : ''}`}
         role="dialog"
       >
-        <span className="volume-value">{formatVolumePercent(volume)}</span>
+        {skinProps.showValue ? <span className="volume-value">{formatVolumePercent(volume)}</span> : null}
         <div className="volume-slider-container">
           <input
             type="range"
@@ -56,9 +56,11 @@ export const StandardVolume: React.FC<VolumeVariantProps> = ({ data, logic }) =>
             disabled={muted}
           />
         </div>
-        <button className="volume-mute-btn" onClick={toggleMute}>
-          {muted ? '⊗' : '♪'}
-        </button>
+        {skinProps.showMuteToggle ? (
+          <button className="volume-mute-btn" onClick={toggleMute}>
+            {muted ? 'M' : 'U'}
+          </button>
+        ) : null}
       </CollisionAwarePopup>
     </>
   );

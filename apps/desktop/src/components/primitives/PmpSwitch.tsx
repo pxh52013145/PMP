@@ -3,6 +3,7 @@ import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { mergeComponentThemes } from '../../themes/mergeComponentTheme';
 import { createResolvedSkinSurfaceModel } from '../../themes/skinSurface';
 import type { ThemeBindingId, ThemeSurfaceId } from '../../themes/types/theme';
+import { composeEventHandlers, resolvePrimitiveInteractionMotion, usePrimitiveInteractionState } from './interactionMotion';
 
 export interface PmpSwitchProps
   extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
@@ -26,6 +27,14 @@ export const PmpSwitch = React.forwardRef<HTMLButtonElement, PmpSwitchProps>(fun
     className,
     style,
     onClick,
+    onMouseEnter,
+    onMouseLeave,
+    onMouseDown,
+    onMouseUp,
+    onFocus,
+    onBlur,
+    onKeyDown,
+    onKeyUp,
     type = 'button',
     children,
     ...props
@@ -50,6 +59,7 @@ export const PmpSwitch = React.forwardRef<HTMLButtonElement, PmpSwitchProps>(fun
     () => createResolvedSkinSurfaceModel(theme, variantSurfaceId, resolvedTheme),
     [theme, variantSurfaceId, resolvedTheme]
   );
+  const interaction = usePrimitiveInteractionState({ disabled: props.disabled });
 
   const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     onClick?.(event);
@@ -57,16 +67,80 @@ export const PmpSwitch = React.forwardRef<HTMLButtonElement, PmpSwitchProps>(fun
     onCheckedChange?.(!checked, event);
   };
 
+  const rootPart = surface.getPart('root', { state: stateName });
+  const trackPart = surface.getPart('track', { state: stateName, includeSurfaceTokens: false });
+  const thumbPart = surface.getPart('thumb', { state: stateName, includeSurfaceTokens: false });
+  const labelPart = surface.getPart('label', { state: stateName, includeSurfaceTokens: false });
+  const rootMotion = useMemo(
+    () =>
+      resolvePrimitiveInteractionMotion({
+        part: rootPart,
+        interactionState: interaction.interactionState,
+        transitionState: interaction.transitionState,
+      }),
+    [interaction.interactionState, interaction.transitionState, rootPart]
+  );
+  const trackMotion = useMemo(
+    () =>
+      resolvePrimitiveInteractionMotion({
+        part: trackPart,
+        interactionState: interaction.interactionState,
+        transitionState: interaction.transitionState,
+        fallbackPart: rootPart,
+      }),
+    [interaction.interactionState, interaction.transitionState, rootPart, trackPart]
+  );
+  const thumbMotion = useMemo(
+    () =>
+      resolvePrimitiveInteractionMotion({
+        part: thumbPart,
+        interactionState: interaction.interactionState,
+        transitionState: interaction.transitionState,
+        fallbackPart: rootPart,
+      }),
+    [interaction.interactionState, interaction.transitionState, rootPart, thumbPart]
+  );
+  const labelMotion = useMemo(
+    () =>
+      resolvePrimitiveInteractionMotion({
+        part: labelPart,
+        interactionState: interaction.interactionState,
+        transitionState: interaction.transitionState,
+        fallbackPart: rootPart,
+      }),
+    [interaction.interactionState, interaction.transitionState, labelPart, rootPart]
+  );
   const rootProps = surface.getElementProps({
     primitive: 'switch',
     bindingId: variantSurfaceId as ThemeBindingId,
     state: stateName,
     className,
-    style,
+    style: {
+      ...style,
+      ...rootMotion.style,
+    },
   });
-  const trackPart = surface.getPart('track', { state: stateName, includeSurfaceTokens: false });
-  const thumbPart = surface.getPart('thumb', { state: stateName, includeSurfaceTokens: false });
-  const labelPart = surface.getPart('label', { state: stateName, includeSurfaceTokens: false });
+  const trackProps = surface.getElementProps({
+    part: 'track',
+    state: stateName,
+    className: 'pmp-switch-track',
+    style: trackMotion.style,
+    includeSurfaceTokens: false,
+  });
+  const thumbProps = surface.getElementProps({
+    part: 'thumb',
+    state: stateName,
+    className: 'pmp-switch-thumb',
+    style: thumbMotion.style,
+    includeSurfaceTokens: false,
+  });
+  const labelProps = surface.getElementProps({
+    part: 'label',
+    state: stateName,
+    className: 'pmp-switch-label',
+    style: labelMotion.style,
+    includeSurfaceTokens: false,
+  });
 
   return (
     <button
@@ -80,15 +154,24 @@ export const PmpSwitch = React.forwardRef<HTMLButtonElement, PmpSwitchProps>(fun
       data-surface-id={variantSurfaceId}
       data-surface-state={stateName}
       data-surface-variant={resolvedTheme.variant}
+      data-pmp-interaction-state={interaction.interactionState}
+      {...(rootMotion.channel ? { 'data-pmp-motion-channel': rootMotion.channel } : {})}
+      {...(rootMotion.preset ? { 'data-pmp-motion-preset': rootMotion.preset } : {})}
       onClick={handleClick}
+      onMouseEnter={composeEventHandlers(onMouseEnter, interaction.eventHandlers.onMouseEnter)}
+      onMouseLeave={composeEventHandlers(onMouseLeave, interaction.eventHandlers.onMouseLeave)}
+      onMouseDown={composeEventHandlers(onMouseDown, interaction.eventHandlers.onMouseDown)}
+      onMouseUp={composeEventHandlers(onMouseUp, interaction.eventHandlers.onMouseUp)}
+      onFocus={composeEventHandlers(onFocus, interaction.eventHandlers.onFocus)}
+      onBlur={composeEventHandlers(onBlur, interaction.eventHandlers.onBlur)}
+      onKeyDown={composeEventHandlers(onKeyDown, interaction.eventHandlers.onKeyDown)}
+      onKeyUp={composeEventHandlers(onKeyUp, interaction.eventHandlers.onKeyUp)}
     >
-      <span className={['pmp-switch-track', trackPart.className].filter(Boolean).join(' ')} style={trackPart.style}>
-        <span className={['pmp-switch-thumb', thumbPart.className].filter(Boolean).join(' ')} style={thumbPart.style} />
+      <span {...trackProps}>
+        <span {...thumbProps} />
       </span>
       {children ? (
-        <span className={['pmp-switch-label', labelPart.className].filter(Boolean).join(' ')} style={labelPart.style}>
-          {children}
-        </span>
+        <span {...labelProps}>{children}</span>
       ) : null}
     </button>
   );

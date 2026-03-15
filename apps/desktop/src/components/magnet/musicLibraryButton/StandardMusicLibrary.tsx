@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useT } from '../../../i18n';
 import { MusicLibraryVariantProps } from './MusicLibraryTypes';
+import { parseMusicLibrarySkinProps } from './musicLibrarySkin';
 import './StandardMusicLibrary.css';
 
 const LibraryIcon: React.FC = () => (
@@ -13,9 +14,14 @@ const LibraryIcon: React.FC = () => (
   </svg>
 );
 
-export const StandardMusicLibrary: React.FC<MusicLibraryVariantProps> = ({ logic }) => {
+export const StandardMusicLibrary: React.FC<MusicLibraryVariantProps> = ({
+  data,
+  logic,
+  variantConfig,
+}) => {
   const { navigateToMusicLibrary } = logic;
   const t = useT();
+  const skinProps = useMemo(() => parseMusicLibrarySkinProps(variantConfig), [variantConfig]);
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -25,11 +31,19 @@ export const StandardMusicLibrary: React.FC<MusicLibraryVariantProps> = ({ logic
 
   return (
     <button
-      className="magnet-control-button music-library-button"
+      className={`magnet-control-button music-library-button ${
+        skinProps.showLabel ? 'music-library-button-labeled' : ''
+      } ${data.isActive && skinProps.showActiveIndicator ? 'music-library-button-active' : ''}`}
       onClick={handleClick}
       title={t('magnet.renderers.btn-music-library.preview')}
     >
       <LibraryIcon />
+      {skinProps.showLabel ? (
+        <span className="music-library-button-label">{t('magnet.renderers.btn-music-library.preview')}</span>
+      ) : null}
+      {data.isActive && skinProps.showActiveIndicator ? (
+        <span className="music-library-button-indicator" aria-hidden="true" />
+      ) : null}
     </button>
   );
 };

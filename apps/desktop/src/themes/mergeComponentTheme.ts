@@ -1,4 +1,10 @@
-import type { ComponentTheme, ThemePartStateSpec, ThemeSurfacePartSpec, ThemeSurfaceStateSpec } from './types/theme';
+import type {
+  ComponentTheme,
+  ThemeMotionChannelMap,
+  ThemePartStateSpec,
+  ThemeSurfacePartSpec,
+  ThemeSurfaceStateSpec,
+} from './types/theme';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -7,6 +13,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function mergeClassLists(...classLists: Array<string[] | undefined>): string[] | undefined {
   const merged = classLists.flatMap((classList) => classList ?? []).map((entry) => entry.trim()).filter(Boolean);
   return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+}
+
+function mergeMotionMaps(
+  base: ThemeMotionChannelMap | undefined,
+  override: ThemeMotionChannelMap | undefined
+): ThemeMotionChannelMap | undefined {
+  const keys = new Set<string>([...Object.keys(base ?? {}), ...Object.keys(override ?? {})]);
+  if (keys.size === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    [...keys].map((key) => [
+      key,
+      {
+        ...(isPlainObject(base?.[key]) ? base?.[key] : {}),
+        ...(isPlainObject(override?.[key]) ? override?.[key] : {}),
+      },
+    ])
+  );
 }
 
 function mergeThemePartStateSpecs(
@@ -27,6 +53,7 @@ function mergeThemePartStateSpecs(
       ...(isPlainObject(base?.tokens) ? base.tokens : {}),
       ...(isPlainObject(override?.tokens) ? override.tokens : {}),
     },
+    motion: mergeMotionMaps(base?.motion, override?.motion),
   };
 }
 

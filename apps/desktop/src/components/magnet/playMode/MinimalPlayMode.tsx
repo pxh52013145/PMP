@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { PlayModeVariantProps } from './PlayModeTypes';
+import { parsePlayModeSkinProps } from './playModeSkin';
 import './MinimalPlayMode.css';
 
 const SequenceIcon: React.FC = () => (
@@ -44,23 +45,25 @@ const ShuffleIcon: React.FC = () => (
   </svg>
 );
 
-function getModeMeta(mode: string): { icon: React.ReactNode; text: string } {
+function getModeMeta(mode: string): { icon: React.ReactNode; title: string; badge: string } {
   if (mode === 'shuffle') {
-    return { icon: <ShuffleIcon />, text: '随机播放' };
+    return { icon: <ShuffleIcon />, title: 'Shuffle', badge: 'RAND' };
   }
   if (mode === 'single-loop') {
-    return { icon: <SingleLoopIcon />, text: '单曲循环' };
+    return { icon: <SingleLoopIcon />, title: 'Single Loop', badge: 'ONE' };
   }
   if (mode === 'loop') {
-    return { icon: <LoopIcon />, text: '列表循环' };
+    return { icon: <LoopIcon />, title: 'Loop', badge: 'LOOP' };
   }
-  return { icon: <SequenceIcon />, text: '顺序播放' };
+  return { icon: <SequenceIcon />, title: 'Sequence', badge: 'SEQ' };
 }
 
-export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic }) => {
+export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic, variantConfig }) => {
   const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+  const skinProps = useMemo(() => parsePlayModeSkinProps(variantConfig), [variantConfig]);
 
   const triggerPulse = () => {
+    if (!skinProps.pulseOnSwitch) return;
     const button = buttonRef.current;
     if (!button) return;
     button.classList.remove('click-pulse');
@@ -82,12 +85,13 @@ export const MinimalPlayMode: React.FC<PlayModeVariantProps> = ({ data, logic })
   return (
     <button
       ref={buttonRef}
-      className={`minimal-play-mode-btn mode-${data.playMode}`}
+      className={`minimal-play-mode-btn mode-${data.playMode} play-mode-ring-${skinProps.ringVisibility}`}
       onClick={handleClick}
-      title={meta.text}
-      aria-label={meta.text}
+      title={meta.title}
+      aria-label={meta.title}
     >
       {meta.icon}
+      {skinProps.showModeBadge ? <span className="play-mode-badge">{meta.badge}</span> : null}
     </button>
   );
 };

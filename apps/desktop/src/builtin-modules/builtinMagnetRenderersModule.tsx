@@ -7,7 +7,31 @@ import {
   unregisterMagnetRenderer,
   type MagnetRendererDefinition,
 } from '../magnet-system/registry';
+import { clearMagnetVariants, registerMagnetVariant } from '../magnet-system/variantRegistry';
 import { subscribeLocale, t } from '../i18n/core';
+import {
+  toMagnetVariantDefinitions,
+  type MagnetVariantPreset,
+} from '../components/magnet/shared/magnetVariantCatalog';
+import { DSP_VST_VARIANT_PRESETS } from '../components/magnet/dspVstSkin';
+import { MATRIX_CHANGE_VARIANT_PRESETS } from '../components/magnet/matrixChangeSkin';
+import { PROCESS_PERF_MONITOR_VARIANT_PRESETS } from '../components/magnet/processPerfMonitorSkin';
+import { BACK_BUTTON_VARIANT_PRESETS } from '../components/magnet/backButton/backButtonSkin';
+import { DESKTOP_LYRICS_VARIANT_PRESETS } from '../components/magnet/desktopLyricsButton/desktopLyricsSkin';
+import { DEBUG_BUTTON_VARIANT_PRESETS } from '../components/magnet/debugButton/debugButtonSkin';
+import { MUSIC_LIBRARY_VARIANT_PRESETS } from '../components/magnet/musicLibraryButton/musicLibrarySkin';
+import { NAVIGATION_PAGE_VARIANT_PRESETS } from '../components/magnet/navigationPage/navigationPageSkin';
+import { PLAY_MODE_VARIANT_PRESETS } from '../components/magnet/playMode/playModeSkin';
+import { PLAY_PAUSE_VARIANT_PRESETS } from '../components/magnet/playbackControls/playPauseSkin';
+import { PLAY_QUEUE_VARIANT_PRESETS } from '../components/magnet/playQueue/playQueueSkin';
+import { PLAYBACK_STEP_VARIANT_PRESETS } from '../components/magnet/playbackControls/playbackStepSkin';
+import { PLAYLISTS_VARIANT_PRESETS } from '../components/magnet/playlistsButton/playlistsSkin';
+import { PROGRESS_BAR_VARIANT_PRESETS } from '../components/magnet/progressBar/progressBarSkin';
+import { PLATFORM_LOGIN_VARIANT_PRESETS } from '../components/magnet/platformLogin/platformLoginSkin';
+import { PLATFORM_MAGNET_VARIANT_PRESETS } from '../components/magnet/platformPage/platformMagnetSkin';
+import { AUDIO_VISUALIZER_VARIANT_PRESETS } from '../components/magnet/audioVisualizerSkin';
+import { VOLUME_VARIANT_PRESETS } from '../components/magnet/volumeControl/volumeSkin';
+import { WINDOW_PIN_VARIANT_PRESETS } from '../components/magnet/windowPinButton/windowPinSkin';
 
 const NavigationPageLazy = React.lazy(async () => ({
   default: (await import('../components/magnet/NavigationPage')).NavigationPage,
@@ -260,6 +284,31 @@ function getBuiltinDefinitions(): MagnetRendererDefinition[] {
   ];
 }
 
+function getBuiltinVariantCatalog(): ReadonlyArray<readonly [string, readonly MagnetVariantPreset<object>[]]> {
+  return [
+    ['navigation-page', NAVIGATION_PAGE_VARIANT_PRESETS],
+    ['platform-magnet', PLATFORM_MAGNET_VARIANT_PRESETS],
+    ['btn-platform-login', PLATFORM_LOGIN_VARIANT_PRESETS],
+    ['btn-window-pin', WINDOW_PIN_VARIANT_PRESETS],
+    ['btn-play-pause', PLAY_PAUSE_VARIANT_PRESETS],
+    ['btn-previous', PLAYBACK_STEP_VARIANT_PRESETS],
+    ['btn-next', PLAYBACK_STEP_VARIANT_PRESETS],
+    ['btn-mode', PLAY_MODE_VARIANT_PRESETS],
+    ['btn-volume', VOLUME_VARIANT_PRESETS],
+    ['btn-desktop-lyrics', DESKTOP_LYRICS_VARIANT_PRESETS],
+    ['progress-bar', PROGRESS_BAR_VARIANT_PRESETS],
+    ['btn-play-queue', PLAY_QUEUE_VARIANT_PRESETS],
+    ['btn-playlists', PLAYLISTS_VARIANT_PRESETS],
+    ['btn-music-library', MUSIC_LIBRARY_VARIANT_PRESETS],
+    ['btn-back', BACK_BUTTON_VARIANT_PRESETS],
+    ['btn-debug', DEBUG_BUTTON_VARIANT_PRESETS],
+    ['btn-matrix-change', MATRIX_CHANGE_VARIANT_PRESETS],
+    ['process-perf-monitor', PROCESS_PERF_MONITOR_VARIANT_PRESETS],
+    ['dsp-vst', DSP_VST_VARIANT_PRESETS],
+    ['audio-visualizer', AUDIO_VISUALIZER_VARIANT_PRESETS],
+  ];
+}
+
 export function createBuiltinMagnetRenderersModule(): KernelModule<AppEvents> {
   return {
     id: 'builtin-magnet-renderers',
@@ -271,6 +320,17 @@ export function createBuiltinMagnetRenderersModule(): KernelModule<AppEvents> {
             continue;
           }
           registerMagnetRenderer(definition, { overwrite: true });
+        }
+
+        for (const [rendererId, presets] of getBuiltinVariantCatalog()) {
+          const existing = getMagnetRenderer(rendererId);
+          if (existing && existing.source !== 'builtin') {
+            continue;
+          }
+          clearMagnetVariants(rendererId);
+          for (const variant of toMagnetVariantDefinitions(presets, t)) {
+            registerMagnetVariant(rendererId, variant, { overwrite: true });
+          }
         }
       };
 
@@ -290,6 +350,14 @@ export function createBuiltinMagnetRenderersModule(): KernelModule<AppEvents> {
             continue;
           }
           unregisterMagnetRenderer(definition.id);
+        }
+
+        for (const [rendererId] of getBuiltinVariantCatalog()) {
+          const existing = getMagnetRenderer(rendererId);
+          if (existing && existing.source !== 'builtin') {
+            continue;
+          }
+          clearMagnetVariants(rendererId);
         }
       };
     },

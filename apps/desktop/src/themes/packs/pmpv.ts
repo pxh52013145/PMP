@@ -14,7 +14,7 @@ export type VariantPresetV1 = {
   target: {
     rendererId: string;
   };
-  componentTheme: Record<string, unknown>;
+  fragment: Record<string, unknown>;
 };
 
 function assertPlainObject(value: unknown, path: string): asserts value is Record<string, unknown> {
@@ -36,6 +36,7 @@ function validateStringArray(value: unknown, path: string): string[] {
 
 export function validateVariantPresetV1(value: unknown): asserts value is VariantPresetV1 {
   assertPlainObject(value, 'preset');
+  const preset = value as Record<string, unknown>;
   if (value.formatVersion !== '1.0') throw new Error('preset.formatVersion must be "1.0"');
   if (value.type !== 'variant-preset') throw new Error('preset.type must be "variant-preset"');
 
@@ -64,7 +65,14 @@ export function validateVariantPresetV1(value: unknown): asserts value is Varian
     throw new Error('preset.target.rendererId is required');
   }
 
-  assertPlainObject(value.componentTheme, 'preset.componentTheme');
+  const fragment = typeof preset.fragment !== 'undefined' ? preset.fragment : preset.componentTheme;
+  if (typeof fragment === 'undefined') {
+    throw new Error('preset.fragment is required');
+  }
+
+  assertPlainObject(fragment, typeof preset.fragment !== 'undefined' ? 'preset.fragment' : 'preset.componentTheme');
+  preset.fragment = fragment;
+  delete preset.componentTheme;
 }
 
 export function parseVariantPresetFromText(text: string): VariantPresetV1 {

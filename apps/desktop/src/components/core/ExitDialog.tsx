@@ -34,8 +34,6 @@ export const ExitDialog: React.FC<ExitDialogProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onCancel, open]);
 
-  if (!open) return null;
-
   return (
     <PmpDialog
       open={open}

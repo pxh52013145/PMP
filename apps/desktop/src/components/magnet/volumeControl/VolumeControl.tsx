@@ -2,10 +2,12 @@ import React from 'react';
 import { useVolumeData } from './useVolumeData';
 import { useVolumeLogic } from './useVolumeLogic';
 import { StandardVolume } from './StandardVolume';
+import { VOLUME_VARIANT_PRESETS } from './volumeSkin';
+import { buildMagnetVariantRenderers } from '../shared/magnetVariantCatalog';
 import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 const VOLUME_RENDERERS = {
-  default: StandardVolume,
+  ...buildMagnetVariantRenderers(StandardVolume, VOLUME_VARIANT_PRESETS),
 };
 
 export const VolumeControl: React.FC = () => {
