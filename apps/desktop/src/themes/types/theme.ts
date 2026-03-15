@@ -1,41 +1,34 @@
-/**
- * 主题系统类型定义
- */
+import type { BackgroundConfig } from '../../types/background';
 
-import { BackgroundConfig } from '../../types/background';
-
-/**
- * 动态颜色配置
- * 用于TrackInfo等组件从封面提取颜色
- */
 export type DynamicColorEffect = 'tone' | 'gradient' | 'dynamic';
 export type ThemeSurfaceNamespace = 'magnet' | 'page' | 'overlay' | 'primitive';
 export type ThemeBindingNamespace = ThemeSurfaceNamespace;
 export type ThemeSurfaceId = `${ThemeSurfaceNamespace}.${string}` | string;
 export type ThemeBindingId = `${ThemeBindingNamespace}.${string}`;
+
 export type ThemeColorTokens = Record<string, string>;
 export type ThemeMotionTokens = Record<string, string | number | boolean>;
 export type ThemeTypographyTokens = Record<string, string | number>;
+export type ThemeRadiusTokens = Record<string, string | number>;
+export type ThemeSpaceTokens = Record<string, string | number>;
+export type ThemeSizeTokens = Record<string, string | number>;
+export type ThemeShadowTokens = Record<string, string>;
+export type ThemeBorderTokens = Record<string, string | number>;
+export type ThemeTokenPrimitive = string | number | boolean;
+export type ThemeTokenReference = `{${string}}`;
+export type ThemeTokenAssignments = Record<string, ThemeTokenPrimitive>;
 
 export interface DynamicColorConfig {
-  // 是否从封面提取颜色
   extractFromCover?: boolean;
-
   effect?: DynamicColorEffect;
   gradientAngle?: number;
   dynamicSpeed?: number;
-
-  // 提取后如何应用
   applyMode?: 'full' | 'glow-only' | 'blend' | 'none';
-
-  // 混合比例（当mode为blend时）
-  blendRatio?: number; // 0.0-1.0, 0=完全主题色, 1=完全提取色
-
-  // 颜色调整
+  blendRatio?: number;
   colorAdjust?: {
-    saturation?: number; // 饱和度调整 (0.5-2.0)
-    brightness?: number; // 亮度调整 (0.5-2.0)
-    hueShift?: number; // 色相偏移 (-180 to 180)
+    saturation?: number;
+    brightness?: number;
+    hueShift?: number;
   };
 }
 
@@ -54,107 +47,50 @@ export interface ThemeBindingCapabilities {
   dynamicColor?: ThemeBindingDynamicColorCapability;
 }
 
-/**
- * 主题绑定
- * 作为从旧 componentThemes 迁移到统一 binding 模型的过渡结构
- */
 export interface ThemeBinding {
   surface?: ThemeSurfaceId;
   renderer?: string;
-  /**
-   * 兼容旧磁贴变体模型。
-   * 长期目标是收敛到 renderer + props，但过渡期仍保留 variant 以避免运行时断层。
-   */
   variant?: string;
   props?: Record<string, unknown>;
   capabilities?: ThemeBindingCapabilities;
 }
 
-/**
- * 组件主题配置
- */
-export interface ComponentTheme {
-  // 1. 预设变体选择
-  variant?: string;
-
-  // 2. 变体配置参数
-  variantConfig?: {
-    // 布局
-    layout?: 'horizontal' | 'vertical' | 'compact' | 'full';
-
-    // 动画
-    animation?: {
-      type: 'spin' | 'pulse' | 'glow' | 'float' | 'bounce' | 'none';
-      speed?: number;
-      intensity?: number;
-    };
-
-    // 封面样式（TrackInfo专用）
-    coverStyle?: {
-      shape: 'circle' | 'square' | 'rounded' | 'hexagon' | 'vinyl';
-      size: 'small' | 'medium' | 'large' | 'auto';
-      border?: boolean;
-      shadow?: boolean;
-      reflection?: boolean;
-    };
-
-    // 字体样式
-    typography?: {
-      titleFont?: string;
-      titleSize?: string;
-      titleWeight?: string | number;
-      subtitleFont?: string;
-      subtitleSize?: string;
-    };
-
-    // 特效
-    effects?: {
-      blur?: number;
-      brightness?: number;
-      saturation?: number;
-      glow?: boolean;
-      glitch?: boolean;
-      scanlines?: boolean;
-    };
-
-    // 自定义参数
-    [key: string]: unknown;
-  };
-
-  // 3. 渲染插槽
-  slots?: {
-    [slotName: string]: React.ComponentType<Record<string, unknown>>;
-  };
-
-  // 4. 完全自定义渲染器
-  customRenderer?: React.ComponentType<Record<string, unknown>>;
-
-  // 5. 样式覆盖（CSS-in-JS）
-  styleOverride?: {
-    container?: React.CSSProperties;
-    cover?: React.CSSProperties;
-    title?: React.CSSProperties;
-    subtitle?: React.CSSProperties;
-    [key: string]: React.CSSProperties | undefined;
-  };
-
-  // 6. CSS类名覆盖
-  classNameOverride?: {
-    container?: string;
-    cover?: string;
-    title?: string;
-    subtitle?: string;
-    [key: string]: string | undefined;
-  };
-
-  // 7. 动态颜色配置
-  dynamicColor?: DynamicColorConfig;
+export interface ThemeTokens {
+  color?: ThemeColorTokens;
+  motion?: ThemeMotionTokens;
+  typography?: ThemeTypographyTokens;
+  radius?: ThemeRadiusTokens;
+  space?: ThemeSpaceTokens;
+  size?: ThemeSizeTokens;
+  shadow?: ThemeShadowTokens;
+  border?: ThemeBorderTokens;
 }
 
-/**
- * 主题
- * 完整的主题配置
- */
+export interface ThemePartStateSpec {
+  classes?: string[];
+  style?: Record<string, unknown>;
+  tokens?: ThemeTokenAssignments;
+}
+
+export interface ThemeSurfacePartSpec extends ThemePartStateSpec {
+  states?: Record<string, ThemePartStateSpec>;
+}
+
+export interface ThemeSurfaceStateSpec extends ThemePartStateSpec {
+  parts?: Record<string, ThemePartStateSpec>;
+}
+
+export interface ComponentTheme {
+  extends?: ThemeSurfaceId;
+  variant?: string;
+  tokens?: ThemeTokenAssignments;
+  parts?: Record<string, ThemeSurfacePartSpec>;
+  states?: Record<string, ThemeSurfaceStateSpec>;
+  metadata?: {
+    description?: string;
+  };
+}
+
 export interface Theme {
   id: string;
   name: string;
@@ -163,17 +99,12 @@ export interface Theme {
   description?: string;
   thumbnail?: string;
 
-  colors?: ThemeColorTokens;
-  motion?: ThemeMotionTokens;
-  typography?: ThemeTypographyTokens;
+  tokens?: ThemeTokens;
 
-  // Pixel系统配置
   pixel: {
     shape: 'circle' | 'square' | 'rounded-square' | 'diamond' | 'hexagon';
-    size: number; // 0.5-1.0
-    opacity: number; // 0.0-1.0
-
-    // Pixel使用着色器的哪些颜色
+    size: number;
+    opacity: number;
     colors: {
       default: { slot: 'primary' | 'secondary' | 'accent' | 'detail'; alpha?: number };
       hover: { slot: 'primary' | 'secondary' | 'accent' | 'detail'; state?: 'hover' };
@@ -182,20 +113,17 @@ export interface Theme {
     };
   };
 
-  // 背景配置
   background: {
     maximized: BackgroundConfig;
     windowed: BackgroundConfig;
   };
 
-  // 全局字体配置
   fonts: {
     primary: string;
     secondary?: string;
     mono?: string;
   };
 
-  // 全局效果
   globalEffects?: {
     blur?: number;
     brightness?: number;
@@ -203,19 +131,6 @@ export interface Theme {
     saturation?: number;
   };
 
-  // 组件主题化配置
-  surfaces?: {
-    [surfaceId: string]: ComponentTheme;
-  };
-
-  bindings?: {
-    [bindingId: string]: ThemeBinding;
-  };
-}
-
-export interface ThemeImportCandidate extends Theme {
-  componentThemes?: {
-    [componentId: string]: ComponentTheme;
-  };
-  shader?: unknown;
+  surfaces?: Record<string, ComponentTheme>;
+  bindings?: Record<string, ThemeBinding>;
 }

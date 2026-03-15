@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { mergeComponentThemes } from '../../themes/mergeComponentTheme';
-import type { ThemeSurfaceId } from '../../themes/types/theme';
+import { createResolvedSkinSurfaceModel } from '../../themes/skinSurface';
+import type { ThemeBindingId, ThemeSurfaceId } from '../../themes/types/theme';
 
 export interface PmpDialogProps {
   open: boolean;
@@ -55,10 +56,22 @@ export function PmpDialog({
   role = 'dialog',
   ariaLabel,
 }: PmpDialogProps) {
-  const overlayTheme = useSkinSurface(overlaySurfaceId);
-  const dialogBaseTheme = useSkinSurface('primitive.dialog');
-  const dialogVariantTheme = useSkinSurface(dialogSurfaceId);
-  const dialogTheme = mergeComponentThemes(dialogBaseTheme, dialogVariantTheme);
+  const { theme, getSurfaceTheme } = useTheme();
+  const overlayTheme = getSurfaceTheme(overlaySurfaceId);
+  const dialogBaseTheme = getSurfaceTheme('primitive.dialog');
+  const dialogVariantTheme = getSurfaceTheme(dialogSurfaceId);
+  const dialogTheme = useMemo(
+    () => mergeComponentThemes(dialogBaseTheme, dialogVariantTheme),
+    [dialogBaseTheme, dialogVariantTheme]
+  );
+  const overlaySurface = useMemo(
+    () => createResolvedSkinSurfaceModel(theme, overlaySurfaceId, overlayTheme),
+    [theme, overlaySurfaceId, overlayTheme]
+  );
+  const dialogSurface = useMemo(
+    () => createResolvedSkinSurfaceModel(theme, dialogSurfaceId, dialogTheme),
+    [theme, dialogSurfaceId, dialogTheme]
+  );
 
   if (!open) {
     return null;
@@ -71,41 +84,49 @@ export function PmpDialog({
 
   return createPortal(
     <div
-      className={[overlayClassName, overlayTheme.classNameOverride?.overlay].filter(Boolean).join(' ')}
+      {...overlaySurface.getElementProps({
+        part: 'overlay',
+        bindingId: overlaySurfaceId as ThemeBindingId,
+        className: overlayClassName,
+        style: overlayStyle,
+      })}
       data-surface-id={overlaySurfaceId}
       data-surface-variant={overlayTheme.variant}
       onClick={handleBackdropClick}
-      style={{ ...overlayTheme.styleOverride?.overlay, ...overlayStyle }}
     >
       <div
-        className={[
+        {...dialogSurface.getElementProps({
+          bindingId: dialogSurfaceId as ThemeBindingId,
           className,
-          overlayTheme.classNameOverride?.container,
-          dialogTheme.classNameOverride?.container,
-        ]
-          .filter(Boolean)
-          .join(' ')}
+          style: {
+            ...overlaySurface.getPart('root', { includeSurfaceTokens: false }).style,
+            ...style,
+          },
+        })}
         data-surface-id-dialog={dialogSurfaceId}
         data-surface-variant-dialog={dialogTheme.variant}
         role={role}
         aria-modal="true"
         aria-label={ariaLabel}
         onClick={(event) => event.stopPropagation()}
-        style={{
-          ...overlayTheme.styleOverride?.container,
-          ...dialogTheme.styleOverride?.container,
-          ...style,
-        }}
       >
         {(title || headerActions) && (
           <div
-            className={[headerClassName, dialogTheme.classNameOverride?.header].filter(Boolean).join(' ')}
-            style={{ ...dialogTheme.styleOverride?.header, ...headerStyle }}
+            {...dialogSurface.getElementProps({
+              part: 'header',
+              className: headerClassName,
+              style: headerStyle,
+              includeSurfaceTokens: false,
+            })}
           >
             {title ? (
               <div
-                className={[titleClassName, dialogTheme.classNameOverride?.title].filter(Boolean).join(' ')}
-                style={{ ...dialogTheme.styleOverride?.title, ...titleStyle }}
+                {...dialogSurface.getElementProps({
+                  part: 'title',
+                  className: titleClassName,
+                  style: titleStyle,
+                  includeSurfaceTokens: false,
+                })}
               >
                 {title}
               </div>
@@ -114,15 +135,23 @@ export function PmpDialog({
           </div>
         )}
         <div
-          className={[bodyClassName, dialogTheme.classNameOverride?.body].filter(Boolean).join(' ')}
-          style={{ ...dialogTheme.styleOverride?.body, ...bodyStyle }}
+          {...dialogSurface.getElementProps({
+            part: 'body',
+            className: bodyClassName,
+            style: bodyStyle,
+            includeSurfaceTokens: false,
+          })}
         >
           {children}
         </div>
         {footer ? (
           <div
-            className={[footerClassName, dialogTheme.classNameOverride?.footer].filter(Boolean).join(' ')}
-            style={{ ...dialogTheme.styleOverride?.footer, ...footerStyle }}
+            {...dialogSurface.getElementProps({
+              part: 'footer',
+              className: footerClassName,
+              style: footerStyle,
+              includeSurfaceTokens: false,
+            })}
           >
             {footer}
           </div>

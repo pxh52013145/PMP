@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import { useSkinSurfaceModel } from '../../themes/skinSurface';
 import './ContextMenu.css';
 
 export interface ContextMenuItem {
@@ -23,7 +23,7 @@ interface ContextMenuProps {
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x, y });
-  const surfaceTheme = useSkinSurface('overlay.context-menu');
+  const surface = useSkinSurfaceModel('overlay.context-menu');
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -100,53 +100,77 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       if (item.divider) {
         return (
           <div
-            className={['context-menu-divider', surfaceTheme.classNameOverride?.divider].filter(Boolean).join(' ')}
+            {...surface.getElementProps({
+              part: 'divider',
+              className: 'context-menu-divider',
+              includeSurfaceTokens: false,
+            })}
             key={`${nested ? 'sub' : 'root'}-divider-${index}`}
-            style={surfaceTheme.styleOverride?.divider}
           />
         );
       }
 
       const hasChildren = Array.isArray(item.children) && item.children.length > 0;
+      const itemState = item.disabled ? 'disabled' : item.danger ? 'danger' : undefined;
 
       return (
         <div
           key={`${nested ? 'sub' : 'root'}-item-${index}`}
-          className={[
-            'context-menu-item',
-            item.disabled ? 'disabled' : '',
-            item.danger ? 'danger' : '',
-            hasChildren ? 'context-menu-item-has-children' : '',
-            surfaceTheme.classNameOverride?.item,
-          ]
-            .filter(Boolean)
-            .join(' ')}
+          {...surface.getElementProps({
+            part: 'item',
+            state: itemState,
+            className: [
+              'context-menu-item',
+              item.disabled ? 'disabled' : '',
+              item.danger ? 'danger' : '',
+              hasChildren ? 'context-menu-item-has-children' : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+            includeSurfaceTokens: false,
+          })}
           data-surface-role="item"
-          data-surface-variant={surfaceTheme.variant}
-          style={{
-            ...surfaceTheme.styleOverride?.item,
-            ...(item.disabled ? surfaceTheme.styleOverride?.disabled : undefined),
-            ...(item.danger ? surfaceTheme.styleOverride?.danger : undefined),
-          }}
+          data-surface-variant={surface.variant}
           onClick={() => handleItemClick(item)}
         >
           {item.icon ? (
-            <span className="context-menu-icon" style={surfaceTheme.styleOverride?.icon}>
+            <span
+              {...surface.getElementProps({
+                part: 'icon',
+                className: 'context-menu-icon',
+                includeSurfaceTokens: false,
+              })}
+            >
               {item.icon}
             </span>
           ) : null}
-          <span className="context-menu-label" style={surfaceTheme.styleOverride?.label}>
+          <span
+            {...surface.getElementProps({
+              part: 'label',
+              className: 'context-menu-label',
+              includeSurfaceTokens: false,
+            })}
+          >
             {item.label ?? ''}
           </span>
           {hasChildren ? (
-            <span className="context-menu-submenu-arrow" style={surfaceTheme.styleOverride?.arrow}>
+            <span
+              {...surface.getElementProps({
+                part: 'arrow',
+                className: 'context-menu-submenu-arrow',
+                includeSurfaceTokens: false,
+              })}
+            >
               {'>'}
             </span>
           ) : null}
           {hasChildren ? (
             <div
-              className={['context-submenu', surfaceTheme.classNameOverride?.submenu].filter(Boolean).join(' ')}
-              style={surfaceTheme.styleOverride?.submenu}
+              {...surface.getElementProps({
+                part: 'submenu',
+                className: 'context-submenu',
+                includeSurfaceTokens: false,
+              })}
             >
               {renderItems(item.children ?? [], true)}
             </div>
@@ -158,16 +182,24 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
 
   return createPortal(
     <div
-      className={['context-menu-overlay', surfaceTheme.classNameOverride?.overlay].filter(Boolean).join(' ')}
+      {...surface.getElementProps({
+        part: 'overlay',
+        bindingId: 'overlay.context-menu',
+        className: 'context-menu-overlay',
+        includeSurfaceTokens: true,
+      })}
       data-surface-id="overlay.context-menu"
-      data-surface-variant={surfaceTheme.variant}
-      style={surfaceTheme.styleOverride?.overlay}
+      data-surface-variant={surface.variant}
       onClick={onClose}
     >
       <div
         ref={menuRef}
-        className={['context-menu', surfaceTheme.classNameOverride?.container].filter(Boolean).join(' ')}
-        style={{ left: position.x, top: position.y, ...surfaceTheme.styleOverride?.container }}
+        {...surface.getElementProps({
+          part: 'container',
+          className: 'context-menu',
+          style: { left: position.x, top: position.y },
+          includeSurfaceTokens: false,
+        })}
         onClick={(event) => event.stopPropagation()}
       >
         {renderItems(items)}

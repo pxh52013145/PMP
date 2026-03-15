@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { assignMagnetComponentTheme, materializeThemeBinding } from '../importAdapters';
 import {
-  assignMagnetComponentTheme,
   assignThemeBinding,
   isThemeBindingEmpty,
-  materializeThemeBinding,
   removeThemeBinding,
   resolveThemeBinding,
 } from '../bindings';
@@ -48,12 +47,13 @@ describe('theme bindings', () => {
       ...createBaseTheme(),
       surfaces: {
         'page.settings.glass': {
-          classNameOverride: {
-            container: 'page-settings-glass',
-          },
-          styleOverride: {
-            container: {
-              opacity: 0.92,
+          extends: 'primitive.card',
+          parts: {
+            root: {
+              classes: ['page-settings-glass'],
+              style: {
+                opacity: 0.92,
+              },
             },
           },
         },
@@ -82,8 +82,9 @@ describe('theme bindings', () => {
 
     expect(resolvedBinding.source).toBe('binding');
     expect(resolvedBinding.binding.surface).toBe('page.settings.glass');
-    expect(materialized.classNameOverride?.container).toBe('page-settings-glass');
-    expect(materialized.styleOverride?.container?.opacity).toBe(0.92);
+    expect(materialized.extends).toBe('primitive.card');
+    expect(materialized.parts?.root?.classes).toContain('page-settings-glass');
+    expect(materialized.parts?.root?.style?.opacity).toBe(0.92);
     expect(materialized.variant).toBe('glass');
     expect(materialized.variantConfig?.layout).toBe('compact');
     expect(materialized.dynamicColor?.extractFromCover).toBe(true);
@@ -92,18 +93,29 @@ describe('theme bindings', () => {
     expect(materialized.dynamicColor?.blendRatio).toBe(0.4);
   });
 
-  it('resolves self surface documents for magnet bindings', () => {
+  it('materializes magnet binding overlays on top of runtime surface documents', () => {
     const theme: Theme = {
       ...createBaseTheme(),
       surfaces: {
         'magnet.track-info': {
+          parts: {
+            root: {
+              classes: ['track-info-surface'],
+            },
+          },
+        },
+      },
+      bindings: {
+        'magnet.track-info': {
           variant: 'spinning-vinyl',
-          variantConfig: {
+          props: {
             layout: 'full',
           },
-          dynamicColor: {
-            extractFromCover: false,
-            effect: 'tone',
+          capabilities: {
+            dynamicColor: {
+              enabled: false,
+              mode: 'tone',
+            },
           },
         },
       },
@@ -112,8 +124,8 @@ describe('theme bindings', () => {
     const resolvedBinding = resolveThemeBinding(theme, 'magnet.track-info');
     const materialized = materializeThemeBinding(theme, 'magnet.track-info');
 
-    expect(resolvedBinding.source).toBe('surface');
-    expect(resolvedBinding.binding.surface).toBe('magnet.track-info');
+    expect(resolvedBinding.source).toBe('binding');
+    expect(materialized.parts?.root?.classes).toContain('track-info-surface');
     expect(materialized.variant).toBe('spinning-vinyl');
     expect(materialized.variantConfig?.layout).toBe('full');
     expect(materialized.dynamicColor?.extractFromCover).toBe(false);
@@ -136,16 +148,28 @@ describe('theme bindings', () => {
   it('writes magnet component themes into explicit self surfaces', () => {
     const theme = assignMagnetComponentTheme(createBaseTheme(), 'track-info', {
       variant: 'spinning-vinyl',
+      variantConfig: {
+        layout: 'full',
+      },
+      parts: {
+        root: {
+          style: {
+            opacity: 0.9,
+          },
+        },
+      },
       dynamicColor: {
         extractFromCover: true,
         effect: 'gradient',
       },
     });
 
-    expect(theme.bindings?.['magnet.track-info']?.surface).toBe('magnet.track-info');
-    expect(theme.surfaces?.['magnet.track-info']?.variant).toBe('spinning-vinyl');
-    expect(theme.surfaces?.['magnet.track-info']?.dynamicColor?.extractFromCover).toBe(true);
-    expect(theme.surfaces?.['magnet.track-info']?.dynamicColor?.effect).toBe('gradient');
+    expect(theme.bindings?.['magnet.track-info']?.variant).toBe('spinning-vinyl');
+    expect(theme.bindings?.['magnet.track-info']?.props?.layout).toBe('full');
+    expect(theme.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.enabled).toBe(true);
+    expect(theme.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.mode).toBe('gradient');
+    expect(theme.surfaces?.['magnet.track-info']?.parts?.root?.style?.opacity).toBe(0.9);
+    expect(theme.surfaces?.['magnet.track-info']?.variant).toBeUndefined();
   });
 
   it('removes empty bindings cleanly', () => {

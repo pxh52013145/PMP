@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useKernel } from '../../contexts/KernelContext';
 import type { SettingsPanelContribution } from '../../contracts/contributions';
 import { useT } from '../../i18n';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import { useSkinSurfaceModel } from '../../themes/skinSurface';
 import { PmpChoiceButton } from '../primitives';
 
 function sortPanels(a: SettingsPanelContribution, b: SettingsPanelContribution): number {
@@ -59,7 +59,7 @@ type SettingsSection = {
 export const SettingsPage: React.FC = () => {
   const kernel = useKernel();
   const t = useT();
-  const pageSurfaceTheme = useSkinSurface('page.settings');
+  const pageSurface = useSkinSurfaceModel('page.settings');
   const [revision, setRevision] = useState(0);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
@@ -166,27 +166,25 @@ export const SettingsPage: React.FC = () => {
     return activeSection?.panels ?? [];
   }, [activeSection]);
 
+  const rootProps = pageSurface.getElementProps({
+    bindingId: 'page.settings',
+    className: ['page-settings', 'page-settings--deltaforce'].join(' '),
+  });
+
   return (
     <div
-      className={[
-        'page-settings',
-        'page-settings--deltaforce',
-        pageSurfaceTheme.classNameOverride?.container,
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      {...rootProps}
       data-surface-id="page.settings"
-      data-surface-variant={pageSurfaceTheme.variant}
-      style={pageSurfaceTheme.styleOverride?.container}
+      data-surface-variant={pageSurface.variant}
     >
       {panels.length === 0 ? (
         <div className="settings-card-note">{t('pages.settings.empty')}</div>
       ) : (
-        <div className="settings-shell">
-          <header className="settings-topbar">
-            <div className="settings-topbar-left">
+        <div className="settings-shell" data-pmp-part="shell">
+          <header className="settings-topbar" data-pmp-part="header">
+            <div className="settings-topbar-left" data-pmp-part="header-main">
               {sections.length > 1 ? (
-                <div className="settings-main-tabs" role="tablist" aria-label={t('pages.settings.title')}>
+                <div className="settings-main-tabs" data-pmp-part="main-tabs" role="tablist" aria-label={t('pages.settings.title')}>
                   {sections.map((section, index) => {
                     const isActive = section.id === activeSectionId;
                     return (
@@ -222,7 +220,7 @@ export const SettingsPage: React.FC = () => {
                   })}
                 </div>
               ) : (
-                <div className="settings-topbar-title">
+                <div className="settings-topbar-title" data-pmp-part="header-title">
                   <div className="settings-title">{t('pages.settings.title')}</div>
                   <div className="settings-subtitle">{t('pages.settings.subtitle')}</div>
                 </div>
@@ -230,12 +228,13 @@ export const SettingsPage: React.FC = () => {
             </div>
           </header>
 
-          <div className="settings-divider" />
+          <div className="settings-divider" data-pmp-part="divider" />
 
-          <nav className="settings-subbar" aria-label={t('pages.settings.title')}>
+          <nav className="settings-subbar" data-pmp-part="subbar" aria-label={t('pages.settings.title')}>
             <div
               ref={subTabsRef}
               className="settings-sub-tabs"
+              data-pmp-part="sub-tabs"
               onWheel={(e) => {
                 const el = subTabsRef.current;
                 if (!el) return;

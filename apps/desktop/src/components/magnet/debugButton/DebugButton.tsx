@@ -1,18 +1,20 @@
 import React from 'react';
 import { useDebugButtonData } from './useDebugButtonData';
 import { useDebugButtonLogic } from './useDebugButtonLogic';
-import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { StandardDebugButton } from './StandardDebugButton';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
+
+const DEBUG_BUTTON_RENDERERS = {
+  default: StandardDebugButton,
+};
 
 export const DebugButton: React.FC = () => {
   const data = useDebugButtonData();
   const logic = useDebugButtonLogic();
-  const themeConfig = useComponentTheme('btn-debug');
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-debug', DEBUG_BUTTON_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
 
-  if (themeConfig.customRenderer) {
-    const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
-  }
-
-  return <StandardDebugButton data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+  return <Renderer data={data} logic={logic} variantConfig={skin.props} />;
 };

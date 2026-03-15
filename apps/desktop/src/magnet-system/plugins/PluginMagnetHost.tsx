@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useKernel } from '../../contexts/KernelContext';
 import { NAVIGATION_SERVICE_TOKEN } from '../../services/navigation';
-import { useComponentTheme } from '../../themes/contexts/ThemeContextWithSync';
+import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import {
   getInstalledPmpmPlugin,
   getPmpmPluginEffectivePermissions,
@@ -32,7 +32,6 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   const kernel = useKernel();
   const audioService = useAudioService();
   const navigationService = kernel.services.get(NAVIGATION_SERVICE_TOKEN);
-  const componentTheme = useComponentTheme(pluginId);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +60,14 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   }, [pluginId, pluginStoreRevision]);
 
   const enabled = plugin ? (plugin.enabled ?? true) : false;
+  const skin = useMagnetSkin(pluginId, {
+    defaultRendererId: pluginId,
+    defaultVariant:
+      typeof plugin?.manifest.magnet?.defaultVariant === 'string' &&
+      plugin.manifest.magnet.defaultVariant.trim().length > 0
+        ? plugin.manifest.magnet.defaultVariant.trim()
+        : 'default',
+  });
 
   const permissions = useMemo(() => {
     void pluginStoreRevision;
@@ -89,11 +96,8 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
   }, [audioService, navigation, permissions, pluginId]);
 
   const mountContext = useMemo(() => {
-    const themeVariant =
-      typeof componentTheme.variant === 'string' && componentTheme.variant.trim().length > 0
-        ? componentTheme.variant.trim()
-        : null;
-    const themeVariantConfig = isPlainObject(componentTheme.variantConfig) ? componentTheme.variantConfig : null;
+    const themeVariant = typeof skin.variant === 'string' && skin.variant.trim().length > 0 ? skin.variant.trim() : null;
+    const themeVariantConfig = isPlainObject(skin.props) ? skin.props : null;
 
     const manifestDefaultVariant =
       typeof plugin?.manifest.magnet?.defaultVariant === 'string' &&
@@ -110,7 +114,7 @@ export function PluginMagnetHost({ pluginId }: { pluginId: string }) {
         ...(themeVariantConfig ? { variantConfig: themeVariantConfig } : {}),
       },
     };
-  }, [componentTheme.variant, componentTheme.variantConfig, plugin?.manifest.magnet?.defaultVariant]);
+  }, [plugin?.manifest.magnet?.defaultVariant, skin.props, skin.variant]);
 
   useEffect(() => {
     if (!enabled) return;

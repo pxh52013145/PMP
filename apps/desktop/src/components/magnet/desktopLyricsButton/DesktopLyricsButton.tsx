@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type ContextMenuItem, ContextMenu } from '../ContextMenu';
-import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { useT } from '../../../i18n';
 import {
   type DesktopLyricsOverlaySettings,
@@ -15,6 +14,7 @@ import { StandardDesktopLyricsButton } from './StandardDesktopLyricsButton';
 import { useDesktopLyricsButtonData } from './useDesktopLyricsButtonData';
 import { useDesktopLyricsButtonLogic } from './useDesktopLyricsButtonLogic';
 import { TAURI_EVENTS, setupTauriListenerWithPayload } from '../../../utils/windowCommunication';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
 
 interface DesktopLyricsLayoutChangedPayload {
   offsetX: number;
@@ -44,11 +44,18 @@ const LYRIC_OFFSET_OPTIONS: ReadonlyArray<{
 
 const LYRIC_OFFSET_NUDGE_STEP = 100;
 
+const DESKTOP_LYRICS_RENDERERS = {
+  default: StandardDesktopLyricsButton,
+};
+
 export const DesktopLyricsButton: React.FC = () => {
   const t = useT();
   const data = useDesktopLyricsButtonData();
   const logic = useDesktopLyricsButtonLogic();
-  const themeConfig = useComponentTheme('btn-desktop-lyrics');
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-desktop-lyrics', DESKTOP_LYRICS_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
   const [contextMenu, setContextMenu] = useState<null | {
     x: number;
     y: number;
@@ -287,11 +294,6 @@ export const DesktopLyricsButton: React.FC = () => {
     [openContextMenuAt]
   );
 
-  if (themeConfig.customRenderer) {
-    const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
-  }
-
   return (
     <>
       <div
@@ -299,11 +301,7 @@ export const DesktopLyricsButton: React.FC = () => {
         onContextMenu={handleContextMenu}
         onMouseDown={handleMouseDown}
       >
-        <StandardDesktopLyricsButton
-          data={data}
-          logic={logic}
-          variantConfig={themeConfig.variantConfig}
-        />
+        <Renderer data={data} logic={logic} variantConfig={skin.props} />
       </div>
       {contextMenu ? (
         <ContextMenu

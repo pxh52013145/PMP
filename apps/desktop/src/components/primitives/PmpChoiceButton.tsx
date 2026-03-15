@@ -1,7 +1,8 @@
-import React from 'react';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import React, { useMemo } from 'react';
+import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { mergeComponentThemes } from '../../themes/mergeComponentTheme';
-import type { ThemeSurfaceId } from '../../themes/types/theme';
+import { createResolvedSkinSurfaceModel } from '../../themes/skinSurface';
+import type { ThemeBindingId, ThemeSurfaceId } from '../../themes/types/theme';
 
 export interface PmpChoiceButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   active?: boolean;
@@ -27,34 +28,49 @@ export const PmpChoiceButton = React.forwardRef<HTMLButtonElement, PmpChoiceButt
     },
     ref
   ) {
-    const baseTheme = useSkinSurface('primitive.choice');
+    const { theme, getSurfaceTheme } = useTheme();
     const variantSurfaceId = surfaceId ?? `primitive.choice.${variant}`;
-    const variantTheme = useSkinSurface(variantSurfaceId);
-    const stateSurfaceTheme = useSkinSurface(
+    const baseTheme = getSurfaceTheme('primitive.choice');
+    const variantTheme = getSurfaceTheme(variantSurfaceId);
+    const stateName = active ? 'active' : 'inactive';
+    const stateSurfaceTheme = getSurfaceTheme(
       active
         ? (activeSurfaceId ?? `${variantSurfaceId}.active`)
         : (inactiveSurfaceId ?? `${variantSurfaceId}.inactive`)
     );
-    const theme = mergeComponentThemes(baseTheme, variantTheme, stateSurfaceTheme);
+    const resolvedTheme = useMemo(
+      () => mergeComponentThemes(baseTheme, variantTheme, stateSurfaceTheme),
+      [baseTheme, stateSurfaceTheme, variantTheme]
+    );
+    const surface = useMemo(
+      () => createResolvedSkinSurfaceModel(theme, variantSurfaceId, resolvedTheme),
+      [theme, variantSurfaceId, resolvedTheme]
+    );
     const resolvedAriaPressed =
       typeof ariaPressed !== 'undefined'
         ? ariaPressed
         : role === 'tab' || role === 'radio'
           ? undefined
           : active;
+    const rootProps = surface.getElementProps({
+      primitive: 'choice',
+      bindingId: variantSurfaceId as ThemeBindingId,
+      state: stateName,
+      className,
+      style,
+    });
 
     return (
       <button
         ref={ref}
         {...props}
         aria-pressed={resolvedAriaPressed}
-        className={[className, theme.classNameOverride?.container].filter(Boolean).join(' ')}
+        {...rootProps}
         data-active={active ? 'true' : 'false'}
         role={role}
         data-surface-id={variantSurfaceId}
-        data-surface-state={active ? 'active' : 'inactive'}
-        data-surface-variant={theme.variant}
-        style={{ ...theme.styleOverride?.container, ...style }}
+        data-surface-state={stateName}
+        data-surface-variant={resolvedTheme.variant}
       />
     );
   }

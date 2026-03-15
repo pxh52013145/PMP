@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAudioService } from '../../contexts/AudioEngineContext';
 import type { Track } from '../../services/audio';
-import { useComponentTheme } from '../../themes/contexts/ThemeContextWithSync';
+import { useMagnetSkin } from '../../themes/useMagnetSkin';
 import { AudioVisualizer } from './AudioVisualizer';
 import { useCoverUrlForTrack } from './shared/useCoverUrlForTrack';
 import { useDynamicColor } from './shared/useDynamicColor';
@@ -9,13 +9,16 @@ import { isSameTrackRenderIdentity, sanitizeTrackForRuntime } from './shared/san
 
 export const AudioVisualizerMagnet: React.FC = () => {
   const audioService = useAudioService();
-  const themeConfig = useComponentTheme('audio-visualizer');
+  const skin = useMagnetSkin('audio-visualizer', {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
   const [playbackState, setPlaybackState] = useState(() => audioService.getState().playbackState);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() =>
     sanitizeTrackForRuntime(audioService.getState().currentTrack)
   );
 
-  const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false;
+  const dynamicColorEnabled = skin.dynamicColor?.extractFromCover !== false;
   const coverUrl = useCoverUrlForTrack(dynamicColorEnabled ? currentTrack : null, {
     coverSizeHint: 'small',
   });

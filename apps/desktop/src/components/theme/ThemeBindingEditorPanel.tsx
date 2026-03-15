@@ -51,7 +51,7 @@ export function ThemeBindingEditorPanel({
           resolved renderer: {bindingEditor.resolvedBinding.renderer ?? '-'}
         </span>
         <span className="theme-binding-editor-panel__chip">
-          resolved variant: {bindingEditor.resolvedTheme.variant ?? '-'}
+          resolved variant: {bindingEditor.resolvedBinding.variant ?? bindingEditor.resolvedTheme.variant ?? '-'}
         </span>
         <span className="theme-binding-editor-panel__chip">surface doc: {bindingEditor.surfaceDocumentId}</span>
         <span className="theme-binding-editor-panel__chip">

@@ -1,7 +1,8 @@
-import React from 'react';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import React, { useMemo } from 'react';
+import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { mergeComponentThemes } from '../../themes/mergeComponentTheme';
-import type { ThemeSurfaceId } from '../../themes/types/theme';
+import { createResolvedSkinSurfaceModel } from '../../themes/skinSurface';
+import type { ThemeBindingId, ThemeSurfaceId } from '../../themes/types/theme';
 
 type PmpDrawerElement = 'section' | 'div' | 'aside';
 
@@ -20,18 +21,28 @@ export function PmpDrawer({
   ...props
 }: PmpDrawerProps) {
   const Component = as;
-  const overlayTheme = useSkinSurface(surfaceId);
-  const dialogTheme = useSkinSurface('primitive.dialog');
-  const theme = mergeComponentThemes(dialogTheme, overlayTheme);
+  const { theme, getSurfaceTheme } = useTheme();
+  const overlayTheme = getSurfaceTheme(surfaceId);
+  const dialogTheme = getSurfaceTheme('primitive.dialog');
+  const resolvedTheme = useMemo(() => mergeComponentThemes(dialogTheme, overlayTheme), [dialogTheme, overlayTheme]);
+  const surface = useMemo(
+    () => createResolvedSkinSurfaceModel(theme, surfaceId, resolvedTheme),
+    [theme, surfaceId, resolvedTheme]
+  );
+  const rootProps = surface.getElementProps({
+    primitive: 'drawer',
+    bindingId: surfaceId as ThemeBindingId,
+    className,
+    style,
+  });
 
   return (
     <Component
       {...props}
-      className={[className, theme.classNameOverride?.container].filter(Boolean).join(' ')}
+      {...rootProps}
       data-surface-id={surfaceId}
-      data-surface-variant={theme.variant}
+      data-surface-variant={resolvedTheme.variant}
       data-open={open ? 'true' : 'false'}
-      style={{ ...theme.styleOverride?.container, ...style }}
     />
   );
 }

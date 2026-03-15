@@ -1,5 +1,6 @@
-import { mergeComponentThemes } from './mergeComponentTheme';
-import type { ComponentTheme, ThemeImportCandidate, ThemeSurfaceId } from './types/theme';
+import { mergeThemeImportSurfaceSpecs } from './importAdapters';
+import type { ThemeSurfaceId } from './types/theme';
+import type { ThemeImportCandidate, ThemeImportSurfaceSpec } from './types/themeImport';
 
 export const LEGACY_COMPONENT_THEME_KEYS: Record<string, string[]> = {
   'btn-play-pause': ['play-pause-button'],
@@ -74,10 +75,10 @@ export function migrateLegacyComponentThemes(theme: ThemeImportCandidate): Theme
       return a.index - b.index;
     });
 
-  const migratedLegacySurfaces: Record<string, ComponentTheme> = {};
+  const migratedLegacySurfaces: Record<string, ThemeImportSurfaceSpec> = {};
   for (const entry of legacyEntries) {
     const surfaceId = resolveLegacyComponentThemeSurfaceId(entry.componentId);
-    migratedLegacySurfaces[surfaceId] = mergeComponentThemes(
+    migratedLegacySurfaces[surfaceId] = mergeThemeImportSurfaceSpecs(
       migratedLegacySurfaces[surfaceId],
       entry.componentTheme
     );
@@ -85,7 +86,7 @@ export function migrateLegacyComponentThemes(theme: ThemeImportCandidate): Theme
 
   const mergedSurfaces = { ...migratedLegacySurfaces };
   for (const [surfaceId, surfaceTheme] of Object.entries(restTheme.surfaces ?? {})) {
-    mergedSurfaces[surfaceId] = mergeComponentThemes(mergedSurfaces[surfaceId], surfaceTheme);
+    mergedSurfaces[surfaceId] = mergeThemeImportSurfaceSpecs(mergedSurfaces[surfaceId], surfaceTheme);
   }
 
   return {

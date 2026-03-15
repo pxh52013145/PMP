@@ -27,7 +27,7 @@ import {
 import { ConfirmDialog } from '../magnet/ConfirmDialog';
 
 import { ContextMenu, ContextMenuItem } from '../magnet/ContextMenu';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import { useSkinSurfaceModel } from '../../themes/skinSurface';
 
 import { useAudioService } from '../../contexts/AudioEngineContext';
 
@@ -7234,34 +7234,32 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  const pageSurfaceTheme = useSkinSurface('page.music-library');
+  const pageSurface = useSkinSurfaceModel('page.music-library');
 
   if (!isOpen) return null;
+
+  const rootProps = pageSurface.getElementProps({
+    bindingId: 'page.music-library',
+    className: ['music-library', embedded ? 'music-library-embedded' : ''].filter(Boolean).join(' '),
+  });
 
   const libraryContent = (
 
     <div
-      className={[
-        'music-library',
-        embedded ? 'music-library-embedded' : '',
-        pageSurfaceTheme.classNameOverride?.container,
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      {...rootProps}
       data-surface-id="page.music-library"
-      data-surface-variant={pageSurfaceTheme.variant}
-      style={pageSurfaceTheme.styleOverride?.container}
+      data-surface-variant={pageSurface.variant}
     >
 
       {!embedded && (
 
-        <div className="music-library-header">
+        <div className="music-library-header" data-pmp-part="header">
 
-          <div className="music-library-header-left">
+          <div className="music-library-header-left" data-pmp-part="header-main">
 
             <h2 className="music-library-title">{t('pages.music-library.title')}</h2>
 
-            <div className="music-library-source-modes">
+            <div className="music-library-source-modes" data-pmp-part="source-modes">
 
               <button
 
@@ -7310,14 +7308,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       <div
 
         className="music-library-toolbar-region"
+        data-pmp-part="toolbar-region"
 
         ref={librarySourceMode === 'local' ? baseToolbarRegionRef : undefined}
 
       >
 
-        <div className="music-library-toolbar">
+        <div className="music-library-toolbar" data-pmp-part="toolbar">
 
-          <div className="music-library-actions">
+          <div className="music-library-actions" data-pmp-part="actions">
 
             {librarySourceMode === 'local' ? (
 

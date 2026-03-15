@@ -57,19 +57,52 @@ describe('theme surfaces', () => {
     expect(resolveThemeSurface(theme, 'primitive.checkbox.settings.checked').variant).toBe('boxed');
   });
 
-  it('resolves magnet surfaces from theme.surfaces', () => {
-    const theme = assignThemeSurface(createBaseTheme(), 'magnet.track-info', {
-      variant: 'spinning-vinyl',
-    });
+  it('resolves inherited surfaces through extends', () => {
+    const theme = assignThemeSurface(
+      assignThemeSurface(createBaseTheme(), 'primitive.card', {
+        tokens: {
+          'color.surface': '{color.bg.surface}',
+        },
+        parts: {
+          root: {
+            classes: ['card-base'],
+            style: {
+              borderRadius: 12,
+            },
+          },
+        },
+      }),
+      'primitive.card.settings',
+      {
+        extends: 'primitive.card',
+        parts: {
+          root: {
+            classes: ['card-settings'],
+          },
+          header: {
+            style: {
+              minHeight: 56,
+            },
+          },
+        },
+      }
+    );
 
-    expect(resolveThemeSurface(theme, 'magnet.track-info').variant).toBe('spinning-vinyl');
+    const resolved = resolveThemeSurface(theme, 'primitive.card.settings');
+
+    expect(resolved.parts?.root?.classes).toEqual(['card-base', 'card-settings']);
+    expect(resolved.parts?.root?.style?.borderRadius).toBe(12);
+    expect(resolved.parts?.header?.style?.minHeight).toBe(56);
+    expect(resolved.tokens?.['color.surface']).toBe('{color.bg.surface}');
   });
 
   it('removes empty surface documents cleanly', () => {
     const themed = assignThemeSurface(createBaseTheme(), 'overlay.modal.glass', {
-      styleOverride: {
-        container: {
-          opacity: 0.92,
+      parts: {
+        root: {
+          style: {
+            opacity: 0.92,
+          },
         },
       },
     });

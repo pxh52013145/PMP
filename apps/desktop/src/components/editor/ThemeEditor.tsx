@@ -44,9 +44,10 @@ import {
 import { filterMagnetConfigSnapshotForImport, filterMagnetSpaceLayoutForImport } from '../../themes/packs/profilePackApply';
 import { parseVariantPresetFromText, type VariantPresetV1 } from '../../themes/packs/pmpv';
 import { satisfiesSemverRange } from '../../themes/packs/semver';
-import { assignMagnetComponentTheme } from '../../themes/bindings';
+import { assignMagnetComponentTheme, materializeThemeBinding } from '../../themes/importAdapters';
 import { resolveLegacyComponentThemeSurfaceId } from '../../themes/legacyComponentThemes';
-import type { ComponentTheme, Theme, ThemeImportCandidate, ThemeBindingId } from '../../themes/types/theme';
+import type { Theme, ThemeBindingId } from '../../themes/types/theme';
+import type { ThemeImportCandidate, ThemeImportSurfaceSpec } from '../../themes/types/themeImport';
 import { useThemeBindingEditor } from '../../themes/useThemeBindingEditor';
 import type { Magnet } from '../../types/pixel';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
@@ -83,10 +84,192 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function assertObjectMap(value: unknown, path: string): asserts value is Record<string, Record<string, unknown>> {
+function assertThemeTokenPrimitive(value: unknown, path: string): void {
+  if (!['string', 'number', 'boolean'].includes(typeof value)) {
+    throw new Error(`${path} must be a string, number, or boolean`);
+  }
+}
+
+function assertThemeTokenAssignments(value: unknown, path: string): void {
   assertObject(value, path);
-  for (const [key, entry] of Object.entries(value)) {
-    assertObject(entry, `${path}.${key}`);
+  for (const [key, tokenValue] of Object.entries(value)) {
+    assertThemeTokenPrimitive(tokenValue, `${path}.${key}`);
+  }
+}
+
+function assertThemeTokens(value: unknown, path: string): void {
+  assertObject(value, path);
+  for (const [key, tokenValue] of Object.entries(value)) {
+    assertThemeTokenAssignments(tokenValue, `${path}.${key}`);
+  }
+}
+
+function assertDynamicColorCapability(value: unknown, path: string): void {
+  assertObject(value, path);
+  const dynamicColor = value.dynamicColor;
+  if (typeof dynamicColor === 'undefined') {
+    return;
+  }
+  assertObject(dynamicColor, `${path}.dynamicColor`);
+
+  const booleanFields = ['enabled'] as const;
+  for (const key of booleanFields) {
+    const fieldValue = dynamicColor[key];
+    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'boolean') {
+      throw new Error(`${path}.dynamicColor.${key} must be a boolean`);
+    }
+  }
+
+  const stringFields = ['source', 'mode', 'apply'] as const;
+  for (const key of stringFields) {
+    const fieldValue = dynamicColor[key];
+    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'string') {
+      throw new Error(`${path}.dynamicColor.${key} must be a string`);
+    }
+  }
+
+  const numberFields = ['blendRatio', 'gradientAngle', 'dynamicSpeed'] as const;
+  for (const key of numberFields) {
+    const fieldValue = dynamicColor[key];
+    if (typeof fieldValue !== 'undefined' && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
+      throw new Error(`${path}.dynamicColor.${key} must be a finite number`);
+    }
+  }
+
+  if (typeof dynamicColor.colorAdjust !== 'undefined') {
+    assertObject(dynamicColor.colorAdjust, `${path}.dynamicColor.colorAdjust`);
+  }
+}
+
+function assertLegacyDynamicColorConfig(value: unknown, path: string): void {
+  assertObject(value, path);
+  const booleanFields = ['extractFromCover'] as const;
+  for (const key of booleanFields) {
+    const fieldValue = value[key];
+    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'boolean') {
+      throw new Error(`${path}.${key} must be a boolean`);
+    }
+  }
+
+  const stringFields = ['effect', 'applyMode'] as const;
+  for (const key of stringFields) {
+    const fieldValue = value[key];
+    if (typeof fieldValue !== 'undefined' && typeof fieldValue !== 'string') {
+      throw new Error(`${path}.${key} must be a string`);
+    }
+  }
+
+  const numberFields = ['gradientAngle', 'dynamicSpeed', 'blendRatio'] as const;
+  for (const key of numberFields) {
+    const fieldValue = value[key];
+    if (typeof fieldValue !== 'undefined' && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue))) {
+      throw new Error(`${path}.${key} must be a finite number`);
+    }
+  }
+
+  if (typeof value.colorAdjust !== 'undefined') {
+    assertObject(value.colorAdjust, `${path}.colorAdjust`);
+  }
+}
+
+function assertThemePartStateSpec(value: unknown, path: string): void {
+  assertObject(value, path);
+  if (typeof value.classes !== 'undefined') {
+    if (!Array.isArray(value.classes) || value.classes.some((entry) => typeof entry !== 'string')) {
+      throw new Error(`${path}.classes must be an array of strings`);
+    }
+  }
+  if (typeof value.style !== 'undefined') {
+    assertObject(value.style, `${path}.style`);
+  }
+  if (typeof value.tokens !== 'undefined') {
+    assertThemeTokenAssignments(value.tokens, `${path}.tokens`);
+  }
+}
+
+function assertThemeSurfaceStateSpec(value: unknown, path: string): void {
+  assertThemePartStateSpec(value, path);
+  const record = value as Record<string, unknown>;
+  if (typeof record.parts !== 'undefined') {
+    assertObject(record.parts, `${path}.parts`);
+    for (const [key, entry] of Object.entries(record.parts)) {
+      assertThemePartStateSpec(entry, `${path}.parts.${key}`);
+    }
+  }
+}
+
+function assertThemeSurfacePartSpec(value: unknown, path: string): void {
+  assertThemePartStateSpec(value, path);
+  const record = value as Record<string, unknown>;
+  if (typeof record.states !== 'undefined') {
+    assertObject(record.states, `${path}.states`);
+    for (const [key, entry] of Object.entries(record.states)) {
+      assertThemePartStateSpec(entry, `${path}.states.${key}`);
+    }
+  }
+}
+
+function assertComponentThemeDocument(value: unknown, path: string): void {
+  assertObject(value, path);
+
+  if (typeof value.extends !== 'undefined' && typeof value.extends !== 'string') {
+    throw new Error(`${path}.extends must be a string`);
+  }
+  if (typeof value.variant !== 'undefined' && typeof value.variant !== 'string') {
+    throw new Error(`${path}.variant must be a string`);
+  }
+  if (typeof value.variantConfig !== 'undefined') {
+    assertObject(value.variantConfig, `${path}.variantConfig`);
+  }
+  if (typeof value.tokens !== 'undefined') {
+    assertThemeTokenAssignments(value.tokens, `${path}.tokens`);
+  }
+  if (typeof value.parts !== 'undefined') {
+    assertObject(value.parts, `${path}.parts`);
+    for (const [key, entry] of Object.entries(value.parts)) {
+      assertThemeSurfacePartSpec(entry, `${path}.parts.${key}`);
+    }
+  }
+  if (typeof value.states !== 'undefined') {
+    assertObject(value.states, `${path}.states`);
+    for (const [key, entry] of Object.entries(value.states)) {
+      assertThemeSurfaceStateSpec(entry, `${path}.states.${key}`);
+    }
+  }
+  if (typeof value.metadata !== 'undefined') {
+    assertObject(value.metadata, `${path}.metadata`);
+    if (typeof value.metadata.description !== 'undefined' && typeof value.metadata.description !== 'string') {
+      throw new Error(`${path}.metadata.description must be a string`);
+    }
+  }
+
+  if (typeof value.styleOverride !== 'undefined') {
+    assertObject(value.styleOverride, `${path}.styleOverride`);
+  }
+  if (typeof value.classNameOverride !== 'undefined') {
+    assertObject(value.classNameOverride, `${path}.classNameOverride`);
+  }
+  if (typeof value.dynamicColor !== 'undefined') {
+    assertLegacyDynamicColorConfig(value.dynamicColor, `${path}.dynamicColor`);
+  }
+}
+
+function assertThemeBindingValue(value: unknown, path: string): void {
+  assertObject(value, path);
+  if (typeof value.surface !== 'undefined' && typeof value.surface !== 'string') {
+    throw new Error(`${path}.surface must be a string`);
+  }
+  if (typeof value.renderer !== 'undefined' && typeof value.renderer !== 'string') {
+    throw new Error(`${path}.renderer must be a string`);
+  }
+  if (typeof value.variant !== 'undefined' && typeof value.variant !== 'string') {
+    throw new Error(`${path}.variant must be a string`);
+  }
+  if (typeof value.props !== 'undefined') {
+    assertObject(value.props, `${path}.props`);
+  }
+  if (typeof value.capabilities !== 'undefined') {
+    assertDynamicColorCapability(value.capabilities, `${path}.capabilities`);
   }
 }
 
@@ -130,6 +313,10 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
     }
   }
 
+  if (typeof value.tokens !== 'undefined') {
+    assertThemeTokens(value.tokens, 'theme.tokens');
+  }
+
   assertObject(value.pixel, 'theme.pixel');
   if (typeof value.pixel.shape !== 'string') {
     throw new Error('theme.pixel.shape is required');
@@ -151,13 +338,22 @@ function validateThemeJson(value: unknown): asserts value is ThemeImportCandidat
   }
 
   if (typeof value.componentThemes !== 'undefined') {
-    assertObjectMap(value.componentThemes, 'theme.componentThemes');
+    assertObject(value.componentThemes, 'theme.componentThemes');
+    for (const [key, entry] of Object.entries(value.componentThemes)) {
+      assertComponentThemeDocument(entry, `theme.componentThemes.${key}`);
+    }
   }
   if (typeof value.surfaces !== 'undefined') {
-    assertObjectMap(value.surfaces, 'theme.surfaces');
+    assertObject(value.surfaces, 'theme.surfaces');
+    for (const [key, entry] of Object.entries(value.surfaces)) {
+      assertComponentThemeDocument(entry, `theme.surfaces.${key}`);
+    }
   }
   if (typeof value.bindings !== 'undefined') {
-    assertObjectMap(value.bindings, 'theme.bindings');
+    assertObject(value.bindings, 'theme.bindings');
+    for (const [key, entry] of Object.entries(value.bindings)) {
+      assertThemeBindingValue(entry, `theme.bindings.${key}`);
+    }
   }
 }
 
@@ -316,7 +512,7 @@ export type ThemeEditorProps = {
 
 export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEditorProps) {
   const t = useT();
-  const { theme, applyTheme, getSurfaceTheme } = useTheme();
+  const { theme, applyTheme } = useTheme();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const isTauri = useMemo(() => isTauriRuntime(), []);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -571,7 +767,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
       const rawId = `${theme.id}-${rendererId}`;
       const id = isValidId(rawId) ? rawId : isValidId(rendererId) ? rendererId : 'variant-preset';
 
-      const resolvedComponentTheme = getSurfaceTheme(`magnet.${rendererId}`);
+      const resolvedComponentTheme = materializeThemeBinding(theme, `magnet.${rendererId}` as ThemeBindingId);
       const componentTheme = isPlainObject(resolvedComponentTheme)
         ? (resolvedComponentTheme as unknown as Record<string, unknown>)
         : {};
@@ -608,7 +804,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         text: t('editor.theme-editor.pmpv.message.exportFailed', { message }),
       });
     }
-  }, [getSurfaceTheme, selectedRendererId, t, theme.id, theme.name, theme.version]);
+  }, [selectedRendererId, t, theme]);
 
   const handleVariantPresetUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -630,7 +826,7 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
         });
         if (!ok) return;
 
-        const componentTheme = parsed.componentTheme as unknown as ComponentTheme;
+        const componentTheme = parsed.componentTheme as unknown as ThemeImportSurfaceSpec;
         await applyTheme(assignMagnetComponentTheme(theme, rendererId, componentTheme));
 
         setVariantPresetMessage({
@@ -2684,7 +2880,10 @@ export function ThemeEditor({ magnetLibrary, applyRendererBindings }: ThemeEdito
                         {
                           rendererId: selectedRenderer.id,
                           explicitBinding: theme.bindings?.[`magnet.${selectedRenderer.id}`] ?? null,
-                          materializedComponentTheme: getSurfaceTheme(`magnet.${selectedRenderer.id}`),
+                          materializedComponentTheme: materializeThemeBinding(
+                            theme,
+                            `magnet.${selectedRenderer.id}` as ThemeBindingId
+                          ),
                         },
                         null,
                         2

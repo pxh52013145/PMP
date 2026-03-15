@@ -1,3 +1,4 @@
+import { mergeComponentThemes } from './mergeComponentTheme';
 import type { ComponentTheme, Theme, ThemeSurfaceId } from './types/theme';
 
 function hasOwnKeys(value: unknown): value is Record<string, unknown> {
@@ -8,8 +9,28 @@ function hasOwnKeys(value: unknown): value is Record<string, unknown> {
   return Object.keys(value).length > 0;
 }
 
+function resolveThemeSurfaceInternal(
+  theme: Theme,
+  surfaceId: ThemeSurfaceId,
+  visited: Set<string>
+): ComponentTheme {
+  const current = theme.surfaces?.[surfaceId];
+  if (!current) {
+    return {};
+  }
+
+  const parentSurfaceId = typeof current.extends === 'string' ? current.extends.trim() : '';
+  if (!parentSurfaceId || visited.has(surfaceId)) {
+    return current;
+  }
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(surfaceId);
+  return mergeComponentThemes(resolveThemeSurfaceInternal(theme, parentSurfaceId, nextVisited), current);
+}
+
 export function resolveThemeSurface(theme: Theme, surfaceId: ThemeSurfaceId): ComponentTheme {
-  return theme.surfaces?.[surfaceId] ?? {};
+  return resolveThemeSurfaceInternal(theme, surfaceId, new Set());
 }
 
 export function isComponentThemeEmpty(themeValue: ComponentTheme | null | undefined): boolean {
@@ -18,13 +39,12 @@ export function isComponentThemeEmpty(themeValue: ComponentTheme | null | undefi
   }
 
   return (
+    !themeValue.extends &&
     !themeValue.variant &&
-    !hasOwnKeys(themeValue.variantConfig) &&
-    !hasOwnKeys(themeValue.slots) &&
-    !themeValue.customRenderer &&
-    !hasOwnKeys(themeValue.styleOverride) &&
-    !hasOwnKeys(themeValue.classNameOverride) &&
-    !hasOwnKeys(themeValue.dynamicColor)
+    !hasOwnKeys(themeValue.tokens) &&
+    !hasOwnKeys(themeValue.parts) &&
+    !hasOwnKeys(themeValue.states) &&
+    !hasOwnKeys(themeValue.metadata)
   );
 }
 

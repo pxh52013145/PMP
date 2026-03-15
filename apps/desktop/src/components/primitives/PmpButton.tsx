@@ -1,7 +1,8 @@
-import React from 'react';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import React, { useMemo } from 'react';
+import { useTheme } from '../../themes/contexts/ThemeContextWithSync';
 import { mergeComponentThemes } from '../../themes/mergeComponentTheme';
-import type { ThemeSurfaceId } from '../../themes/types/theme';
+import { createResolvedSkinSurfaceModel } from '../../themes/skinSurface';
+import type { ThemeBindingId, ThemeSurfaceId } from '../../themes/types/theme';
 
 export interface PmpButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'default' | 'primary' | 'danger' | 'ghost';
@@ -12,20 +13,30 @@ export const PmpButton = React.forwardRef<HTMLButtonElement, PmpButtonProps>(fun
   { variant = 'default', surfaceId, className, style, ...props },
   ref
 ) {
-  const baseTheme = useSkinSurface('primitive.button');
+  const { theme, getSurfaceTheme } = useTheme();
   const variantSurfaceId = surfaceId ?? `primitive.button.${variant}`;
-  const variantTheme = useSkinSurface(variantSurfaceId);
-  const theme = mergeComponentThemes(baseTheme, variantTheme);
+  const baseTheme = getSurfaceTheme('primitive.button');
+  const variantTheme = getSurfaceTheme(variantSurfaceId);
+  const resolvedTheme = useMemo(() => mergeComponentThemes(baseTheme, variantTheme), [baseTheme, variantTheme]);
+  const surface = useMemo(
+    () => createResolvedSkinSurfaceModel(theme, variantSurfaceId, resolvedTheme),
+    [theme, variantSurfaceId, resolvedTheme]
+  );
+  const rootProps = surface.getElementProps({
+    primitive: 'button',
+    bindingId: variantSurfaceId as ThemeBindingId,
+    className,
+    style,
+  });
 
   return (
     <button
       ref={ref}
       {...props}
-      className={[className, theme.classNameOverride?.container].filter(Boolean).join(' ')}
+      {...rootProps}
       data-surface-id={variantSurfaceId}
-      data-surface-variant={theme.variant}
+      data-surface-variant={resolvedTheme.variant}
       data-primitive-variant={variant}
-      style={{ ...theme.styleOverride?.container, ...style }}
     />
   );
 });

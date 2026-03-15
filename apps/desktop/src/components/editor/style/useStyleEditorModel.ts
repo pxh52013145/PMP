@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { readJson, readString, writeJson, writeString } from '../../../modules/storage';
 import { useTheme } from '../../../themes/contexts/ThemeContextWithSync';
-import { assignMagnetComponentTheme } from '../../../themes/bindings';
-import type { DynamicColorConfig, DynamicColorEffect } from '../../../themes/types/theme';
+import {
+  assignMagnetComponentTheme,
+  dynamicColorCapabilityToConfig,
+  materializeThemeBinding,
+} from '../../../themes/importAdapters';
+import type { DynamicColorConfig, DynamicColorEffect, ThemeBindingId } from '../../../themes/types/theme';
 import { STORAGE_KEYS, TAURI_EVENTS, broadcastSignal } from '../../../utils/windowCommunication';
 import type { ColorThemePreset } from './stylePresets';
 
@@ -57,17 +61,18 @@ export interface StyleEditorModel {
 const COVER_COLOR_COMPONENT_IDS = ['track-info', 'progress-bar', 'audio-visualizer', 'btn-play-pause'] as const;
 
 export function useStyleEditorModel(): StyleEditorModel {
-  const { theme, applyTheme, getSurfaceTheme } = useTheme();
+  const { theme, applyTheme, getBinding } = useTheme();
 
   const currentCoverColorConfig: DynamicColorConfig = useMemo(() => {
     for (const componentId of COVER_COLOR_COMPONENT_IDS) {
-      const config = getSurfaceTheme(`magnet.${componentId}`).dynamicColor;
+      const bindingId = `magnet.${componentId}` as ThemeBindingId;
+      const config = dynamicColorCapabilityToConfig(getBinding(bindingId).capabilities?.dynamicColor);
       if (config) {
         return config as DynamicColorConfig;
       }
     }
     return {} as DynamicColorConfig;
-  }, [getSurfaceTheme]);
+  }, [getBinding]);
 
   const coverColorEnabled = currentCoverColorConfig.extractFromCover !== false;
   const coverColorEffect = normalizeCoverColorEffect(currentCoverColorConfig.effect);
@@ -79,7 +84,8 @@ export function useStyleEditorModel(): StyleEditorModel {
       let nextTheme = theme;
 
       for (const componentId of COVER_COLOR_COMPONENT_IDS) {
-        const currentComponentTheme = getSurfaceTheme(`magnet.${componentId}`);
+        const bindingId = `magnet.${componentId}` as ThemeBindingId;
+        const currentComponentTheme = materializeThemeBinding(nextTheme, bindingId);
         nextTheme = assignMagnetComponentTheme(nextTheme, componentId, {
           ...currentComponentTheme,
           dynamicColor: {
@@ -91,7 +97,7 @@ export function useStyleEditorModel(): StyleEditorModel {
 
       await applyTheme(nextTheme);
     },
-    [applyTheme, getSurfaceTheme, theme]
+    [applyTheme, theme]
   );
 
   const [selectedPixelShape, setSelectedPixelShape] = useState(() => readString(STORAGE_KEYS.PIXEL_SHAPE) || 'circle');

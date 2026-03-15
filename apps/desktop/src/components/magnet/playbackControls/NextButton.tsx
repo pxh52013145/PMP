@@ -1,18 +1,20 @@
 import React from 'react';
 import { usePlaybackData } from './usePlaybackData';
 import { usePlaybackLogic } from './usePlaybackLogic';
-import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { StandardNext } from './StandardNext';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
+
+const NEXT_BUTTON_RENDERERS = {
+  default: StandardNext,
+};
 
 export const NextButton: React.FC = () => {
   const data = usePlaybackData();
   const logic = usePlaybackLogic();
-  const themeConfig = useComponentTheme('btn-next');
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-next', NEXT_BUTTON_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
 
-  if (themeConfig.customRenderer) {
-    const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
-  }
-
-  return <StandardNext data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+  return <Renderer data={data} logic={logic} variantConfig={skin.props} />;
 };

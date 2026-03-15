@@ -1,18 +1,20 @@
 import React from 'react';
 import { useBackButtonData } from './useBackButtonData';
 import { useBackButtonLogic } from './useBackButtonLogic';
-import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { StandardBackButton } from './StandardBackButton';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
+
+const BACK_BUTTON_RENDERERS = {
+  default: StandardBackButton,
+};
 
 export const BackButton: React.FC = () => {
   const data = useBackButtonData();
   const logic = useBackButtonLogic();
-  const themeConfig = useComponentTheme('btn-back');
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-back', BACK_BUTTON_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
 
-  if (themeConfig.customRenderer) {
-    const CustomRenderer = themeConfig.customRenderer;
-    return <CustomRenderer data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
-  }
-
-  return <StandardBackButton data={data} logic={logic} variantConfig={themeConfig.variantConfig} />;
+  return <Renderer data={data} logic={logic} variantConfig={skin.props} />;
 };

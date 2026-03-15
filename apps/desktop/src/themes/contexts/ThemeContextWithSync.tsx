@@ -13,20 +13,14 @@ import { broadcastDataUpdate, setupDualListener, STORAGE_KEYS, TAURI_EVENTS } fr
 import {
   assignThemeBinding,
   isThemeBindingEmpty,
-  materializeThemeBinding,
   removeThemeBinding,
   resolveThemeBinding,
+  resolveThemeSurfaceTargetId,
 } from '../bindings';
 import { normalizeTheme } from '../normalizeTheme';
 import { assignThemeSurface, isComponentThemeEmpty, removeThemeSurface, resolveThemeSurface } from '../surfaces';
-import type {
-  ComponentTheme,
-  Theme,
-  ThemeBinding,
-  ThemeBindingId,
-  ThemeImportCandidate,
-  ThemeSurfaceId,
-} from '../types/theme';
+import type { ComponentTheme, Theme, ThemeBinding, ThemeBindingId, ThemeSurfaceId } from '../types/theme';
+import type { ThemeImportCandidate } from '../types/themeImport';
 
 const DEFAULT_THEME: Theme = {
   id: 'theme-default',
@@ -47,12 +41,15 @@ const DEFAULT_THEME: Theme = {
   fonts: {
     primary: 'Inter, sans-serif',
   },
-  surfaces: {
+  bindings: {
     'magnet.track-info': {
       variant: 'spinning-vinyl',
-      dynamicColor: {
-        extractFromCover: true,
-        applyMode: 'full',
+      capabilities: {
+        dynamicColor: {
+          enabled: true,
+          source: 'cover',
+          apply: 'full',
+        },
       },
     },
   },
@@ -140,11 +137,9 @@ export function ThemeProvider({ children, initialTheme }: ThemeProviderProps) {
 
   const getSurfaceTheme = useCallback(
     (surfaceId: ThemeSurfaceId): ComponentTheme => {
-      const binding = resolveThemeBinding(theme, surfaceId as ThemeBindingId);
-      if (binding.source !== 'none') {
-        return materializeThemeBinding(theme, surfaceId as ThemeBindingId);
-      }
-      return resolveThemeSurface(theme, surfaceId);
+      const targetSurfaceId =
+        resolveThemeSurfaceTargetId(theme, surfaceId) ?? resolveThemeBinding(theme, surfaceId as ThemeBindingId).binding.surface;
+      return targetSurfaceId ? resolveThemeSurface(theme, targetSurfaceId) : {};
     },
     [theme]
   );
@@ -183,16 +178,6 @@ export function useTheme(): ThemeContextValue {
     throw new Error('useTheme must be used within ThemeProvider');
   }
   return context;
-}
-
-export function useComponentTheme(componentId: string): ComponentTheme {
-  const { getSurfaceTheme } = useTheme();
-  return getSurfaceTheme(`magnet.${componentId}`);
-}
-
-export function useSkinSurface(surfaceId: ThemeSurfaceId): ComponentTheme {
-  const { getSurfaceTheme } = useTheme();
-  return getSurfaceTheme(surfaceId);
 }
 
 export function useThemeBinding(bindingId: ThemeBindingId): ThemeBinding {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../../i18n';
-import { useSkinSurface } from '../../themes/contexts/ThemeContextWithSync';
+import { useSkinSurfaceModel } from '../../themes/skinSurface';
 import './ConfirmDialog.css';
 
 interface ConfirmDialogProps {
@@ -26,7 +26,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   onCancel,
 }) => {
   const t = useT();
-  const surfaceTheme = useSkinSurface('overlay.confirm-dialog');
+  const surface = useSkinSurfaceModel('overlay.confirm-dialog');
 
   if (!isOpen) return null;
 
@@ -46,70 +46,86 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   return createPortal(
     <div
-      className={['confirm-dialog-overlay', surfaceTheme.classNameOverride?.overlay].filter(Boolean).join(' ')}
+      {...surface.getElementProps({
+        part: 'overlay',
+        bindingId: 'overlay.confirm-dialog',
+        className: 'confirm-dialog-overlay',
+        includeSurfaceTokens: true,
+      })}
       data-surface-id="overlay.confirm-dialog"
-      data-surface-variant={surfaceTheme.variant}
-      style={surfaceTheme.styleOverride?.overlay}
+      data-surface-variant={surface.variant}
       onClick={handleCancel}
     >
       <div
-        className={['confirm-dialog', surfaceTheme.classNameOverride?.container].filter(Boolean).join(' ')}
-        style={surfaceTheme.styleOverride?.container}
+        {...surface.getElementProps({
+          part: 'container',
+          className: 'confirm-dialog',
+          includeSurfaceTokens: false,
+        })}
         onClick={(e) => e.stopPropagation()}
       >
         <div
-          className={['confirm-dialog-header', surfaceTheme.classNameOverride?.header].filter(Boolean).join(' ')}
-          style={surfaceTheme.styleOverride?.header}
+          {...surface.getElementProps({
+            part: 'header',
+            className: 'confirm-dialog-header',
+            includeSurfaceTokens: false,
+          })}
         >
           <h3
-            className={['confirm-dialog-title', surfaceTheme.classNameOverride?.title].filter(Boolean).join(' ')}
-            style={surfaceTheme.styleOverride?.title}
+            {...surface.getElementProps({
+              part: 'title',
+              className: 'confirm-dialog-title',
+              includeSurfaceTokens: false,
+            })}
           >
             {resolvedTitle}
           </h3>
         </div>
         <div
-          className={['confirm-dialog-body', surfaceTheme.classNameOverride?.body].filter(Boolean).join(' ')}
-          style={surfaceTheme.styleOverride?.body}
+          {...surface.getElementProps({
+            part: 'body',
+            className: 'confirm-dialog-body',
+            includeSurfaceTokens: false,
+          })}
         >
           <p
-            className={['confirm-dialog-message', surfaceTheme.classNameOverride?.message].filter(Boolean).join(' ')}
-            style={surfaceTheme.styleOverride?.message}
+            {...surface.getElementProps({
+              part: 'message',
+              className: 'confirm-dialog-message',
+              includeSurfaceTokens: false,
+            })}
           >
             {message}
           </p>
         </div>
         <div
-          className={['confirm-dialog-footer', surfaceTheme.classNameOverride?.footer].filter(Boolean).join(' ')}
-          style={surfaceTheme.styleOverride?.footer}
+          {...surface.getElementProps({
+            part: 'footer',
+            className: 'confirm-dialog-footer',
+            includeSurfaceTokens: false,
+          })}
         >
           {resolvedCancelText && (
             <button
-              className={[
-                'confirm-dialog-btn',
-                'confirm-dialog-btn-cancel',
-                surfaceTheme.classNameOverride?.button,
-                surfaceTheme.classNameOverride?.cancelButton,
-              ]
-                .filter(Boolean)
-                .join(' ')}
-              style={{ ...surfaceTheme.styleOverride?.button, ...surfaceTheme.styleOverride?.cancelButton }}
+              {...surface.getElementProps({
+                part: 'cancelButton',
+                className: ['confirm-dialog-btn', 'confirm-dialog-btn-cancel'].join(' '),
+                includeSurfaceTokens: false,
+              })}
               onClick={handleCancel}
             >
               {resolvedCancelText}
             </button>
           )}
           <button
-            className={[
-              'confirm-dialog-btn',
-              'confirm-dialog-btn-confirm',
-              `confirm-dialog-btn-${confirmButtonStyle}`,
-              surfaceTheme.classNameOverride?.button,
-              surfaceTheme.classNameOverride?.confirmButton,
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            style={{ ...surfaceTheme.styleOverride?.button, ...surfaceTheme.styleOverride?.confirmButton }}
+            {...surface.getElementProps({
+              part: 'confirmButton',
+              state: confirmButtonStyle,
+              className: ['confirm-dialog-btn', 'confirm-dialog-btn-confirm', `confirm-dialog-btn-${confirmButtonStyle}`]
+                .filter(Boolean)
+                .join(' '),
+              includeSurfaceTokens: false,
+            })}
             onClick={handleConfirm}
           >
             {resolvedConfirmText}

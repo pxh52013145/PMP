@@ -1,17 +1,25 @@
 import React from 'react';
 import { usePlaybackData } from './usePlaybackData';
 import { usePlaybackLogic } from './usePlaybackLogic';
-import { useComponentTheme } from '../../../themes/contexts/ThemeContextWithSync';
 import { useCoverUrlForTrack } from '../shared/useCoverUrlForTrack';
 import { useDynamicColor } from '../shared/useDynamicColor';
 import { CyberPlayPause } from './CyberPlayPause';
+import { useResolvedMagnetSkinRenderer } from '../shared/useResolvedMagnetSkinRenderer';
+
+const PLAY_PAUSE_RENDERERS = {
+  default: CyberPlayPause,
+  cyber: CyberPlayPause,
+};
 
 export const PlayPauseButton: React.FC = () => {
   const data = usePlaybackData();
   const logic = usePlaybackLogic();
-  const themeConfig = useComponentTheme('btn-play-pause');
+  const { skin, Renderer } = useResolvedMagnetSkinRenderer('btn-play-pause', PLAY_PAUSE_RENDERERS, {
+    defaultRendererId: 'default',
+    defaultVariant: 'default',
+  });
 
-  const dynamicColorEnabled = themeConfig.dynamicColor?.extractFromCover !== false;
+  const dynamicColorEnabled = skin.dynamicColor?.extractFromCover !== false;
   const coverUrl = useCoverUrlForTrack(dynamicColorEnabled ? data.currentTrack : null, {
     coverSizeHint: 'small',
   });
@@ -19,28 +27,14 @@ export const PlayPauseButton: React.FC = () => {
     sampleSize: 'small',
     releaseAfterExtract: true,
   });
-  const dynamicColorConfig = themeConfig.dynamicColor;
-
-  if (themeConfig.customRenderer) {
-    const CustomRenderer = themeConfig.customRenderer;
-    return (
-      <CustomRenderer
-        data={data}
-        logic={logic}
-        dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
-        dynamicColorConfig={dynamicColorConfig}
-        variantConfig={themeConfig.variantConfig}
-      />
-    );
-  }
 
   return (
-    <CyberPlayPause
+    <Renderer
       data={data}
       logic={logic}
       dynamicColors={dynamicColorEnabled ? dynamicColors : undefined}
-      dynamicColorConfig={dynamicColorConfig}
-      variantConfig={themeConfig.variantConfig}
+      dynamicColorConfig={skin.dynamicColor}
+      variantConfig={skin.props}
     />
   );
 };

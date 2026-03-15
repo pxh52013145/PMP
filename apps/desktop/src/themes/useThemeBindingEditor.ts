@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 
 import { useTheme } from './contexts/ThemeContextWithSync';
 import type { ComponentTheme, ThemeBinding, ThemeBindingId, ThemeSurfaceId } from './types/theme';
+import type { ThemeImportSurfaceSpec } from './types/themeImport';
+import { materializeThemeBinding } from './importAdapters';
 
 export type ThemeBindingEditorMessage = { kind: 'error' | 'success'; text: string };
 export type ThemeBindingEditorPreview = {
@@ -11,7 +13,7 @@ export type ThemeBindingEditorPreview = {
   resolvedBinding: ThemeBinding;
   surfaceDocument: ComponentTheme | null;
   surfaceDocumentSummary: ReturnType<typeof summarizeComponentTheme>;
-  materializedBindingTheme: ReturnType<typeof summarizeComponentTheme>;
+  materializedBindingTheme: ReturnType<typeof summarizeThemeImportSurface>;
 };
 
 export interface ThemeBindingEditorModel {
@@ -66,11 +68,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function summarizeComponentTheme(themeValue: ComponentTheme) {
   return {
+    extends: themeValue.extends ?? null,
     variant: themeValue.variant ?? null,
-    variantConfigKeys: Object.keys(themeValue.variantConfig ?? {}),
-    classParts: Object.keys(themeValue.classNameOverride ?? {}),
-    styleParts: Object.keys(themeValue.styleOverride ?? {}),
-    dynamicColor: themeValue.dynamicColor ?? null,
+    tokenKeys: Object.keys(themeValue.tokens ?? {}),
+    partNames: Object.keys(themeValue.parts ?? {}),
+    stateNames: Object.keys(themeValue.states ?? {}),
+    metadata: themeValue.metadata ?? null,
+  };
+}
+
+function summarizeThemeImportSurface(themeValue: ThemeImportSurfaceSpec) {
+  return {
+    ...summarizeComponentTheme(themeValue),
+    bindingOverlay: {
+      variantConfigKeys: Object.keys(themeValue.variantConfig ?? {}),
+      dynamicColor: themeValue.dynamicColor ?? null,
+    },
   };
 }
 
@@ -108,6 +121,7 @@ export function useThemeBindingEditor({
     () => getSurfaceTheme(bindingId as ThemeSurfaceId),
     [bindingId, getSurfaceTheme]
   );
+  const materializedTheme = useMemo(() => materializeThemeBinding(theme, bindingId), [bindingId, theme]);
 
   const surfaceNamespace = useMemo(() => {
     const [namespace = 'page'] = bindingId.split('.');
@@ -183,9 +197,9 @@ export function useThemeBindingEditor({
       resolvedBinding,
       surfaceDocument,
       surfaceDocumentSummary: summarizeComponentTheme(surfaceDocument ?? {}),
-      materializedBindingTheme: summarizeComponentTheme(resolvedTheme),
+      materializedBindingTheme: summarizeThemeImportSurface(materializedTheme),
     }),
-    [bindingId, explicitBinding, resolvedBinding, resolvedTheme, surfaceDocument, surfaceDocumentId]
+    [bindingId, explicitBinding, materializedTheme, resolvedBinding, surfaceDocument, surfaceDocumentId]
   );
 
   const applySurfaceBinding = useCallback(async () => {

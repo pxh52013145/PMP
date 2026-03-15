@@ -1,0 +1,15 @@
+{
+  "formatVersion": "1.0",
+  "type": "theme-pack",
+  "metadata": {
+    "id": "aurora-grid",
+    "name": "Aurora Grid",
+    "version": "1.0.0",
+    "author": "PMP Docs",
+    "description": "Example public skin pack using tokens + surfaces + bindings only.",
+    "tags": ["theme", "skin", "surface", "authoring"]
+  },
+  "entry": {
+    "theme": "theme.pmpt"
+  }
+}

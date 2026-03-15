@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { normalizeTheme } from '../normalizeTheme';
-import type { ThemeImportCandidate } from '../types/theme';
+import type { ThemeImportCandidate } from '../types/themeImport';
 
 describe('normalizeTheme', () => {
-  it('removes legacy shader metadata and migrates componentThemes into surfaces', () => {
+  it('removes legacy shader metadata and migrates legacy theme fields into tokens, surfaces, and bindings', () => {
     const input = {
       id: 'theme-default',
       name: 'Default Theme',
@@ -37,9 +37,25 @@ describe('normalizeTheme', () => {
       fonts: {
         primary: 'Inter, sans-serif',
       },
+      colors: {
+        'bg.canvas': '#101010',
+      },
+      motion: {
+        'duration.fast': 120,
+      },
+      typography: {
+        'font.body': 'Inter',
+      },
       componentThemes: {
         'track-info': {
           variant: 'spinning-vinyl',
+          variantConfig: {
+            layout: 'full',
+          },
+          dynamicColor: {
+            extractFromCover: true,
+            effect: 'gradient',
+          },
         },
         'play-pause-button': {
           variant: 'pill',
@@ -51,6 +67,11 @@ describe('normalizeTheme', () => {
             container: {
               opacity: 0.9,
             },
+          },
+        },
+        'page.settings': {
+          classNameOverride: {
+            container: 'page-settings-glass',
           },
         },
       },
@@ -66,9 +87,19 @@ describe('normalizeTheme', () => {
 
     expect(normalized).not.toHaveProperty('shader');
     expect(normalized).not.toHaveProperty('componentThemes');
-    expect(normalized.surfaces?.['magnet.track-info']?.variant).toBe('spinning-vinyl');
-    expect(normalized.surfaces?.['magnet.track-info']?.styleOverride?.container?.opacity).toBe(0.9);
-    expect(normalized.surfaces?.['magnet.btn-play-pause']?.variant).toBe('pill');
+    expect(normalized.tokens?.color?.['bg.canvas']).toBe('#101010');
+    expect(normalized.tokens?.motion?.['duration.fast']).toBe(120);
+    expect(normalized.tokens?.typography?.['font.body']).toBe('Inter');
+    expect(normalized.bindings?.['magnet.track-info']?.surface).toBeUndefined();
+    expect(normalized.bindings?.['magnet.track-info']?.variant).toBe('spinning-vinyl');
+    expect(normalized.bindings?.['magnet.track-info']?.props?.layout).toBe('full');
+    expect(normalized.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.enabled).toBe(true);
+    expect(normalized.bindings?.['magnet.track-info']?.capabilities?.dynamicColor?.mode).toBe('gradient');
+    expect(normalized.surfaces?.['magnet.track-info']?.parts?.root?.style?.opacity).toBe(0.9);
+    expect(normalized.surfaces?.['magnet.track-info']?.variant).toBeUndefined();
+    expect(normalized.surfaces?.['magnet.btn-play-pause']?.parts).toBeUndefined();
+    expect(normalized.bindings?.['magnet.btn-play-pause']?.variant).toBe('pill');
+    expect(normalized.surfaces?.['page.settings']?.parts?.root?.classes).toContain('page-settings-glass');
     expect(normalized.bindings?.['page.settings']?.surface).toBe('page.settings.glass');
     expect(normalized.pixel.colors.default.slot).toBe('primary');
   });
