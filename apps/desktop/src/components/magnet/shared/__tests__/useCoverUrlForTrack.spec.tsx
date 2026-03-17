@@ -34,6 +34,7 @@ describe('useCoverUrlForTrack', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
 
     if (root) {
       await act(async () => {
@@ -86,5 +87,82 @@ describe('useCoverUrlForTrack', () => {
 
     expect(getCoverUrlSpy).toHaveBeenCalledTimes(2);
     expect(renders.at(-1)).toBe('pmp://cover/mock-2');
+  });
+
+  it('releases the current cover immediately when the track becomes inactive', async () => {
+    const track = {
+      id: 'track-cover-release',
+      title: 'Cover Release Test',
+      filePath: 'C:\\Music\\cover-release.mp3',
+    } as Track;
+
+    vi.spyOn(musicLibraryService, 'getCoverUrlForTrack').mockResolvedValue('blob:cover-release');
+    const releaseSpy = vi
+      .spyOn(musicLibraryService, 'releaseCoverUrls')
+      .mockImplementation(() => undefined);
+
+    await act(async () => {
+      root?.render(<HookProbe track={track} onRender={() => undefined} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      root?.render(<HookProbe track={null} onRender={() => undefined} />);
+      await Promise.resolve();
+    });
+
+    expect(releaseSpy).toHaveBeenCalledWith(['blob:cover-release']);
+  });
+
+  it('releases the previous small cover shortly after switching tracks', async () => {
+    vi.useFakeTimers();
+
+    const firstTrack = {
+      id: 'track-cover-a',
+      title: 'Cover A',
+      filePath: 'C:\\Music\\cover-a.mp3',
+    } as Track;
+    const secondTrack = {
+      id: 'track-cover-b',
+      title: 'Cover B',
+      filePath: 'C:\\Music\\cover-b.mp3',
+    } as Track;
+
+    vi.spyOn(musicLibraryService, 'getCoverUrlForTrack').mockImplementation(async (track) => {
+      if (track.id === firstTrack.id) return 'blob:cover-a';
+      if (track.id === secondTrack.id) return 'blob:cover-b';
+      return undefined;
+    });
+    const releaseSpy = vi
+      .spyOn(musicLibraryService, 'releaseCoverUrls')
+      .mockImplementation(() => undefined);
+
+    await act(async () => {
+      root?.render(<HookProbe track={firstTrack} onRender={() => undefined} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    releaseSpy.mockClear();
+
+    await act(async () => {
+      root?.render(<HookProbe track={secondTrack} onRender={() => undefined} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(releaseSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(119);
+    });
+    expect(releaseSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(releaseSpy).toHaveBeenCalledWith(['blob:cover-a']);
+
   });
 });

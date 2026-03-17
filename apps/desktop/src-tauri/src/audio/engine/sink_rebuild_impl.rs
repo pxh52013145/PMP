@@ -31,7 +31,7 @@ pub(super) fn rebuild_sink_on_new_device_impl(
     // Commit point: stop current playback before mutating shared state (DSP runtime / streaming buffer).
     engine.sync_clock();
     if let Some(old_sink) = engine.sink.take() {
-        engine.stop_and_retire_sink(old_sink);
+        engine.stop_and_release_sink(old_sink, RuntimeReleaseMode::Deferred);
     }
 
     engine.apply_output_stream_info(output_info);

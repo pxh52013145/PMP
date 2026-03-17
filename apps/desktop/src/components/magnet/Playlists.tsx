@@ -5,6 +5,7 @@ import { useAudioService } from '../../contexts/AudioEngineContext';
 import { useT } from '../../i18n';
 import { musicLibraryService } from '../../services/audio/MusicLibraryService';
 import { resolveBilibiliCoverAssetUrl, searchBilibiliResourceByBvid } from '../../modules/music-platform';
+import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { InputDialog } from './InputDialog';
@@ -723,18 +724,50 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     activePlaylistBlobCoverUrlsRef.current = nextUrls;
   }, [activePlaylistBlobCoverUrls]);
 
-  useEffect(() => {
-    return () => {
+  const releasePlaylistOverlayRuntimeResources = useCallback(
+    (options?: { resetState?: boolean }) => {
       const urlsToRelease = Array.from(activePlaylistBlobCoverUrlsRef.current);
       activePlaylistBlobCoverUrlsRef.current.clear();
       previousSelectedPlaylistIdRef.current = null;
       pendingPlaylistCoverIdsRef.current.clear();
       audioService.releasePlaylistTracks?.();
+
+      if (options?.resetState) {
+        setSelectedPlaylist(null);
+        setSelectedTrackKeys([]);
+        setTrackContextMenu(null);
+        setPlaylistActionsMenu(null);
+        setShowSortMenu(false);
+        setShowPlaylistTrackSearch(false);
+        setPlaylistTrackSearchQuery('');
+        setIsSelectedPlaylistLoading(false);
+        setResolvedPlaylistCoverMap({});
+        setPlaylistListScrollTop(0);
+        setPlaylistListViewportHeight(0);
+      }
+
       if (urlsToRelease.length > 0) {
         musicLibraryService.releaseCoverUrls(urlsToRelease);
       }
+    },
+    [audioService]
+  );
+
+  useEffect(() => {
+    if (isOpen) return;
+
+    releasePlaylistOverlayRuntimeResources({ resetState: true });
+    scheduleProcessWorkingSetTrim('webview2', {
+      delaysMs: [0, 700, 2200],
+      reason: 'playlists-overlay-hidden',
+    });
+  }, [isOpen, releasePlaylistOverlayRuntimeResources]);
+
+  useEffect(() => {
+    return () => {
+      releasePlaylistOverlayRuntimeResources();
     };
-  }, [audioService]);
+  }, [releasePlaylistOverlayRuntimeResources]);
 
   const filteredPlaylistTrackEntries = useMemo<PlaylistTrackEntry[]>(() => {
     if (!selectedPlaylist) {

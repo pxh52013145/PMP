@@ -79,6 +79,7 @@ pub struct NativeAudioStatePayload {
     pub control_queue_drop_newest_events: Option<u64>,
     pub control_queue_coalesced_overflow_events: Option<u64>,
     pub control_queue_critical_overflow_events: Option<u64>,
+    pub estimated_audio_buffer_bytes: Option<u64>,
     pub retire_pending_tasks: Option<u64>,
     pub retire_enqueued_total: Option<u64>,
     pub retire_executed_total: Option<u64>,

@@ -13,6 +13,7 @@ type DynamicSrcAutoDegradationOptions = {
 export type NativeAudioRobustnessSnapshotAdapterInput = {
   record: Record<string, unknown>;
   state: AudioState;
+  estimatedAudioBufferBytes: number;
   bufferedAheadRollingWindow: number[];
   bufferedAheadRollingSum: number;
   underrunRecoveryUntilMs: number;
@@ -34,6 +35,7 @@ export function createNativeAudioRobustnessSnapshotSource(
     Record<string, unknown>;
 
   source.state = input.state;
+  source.estimatedAudioBufferBytes = input.estimatedAudioBufferBytes;
   source.bufferedAheadRollingWindow = input.bufferedAheadRollingWindow;
   source.bufferedAheadRollingSum = input.bufferedAheadRollingSum;
   source.underrunRecoveryUntilMs = input.underrunRecoveryUntilMs;
@@ -49,4 +51,3 @@ export function createNativeAudioRobustnessSnapshotSource(
 
   return source;
 }
-

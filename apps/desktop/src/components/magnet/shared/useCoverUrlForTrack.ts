@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Track } from '../../../services/audio';
 import type { CoverSizeHint } from '../../../services/audio/MusicLibraryService';
@@ -13,9 +13,9 @@ import { trackKey } from './trackKey';
 
 type CoverUrlState = { key: string; url?: string };
 
-const COVER_RELEASE_DELAY_MS = 3000;
-const COVER_KEEP_HOT_COUNT = 2;
-const SMALL_COVER_RELEASE_DELAY_MS = 1200;
+const COVER_RELEASE_DELAY_MS = 450;
+const COVER_KEEP_HOT_COUNT = 1;
+const SMALL_COVER_RELEASE_DELAY_MS = 120;
 const SMALL_COVER_KEEP_HOT_COUNT = 1;
 
 type UseCoverUrlOptions = {
@@ -80,9 +80,26 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
 
   const [resolved, setResolved] = useState<CoverUrlState>({ key: 'none' });
   const [coverSettingsRevision, setCoverSettingsRevision] = useState(0);
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === 'undefined' || !document.hidden
+  );
   const recentCoverUrlsRef = useRef<string[]>([]);
   const pendingReleaseUrlsRef = useRef<Set<string>>(new Set());
   const releaseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      const nextVisible = !document.hidden;
+      setDocumentVisible((previous) => (previous === nextVisible ? previous : nextVisible));
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -104,6 +121,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
   }, []);
 
   const lookupTrack = useMemo(() => {
+    if (!documentVisible && !bypassRuntimePolicy) return null;
     if (!trackId && !trackTitle && !trackFilePath && !trackPath) return null;
     return {
       id: trackId || 'unknown',
@@ -116,6 +134,8 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
       coverUrl: embeddedCoverUrl,
     } as Track;
   }, [
+    bypassRuntimePolicy,
+    documentVisible,
     embeddedCoverUrl,
     trackAlbum,
     trackArtist,
@@ -164,6 +184,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     embeddedCoverUrl && (embeddedCoverUrl.startsWith('blob:') || embeddedCoverUrl.startsWith('data:'));
 
   const preferredCoverUrl = (() => {
+    if (!documentVisible && !bypassRuntimePolicy) return undefined;
     if (!embeddedIsEphemeral) return resolvedUrl ?? embeddedCoverUrl;
 
     // Desktop/Tauri: avoid keeping large embedded cover payloads in memory for absolute-path tracks.
@@ -174,7 +195,7 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     return embeddedCoverUrl;
   })();
 
-  const releaseTrackedCoverUrls = () => {
+  const releaseTrackedCoverUrls = useCallback((immediate: boolean = false) => {
     if (releaseTimerRef.current != null) {
       window.clearTimeout(releaseTimerRef.current);
       releaseTimerRef.current = null;
@@ -196,9 +217,28 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
     pendingReleaseUrlsRef.current.clear();
 
     if (toRelease.size > 0) {
-      musicLibraryService.releaseCoverUrls(Array.from(toRelease));
+      const release = () => musicLibraryService.releaseCoverUrls(Array.from(toRelease));
+      if (immediate) {
+        release();
+        return;
+      }
+      window.setTimeout(release, 0);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (lookupTrack) return;
+    releaseTrackedCoverUrls(true);
+    setResolved((previous) =>
+      previous.key === 'none' && previous.url === undefined ? previous : { key: 'none' }
+    );
+  }, [lookupTrack, releaseTrackedCoverUrls]);
+
+  useEffect(() => {
+    if (documentVisible || bypassRuntimePolicy) return;
+    releaseTrackedCoverUrls(true);
+    setResolved({ key: 'none' });
+  }, [bypassRuntimePolicy, documentVisible, releaseTrackedCoverUrls]);
 
   useEffect(() => {
     const currentUrl =
@@ -247,9 +287,9 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
 
   useEffect(() => {
     return () => {
-      releaseTrackedCoverUrls();
+      releaseTrackedCoverUrls(true);
     };
-  }, []);
+  }, [releaseTrackedCoverUrls]);
 
   return preferredCoverUrl;
 }

@@ -341,13 +341,13 @@ export class MusicLibraryService {
   private legacyCoverUrlDropIds: Set<string> = new Set();
   private legacyCoverUrlDropScheduled = false;
   private legacyCoverUrlDropInFlight = false;
-  private readonly DEFAULT_COVER_URL_CACHE_MAX_ENTRIES = 320;
-  private readonly DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES = 96;
-  private readonly DEFAULT_COVER_CACHE_MAX_BYTES = 80 * 1024 * 1024;
-  private readonly DEFAULT_COVER_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-  private readonly DEFAULT_COVER_BLOB_CACHE_MAX_BYTES = 12 * 1024 * 1024;
-  private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES = 160;
-  private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES = 36 * 1024 * 1024;
+  private readonly DEFAULT_COVER_URL_CACHE_MAX_ENTRIES = 160;
+  private readonly DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES = 48;
+  private readonly DEFAULT_COVER_CACHE_MAX_BYTES = 48 * 1024 * 1024;
+  private readonly DEFAULT_COVER_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+  private readonly DEFAULT_COVER_BLOB_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+  private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_ENTRIES = 72;
+  private readonly DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES = 12 * 1024 * 1024;
 
   private COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_COVER_URL_CACHE_MAX_ENTRIES;
   private ALBUM_COVER_URL_CACHE_MAX_ENTRIES = this.DEFAULT_ALBUM_COVER_URL_CACHE_MAX_ENTRIES;
@@ -359,7 +359,7 @@ export class MusicLibraryService {
 
   private currentCoverRuntimeCachePolicy: CoverRuntimeCachePolicy = 'default';
   private coverRuntimeEpoch = 0;
-  private coverMaxEdgePx: number = 256;
+  private coverMaxEdgePx: number = 128;
   private nativeSourceBootstrapScheduled = false;
   private readonly NATIVE_SCHEMA_ENVELOPE_CACHE_TTL_MS = 60_000;
   private readonly NATIVE_SCHEMA_ENVELOPE_STALE_RETRY_MS = 10_000;
@@ -388,12 +388,12 @@ export class MusicLibraryService {
 
   private readCoverMaxEdgePxSetting(): number {
     try {
-      const value = readJson<number>(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, 256);
-      const resolved = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 256;
+      const value = readJson<number>(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, 128);
+      const resolved = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 128;
       if (resolved <= 0) return 0;
       return resolved;
     } catch {
-      return 256;
+      return 128;
     }
   }
 
@@ -495,45 +495,46 @@ export class MusicLibraryService {
       case 'watch':
         return {
           ...defaults,
-          coverUrlCacheMaxEntries: 256,
-          albumCoverUrlCacheMaxEntries: 72,
-          coverBlobCacheMaxBytes: 8 * 1024 * 1024,
-          coverDecodedEstimateMaxEntries: 128,
-          coverDecodedEstimateMaxBytes: 24 * 1024 * 1024,
-          coverCacheMaxBytes: 64 * 1024 * 1024,
+          coverUrlCacheMaxEntries: 120,
+          albumCoverUrlCacheMaxEntries: 36,
+          coverBlobCacheMaxBytes: 3 * 1024 * 1024,
+          coverDecodedEstimateMaxEntries: 48,
+          coverDecodedEstimateMaxBytes: 8 * 1024 * 1024,
+          coverCacheMaxBytes: 40 * 1024 * 1024,
+          coverMaxImageBytes: 2 * 1024 * 1024,
         };
       case 'high':
         return {
           ...defaults,
-          coverUrlCacheMaxEntries: 192,
-          albumCoverUrlCacheMaxEntries: 56,
-          coverBlobCacheMaxBytes: 6 * 1024 * 1024,
-          coverDecodedEstimateMaxEntries: 96,
-          coverDecodedEstimateMaxBytes: 16 * 1024 * 1024,
-          coverCacheMaxBytes: 48 * 1024 * 1024,
-          coverMaxImageBytes: 3 * 1024 * 1024,
+          coverUrlCacheMaxEntries: 72,
+          albumCoverUrlCacheMaxEntries: 24,
+          coverBlobCacheMaxBytes: 2 * 1024 * 1024,
+          coverDecodedEstimateMaxEntries: 32,
+          coverDecodedEstimateMaxBytes: 5 * 1024 * 1024,
+          coverCacheMaxBytes: 28 * 1024 * 1024,
+          coverMaxImageBytes: Math.floor(1.5 * 1024 * 1024),
         };
       case 'critical':
         return {
           ...defaults,
-          coverUrlCacheMaxEntries: 128,
-          albumCoverUrlCacheMaxEntries: 40,
-          coverBlobCacheMaxBytes: 4 * 1024 * 1024,
-          coverDecodedEstimateMaxEntries: 64,
-          coverDecodedEstimateMaxBytes: 10 * 1024 * 1024,
-          coverCacheMaxBytes: 32 * 1024 * 1024,
-          coverMaxImageBytes: 2 * 1024 * 1024,
+          coverUrlCacheMaxEntries: 32,
+          albumCoverUrlCacheMaxEntries: 12,
+          coverBlobCacheMaxBytes: 768 * 1024,
+          coverDecodedEstimateMaxEntries: 12,
+          coverDecodedEstimateMaxBytes: 1_500_000,
+          coverCacheMaxBytes: 18 * 1024 * 1024,
+          coverMaxImageBytes: 1 * 1024 * 1024,
         };
       case 'hidden':
         return {
           ...defaults,
-          coverUrlCacheMaxEntries: 32,
-          albumCoverUrlCacheMaxEntries: 16,
-          coverBlobCacheMaxBytes: 1 * 1024 * 1024,
-          coverDecodedEstimateMaxEntries: 16,
-          coverDecodedEstimateMaxBytes: 2 * 1024 * 1024,
-          coverCacheMaxBytes: 16 * 1024 * 1024,
-          coverMaxImageBytes: Math.floor(1.5 * 1024 * 1024),
+          coverUrlCacheMaxEntries: 8,
+          albumCoverUrlCacheMaxEntries: 4,
+          coverBlobCacheMaxBytes: 0,
+          coverDecodedEstimateMaxEntries: 0,
+          coverDecodedEstimateMaxBytes: 0,
+          coverCacheMaxBytes: 12 * 1024 * 1024,
+          coverMaxImageBytes: 512 * 1024,
         };
       case 'default':
       default:
@@ -579,6 +580,7 @@ export class MusicLibraryService {
   }
 
   applyCoverRuntimeCachePolicy(policy: CoverRuntimeCachePolicy): void {
+    const previousPolicy = this.currentCoverRuntimeCachePolicy;
     const next = this.getPolicyLimits(policy);
 
     this.currentCoverRuntimeCachePolicy = policy;
@@ -589,6 +591,11 @@ export class MusicLibraryService {
     this.COVER_DECODED_ESTIMATE_MAX_BYTES = next.coverDecodedEstimateMaxBytes;
     this.COVER_CACHE_MAX_BYTES = next.coverCacheMaxBytes;
     this.COVER_MAX_IMAGE_BYTES = next.coverMaxImageBytes;
+
+    if (policy === 'hidden' && previousPolicy !== 'hidden') {
+      this.clearCoverRuntimeCaches();
+      return;
+    }
 
     this.enforceRuntimeCacheBudgets();
   }

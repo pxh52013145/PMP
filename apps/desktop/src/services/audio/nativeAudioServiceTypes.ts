@@ -59,6 +59,7 @@ export type NativeAudioStatePayload = {
   controlQueueDropNewestEvents?: number;
   controlQueueCoalescedOverflowEvents?: number;
   controlQueueCriticalOverflowEvents?: number;
+  estimatedAudioBufferBytes?: number;
   retirePendingTasks?: number;
   retireEnqueuedTotal?: number;
   retireExecutedTotal?: number;

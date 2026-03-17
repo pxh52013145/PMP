@@ -365,6 +365,7 @@ pub(super) fn build_state_payload_with_options_impl(
             control_plane_stats.coalesced_overflow_events,
         ),
         control_queue_critical_overflow_events: Some(control_plane_stats.critical_overflow_events),
+        estimated_audio_buffer_bytes: Some(engine.estimated_audio_buffer_bytes() as u64),
         retire_pending_tasks: Some(retire_plane_stats.pending_tasks),
         retire_enqueued_total: Some(retire_plane_stats.enqueued_total),
         retire_executed_total: Some(retire_plane_stats.executed_total),

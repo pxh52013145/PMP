@@ -57,6 +57,7 @@ export type NativeAudioListenerHost = {
   controlQueueDropNewestEvents: number;
   controlQueueCoalescedOverflowEvents: number;
   controlQueueCriticalOverflowEvents: number;
+  estimatedAudioBufferBytes: number;
   diagnosticTimelineDroppedEvents: number;
   diagnosticTimeline: Array<{
     seq: number;
@@ -456,6 +457,13 @@ export async function setupNativeListenersImpl(
             0,
             Math.floor(next.controlQueueCriticalOverflowEvents)
           );
+        }
+
+        if (
+          typeof next.estimatedAudioBufferBytes === 'number' &&
+          Number.isFinite(next.estimatedAudioBufferBytes)
+        ) {
+          this.estimatedAudioBufferBytes = Math.max(0, Math.floor(next.estimatedAudioBufferBytes));
         }
 
         if (

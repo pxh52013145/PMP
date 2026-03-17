@@ -112,6 +112,8 @@ describe('DefaultPerformanceControlService', () => {
         navigationHistoryBytes: 100,
         coverBlobUrlTotalBytes: 100,
         coverBlobUrlCacheEntries: 1,
+        coverDecodedEstimateEntries: 1,
+        coverDecodedEstimateTotalBytes: 64 * 1024,
         coverUrlCacheEntries: 1,
         coverUrlInflight: 0,
         albumCoverUrlCacheEntries: 1,

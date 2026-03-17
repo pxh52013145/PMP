@@ -272,6 +272,7 @@ export interface AudioRobustnessSnapshot {
   controlQueueDropNewestEvents?: number;
   controlQueueCoalescedOverflowEvents?: number;
   controlQueueCriticalOverflowEvents?: number;
+  estimatedAudioBufferBytes?: number;
   diagnosticTimelineDroppedEvents?: number;
   diagnosticTimeline?: Array<{
     seq: number;

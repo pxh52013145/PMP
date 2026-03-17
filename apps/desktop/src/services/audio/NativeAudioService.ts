@@ -123,7 +123,7 @@ import {
   toPlaylistItemUpserts,
   type RecentSmartPlaylistWriteEntry,
 } from './recentSmartPlaylist';
-import { compactTrackForState } from './trackStateProjection';
+import { compactTrackForQueueState, compactTrackForState } from './trackStateProjection';
 import {
   parseLegacyRuntimeControlFromReplayGain,
   type CrossfadeSettings,
@@ -308,6 +308,7 @@ export class NativeAudioService implements IAudioService {
   private controlQueueDropNewestEvents = 0;
   private controlQueueCoalescedOverflowEvents = 0;
   private controlQueueCriticalOverflowEvents = 0;
+  private estimatedAudioBufferBytes = 0;
   private diagnosticTimelineDroppedEvents = 0;
   private diagnosticTimeline: Array<{
     seq: number;
@@ -720,6 +721,38 @@ export class NativeAudioService implements IAudioService {
       playlistId,
       await listNativeLibraryPlaylistItems(playlistId)
     );
+  }
+
+  private async resolvePlaylistForQueuePlayback(playlistId: string): Promise<Playlist | null> {
+    const normalizedPlaylistId = String(playlistId || '').trim();
+    if (!normalizedPlaylistId) return null;
+
+    const playlist = this.getPlaylist(normalizedPlaylistId);
+    if (!playlist) return null;
+    if (playlist.tracksHydrated !== false) {
+      return playlist;
+    }
+
+    try {
+      const tracks = await this.loadPlaylistTracksFromLibraryDb(playlist);
+      const latestPlaylist = this.getPlaylist(normalizedPlaylistId) ?? playlist;
+      return this.createHydratedPlaylist(latestPlaylist, tracks, {
+        trackCount:
+          typeof latestPlaylist.trackCount === 'number' && latestPlaylist.trackCount > 0
+            ? latestPlaylist.trackCount
+            : tracks.length,
+        totalDuration:
+          typeof latestPlaylist.totalDuration === 'number' && latestPlaylist.totalDuration > 0
+            ? latestPlaylist.totalDuration
+            : undefined,
+      });
+    } catch (error) {
+      console.warn(
+        '[NativeAudioService] failed to resolve playlist tracks for queue playback:',
+        error
+      );
+      return playlist;
+    }
   }
 
   private clearRecentSmartPlaylistWriteTimer(): void {
@@ -3095,6 +3128,7 @@ export class NativeAudioService implements IAudioService {
     const source = createNativeAudioRobustnessSnapshotSource({
       record: this as unknown as Record<string, unknown>,
       state: this.state,
+      estimatedAudioBufferBytes: this.estimatedAudioBufferBytes,
       bufferedAheadRollingWindow: this.bufferedAheadRollingWindow,
       bufferedAheadRollingSum: this.bufferedAheadRollingSum,
       underrunRecoveryUntilMs: this.underrunRecoveryUntilMs,
@@ -3233,6 +3267,7 @@ export class NativeAudioService implements IAudioService {
     trackPath: string
   ): { track: Track; queue: Track[]; index: number } {
     const stateTrack = compactTrackForState(track);
+    const queueTrack = compactTrackForQueueState(track);
     let queue = this.state.queue;
     let index = this.findQueueIndexByPath(queue, trackPath);
 
@@ -3241,14 +3276,14 @@ export class NativeAudioService implements IAudioService {
     }
 
     if (index === -1) {
-      queue = [...queue, stateTrack];
+      queue = [...queue, queueTrack];
       index = queue.length - 1;
-    } else if (queue[index] !== stateTrack) {
+    } else if (queue[index] !== queueTrack) {
       queue = [...queue];
-      queue[index] = stateTrack;
+      queue[index] = queueTrack;
     }
 
-    return { track: queue[index] ?? stateTrack, queue, index };
+    return { track: stateTrack, queue, index };
   }
 
   private applyTrackLoadingState(track: Track, queue: Track[], index: number): void {
@@ -3266,6 +3301,13 @@ export class NativeAudioService implements IAudioService {
       outputBufferedAhead: 0,
     });
     this.timeUpdateCallbacks.forEach((cb) => cb(nextState.currentTime));
+  }
+
+  private scheduleTrackSwitchWorkingSetTrim(reason: string): void {
+    scheduleProcessWorkingSetTrim('tree', {
+      delaysMs: [0, 1000, 3200],
+      reason,
+    });
   }
 
   private buildQueuePaths(queue: Track[]): string[] {
@@ -3664,6 +3706,7 @@ export class NativeAudioService implements IAudioService {
     this.syncQueueToNative(queue, index, { indexOnly: queue === this.state.queue });
 
     this.markTrackPlayedBestEffort(resolvedTrack);
+    this.scheduleTrackSwitchWorkingSetTrim('native-audio-track-switch');
 
     return true;
   }
@@ -3828,14 +3871,14 @@ export class NativeAudioService implements IAudioService {
   // ===== 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鐢稿箚閻愬搫绠规繛锝庡墮婵″ジ鏌涚仦璇插闂囧鏌ｅΟ鐑樷枙闁稿骸绻戞穱濠囶敃閿涳綆浜俊鎾箳閹搭厽鍍甸梺鎸庣箓閹冲秵绔熼弴鐔虹瘈婵炲牆鐏濋弸娑㈡煥閺囨ê鈧繃淇婇崼鏇炵濞达絽鎽滈悾娲⒑闂堟稓绠冲┑顔惧厴瀵磭鈧綆鍠楅悡娆愮箾閸繄浠㈤柡瀣懅缁?=====
   addToQueue(track: Track): void {
     if (!track) return;
-    const queue = [...this.state.queue, compactTrackForState(track)];
+    const queue = [...this.state.queue, compactTrackForQueueState(track)];
     this.updateState({ queue });
     this.syncQueueToNative(queue, this.state.currentIndex);
   }
 
   addMultipleToQueue(tracks: Track[]): void {
     if (!tracks.length) return;
-    const queue = [...this.state.queue, ...tracks.map((track) => compactTrackForState(track))];
+    const queue = [...this.state.queue, ...tracks.map((track) => compactTrackForQueueState(track))];
     this.updateState({ queue });
     this.syncQueueToNative(queue, this.state.currentIndex);
   }
@@ -3904,7 +3947,7 @@ export class NativeAudioService implements IAudioService {
     this.syncQueueToNative([], -1);
     this.fireAndForgetCommand('native_audio_stop');
     scheduleProcessWorkingSetTrim('tree', {
-      delaysMs: [900, 2600, 5200],
+      delaysMs: [0, 700, 2200, 4800],
       reason: 'native-audio-clear-queue',
     });
     this.applyPlaybackStateSideEffects(nextState.playbackState);
@@ -3984,7 +4027,7 @@ export class NativeAudioService implements IAudioService {
       const stateTrack = compactTrackForState(track);
       if (track !== originalTrack) {
         const nextQueue = [...this.state.queue];
-        nextQueue[index] = stateTrack;
+        nextQueue[index] = compactTrackForQueueState(track);
         this.updateState({ queue: nextQueue });
       }
       this.resetSharedTimelineStressTracking();
@@ -4024,6 +4067,7 @@ export class NativeAudioService implements IAudioService {
           durationMs: crossfade.durationMs,
         });
         this.markTrackPlayedBestEffort(track);
+        this.scheduleTrackSwitchWorkingSetTrim('native-audio-crossfade-switch');
         return;
       }
 
@@ -4348,18 +4392,18 @@ export class NativeAudioService implements IAudioService {
 
   async playPlaylist(playlistId: string): Promise<void> {
     const playlist =
-      (await this.hydratePlaylistTracks(playlistId)) ?? this.getPlaylist(playlistId);
+      (await this.resolvePlaylistForQueuePlayback(playlistId)) ?? this.getPlaylist(playlistId);
     if (!playlist || playlist.tracks.length === 0) return;
     this.clearQueue({ releasePlaylists: false });
     this.addMultipleToQueue(playlist.tracks);
     await this.playTrackAtIndex(0);
-    this.updateState({ currentPlaylist: playlist });
+    this.updateState({ currentPlaylist: this.getPlaylist(playlistId) ?? playlist });
     this.touchPlaylistOpenedBestEffort(playlistId);
   }
 
   async addPlaylistToQueue(playlistId: string): Promise<void> {
     const playlist =
-      (await this.hydratePlaylistTracks(playlistId)) ?? this.getPlaylist(playlistId);
+      (await this.resolvePlaylistForQueuePlayback(playlistId)) ?? this.getPlaylist(playlistId);
     if (!playlist) return;
     this.addMultipleToQueue(playlist.tracks);
   }

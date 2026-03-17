@@ -47,7 +47,7 @@ describe('bootstrapPerformanceRuntimeProfileStorage', () => {
     expect(uiQuality.mode).toBe('fixed');
     expect(uiQuality.fixedLevel).toBe('potato');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.BACKGROUND_RENDER_POLICY) ?? 'null')).toBe('pause');
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX) ?? 'null')).toBe(192);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX) ?? 'null')).toBe(128);
   });
 
   it('does not overwrite custom profile fields', () => {

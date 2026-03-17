@@ -15,6 +15,8 @@ export type MemoryGovernanceAction =
   | 'tighten-cover-runtime-caches-high'
   | 'tighten-cover-runtime-caches-critical'
   | 'tighten-cover-runtime-caches-hidden'
+  | 'trim-webview2-working-set'
+  | 'trim-tree-working-set'
   | 'destroy-hidden-editor-windows'
   | 'destroy-hidden-plugin-windows'
   | 'destroy-hidden-vst-manager-windows';
@@ -38,6 +40,8 @@ export type MemoryGovernanceSnapshot = {
   navigationHistoryBytes: number;
   coverBlobUrlTotalBytes: number;
   coverBlobUrlCacheEntries: number;
+  coverDecodedEstimateEntries: number;
+  coverDecodedEstimateTotalBytes: number;
   coverUrlCacheEntries: number;
   coverUrlInflight: number;
   albumCoverUrlCacheEntries: number;
@@ -80,6 +84,7 @@ export function computeJsonSizeBytes(value: unknown): number {
 export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): MemoryGovernancePlan {
   const coverBlobRatio =
     COVER_BLOB_CACHE_MAX_BYTES > 0 ? snapshot.coverBlobUrlTotalBytes / COVER_BLOB_CACHE_MAX_BYTES : 0;
+  const coverDecodedEstimateBytes = snapshot.coverDecodedEstimateTotalBytes;
 
   const heap = snapshot.jsHeapUsedBytes ?? 0;
   const navBytes = snapshot.navigationHistoryBytes;
@@ -96,6 +101,7 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     heap >= 950_000_000 ||
     navBytes >= 1_600_000 ||
     coverBlobRatio >= 0.98 ||
+    coverDecodedEstimateBytes >= 180_000_000 ||
     webview2Private >= 700_000_000 ||
     webview2WorkingSet >= 950_000_000 ||
     treePrivate >= 1_200_000_000
@@ -105,6 +111,7 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     heap >= 650_000_000 ||
     navBytes >= 800_000 ||
     coverBlobRatio >= 0.92 ||
+    coverDecodedEstimateBytes >= 96_000_000 ||
     webview2Private >= 500_000_000 ||
     webview2WorkingSet >= 700_000_000 ||
     treePrivate >= 900_000_000 ||
@@ -115,6 +122,7 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
     heap >= 450_000_000 ||
     navBytes >= 400_000 ||
     coverBlobRatio >= 0.85 ||
+    coverDecodedEstimateBytes >= 48_000_000 ||
     webview2Private >= 350_000_000 ||
     webview2WorkingSet >= 500_000_000 ||
     treePrivate >= 650_000_000 ||
@@ -128,6 +136,7 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
   if (
     tier >= 1 &&
     (coverBlobRatio >= 0.80 ||
+      coverDecodedEstimateBytes >= 24_000_000 ||
       snapshot.coverBlobUrlCacheEntries >= 128 ||
       snapshot.coverUrlCacheEntries >= 320)
   ) {
@@ -135,17 +144,40 @@ export function decideMemoryGovernancePlan(snapshot: MemoryGovernanceSnapshot): 
 
     if (
       tier >= 2 &&
-      (coverBlobRatio >= 0.90 || snapshot.coverBlobUrlCacheEntries >= 192 || snapshot.coverUrlCacheEntries >= 480)
+      (coverBlobRatio >= 0.90 ||
+        coverDecodedEstimateBytes >= 64_000_000 ||
+        snapshot.coverBlobUrlCacheEntries >= 192 ||
+        snapshot.coverUrlCacheEntries >= 480)
     ) {
       actions.push('tighten-cover-runtime-caches-high');
     }
 
     if (
       tier >= 3 &&
-      (coverBlobRatio >= 0.96 || snapshot.coverBlobUrlCacheEntries >= 256 || snapshot.coverUrlCacheEntries >= 640)
+      (coverBlobRatio >= 0.96 ||
+        coverDecodedEstimateBytes >= 128_000_000 ||
+        snapshot.coverBlobUrlCacheEntries >= 256 ||
+        snapshot.coverUrlCacheEntries >= 640)
     ) {
       actions.push('tighten-cover-runtime-caches-critical');
     }
+  }
+
+  if (
+    snapshot.isTauri &&
+    (tier >= 1 ||
+      coverDecodedEstimateBytes >= 32_000_000 ||
+      webview2Private >= 320_000_000 ||
+      webview2WorkingSet >= 420_000_000)
+  ) {
+    actions.push('trim-webview2-working-set');
+  }
+
+  if (
+    snapshot.isTauri &&
+    (tier >= 2 || treePrivate >= 850_000_000 || webview2Private >= 560_000_000)
+  ) {
+    actions.push('trim-tree-working-set');
   }
 
   if (!snapshot.isTauri && (coverBlobRatio >= 0.96 || snapshot.coverBlobUrlCacheEntries >= 256)) {

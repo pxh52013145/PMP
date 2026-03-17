@@ -75,16 +75,30 @@ describe('recentSmartPlaylist', () => {
       fileContent: new ArrayBuffer(2 * 1024 * 1024),
       lyrics: 'l'.repeat(16 * 1024),
       tags: ['tag-a', 'tag-b'],
-      comment: 'keep me',
+      comment: 'drop-local-comment',
     });
 
     const payload = JSON.parse(payloadJson ?? '{}') as Record<string, unknown>;
     expect(payload.id).toBe('t-heavy');
-    expect(payload.comment).toBe('keep me');
+    expect(payload.comment).toBeUndefined();
     expect(payload.fileContent).toBeUndefined();
     expect(payload.lyrics).toBeUndefined();
     expect(payload.tags).toBeUndefined();
     expect(payload.coverUrl).toBeUndefined();
+  });
+
+  it('keeps serialized source locators for platform-backed tracks', () => {
+    const payloadJson = serializeTrackForPlaylist({
+      id: 't-platform',
+      title: 'Platform Track',
+      filePath: 'C:/Cache/platform-track.m4a',
+      path: 'C:/Cache/platform-track.m4a',
+      originalPath: 'bilibili://video/BV1abc123',
+      comment: 'bilibili://video/BV1abc123',
+    });
+
+    const payload = JSON.parse(payloadJson ?? '{}') as Record<string, unknown>;
+    expect(payload.comment).toBe('bilibili://video/BV1abc123');
   });
 
   it('applies recent snapshot to playlist state and syncs current playlist', () => {

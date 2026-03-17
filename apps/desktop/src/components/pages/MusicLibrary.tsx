@@ -449,15 +449,15 @@ type MainViewportSnapshot = {
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5闁告帒妫濋幐鎾剁磽閹惧磭鎽?
 
-const INITIAL_TRACK_LOAD_LIMIT = 180;
+const INITIAL_TRACK_LOAD_LIMIT = 120;
 
-const TRACK_LOAD_CHUNK_SIZE = 120;
+const TRACK_LOAD_CHUNK_SIZE = 72;
 
-const TRACK_RENDER_CHUNK_SIZE = 96;
+const TRACK_RENDER_CHUNK_SIZE = 48;
 
 const TRACK_SCROLL_LOAD_TRIGGER_PX = 320;
 
-const MODULE_CACHE_TRACK_CAP = 300;
+const MODULE_CACHE_TRACK_CAP = 120;
 
 const SEARCH_DEBOUNCE_MS = 180;
 
@@ -465,11 +465,11 @@ const TRACK_ROW_HEIGHT_PX = 46;
 
 const TRACK_LIST_HEADER_HEIGHT_PX = 52;
 
-const TRACK_WINDOW_OVERSCAN_ROWS = 20;
+const TRACK_WINDOW_OVERSCAN_ROWS = 8;
 
-const NATIVE_BASE_PAGE_SIZE = 240;
+const NATIVE_BASE_PAGE_SIZE = 120;
 
-const CARD_COVER_VISIBILITY_ROOT_MARGIN = '96px';
+const CARD_COVER_VISIBILITY_ROOT_MARGIN = '48px';
 
 const MUSIC_LIBRARY_MAIN_HORIZONTAL_PADDING_PX = 40;
 
@@ -933,6 +933,20 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
 
   const displayCoverUrl = !coverLoadFailed && normalizedCoverUrl.length > 0 ? normalizedCoverUrl : undefined;
 
+  useEffect(() => {
+
+    const image = coverImageRef.current;
+
+    if (!image) return;
+
+    if (isCardVisible && displayCoverUrl) return;
+
+    image.removeAttribute('src');
+
+    image.removeAttribute('srcset');
+
+  }, [displayCoverUrl, isCardVisible]);
+
   const fallbackCoverGlyph =
 
     typeof track.title === 'string' && track.title.trim().length > 0
@@ -974,6 +988,8 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
             loading="lazy"
 
             decoding="async"
+
+            fetchPriority="low"
 
             onLoad={(event) => {
 
@@ -2057,13 +2073,13 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       resetSchemaCache: true,
     });
     scheduleProcessWorkingSetTrim('webview2', {
-      delaysMs: [700, 2200, 4800],
+      delaysMs: [0, 500, 1800, 4200],
       reason: 'music-library-hidden',
     });
     const playbackState = audioService.getState().playbackState;
     if (playbackState === 'idle' || playbackState === 'stopped' || playbackState === 'error') {
       scheduleProcessWorkingSetTrim('tree', {
-        delaysMs: [1000, 3200],
+        delaysMs: [0, 900, 2600],
         reason: 'music-library-hidden-idle',
       });
     }

@@ -90,6 +90,7 @@ type NativeAudioRobustnessSnapshotSourceRecord = {
   controlQueueDropNewestEvents?: AudioRobustnessSnapshot['controlQueueDropNewestEvents'];
   controlQueueCoalescedOverflowEvents?: AudioRobustnessSnapshot['controlQueueCoalescedOverflowEvents'];
   controlQueueCriticalOverflowEvents?: AudioRobustnessSnapshot['controlQueueCriticalOverflowEvents'];
+  estimatedAudioBufferBytes?: AudioRobustnessSnapshot['estimatedAudioBufferBytes'];
   diagnosticTimelineDroppedEvents?: AudioRobustnessSnapshot['diagnosticTimelineDroppedEvents'];
   diagnosticTimeline: NonNullable<AudioRobustnessSnapshot['diagnosticTimeline']>;
   protectionWindowReason: string | null;
@@ -263,6 +264,7 @@ export function buildNativeAudioRobustnessSnapshot(
     controlQueueDropNewestEvents: sourceRecord.controlQueueDropNewestEvents,
     controlQueueCoalescedOverflowEvents: sourceRecord.controlQueueCoalescedOverflowEvents,
     controlQueueCriticalOverflowEvents: sourceRecord.controlQueueCriticalOverflowEvents,
+    estimatedAudioBufferBytes: sourceRecord.estimatedAudioBufferBytes,
     diagnosticTimelineDroppedEvents: sourceRecord.diagnosticTimelineDroppedEvents,
     diagnosticTimeline: [...sourceRecord.diagnosticTimeline],
     recentPlaylistWriteScheduledCount: audioPerfTelemetry.recentPlaylistWriteScheduledCount,

@@ -87,33 +87,35 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
             let spectrum_enabled = SPECTRUM_ENABLED.load(Ordering::Acquire);
             tick_counter = tick_counter.wrapping_add(1);
 
-            let Some((state_payload, dual_spectrum_snapshot, active_playback, cold_idle)) = (|| {
-                let mut engine = ENGINE.try_lock().ok()?;
-                let cold_idle = engine.is_cold_idle_runtime();
-                let was_playing = engine.is_playing_or_rebuffering();
-                let ticked = engine.tick();
-                if !ticked {
-                    return None;
-                }
-                let active_playback = engine.is_playing_or_rebuffering();
-                let include_extended_tick = active_playback && tick_counter % 40 == 0;
-                let is_stopped = matches!(engine.playback_state(), PlaybackState::Stopped);
-                let ended = was_playing && is_stopped;
-                Some((
-                    if include_extended_tick || ended {
-                        engine.build_extended_tick_state_payload(ended)
-                    } else {
-                        engine.build_tick_state_payload(ended)
-                    },
-                    if spectrum_enabled {
-                        engine.snapshot_for_dual_spectrum()
-                    } else {
-                        None
-                    },
-                    active_playback,
-                    cold_idle,
-                ))
-            })() else {
+            let Some((state_payload, dual_spectrum_snapshot, active_playback, cold_idle)) =
+                (|| {
+                    let mut engine = ENGINE.try_lock().ok()?;
+                    let cold_idle = engine.is_cold_idle_runtime();
+                    let was_playing = engine.is_playing_or_rebuffering();
+                    let ticked = engine.tick();
+                    if !ticked {
+                        return None;
+                    }
+                    let active_playback = engine.is_playing_or_rebuffering();
+                    let include_extended_tick = active_playback && tick_counter % 40 == 0;
+                    let is_stopped = matches!(engine.playback_state(), PlaybackState::Stopped);
+                    let ended = was_playing && is_stopped;
+                    Some((
+                        if include_extended_tick || ended {
+                            engine.build_extended_tick_state_payload(ended)
+                        } else {
+                            engine.build_tick_state_payload(ended)
+                        },
+                        if spectrum_enabled {
+                            engine.snapshot_for_dual_spectrum()
+                        } else {
+                            None
+                        },
+                        active_playback,
+                        cold_idle,
+                    ))
+                })()
+            else {
                 continue;
             };
 

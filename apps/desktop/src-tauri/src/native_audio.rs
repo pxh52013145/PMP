@@ -1614,7 +1614,7 @@ pub fn set_volume(app_handle: &AppHandle, volume: f32) -> Result<(), String> {
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_volume(clamped);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;
     Ok(())
@@ -1627,7 +1627,7 @@ pub fn set_mute(app_handle: &AppHandle, muted: bool) -> Result<(), String> {
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_mute(muted);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;
     Ok(())
@@ -1640,7 +1640,7 @@ pub fn set_gain(app_handle: &AppHandle, gain_db: f32) -> Result<(), String> {
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_gain(gain_db);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;
     Ok(())
@@ -1653,7 +1653,7 @@ pub fn set_replay_gain(app_handle: &AppHandle, replay_gain_db: Option<f32>) -> R
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_replay_gain(replay_gain_db);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;
     Ok(())
@@ -1666,7 +1666,7 @@ pub fn set_dynamic_gain_enabled(app_handle: &AppHandle, enabled: bool) -> Result
             .lock()
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_dynamic_gain_enabled(enabled);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;
     Ok(())
@@ -1754,7 +1754,7 @@ pub fn set_dsp_chain(app_handle: &AppHandle, chain: Vec<DspNodeConfig>) -> Resul
             .map_err(|_| "Audio engine is locked".to_string())?;
         engine.set_dsp_chain(chain);
         engine.set_vst_nodes(vst_keys);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
     emitter::emit_state(app_handle, payload)?;
     Ok(())
@@ -2222,7 +2222,7 @@ pub fn select_output_backend(
                 .lock()
                 .map_err(|_| "Audio engine is locked".to_string())?;
             engine.record_error("NATIVE_AUDIO_BACKEND_SELECT_FAILED", message.clone());
-            let state_payload = engine.build_state_payload(false);
+            let state_payload = engine.build_transport_state_payload(false);
             let maybe_error = match (
                 state_payload.error_seq,
                 state_payload.error_code.clone(),
@@ -2253,7 +2253,7 @@ pub fn select_output_backend(
             err
         });
 
-        let state_payload = engine.build_state_payload(false);
+        let state_payload = engine.build_transport_state_payload(false);
         let components_payload = engine.build_components_payload();
         let maybe_error = match (
             state_payload.error_seq,
@@ -2296,7 +2296,7 @@ pub fn select_audio_input(
             err
         });
 
-        let state_payload = engine.build_state_payload(false);
+        let state_payload = engine.build_transport_state_payload(false);
         let components_payload = engine.build_components_payload();
         let maybe_error = match (
             state_payload.error_seq,
@@ -2410,7 +2410,7 @@ pub fn select_output_device(
             let engine = ENGINE
                 .lock()
                 .map_err(|_| "Audio engine is locked".to_string())?;
-            engine.build_state_payload(false)
+            engine.build_transport_state_payload(false)
         };
         emitter::emit_state(app_handle, payload)?;
         return Ok(());
@@ -2427,7 +2427,7 @@ pub fn select_output_device(
                     .lock()
                     .map_err(|_| "Audio engine is locked".to_string())?;
                 engine.set_error("NATIVE_AUDIO_DEVICE_SELECT_FAILED", err.clone());
-                engine.build_state_payload(false)
+                engine.build_transport_state_payload(false)
             };
 
             let maybe_error = match (
@@ -2455,7 +2455,7 @@ pub fn select_output_device(
             .map_err(|_| "Audio engine is locked".to_string())?;
 
         engine.apply_selected_output_device(output_info);
-        engine.build_state_payload(false)
+        engine.build_transport_state_payload(false)
     };
 
     emitter::emit_state(app_handle, payload)?;

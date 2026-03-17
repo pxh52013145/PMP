@@ -109,7 +109,7 @@ const PERFORMANCE_RUNTIME_PRESET_SETTINGS: Record<
   minimal: {
     editorLowPerformanceMode: true,
     gifImportMaxFps: 15,
-    coverMaxEdgePx: 192,
+    coverMaxEdgePx: 128,
     backgroundRenderPolicy: 'pause',
     memoryGovernanceAutoEnabled: true,
     uiQualitySettings: MINIMAL_QUALITY_SETTINGS,

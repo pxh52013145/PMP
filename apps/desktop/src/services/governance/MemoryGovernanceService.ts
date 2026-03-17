@@ -17,6 +17,7 @@ import { readJson, writeJson } from '../../modules/storage';
 import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { MEMORY_GOVERNANCE_AUDIT_MAX_ENTRIES } from '../../contracts/memoryGovernance';
 import { getProcessPerfTotalsSnapshot } from '../../modules/debug';
+import { scheduleProcessWorkingSetTrim } from '../../utils/processWorkingSetTrim';
 
 export type MemoryGovernanceAuditEntry = {
   atMs: number;
@@ -45,6 +46,8 @@ const HIDDEN_PHASE_REASONS: ReadonlySet<MemoryGovernanceReason> = new Set([
 const HIDDEN_PHASE_BASE_ACTION: MemoryGovernanceAction = 'tighten-cover-runtime-caches-hidden';
 
 const HIDDEN_PHASE_TAURI_ACTIONS: readonly MemoryGovernanceAction[] = [
+  'trim-webview2-working-set',
+  'trim-tree-working-set',
   'destroy-hidden-editor-windows',
   'destroy-hidden-plugin-windows',
   'destroy-hidden-vst-manager-windows',
@@ -122,10 +125,36 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       const policy = ACTION_TO_COVER_RUNTIME_POLICY[action];
       if (policy) {
         try {
-          MusicLibraryService.getInstance().applyCoverRuntimeCachePolicy(policy);
+          const service = MusicLibraryService.getInstance();
+          service.applyCoverRuntimeCachePolicy(policy);
+          if (policy === 'hidden') {
+            service.clearCoverRuntimeCaches();
+          }
           executed.push(action);
         } catch (error) {
           console.warn('[memory-governance] failed to tighten cover cache policy', error);
+        }
+        continue;
+      }
+
+      if (action === 'trim-webview2-working-set') {
+        if (snapshot.isTauri) {
+          scheduleProcessWorkingSetTrim('webview2', {
+            delaysMs: [0, 700, 2200],
+            reason: `memory-governance:${reason}`,
+          });
+          executed.push(action);
+        }
+        continue;
+      }
+
+      if (action === 'trim-tree-working-set') {
+        if (snapshot.isTauri) {
+          scheduleProcessWorkingSetTrim('tree', {
+            delaysMs: [0, 900, 2800],
+            reason: `memory-governance:${reason}`,
+          });
+          executed.push(action);
         }
         continue;
       }
@@ -213,6 +242,8 @@ export class DefaultMemoryGovernanceService implements MemoryGovernanceService {
       navigationHistoryBytes,
       coverBlobUrlTotalBytes: coverStats.coverBlobUrlTotalBytes,
       coverBlobUrlCacheEntries: coverStats.coverBlobUrlCacheEntries,
+      coverDecodedEstimateEntries: coverStats.coverDecodedEstimateEntries,
+      coverDecodedEstimateTotalBytes: coverStats.coverDecodedEstimateTotalBytes,
       coverUrlCacheEntries: coverStats.coverUrlCacheEntries,
       coverUrlInflight: coverStats.coverUrlInflight,
       albumCoverUrlCacheEntries: coverStats.albumCoverUrlCacheEntries,

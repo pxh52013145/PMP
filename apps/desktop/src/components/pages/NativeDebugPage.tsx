@@ -1442,6 +1442,9 @@ export const NativeDebugPage: React.FC = () => {
             audioStateJsonBytes,
             queuePaths: queuePathsPayloadDiagnostics,
           },
+          nativeAudio: {
+            estimatedAudioBufferBytes: robustness.estimatedAudioBufferBytes ?? 0,
+          },
         },
         null,
         2

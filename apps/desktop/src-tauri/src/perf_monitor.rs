@@ -613,10 +613,12 @@ fn trim_working_set_windows(
         .into_iter()
         .filter(|pid| match target {
             ProcessWorkingSetTrimTarget::App => *pid == root_pid as u32,
-            ProcessWorkingSetTrimTarget::WebView2 => by_pid
-                .get(pid)
-                .map(|entry| classify_process(*pid, &entry.exe_name, root_pid as u32))
-                == Some(ProcessPerfKind::WebView2),
+            ProcessWorkingSetTrimTarget::WebView2 => {
+                by_pid
+                    .get(pid)
+                    .map(|entry| classify_process(*pid, &entry.exe_name, root_pid as u32))
+                    == Some(ProcessPerfKind::WebView2)
+            }
             ProcessWorkingSetTrimTarget::Tree => true,
         })
         .collect();
@@ -645,8 +647,7 @@ fn trim_working_set_windows(
 fn trim_single_process_working_set(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, SetProcessWorkingSetSize, PROCESS_QUERY_LIMITED_INFORMATION,
-        PROCESS_SET_QUOTA,
+        OpenProcess, SetProcessWorkingSetSize, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
     };
 
     struct WinHandle(HANDLE);
@@ -659,7 +660,11 @@ fn trim_single_process_working_set(pid: u32) -> bool {
     }
 
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA, 0, pid);
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA,
+            0,
+            pid,
+        );
         if handle.is_null() {
             return false;
         }
