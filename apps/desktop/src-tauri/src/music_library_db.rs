@@ -448,6 +448,8 @@ pub struct LibraryPlaylistRecord {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub last_opened_at_ms: Option<i64>,
+    pub track_count: u64,
+    pub total_duration: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1350,12 +1352,16 @@ fn migrate(conn: &Connection) -> Result<(), String> {
 
         if !local_track_columns.iter().any(|column| column == "year") {
             conn.execute_batch("ALTER TABLE local_tracks ADD COLUMN year INTEGER;")
-                .map_err(|error| format!("Failed to migrate music library schema to v9 (year): {error}"))?;
+                .map_err(|error| {
+                    format!("Failed to migrate music library schema to v9 (year): {error}")
+                })?;
         }
 
         if !local_track_columns.iter().any(|column| column == "format") {
             conn.execute_batch("ALTER TABLE local_tracks ADD COLUMN format TEXT;")
-                .map_err(|error| format!("Failed to migrate music library schema to v9 (format): {error}"))?;
+                .map_err(|error| {
+                    format!("Failed to migrate music library schema to v9 (format): {error}")
+                })?;
         }
 
         conn.execute_batch("PRAGMA user_version = 9;")
@@ -1658,7 +1664,17 @@ fn playlist_record_by_id(
           is_readonly,
           created_at_ms,
           updated_at_ms,
-          last_opened_at_ms
+          last_opened_at_ms,
+          (
+            SELECT COUNT(*)
+            FROM playlist_items pi
+            WHERE pi.playlist_id = playlists.id
+          ) AS track_count,
+          (
+            SELECT COALESCE(SUM(COALESCE(pi.snapshot_duration_seconds, 0.0)), 0.0)
+            FROM playlist_items pi
+            WHERE pi.playlist_id = playlists.id
+          ) AS total_duration
         FROM playlists
         WHERE id = ?1
         "#,
@@ -1678,6 +1694,8 @@ fn playlist_record_by_id(
                 created_at_ms: row.get(10)?,
                 updated_at_ms: row.get(11)?,
                 last_opened_at_ms: row.get(12)?,
+                track_count: row.get::<_, i64>(13)?.max(0) as u64,
+                total_duration: row.get::<_, f64>(14)?.max(0.0),
             })
         },
     )
@@ -4243,7 +4261,17 @@ pub fn list_playlists(
                   is_readonly,
                   created_at_ms,
                   updated_at_ms,
-                  last_opened_at_ms
+                  last_opened_at_ms,
+                  (
+                    SELECT COUNT(*)
+                    FROM playlist_items pi
+                    WHERE pi.playlist_id = playlists.id
+                  ) AS track_count,
+                  (
+                    SELECT COALESCE(SUM(COALESCE(pi.snapshot_duration_seconds, 0.0)), 0.0)
+                    FROM playlist_items pi
+                    WHERE pi.playlist_id = playlists.id
+                  ) AS total_duration
                 FROM playlists
                 WHERE (?1 = 0 OR owner_uid = ?2)
                   AND (?3 = 0 OR kind = ?4)
@@ -4282,6 +4310,8 @@ pub fn list_playlists(
                         created_at_ms: row.get(10)?,
                         updated_at_ms: row.get(11)?,
                         last_opened_at_ms: row.get(12)?,
+                        track_count: row.get::<_, i64>(13)?.max(0) as u64,
+                        total_duration: row.get::<_, f64>(14)?.max(0.0),
                     })
                 },
             )
@@ -5964,7 +5994,8 @@ fn list_track_field_catalog_from_descriptors(
         .iter()
         .cloned()
         .map(|descriptor| {
-            let facetable = descriptor.kind == "text" && (descriptor.filterable || descriptor.groupable);
+            let facetable =
+                descriptor.kind == "text" && (descriptor.filterable || descriptor.groupable);
             LibraryTrackFieldCatalogRecord {
                 id: descriptor.field_id,
                 label: descriptor.label,
@@ -6018,15 +6049,27 @@ fn list_facet_catalog_from_descriptors(
     let mut items = Vec::new();
 
     if let Some(descriptor) = resolve_text_facet_descriptor(descriptors, "artist") {
-        items.push(build_facet_catalog_record("artists", "text-values", descriptor));
+        items.push(build_facet_catalog_record(
+            "artists",
+            "text-values",
+            descriptor,
+        ));
     }
 
     if let Some(descriptor) = resolve_text_facet_descriptor(descriptors, "genre") {
-        items.push(build_facet_catalog_record("genres", "text-values", descriptor));
+        items.push(build_facet_catalog_record(
+            "genres",
+            "text-values",
+            descriptor,
+        ));
     }
 
     if let Some(descriptor) = resolve_text_facet_descriptor(descriptors, "album") {
-        items.push(build_facet_catalog_record("albums", "album-summaries", descriptor));
+        items.push(build_facet_catalog_record(
+            "albums",
+            "album-summaries",
+            descriptor,
+        ));
     }
 
     items
@@ -6047,9 +6090,9 @@ fn read_schema_version(conn: &Connection) -> Result<i32, String> {
 
 fn list_table_columns(conn: &Connection, table_name: &str) -> Result<Vec<String>, String> {
     let sql = format!("PRAGMA table_info({})", quote_sqlite_identifier(table_name));
-    let mut stmt = conn
-        .prepare(sql.as_str())
-        .map_err(|error| format!("Failed to prepare table_info pragma for {table_name}: {error}"))?;
+    let mut stmt = conn.prepare(sql.as_str()).map_err(|error| {
+        format!("Failed to prepare table_info pragma for {table_name}: {error}")
+    })?;
 
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(1))
@@ -6057,11 +6100,9 @@ fn list_table_columns(conn: &Connection, table_name: &str) -> Result<Vec<String>
 
     let mut columns = Vec::new();
     for row in rows {
-        columns.push(
-            row.map_err(|error| {
-                format!("Failed to parse table column row for {table_name}: {error}")
-            })?,
-        );
+        columns.push(row.map_err(|error| {
+            format!("Failed to parse table column row for {table_name}: {error}")
+        })?);
     }
 
     Ok(columns)
@@ -6072,9 +6113,9 @@ fn inspect_schema_source_table(
     table_name: &str,
 ) -> Result<LibrarySchemaSourceTableRecord, String> {
     let sql = format!("PRAGMA table_info({})", quote_sqlite_identifier(table_name));
-    let mut stmt = conn
-        .prepare(sql.as_str())
-        .map_err(|error| format!("Failed to prepare schema table_info pragma for {table_name}: {error}"))?;
+    let mut stmt = conn.prepare(sql.as_str()).map_err(|error| {
+        format!("Failed to prepare schema table_info pragma for {table_name}: {error}")
+    })?;
 
     let rows = stmt
         .query_map([], |row| {
@@ -6083,15 +6124,23 @@ fn inspect_schema_source_table(
             let not_null: i64 = row.get(3)?;
             let default_value: Option<String> = row.get(4)?;
             let primary_key: i64 = row.get(5)?;
-            Ok((column_name, declared_type.unwrap_or_default(), not_null, default_value.unwrap_or_default(), primary_key))
+            Ok((
+                column_name,
+                declared_type.unwrap_or_default(),
+                not_null,
+                default_value.unwrap_or_default(),
+                primary_key,
+            ))
         })
         .map_err(|error| format!("Failed to inspect schema table {table_name}: {error}"))?;
 
     let mut columns = Vec::new();
     let mut schema_tokens = Vec::new();
     for row in rows {
-        let (column_name, declared_type, not_null, default_value, primary_key) = row
-            .map_err(|error| format!("Failed to parse schema table row for {table_name}: {error}"))?;
+        let (column_name, declared_type, not_null, default_value, primary_key) =
+            row.map_err(|error| {
+                format!("Failed to parse schema table row for {table_name}: {error}")
+            })?;
         columns.push(column_name.clone());
         schema_tokens.push(format!(
             "{}:{}:{}:{}:{}",
@@ -6100,12 +6149,16 @@ fn inspect_schema_source_table(
     }
 
     if columns.is_empty() {
-        return Err(format!("Schema source table not found or empty: {table_name}"));
+        return Err(format!(
+            "Schema source table not found or empty: {table_name}"
+        ));
     }
 
     let mut hasher = DefaultHasher::new();
     table_name.hash(&mut hasher);
-    schema_tokens.iter().for_each(|token| token.hash(&mut hasher));
+    schema_tokens
+        .iter()
+        .for_each(|token| token.hash(&mut hasher));
     let schema_hash = format!("{:016x}", hasher.finish());
 
     Ok(LibrarySchemaSourceTableRecord {
@@ -6116,7 +6169,9 @@ fn inspect_schema_source_table(
     })
 }
 
-fn list_schema_source_tables(conn: &Connection) -> Result<Vec<LibrarySchemaSourceTableRecord>, String> {
+fn list_schema_source_tables(
+    conn: &Connection,
+) -> Result<Vec<LibrarySchemaSourceTableRecord>, String> {
     ["local_tracks", "sources"]
         .into_iter()
         .map(|table_name| inspect_schema_source_table(conn, table_name))
@@ -6136,7 +6191,10 @@ fn compute_schema_fingerprint(
         table.name.hash(&mut hasher);
         table.column_count.hash(&mut hasher);
         table.schema_hash.hash(&mut hasher);
-        table.columns.iter().for_each(|column| column.hash(&mut hasher));
+        table
+            .columns
+            .iter()
+            .for_each(|column| column.hash(&mut hasher));
     });
 
     track_fields.iter().for_each(|field| {
@@ -6163,7 +6221,6 @@ fn compute_schema_fingerprint(
 
     format!("{:016x}", hasher.finish())
 }
-
 
 fn read_observed_schema_state(conn: &Connection) -> Result<ObservedLibrarySchemaState, String> {
     let descriptors = list_local_track_field_descriptors(conn)?;
@@ -6387,14 +6444,17 @@ fn list_album_facet_values_from_conn(
         .map_err(|error| format!("Failed to prepare album facet statement: {error}"))?;
 
     let rows = stmt
-        .query_map(params![visible_only_flag, include_missing_flag, limit], |row| {
-            Ok(LibraryAlbumRecord {
-                album: row.get(0)?,
-                artist: row.get(1)?,
-                cover_track_id: row.get(2)?,
-                cover_track_path: row.get(3)?,
-            })
-        })
+        .query_map(
+            params![visible_only_flag, include_missing_flag, limit],
+            |row| {
+                Ok(LibraryAlbumRecord {
+                    album: row.get(0)?,
+                    artist: row.get(1)?,
+                    cover_track_id: row.get(2)?,
+                    cover_track_path: row.get(3)?,
+                })
+            },
+        )
         .map_err(|error| format!("Failed to query album facet values: {error}"))?;
 
     let mut items = Vec::new();
@@ -6642,7 +6702,10 @@ mod tests {
         let catalog = list_facet_catalog_from_descriptors(&descriptors);
 
         assert_eq!(
-            catalog.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            catalog
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["artists", "genres", "albums"]
         );
 
@@ -6682,7 +6745,10 @@ mod tests {
             facet_collections,
         };
 
-        assert!(envelope.track_fields.iter().any(|field| field.id == "artist"));
+        assert!(envelope
+            .track_fields
+            .iter()
+            .any(|field| field.id == "artist"));
         assert!(envelope
             .facet_collections
             .iter()
@@ -6802,7 +6868,8 @@ mod tests {
         assert!(has_index(&conn, "lyric_fetch_jobs_status_idx"));
         assert!(has_index(&conn, "playlists_owner_uid_idx"));
         assert!(has_index(&conn, "playlist_items_playlist_id_idx"));
-        let local_track_columns = list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
+        let local_track_columns =
+            list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
 
@@ -6861,7 +6928,8 @@ mod tests {
         ));
         assert!(has_index(&conn, "lyric_candidates_document_id_idx"));
         assert!(has_index(&conn, "playlists_owner_last_opened_idx"));
-        let local_track_columns = list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
+        let local_track_columns =
+            list_table_columns(&conn, "local_tracks").expect("read local_tracks columns");
         assert!(local_track_columns.iter().any(|column| column == "year"));
         assert!(local_track_columns.iter().any(|column| column == "format"));
 

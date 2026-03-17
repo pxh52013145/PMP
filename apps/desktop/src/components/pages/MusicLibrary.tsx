@@ -60,6 +60,10 @@ import { STORAGE_KEYS } from '../../utils/windowCommunication';
 import { useLocale, useT } from '../../i18n';
 
 import { isTauriRuntime } from '../../utils/tauriRuntime';
+import {
+  cancelScheduledProcessWorkingSetTrim,
+  scheduleProcessWorkingSetTrim,
+} from '../../utils/processWorkingSetTrim';
 
 import {
 
@@ -229,13 +233,11 @@ import {
 
 import {
 
-  buildMusicLibraryCardGroupLayout,
-
-  type MusicLibraryCardGroupEntry,
-
-  type MusicLibraryCardGroupNode,
-
-} from '../../modules/music-library/cardGroups';
+  buildMusicLibraryCardVirtualLayout,
+  MUSIC_LIBRARY_CARD_GROUP_INDENT_MARGIN_PX,
+  MUSIC_LIBRARY_CARD_GROUP_INDENT_PADDING_PX,
+  sliceMusicLibraryCardVirtualLayout,
+} from '../../modules/music-library/cardVirtualWindow';
 
 
 import {
@@ -469,7 +471,23 @@ const NATIVE_BASE_PAGE_SIZE = 240;
 
 const CARD_COVER_VISIBILITY_ROOT_MARGIN = '96px';
 
+const MUSIC_LIBRARY_MAIN_HORIZONTAL_PADDING_PX = 40;
+
 const MUSIC_LIBRARY_MEMORY_LOG_DEBOUNCE_MS = 900;
+
+const EMPTY_LIBRARY_STATS: LibraryStats = {
+  totalTracks: 0,
+  totalArtists: 0,
+  totalAlbums: 0,
+  totalSize: 0,
+  totalDuration: 0,
+};
+
+const EMPTY_MAIN_VIEWPORT: MainViewportSnapshot = {
+  scrollTop: 0,
+  clientHeight: 0,
+  clientWidth: 0,
+};
 
 type MusicLibraryRuntimeDiagnosticSnapshot = {
   timestampMs: number;
@@ -505,6 +523,14 @@ type SharedVisibilityObserverEntry = {
 };
 
 const sharedVisibilityObservers = new Map<string, SharedVisibilityObserverEntry>();
+
+function clearSharedVisibilityObservers(): void {
+  for (const entry of sharedVisibilityObservers.values()) {
+    entry.observer.disconnect();
+    entry.listeners.clear();
+  }
+  sharedVisibilityObservers.clear();
+}
 
 declare global {
   interface Window {
@@ -866,6 +892,22 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
     CARD_COVER_VISIBILITY_ROOT_MARGIN
 
   );
+  const coverImageRef = useRef<HTMLImageElement | null>(null);
+  const bindCoverImageRef = useCallback((element: HTMLImageElement | null) => {
+
+    const previous = coverImageRef.current;
+
+    if (previous && previous !== element) {
+
+      previous.removeAttribute('src');
+
+      previous.removeAttribute('srcset');
+
+    }
+
+    coverImageRef.current = element;
+
+  }, []);
 
   const coverUrl = useCoverUrlForTrack(isCardVisible ? track : null, {
 
@@ -922,6 +964,8 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
         {displayCoverUrl ? (
 
           <img
+
+            ref={bindCoverImageRef}
 
             src={displayCoverUrl}
 
@@ -1929,6 +1973,107 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   } | null>(null);
 
+  const releaseLocalLibraryViewState = useCallback(() => {
+    trackChunkLoadingRef.current = false;
+    trackNextOffsetRef.current = 0;
+    hasMoreTracksRef.current = false;
+    nativeBaseTrackNextOffsetRef.current = 0;
+    nativeBaseTrackLoadingRef.current = false;
+    nativeBaseQueryKeyRef.current = '';
+    nativeBaseTracksRef.current = null;
+    hasMoreNativeBaseTracksRef.current = false;
+    initialViewportAutoloadKeyRef.current = null;
+
+    setTracks([]);
+    setNativeBaseTracks(null);
+    setNativeBaseTracksTotal(null);
+    setHasMoreNativeBaseTracks(false);
+    setIsNativeBaseTracksLoading(false);
+    setHasMoreTracks(false);
+    setIsTrackChunkLoading(false);
+    setRenderedTrackLimit(TRACK_RENDER_CHUNK_SIZE);
+    setLibraryStats(EMPTY_LIBRARY_STATS);
+    setLibraryPaths([]);
+    setLibraryPathHealthMap({});
+    setIsLibraryPathHealthLoading(false);
+    setIsLibraryPathHealthAvailable(true);
+    setPathCleanupBusyMap({});
+    setIsCleanupAllMissingBusy(false);
+    setShowPathsManager(false);
+    setScanProgress(null);
+    setErrorMessage(null);
+    setContextMenu(null);
+    setCleanupConfirmTarget(null);
+    setMainViewport(EMPTY_MAIN_VIEWPORT);
+  }, []);
+
+  const releaseStableLibraryViewState = useCallback(() => {
+    setStableEntries([]);
+    setIsStableEntriesLoading(false);
+    setShowStableQueuePanel(false);
+    setIsStableQueueLoading(false);
+    setStableFallbackTasks([]);
+    setStableHashJobs([]);
+    setStableFallbackAudit(buildStableFallbackAuditSnapshot([]));
+    setFallbackTaskStatusPendingId(null);
+    setHashJobStatusPendingId(null);
+    setEditingStableEntry(null);
+    setStableEntryRatingInput('');
+    setStableEntryTagsInput('');
+    setIsStableMetadataSaving(false);
+  }, []);
+
+  const releaseMusicLibraryRuntimeResources = useCallback(
+    (options?: { closeDatabase?: boolean; resetSchemaCache?: boolean }) => {
+      if (searchDebounceTimerRef.current != null) {
+        window.clearTimeout(searchDebounceTimerRef.current);
+        searchDebounceTimerRef.current = null;
+      }
+      if (musicLibraryDiagnosticsTimerRef.current != null) {
+        window.clearTimeout(musicLibraryDiagnosticsTimerRef.current);
+        musicLibraryDiagnosticsTimerRef.current = null;
+      }
+
+      clearModuleCache();
+      clearSharedVisibilityObservers();
+      currentCoverPolicyRef.current = 'hidden';
+      musicLibraryService.applyCoverRuntimeCachePolicy('hidden');
+      musicLibraryService.releaseLibraryViewRuntimeMemory({
+        closeDatabase: options?.closeDatabase,
+        resetSchemaCache: options?.resetSchemaCache,
+      });
+    },
+    []
+  );
+
+  const teardownHiddenMusicLibraryView = useCallback(() => {
+    libraryLoadTokenRef.current += 1;
+    stableLoadTokenRef.current += 1;
+    searchTokenRef.current += 1;
+    releaseLocalLibraryViewState();
+    releaseStableLibraryViewState();
+    releaseMusicLibraryRuntimeResources({
+      closeDatabase: true,
+      resetSchemaCache: true,
+    });
+    scheduleProcessWorkingSetTrim('webview2', {
+      delaysMs: [700, 2200, 4800],
+      reason: 'music-library-hidden',
+    });
+    const playbackState = audioService.getState().playbackState;
+    if (playbackState === 'idle' || playbackState === 'stopped' || playbackState === 'error') {
+      scheduleProcessWorkingSetTrim('tree', {
+        delaysMs: [1000, 3200],
+        reason: 'music-library-hidden-idle',
+      });
+    }
+  }, [
+    audioService,
+    releaseLocalLibraryViewState,
+    releaseMusicLibraryRuntimeResources,
+    releaseStableLibraryViewState,
+  ]);
+
 
 
   const updateCoverRuntimePolicy = useCallback((policy: CoverRuntimeCachePolicy) => {
@@ -2328,7 +2473,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
 
-    if (remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
+    if (baseView !== 'card' && remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
 
       setRenderedTrackLimit((prev) => prev + TRACK_RENDER_CHUNK_SIZE);
 
@@ -2351,6 +2496,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     scheduleMainScrollAnchorUpdate,
 
     syncMainViewport,
+    baseView,
 
     viewMode,
 
@@ -2889,6 +3035,9 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
       if (nextMode === 'local') {
+        stableLoadTokenRef.current += 1;
+        releaseStableLibraryViewState();
+        releaseMusicLibraryRuntimeResources();
 
         searchTokenRef.current += 1;
 
@@ -2900,6 +3049,10 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
+      libraryLoadTokenRef.current += 1;
+      searchTokenRef.current += 1;
+      releaseLocalLibraryViewState();
+      releaseMusicLibraryRuntimeResources();
       setMainViewport((prev) => ({ ...prev, scrollTop: 0 }));
 
       const root = getMainScrollRoot(moduleScrollMemory[viewMode]?.rootKind);
@@ -2920,6 +3073,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       loadStableLibraryEntries,
 
+      releaseLocalLibraryViewState,
+ 
+      releaseMusicLibraryRuntimeResources,
+ 
+      releaseStableLibraryViewState,
+ 
       resetLibraryDataFromStorage,
 
       viewMode,
@@ -3041,22 +3200,31 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
   useEffect(() => {
+    if (isOpen) {
+      cancelScheduledProcessWorkingSetTrim('webview2');
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
 
     if (!isOpen) {
-
-      updateCoverRuntimePolicy('hidden');
-
-      return;
-
+      teardownHiddenMusicLibraryView();
     }
+  }, [isOpen, teardownHiddenMusicLibraryView]);
+
+  useEffect(() => {
 
     return () => {
-
-      updateCoverRuntimePolicy('hidden');
-
+      libraryLoadTokenRef.current += 1;
+      stableLoadTokenRef.current += 1;
+      searchTokenRef.current += 1;
+      releaseMusicLibraryRuntimeResources({
+        closeDatabase: true,
+        resetSchemaCache: true,
+      });
     };
 
-  }, [isOpen, updateCoverRuntimePolicy]);
+  }, [releaseMusicLibraryRuntimeResources]);
 
 
 
@@ -5109,10 +5277,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       : filteredTracks.length;
 
-  const shouldEagerFillGroupedCardView =
-
-    baseView === 'card' && baseGroupByRules.length > 0;
-
 
 
   useEffect(() => {
@@ -5133,61 +5297,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
 
 
-  const renderedTracks = useMemo(() => {
-
-    if (baseView !== 'card') return filteredTracks;
-
-    if (shouldEagerFillGroupedCardView) return filteredTracks;
-
-    if (renderedTrackLimit >= filteredTracks.length) return filteredTracks;
-
-    return filteredTracks.slice(0, renderedTrackLimit);
-
-  }, [baseView, filteredTracks, renderedTrackLimit, shouldEagerFillGroupedCardView]);
-
-
-
-  useEffect(() => {
-
-    if (!isOpen || !shouldEagerFillGroupedCardView) return;
-
-
-
-    if (renderedTrackLimit < filteredTracks.length) {
-
-      setRenderedTrackLimit(filteredTracks.length);
-
-      return;
-
-    }
-
-
-
-    if (!hasMoreVisibleTrackSource) return;
-
-
-
-    void (shouldUseNativeBaseQuery ? loadNativeBaseTrackChunk() : scheduleTrackChunkLoad());
-
-  }, [
-
-    filteredTracks.length,
-
-    hasMoreVisibleTrackSource,
-
-    isOpen,
-
-    loadNativeBaseTrackChunk,
-
-    renderedTrackLimit,
-
-    scheduleTrackChunkLoad,
-
-    shouldEagerFillGroupedCardView,
-
-    shouldUseNativeBaseQuery,
-
-  ]);
+  const renderedTracks = useMemo(() => filteredTracks, [filteredTracks]);
 
 
 
@@ -5197,7 +5307,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       buildMusicLibraryGroupedRows({
 
-        tracks: baseView === 'card' ? renderedTracks : filteredTracks,
+        tracks: filteredTracks,
 
         groupByRules: baseGroupByRules,
 
@@ -5219,17 +5329,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       filteredTracks,
 
-      renderedTracks,
-
       resolveBaseFieldLabel,
 
     ]
 
   );
-
-
-
-  const cardGroupLayout = useMemo(() => buildMusicLibraryCardGroupLayout(groupedRows), [groupedRows]);
 
 
 
@@ -5290,6 +5394,66 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     };
 
   }, [mainViewport.clientHeight, mainViewport.scrollTop, virtualizedTrackSourceRows]);
+
+
+
+  const cardViewportWidth = useMemo(
+
+    () =>
+
+      Math.max(320, (mainViewport.clientWidth > 0 ? mainViewport.clientWidth : 960) - MUSIC_LIBRARY_MAIN_HORIZONTAL_PADDING_PX),
+
+    [mainViewport.clientWidth]
+
+  );
+
+
+
+  const cardVirtualLayout = useMemo(
+
+    () => buildMusicLibraryCardVirtualLayout(groupedRows, cardViewportWidth),
+
+    [cardViewportWidth, groupedRows]
+
+  );
+
+
+
+  const cardVirtualWindow = useMemo(
+
+    () =>
+
+      sliceMusicLibraryCardVirtualLayout(
+
+        cardVirtualLayout,
+
+        mainViewport.scrollTop,
+
+        mainViewport.clientHeight > 0 ? mainViewport.clientHeight : 720
+
+      ),
+
+    [cardVirtualLayout, mainViewport.clientHeight, mainViewport.scrollTop]
+
+  );
+
+
+
+  const cardVisibleTrackCount = useMemo(
+
+    () =>
+
+      cardVirtualWindow.blocks.reduce(
+
+        (total, block) => total + (block.kind === 'track-row' ? block.rows.length : 0),
+
+        0
+
+      ),
+
+    [cardVirtualWindow.blocks]
+
+  );
 
 
 
@@ -5355,7 +5519,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
           filteredTracks: filteredTracks.length,
 
-          renderedTracks: renderedTracks.length,
+          renderedTracks: baseView === 'card' ? cardVisibleTrackCount : renderedTracks.length,
 
           groupedRows: groupedRows.length,
 
@@ -5400,6 +5564,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [
 
       baseView,
+      cardVisibleTrackCount,
 
       filteredTracks,
 
@@ -6403,7 +6568,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const renderTrackCardByRow = (row: MusicLibraryTrackRow) => {
 
-      const track = renderedTracks[row.trackIndex];
+      const track = filteredTracks[row.trackIndex];
 
       if (!track) {
 
@@ -6460,144 +6625,137 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
       );
 
     };
+    const resolveIndentedBlockStyle = (depth: number): React.CSSProperties | undefined => {
 
+      if (depth <= 0) return undefined;
 
+      return {
 
-    const renderGroupNode = (node: MusicLibraryCardGroupNode, keyPath: string): React.ReactNode => {
+        marginLeft: `${depth * MUSIC_LIBRARY_CARD_GROUP_INDENT_MARGIN_PX}px`,
 
-      const row = node.header;
+        paddingLeft: `${depth * MUSIC_LIBRARY_CARD_GROUP_INDENT_PADDING_PX}px`,
 
-      return (
-
-        <section key={`group:${keyPath}`} className="music-library-card-group-section">
-
-          <button
-
-            type="button"
-
-            className="music-library-card-group-header"
-
-            onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
-
-            title={
-
-              row.collapsed
-
-                ? t('pages.music-library.group.expandTitle')
-
-                : t('pages.music-library.group.collapseTitle')
-
-            }
-
-          >
-
-            <span className="music-library-card-group-arrow" aria-hidden="true">
-
-              {row.collapsed ? '▶' : '▼'}
-
-            </span>
-
-            <span className="music-library-card-group-field">{row.fieldLabel}</span>
-
-            <span className="music-library-card-group-title">{row.title}</span>
-
-            <span className="music-library-card-group-count">
-
-              {t('pages.album.stats.trackCount', { count: row.count })}
-
-            </span>
-
-          </button>
-
-
-
-          {!row.collapsed && node.entries.length > 0 ? (
-
-            <div className="music-library-card-group-body">
-
-              {renderEntries(node.entries, keyPath)}
-
-            </div>
-
-          ) : null}
-
-        </section>
-
-      );
-
-    };
-
-
-
-    const renderEntries = (
-
-      entries: MusicLibraryCardGroupEntry[],
-
-      parentKey: string
-
-    ): React.ReactNode[] => {
-
-      const nodes: React.ReactNode[] = [];
-
-      let pendingTrackRows: MusicLibraryTrackRow[] = [];
-
-
-
-      const flushTrackRows = () => {
-
-        if (pendingTrackRows.length === 0) return;
-
-        const trackRows = pendingTrackRows;
-
-        pendingTrackRows = [];
-
-        nodes.push(
-
-          <div key={`${parentKey}:tracks:${nodes.length}`} className="music-library-card-grid">
-
-            {trackRows.map(renderTrackCardByRow)}
-
-          </div>
-
-        );
+        borderLeft: '1px solid rgba(140, 170, 255, 0.18)',
 
       };
 
-
-
-      for (const entry of entries) {
-
-        if (entry.kind === 'track') {
-
-          pendingTrackRows.push(entry.row);
-
-          continue;
-
-        }
-
-
-
-        flushTrackRows();
-
-        nodes.push(renderGroupNode(entry.node, `${parentKey}/${entry.node.header.groupKey}`));
-
-      }
-
-
-
-      flushTrackRows();
-
-      return nodes;
-
     };
 
 
 
-    return renderEntries(cardGroupLayout.entries, 'root');
+    return (
+
+      <>
+
+        {cardVirtualWindow.topSpacerPx > 0 && (
+
+          <div
+
+            className="music-library-virtual-spacer"
+
+            style={{ height: `${cardVirtualWindow.topSpacerPx}px` }}
+
+            aria-hidden="true"
+
+          />
+
+        )}
+
+        {cardVirtualWindow.blocks.map((block) => {
+
+          if (block.kind === 'group-header') {
+
+            const row = block.row;
+            const blockStyle = resolveIndentedBlockStyle(block.depth);
+
+            return (
+
+              <div key={block.key} style={blockStyle}>
+
+                <button
+
+                  type="button"
+
+                  className="music-library-card-group-header"
+
+                  onClick={() => toggleTrackGroupCollapsed(row.groupKey)}
+
+                  title={
+
+                    row.collapsed
+
+                      ? t('pages.music-library.group.expandTitle')
+
+                      : t('pages.music-library.group.collapseTitle')
+
+                  }
+
+                >
+
+                  <span className="music-library-card-group-arrow" aria-hidden="true">
+
+                    {row.collapsed ? '▶' : '▼'}
+
+                  </span>
+
+                  <span className="music-library-card-group-field">{row.fieldLabel}</span>
+
+                  <span className="music-library-card-group-title">{row.title}</span>
+
+                  <span className="music-library-card-group-count">
+
+                    {t('pages.album.stats.trackCount', { count: row.count })}
+
+                  </span>
+
+                </button>
+
+              </div>
+
+            );
+
+          }
+
+
+
+          const blockStyle = resolveIndentedBlockStyle(block.depth);
+
+          return (
+
+            <div key={block.key} className="music-library-card-grid" style={blockStyle}>
+
+              {block.rows.map(renderTrackCardByRow)}
+
+            </div>
+
+          );
+
+        })}
+
+        {cardVirtualWindow.bottomSpacerPx > 0 && (
+
+          <div
+
+            className="music-library-virtual-spacer"
+
+            style={{ height: `${cardVirtualWindow.bottomSpacerPx}px` }}
+
+            aria-hidden="true"
+
+          />
+
+        )}
+
+      </>
+
+    );
 
   }, [
 
-    cardGroupLayout.entries,
+    cardVirtualWindow.blocks,
+    cardVirtualWindow.bottomSpacerPx,
+    cardVirtualWindow.topSpacerPx,
+    filteredTracks,
 
     handleAddSingleTrack,
 
@@ -6614,8 +6772,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     pendingPlayTrackIdentity,
 
     resolveTrackIdentity,
-
-    renderedTracks,
 
     t,
 

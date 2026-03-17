@@ -44,7 +44,7 @@ export const StandardPlaylists: React.FC<PlaylistsVariantProps> = ({ data, logic
         ) : null}
         {isOpen && skinProps.showActiveIndicator ? <span className="playlists-button-indicator" aria-hidden="true" /> : null}
       </button>
-      <Playlists isOpen={isOpen} onClose={closePlaylists} />
+      {isOpen ? <Playlists isOpen={isOpen} onClose={closePlaylists} /> : null}
     </>
   );
 };

@@ -134,6 +134,18 @@ pub async fn debug_get_process_perf_totals(
 }
 
 #[tauri::command]
+pub async fn debug_trim_process_working_set(
+    perf_monitor: tauri::State<'_, Arc<perf_monitor::PerfMonitor>>,
+    target: Option<perf_monitor::ProcessWorkingSetTrimTarget>,
+) -> Result<perf_monitor::ProcessWorkingSetTrimResult, String> {
+    let monitor = perf_monitor.inner().clone();
+    let target = target.unwrap_or(perf_monitor::ProcessWorkingSetTrimTarget::Tree);
+    tauri::async_runtime::spawn_blocking(move || monitor.trim_working_set(target))
+        .await
+        .map_err(|e| format!("Process working set trim task failed: {e}"))?
+}
+
+#[tauri::command]
 pub fn debug_get_backend_modules() -> Vec<modules::descriptor::BackendModuleDescriptor> {
     modules::catalog::list_backend_modules()
 }

@@ -4,6 +4,7 @@ import {
   applyRecentSmartPlaylistSnapshotToState,
   compactTrackForRecentPlaylist,
   mergeRecentSmartPlaylistTracks,
+  serializeTrackForPlaylist,
   toPlaylistItemUpserts,
 } from '../recentSmartPlaylist';
 
@@ -61,6 +62,29 @@ describe('recentSmartPlaylist', () => {
     expect(items[0]?.position).toBe(0);
     expect(items[0]?.snapshotTitle).toBe('Track 1');
     expect(typeof items[0]?.trackPayloadJson).toBe('string');
+  });
+
+  it('serializes playlist tracks without heavyweight runtime fields', () => {
+    const payloadJson = serializeTrackForPlaylist({
+      id: 't-heavy',
+      title: 'Heavy Track',
+      artist: 'Artist',
+      filePath: 'C:/Music/heavy.flac',
+      path: 'C:/Music/heavy.flac',
+      coverUrl: `data:image/png;base64,${'a'.repeat(2048)}`,
+      fileContent: new ArrayBuffer(2 * 1024 * 1024),
+      lyrics: 'l'.repeat(16 * 1024),
+      tags: ['tag-a', 'tag-b'],
+      comment: 'keep me',
+    });
+
+    const payload = JSON.parse(payloadJson ?? '{}') as Record<string, unknown>;
+    expect(payload.id).toBe('t-heavy');
+    expect(payload.comment).toBe('keep me');
+    expect(payload.fileContent).toBeUndefined();
+    expect(payload.lyrics).toBeUndefined();
+    expect(payload.tags).toBeUndefined();
+    expect(payload.coverUrl).toBeUndefined();
   });
 
   it('applies recent snapshot to playlist state and syncs current playlist', () => {

@@ -2,6 +2,7 @@ import type {
   NativeLibraryPlaylistItemUpsertInput,
 } from '../../modules/music-library';
 import { prependTrackWithDedup } from './trackIdentity';
+import { compactTrackForState } from './trackStateProjection';
 import type { Playlist, Track } from './types';
 
 export type RecentSmartPlaylistWriteEntry = {
@@ -10,75 +11,75 @@ export type RecentSmartPlaylistWriteEntry = {
 };
 
 export function compactTrackForRecentPlaylist(track: Track): Track {
+  const compacted = compactTrackForState(track);
   return {
-    id: track.id,
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    albumArtist: track.albumArtist,
-    duration: track.duration,
-    path: track.path,
-    filePath: track.filePath,
-    originalPath: track.originalPath,
-    quickFingerprint: track.quickFingerprint,
-    coverKey: track.coverKey,
-    coverUrl: track.coverUrl,
-    genre: track.genre,
-    sampleRate: track.sampleRate,
-    fileSize: track.fileSize,
-    mtimeMs: track.mtimeMs,
-    comment: track.comment,
-    mimeType: track.mimeType,
-    lastPlayed: track.lastPlayed,
-    playCount: track.playCount,
-    replayGainTrackGainDb: track.replayGainTrackGainDb,
-    replayGainAlbumGainDb: track.replayGainAlbumGainDb,
-    codecName: track.codecName,
-    format: track.format,
+    id: compacted.id,
+    title: compacted.title,
+    artist: compacted.artist,
+    album: compacted.album,
+    albumArtist: compacted.albumArtist,
+    duration: compacted.duration,
+    path: compacted.path,
+    filePath: compacted.filePath,
+    originalPath: compacted.originalPath,
+    quickFingerprint: compacted.quickFingerprint,
+    coverKey: compacted.coverKey,
+    coverUrl: compacted.coverUrl,
+    genre: compacted.genre,
+    sampleRate: compacted.sampleRate,
+    fileSize: compacted.fileSize,
+    mtimeMs: compacted.mtimeMs,
+    comment: compacted.comment,
+    mimeType: compacted.mimeType,
+    lastPlayed: compacted.lastPlayed,
+    playCount: compacted.playCount,
+    replayGainTrackGainDb: compacted.replayGainTrackGainDb,
+    replayGainAlbumGainDb: compacted.replayGainAlbumGainDb,
+    codecName: compacted.codecName,
+    format: compacted.format,
   };
 }
 
 export function serializeTrackForPlaylist(track: Track): string | undefined {
-  const id = typeof track?.id === 'string' ? track.id.trim() : '';
-  const title = typeof track?.title === 'string' ? track.title.trim() : '';
+  const compacted = compactTrackForState(track);
+  const id = typeof compacted.id === 'string' ? compacted.id.trim() : '';
+  const title = typeof compacted.title === 'string' ? compacted.title.trim() : '';
   if (!id || !title) return undefined;
 
   const payload: Partial<Track> = {
     id,
     title,
-    artist: track.artist,
-    album: track.album,
-    albumArtist: track.albumArtist,
-    duration: track.duration,
-    path: track.path,
-    filePath: track.filePath,
-    originalPath: track.originalPath,
-    libraryPathId: track.libraryPathId,
-    mtimeMs: track.mtimeMs,
-    quickFingerprint: track.quickFingerprint,
-    coverKey: track.coverKey,
-    coverUrl: track.coverUrl,
-    year: track.year,
-    genre: track.genre,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber,
-    composer: track.composer,
-    bitrate: track.bitrate,
-    sampleRate: track.sampleRate,
-    replayGainTrackGainDb: track.replayGainTrackGainDb,
-    replayGainAlbumGainDb: track.replayGainAlbumGainDb,
-    format: track.format,
-    codecName: track.codecName,
-    fileSize: track.fileSize,
-    dateAdded: track.dateAdded,
-    lastPlayed: track.lastPlayed,
-    playCount: track.playCount,
-    rating: track.rating,
-    favorite: track.favorite,
-    tags: track.tags,
-    lyrics: track.lyrics,
-    comment: track.comment,
-    mimeType: track.mimeType,
+    artist: compacted.artist,
+    album: compacted.album,
+    albumArtist: compacted.albumArtist,
+    duration: compacted.duration,
+    path: compacted.path,
+    filePath: compacted.filePath,
+    originalPath: compacted.originalPath,
+    libraryPathId: compacted.libraryPathId,
+    mtimeMs: compacted.mtimeMs,
+    quickFingerprint: compacted.quickFingerprint,
+    coverKey: compacted.coverKey,
+    coverUrl: compacted.coverUrl,
+    year: compacted.year,
+    genre: compacted.genre,
+    trackNumber: compacted.trackNumber,
+    discNumber: compacted.discNumber,
+    composer: compacted.composer,
+    bitrate: compacted.bitrate,
+    sampleRate: compacted.sampleRate,
+    replayGainTrackGainDb: compacted.replayGainTrackGainDb,
+    replayGainAlbumGainDb: compacted.replayGainAlbumGainDb,
+    format: compacted.format,
+    codecName: compacted.codecName,
+    fileSize: compacted.fileSize,
+    dateAdded: compacted.dateAdded,
+    lastPlayed: compacted.lastPlayed,
+    playCount: compacted.playCount,
+    rating: compacted.rating,
+    favorite: compacted.favorite,
+    comment: compacted.comment,
+    mimeType: compacted.mimeType,
   };
 
   try {
@@ -143,6 +144,7 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
 }): { playlists: Playlist[]; currentPlaylist: Playlist | null } {
   const totalDuration = options.tracks.reduce((sum, item) => sum + (item.duration ?? 0), 0);
   let hasRecentPlaylist = false;
+  const shouldMaterializeTracks = options.currentPlaylist?.id === options.recentPlaylistId;
 
   const nextPlaylists = options.playlists.map((playlist) => {
     if (playlist.id !== options.recentPlaylistId) {
@@ -150,10 +152,11 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
     }
 
     hasRecentPlaylist = true;
+    const materializeTracks = shouldMaterializeTracks || playlist.tracksHydrated !== false;
     return {
       ...playlist,
       name: playlist.name || options.recentPlaylistName,
-      tracks: options.tracks,
+      tracks: materializeTracks ? options.tracks : [],
       kind: 'smart' as const,
       readonly: true,
       smartRuleJson:
@@ -165,6 +168,7 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
       updatedAt: Math.max(options.updatedAtMs, playlist.updatedAt || 0),
       trackCount: options.tracks.length,
       totalDuration,
+      tracksHydrated: materializeTracks,
     };
   });
 
@@ -172,7 +176,7 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
     nextPlaylists.push({
       id: options.recentPlaylistId,
       name: options.recentPlaylistName,
-      tracks: options.tracks,
+      tracks: shouldMaterializeTracks ? options.tracks : [],
       kind: 'smart',
       readonly: true,
       smartRuleJson: JSON.stringify({
@@ -183,6 +187,7 @@ export function applyRecentSmartPlaylistSnapshotToState(options: {
       updatedAt: options.updatedAtMs,
       trackCount: options.tracks.length,
       totalDuration,
+      tracksHydrated: shouldMaterializeTracks,
     });
   }
 

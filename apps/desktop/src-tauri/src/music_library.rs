@@ -1253,7 +1253,9 @@ fn build_protocol_response(
         response = response.header("Content-Type", content_type);
     }
     response = response.header("Access-Control-Allow-Origin", "*");
-    response = response.header("Cache-Control", "public, max-age=604800, immutable");
+    response = response.header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response = response.header("Pragma", "no-cache");
+    response = response.header("Expires", "0");
     response
         .header("Content-Length", body.len().to_string())
         .body(body)

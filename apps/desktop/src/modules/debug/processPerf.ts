@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { isTauriRuntime } from '../../utils/tauriRuntime';
 
 export type ProcessPerfKind = 'app' | 'webview2' | 'child';
+export type ProcessWorkingSetTrimTarget = 'app' | 'webview2' | 'tree';
 
 export type SystemMemorySnapshot = {
   memoryLoadPercent: number;
@@ -55,6 +56,15 @@ export type ProcessPerfTotalsSnapshot = {
   totals: ProcessPerfTotals;
 };
 
+export type ProcessWorkingSetTrimResult = {
+  timestampMs: number;
+  rootPid: number;
+  target: ProcessWorkingSetTrimTarget;
+  attemptedPids: number[];
+  trimmedPids: number[];
+  failedPids: number[];
+};
+
 const EMPTY_TOTALS: ProcessPerfTotals = {
   workingSetBytes: 0,
   privateBytes: 0,
@@ -89,6 +99,15 @@ const EMPTY_TOTALS_SNAPSHOT: ProcessPerfTotalsSnapshot = {
   totals: EMPTY_TOTALS,
 };
 
+const EMPTY_TRIM_RESULT: ProcessWorkingSetTrimResult = {
+  timestampMs: 0,
+  rootPid: 0,
+  target: 'tree',
+  attemptedPids: [],
+  trimmedPids: [],
+  failedPids: [],
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -108,6 +127,11 @@ function readString(value: unknown, fallback: string): string {
 function readKind(value: unknown): ProcessPerfKind {
   if (value === 'app' || value === 'webview2' || value === 'child') return value;
   return 'child';
+}
+
+function readTrimTarget(value: unknown): ProcessWorkingSetTrimTarget {
+  if (value === 'app' || value === 'webview2' || value === 'tree') return value;
+  return 'tree';
 }
 
 function ensureSystemMemory(value: unknown): SystemMemorySnapshot | null {
@@ -184,6 +208,28 @@ export function ensureProcessPerfTotalsSnapshot(value: unknown): ProcessPerfTota
   };
 }
 
+export function ensureProcessWorkingSetTrimResult(value: unknown): ProcessWorkingSetTrimResult {
+  if (!isRecord(value)) return EMPTY_TRIM_RESULT;
+  const attemptedPids = Array.isArray(value.attemptedPids)
+    ? value.attemptedPids.map((item) => readNumber(item, 0)).filter((item) => item > 0)
+    : [];
+  const trimmedPids = Array.isArray(value.trimmedPids)
+    ? value.trimmedPids.map((item) => readNumber(item, 0)).filter((item) => item > 0)
+    : [];
+  const failedPids = Array.isArray(value.failedPids)
+    ? value.failedPids.map((item) => readNumber(item, 0)).filter((item) => item > 0)
+    : [];
+
+  return {
+    timestampMs: readNumber(value.timestampMs, 0),
+    rootPid: readNumber(value.rootPid, 0),
+    target: readTrimTarget(value.target),
+    attemptedPids,
+    trimmedPids,
+    failedPids,
+  };
+}
+
 export async function getProcessPerfSnapshot(): Promise<ProcessPerfSnapshot | null> {
   if (!isTauriRuntime()) return null;
   const raw = await invoke<unknown>('debug_get_process_perf_snapshot').catch(() => null);
@@ -196,4 +242,13 @@ export async function getProcessPerfTotalsSnapshot(): Promise<ProcessPerfTotalsS
   const raw = await invoke<unknown>('debug_get_process_perf_totals').catch(() => null);
   if (!raw) return null;
   return ensureProcessPerfTotalsSnapshot(raw);
+}
+
+export async function trimProcessWorkingSet(
+  target: ProcessWorkingSetTrimTarget = 'tree'
+): Promise<ProcessWorkingSetTrimResult | null> {
+  if (!isTauriRuntime()) return null;
+  const raw = await invoke<unknown>('debug_trim_process_working_set', { target }).catch(() => null);
+  if (!raw) return null;
+  return ensureProcessWorkingSetTrimResult(raw);
 }

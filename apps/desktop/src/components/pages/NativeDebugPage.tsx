@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
 import { useLocale, useT } from '../../i18n';
-import { AudioRobustnessSnapshot, Track } from '../../services/audio';
+import { AudioRobustnessSnapshot, type AudioState, Track } from '../../services/audio';
 import type { AudioTuningProfileId } from '../../services/audio/types';
 import { NativeDebugQueuePanel } from './native-debug/NativeDebugQueuePanel';
 import { NativeDebugPlaybackDspPanel } from './native-debug/NativeDebugPlaybackDspPanel';
@@ -31,6 +31,138 @@ const SUPPORTED_EXTENSIONS = ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'];
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
   return value as Record<string, unknown>;
+}
+
+type TrackResidencyDiagnostics = {
+  trackCount: number;
+  tracksWithFileContent: number;
+  fileContentBytes: number;
+  tracksWithLyrics: number;
+  lyricChars: number;
+  tracksWithTags: number;
+  tagEntries: number;
+  tagChars: number;
+  tracksWithBlobCoverUrl: number;
+  tracksWithDataCoverUrl: number;
+  coverUrlChars: number;
+  tracksWithFileHandle: number;
+  commentChars: number;
+  pathChars: number;
+  filePathChars: number;
+  originalPathChars: number;
+  uniquePathCount: number;
+  approxJsonBytes: number;
+  approxHeavyFieldBytes: number;
+};
+
+function measureJsonBytes(value: unknown): number {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof json !== 'string') return 0;
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(json).length;
+    }
+    return json.length * 2;
+  } catch {
+    return 0;
+  }
+}
+
+function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagnostics {
+  let tracksWithFileContent = 0;
+  let fileContentBytes = 0;
+  let tracksWithLyrics = 0;
+  let lyricChars = 0;
+  let tracksWithTags = 0;
+  let tagEntries = 0;
+  let tagChars = 0;
+  let tracksWithBlobCoverUrl = 0;
+  let tracksWithDataCoverUrl = 0;
+  let coverUrlChars = 0;
+  let tracksWithFileHandle = 0;
+  let commentChars = 0;
+  let pathChars = 0;
+  let filePathChars = 0;
+  let originalPathChars = 0;
+  const uniquePaths = new Set<string>();
+
+  for (const track of tracks) {
+    if (track.fileContent instanceof ArrayBuffer) {
+      tracksWithFileContent += 1;
+      fileContentBytes += track.fileContent.byteLength;
+    }
+
+    if (typeof track.lyrics === 'string' && track.lyrics.length > 0) {
+      tracksWithLyrics += 1;
+      lyricChars += track.lyrics.length;
+    }
+
+    if (Array.isArray(track.tags) && track.tags.length > 0) {
+      tracksWithTags += 1;
+      tagEntries += track.tags.length;
+      tagChars += track.tags.reduce((total, tag) => total + (typeof tag === 'string' ? tag.length : 0), 0);
+    }
+
+    if (typeof track.coverUrl === 'string' && track.coverUrl.length > 0) {
+      const lowerCoverUrl = track.coverUrl.trim().toLowerCase();
+      coverUrlChars += track.coverUrl.length;
+      if (lowerCoverUrl.startsWith('blob:')) {
+        tracksWithBlobCoverUrl += 1;
+      } else if (lowerCoverUrl.startsWith('data:')) {
+        tracksWithDataCoverUrl += 1;
+      }
+    }
+
+    if (track.fileHandle) {
+      tracksWithFileHandle += 1;
+    }
+
+    if (typeof track.comment === 'string' && track.comment.length > 0) {
+      commentChars += track.comment.length;
+    }
+
+    if (typeof track.path === 'string' && track.path.length > 0) {
+      pathChars += track.path.length;
+      uniquePaths.add(track.path);
+    }
+
+    if (typeof track.filePath === 'string' && track.filePath.length > 0) {
+      filePathChars += track.filePath.length;
+      uniquePaths.add(track.filePath);
+    }
+
+    if (typeof track.originalPath === 'string' && track.originalPath.length > 0) {
+      originalPathChars += track.originalPath.length;
+      uniquePaths.add(track.originalPath);
+    }
+  }
+
+  return {
+    trackCount: tracks.length,
+    tracksWithFileContent,
+    fileContentBytes,
+    tracksWithLyrics,
+    lyricChars,
+    tracksWithTags,
+    tagEntries,
+    tagChars,
+    tracksWithBlobCoverUrl,
+    tracksWithDataCoverUrl,
+    coverUrlChars,
+    tracksWithFileHandle,
+    commentChars,
+    pathChars,
+    filePathChars,
+    originalPathChars,
+    uniquePathCount: uniquePaths.size,
+    approxJsonBytes: measureJsonBytes(tracks),
+    approxHeavyFieldBytes:
+      fileContentBytes +
+      lyricChars * 2 +
+      tagChars * 2 +
+      coverUrlChars * 2 +
+      commentChars * 2,
+  };
 }
 
 type NativeAudioMeta = {
@@ -140,6 +272,90 @@ const DEFAULT_EQ_BANDS: NativeDspEqBand[] = [
   { kind: 'high-shelf', frequencyHz: 8000, q: 1, gainDb: 0 },
 ];
 
+type NativeRetireStats = {
+  pendingTasks: number | null;
+  enqueuedTotal: number | null;
+  executedTotal: number | null;
+  inlineFallbackTotal: number | null;
+  panicTotal: number | null;
+};
+
+type NativeBufferDebugSnapshot = {
+  timestampMs: number;
+  playbackState: AudioState['playbackState'];
+  trackPath: string | null;
+  bufferedAhead: number;
+  decodeBufferedAhead: number | null;
+  outputBufferedAhead: number | null;
+  retirePendingTasks: number | null;
+  retireEnqueuedTotal: number | null;
+  retireExecutedTotal: number | null;
+};
+
+type NativeTrackSwitchDebugSnapshot = {
+  status: 'pending' | 'completed' | 'error';
+  startedAtMs: number;
+  completedAtMs: number | null;
+  fromTrack: string | null;
+  toTrack: string | null;
+  before: NativeBufferDebugSnapshot | null;
+  current: NativeBufferDebugSnapshot;
+  after: NativeBufferDebugSnapshot | null;
+};
+
+const EMPTY_RETIRE_STATS: NativeRetireStats = {
+  pendingTasks: null,
+  enqueuedTotal: null,
+  executedTotal: null,
+  inlineFallbackTotal: null,
+  panicTotal: null,
+};
+
+function parseOptionalNonNegativeInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : null;
+}
+
+function getDebugTrackPath(track: Track | null | undefined): string | null {
+  if (!track) return null;
+  const candidates = [track.originalPath, track.filePath, track.path];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  return null;
+}
+
+function captureBufferDebugSnapshot(
+  state: AudioState,
+  retireStats: NativeRetireStats,
+  timestampMs: number = Date.now()
+): NativeBufferDebugSnapshot {
+  return {
+    timestampMs,
+    playbackState: state.playbackState,
+    trackPath: getDebugTrackPath(state.currentTrack),
+    bufferedAhead:
+      typeof state.bufferedAhead === 'number' && Number.isFinite(state.bufferedAhead)
+        ? Math.max(0, state.bufferedAhead)
+        : 0,
+    decodeBufferedAhead:
+      typeof state.decodeBufferedAhead === 'number' && Number.isFinite(state.decodeBufferedAhead)
+        ? Math.max(0, state.decodeBufferedAhead)
+        : null,
+    outputBufferedAhead:
+      typeof state.outputBufferedAhead === 'number' && Number.isFinite(state.outputBufferedAhead)
+        ? Math.max(0, state.outputBufferedAhead)
+        : null,
+    retirePendingTasks: retireStats.pendingTasks,
+    retireEnqueuedTotal: retireStats.enqueuedTotal,
+    retireExecutedTotal: retireStats.executedTotal,
+  };
+}
+
 export const NativeDebugPage: React.FC = () => {
   const audioService = useAudioService();
   const t = useT();
@@ -203,6 +419,13 @@ export const NativeDebugPage: React.FC = () => {
   const [robustness, setRobustness] = useState<AudioRobustnessSnapshot>(() =>
     audioService.getRobustnessSnapshot?.() ?? EMPTY_ROBUSTNESS
   );
+  const [retireStats, setRetireStats] = useState<NativeRetireStats>(EMPTY_RETIRE_STATS);
+  const [trackSwitchSnapshot, setTrackSwitchSnapshot] = useState<NativeTrackSwitchDebugSnapshot | null>(null);
+  const previousTrackPathRef = useRef<string | null>(getDebugTrackPath(state.currentTrack));
+  const previousBufferSnapshotRef = useRef<NativeBufferDebugSnapshot>(
+    captureBufferDebugSnapshot(state, EMPTY_RETIRE_STATS)
+  );
+  const pendingTrackSwitchRef = useRef<NativeTrackSwitchDebugSnapshot | null>(null);
 
   const getFrequencyData = useCallback(() => audioService.getFrequencyData?.() ?? null, [audioService]);
 
@@ -365,8 +588,16 @@ export const NativeDebugPage: React.FC = () => {
       const bitDepth = typeof next.bitDepth === 'number' ? next.bitDepth : null;
       const gainDb = typeof next.gainDb === 'number' ? next.gainDb : null;
       const replayGainDb = typeof next.replayGainDb === 'number' ? next.replayGainDb : null;
+      const nextRetireStats: NativeRetireStats = {
+        pendingTasks: parseOptionalNonNegativeInt(next.retirePendingTasks),
+        enqueuedTotal: parseOptionalNonNegativeInt(next.retireEnqueuedTotal),
+        executedTotal: parseOptionalNonNegativeInt(next.retireExecutedTotal),
+        inlineFallbackTotal: parseOptionalNonNegativeInt(next.retireInlineFallbackTotal),
+        panicTotal: parseOptionalNonNegativeInt(next.retirePanicTotal),
+      };
 
       setNativeMeta({ device, sampleRate, bitDepth, gainDb, replayGainDb });
+      setRetireStats(nextRetireStats);
       if (gainDb !== null) {
         setDspGainDb(gainDb);
       }
@@ -386,6 +617,78 @@ export const NativeDebugPage: React.FC = () => {
     const { title, artist } = state.currentTrack;
     return artist ? `${title} - ${artist}` : title;
   }, [state.currentTrack, t]);
+
+  const currentTrackDebugPath = useMemo(
+    () => getDebugTrackPath(state.currentTrack),
+    [state.currentTrack]
+  );
+
+  const currentBufferDebugSnapshot = useMemo(
+    () => captureBufferDebugSnapshot(state, retireStats),
+    [
+      retireStats,
+      state.bufferedAhead,
+      state.currentTrack,
+      state.decodeBufferedAhead,
+      state.outputBufferedAhead,
+      state.playbackState,
+    ]
+  );
+
+  useEffect(() => {
+    const previousTrackPath = previousTrackPathRef.current;
+    const previousBufferSnapshot = previousBufferSnapshotRef.current;
+    const trackChanged = currentTrackDebugPath !== previousTrackPath;
+
+    if (
+      state.playbackState === 'loading' &&
+      trackChanged &&
+      typeof currentTrackDebugPath === 'string' &&
+      currentTrackDebugPath.length > 0
+    ) {
+      const snapshot: NativeTrackSwitchDebugSnapshot = {
+        status: 'pending',
+        startedAtMs: currentBufferDebugSnapshot.timestampMs,
+        completedAtMs: null,
+        fromTrack: previousTrackPath,
+        toTrack: currentTrackDebugPath,
+        before: previousBufferSnapshot,
+        current: currentBufferDebugSnapshot,
+        after: null,
+      };
+      pendingTrackSwitchRef.current = snapshot;
+      setTrackSwitchSnapshot(snapshot);
+    } else if (pendingTrackSwitchRef.current) {
+      const pendingSnapshot = pendingTrackSwitchRef.current;
+      const liveSnapshot: NativeTrackSwitchDebugSnapshot = {
+        ...pendingSnapshot,
+        current: currentBufferDebugSnapshot,
+      };
+      const switchSettled =
+        currentTrackDebugPath === pendingSnapshot.toTrack &&
+        state.playbackState !== 'loading' &&
+        state.playbackState !== 'buffering';
+
+      if (switchSettled) {
+        const status: NativeTrackSwitchDebugSnapshot['status'] =
+          state.playbackState === 'error' ? 'error' : 'completed';
+        const completedSnapshot: NativeTrackSwitchDebugSnapshot = {
+          ...liveSnapshot,
+          status,
+          completedAtMs: currentBufferDebugSnapshot.timestampMs,
+          after: currentBufferDebugSnapshot,
+        };
+        pendingTrackSwitchRef.current = null;
+        setTrackSwitchSnapshot(completedSnapshot);
+      } else {
+        pendingTrackSwitchRef.current = liveSnapshot;
+        setTrackSwitchSnapshot(liveSnapshot);
+      }
+    }
+
+    previousTrackPathRef.current = currentTrackDebugPath;
+    previousBufferSnapshotRef.current = currentBufferDebugSnapshot;
+  }, [currentBufferDebugSnapshot, currentTrackDebugPath, state.playbackState]);
 
   const parseSrcTargetRate = useCallback((value: string): number | null => {
     const parsed = Number(value);
@@ -1072,6 +1375,89 @@ export const NativeDebugPage: React.FC = () => {
     appendLog(t('pages.native-debug.log.queue.cleared'));
   }, [audioService, appendLog, t]);
 
+  const queueResidencyDiagnostics = useMemo(
+    () => collectTrackResidencyDiagnostics(state.queue),
+    [state.queue]
+  );
+  const playlistTrackResidencyDiagnostics = useMemo(
+    () => collectTrackResidencyDiagnostics(state.playlists.flatMap((playlist) => playlist.tracks)),
+    [state.playlists]
+  );
+  const currentTrackResidencyDiagnostics = useMemo(
+    () => collectTrackResidencyDiagnostics(state.currentTrack ? [state.currentTrack] : []),
+    [state.currentTrack]
+  );
+  const queuePathsPayloadDiagnostics = useMemo(() => {
+    const queuePaths = state.queue
+      .map((track) => track.filePath || track.path || track.originalPath || '')
+      .filter((value) => value.length > 0);
+
+    return {
+      pathCount: queuePaths.length,
+      totalChars: queuePaths.reduce((total, value) => total + value.length, 0),
+      approxJsonBytes: measureJsonBytes(queuePaths),
+    };
+  }, [state.queue]);
+  const playlistStateFootprint = useMemo(() => {
+    const playlistSummaries = state.playlists.map((playlist) => ({
+      id: playlist.id,
+      name: playlist.name,
+      kind: playlist.kind,
+      readonly: playlist.readonly,
+      trackCount: playlist.trackCount ?? playlist.tracks.length,
+      loadedTrackCount: playlist.tracks.length,
+      totalDuration: playlist.totalDuration ?? 0,
+      updatedAt: playlist.updatedAt,
+      tracksHydrated: playlist.tracksHydrated !== false,
+    }));
+
+    return {
+      playlistCount: state.playlists.length,
+      loadedTrackCount: state.playlists.reduce((total, playlist) => total + playlist.tracks.length, 0),
+      approxJsonBytes: measureJsonBytes(state.playlists),
+      approxSummaryJsonBytes: measureJsonBytes(playlistSummaries),
+      currentPlaylistId: state.currentPlaylist?.id ?? null,
+      currentPlaylistTrackCount: state.currentPlaylist?.tracks.length ?? 0,
+      currentPlaylistJsonBytes: measureJsonBytes(state.currentPlaylist),
+    };
+  }, [state.currentPlaylist, state.playlists]);
+  const audioStateJsonBytes = useMemo(() => measureJsonBytes(state), [state]);
+
+  const displayedDiagnostics = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          retire: retireStats,
+          currentBuffers: currentBufferDebugSnapshot,
+          lastTrackSwitch: trackSwitchSnapshot,
+          residency: {
+            currentTrack: currentTrackResidencyDiagnostics,
+            queue: queueResidencyDiagnostics,
+            playlists: {
+              ...playlistStateFootprint,
+              ...playlistTrackResidencyDiagnostics,
+            },
+          },
+          stateFootprint: {
+            audioStateJsonBytes,
+            queuePaths: queuePathsPayloadDiagnostics,
+          },
+        },
+        null,
+        2
+      ),
+    [
+      audioStateJsonBytes,
+      currentBufferDebugSnapshot,
+      currentTrackResidencyDiagnostics,
+      playlistStateFootprint,
+      playlistTrackResidencyDiagnostics,
+      queuePathsPayloadDiagnostics,
+      queueResidencyDiagnostics,
+      retireStats,
+      trackSwitchSnapshot,
+    ]
+  );
   const displayedState = useMemo(() => JSON.stringify(state, null, 2), [state]);
   const displayedRobustness = useMemo(() => JSON.stringify(robustness, null, 2), [robustness]);
   const diagnosticTimelineRows = useMemo(
@@ -1364,7 +1750,12 @@ export const NativeDebugPage: React.FC = () => {
             onRemoveAtIndex={handleQueueRemove}
           />
         </section>
-        <NativeDebugStatePanel t={t} displayedState={displayedState} logs={logs} />
+        <NativeDebugStatePanel
+          t={t}
+          displayedDiagnostics={displayedDiagnostics}
+          displayedState={displayedState}
+          logs={logs}
+        />
       </div>
     </div>
   );

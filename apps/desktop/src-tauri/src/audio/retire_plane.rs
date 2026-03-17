@@ -2,7 +2,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
 
@@ -40,6 +40,7 @@ static RETIRE_INLINE_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RETIRE_PANIC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RETIRE_TIMING_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 static RETIRE_PANIC_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
+static RETIRE_BACKPRESSURE_TIMELINE_GATE_MS: AtomicU64 = AtomicU64::new(0);
 
 fn decrement_pending() {
     let _ = RETIRE_PENDING_TASKS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
@@ -148,6 +149,51 @@ pub(crate) fn stats_snapshot() -> RetirePlaneStatsSnapshot {
         inline_fallback_total: RETIRE_INLINE_FALLBACK_TOTAL.load(Ordering::Relaxed),
         panic_total: RETIRE_PANIC_TOTAL.load(Ordering::Relaxed),
     }
+}
+
+pub(crate) fn pending_tasks() -> u64 {
+    RETIRE_PENDING_TASKS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn wait_for_pending_tasks_at_most(max_pending: u64, timeout: Duration) -> bool {
+    let started = Instant::now();
+    let initial_pending = pending_tasks();
+    if initial_pending <= max_pending {
+        return true;
+    }
+
+    let mut spin_loops = 0u32;
+    while started.elapsed() < timeout {
+        let pending = pending_tasks();
+        if pending <= max_pending {
+            let waited_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            diagnostics::record_event_throttled(
+                "retire_plane.backpressure_wait_ms",
+                waited_ms,
+                initial_pending,
+                &RETIRE_BACKPRESSURE_TIMELINE_GATE_MS,
+                200,
+            );
+            return true;
+        }
+
+        if spin_loops < 8 {
+            spin_loops += 1;
+            std::hint::spin_loop();
+            continue;
+        }
+
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    diagnostics::record_event_throttled(
+        "retire_plane.backpressure_timeout",
+        pending_tasks(),
+        initial_pending,
+        &RETIRE_BACKPRESSURE_TIMELINE_GATE_MS,
+        200,
+    );
+    false
 }
 
 pub(crate) fn shutdown() {

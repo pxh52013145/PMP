@@ -14,6 +14,7 @@ pub const DEBUG_COMMAND_NAMES: &[&str] = &[
     "governance_destroy_hidden_vst_manager_windows",
     "debug_get_process_perf_snapshot",
     "debug_get_process_perf_totals",
+    "debug_trim_process_working_set",
     "debug_get_backend_modules",
     "debug_get_registered_commands",
 ];
@@ -288,6 +289,7 @@ macro_rules! pmp_generate_handler {
             crate::commands::debug::governance_destroy_hidden_vst_manager_windows,
             crate::commands::debug::debug_get_process_perf_snapshot,
             crate::commands::debug::debug_get_process_perf_totals,
+            crate::commands::debug::debug_trim_process_working_set,
             crate::commands::debug::debug_get_backend_modules,
             crate::commands::debug::debug_get_registered_commands,
             crate::commands::media::background_import_media,

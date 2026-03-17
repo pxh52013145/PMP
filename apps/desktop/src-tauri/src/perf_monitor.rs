@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -11,6 +11,14 @@ pub enum ProcessPerfKind {
     WebView2,
     #[serde(rename = "child")]
     Child,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProcessWorkingSetTrimTarget {
+    App,
+    WebView2,
+    Tree,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +83,17 @@ pub struct ProcessPerfTotalsSnapshot {
     pub totals: ProcessPerfTotals,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessWorkingSetTrimResult {
+    pub timestamp_ms: u64,
+    pub root_pid: u32,
+    pub target: ProcessWorkingSetTrimTarget,
+    pub attempted_pids: Vec<u32>,
+    pub trimmed_pids: Vec<u32>,
+    pub failed_pids: Vec<u32>,
+}
+
 #[derive(Debug, Default)]
 pub struct PerfMonitor {
     inner: Mutex<PerfMonitorInner>,
@@ -121,6 +140,21 @@ impl PerfMonitor {
         #[cfg(not(target_os = "windows"))]
         {
             Err("Process performance snapshot is only supported on Windows.".to_string())
+        }
+    }
+
+    pub fn trim_working_set(
+        &self,
+        target: ProcessWorkingSetTrimTarget,
+    ) -> Result<ProcessWorkingSetTrimResult, String> {
+        #[cfg(target_os = "windows")]
+        {
+            trim_working_set_windows(target)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = target;
+            Err("Process working set trim is only supported on Windows.".to_string())
         }
     }
 }
@@ -560,4 +594,76 @@ fn build_process_tree(
         }
     }
     (tree, by_pid)
+}
+
+#[cfg(target_os = "windows")]
+fn trim_working_set_windows(
+    target: ProcessWorkingSetTrimTarget,
+) -> Result<ProcessWorkingSetTrimResult, String> {
+    let root_pid = std::process::id();
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let entries = list_process_entries()?;
+    let (tree_pids, by_pid) = build_process_tree(&entries, root_pid as u32);
+
+    let attempted_pids: Vec<u32> = tree_pids
+        .into_iter()
+        .filter(|pid| match target {
+            ProcessWorkingSetTrimTarget::App => *pid == root_pid as u32,
+            ProcessWorkingSetTrimTarget::WebView2 => by_pid
+                .get(pid)
+                .map(|entry| classify_process(*pid, &entry.exe_name, root_pid as u32))
+                == Some(ProcessPerfKind::WebView2),
+            ProcessWorkingSetTrimTarget::Tree => true,
+        })
+        .collect();
+
+    let mut trimmed_pids = Vec::with_capacity(attempted_pids.len());
+    let mut failed_pids = Vec::new();
+    for pid in attempted_pids.iter().copied() {
+        if trim_single_process_working_set(pid) {
+            trimmed_pids.push(pid);
+        } else {
+            failed_pids.push(pid);
+        }
+    }
+
+    Ok(ProcessWorkingSetTrimResult {
+        timestamp_ms,
+        root_pid: root_pid as u32,
+        target,
+        attempted_pids,
+        trimmed_pids,
+        failed_pids,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn trim_single_process_working_set(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, SetProcessWorkingSetSize, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SET_QUOTA,
+    };
+
+    struct WinHandle(HANDLE);
+    impl Drop for WinHandle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let handle = WinHandle(handle);
+        SetProcessWorkingSetSize(handle.0, usize::MAX, usize::MAX) != 0
+    }
 }

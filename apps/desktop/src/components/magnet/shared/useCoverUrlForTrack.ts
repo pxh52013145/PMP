@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Track } from '../../../services/audio';
 import type { CoverSizeHint } from '../../../services/audio/MusicLibraryService';
+import {
+  PMP_STORAGE_CHANGE_EVENT,
+  type PmpStorageChangeDetail,
+} from '../../../modules/storage/localStorage';
 import { musicLibraryService } from '../../../services/audio/MusicLibraryService';
+import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { isTauriRuntime } from '../../../utils/tauriRuntime';
 import { trackKey } from './trackKey';
 
@@ -74,9 +79,29 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
   }, [track?.filePath, track?.path]);
 
   const [resolved, setResolved] = useState<CoverUrlState>({ key: 'none' });
+  const [coverSettingsRevision, setCoverSettingsRevision] = useState(0);
   const recentCoverUrlsRef = useRef<string[]>([]);
   const pendingReleaseUrlsRef = useRef<Set<string>>(new Set());
   const releaseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorageChange = (event: Event) => {
+      const detail = (event as CustomEvent<PmpStorageChangeDetail>).detail;
+      if (!detail || detail.key !== STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX) {
+        return;
+      }
+
+      setResolved({ key: 'none' });
+      setCoverSettingsRevision((previous) => previous + 1);
+    };
+
+    window.addEventListener(PMP_STORAGE_CHANGE_EVENT, handleStorageChange as EventListener);
+    return () => {
+      window.removeEventListener(PMP_STORAGE_CHANGE_EVENT, handleStorageChange as EventListener);
+    };
+  }, []);
 
   const lookupTrack = useMemo(() => {
     if (!trackId && !trackTitle && !trackFilePath && !trackPath) return null;
@@ -110,8 +135,9 @@ export function useCoverUrlForTrack(track: Track | null, options?: UseCoverUrlOp
       lookupTrack.coverKey || '',
       coverSignature,
       coverSizeHint || '',
+      coverSettingsRevision,
     ].join('|');
-  }, [coverSignature, coverSizeHint, key, lookupTrack]);
+  }, [coverSettingsRevision, coverSignature, coverSizeHint, key, lookupTrack]);
 
   useEffect(() => {
     if (!lookupTrack) return;

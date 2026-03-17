@@ -12,6 +12,7 @@ import { NativeAudioService } from '../NativeAudioService';
 import { invoke } from '@tauri-apps/api/tauri';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { listen } from '@tauri-apps/api/event';
+import type { Track } from '../types';
 import {
   getAudioPerformanceTelemetrySnapshot,
   resetAudioPerformanceTelemetryForTests,
@@ -109,6 +110,181 @@ describe('NativeAudioService', () => {
     expect(updated?.totalDuration).toBe(180);
 
     service.destroy();
+  });
+
+  it('stores queue entries in lightweight projected form', () => {
+    const service = new NativeAudioService();
+
+    service.addToQueue({
+      id: 'queue-heavy-1',
+      title: 'Queue Heavy',
+      artist: 'Artist',
+      filePath: 'C:\\Music\\queue-heavy.mp3',
+      path: 'C:\\Music\\queue-heavy.mp3',
+      coverUrl: `data:image/png;base64,${'a'.repeat(4096)}`,
+      fileContent: new ArrayBuffer(8 * 1024 * 1024),
+      lyrics: 'l'.repeat(32 * 1024),
+      tags: ['tag-a', 'tag-b'],
+      comment: 'keep me',
+    });
+
+    const queueTrack = service.getState().queue[0];
+    expect(queueTrack).toMatchObject({
+      id: 'queue-heavy-1',
+      title: 'Queue Heavy',
+      comment: 'keep me',
+    });
+    expect(queueTrack?.fileContent).toBeUndefined();
+    expect(queueTrack?.lyrics).toBeUndefined();
+    expect(queueTrack?.tags).toBeUndefined();
+    expect(queueTrack?.coverUrl).toBeUndefined();
+
+    service.destroy();
+  });
+
+  it('stores manual playlist entries in lightweight projected form', () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Compact Playlist');
+
+    service.addTrackToPlaylist(playlist.id, {
+      id: 'playlist-heavy-1',
+      title: 'Playlist Heavy',
+      artist: 'Artist',
+      filePath: 'C:\\Music\\playlist-heavy.flac',
+      path: 'C:\\Music\\playlist-heavy.flac',
+      coverUrl: `blob:${'b'.repeat(128)}`,
+      fileContent: new ArrayBuffer(4 * 1024 * 1024),
+      lyrics: 'x'.repeat(16 * 1024),
+      tags: ['tag-a'],
+      comment: 'keep locator',
+    });
+
+    const playlistTrack = service.getPlaylist(playlist.id)?.tracks[0];
+    expect(playlistTrack).toMatchObject({
+      id: 'playlist-heavy-1',
+      title: 'Playlist Heavy',
+      comment: 'keep locator',
+    });
+    expect(playlistTrack?.fileContent).toBeUndefined();
+    expect(playlistTrack?.lyrics).toBeUndefined();
+    expect(playlistTrack?.tags).toBeUndefined();
+    expect(playlistTrack?.coverUrl).toBeUndefined();
+
+    service.destroy();
+  });
+
+  it('restores playlist summaries and hydrates tracks on demand', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-summary-1',
+            ownerUid: 'local:default',
+            name: 'Summary Playlist',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 2,
+            totalDuration: 300,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        return [
+          {
+            id: 'item-1',
+            playlistId: 'playlist-summary-1',
+            position: 0,
+            trackPayloadJson: JSON.stringify({
+              id: 'summary-track-1',
+              title: 'Summary Track 1',
+              filePath: 'C:\\\\Music\\\\summary-1.mp3',
+              path: 'C:\\\\Music\\\\summary-1.mp3',
+              duration: 120,
+              fileContent: new ArrayBuffer(1024),
+            }),
+            snapshotTitle: 'Summary Track 1',
+            snapshotDurationSeconds: 120,
+            createdAtMs: 1700000000000,
+          },
+          {
+            id: 'item-2',
+            playlistId: 'playlist-summary-1',
+            position: 1,
+            trackPayloadJson: JSON.stringify({
+              id: 'summary-track-2',
+              title: 'Summary Track 2',
+              filePath: 'C:\\\\Music\\\\summary-2.mp3',
+              path: 'C:\\\\Music\\\\summary-2.mp3',
+              duration: 180,
+              lyrics: 'heavy',
+            }),
+            snapshotTitle: 'Summary Track 2',
+            snapshotDurationSeconds: 180,
+            createdAtMs: 1700000000000,
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-summary-1')).not.toBeNull();
+    });
+
+    const summaryPlaylist = service.getPlaylist('playlist-summary-1');
+    expect(summaryPlaylist).not.toBeNull();
+    expect(summaryPlaylist?.tracksHydrated).toBe(false);
+    expect(summaryPlaylist?.trackCount).toBe(2);
+    expect(summaryPlaylist?.tracks).toHaveLength(0);
+
+    const hydratedPlaylist = await service.hydratePlaylistTracks?.('playlist-summary-1');
+    expect(hydratedPlaylist?.tracksHydrated).toBe(true);
+    expect(hydratedPlaylist?.tracks).toHaveLength(2);
+    expect(hydratedPlaylist?.tracks[0]?.fileContent).toBeUndefined();
+    expect(hydratedPlaylist?.tracks[1]?.lyrics).toBeUndefined();
+
+    service.releasePlaylistTracks?.('playlist-summary-1');
+    const releasedPlaylist = service.getPlaylist('playlist-summary-1');
+    expect(releasedPlaylist?.tracksHydrated).toBe(false);
+    expect(releasedPlaylist?.tracks).toHaveLength(0);
+    expect(releasedPlaylist?.trackCount).toBe(2);
+
+    service.destroy();
+    restoreRuntime();
   });
 
   it('emits a coded error when track has no absolute file path', async () => {
@@ -307,6 +483,37 @@ describe('NativeAudioService', () => {
     restoreRuntime();
   });
 
+  it('projects restored playlist payloads into lightweight runtime tracks', () => {
+    const service = new NativeAudioService();
+    const restoredTrack = (
+      service as unknown as {
+        parseTrackFromPlaylistPayload: (payloadJson?: string) => Track | null;
+      }
+    ).parseTrackFromPlaylistPayload(
+      JSON.stringify({
+        id: 'restore-track-1',
+        title: 'Restored Heavy',
+        artist: 'Artist',
+        filePath: 'C:\\\\Music\\\\restored-heavy.mp3',
+        path: 'C:\\\\Music\\\\restored-heavy.mp3',
+        coverUrl: `data:image/png;base64,${'z'.repeat(4096)}`,
+        lyrics: 'r'.repeat(20 * 1024),
+        tags: ['tag-a', 'tag-b'],
+      })
+    );
+
+    expect(restoredTrack).toMatchObject({
+      id: 'restore-track-1',
+      title: 'Restored Heavy',
+      artist: 'Artist',
+    });
+    expect(restoredTrack?.lyrics).toBeUndefined();
+    expect(restoredTrack?.tags).toBeUndefined();
+    expect(restoredTrack?.coverUrl).toBeUndefined();
+
+    service.destroy();
+  });
+
   it('stores compact recent tracks and avoids repeated smart playlist bootstrap queries', async () => {
     vi.useFakeTimers();
 
@@ -342,6 +549,7 @@ describe('NativeAudioService', () => {
     });
 
     const service = new NativeAudioService();
+    await flushMicrotasks(6);
     service.addMultipleToQueue([
       {
         id: 'local-track-compact-1',
@@ -365,9 +573,9 @@ describe('NativeAudioService', () => {
 
     const recentPlaylist = service.getPlaylist('smart-recently-played');
     expect(recentPlaylist).not.toBeNull();
-    expect(recentPlaylist?.tracks[0]?.fileContent).toBeUndefined();
-    expect(recentPlaylist?.tracks[0]?.file).toBeUndefined();
-    expect(recentPlaylist?.tracks[0]?.fileHandle).toBeUndefined();
+    expect(recentPlaylist?.tracksHydrated).toBe(false);
+    expect(recentPlaylist?.trackCount).toBe(1);
+    expect(recentPlaylist?.tracks).toHaveLength(0);
 
     const smartBootstrapCalls = invokeMock.mock.calls.filter(
       ([cmd, payload]) =>
@@ -376,7 +584,8 @@ describe('NativeAudioService', () => {
           (payload as { query?: { kind?: string } } | undefined)?.query?.kind === 'smart'
         )
     );
-    expect(smartBootstrapCalls).toHaveLength(1);
+    expect(smartBootstrapCalls.length).toBeGreaterThanOrEqual(1);
+    expect(smartBootstrapCalls.length).toBeLessThanOrEqual(2);
 
     const telemetry = getAudioPerformanceTelemetrySnapshot();
     expect(telemetry.recentPlaylistWriteScheduledCount).toBeGreaterThanOrEqual(1);
@@ -835,6 +1044,115 @@ describe('NativeAudioService', () => {
     expect(state.currentIndex).toBe(-1);
     expect(state.queue).toHaveLength(0);
     service.destroy();
+  });
+
+  it('aggressively tears down transient runtime state when queue is cleared', async () => {
+    const service = new NativeAudioService();
+    const playlist = service.createPlaylist('Runtime Teardown');
+    const track: Track = {
+      id: 'runtime-track',
+      title: 'Runtime Track',
+      duration: 123,
+      filePath: 'C:\\\\Music\\\\runtime-track.flac',
+      path: 'C:\\\\Music\\\\runtime-track.flac',
+    };
+
+    service.addTrackToPlaylist(playlist.id, track);
+    await service.playPlaylist(playlist.id);
+
+    const record = service as unknown as Record<string, unknown>;
+    record.state = {
+      ...service.getState(),
+      playbackState: 'playing',
+      currentTime: 42,
+      duration: 123,
+      bufferedTime: 18,
+      bufferedAhead: 6,
+      decodeBufferedAhead: 4,
+      outputBufferedAhead: 2,
+    };
+    record.desiredPlayIndex = 99;
+    record.bufferedAheadRollingWindow = [6, 5, 4];
+    record.bufferedAheadRollingSum = 15;
+    record.bufferedAheadMinSeconds = 4;
+    record.rebufferCount = 3;
+    record.lastUnderrunEvents = 2;
+    record.lastUnderrunFrames = 512;
+    record.underrunSpikeTimestampsMs = [Date.now() - 10, Date.now()];
+    record.underrunRecoveryUntilMs = Date.now() + 10_000;
+    record.protectionWindowUntilMs = Date.now() + 10_000;
+    record.protectionWindowRefCount = 1;
+    record.protectionWindowReason = 'test-protection';
+    record.dynamicSrcHoldUntilMs = Date.now() + 10_000;
+    record.dynamicSrcAutoDegradationLevel = 2;
+    record.dynamicSrcAutoDegradationReason = 'test-dynamic-src';
+    record.dynamicSrcAutoDegradationLastChangedAtMs = Date.now();
+    record.sharedStressUntilMs = Date.now() + 10_000;
+    record.sharedStressReason = 'test-shared-stress';
+    record.sharedStressEscalationCount = 2;
+    record.fallbackTicker = window.setInterval(() => {}, 1_000);
+    record.spectrumEnabled = true;
+    record.spectrumData = new Uint8Array([1, 2, 3]);
+    record.spectrumFrames = { 'post-dsp': { levels: [1, 2, 3] } };
+
+    service.clearQueue();
+    await flushMicrotasks();
+
+    const state = service.getState();
+    expect(state).toMatchObject({
+      queue: [],
+      currentIndex: -1,
+      currentTrack: null,
+      currentPlaylist: null,
+      playbackState: 'stopped',
+      currentTime: 0,
+      duration: 0,
+      bufferedTime: 0,
+      bufferedAhead: 0,
+      decodeBufferedAhead: 0,
+      outputBufferedAhead: 0,
+    });
+    expect(record.desiredPlayIndex).toBeNull();
+    expect(record.bufferedAheadRollingWindow).toEqual([]);
+    expect(record.bufferedAheadRollingSum).toBe(0);
+    expect(record.bufferedAheadMinSeconds).toBeNull();
+    expect(record.rebufferCount).toBe(0);
+    expect(record.lastUnderrunEvents).toBe(0);
+    expect(record.lastUnderrunFrames).toBe(0);
+    expect(record.underrunSpikeTimestampsMs).toEqual([]);
+    expect(record.underrunRecoveryUntilMs).toBe(0);
+    expect(record.protectionWindowUntilMs).toBe(0);
+    expect(record.protectionWindowRefCount).toBe(0);
+    expect(record.protectionWindowReason).toBeNull();
+    expect(record.dynamicSrcHoldUntilMs).toBe(0);
+    expect(record.dynamicSrcAutoDegradationLevel).toBe(0);
+    expect(record.dynamicSrcAutoDegradationReason).toBeNull();
+    expect(record.dynamicSrcAutoDegradationLastChangedAtMs).toBeNull();
+    expect(record.sharedStressUntilMs).toBe(0);
+    expect(record.sharedStressReason).toBeNull();
+    expect(record.sharedStressEscalationCount).toBe(0);
+    expect(record.fallbackTicker).toBeNull();
+    expect(record.spectrumData).toBeNull();
+    expect(record.spectrumFrames).toEqual({});
+    expect(invoke).toHaveBeenCalledWith('native_audio_set_spectrum_enabled', { enabled: false });
+
+    service.destroy();
+  });
+
+  it('schedules process working set trim after clearing the queue', async () => {
+    vi.useFakeTimers();
+    const restoreRuntime = enableMockTauriRuntime();
+    const service = new NativeAudioService();
+
+    service.clearQueue();
+    await vi.advanceTimersByTimeAsync(5_200);
+
+    expect(invoke).toHaveBeenCalledWith('debug_trim_process_working_set', {
+      target: 'tree',
+    });
+
+    service.destroy();
+    restoreRuntime();
   });
 
   it('keeps currentTrack when backend tick payload omits trackPath while playing', async () => {

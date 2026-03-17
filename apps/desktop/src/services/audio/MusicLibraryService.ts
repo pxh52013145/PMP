@@ -358,6 +358,7 @@ export class MusicLibraryService {
   private COVER_DECODED_ESTIMATE_MAX_BYTES = this.DEFAULT_COVER_DECODED_ESTIMATE_MAX_BYTES;
 
   private currentCoverRuntimeCachePolicy: CoverRuntimeCachePolicy = 'default';
+  private coverRuntimeEpoch = 0;
   private coverMaxEdgePx: number = 256;
   private nativeSourceBootstrapScheduled = false;
   private readonly NATIVE_SCHEMA_ENVELOPE_CACHE_TTL_MS = 60_000;
@@ -403,7 +404,11 @@ export class MusicLibraryService {
       const detail = (event as CustomEvent<PmpStorageChangeDetail>).detail;
       if (!detail || detail.key !== STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX) return;
 
-      this.coverMaxEdgePx = this.readCoverMaxEdgePxSetting();
+      const nextCoverMaxEdgePx = this.readCoverMaxEdgePxSetting();
+      if (nextCoverMaxEdgePx === this.coverMaxEdgePx) return;
+
+      this.coverMaxEdgePx = nextCoverMaxEdgePx;
+      this.clearCoverRuntimeCaches();
     };
 
     window.addEventListener(PMP_STORAGE_CHANGE_EVENT, handler as EventListener);
@@ -1829,13 +1834,21 @@ export class MusicLibraryService {
   }
 
   private resolveCoverEdgePx(coverSizeHint?: CoverSizeHint): number {
+    const applyConfiguredCap = (preferredEdgePx: number): number => {
+      if (preferredEdgePx <= 0) return 0;
+      if (this.coverMaxEdgePx > 0) {
+        return Math.min(preferredEdgePx, this.coverMaxEdgePx);
+      }
+      return preferredEdgePx;
+    };
+
     switch (coverSizeHint) {
       case 'small':
-        return 96;
+        return applyConfiguredCap(96);
       case 'medium':
-        return 256;
+        return applyConfiguredCap(256);
       case 'large':
-        return 384;
+        return applyConfiguredCap(384);
       default:
         return this.coverMaxEdgePx > 0 ? this.coverMaxEdgePx : 0;
     }
@@ -2332,6 +2345,7 @@ export class MusicLibraryService {
     const normalizedExistingUrl =
       typeof existingUrl === 'string' && existingUrl.trim().length > 0 ? existingUrl.trim() : '';
     const allowPmpCoverUrl = this.shouldUsePmpCoverProtocol();
+    const coverRuntimeEpoch = this.coverRuntimeEpoch;
 
     if (this.isPmpCoverUrl(normalizedExistingUrl) && allowPmpCoverUrl) {
       const coverKeyFromUrl = this.parseCoverKeyFromPmpUrl(normalizedExistingUrl);
@@ -2408,6 +2422,7 @@ export class MusicLibraryService {
         coverSizeHint
       );
       if (!resolvedUrl) return undefined;
+      if (coverRuntimeEpoch !== this.coverRuntimeEpoch) return undefined;
 
       const url = resolvedUrl;
       this.coverUrlCache.set(effectiveCacheKey, url);
@@ -2545,6 +2560,7 @@ export class MusicLibraryService {
   }
 
   clearCoverRuntimeCaches(): void {
+    this.coverRuntimeEpoch += 1;
     for (const entry of this.coverBlobUrlCache.values()) {
       try {
         URL.revokeObjectURL(entry.url);
@@ -2561,6 +2577,38 @@ export class MusicLibraryService {
     this.coverBlobUrlTotalBytes = 0;
     this.coverDecodedEstimateBytes.clear();
     this.coverDecodedEstimateTotalBytes = 0;
+  }
+
+  releaseLibraryViewRuntimeMemory(options?: {
+    closeDatabase?: boolean;
+    resetSchemaCache?: boolean;
+  }): void {
+    this.clearCoverRuntimeCaches();
+    this.cachedStats = null;
+    this.cacheTimestamp = 0;
+    this.legacyCoverUrlDropIds.clear();
+    this.legacyCoverUrlDropScheduled = false;
+    this.legacyCoverUrlDropInFlight = false;
+
+    if (this.nativeSchemaEnvelopeRefreshTimer !== null) {
+      clearTimeout(this.nativeSchemaEnvelopeRefreshTimer);
+      this.nativeSchemaEnvelopeRefreshTimer = null;
+    }
+
+    if (options?.resetSchemaCache) {
+      this.nativeSchemaEnvelopeCache = null;
+      this.nativeSchemaEnvelopeCacheExpiresAtMs = 0;
+      this.nativeSchemaEnvelopeLoadPromise = null;
+    }
+
+    if (options?.closeDatabase && this.db) {
+      try {
+        this.db.close();
+      } catch {
+        // best-effort
+      }
+      this.db = null;
+    }
   }
 
   releaseCoverUrls(urls: string[]): void {

@@ -23,6 +23,7 @@ export interface Playlist {
   trackCount?: number;
   totalDuration?: number;
   favorite?: boolean;
+  tracksHydrated?: boolean;
 }
 
 export interface PlaylistCreateOptions {
@@ -528,6 +529,16 @@ export interface IAudioService {
    * 将播放列表添加到队列
    */
   addPlaylistToQueue(playlistId: string): void;
+
+  /**
+   * 按需加载播放列表曲目
+   */
+  hydratePlaylistTracks?(playlistId: string): Promise<Playlist | null>;
+
+  /**
+   * 释放播放列表曲目常驻内存
+   */
+  releasePlaylistTracks?(playlistId?: string): void;
 
   // ===== 音频可视化 =====
   /**

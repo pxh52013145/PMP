@@ -80,9 +80,11 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
   const [showPlaylistTrackSearch, setShowPlaylistTrackSearch] = useState(false);
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [playlistBatchMode, setPlaylistBatchMode] = useState(false);
+  const [isSelectedPlaylistLoading, setIsSelectedPlaylistLoading] = useState(false);
   const [selectedTrackKeys, setSelectedTrackKeys] = useState<string[]>([]);
   const [resolvedPlaylistCoverMap, setResolvedPlaylistCoverMap] = useState<Record<string, string>>({});
   const pendingPlaylistCoverIdsRef = useRef<Set<string>>(new Set());
+  const previousSelectedPlaylistIdRef = useRef<string | null>(null);
   const playlistListRef = useRef<HTMLDivElement | null>(null);
   const activePlaylistBlobCoverUrlsRef = useRef<Set<string>>(new Set());
   const playlistTrackSearchControlRef = useRef<HTMLDivElement | null>(null);
@@ -110,6 +112,63 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
       setSelectedPlaylist(nextSelectedPlaylist);
     }
   }, [audioState.playlists, selectedPlaylist]);
+
+  useEffect(() => {
+    const previousSelectedPlaylistId = previousSelectedPlaylistIdRef.current;
+    const nextSelectedPlaylistId = selectedPlaylist?.id ?? null;
+    if (
+      previousSelectedPlaylistId &&
+      previousSelectedPlaylistId !== nextSelectedPlaylistId
+    ) {
+      audioService.releasePlaylistTracks?.(previousSelectedPlaylistId);
+    }
+    previousSelectedPlaylistIdRef.current = nextSelectedPlaylistId;
+  }, [audioService, selectedPlaylist?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!isOpen || !selectedPlaylist?.id) {
+      setIsSelectedPlaylistLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const requiresHydration =
+      selectedPlaylist.tracksHydrated === false && (selectedPlaylist.trackCount ?? 0) > 0;
+    if (!requiresHydration) {
+      setIsSelectedPlaylistLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsSelectedPlaylistLoading(true);
+    const hydration = audioService.hydratePlaylistTracks?.(selectedPlaylist.id);
+    if (!hydration) {
+      setIsSelectedPlaylistLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void hydration.catch(() => null).finally(() => {
+      if (!cancelled) {
+        setIsSelectedPlaylistLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    audioService,
+    isOpen,
+    selectedPlaylist?.id,
+    selectedPlaylist?.trackCount,
+    selectedPlaylist?.tracksHydrated,
+  ]);
 
   useEffect(() => {
     setSelectedTrackKeys([]);
@@ -315,6 +374,16 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
         const explicitPlaylistCover =
           typeof playlist.coverUrl === 'string' ? playlist.coverUrl.trim() : '';
         if (explicitPlaylistCover) {
+          setResolvedPlaylistCoverMap((previous) => {
+            if (!(playlistId in previous)) return previous;
+            const next = { ...previous };
+            delete next[playlistId];
+            return next;
+          });
+          continue;
+        }
+
+        if (playlist.tracksHydrated === false) {
           setResolvedPlaylistCoverMap((previous) => {
             if (!(playlistId in previous)) return previous;
             const next = { ...previous };
@@ -658,11 +727,14 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
     return () => {
       const urlsToRelease = Array.from(activePlaylistBlobCoverUrlsRef.current);
       activePlaylistBlobCoverUrlsRef.current.clear();
+      previousSelectedPlaylistIdRef.current = null;
+      pendingPlaylistCoverIdsRef.current.clear();
+      audioService.releasePlaylistTracks?.();
       if (urlsToRelease.length > 0) {
         musicLibraryService.releaseCoverUrls(urlsToRelease);
       }
     };
-  }, []);
+  }, [audioService]);
 
   const filteredPlaylistTrackEntries = useMemo<PlaylistTrackEntry[]>(() => {
     if (!selectedPlaylist) {
@@ -1285,7 +1357,13 @@ export const Playlists: React.FC<PlaylistsProps> = ({ isOpen, onClose }) => {
                       </div>
                     </div>
 
-                    {filteredPlaylistTrackEntries.length === 0 ? (
+                    {isSelectedPlaylistLoading ? (
+                      <div className="playlists-tracks-empty playlists-tracks-empty-query">
+                        <div className="playlists-tracks-empty-text">
+                          {t('common.state.loading')}
+                        </div>
+                      </div>
+                    ) : filteredPlaylistTrackEntries.length === 0 ? (
                       <div className="playlists-tracks-empty playlists-tracks-empty-query">
                         <div className="playlists-tracks-empty-text">
                           {t('pages.playlists.tracks.empty.searchResult')}

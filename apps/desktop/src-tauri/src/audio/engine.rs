@@ -87,6 +87,15 @@ static NATIVE_AUDIO_INFO_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 
+static RETIRE_BACKPRESSURE_PENDING_THRESHOLD: Lazy<u64> =
+    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_BACKPRESSURE_PENDING_THRESHOLD", 3, 0, 64));
+
+static RETIRE_BACKPRESSURE_TARGET_PENDING: Lazy<u64> =
+    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_BACKPRESSURE_TARGET_PENDING", 1, 0, 32));
+
+static RETIRE_BACKPRESSURE_WAIT_TIMEOUT_MS: Lazy<u64> =
+    Lazy::new(|| parse_env_u64("PMP_AUDIO_RETIRE_BACKPRESSURE_WAIT_TIMEOUT_MS", 18, 0, 250));
+
 mod policy_impl;
 mod sink_rebuild_impl;
 mod state_payload_impl;
@@ -623,13 +632,17 @@ pub(crate) struct PreparedLoad {
     pub decoded_samples: Option<Arc<Vec<f32>>>,
 }
 
+fn flush_and_stop_sink(sink: &Arc<dyn AudioSink>) {
+    sink.flush();
+    sink.stop();
+}
+
 impl PreparedLoad {
     pub(crate) fn abort(self) {
-        self.sink.stop();
+        flush_and_stop_sink(&self.sink);
         crate::audio::retire_plane::retire_drop("engine.prepared_load.sink", self.sink);
         if let Some(streaming) = self.streaming {
-            streaming.shutdown_tx.shutdown();
-            crate::audio::retire_plane::retire_drop("engine.prepared_load.streaming", streaming);
+            retire_streaming_playback("engine.prepared_load.streaming", streaming);
         }
     }
 }
@@ -664,13 +677,26 @@ pub(crate) struct PreparedCrossfade {
 impl PreparedCrossfade {
     pub(crate) fn abort(self) {
         if let Some(streaming) = self.streaming {
-            streaming.shutdown_tx.shutdown();
-            crate::audio::retire_plane::retire_drop(
-                "engine.prepared_crossfade.streaming",
-                streaming,
-            );
+            retire_streaming_playback("engine.prepared_crossfade.streaming", streaming);
         }
     }
+}
+
+fn prepare_streaming_for_retirement(streaming: &StreamingPlayback) {
+    streaming.buffer.clear();
+    streaming.render_queue.clear();
+    streaming.buffer.mark_finished();
+    streaming.render_queue.mark_finished();
+    streaming.shutdown_tx.shutdown();
+}
+
+fn retire_streaming_playback(task_name: &'static str, streaming: StreamingPlayback) {
+    prepare_streaming_for_retirement(&streaming);
+    crate::audio::retire_plane::retire_drop(task_name, streaming);
+}
+
+fn retire_decoded_samples(task_name: &'static str, decoded_samples: Arc<Vec<f32>>) {
+    crate::audio::retire_plane::retire_drop(task_name, decoded_samples);
 }
 
 #[derive(Clone, Copy)]
@@ -974,6 +1000,15 @@ impl NativeAudioEngine {
         streaming.buffer.is_finished_and_empty() && streaming.render_queue.is_finished_and_empty()
     }
 
+    pub(crate) fn is_cold_idle_runtime(&self) -> bool {
+        self.current_track.is_none()
+            && self.queue.is_empty()
+            && self.sink.is_none()
+            && self.streaming.is_none()
+            && self.decoded_samples.is_none()
+            && !self.is_playing_or_rebuffering()
+    }
+
     pub(crate) fn clone_dsp_chain(&self) -> Vec<DspNodeConfig> {
         self.dsp_chain.clone()
     }
@@ -1006,12 +1041,7 @@ impl NativeAudioEngine {
         self.spectrum_post_tap.clear();
         self.dsp_runtime.request_reset();
         self.reset_recovery_tracking();
-
-        if let Some(old_sink) = self.sink.take() {
-            self.stop_and_retire_sink(old_sink);
-        }
-        self.shutdown_streaming();
-        self.mixer = None;
+        self.detach_active_runtime_state_for_reload();
 
         let token = self.begin_operation();
         self.set_state(PlaybackState::Loading);
@@ -1563,13 +1593,61 @@ impl NativeAudioEngine {
     }
 
     fn stop_and_retire_sink(&self, sink: Arc<dyn AudioSink>) {
-        sink.stop();
+        flush_and_stop_sink(&sink);
         crate::audio::retire_plane::retire_drop("engine.sink", sink);
     }
 
+    fn maybe_wait_for_retire_backpressure_after_detach(&self) {
+        let timeout_ms = *RETIRE_BACKPRESSURE_WAIT_TIMEOUT_MS;
+        if timeout_ms == 0 {
+            return;
+        }
+
+        let pending_threshold = *RETIRE_BACKPRESSURE_PENDING_THRESHOLD;
+        let current_pending = crate::audio::retire_plane::pending_tasks();
+        if current_pending <= pending_threshold {
+            return;
+        }
+
+        let target_pending = (*RETIRE_BACKPRESSURE_TARGET_PENDING).min(pending_threshold);
+        let _ = crate::audio::retire_plane::wait_for_pending_tasks_at_most(
+            target_pending,
+            Duration::from_millis(timeout_ms),
+        );
+    }
+
+    fn detach_active_runtime_state_for_reload(&mut self) {
+        let mut detached_any = false;
+
+        if let Some(old_sink) = self.sink.take() {
+            detached_any = true;
+            self.stop_and_retire_sink(old_sink);
+        }
+        if self.streaming.is_some() {
+            detached_any = true;
+            self.shutdown_streaming();
+        }
+        if self.decoded_samples.is_some() {
+            detached_any = true;
+            self.retire_cached_decoded_samples();
+        }
+        if self.mixer.take().is_some() {
+            detached_any = true;
+        }
+
+        if detached_any {
+            self.maybe_wait_for_retire_backpressure_after_detach();
+        }
+    }
+
     fn shutdown_and_retire_streaming(&self, streaming: StreamingPlayback) {
-        streaming.shutdown_tx.shutdown();
-        crate::audio::retire_plane::retire_drop("engine.streaming", streaming);
+        retire_streaming_playback("engine.streaming", streaming);
+    }
+
+    fn retire_cached_decoded_samples(&mut self) {
+        if let Some(decoded_samples) = self.decoded_samples.take() {
+            retire_decoded_samples("engine.decoded_samples", decoded_samples);
+        }
     }
 
     pub(crate) fn cancel_crossfade(&mut self) {
@@ -1635,12 +1713,43 @@ impl NativeAudioEngine {
         }
         self.mixer = None;
         self.shutdown_streaming();
-        self.decoded_samples = None;
+        self.retire_cached_decoded_samples();
         self.decoded_channels = 0;
         self.source_sample_rate = 0;
         self.decoded_sample_rate = 0;
         self.decoded_bit_depth = None;
         self.active_input_id = None;
+    }
+
+    fn release_runtime_state_for_empty_queue(&mut self) {
+        self.cancel_crossfade();
+        self.sync_clock();
+        self.clear_error();
+        self.spectrum_pre_tap.clear();
+        self.spectrum_post_tap.clear();
+        self.dsp_runtime.request_reset();
+        self.reset_recovery_tracking();
+
+        let had_runtime = self.sink.is_some()
+            || self.mixer.is_some()
+            || self.streaming.is_some()
+            || self.decoded_samples.is_some();
+
+        self.release_cached_audio_pipeline();
+        self.output_backend.close_stream();
+
+        if had_runtime {
+            self.maybe_wait_for_retire_backpressure_after_detach();
+        }
+
+        self.current_track = None;
+        self.active_input_id = None;
+        self.current_position = 0.0;
+        self.base_position = 0.0;
+        self.playback_started_at = None;
+        self.duration = 0.0;
+        self.output_sample_rate = self.output_backend.current_info().output_sample_rate;
+        self.set_state(PlaybackState::Stopped);
     }
 
     fn reload_track_for_seek_recovery(&mut self, track_path: PathBuf) -> Result<(), String> {
@@ -1659,10 +1768,7 @@ impl NativeAudioEngine {
         self.spectrum_post_tap.clear();
         self.dsp_runtime.request_reset();
         self.reset_recovery_tracking();
-        if let Some(old_sink) = self.sink.take() {
-            self.stop_and_retire_sink(old_sink);
-        }
-        self.shutdown_streaming();
+        self.detach_active_runtime_state_for_reload();
 
         let (sink, output_info) = self.output_backend.create_sink()?;
         self.apply_output_stream_info(output_info);
@@ -2159,27 +2265,7 @@ impl NativeAudioEngine {
         self.current_index = current_index.clamp(-1, max_index);
 
         if self.queue.is_empty() || self.current_index < 0 {
-            self.cancel_crossfade();
-            self.sync_clock();
-            self.spectrum_pre_tap.clear();
-            self.spectrum_post_tap.clear();
-            self.dsp_runtime.request_reset();
-            if let Some(sink) = self.sink.take() {
-                self.stop_and_retire_sink(sink);
-            }
-            self.shutdown_streaming();
-            self.current_track = None;
-            self.active_input_id = None;
-            self.current_position = 0.0;
-            self.base_position = 0.0;
-            self.playback_started_at = None;
-            self.duration = 0.0;
-            self.decoded_samples = None;
-            self.decoded_channels = 0;
-            self.source_sample_rate = 0;
-            self.decoded_sample_rate = 0;
-            self.decoded_bit_depth = None;
-            self.set_state(PlaybackState::Stopped);
+            self.release_runtime_state_for_empty_queue();
         }
     }
 
@@ -2192,27 +2278,7 @@ impl NativeAudioEngine {
         self.current_index = current_index.clamp(-1, max_index);
 
         if self.queue.is_empty() || self.current_index < 0 {
-            self.cancel_crossfade();
-            self.sync_clock();
-            self.spectrum_pre_tap.clear();
-            self.spectrum_post_tap.clear();
-            self.dsp_runtime.request_reset();
-            if let Some(sink) = self.sink.take() {
-                self.stop_and_retire_sink(sink);
-            }
-            self.shutdown_streaming();
-            self.current_track = None;
-            self.active_input_id = None;
-            self.current_position = 0.0;
-            self.base_position = 0.0;
-            self.playback_started_at = None;
-            self.duration = 0.0;
-            self.decoded_samples = None;
-            self.decoded_channels = 0;
-            self.source_sample_rate = 0;
-            self.decoded_sample_rate = 0;
-            self.decoded_bit_depth = None;
-            self.set_state(PlaybackState::Stopped);
+            self.release_runtime_state_for_empty_queue();
         }
     }
 
@@ -3061,6 +3127,7 @@ mod tests {
 
     #[derive(Default)]
     struct FlagSink {
+        flushed: AtomicBool,
         stopped: AtomicBool,
     }
 
@@ -3070,6 +3137,10 @@ mod tests {
         fn play(&self) {}
 
         fn pause(&self) {}
+
+        fn flush(&self) {
+            self.flushed.store(true, Ordering::Release);
+        }
 
         fn stop(&self) {
             self.stopped.store(true, Ordering::Release);
@@ -3317,12 +3388,13 @@ mod tests {
         let backend: Arc<dyn AudioOutputBackend> =
             Arc::new(TransportModeBackend::new("rodio-cpal"));
         let mut engine = NativeAudioEngine::new_with_backend(backend);
+        let sink = Arc::new(CallSink::default());
 
         engine.current_track = Some(PathBuf::from("D:/memory-test.wav"));
         engine.decoded_channels = 2;
         engine.decoded_sample_rate = 48_000;
         engine.decoded_samples = Some(Arc::new(vec![0.0f32; 64 * 1024]));
-        engine.sink = Some(Arc::new(CallSink::default()));
+        engine.sink = Some(sink.clone());
         engine.streaming = Some(make_finished_streaming_playback(1_000_000, 2));
 
         engine.release_cached_audio_pipeline();
@@ -3339,6 +3411,46 @@ mod tests {
         assert_eq!(engine.decoded_channels, 0);
         assert_eq!(engine.decoded_sample_rate, 0);
         assert!(engine.active_input_id.is_none());
+        assert!(
+            sink.flush_calls.load(Ordering::Acquire) >= 1,
+            "release should flush old sink before retiring it"
+        );
+    }
+
+    #[test]
+    fn begin_load_operation_aggressively_retires_old_runtime_state() {
+        let backend: Arc<dyn AudioOutputBackend> =
+            Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let sink = Arc::new(FlagSink::default());
+        let sink_dyn: Arc<dyn AudioSink> = sink.clone();
+        let streaming = make_active_streaming_playback(48_000, 2);
+        let decode_buffer = streaming.buffer.clone();
+        let render_queue = streaming.render_queue.clone();
+
+        engine.sink = Some(sink_dyn);
+        engine.streaming = Some(streaming);
+        engine.decoded_samples = Some(Arc::new(vec![0.0f32; 96_000]));
+
+        let op = engine.begin_load_operation();
+
+        assert!(op.token > 0, "load operation should allocate a token");
+        assert!(sink.flushed.load(Ordering::Acquire));
+        assert!(sink.stopped.load(Ordering::Acquire));
+        assert!(
+            engine.streaming.is_none(),
+            "old streaming should be detached"
+        );
+        assert!(
+            engine.decoded_samples.is_none(),
+            "old decoded samples should be detached before prepare"
+        );
+        assert_eq!(decode_buffer.len_samples(), 0);
+        assert_eq!(render_queue.len_samples(), 0);
+        assert!(decode_buffer.is_finished());
+        assert!(render_queue.is_finished());
+        assert!(matches!(engine.playback_state, PlaybackState::Loading));
     }
 
     #[test]
@@ -3551,6 +3663,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sync_queue_state_empty_aggressively_cools_runtime_state() {
+        let backend_impl = Arc::new(TransportModeBackend::new("rodio-cpal"));
+        let backend: Arc<dyn AudioOutputBackend> = backend_impl.clone();
+        let mut engine = NativeAudioEngine::new_with_backend(backend);
+
+        let sink = Arc::new(CallSink::default());
+        let initial_source = Box::new(SharedSamplesSource::new(
+            Arc::new(vec![0.0f32; 4_096]),
+            2,
+            48_000,
+            0,
+        )) as crate::audio::output::BoxedSource;
+        let (controller, _mixer_source) = PlaybackMixerSource::new(initial_source, 2, 48_000);
+
+        engine.queue = vec![PathBuf::from("queue-track-a.wav")];
+        engine.current_track = Some(PathBuf::from("queue-track-a.wav"));
+        engine.current_index = 0;
+        engine.sink = Some(sink.clone());
+        engine.mixer = Some(controller);
+        engine.streaming = Some(make_finished_streaming_playback(131_072, 2));
+        engine.decoded_samples = Some(Arc::new(vec![0.0f32; 96_000]));
+        engine.decoded_channels = 2;
+        engine.decoded_sample_rate = 48_000;
+        engine.duration = 123.0;
+        engine.playback_state = PlaybackState::Paused;
+        engine.desired_playback_state = PlaybackState::Paused;
+
+        engine.sync_queue_state(Vec::new(), -1);
+
+        assert!(engine.queue.is_empty());
+        assert!(engine.current_track.is_none());
+        assert!(engine.sink.is_none());
+        assert!(engine.mixer.is_none());
+        assert!(engine.streaming.is_none());
+        assert!(engine.decoded_samples.is_none());
+        assert_eq!(engine.decoded_channels, 0);
+        assert_eq!(engine.decoded_sample_rate, 0);
+        assert_eq!(engine.duration, 0.0);
+        assert!(matches!(engine.playback_state, PlaybackState::Stopped));
+        assert!(
+            sink.flush_calls.load(Ordering::Acquire) >= 1,
+            "empty queue should flush sink before retirement"
+        );
+        assert_eq!(
+            backend_impl.close_stream_calls.load(Ordering::Relaxed),
+            1,
+            "empty queue should close output stream for cold idle"
+        );
+    }
+
     struct StaticBackend(&'static str);
 
     impl AudioOutputBackend for StaticBackend {
@@ -3589,6 +3752,7 @@ mod tests {
         id: &'static str,
         sink: Arc<CallSink>,
         transport_mode_calls: Arc<AtomicUsize>,
+        close_stream_calls: Arc<AtomicUsize>,
     }
 
     impl TransportModeBackend {
@@ -3597,6 +3761,7 @@ mod tests {
                 id,
                 sink: Arc::new(CallSink::default()),
                 transport_mode_calls: Arc::new(AtomicUsize::new(0)),
+                close_stream_calls: Arc::new(AtomicUsize::new(0)),
             }
         }
     }
@@ -3628,6 +3793,10 @@ mod tests {
 
         fn create_sink(&self) -> Result<(Arc<dyn AudioSink>, OutputStreamInfo), String> {
             Ok((self.sink.clone(), OutputStreamInfo::default()))
+        }
+
+        fn close_stream(&self) {
+            self.close_stream_calls.fetch_add(1, Ordering::Relaxed);
         }
 
         fn set_transport_mode(&self, _mode: NativeAudioTransportMode) {
@@ -3944,6 +4113,30 @@ mod tests {
         render_queue.push_interleaved(&samples, channels);
         buffer.mark_finished();
         render_queue.mark_finished();
+
+        let (command_tx, _command_rx) =
+            crate::audio::control_plane::command_channel::<DecoderCommand>();
+        let (transfer_tx, _transfer_rx) = crate::audio::control_plane::command_channel();
+        StreamingPlayback {
+            buffer,
+            render_queue,
+            shutdown_tx: StreamingShutdownTx::new(command_tx.clone(), transfer_tx),
+            command_tx,
+            error: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn make_active_streaming_playback(
+        capacity_samples: usize,
+        channels: usize,
+    ) -> StreamingPlayback {
+        let buffer = crate::audio::buffer::AudioRingBuffer::new(capacity_samples);
+        let render_queue = crate::audio::buffer::AudioRingBuffer::new(
+            (capacity_samples / 4).clamp(16_384, 262_144),
+        );
+        let samples = vec![0.1f32; channels * 16];
+        buffer.push_interleaved(&samples, channels);
+        render_queue.push_interleaved(&samples, channels);
 
         let (command_tx, _command_rx) =
             crate::audio::control_plane::command_channel::<DecoderCommand>();

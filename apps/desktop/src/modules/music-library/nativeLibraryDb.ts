@@ -723,6 +723,8 @@ export interface NativeLibraryPlaylistRecord {
   createdAtMs: number;
   updatedAtMs: number;
   lastOpenedAtMs?: number;
+  trackCount: number;
+  totalDuration: number;
 }
 
 export interface NativeLibraryPlaylistItemUpsertInput {
@@ -2024,6 +2026,8 @@ function ensurePlaylistRecord(value: unknown): NativeLibraryPlaylistRecord | nul
     createdAtMs,
     updatedAtMs,
     lastOpenedAtMs: asNumber(value.lastOpenedAtMs),
+    trackCount: Math.max(0, Math.floor(asNumber(value.trackCount) ?? 0)),
+    totalDuration: Math.max(0, asNumber(value.totalDuration) ?? 0),
   };
 }
 

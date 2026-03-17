@@ -16,7 +16,9 @@ vi.mock('@tauri-apps/api/fs', () => ({
 
 import { invoke } from '@tauri-apps/api/tauri';
 import { MusicLibraryService } from '../MusicLibraryService';
+import { PMP_STORAGE_CHANGE_EVENT } from '../../../modules/storage/localStorage';
 import { replaceMusicLibraryBaseFieldCapabilities } from '../../../modules/music-library/fieldCapabilities';
+import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import {
   clearCloudPlaybackFallbackQueue,
   getCloudPlaybackFallbackQueueSnapshot,
@@ -121,6 +123,84 @@ describe('MusicLibraryService.getCoverUrlForTrack', () => {
     );
     expect(url).toContain('cover-small-thumb-96px.jpg');
     expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+  });
+
+  it('applies the configured thumbnail quality cap to larger size hints', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({
+      key: 'cover-medium-thumb-128px',
+      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-medium-thumb-128px.jpg',
+      size: 12288,
+      mediaType: 'image/jpeg',
+    });
+
+    localStorage.setItem(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, JSON.stringify(128));
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    (service as unknown as { upsertCoverCacheEntry: unknown }).upsertCoverCacheEntry = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { maybeUpdateTrackCoverInDB: unknown }).maybeUpdateTrackCoverInDB = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { pruneCoverCacheIfNeeded: unknown }).pruneCoverCacheIfNeeded = vi.fn().mockResolvedValue(undefined);
+
+    const url = await service.getCoverUrlForTrack(
+      {
+        id: 't3-medium',
+        title: 'Sized Medium',
+        filePath: 'C:\\Music\\sized-medium.mp3',
+      },
+      { coverSizeHint: 'medium' }
+    );
+
+    expect(invoke).toHaveBeenCalledWith(
+      'music_library_get_cover',
+      expect.objectContaining({ path: 'C:\\Music\\sized-medium.mp3', maxEdgePx: 128 })
+    );
+    expect(url).toContain('cover-medium-thumb-128px.jpg');
+    expect(url?.startsWith('http://asset.localhost/')).toBe(true);
+  });
+
+  it('clears runtime cover caches when thumbnail quality setting changes', async () => {
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockResolvedValue({
+      key: 'cover-medium-thumb-256px',
+      path: 'C:\\AppData\\com.pixelmatrix.player\\music-covers\\cover-medium-thumb-256px.jpg',
+      size: 12288,
+      mediaType: 'image/jpeg',
+    });
+
+    localStorage.setItem(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, JSON.stringify(256));
+
+    const service = MusicLibraryService.getInstance();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {};
+
+    (service as unknown as { upsertCoverCacheEntry: unknown }).upsertCoverCacheEntry = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { maybeUpdateTrackCoverInDB: unknown }).maybeUpdateTrackCoverInDB = vi.fn().mockResolvedValue(undefined);
+    (service as unknown as { pruneCoverCacheIfNeeded: unknown }).pruneCoverCacheIfNeeded = vi.fn().mockResolvedValue(undefined);
+
+    await service.getCoverUrlForTrack(
+      {
+        id: 't3-cache',
+        title: 'Cached Cover',
+        filePath: 'C:\\Music\\cached-cover.mp3',
+      },
+      { coverSizeHint: 'medium' }
+    );
+
+    expect(service.getCoverRuntimeCacheStats().coverUrlCacheEntries).toBeGreaterThan(0);
+
+    localStorage.setItem(STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX, JSON.stringify(128));
+    window.dispatchEvent(
+      new CustomEvent(PMP_STORAGE_CHANGE_EVENT, {
+        detail: {
+          key: STORAGE_KEYS.MUSIC_LIBRARY_COVER_MAX_EDGE_PX,
+          value: JSON.stringify(128),
+        },
+      })
+    );
+
+    expect(service.getCoverRuntimeCacheStats().coverUrlCacheEntries).toBe(0);
+    expect(service.getCoverRuntimeCacheStats().coverBlobUrlCacheEntries).toBe(0);
   });
 
   it('uses full projection when native grouping depends on a custom field', async () => {

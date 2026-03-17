@@ -16,13 +16,17 @@ export {
 export {
   ensureProcessPerfSnapshot,
   ensureProcessPerfTotalsSnapshot,
+  ensureProcessWorkingSetTrimResult,
   getProcessPerfSnapshot,
   getProcessPerfTotalsSnapshot,
+  trimProcessWorkingSet,
   type ProcessPerfKind,
   type ProcessPerfRow,
   type ProcessPerfSnapshot,
   type ProcessPerfTotalsSnapshot,
   type ProcessPerfTotals,
+  type ProcessWorkingSetTrimResult,
+  type ProcessWorkingSetTrimTarget,
   type SystemMemorySnapshot,
 } from './processPerf';
 

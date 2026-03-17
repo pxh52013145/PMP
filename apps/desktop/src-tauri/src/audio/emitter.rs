@@ -16,6 +16,7 @@ static LAST_EMITTED_ERROR_SEQ: AtomicU64 = AtomicU64::new(0);
 static EMITTER_STOP: AtomicBool = AtomicBool::new(false);
 static SPECTRUM_ENABLED: AtomicBool = AtomicBool::new(false);
 const IDLE_STATE_HEARTBEAT_TICKS: u64 = 5;
+const COLD_IDLE_SLEEP_MS: u64 = 4_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StateEmitSignature {
@@ -86,8 +87,9 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
             let spectrum_enabled = SPECTRUM_ENABLED.load(Ordering::Acquire);
             tick_counter = tick_counter.wrapping_add(1);
 
-            let Some((state_payload, dual_spectrum_snapshot, active_playback)) = (|| {
+            let Some((state_payload, dual_spectrum_snapshot, active_playback, cold_idle)) = (|| {
                 let mut engine = ENGINE.try_lock().ok()?;
+                let cold_idle = engine.is_cold_idle_runtime();
                 let was_playing = engine.is_playing_or_rebuffering();
                 let ticked = engine.tick();
                 if !ticked {
@@ -109,6 +111,7 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                         None
                     },
                     active_playback,
+                    cold_idle,
                 ))
             })() else {
                 continue;
@@ -118,6 +121,8 @@ pub(crate) fn ensure_started(app_handle: &AppHandle) {
                 250
             } else if active_playback {
                 400
+            } else if cold_idle {
+                COLD_IDLE_SLEEP_MS
             } else {
                 1200
             };
