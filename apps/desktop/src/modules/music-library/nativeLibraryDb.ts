@@ -3480,14 +3480,21 @@ export async function replaceNativeLibraryPlaylistItems(
 }
 
 export async function listNativeLibraryPlaylistItems(
-  playlistId: string
+  playlistId: string,
+  options?: { limit?: number }
 ): Promise<NativeLibraryPlaylistItemRecord[]> {
   if (!isTauriRuntime()) return [];
   const normalizedPlaylistId = playlistId.trim();
   if (!normalizedPlaylistId) return [];
 
+  const limit =
+    typeof options?.limit === 'number' && Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(512, Math.floor(options.limit)))
+      : undefined;
+
   const raw = await invoke<unknown>('music_library_db_list_playlist_items', {
     playlistId: normalizedPlaylistId,
+    limit,
   }).catch(() => null);
   if (!Array.isArray(raw)) return [];
 

@@ -123,7 +123,12 @@ import {
   toPlaylistItemUpserts,
   type RecentSmartPlaylistWriteEntry,
 } from './recentSmartPlaylist';
-import { compactTrackForQueueState, compactTrackForState } from './trackStateProjection';
+import {
+  compactTrackForPlaylistState,
+  compactTrackForQueueState,
+  compactTrackForState,
+} from './trackStateProjection';
+import { musicLibraryService, type CoverSizeHint } from './MusicLibraryService';
 import {
   parseLegacyRuntimeControlFromReplayGain,
   type CrossfadeSettings,
@@ -580,7 +585,7 @@ export class NativeAudioService implements IAudioService {
       mimeType: asString(record?.mimeType),
     };
 
-    return compactTrackForState(track);
+    return compactTrackForPlaylistState(track);
   }
 
   private parseTracksFromPlaylistItems(
@@ -603,6 +608,131 @@ export class NativeAudioService implements IAudioService {
     return tracks;
   }
 
+  private sanitizePlaylistCoverUrl(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (!normalized) return undefined;
+
+    const lower = normalized.toLowerCase();
+    if (
+      lower.startsWith('http://') ||
+      lower.startsWith('https://') ||
+      lower.startsWith('pmp://cover/') ||
+      lower.startsWith('pmp://localhost/cover/')
+    ) {
+      return normalized;
+    }
+
+    return undefined;
+  }
+
+  private isPlaylistCoverResolutionAbsolutePath(value: string | null | undefined): boolean {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized) return false;
+    if (normalized.startsWith('/') || normalized.startsWith('\\\\')) return true;
+    return /^[A-Za-z]:[\\/]/.test(normalized);
+  }
+
+  private canRenderPmpPlaylistCoverDirectly(): boolean {
+    if (typeof window === 'undefined') return true;
+    const protocol = String(window.location?.protocol || '').toLowerCase();
+    return protocol !== 'http:' && protocol !== 'https:';
+  }
+
+  private async loadPlaylistCoverPreviewTracks(
+    playlist: Playlist,
+    limit: number
+  ): Promise<Track[]> {
+    const playlistId = String(playlist.id || '').trim();
+    if (!playlistId) return [];
+
+    const normalizedLimit = Math.max(1, Math.min(8, Math.floor(limit)));
+    let tracks = this.parseTracksFromPlaylistItems(
+      playlistId,
+      await listNativeLibraryPlaylistItems(playlistId, { limit: normalizedLimit })
+    ).slice(0, normalizedLimit);
+
+    if (
+      tracks.length === 0 &&
+      playlist.kind === NativeAudioService.PLAYLIST_KIND_SMART &&
+      playlistId === NativeAudioService.SMART_PLAYLIST_RECENT_ID
+    ) {
+      tracks = (await this.buildRecentSmartPlaylistTracks(normalizedLimit)).slice(
+        0,
+        normalizedLimit
+      );
+    }
+
+    return tracks;
+  }
+
+  async resolvePlaylistCoverPreview(
+    playlistId: string,
+    options?: { coverSizeHint?: CoverSizeHint }
+  ): Promise<string | undefined> {
+    const normalizedPlaylistId = String(playlistId || '').trim();
+    if (!normalizedPlaylistId) return undefined;
+
+    const playlist = this.getPlaylist(normalizedPlaylistId);
+    if (!playlist) return undefined;
+
+    const explicitPlaylistCover = this.sanitizePlaylistCoverUrl(playlist.coverUrl);
+    if (
+      explicitPlaylistCover &&
+      !explicitPlaylistCover.toLowerCase().startsWith('pmp://cover/') &&
+      !explicitPlaylistCover.toLowerCase().startsWith('pmp://localhost/cover/')
+    ) {
+      return explicitPlaylistCover;
+    }
+
+    const scanLimit = 5;
+    const trackCandidates =
+      playlist.tracksHydrated !== false && playlist.tracks.length > 0
+        ? playlist.tracks.slice(0, scanLimit)
+        : await this.loadPlaylistCoverPreviewTracks(playlist, scanLimit);
+
+    for (const candidate of trackCandidates) {
+      const embeddedCoverUrl =
+        typeof candidate.coverUrl === 'string' ? candidate.coverUrl.trim() : '';
+      const shouldIgnoreEmbeddedTrackCover =
+        this.isPlaylistCoverResolutionAbsolutePath(candidate.filePath || candidate.path) ||
+        embeddedCoverUrl.toLowerCase().startsWith('pmp://cover/') ||
+        embeddedCoverUrl.toLowerCase().startsWith('pmp://localhost/cover/');
+      const resolutionCandidate = shouldIgnoreEmbeddedTrackCover
+        ? { ...candidate, coverUrl: undefined }
+        : candidate;
+
+      try {
+        const resolvedUrl = await musicLibraryService.getCoverUrlForTrack(resolutionCandidate, {
+          coverSizeHint: options?.coverSizeHint ?? 'small',
+          bypassRuntimePolicy: true,
+        });
+        const normalizedResolvedUrl =
+          typeof resolvedUrl === 'string' ? resolvedUrl.trim() : '';
+        if (normalizedResolvedUrl) {
+          return normalizedResolvedUrl;
+        }
+      } catch {
+        // best-effort preview resolution
+      }
+
+      if (embeddedCoverUrl && !shouldIgnoreEmbeddedTrackCover) {
+        return embeddedCoverUrl;
+      }
+    }
+
+    if (
+      explicitPlaylistCover &&
+      (this.canRenderPmpPlaylistCoverDirectly() ||
+        (!explicitPlaylistCover.toLowerCase().startsWith('pmp://cover/') &&
+          !explicitPlaylistCover.toLowerCase().startsWith('pmp://localhost/cover/')))
+    ) {
+      return explicitPlaylistCover;
+    }
+
+    return undefined;
+  }
+
   private createPlaylistSummaryFromRecord(record: {
     id: string;
     name: string;
@@ -622,7 +752,7 @@ export class NativeAudioService implements IAudioService {
       id: record.id,
       name: record.name,
       description: record.description,
-      coverUrl: record.coverUrl,
+      coverUrl: this.sanitizePlaylistCoverUrl(record.coverUrl),
       tracks: [],
       kind: record.kind,
       readonly: record.isReadonly,
@@ -929,7 +1059,7 @@ export class NativeAudioService implements IAudioService {
       ownerUid: NativeAudioService.PLAYLIST_OWNER_UID,
       name: playlistName,
       description: typeof playlist.description === 'string' ? playlist.description.trim() : undefined,
-      coverUrl: typeof playlist.coverUrl === 'string' ? playlist.coverUrl.trim() : undefined,
+      coverUrl: this.sanitizePlaylistCoverUrl(playlist.coverUrl),
       kind,
       sourceConnectorId: playlist.sourceConnectorId,
       sourcePlaylistId: playlist.sourcePlaylistId,
@@ -4322,7 +4452,7 @@ export class NativeAudioService implements IAudioService {
   addTrackToPlaylist(playlistId: string, track: Track): void {
     const targetPlaylist = this.getPlaylist(playlistId);
     if (this.isReadonlyPlaylist(targetPlaylist)) return;
-    const stateTrack = compactTrackForState(track);
+    const stateTrack = compactTrackForPlaylistState(track);
 
     const playlists = this.state.playlists.map((pl) => {
       if (pl.id !== playlistId) return pl;

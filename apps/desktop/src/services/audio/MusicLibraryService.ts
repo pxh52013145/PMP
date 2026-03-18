@@ -111,6 +111,7 @@ import {
   type MusicSourceFacadeItem,
   type MusicSourceTrackCandidate,
 } from './musicSourceFacade';
+import { createMusicLibraryReadGateway } from './musicLibraryReadGateway';
 
 // 音乐库数据库版本
 const DB_VERSION = 5;
@@ -373,6 +374,30 @@ export class MusicLibraryService {
   private cachedStats: LibraryStats | null = null;
   private cacheTimestamp: number = 0;
   private CACHE_TTL = 5000; // 5秒缓存
+  private readonly readGateway = createMusicLibraryReadGateway({
+    isDesktopRuntime: () => isTauriRuntime(),
+    tryGetAllTracksFromNativeDb: (limit?: number, offset?: number) =>
+      this.tryGetAllTracksFromNativeDb(limit, offset),
+    trySearchTracksFromNativeDb: (query: string, limit?: number) =>
+      this.trySearchTracksFromNativeDb(query, limit),
+    tryGetTracksByAlbumFromNativeDb: (album: string) => this.tryGetTracksByAlbumFromNativeDb(album),
+    tryGetAllAlbumsFromNativeDb: (includeStoredCover: boolean) =>
+      this.tryGetAllAlbumsFromNativeDb(includeStoredCover),
+    tryGetLibraryStatsFromNativeDb: () => this.tryGetLibraryStatsFromNativeDb(),
+    ensureDb: () => this.ensureDB(),
+    buildPathVisibilityContext: () => this.buildPathVisibilityContext(),
+    isStoredTrackVisible: (storedTrack: unknown, visibilityContext: unknown) =>
+      this.isStoredTrackVisible(storedTrack as StoredTrackRecord, visibilityContext as PathVisibilityContext),
+    restoreTrackForListProjection: (storedTrack: unknown) =>
+      this.restoreTrackForListProjection(storedTrack as StoredTrackRecord),
+    restoreTrackForPlayback: (storedTrack: unknown) =>
+      this.restoreTrackForPlayback(storedTrack as StoredTrackRecord),
+    sanitizeStoredCoverUrlForPath: (rawCoverUrl: unknown, trackPath: unknown) =>
+      this.sanitizeStoredCoverUrlForPath(
+        typeof rawCoverUrl === 'string' ? rawCoverUrl : undefined,
+        typeof trackPath === 'string' ? trackPath : undefined
+      ),
+  });
 
   private constructor() {
     void this.initDB().catch((error) => {
@@ -4095,124 +4120,12 @@ export class MusicLibraryService {
 
   // 获取所有轨道（带限制，避免内存溢出）
   async getAllTracks(limit?: number, offset?: number): Promise<Track[]> {
-    const nativeTracks = await this.tryGetAllTracksFromNativeDb(limit, offset);
-    if (nativeTracks) {
-      return nativeTracks;
-    }
-
-    const db = await this.ensureDB();
-    const visibilityContext = await this.buildPathVisibilityContext();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['tracks'], 'readonly');
-      const store = transaction.objectStore('tracks');
-
-      if (limit) {
-        const safeOffset =
-          typeof offset === 'number' && Number.isFinite(offset) && offset > 0
-            ? Math.floor(offset)
-            : 0;
-
-        // 使用游标限制结果数量
-        const tracks: Track[] = [];
-        const request = store.openCursor();
-        let count = 0;
-        let skipped = 0;
-
-        request.onsuccess = (event) => {
-          const cursor = (event.target as IDBRequest).result;
-          if (!cursor) {
-            resolve(tracks);
-            return;
-          }
-
-          const value = cursor.value as unknown as StoredTrackRecord;
-          if (!this.isStoredTrackVisible(value, visibilityContext)) {
-            cursor.continue();
-            return;
-          }
-
-          if (skipped < safeOffset) {
-            skipped++;
-            cursor.continue();
-            return;
-          }
-
-          if (count < limit) {
-            tracks.push(this.restoreTrackForListProjection(value));
-            count++;
-            cursor.continue();
-          } else {
-            resolve(tracks);
-          }
-        };
-        request.onerror = () => reject(request.error);
-      } else {
-        // 获取所有
-        const request = store.getAll();
-        request.onsuccess = () => {
-          const raw = Array.isArray(request.result) ? request.result : [];
-          const restoredTracks = raw
-            .filter((track) =>
-              this.isStoredTrackVisible(track as unknown as StoredTrackRecord, visibilityContext)
-            )
-            .map((track) =>
-              this.restoreTrackForListProjection(track as unknown as StoredTrackRecord)
-            );
-          resolve(restoredTracks);
-        };
-        request.onerror = () => reject(request.error);
-      }
-    });
+    return this.readGateway.getAllTracks(limit, offset);
   }
 
   // 搜索轨道（避免一次性加载全库导致卡顿）
   async searchTracks(query: string, limit?: number): Promise<Track[]> {
-    const q = query.trim().toLowerCase();
-    if (!q) return typeof limit === 'number' ? this.getAllTracks(limit) : this.getAllTracks();
-
-    const nativeTracks = await this.trySearchTracksFromNativeDb(q, limit);
-    if (nativeTracks) {
-      return nativeTracks;
-    }
-
-    const db = await this.ensureDB();
-    const visibilityContext = await this.buildPathVisibilityContext();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['tracks'], 'readonly');
-      const store = transaction.objectStore('tracks');
-
-      const results: Track[] = [];
-      const request = store.openCursor();
-
-      request.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
-        if (!cursor) {
-          resolve(results);
-          return;
-        }
-
-        const value = cursor.value as unknown as StoredTrackRecord;
-        if (!this.isStoredTrackVisible(value, visibilityContext)) {
-          cursor.continue();
-          return;
-        }
-        const title = String(value.title || '').toLowerCase();
-        const artist = String(value.artist || '').toLowerCase();
-        const album = String(value.album || '').toLowerCase();
-
-        if (title.includes(q) || artist.includes(q) || album.includes(q)) {
-          results.push(this.restoreTrackForListProjection(value));
-          if (typeof limit === 'number' && results.length >= limit) {
-            resolve(results);
-            return;
-          }
-        }
-
-        cursor.continue();
-      };
-
-      request.onerror = () => reject(request.error);
-    });
+    return this.readGateway.searchTracks(query, limit);
   }
 
   // 从存储的track恢复用于播放的track对象
@@ -5196,30 +5109,7 @@ export class MusicLibraryService {
 
   // 按专辑获取轨道
   async getTracksByAlbum(album: string): Promise<Track[]> {
-    const nativeTracks = await this.tryGetTracksByAlbumFromNativeDb(album);
-    if (nativeTracks) {
-      return nativeTracks;
-    }
-
-    const db = await this.ensureDB();
-    const visibilityContext = await this.buildPathVisibilityContext();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['tracks'], 'readonly');
-      const store = transaction.objectStore('tracks');
-      const index = store.index('album');
-      const request = index.getAll(album);
-
-      request.onsuccess = () => {
-        const raw = Array.isArray(request.result) ? request.result : [];
-        const restoredTracks = raw
-          .filter((track) =>
-            this.isStoredTrackVisible(track as unknown as StoredTrackRecord, visibilityContext)
-          )
-          .map((track) => this.restoreTrackForPlayback(track as unknown as StoredTrackRecord));
-        resolve(restoredTracks);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return this.readGateway.getTracksByAlbum(album);
   }
 
   // 获取所有艺术家
@@ -5261,81 +5151,7 @@ export class MusicLibraryService {
 
   // 获取所有专辑
   async getAllAlbums(options?: { includeStoredCover?: boolean }): Promise<AlbumSummary[]> {
-    const includeStoredCover = options?.includeStoredCover ?? true;
-    const nativeAlbums = await this.tryGetAllAlbumsFromNativeDb(includeStoredCover);
-    if (nativeAlbums) {
-      return nativeAlbums;
-    }
-
-    const db = await this.ensureDB();
-    const visibilityContext = await this.buildPathVisibilityContext();
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(['tracks'], 'readonly');
-      const store = transaction.objectStore('tracks');
-
-      if (!store.indexNames.contains('album')) {
-        void this.getAllTracks()
-          .then((tracks) => {
-            const albumMap = new Map<string, AlbumSummary>();
-            tracks.forEach((track) => {
-              if (!track.album) return;
-              const key = `${track.album}::${track.artist || ''}`;
-              if (albumMap.has(key)) return;
-              albumMap.set(key, {
-              album: track.album,
-              artist: track.artist || 'Unknown Artist',
-              cover: includeStoredCover
-                ? this.sanitizeStoredCoverUrlForPath(track.coverUrl, track.filePath || track.path)
-                : undefined,
-              coverTrackPath: track.filePath || track.path,
-              coverTrackId: track.id,
-            });
-            });
-            resolve(
-              Array.from(albumMap.values()).sort((a, b) => a.album.localeCompare(b.album))
-            );
-          })
-          .catch(reject);
-        return;
-      }
-
-      const albumMap = new Map<string, AlbumSummary>();
-      const index = store.index('album');
-      const request = index.openCursor();
-      request.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
-        if (!cursor) {
-          resolve(Array.from(albumMap.values()).sort((a, b) => a.album.localeCompare(b.album)));
-          return;
-        }
-
-        const value = cursor.value as unknown as StoredTrackRecord;
-        if (!this.isStoredTrackVisible(value, visibilityContext)) {
-          cursor.continue();
-          return;
-        }
-        const album = String(value.album ?? '');
-        if (album) {
-          const artist = String(value.artist ?? 'Unknown Artist');
-          const key = `${album}::${artist}`;
-          if (!albumMap.has(key)) {
-              albumMap.set(key, {
-                album,
-                artist,
-                cover: includeStoredCover
-                  ? this.sanitizeStoredCoverUrlForPath(value.coverUrl, value.filePath || value.path)
-                  : undefined,
-                coverTrackPath: value.filePath || value.path,
-                coverTrackId: value.id,
-              });
-          }
-        }
-
-        cursor.continue();
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return this.readGateway.getAllAlbums(options);
   }
 
   // 获取所有流派
@@ -5377,66 +5193,12 @@ export class MusicLibraryService {
 
   // 获取库统计信息（带缓存）
   async getLibraryStats(): Promise<LibraryStats> {
-    // 检查缓存
     const now = Date.now();
     if (this.cachedStats && now - this.cacheTimestamp < this.CACHE_TTL) {
       return this.cachedStats;
     }
 
-    const nativeStats = await this.tryGetLibraryStatsFromNativeDb();
-    if (nativeStats) {
-      this.cachedStats = nativeStats;
-      this.cacheTimestamp = now;
-      return nativeStats;
-    }
-
-    const artists = new Set<string>();
-    const albums = new Set<string>();
-    let totalTracks = 0;
-    let totalSize = 0;
-    let totalDuration = 0;
-
-    const db = await this.ensureDB();
-    const visibilityContext = await this.buildPathVisibilityContext();
-    await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(['tracks'], 'readonly');
-      const store = transaction.objectStore('tracks');
-      const request = store.openCursor();
-
-      request.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest).result as IDBCursorWithValue | null;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-
-        const value = cursor.value as unknown as StoredTrackRecord;
-        if (!this.isStoredTrackVisible(value, visibilityContext)) {
-          cursor.continue();
-          return;
-        }
-        totalTracks++;
-        const artist = String(value.artist ?? '').trim();
-        const album = String(value.album ?? '').trim();
-        if (artist) artists.add(artist);
-        if (album) albums.add(album);
-        totalSize += Number(value.fileSize ?? 0);
-        totalDuration += Number(value.duration ?? 0);
-
-        cursor.continue();
-      };
-      request.onerror = () => reject(request.error);
-    });
-
-    const stats = {
-      totalTracks,
-      totalArtists: artists.size,
-      totalAlbums: albums.size,
-      totalSize,
-      totalDuration,
-    };
-
-    // 更新缓存
+    const stats = await this.readGateway.getLibraryStats();
     this.cachedStats = stats;
     this.cacheTimestamp = now;
 

@@ -536,6 +536,11 @@ export interface IAudioService {
    */
   hydratePlaylistTracks?(playlistId: string): Promise<Playlist | null>;
 
+  resolvePlaylistCoverPreview?(
+    playlistId: string,
+    options?: { coverSizeHint?: 'small' | 'medium' | 'large' }
+  ): Promise<string | undefined>;
+
   /**
    * 释放播放列表曲目常驻内存
    */

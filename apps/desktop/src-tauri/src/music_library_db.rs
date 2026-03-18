@@ -4462,6 +4462,7 @@ pub fn replace_playlist_items(
 pub fn list_playlist_items(
     app: &AppHandle,
     playlist_id: &str,
+    limit: Option<u32>,
 ) -> Result<Vec<LibraryPlaylistItemRecord>, String> {
     ensure_initialized(app)?;
     with_conn(|conn| {
@@ -4469,6 +4470,9 @@ pub fn list_playlist_items(
         if normalized_playlist_id.is_empty() {
             return Ok(Vec::new());
         }
+
+        let normalized_limit = limit
+            .map(|value| value.max(1).min(512) as i64);
 
         let mut stmt = conn
             .prepare(
@@ -4488,12 +4492,13 @@ pub fn list_playlist_items(
                 FROM playlist_items
                 WHERE playlist_id = ?1
                 ORDER BY position ASC, created_at_ms ASC, id ASC
+                LIMIT COALESCE(?2, -1)
                 "#,
             )
             .map_err(|error| format!("Failed to prepare list playlist items statement: {error}"))?;
 
         let rows = stmt
-            .query_map(params![normalized_playlist_id], |row| {
+            .query_map(params![normalized_playlist_id, normalized_limit], |row| {
                 Ok(LibraryPlaylistItemRecord {
                     id: row.get(0)?,
                     playlist_id: row.get(1)?,

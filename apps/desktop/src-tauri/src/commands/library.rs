@@ -541,9 +541,10 @@ pub async fn music_library_db_replace_playlist_items(
 pub async fn music_library_db_list_playlist_items(
     app: tauri::AppHandle,
     playlist_id: String,
+    limit: Option<u32>,
 ) -> Result<Vec<music_library_db::LibraryPlaylistItemRecord>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        music_library_db::list_playlist_items(&app, &playlist_id)
+        music_library_db::list_playlist_items(&app, &playlist_id, limit)
     })
     .await
     .map_err(|e| format!("Music library list playlist items task failed: {e}"))?

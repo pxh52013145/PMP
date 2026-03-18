@@ -238,6 +238,11 @@ import {
   MUSIC_LIBRARY_CARD_GROUP_INDENT_PADDING_PX,
   sliceMusicLibraryCardVirtualLayout,
 } from '../../modules/music-library/cardVirtualWindow';
+import {
+  growMusicLibraryRenderedTrackLimit,
+  shouldDeferMusicLibraryTrackChunkLoad,
+  sliceMusicLibraryRenderedTracks,
+} from '../../modules/music-library/renderWindow';
 
 
 import {
@@ -932,6 +937,7 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
   const normalizedCoverUrl = typeof coverUrl === 'string' ? coverUrl.trim() : '';
 
   const displayCoverUrl = !coverLoadFailed && normalizedCoverUrl.length > 0 ? normalizedCoverUrl : undefined;
+  const coverFetchPriorityProps = { fetchpriority: 'low' } as Record<string, string>;
 
   useEffect(() => {
 
@@ -989,7 +995,7 @@ const LocalTrackCard: React.FC<LocalTrackCardProps> = ({
 
             decoding="async"
 
-            fetchPriority="low"
+            {...coverFetchPriorityProps}
 
             onLoad={(event) => {
 
@@ -1236,6 +1242,8 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   const [isTrackChunkLoading, setIsTrackChunkLoading] = useState(false);
 
   const [renderedTrackLimit, setRenderedTrackLimit] = useState(TRACK_RENDER_CHUNK_SIZE);
+  const renderedTrackLimitRef = useRef(TRACK_RENDER_CHUNK_SIZE);
+  const filteredTrackCountRef = useRef(0);
 
   const trackNextOffsetRef = useRef(0);
 
@@ -2235,6 +2243,12 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
   useEffect(() => {
 
+    renderedTrackLimitRef.current = renderedTrackLimit;
+
+  }, [renderedTrackLimit]);
+
+  useEffect(() => {
+
     nativeBaseTracksRef.current = nativeBaseTracks;
 
   }, [nativeBaseTracks]);
@@ -2405,7 +2419,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     if (remaining > TRACK_SCROLL_LOAD_TRIGGER_PX) return;
 
-
+    if (
+      shouldDeferMusicLibraryTrackChunkLoad({
+        baseView,
+        renderedTrackLimit: renderedTrackLimitRef.current,
+        availableTrackCount: filteredTrackCountRef.current,
+      })
+    ) {
+      return;
+    }
 
     if (shouldUseNativeBaseQuery) {
 
@@ -2432,7 +2454,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     loadNativeBaseTrackChunk,
 
     scheduleTrackChunkLoad,
-
+    baseView,
     shouldUseNativeBaseQuery,
 
   ]);
@@ -2489,9 +2511,15 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     const remaining = root.scrollHeight - (root.scrollTop + root.clientHeight);
 
-    if (baseView !== 'card' && remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
+    if (baseView === 'card' && remaining <= TRACK_SCROLL_LOAD_TRIGGER_PX) {
 
-      setRenderedTrackLimit((prev) => prev + TRACK_RENDER_CHUNK_SIZE);
+      setRenderedTrackLimit((prev) =>
+        growMusicLibraryRenderedTrackLimit(
+          prev,
+          filteredTrackCountRef.current,
+          TRACK_RENDER_CHUNK_SIZE
+        )
+      );
 
     }
 
@@ -2513,7 +2541,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     syncMainViewport,
     baseView,
-
     viewMode,
 
   ]);
@@ -5312,8 +5339,20 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   }, [filteredTracksTotal]);
 
 
+  const renderedTracks = useMemo(
+    () =>
+      sliceMusicLibraryRenderedTracks(filteredTracks, {
+        baseView,
+        renderedTrackLimit,
+      }),
+    [baseView, filteredTracks, renderedTrackLimit]
+  );
 
-  const renderedTracks = useMemo(() => filteredTracks, [filteredTracks]);
+  useEffect(() => {
+
+    filteredTrackCountRef.current = filteredTracks.length;
+
+  }, [filteredTracks.length]);
 
 
 
@@ -5323,7 +5362,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
       buildMusicLibraryGroupedRows({
 
-        tracks: filteredTracks,
+        tracks: renderedTracks,
 
         groupByRules: baseGroupByRules,
 
@@ -5337,13 +5376,11 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
     [
 
-      baseView,
-
       baseGroupByRules,
 
       collapsedTrackGroupKeys,
 
-      filteredTracks,
+      renderedTracks,
 
       resolveBaseFieldLabel,
 
@@ -5454,25 +5491,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
   );
 
 
-
-  const cardVisibleTrackCount = useMemo(
-
-    () =>
-
-      cardVirtualWindow.blocks.reduce(
-
-        (total, block) => total + (block.kind === 'track-row' ? block.rows.length : 0),
-
-        0
-
-      ),
-
-    [cardVirtualWindow.blocks]
-
-  );
-
-
-
   const showTrackLoadHint = isUsingNativeBaseTracks
 
     ? isNativeBaseTracksLoading ||
@@ -5535,7 +5553,7 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
 
           filteredTracks: filteredTracks.length,
 
-          renderedTracks: baseView === 'card' ? cardVisibleTrackCount : renderedTracks.length,
+          renderedTracks: renderedTracks.length,
 
           groupedRows: groupedRows.length,
 
@@ -5580,7 +5598,6 @@ export const MusicLibrary: React.FC<MusicLibraryProps> = ({
     [
 
       baseView,
-      cardVisibleTrackCount,
 
       filteredTracks,
 

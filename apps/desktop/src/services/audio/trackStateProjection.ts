@@ -30,6 +30,30 @@ function isAbsolutePath(pathValue: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(pathValue);
 }
 
+function projectPathFields(track: Track): {
+  filePath?: string;
+  path?: string;
+  originalPath?: string;
+} {
+  const filePath = normalizeOptionalString(track.filePath);
+  const path = normalizeOptionalString(track.path);
+  const originalPath = normalizeOptionalString(track.originalPath);
+  const canonicalPath = filePath ?? path;
+
+  if (canonicalPath && isAbsolutePath(canonicalPath)) {
+    return {
+      filePath: canonicalPath,
+      originalPath: originalPath ?? canonicalPath,
+    };
+  }
+
+  return {
+    filePath,
+    path,
+    originalPath,
+  };
+}
+
 function looksLikeSourceLocator(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return false;
@@ -79,11 +103,19 @@ function sanitizeCoverUrl(track: Track): string | undefined {
   return undefined;
 }
 
-export function compactTrackForState(track: Track): Track {
+type ProjectedTrackCore = {
+  id: string;
+  title: string;
+  filePath?: string;
+  path?: string;
+  originalPath?: string;
+  normalizedPath: string;
+  projectedComment?: string;
+};
+
+function resolveProjectedTrackCore(track: Track): ProjectedTrackCore {
   const id = normalizeOptionalString(track.id) ?? '';
-  const filePath = normalizeOptionalString(track.filePath);
-  const path = normalizeOptionalString(track.path);
-  const originalPath = normalizeOptionalString(track.originalPath);
+  const { filePath, path, originalPath } = projectPathFields(track);
   const normalizedPath = filePath ?? path ?? '';
   const projectedComment = sanitizeProjectedComment(track, normalizedPath, originalPath);
   const title =
@@ -91,6 +123,27 @@ export function compactTrackForState(track: Track): Track {
     originalPath?.split(/[/\\]/).pop() ??
     path?.split(/[/\\]/).pop() ??
     id;
+
+  return {
+    id,
+    title,
+    filePath,
+    path,
+    originalPath,
+    normalizedPath,
+    projectedComment,
+  };
+}
+
+function attachProjectedFileHandle(track: Track, normalizedPath: string, compacted: Track): void {
+  if (!isAbsolutePath(normalizedPath) && track.fileHandle) {
+    compacted.fileHandle = track.fileHandle;
+  }
+}
+
+export function compactTrackForState(track: Track): Track {
+  const { id, title, filePath, path, originalPath, normalizedPath, projectedComment } =
+    resolveProjectedTrackCore(track);
 
   const compacted: Track = {
     id,
@@ -129,25 +182,13 @@ export function compactTrackForState(track: Track): Track {
     mimeType: normalizeOptionalString(track.mimeType),
   };
 
-  if (!isAbsolutePath(normalizedPath) && track.fileHandle) {
-    compacted.fileHandle = track.fileHandle;
-  }
-
+  attachProjectedFileHandle(track, normalizedPath, compacted);
   return compacted;
 }
 
-export function compactTrackForQueueState(track: Track): Track {
-  const id = normalizeOptionalString(track.id) ?? '';
-  const filePath = normalizeOptionalString(track.filePath);
-  const path = normalizeOptionalString(track.path);
-  const originalPath = normalizeOptionalString(track.originalPath);
-  const normalizedPath = filePath ?? path ?? '';
-  const projectedComment = sanitizeProjectedComment(track, normalizedPath, originalPath);
-  const title =
-    normalizeOptionalString(track.title) ??
-    originalPath?.split(/[/\\]/).pop() ??
-    path?.split(/[/\\]/).pop() ??
-    id;
+export function compactTrackForPlaylistState(track: Track): Track {
+  const { id, title, filePath, path, originalPath, normalizedPath, projectedComment } =
+    resolveProjectedTrackCore(track);
 
   const compacted: Track = {
     id,
@@ -166,9 +207,29 @@ export function compactTrackForQueueState(track: Track): Track {
     comment: projectedComment,
   };
 
-  if (!isAbsolutePath(normalizedPath) && track.fileHandle) {
-    compacted.fileHandle = track.fileHandle;
-  }
+  attachProjectedFileHandle(track, normalizedPath, compacted);
+  return compacted;
+}
 
+export function compactTrackForQueueState(track: Track): Track {
+  const { id, title, filePath, path, originalPath, normalizedPath, projectedComment } =
+    resolveProjectedTrackCore(track);
+
+  const compacted: Track = {
+    id,
+    title,
+    artist: normalizeOptionalString(track.artist),
+    album: normalizeOptionalString(track.album),
+    duration: normalizeOptionalNumber(track.duration),
+    path,
+    filePath,
+    originalPath,
+    libraryPathId: normalizeOptionalString(track.libraryPathId),
+    replayGainTrackGainDb: normalizeOptionalNumber(track.replayGainTrackGainDb),
+    replayGainAlbumGainDb: normalizeOptionalNumber(track.replayGainAlbumGainDb),
+    comment: projectedComment,
+  };
+
+  attachProjectedFileHandle(track, normalizedPath, compacted);
   return compacted;
 }

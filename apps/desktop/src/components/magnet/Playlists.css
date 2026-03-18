@@ -1391,3 +1391,50 @@
     justify-content: flex-start;
   }
 }
+
+/* Override legacy mojibake pseudo-icons with direct text glyphs from JSX. */
+.playlists-close-btn {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.playlists-close-btn::before {
+  content: none;
+}
+
+.playlists-hero-cover-fallback {
+  font-size: 52px;
+}
+
+.playlists-item-cover-fallback {
+  font-size: 18px;
+}
+
+.playlists-tracks-empty-icon,
+.playlists-no-selection-icon,
+.playlists-empty-icon {
+  font-size: 56px;
+  color: rgba(255, 255, 255, 0.28);
+}
+
+.playlists-hero-cover-fallback,
+.playlists-item-cover-fallback,
+.playlists-tracks-empty-icon,
+.playlists-no-selection-icon,
+.playlists-empty-icon {
+  line-height: 1;
+}
+
+.playlists-hero-cover-fallback::before,
+.playlists-item-cover-fallback::before,
+.playlists-tracks-empty-icon::before,
+.playlists-no-selection-icon::before,
+.playlists-empty-icon::before,
+.playlists-track-action-btn::before {
+  content: none;
+}
+
+.playlists-track-action-btn {
+  font-size: 13px;
+  line-height: 1;
+}

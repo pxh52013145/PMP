@@ -13,6 +13,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { STORAGE_KEYS } from '../../../utils/windowCommunication';
 import { listen } from '@tauri-apps/api/event';
 import type { Track } from '../types';
+import { musicLibraryService } from '../MusicLibraryService';
 import {
   getAudioPerformanceTelemetrySnapshot,
   resetAudioPerformanceTelemetryForTests,
@@ -152,23 +153,29 @@ describe('NativeAudioService', () => {
       artist: 'Artist',
       filePath: 'C:\\Music\\playlist-heavy.flac',
       path: 'C:\\Music\\playlist-heavy.flac',
+      coverKey: 'playlist-heavy-thumb-96px',
       coverUrl: `blob:${'b'.repeat(128)}`,
       fileContent: new ArrayBuffer(4 * 1024 * 1024),
       lyrics: 'x'.repeat(16 * 1024),
       tags: ['tag-a'],
       comment: 'keep locator',
+      genre: 'Electronic',
+      sampleRate: 96000,
     });
 
     const playlistTrack = service.getPlaylist(playlist.id)?.tracks[0];
     expect(playlistTrack).toMatchObject({
       id: 'playlist-heavy-1',
       title: 'Playlist Heavy',
+      coverKey: 'playlist-heavy-thumb-96px',
     });
     expect(playlistTrack?.comment).toBeUndefined();
     expect(playlistTrack?.fileContent).toBeUndefined();
     expect(playlistTrack?.lyrics).toBeUndefined();
     expect(playlistTrack?.tags).toBeUndefined();
     expect(playlistTrack?.coverUrl).toBeUndefined();
+    expect(playlistTrack?.genre).toBeUndefined();
+    expect(playlistTrack?.sampleRate).toBeUndefined();
 
     service.destroy();
   });
@@ -283,6 +290,201 @@ describe('NativeAudioService', () => {
     expect(releasedPlaylist?.tracks).toHaveLength(0);
     expect(releasedPlaylist?.trackCount).toBe(2);
 
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('sanitizes restored playlist summary cover urls while preserving trusted pmp covers', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-cover-pmp',
+            ownerUid: 'local:default',
+            name: 'Trusted PMP Cover',
+            description: null,
+            coverUrl: 'pmp://cover/playlist-cover-thumb-96px?size=small',
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 0,
+            totalDuration: 0,
+          },
+          {
+            id: 'playlist-cover-legacy',
+            ownerUid: 'local:default',
+            name: 'Legacy Blob Cover',
+            description: null,
+            coverUrl: 'blob:legacy-playlist-cover',
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 0,
+            totalDuration: 0,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      return [];
+    });
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-cover-pmp')).not.toBeNull();
+      expect(service.getPlaylist('playlist-cover-legacy')).not.toBeNull();
+    });
+
+    expect(service.getPlaylist('playlist-cover-pmp')?.coverUrl).toBe(
+      'pmp://cover/playlist-cover-thumb-96px?size=small'
+    );
+    expect(service.getPlaylist('playlist-cover-legacy')?.coverUrl).toBeUndefined();
+
+    service.destroy();
+    restoreRuntime();
+  });
+
+  it('resolves summary-only playlist cover previews without hydrating playlist tracks', async () => {
+    const restoreRuntime = enableMockTauriRuntime();
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation(async (cmd: string, payload?: Record<string, unknown>) => {
+      if (cmd === 'music_library_db_list_playlists') {
+        const query = (payload as { query?: { kind?: string } } | undefined)?.query;
+        if (query?.kind === 'smart') {
+          return [];
+        }
+        return [
+          {
+            id: 'playlist-preview-1',
+            ownerUid: 'local:default',
+            name: 'Preview Playlist',
+            description: null,
+            coverUrl: null,
+            kind: 'manual',
+            sourceConnectorId: null,
+            sourcePlaylistId: null,
+            smartRuleJson: null,
+            isReadonly: false,
+            createdAtMs: 1700000000000,
+            updatedAtMs: 1700000000000,
+            lastOpenedAtMs: null,
+            trackCount: 2,
+            totalDuration: 300,
+          },
+        ];
+      }
+      if (cmd === 'music_library_db_upsert_playlist') {
+        return {
+          id: 'smart-recently-played',
+          ownerUid: 'local:default',
+          name: 'Recently Played',
+          description: null,
+          kind: 'smart',
+          sourceConnectorId: null,
+          sourcePlaylistId: null,
+          smartRuleJson: JSON.stringify({ type: 'recently_played', limit: 1000 }),
+          isReadonly: true,
+          createdAtMs: 1700000000000,
+          updatedAtMs: 1700000000000,
+          lastOpenedAtMs: null,
+          trackCount: 0,
+          totalDuration: 0,
+        };
+      }
+      if (cmd === 'music_library_db_list_playlist_items') {
+        expect(payload).toMatchObject({
+          playlistId: 'playlist-preview-1',
+          limit: 5,
+        });
+        return [
+          {
+            id: 'preview-item-1',
+            playlistId: 'playlist-preview-1',
+            position: 0,
+            trackPayloadJson: JSON.stringify({
+              id: 'preview-track-1',
+              title: 'Preview Track 1',
+              filePath: 'C:\\\\Music\\\\preview-track-1.flac',
+              path: 'C:\\\\Music\\\\preview-track-1.flac',
+              duration: 120,
+            }),
+            snapshotTitle: 'Preview Track 1',
+            snapshotDurationSeconds: 120,
+            createdAtMs: 1700000000000,
+          },
+          {
+            id: 'preview-item-2',
+            playlistId: 'playlist-preview-1',
+            position: 1,
+            trackPayloadJson: JSON.stringify({
+              id: 'preview-track-2',
+              title: 'Preview Track 2',
+              filePath: 'C:\\\\Music\\\\preview-track-2.flac',
+              path: 'C:\\\\Music\\\\preview-track-2.flac',
+              duration: 180,
+            }),
+            snapshotTitle: 'Preview Track 2',
+            snapshotDurationSeconds: 180,
+            createdAtMs: 1700000000001,
+          },
+        ];
+      }
+      return [];
+    });
+
+    const coverSpy = vi
+      .spyOn(musicLibraryService, 'getCoverUrlForTrack')
+      .mockResolvedValue('pmp://cover/generated-preview-thumb-96px?size=small');
+
+    const service = new NativeAudioService();
+    await flushMicrotasks(6);
+    await vi.waitFor(() => {
+      expect(service.getPlaylist('playlist-preview-1')).not.toBeNull();
+    });
+
+    const coverUrl = await service.resolvePlaylistCoverPreview?.('playlist-preview-1', {
+      coverSizeHint: 'small',
+    });
+
+    expect(coverUrl).toBe('pmp://cover/generated-preview-thumb-96px?size=small');
+    expect(service.getPlaylist('playlist-preview-1')?.tracksHydrated).toBe(false);
+    expect(service.getPlaylist('playlist-preview-1')?.tracks).toHaveLength(0);
+    expect(coverSpy).toHaveBeenCalled();
+
+    coverSpy.mockRestore();
     service.destroy();
     restoreRuntime();
   });
@@ -612,6 +814,40 @@ describe('NativeAudioService', () => {
     expect(restoredTrack?.lyrics).toBeUndefined();
     expect(restoredTrack?.tags).toBeUndefined();
     expect(restoredTrack?.coverUrl).toBeUndefined();
+
+    service.destroy();
+  });
+
+  it('keeps playlist-runtime cover pointers and platform locators when restoring playlist payloads', () => {
+    const service = new NativeAudioService();
+    const restoredTrack = (
+      service as unknown as {
+        parseTrackFromPlaylistPayload: (payloadJson?: string) => Track | null;
+      }
+    ).parseTrackFromPlaylistPayload(
+      JSON.stringify({
+        id: 'restore-track-platform-1',
+        title: 'Restored Platform',
+        filePath: 'C:\\\\Cache\\\\restored-platform.m4a',
+        path: 'C:\\\\Cache\\\\restored-platform.m4a',
+        originalPath: 'bilibili://video/BV1abc123',
+        comment: 'bilibili://video/BV1abc123',
+        coverKey: 'restored-platform-thumb-96px',
+        coverUrl: 'pmp://cover/restored-platform-thumb-96px?size=small',
+        quickFingerprint: 'qf2:abcdef1234567890',
+        sampleRate: 48000,
+      })
+    );
+
+    expect(restoredTrack).toMatchObject({
+      id: 'restore-track-platform-1',
+      title: 'Restored Platform',
+      coverKey: 'restored-platform-thumb-96px',
+      coverUrl: 'pmp://cover/restored-platform-thumb-96px?size=small',
+      comment: 'bilibili://video/BV1abc123',
+    });
+    expect(restoredTrack?.quickFingerprint).toBeUndefined();
+    expect(restoredTrack?.sampleRate).toBeUndefined();
 
     service.destroy();
   });

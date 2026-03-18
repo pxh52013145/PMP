@@ -3,9 +3,15 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './NativeDebugPage.css';
 import { useAudioEngine, useAudioService } from '../../contexts/AudioEngineContext';
+import { usePerformanceControlSettings } from '../../contexts/usePerformanceControlSettings';
 import { useLocale, useT } from '../../i18n';
-import { AudioRobustnessSnapshot, type AudioState, Track } from '../../services/audio';
+import { AudioRobustnessSnapshot, type AudioState, Playlist, Track } from '../../services/audio';
 import type { AudioTuningProfileId } from '../../services/audio/types';
+import {
+  getPlaylistsOverlayResidencySnapshot,
+  subscribePlaylistsOverlayResidencyTelemetry,
+  type PlaylistsOverlayResidencySnapshot,
+} from '../../modules/playlists/residencyTelemetry';
 import { NativeDebugQueuePanel } from './native-debug/NativeDebugQueuePanel';
 import { NativeDebugPlaybackDspPanel } from './native-debug/NativeDebugPlaybackDspPanel';
 import { NativeDebugEnginePanel } from './native-debug/NativeDebugEnginePanel';
@@ -162,6 +168,159 @@ function collectTrackResidencyDiagnostics(tracks: Track[]): TrackResidencyDiagno
       tagChars * 2 +
       coverUrlChars * 2 +
       commentChars * 2,
+  };
+}
+
+type TrackDuplicationDiagnostics = {
+  hydratedPlaylistCount: number;
+  queueUniqueTrackCount: number;
+  hydratedPlaylistTrackCount: number;
+  hydratedPlaylistUniqueTrackCount: number;
+  currentPlaylistTrackCount: number;
+  currentPlaylistUniqueTrackCount: number;
+  queueHydratedOverlapCount: number;
+  queueHydratedOverlapApproxJsonBytes: number;
+  queueCurrentPlaylistOverlapCount: number;
+  queueCurrentPlaylistOverlapApproxJsonBytes: number;
+  hydratedCurrentPlaylistOverlapCount: number;
+  hydratedCurrentPlaylistOverlapApproxJsonBytes: number;
+  tripleOverlapCount: number;
+  tripleOverlapApproxJsonBytesUpperBound: number;
+  unionUniqueTrackCount: number;
+  logicalDuplicateCopies: number;
+  logicalDuplicateApproxJsonBytesUpperBound: number;
+};
+
+function getTrackResidencyIdentity(track: Track): string {
+  const filePath = typeof track.filePath === 'string' ? track.filePath.trim() : '';
+  if (filePath) return `file:${filePath}`;
+
+  const path = typeof track.path === 'string' ? track.path.trim() : '';
+  if (path) return `path:${path}`;
+
+  const originalPath = typeof track.originalPath === 'string' ? track.originalPath.trim() : '';
+  if (originalPath) return `original:${originalPath}`;
+
+  const id = typeof track.id === 'string' ? track.id.trim() : '';
+  if (id) return `id:${id}`;
+
+  return '';
+}
+
+function collectTrackDuplicationDiagnostics(
+  queue: Track[],
+  playlists: Playlist[],
+  currentPlaylist: Playlist | null
+): TrackDuplicationDiagnostics {
+  const hydratedPlaylists = playlists.filter(
+    (playlist) => playlist.tracksHydrated !== false && playlist.tracks.length > 0
+  );
+  const hydratedTracks = hydratedPlaylists.flatMap((playlist) => playlist.tracks);
+  const currentPlaylistTracks = currentPlaylist?.tracks ?? [];
+  const queueKeys = new Set<string>();
+  const hydratedKeys = new Set<string>();
+  const currentPlaylistKeys = new Set<string>();
+  const trackPresence = new Map<
+    string,
+    {
+      sample: Track;
+      inQueue: boolean;
+      inHydratedPlaylists: boolean;
+      inCurrentPlaylist: boolean;
+    }
+  >();
+
+  const markTracks = (
+    tracks: Track[],
+    bucket: 'queue' | 'hydratedPlaylists' | 'currentPlaylist',
+    bucketKeys: Set<string>
+  ) => {
+    for (const track of tracks) {
+      const identity = getTrackResidencyIdentity(track);
+      if (!identity) continue;
+      bucketKeys.add(identity);
+      const existing = trackPresence.get(identity);
+      if (existing) {
+        if (bucket === 'queue') existing.inQueue = true;
+        if (bucket === 'hydratedPlaylists') existing.inHydratedPlaylists = true;
+        if (bucket === 'currentPlaylist') existing.inCurrentPlaylist = true;
+        continue;
+      }
+      trackPresence.set(identity, {
+        sample: track,
+        inQueue: bucket === 'queue',
+        inHydratedPlaylists: bucket === 'hydratedPlaylists',
+        inCurrentPlaylist: bucket === 'currentPlaylist',
+      });
+    }
+  };
+
+  markTracks(queue, 'queue', queueKeys);
+  markTracks(hydratedTracks, 'hydratedPlaylists', hydratedKeys);
+  markTracks(currentPlaylistTracks, 'currentPlaylist', currentPlaylistKeys);
+
+  let queueHydratedOverlapCount = 0;
+  let queueHydratedOverlapApproxJsonBytes = 0;
+  let queueCurrentPlaylistOverlapCount = 0;
+  let queueCurrentPlaylistOverlapApproxJsonBytes = 0;
+  let hydratedCurrentPlaylistOverlapCount = 0;
+  let hydratedCurrentPlaylistOverlapApproxJsonBytes = 0;
+  let tripleOverlapCount = 0;
+  let tripleOverlapApproxJsonBytesUpperBound = 0;
+  let logicalDuplicateCopies = 0;
+  let logicalDuplicateApproxJsonBytesUpperBound = 0;
+
+  for (const presence of trackPresence.values()) {
+    const sampleJsonBytes = measureJsonBytes(presence.sample);
+    const copies =
+      Number(presence.inQueue) +
+      Number(presence.inHydratedPlaylists) +
+      Number(presence.inCurrentPlaylist);
+
+    if (presence.inQueue && presence.inHydratedPlaylists) {
+      queueHydratedOverlapCount += 1;
+      queueHydratedOverlapApproxJsonBytes += sampleJsonBytes;
+    }
+
+    if (presence.inQueue && presence.inCurrentPlaylist) {
+      queueCurrentPlaylistOverlapCount += 1;
+      queueCurrentPlaylistOverlapApproxJsonBytes += sampleJsonBytes;
+    }
+
+    if (presence.inHydratedPlaylists && presence.inCurrentPlaylist) {
+      hydratedCurrentPlaylistOverlapCount += 1;
+      hydratedCurrentPlaylistOverlapApproxJsonBytes += sampleJsonBytes;
+    }
+
+    if (copies === 3) {
+      tripleOverlapCount += 1;
+      tripleOverlapApproxJsonBytesUpperBound += sampleJsonBytes * 2;
+    }
+
+    if (copies > 1) {
+      logicalDuplicateCopies += copies - 1;
+      logicalDuplicateApproxJsonBytesUpperBound += sampleJsonBytes * (copies - 1);
+    }
+  }
+
+  return {
+    hydratedPlaylistCount: hydratedPlaylists.length,
+    queueUniqueTrackCount: queueKeys.size,
+    hydratedPlaylistTrackCount: hydratedTracks.length,
+    hydratedPlaylistUniqueTrackCount: hydratedKeys.size,
+    currentPlaylistTrackCount: currentPlaylistTracks.length,
+    currentPlaylistUniqueTrackCount: currentPlaylistKeys.size,
+    queueHydratedOverlapCount,
+    queueHydratedOverlapApproxJsonBytes,
+    queueCurrentPlaylistOverlapCount,
+    queueCurrentPlaylistOverlapApproxJsonBytes,
+    hydratedCurrentPlaylistOverlapCount,
+    hydratedCurrentPlaylistOverlapApproxJsonBytes,
+    tripleOverlapCount,
+    tripleOverlapApproxJsonBytesUpperBound,
+    unionUniqueTrackCount: trackPresence.size,
+    logicalDuplicateCopies,
+    logicalDuplicateApproxJsonBytesUpperBound,
   };
 }
 
@@ -358,11 +517,15 @@ function captureBufferDebugSnapshot(
 
 export const NativeDebugPage: React.FC = () => {
   const audioService = useAudioService();
+  const { service: performanceControlService, snapshot: performanceSnapshot } =
+    usePerformanceControlSettings();
   const t = useT();
   const locale = useLocale();
   const { isNativeAvailable } = useAudioEngine();
   const [state, setState] = useState(() => audioService.getState());
   const [logs, setLogs] = useState<string[]>([]);
+  const [playlistsOverlayResidency, setPlaylistsOverlayResidency] =
+    useState<PlaylistsOverlayResidencySnapshot>(() => getPlaylistsOverlayResidencySnapshot());
   const [isSelectingFile, setIsSelectingFile] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [nativeMeta, setNativeMeta] = useState<NativeAudioMeta>({
@@ -438,6 +601,12 @@ export const NativeDebugPage: React.FC = () => {
   }, [locale]);
 
   useEffect(() => {
+    return subscribePlaylistsOverlayResidencyTelemetry((snapshot) => {
+      setPlaylistsOverlayResidency(snapshot);
+    });
+  }, []);
+
+  useEffect(() => {
     setState(audioService.getState());
     const unsubscribeState = audioService.onStateChange((next) => setState(next));
     const unsubscribeRobustness =
@@ -453,6 +622,10 @@ export const NativeDebugPage: React.FC = () => {
       unsubscribeError();
     };
   }, [audioService, appendLog, t]);
+
+  useEffect(() => {
+    void performanceControlService.refreshNow();
+  }, [performanceControlService]);
 
   const isNativeEngine = isNativeAvailable;
 
@@ -1387,6 +1560,10 @@ export const NativeDebugPage: React.FC = () => {
     () => collectTrackResidencyDiagnostics(state.currentTrack ? [state.currentTrack] : []),
     [state.currentTrack]
   );
+  const playlistDuplicationDiagnostics = useMemo(
+    () => collectTrackDuplicationDiagnostics(state.queue, state.playlists, state.currentPlaylist),
+    [state.currentPlaylist, state.playlists, state.queue]
+  );
   const queuePathsPayloadDiagnostics = useMemo(() => {
     const queuePaths = state.queue
       .map((track) => track.filePath || track.path || track.originalPath || '')
@@ -1422,6 +1599,42 @@ export const NativeDebugPage: React.FC = () => {
     };
   }, [state.currentPlaylist, state.playlists]);
   const audioStateJsonBytes = useMemo(() => measureJsonBytes(state), [state]);
+  const processResidencyComparison = useMemo(() => {
+    const webview2 = performanceSnapshot.webview2;
+    const webview2PrivateBytes = webview2?.webview2PrivateBytes ?? null;
+    const stateTrackedJsonBytes = audioStateJsonBytes;
+
+    return {
+      queueApproxJsonBytes: queueResidencyDiagnostics.approxJsonBytes,
+      playlistApproxJsonBytes: playlistTrackResidencyDiagnostics.approxJsonBytes,
+      currentTrackApproxJsonBytes: currentTrackResidencyDiagnostics.approxJsonBytes,
+      audioStateApproxJsonBytes: stateTrackedJsonBytes,
+      webview2PrivateBytes,
+      webview2WorkingSetBytes: webview2?.webview2WorkingSetBytes ?? null,
+      treePrivateBytes: webview2?.treePrivateBytes ?? null,
+      treeWorkingSetBytes: webview2?.treeWorkingSetBytes ?? null,
+      webview2CpuPercent: webview2?.webview2CpuPercent ?? null,
+      privateBytesMinusAudioStateJsonBytes:
+        webview2PrivateBytes != null ? Math.max(0, webview2PrivateBytes - stateTrackedJsonBytes) : null,
+      privateBytesMinusQueueJsonBytes:
+        webview2PrivateBytes != null
+          ? Math.max(0, webview2PrivateBytes - queueResidencyDiagnostics.approxJsonBytes)
+          : null,
+    };
+  }, [
+    audioStateJsonBytes,
+    currentTrackResidencyDiagnostics.approxJsonBytes,
+    performanceSnapshot.webview2,
+    playlistTrackResidencyDiagnostics.approxJsonBytes,
+    queueResidencyDiagnostics.approxJsonBytes,
+  ]);
+  const playlistsOverlayResidencySummary = useMemo(
+    () => ({
+      latestSample: playlistsOverlayResidency.latestSample,
+      samples: playlistsOverlayResidency.samples.slice(0, 8),
+    }),
+    [playlistsOverlayResidency]
+  );
 
   const displayedDiagnostics = useMemo(
     () =>
@@ -1437,11 +1650,14 @@ export const NativeDebugPage: React.FC = () => {
               ...playlistStateFootprint,
               ...playlistTrackResidencyDiagnostics,
             },
+            logicalOverlap: playlistDuplicationDiagnostics,
           },
           stateFootprint: {
             audioStateJsonBytes,
             queuePaths: queuePathsPayloadDiagnostics,
           },
+          processComparison: processResidencyComparison,
+          playlistsOverlayResidency: playlistsOverlayResidencySummary,
           nativeAudio: {
             estimatedAudioBufferBytes: robustness.estimatedAudioBufferBytes ?? 0,
           },
@@ -1453,8 +1669,11 @@ export const NativeDebugPage: React.FC = () => {
       audioStateJsonBytes,
       currentBufferDebugSnapshot,
       currentTrackResidencyDiagnostics,
+      playlistDuplicationDiagnostics,
+      playlistsOverlayResidencySummary,
       playlistStateFootprint,
       playlistTrackResidencyDiagnostics,
+      processResidencyComparison,
       queuePathsPayloadDiagnostics,
       queueResidencyDiagnostics,
       retireStats,
